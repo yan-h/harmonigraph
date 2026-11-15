@@ -91,9 +91,6 @@ struct Assigned {
 struct Published {
     source: u8,
     delta: NoteDelta,
-    /// Where the input arrived, `timing.input`, is the delta's stamp; the delta
-    /// itself carries the time it is scheduled to sound.
-    timing: EventTiming,
 }
 
 /// A note the Hub believes is sounding, as far as the policy is concerned.
@@ -305,9 +302,9 @@ pub struct Hub {
     rows: Box<[Row]>,
     batch: Vec<Record>,
     pending: Vec<Published>,
-    /// Deltas lost before reaching either publication lane: the earliest time
-    /// among them, and the first and last input they came from.
-    pending_loss: Option<(f64, i64, i64)>,
+    /// The earliest time among deltas lost before reaching either
+    /// publication lane.
+    pending_loss: Option<f64>,
     sequencer: Box<Sequencer>,
     rate: f64,
     callback: Option<api::Callback>,
@@ -318,9 +315,6 @@ pub struct Hub {
     /// The last recording run every row was told to open with a take-lane
     /// snapshot. See [`Hub::publish`].
     opened: Option<u64>,
-    /// The earliest input still in a ring after this callback's collection
-    /// filled the batch: the source frontier stops below it.
-    waiting: Option<i64>,
     status: u32,
     /// Which row the next collection starts from.
     rotation: usize,
@@ -353,7 +347,6 @@ impl Hub {
             clock: ClockId::default(),
             seconds: None,
             opened: None,
-            waiting: None,
             status: 0,
             rotation: 0,
             #[cfg(test)]
@@ -395,9 +388,8 @@ impl Hub {
 
     pub fn begin(&mut self, callback: api::Callback, owner: &mut Owner, presentation: f64) {
         self.callback = Some(callback);
-        // One clock for the life of this Harmonigraph. Nothing advances it any
-        // more, because nothing can hold a record long enough for an old one
-        // to reach the recorder: what this callback sequences, it publishes.
+        // One clock for the life of this Harmonigraph, which a host reset cuts
+        // (`Recording::reset`): what this callback sequences, it publishes.
         if owner.recording.clock.runtime_session == 0 {
             owner.recording.clock.runtime_session = self.id;
         }
@@ -567,10 +559,6 @@ impl Hub {
             LatticePos::ORIGIN
         });
         self.collect();
-        // A full batch may have left captures in the rings, from inputs this
-        // callback's frontier would otherwise claim were all published.
-        self.waiting =
-            (self.batch.len() == BATCH_EVENTS).then(|| self.earliest_waiting()).flatten();
         if self.batch.is_empty() {
             return;
         }
@@ -710,19 +698,6 @@ impl Hub {
                 );
             }
         }
-    }
-
-    /// The earliest input of this epoch still in a row's ring: each ring holds
-    /// its captures in input order, so its first one counts. The direct queue
-    /// is always empty here (`CAPTURE_RING < BATCH_EVENTS`).
-    fn earliest_waiting(&mut self) -> Option<i64> {
-        let epoch = self.epoch;
-        self.ends
-            .iter_mut()
-            .flat_map(|ends| ends.iter_mut().flatten())
-            .filter_map(|end| first_waiting(&mut end.captures, |c| c.epoch == epoch))
-            .map(|c| c.sample)
-            .min()
     }
 
     /// Bind in each source's input order, before the musical sort moves
@@ -1076,7 +1051,7 @@ impl Hub {
                         delta.pitch_microcents = Some(voice.pitch_microcents);
                     }
                 }
-                self.hold(record, timing, delta);
+                self.hold(record, delta);
             }
             // Defensive cleanup if an onset cannot be retained. Admission
             // above normally refuses it before assignment; policy must not
@@ -1101,7 +1076,7 @@ impl Hub {
                 self.rows[index].sequence += 1;
                 let stamp = Stamp { sequence: self.rows[index].sequence, ..stamp };
                 if let Some(delta) = self.rows[index].state.retuned(lifetime, stamp) {
-                    self.hold(record, timing, delta);
+                    self.hold(record, delta);
                 }
             }
         }
@@ -1110,37 +1085,27 @@ impl Hub {
 
     /// Queue one delta for this callback's publication pass. A full queue
     /// owes an explicit gap and a snapshot: current state cannot replace history.
-    fn hold(&mut self, record: Record, timing: EventTiming, delta: NoteDelta) {
+    fn hold(&mut self, record: Record, delta: NoteDelta) {
         let time = delta.event.time;
         let row = &mut self.rows[usize::from(record.source)];
         row.applied_time = Some(row.applied_time.map_or(time, |old| old.max(time)));
         if self.pending.len() < BATCH_EVENTS {
-            self.pending.push(Published { source: record.source, delta, timing });
+            self.pending.push(Published { source: record.source, delta });
         } else {
-            let input = record.sample;
-            self.pending_loss = Some(match self.pending_loss {
-                Some((old, first, last)) => (old.min(time), first.min(input), last.max(input)),
-                None => (time, input, input),
-            });
+            self.pending_loss = Some(self.pending_loss.map_or(time, |old| old.min(time)));
             row.repair = publication::Lanes::both(true);
             self.status |= session::PUBLICATION;
         }
     }
 
-    /// Everything this callback scheduled, out to both lanes, stamped with
-    /// where its input arrived and the intent of the callback that held it.
-    /// The take routes and translates from that stamp, so nothing here waits
-    /// for a sub-block or asks which pass a delta belongs to.
-    ///
-    /// Two stamps fail a take that could hold the record: a stale clock, and an
-    /// input below the proven frontier. Either is a record it can no longer place.
-    fn flush(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
+    /// Everything this callback scheduled, out to both lanes, each delta timed
+    /// where it sounds. The take places it by that time, so nothing here waits
+    /// for a sub-block or asks which run a delta belongs to.
+    fn flush(&mut self, recorder: &mut Recorder) {
         for position in 0..self.pending.len() {
             let item = self.pending[position];
             let index = usize::from(item.source);
-            let span =
-                owner.recording.stamp_or_lose(recorder, item.timing.clock, item.timing.input);
-            let outcome = recorder.publish_note(item.delta, span);
+            let outcome = recorder.publish_note(item.delta);
             for lane in publication::Lane::ALL {
                 if outcome[lane].is_err() {
                     self.rows[index].repair[lane] = true;
@@ -1154,12 +1119,9 @@ impl Hub {
         // Clear in place. Taking the vector would leave an empty one behind
         // and the reserve that refilled it would allocate, on audio.
         self.pending.clear();
-        if let Some((time, first, last)) = self.pending_loss.take() {
-            // Send it before publish advances the frontier past it, and let
-            // the ordinary all-source snapshots repair each lane.
-            let first = owner.recording.stamp_or_lose(recorder, self.clock, first);
-            let span = first.merge(owner.recording.stamp_or_lose(recorder, self.clock, last));
-            recorder.publication_lost(time, span);
+        if let Some(time) = self.pending_loss.take() {
+            // Let the ordinary all-source snapshots repair each lane.
+            recorder.publication_lost(time);
         }
         let outage = recorder.take_publication_outage();
         for lane in publication::Lane::ALL {
@@ -1190,22 +1152,20 @@ impl Hub {
         self.mapping().at(sample)
     }
 
-    /// The snapshot a display or take reads after a gap, and a take reads at
-    /// the start of every pass: what is sounding now, built from what the Hub
-    /// itself scheduled. It reconstructs no history.
+    /// Everything this callback sequenced, then the snapshots owed: what is
+    /// sounding now, built from what the Hub itself scheduled, which a display
+    /// or take reads after a gap and a take reads at the start of every run.
+    /// It reconstructs no history.
+    ///
+    /// A run that ends in a later sub-block of this callback pushes its end
+    /// after this, so the take's lanes hold everything collected before it. One
+    /// that ends at this callback's start pushed its end before this, but what
+    /// this callback collected was played in it or a callback before by a Tune
+    /// that lags, and sounds a delay later, at or after that end.
     pub fn publish(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
-        self.flush(owner, recorder);
-        let Some(callback) = self.callback else { return };
-        self.snapshots(owner, recorder);
-        // Every record collected this callback has been published, and nothing
-        // still to come is scheduled before this callback began, but what a full
-        // batch left in the rings: the frontier is this callback's start, or the
-        // earliest input still waiting if that is earlier. Sound and monotone,
-        // with no coverage protocol behind it, and it keeps moving through a
-        // flood rather than waiting for the flood to end.
-        let through = self.waiting.map_or(callback.steady_time, |w| w.min(callback.steady_time));
-        if owner.recording.source_frontier(self.clock, through).is_err() {
-            recorder.fail_configuration();
+        self.flush(recorder);
+        if self.callback.is_some() {
+            self.snapshots(owner, recorder);
         }
     }
 
@@ -1215,21 +1175,16 @@ impl Hub {
     /// `publish` opened: it reads the same sub-block's run, which `opened`
     /// already holds.
     fn snapshots(&mut self, owner: &Owner, recorder: &mut Recorder) {
-        // Snapshots are stamped at the sub-block being processed, not the
+        // Snapshots are timed at the sub-block being processed, not the
         // callback's start: a run a mid-callback transport event opens is this
         // sub-block's, and its opening snapshot must fall inside it.
         let block = owner.recording.block_start;
         let time = self.presentation(block);
-        // A sub-block of this callback is always above the proven frontier on
-        // the current clock; a stamp that fails anyway would drop a run's
-        // opening snapshot without a word, so it fails a take that could hold it.
-        let span = owner.recording.stamp_or_lose(recorder, self.clock, block);
-        // Every recording run — each pass, and each resume inside one — opens
-        // with a take-lane snapshot of every row (#1129). The take routes a
-        // delta by the sample its INPUT arrived at, so a voice whose input fell
-        // where nothing recorded — before arming, in a pause, in the D samples
-        // before the transport rolled — has its onset in no run, and the take
-        // would otherwise play its release and expressions against nothing.
+        // Every recording run — the take's first, and each resume — opens with
+        // a take-lane snapshot of every row (#1129). A voice that began where
+        // nothing recorded — before arming, or in a pause — has its attack in
+        // no run, and the take would otherwise play its release and
+        // expressions against nothing.
         if owner.recording.recording() {
             let run = recorder.recording_run();
             if self.opened != Some(run) {
@@ -1262,9 +1217,7 @@ impl Hub {
             // history, and the whole file with it. Those deltas sound up to D
             // after this callback, so the frame is timed at the latest of them
             // rather than at the block's start, which also leaves no voice
-            // whose onset lies after the frame that claims it is sounding. A
-            // delta from the run before, sounding past this run's start, is
-            // the reader's floor to settle.
+            // whose onset lies after the frame that claims it is sounding.
             let at = self.rows[index].applied_time.map_or(time, |applied| applied.max(time));
             let identity = identity(index as u8);
             // One lane at a time, on its own free cells and its own next
@@ -1281,7 +1234,7 @@ impl Hub {
                     continue;
                 };
                 frame.shown = self.rows[index].show;
-                if recorder.publish_baseline(lane, &frame, span).is_ok() {
+                if recorder.publish_baseline(lane, &frame).is_ok() {
                     self.rows[index].baseline_id[lane] = id;
                     self.rows[index].repair[lane] = false;
                 }
@@ -1305,7 +1258,7 @@ impl Hub {
 
     pub fn end(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
         // A callback no sub-block reached still publishes what it sequenced.
-        self.flush(owner, recorder);
+        self.flush(recorder);
         // A snapshot owed and refused for room is owed now, not a callback
         // later that may never come.
         if self.callback.is_some() {
@@ -1335,84 +1288,11 @@ impl Hub {
         self.shared.request_main();
     }
 
-    /// Prove the source frontier through the last callback's end, at a cut or
-    /// before joined destruction: after either, nothing still to come can be
-    /// sequenced before it. `publish` stops at a callback's start instead,
-    /// because a Tune the host runs after the Hub is a callback behind; a
-    /// recorded record of that kind still in a ring here is one the take never
-    /// gets, so it fails the take rather than being proven absent.
-    pub fn prove_final_frontier(&mut self, owner: &mut Owner, recorder: &Recorder) {
-        let Some(through) = owner.recording.registered_through() else { return };
-        let (epoch, recording) = (self.epoch, &owner.recording);
-        // Only a record a take was recording can be missing from one.
-        let recorded = |sample| sample < through && recording.recorded(sample);
-        let stranded =
-            self.ends.iter_mut().flat_map(|ends| ends.iter_mut().enumerate()).any(|(slot, end)| {
-                let Some(end) = end else { return false };
-                let publishing =
-                    session::session().row(slot as u8).capture_epoch.load(Ordering::SeqCst);
-                // Hub stop/reset cuts the session before this proof. A future
-                // callback must adopt that cut; an older callback still publishing
-                // makes the final prefix unprovable, even if its ring is empty.
-                if recording.owes_closure(recorder, recorder.recording_epoch())
-                    && (publishing == u64::MAX || publishing != 0 && publishing <= epoch)
-                {
-                    return true;
-                }
-                // Read without consuming: a cut's own epoch filter still owns them.
-                first_waiting(&mut end.captures, |c| c.epoch == epoch && recorded(c.sample))
-                    .is_some()
-            });
-        if stranded || owner.recording.source_frontier(self.clock, through).is_err() {
-            recorder.fail_configuration();
-        }
-    }
-
-    /// Called only at a joined Hub lifecycle boundary. Retain live ownership
-    /// for future takes; unlike destruction this does not retire the producer.
-    pub fn finish_stopped_recording(
-        &mut self,
-        owner: &mut Owner,
-        recorder: &mut Recorder,
-        observation: f64,
-    ) {
-        let intent = recorder.capture_recording_intent();
-        if intent.is_armed() {
-            return;
-        }
-        // Fail before any completion entry can release Stop to the writer.
-        if owner.recording.owes_closure(recorder, intent.epoch()) {
-            if self.rows.iter().any(|row| row.state.count() != 0) {
-                recorder.fail_configuration();
-            }
-            self.prove_final_frontier(owner, recorder);
-        }
-        owner.recording.observe_joined_disarm(recorder);
-        owner.finish_recording_publication(recorder, observation);
-    }
-
-    /// Destruction closes the recorder's own boundaries, here and now. There
-    /// is no drain to wait for: everything this Hub sequenced was published in
-    /// the callback it was sequenced in, so the only thing left to say is
-    /// whether any voice was still sounding — which fails the take rather
-    /// than being a fact this can go and establish.
-    pub fn retire_publication(
-        &mut self,
-        mut owner: Box<Owner>,
-        mut recorder: Recorder,
-        observation: f64,
-    ) {
-        recorder.hold_retired_publication();
-        let held = self.rows.iter().any(|row| row.state.count() != 0);
-        // Stop can finish as soon as all closure entries reach the worker.
-        // Publish this failure first, before retirement can release them.
-        if held {
-            recorder.fail_configuration();
-        }
-        owner.recording.observe_joined_disarm(&mut recorder);
-        owner.recording.dispose_retired_configuration(&mut recorder);
-        owner.finish_recording_publication(&mut recorder, observation);
-        owner.recording.finish_retired_publication(&mut recorder, held);
+    /// Called only at a joined Hub lifecycle boundary, for a host that stops
+    /// calling the audio thread after a Stop: the stopped take's run closes
+    /// here, so the writer can seal it.
+    pub fn finish_stopped_recording(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
+        owner.recording.close_stopped(recorder);
     }
 
     /// The one authority on what is sounding. There is no second copy to
@@ -1431,7 +1311,7 @@ impl Hub {
     }
     #[cfg(test)]
     pub fn test_held(&self, source: u8) -> usize {
-        self.rows[usize::from(source)].state.count()
+        self.rows[usize::from(source)].state.voices().count()
     }
     #[cfg(test)]
     pub fn test_context(&self) -> usize {
@@ -1458,17 +1338,6 @@ impl Hub {
         self.sequencer.memory.append(&mut context, self.sequencer.config.policy, self.rate);
         context.len()
     }
-}
-
-/// The first capture still in `captures` that `matches`, read without
-/// consuming it.
-fn first_waiting(
-    captures: &mut rtrb::Consumer<session::Capture>,
-    matches: impl Fn(&session::Capture) -> bool,
-) -> Option<session::Capture> {
-    let chunk = captures.read_chunk(captures.slots()).ok()?;
-    let (head, tail) = chunk.as_slices();
-    head.iter().chain(tail).find(|c| matches(c)).copied()
 }
 
 #[cfg(test)]

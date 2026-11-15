@@ -7,7 +7,7 @@ const BAR_BLOCK: f64 = BLOCK / 2.0;
 fn observe(next: Transition, observation: Observation, policy: Policy) -> Transition {
     let run = || transition(next.state, next.history, observation, policy);
     // The test-support feature installs the crate's guarded allocator. Guard
-    // every table transition, including arm, completion and deferred actions.
+    // every table transition, including arm and completion.
     #[cfg(feature = "test-support")]
     return nice_assert_no_alloc::assert_no_alloc(run);
     #[cfg(not(feature = "test-support"))]
@@ -31,8 +31,8 @@ fn transport(next: Transition, position: f64, playing: bool, policy: Policy) -> 
     observe(next, Observation::Transport { position, playing, duration: BLOCK }, policy)
 }
 
-fn recording(motion: Motion, deferred: Deferred) -> State {
-    State::Recording { motion, deferred }
+fn recording(motion: Motion) -> State {
+    State::Recording { motion }
 }
 
 // What each Video trigger hands the recorder, with the stop bar at 6: the
@@ -41,7 +41,7 @@ fn recording(motion: Motion, deferred: Deferred) -> State {
 // links no editor, so it names the policies rather than the triggers.
 const ON_DISARM: Policy = Policy { end_at_rewind: false, stop_bar: None };
 const AT_BAR: Policy = Policy { end_at_rewind: false, stop_bar: Some(5.0) };
-const ON_TRANSPORT_STOP: Policy = Policy { end_at_rewind: true, stop_bar: None };
+const ON_TRANSPORT_STOP: Policy = Policy { end_at_rewind: false, stop_bar: None };
 const AT_LOOP_END: Policy = Policy { end_at_rewind: true, stop_bar: None };
 const TRIGGERS: [(&str, Policy); 4] = [
     ("OnDisarm", ON_DISARM),
@@ -60,7 +60,7 @@ fn trigger_table_reaches_playback_and_stopped_export_rewind_actions() {
             for block in 1..=4 {
                 next = transport(next, 5.0 + f64::from(block) * BLOCK, playing, policy);
                 assert_eq!(next.action, Action::Record);
-                assert_eq!(next.state, recording(Motion::Forward, Deferred::None));
+                assert_eq!(next.state, recording(Motion::Forward));
             }
             // Stopped restores can be smaller than playback's 50 ms jitter.
             // A playing loop goes to 4 s to deliberately exceed that allowance.
@@ -71,7 +71,7 @@ fn trigger_table_reaches_playback_and_stopped_export_rewind_actions() {
                 if end {
                     Action::Complete(End::Rewind)
                 } else if playing {
-                    Action::SplitAndRecord
+                    Action::Record
                 } else {
                     Action::HistoryOnly
                 },
@@ -84,20 +84,9 @@ fn trigger_table_reaches_playback_and_stopped_export_rewind_actions() {
                 assert_eq!(next.action, Action::None);
                 assert_eq!(next.history, history);
             } else {
-                assert_eq!(
-                    next.state,
-                    recording(
-                        Motion::Forward,
-                        if playing { Deferred::None } else { Deferred::Split }
-                    )
-                );
+                assert_eq!(next.state, recording(Motion::Forward));
                 next = transport(next, restore + BLOCK, playing, policy);
-                assert_eq!(
-                    next.action,
-                    if playing { Action::Record } else { Action::SplitAndRecord }
-                );
-                next = transport(next, restore + 2.0 * BLOCK, playing, policy);
-                assert_eq!(next.action, Action::Record, "a debt is paid exactly once");
+                assert_eq!(next.action, Action::Record, "the take records on");
             }
         }
     }
@@ -127,7 +116,7 @@ fn continuity_uses_previous_timing_with_inclusive_tolerance() {
             assert_eq!(next.action, if accepted { Action::Record } else { Action::HistoryOnly });
             assert_eq!(
                 next.state,
-                if accepted { recording(Motion::Forward, Deferred::None) } else { State::Waiting }
+                if accepted { recording(Motion::Forward) } else { State::Waiting }
             );
             assert_eq!(next.history.position, Some((duration * factor, duration * 4.0)));
         }
@@ -146,26 +135,23 @@ fn continuity_uses_previous_timing_with_inclusive_tolerance() {
 }
 
 #[test]
-fn pre_roll_scrubs_and_first_playing_snapback_do_not_complete_or_split() {
+fn pre_roll_scrubs_and_first_playing_snapback_do_not_complete() {
     for (_, policy) in TRIGGERS {
         let mut next = fresh();
         for position in [10.0, 30.0, 5.0, 5.0] {
             next = transport(next, position, false, policy);
             assert_eq!(next.action, Action::HistoryOnly);
-            assert_eq!(next.state, State::Waiting, "scrubs cannot acquire split debt");
+            assert_eq!(next.state, State::Waiting, "scrubs do not record");
         }
         next = transport(next, 0.0, true, policy);
         assert_eq!(next.action, Action::Record);
-        assert_eq!(next.state, recording(Motion::Initial, Deferred::None));
+        assert_eq!(next.state, recording(Motion::Initial));
         // Another snapback before positive progress distinguishes accepted
         // audio from forward-motion evidence. One-file takes retain its origin.
         next = transport(next, -1.0, true, policy);
-        assert_eq!(
-            next.action,
-            if policy.end_at_rewind { Action::Record } else { Action::SplitAndRecord }
-        );
+        assert_eq!(next.action, Action::Record);
         next = transport(next, -1.0 + BLOCK, true, policy);
-        assert_eq!(next.state, recording(Motion::Forward, Deferred::None));
+        assert_eq!(next.state, recording(Motion::Forward));
     }
 }
 
@@ -178,10 +164,10 @@ fn playing_jitter_and_stopped_restore_have_distinct_boundaries() {
         (0.0, false, false),
         (BLOCK / 100.0, false, true),
     ] {
-        let policy = ON_TRANSPORT_STOP;
+        let policy = AT_LOOP_END;
         let next = transport(fresh(), -BLOCK, true, policy);
         let next = transport(next, 0.0, true, policy);
-        assert_eq!(next.state, recording(Motion::Forward, Deferred::None));
+        assert_eq!(next.state, recording(Motion::Forward));
         let next = transport(next, -back, playing, policy);
         assert_eq!(
             next.action,
@@ -197,31 +183,7 @@ fn playing_jitter_and_stopped_restore_have_distinct_boundaries() {
 }
 
 #[test]
-fn policy_changes_drop_real_split_debt_in_both_resumption_directions() {
-    for forward in [false, true] {
-        for policy in [ON_TRANSPORT_STOP, AT_LOOP_END] {
-            let mut next = transport(fresh(), 10.0, true, Policy::default());
-            next = transport(next, 5.0, false, Policy::default());
-            assert_eq!(
-                next.state,
-                recording(Motion::Initial, Deferred::Split),
-                "must reach the debt rule"
-            );
-            // Repeated parked blocks preserve the debt until a recording block.
-            next = transport(next, 5.0, false, policy);
-            assert_eq!(next.state, recording(Motion::Initial, Deferred::Split));
-            next = transport(next, if forward { 5.0 + BLOCK } else { 0.0 }, true, policy);
-            assert_eq!(next.action, Action::Record);
-            assert_eq!(
-                next.state,
-                recording(if forward { Motion::Forward } else { Motion::Initial }, Deferred::None)
-            );
-        }
-    }
-}
-
-#[test]
-fn bar_table_preserves_crossing_history_and_preempts_a_deferred_split() {
+fn bar_table_preserves_crossing_history() {
     for (last, bar, target, completes) in [
         (Some(5.0 - BAR_BLOCK), Some(5.0), Some(5.0), true),
         (Some(5.0), Some(5.0 + BAR_BLOCK), Some(5.0), false),
@@ -236,7 +198,7 @@ fn bar_table_preserves_crossing_history_and_preempts_a_deferred_split() {
     ] {
         let next = transport(fresh(), 20.0, true, Policy::default());
         let next = transport(next, 10.0 - BLOCK, false, Policy::default());
-        assert_eq!(next.state, recording(Motion::Initial, Deferred::Split));
+        assert_eq!(next.state, recording(Motion::Initial));
         // Seed with the trigger OFF: enabling it must use recent bar history.
         let next = observe(next, Observation::Bar(last), Policy::default());
         let next =
@@ -247,7 +209,7 @@ fn bar_table_preserves_crossing_history_and_preempts_a_deferred_split() {
             if completes { Action::Complete(End::Bar) } else { Action::HistoryOnly }
         );
         let next = transport(next, 10.0, true, Policy::default());
-        assert_eq!(next.action, if completes { Action::None } else { Action::SplitAndRecord });
+        assert_eq!(next.action, if completes { Action::None } else { Action::Record });
     }
     let p = AT_BAR;
     let next = observe(fresh(), Observation::Bar(Some(5.0 - BAR_BLOCK)), p);
@@ -285,9 +247,8 @@ fn arm_edges_reset_history_but_repeated_arm_cannot_revive_completion() {
 }
 
 #[test]
-fn forward_audio_continuity_survives_pauses_and_observation_jitter() {
-    for one_file in [false, true] {
-        let p = Policy { end_at_rewind: one_file, ..Default::default() };
+fn forward_audio_continuity_survives_pauses_seeks_and_observation_jitter() {
+    for (_, p) in TRIGGERS {
         let first = transport(fresh(), 0.0, true, p);
         assert_eq!(first.history.recorded_end, Some(BLOCK));
         // Current callback size changes without moving the paused audio end.
@@ -299,26 +260,9 @@ fn forward_audio_continuity_survives_pauses_and_observation_jitter() {
         let paused = transport(paused, 10.0, false, p);
         assert_eq!(paused.history.recorded_end, Some(BLOCK));
         assert_eq!(paused.action, Action::HistoryOnly);
+        // A seek records on, from where the audio had got to.
         let seek = transport(paused, 10.0, true, p);
-        assert_eq!(
-            seek.action,
-            if one_file { Action::Complete(End::ForwardSeek) } else { Action::SplitAndRecord }
-        );
-        for (gap, splits) in [(0.05, false), (0.050001, true)] {
-            let next = transport(first, BLOCK + gap, true, p);
-            assert_eq!(
-                next.action,
-                if splits {
-                    if one_file {
-                        Action::Complete(End::ForwardSeek)
-                    } else {
-                        Action::SplitAndRecord
-                    }
-                } else {
-                    Action::Record
-                }
-            );
-        }
+        assert_eq!((seek.action, seek.origin), (Action::Record, Some(BLOCK)));
         let mut paused = transport(first, 0.0, false, p);
         paused = transport(paused, 0.0, false, p);
         let resumed = observe(
@@ -328,14 +272,9 @@ fn forward_audio_continuity_survives_pauses_and_observation_jitter() {
         );
         assert_eq!(resumed.action, Action::Record);
         assert_eq!(resumed.history.recorded_end, Some(BLOCK * 5.0));
-        // Individually tolerated forward jitter cannot continually re-anchor
-        // audio and hide a growing mismatch between host time and WAV time.
+        // Forward jitter cannot re-anchor the audio either.
         let next = transport(first, 0.03, true, p);
-        assert_eq!(next.action, Action::Record);
         let next = transport(next, 0.06, true, p);
-        assert_eq!(
-            next.action,
-            if one_file { Action::Complete(End::ForwardSeek) } else { Action::SplitAndRecord }
-        );
+        assert_eq!((next.action, next.origin), (Action::Record, Some(2.0 * BLOCK)));
     }
 }

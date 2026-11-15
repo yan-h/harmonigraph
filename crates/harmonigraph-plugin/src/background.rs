@@ -509,7 +509,6 @@ mod tests {
             self.notes
                 .note(
                     CoreNoteEvent { source: SourceId::DIRECT, time, channel: 0, note, kind }.into(),
-                    Default::default(),
                 )
                 .expect("the ring is sized for this");
         }
@@ -694,12 +693,9 @@ mod tests {
         // take's run — and the transport since stopped: the two conditions
         // the debounce needs before it will end a take.
         h.recorder.is_armed();
-        let (epoch, pass) = h.recorder.armed_pass().unwrap();
-        h.recorder.run(epoch, pass, Default::default(), 0.0, 0.0);
-        let intent = harmonigraph_record::configuration::RecordIntent::armed(epoch);
-        let route = harmonigraph_record::publication::Span::at(Default::default(), 0, intent);
+        h.recorder.run(0.0, 0.0);
         let on = CoreNoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
-        let _ = h.recorder.publish_note(on.into(), route);
+        let _ = h.recorder.publish_note(on.into());
 
         h.editor_state.set_open(false);
         h.step();

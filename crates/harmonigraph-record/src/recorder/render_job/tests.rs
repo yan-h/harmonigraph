@@ -106,11 +106,11 @@ fn a_render_that_warned_carries_each_warning_onto_the_detail_it_succeeded_with()
         "the warnings are kept BESIDE the last word, which ffmpeg has taken",
     );
 
-    let detail = rendered_detail(None, &tail.warnings, None);
+    let detail = rendered_detail(&tail.warnings, None);
     assert_eq!(detail, format!("{gap}\n{x264}"));
     // A clean render says nothing extra, or every export would read as one
     // that went wrong.
-    assert_eq!(rendered_detail(None, &[], None), "");
+    assert_eq!(rendered_detail(&[], None), "");
 }
 
 /// A render killed mid-frame leaves its last counter unterminated. It is
@@ -248,7 +248,7 @@ echo 'progress: 10/10 frames (100%)' >&2
         Arc::new(control)
     }
     fn request(&self, look: &str) -> RenderRequest {
-        RenderRequest { appearance: Some(look.into()), notice: None }
+        RenderRequest { appearance: Some(look.into()) }
     }
     fn enqueue(&self, request: RenderRequest) {
         self.enqueue_sized(request, None);

@@ -38,7 +38,8 @@ fn take_with_a_gap(path: &std::path::Path) {
         }
         .into(),
     ));
-    let lines = [Record::Header(Header::default()), note(0.2, 60), gap, note(1.2, 64)];
+    let run = Record::Run(harmonigraph_take::RunRecord::default());
+    let lines = [Record::Header(Header::default()), run, note(0.2, 60), gap, note(1.2, 64)];
     let encoded =
         lines.iter().map(|r| ron::to_string(r).unwrap()).collect::<Vec<_>>().join("\n") + "\n";
     std::fs::write(path, encoded).unwrap();

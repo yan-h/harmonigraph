@@ -11,10 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use harmonigraph_core::canonical::{
-    CanonicalEvent, ClockId, GapReason, NoteDelta, PublicationGap, SourceBaseline,
+    CanonicalEvent, GapReason, NoteDelta, PublicationGap, SourceBaseline,
 };
-
-use crate::configuration::RecordIntent;
 
 pub const PUBLICATION_RING: usize = 4096;
 /// A snapshot frame is two orders of magnitude larger than an item, so it
@@ -106,54 +104,6 @@ impl<T> std::ops::IndexMut<Lane> for Lanes<T> {
     }
 }
 
-/// Where an input arrived: the Hub's clock and the sample on it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Stamp {
-    pub clock: ClockId,
-    pub input: i64,
-}
-
-impl Stamp {
-    /// A clock cut starts a later epoch, so a range spans one in this order.
-    fn order(self) -> (u64, i64) {
-        (self.clock.epoch, self.input)
-    }
-}
-
-/// The inputs an item came from, and the arm intent of the callback that held
-/// them. Taken on audio when the input arrived; a drainer never consults
-/// today's arm state. Disarmed is explicit provenance: the writer drops it.
-///
-/// One input for a note or a snapshot. A gap names the first and last input
-/// it lost, so the reader can tell which runs, and so which passes, it touched.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Span {
-    pub first: Stamp,
-    pub last: Stamp,
-    pub intent: RecordIntent,
-}
-
-impl Span {
-    pub fn at(clock: ClockId, input: i64, intent: RecordIntent) -> Self {
-        let stamp = Stamp { clock, input };
-        Self { first: stamp, last: stamp, intent }
-    }
-
-    /// Both spans' inputs, armed if either part was, under the newer epoch.
-    pub fn merge(self, other: Span) -> Self {
-        let epoch = self.intent.epoch().max(other.intent.epoch());
-        Self {
-            first: if other.first.order() < self.first.order() { other.first } else { self.first },
-            last: if other.last.order() > self.last.order() { other.last } else { self.last },
-            intent: if self.intent.is_armed() || other.intent.is_armed() {
-                RecordIntent::armed(epoch)
-            } else {
-                RecordIntent::disarmed(epoch)
-            },
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 enum Value {
     Note(NoteDelta),
@@ -165,7 +115,6 @@ enum Value {
     /// two FIFOs — no handle, generation or slot state.
     Snapshot,
     Gap(PublicationGap),
-    EpochComplete(u64),
 }
 
 /// Neither the publisher's serial nor the audio time the item was heard at is
@@ -179,7 +128,6 @@ enum Value {
 /// payload that needs a time already carries its own.
 #[derive(Clone, Copy, Debug)]
 struct Item {
-    span: Span,
     value: Value,
 }
 
@@ -192,8 +140,7 @@ pub struct Publisher {
     /// because an earlier gap still occupies it. It keeps growing until the
     /// drainer makes room; the earlier gap has already told the consumer to
     /// clear, so nothing downstream is waiting on this one.
-    /// The span is of the history lost; a lost closure covers no input.
-    outage: Option<(PublicationGap, Option<Span>)>,
+    outage: Option<PublicationGap>,
 }
 
 pub struct Consumer {
@@ -217,11 +164,6 @@ pub enum PublishError {
     /// and republishes it once the drainer has caught up.
     Busy,
     Invalid,
-}
-
-pub enum Delivery<'a> {
-    Event(CanonicalEvent<'a>),
-    EpochComplete(u64),
 }
 
 pub fn channel() -> (Publisher, Consumer) {
@@ -253,38 +195,29 @@ impl Publisher {
     }
 
     /// Explicit loss the caller detected before it reached this lane at all:
-    /// history that overflowed the Hub's own batch, spanning these inputs.
-    pub fn discarded(&mut self, time: f64, span: Span) {
+    /// history that overflowed the Hub's own batch, sounding from `time`.
+    pub fn discarded(&mut self, time: f64) {
         if let Some(serial) = self.serial.checked_add(1) {
             self.serial = serial;
-            self.lost(time, Some(span));
+            self.lost(time);
         }
     }
 
-    /// `span` is `None` for a closure: it was played at no input, and must not
-    /// widen the range of inputs the gap names.
-    fn lost(&mut self, time: f64, span: Option<Span>) -> PublishError {
-        let (gap, span) = match self.outage {
-            Some((old, covered)) => (
-                PublicationGap { last: self.serial, through: old.through.max(time), ..old },
-                match (covered, span) {
-                    (Some(covered), Some(span)) => Some(covered.merge(span)),
-                    (covered, span) => covered.or(span),
-                },
-            ),
-            None => (
-                PublicationGap {
-                    source: None,
-                    time,
-                    through: time,
-                    first: self.serial,
-                    last: self.serial,
-                    reason: GapReason::PublicationFull,
-                },
-                span,
-            ),
+    fn lost(&mut self, time: f64) -> PublishError {
+        let gap = match self.outage {
+            Some(old) => {
+                PublicationGap { last: self.serial, through: old.through.max(time), ..old }
+            }
+            None => PublicationGap {
+                source: None,
+                time,
+                through: time,
+                first: self.serial,
+                last: self.serial,
+                reason: GapReason::PublicationFull,
+            },
         };
-        self.outage = Some((gap, span));
+        self.outage = Some(gap);
         self.flush_outage();
         PublishError::Lost
     }
@@ -293,24 +226,24 @@ impl Publisher {
     /// free unless an earlier gap already occupies it, and that gap has told
     /// the consumer everything this one would.
     fn flush_outage(&mut self) {
-        let Some((gap, span)) = self.outage else { return };
-        if self.ring.push(Item { span: span.unwrap_or_default(), value: Value::Gap(gap) }).is_ok() {
+        let Some(gap) = self.outage else { return };
+        if self.ring.push(Item { value: Value::Gap(gap) }).is_ok() {
             self.outage = None;
         }
     }
 
-    fn push(&mut self, value: Value, time: f64, span: Option<Span>) -> Result<(), PublishError> {
+    fn push(&mut self, value: Value, time: f64) -> Result<(), PublishError> {
         let Some(serial) = self.serial.checked_add(1) else { return Err(PublishError::Invalid) };
         if !time.is_finite() {
             return Err(PublishError::Invalid);
         }
         if self.ring.slots() < self.needed() {
             self.serial = serial;
-            return Err(self.lost(time, span));
+            return Err(self.lost(time));
         }
         self.flush_outage();
         self.serial = serial;
-        let _ = self.ring.push(Item { span: span.unwrap_or_default(), value });
+        let _ = self.ring.push(Item { value });
         Ok(())
     }
 
@@ -320,43 +253,36 @@ impl Publisher {
         1 + GAP_RESERVE + usize::from(self.outage.is_some())
     }
 
-    pub fn note(&mut self, note: NoteDelta, span: Span) -> Result<(), PublishError> {
+    pub fn note(&mut self, note: NoteDelta) -> Result<(), PublishError> {
         note.validate().map_err(|_| PublishError::Invalid)?;
-        self.push(Value::Note(note), note.event.time, Some(span))
+        self.push(Value::Note(note), note.event.time)
     }
 
-    pub fn gap(&mut self, gap: PublicationGap, span: Span) -> Result<(), PublishError> {
+    pub fn gap(&mut self, gap: PublicationGap) -> Result<(), PublishError> {
         gap.validate().map_err(|_| PublishError::Invalid)?;
-        self.push(Value::Gap(gap), gap.time, Some(span))
+        self.push(Value::Gap(gap), gap.time)
     }
 
     /// What the source is sounding NOW. Published whole or not at all: both
     /// FIFOs are checked before either is written, so a marker and its frame
     /// cannot come apart and a refused snapshot costs no serial.
-    pub fn baseline(&mut self, baseline: &SourceBaseline, span: Span) -> Result<(), PublishError> {
+    pub fn baseline(&mut self, baseline: &SourceBaseline) -> Result<(), PublishError> {
         baseline.validate().map_err(|_| PublishError::Invalid)?;
         if self.snapshots.slots() == 0 || self.ring.slots() < self.needed() {
             return Err(PublishError::Busy);
         }
         let _ = self.snapshots.push(*baseline);
-        let result = self.push(Value::Snapshot, baseline.time, Some(span));
+        let result = self.push(Value::Snapshot, baseline.time);
         debug_assert!(result.is_ok(), "capacity for both halves was checked together");
         result
-    }
-
-    /// A closure carries no time of its own, so the caller's observation time
-    /// is what stamps the gap if the lane is full — the only use it has for it.
-    pub fn epoch_complete(&mut self, epoch: u64, observed: f64) -> Result<(), PublishError> {
-        self.push(Value::EpochComplete(epoch), observed, None)
     }
 }
 
 impl Consumer {
-    /// No retained payload remains. Every outage this lane produced is already
-    /// an item by the time its `Err` was returned, so an empty lane is a fully
-    /// delivered one.
-    pub(crate) fn settled(&self) -> bool {
-        self.pending.is_none() && self.held.is_none() && self.ring.is_empty()
+    /// Items waiting now, a declined one included: what a drain bounded by
+    /// this count will reach and nothing published after.
+    pub fn ready(&self) -> usize {
+        self.ring.slots() + usize::from(self.pending.is_some())
     }
 
     pub fn clock(&self) -> Option<f64> {
@@ -366,24 +292,29 @@ impl Consumer {
     /// One bounded drain of the actual selected ring capacity. The borrowed
     /// snapshot cannot escape the call; deferred consumers must make an owned
     /// copy BEFORE this returns and permits reuse.
-    pub fn drain(&mut self, mut consume: impl FnMut(Delivery<'_>, Span) -> bool) -> usize {
+    pub fn drain(&mut self, consume: impl FnMut(CanonicalEvent<'_>) -> bool) -> usize {
+        self.drain_up_to(PUBLICATION_RING, consume)
+    }
+
+    /// [`drain`](Self::drain), reaching at most `limit` items.
+    pub fn drain_up_to(
+        &mut self,
+        limit: usize,
+        mut consume: impl FnMut(CanonicalEvent<'_>) -> bool,
+    ) -> usize {
         let mut count = 0;
-        for _ in 0..PUBLICATION_RING {
+        for _ in 0..limit.min(PUBLICATION_RING) {
             let Some(item) = self.pending.take().or_else(|| self.ring.pop().ok()) else { break };
             let consumed = match item.value {
-                Value::Note(note) => {
-                    consume(Delivery::Event(CanonicalEvent::Note(note)), item.span)
-                }
-                Value::Gap(gap) => consume(Delivery::Event(CanonicalEvent::Gap(gap)), item.span),
-                Value::EpochComplete(epoch) => consume(Delivery::EpochComplete(epoch), item.span),
+                Value::Note(note) => consume(CanonicalEvent::Note(note)),
+                Value::Gap(gap) => consume(CanonicalEvent::Gap(gap)),
                 Value::Snapshot => {
                     let Some(frame) = self.held.take().or_else(|| self.snapshots.pop().ok()) else {
                         debug_assert!(false, "a snapshot marker always follows its frame");
                         count += 1;
                         continue;
                     };
-                    let consumed =
-                        consume(Delivery::Event(CanonicalEvent::Baseline(&frame)), item.span);
+                    let consumed = consume(CanonicalEvent::Baseline(&frame));
                     if !consumed {
                         self.held = Some(frame);
                     }
@@ -430,100 +361,57 @@ mod tests {
         while publisher.free() > 0 {
             time += 1.0;
             let release = NoteEvent::off(time, SourceId::DIRECT, 0, 60).into();
-            publisher.note(release, Span::default()).unwrap();
+            publisher.note(release).unwrap();
         }
     }
 
     /// Losses that go on while the first one's gap still holds the reserve
-    /// become ONE later gap: it spans every serial lost after the first gap,
-    /// runs through the latest loss, covers every input lost, across a clock
-    /// cut too, and is armed if any part of it was, under the newer epoch.
+    /// become ONE later gap: it spans every serial lost after the first gap
+    /// and runs through the latest loss.
     #[test]
     fn an_outage_behind_a_queued_gap_grows_into_one_gap() {
-        let clock = |epoch| ClockId { runtime_session: 1, epoch };
-        let armed = |input| Span::at(clock(0), input, RecordIntent::armed(1));
-        let later = Span::at(clock(1), 5, RecordIntent::disarmed(2));
-        let stamp = |epoch, input| Stamp { clock: clock(epoch), input };
-        for (last, merged) in [
-            (armed(300), Span { first: stamp(0, 200), last: stamp(0, 300), ..armed(0) }),
-            (
-                later,
-                Span { first: stamp(0, 200), last: stamp(1, 5), intent: RecordIntent::armed(2) },
-            ),
-        ] {
-            let (mut publisher, mut consumer) = channel();
-            fill(&mut publisher);
-            for (time, span) in [(9000.0, armed(100)), (9100.0, armed(200)), (9200.0, last)] {
-                let release = NoteEvent::off(time, SourceId::DIRECT, 0, 60).into();
-                assert_eq!(publisher.note(release, span), Err(PublishError::Lost));
-            }
-            let mut gaps = Vec::new();
-            let mut drain = |consumer: &mut Consumer| {
-                consumer.drain(|delivery, span| {
-                    if let Delivery::Event(CanonicalEvent::Gap(gap)) = delivery {
-                        gaps.push((gap, span));
-                    }
-                    true
-                });
-            };
-            drain(&mut consumer);
-            // The held outage reaches the ring ahead of the next publication.
-            let attack = NoteEvent::on(9300.0, SourceId::DIRECT, 0, 60, 0.8).into();
-            publisher.note(attack, Span::default()).unwrap();
-            drain(&mut consumer);
-            let [(queued, first), (grown, span)] = gaps[..] else { panic!("{gaps:?}") };
-            let lost = PUBLICATION_RING as u64;
-            assert_eq!((queued.first, queued.last), (lost, lost), "the fill's next serial");
-            assert_eq!(first, armed(100));
-            assert_eq!((grown.first, grown.last), (lost + 1, lost + 2));
-            assert_eq!((grown.time, grown.through), (9100.0, 9200.0));
-            assert_eq!(span, merged, "{last:?}");
-        }
-    }
-
-    /// A closure lost in an outage was played at no input, so it must not
-    /// widen the range of inputs the gap names: merged as one at sample 0, the
-    /// gap would be drawn over runs that lost nothing. (The lost closure fails
-    /// the take anyway; the gap's range is what a reader shows of the loss.)
-    #[test]
-    fn a_lost_closure_leaves_the_outage_s_inputs_where_they_were() {
         let (mut publisher, mut consumer) = channel();
-        let armed = |input| Span::at(ClockId::default(), input, RecordIntent::armed(1));
         fill(&mut publisher);
-        let release = |time| NoteEvent::off(time, SourceId::DIRECT, 0, 60).into();
-        assert_eq!(publisher.note(release(9000.0), armed(300)), Err(PublishError::Lost));
-        assert_eq!(publisher.epoch_complete(1, 9050.0), Err(PublishError::Lost));
-        assert_eq!(publisher.note(release(9100.0), armed(400)), Err(PublishError::Lost));
-        consumer.drain(|_, _| true);
-        publisher.note(release(9200.0), Span::default()).unwrap();
-        let mut spans = Vec::new();
-        consumer.drain(|delivery, span| {
-            if let Delivery::Event(CanonicalEvent::Gap(_)) = delivery {
-                spans.push((span.first.input, span.last.input));
-            }
-            true
-        });
-        assert_eq!(spans, [(400, 400)], "the held outage spans the note it lost, and no more");
+        for time in [9000.0, 9100.0, 9200.0] {
+            let release = NoteEvent::off(time, SourceId::DIRECT, 0, 60).into();
+            assert_eq!(publisher.note(release), Err(PublishError::Lost));
+        }
+        let mut gaps = Vec::new();
+        let mut drain = |consumer: &mut Consumer| {
+            consumer.drain(|event| {
+                if let CanonicalEvent::Gap(gap) = event {
+                    gaps.push(gap);
+                }
+                true
+            });
+        };
+        drain(&mut consumer);
+        // The held outage reaches the ring ahead of the next publication.
+        publisher.note(NoteEvent::on(9300.0, SourceId::DIRECT, 0, 60, 0.8).into()).unwrap();
+        drain(&mut consumer);
+        let [queued, grown] = gaps[..] else { panic!("{gaps:?}") };
+        let lost = PUBLICATION_RING as u64;
+        assert_eq!((queued.first, queued.last), (lost, lost), "the fill's next serial");
+        assert_eq!((grown.first, grown.last), (lost + 1, lost + 2));
+        assert_eq!((grown.time, grown.through), (9100.0, 9200.0));
     }
 
     #[test]
     fn a_full_lane_reports_its_outage_without_another_audio_callback() {
         let (mut publisher, mut consumer) = channel();
         for note in [60, 72] {
-            publisher
-                .note(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8).into(), Span::default())
-                .unwrap();
+            publisher.note(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8).into()).unwrap();
         }
         // Bends rather than repeated attacks: one onset per key, so a note the
         // snapshot restores can be checked against the onset it really had.
         for i in 2..PUBLICATION_RING - GAP_RESERVE {
             let mut event = NoteEvent::on(i as f64, SourceId::DIRECT, 0, 72, 0.8);
             event.kind = harmonigraph_core::NoteEventKind::Tuning { semitones: 0.1 };
-            publisher.note(event.into(), Span::default()).unwrap();
+            publisher.note(event.into()).unwrap();
         }
         assert_eq!(publisher.free(), 0, "the fixture must actually fill the lane");
         assert_eq!(
-            publisher.note(NoteEvent::off(9000.0, SourceId::DIRECT, 0, 60).into(), Span::default()),
+            publisher.note(NoteEvent::off(9000.0, SourceId::DIRECT, 0, 60).into()),
             Err(PublishError::Lost)
         );
         // Nothing publishes after the loss: whatever the drainer can see now
@@ -531,8 +419,7 @@ mod tests {
         let mut tracker = harmonigraph_core::NoteTracker::new();
         let mut held_at_gap = None;
         let mut gaps = 0;
-        let drained = consumer.drain(|delivery, _| {
-            let Delivery::Event(event) = delivery else { panic!("unexpected control") };
+        let drained = consumer.drain(|event| {
             if let CanonicalEvent::Gap(_) = event {
                 held_at_gap = Some(tracker.held_count());
                 gaps += 1;
@@ -549,11 +436,8 @@ mod tests {
 
         // The refresh restores what is sounding NOW and nothing else: key 60
         // was released while the lane was full and does not come back.
-        publisher
-            .baseline(&frame(1, 9001.0, &[held(72, 0.0, 7_200_000_000)]), Span::default())
-            .unwrap();
-        consumer.drain(|delivery, _| {
-            let Delivery::Event(event) = delivery else { panic!("unexpected control") };
+        publisher.baseline(&frame(1, 9001.0, &[held(72, 0.0, 7_200_000_000)])).unwrap();
+        consumer.drain(|event| {
             tracker.handle_canonical(event).unwrap();
             true
         });
@@ -571,22 +455,22 @@ mod tests {
         let voices: Vec<_> =
             (0..64).map(|note| held(note, 0.0, i64::from(note) * 100_000_000)).collect();
         for id in 1..=SNAPSHOT_SLOTS as u64 {
-            publisher.baseline(&frame(id, 1.0, &voices), Span::default()).unwrap();
+            publisher.baseline(&frame(id, 1.0, &voices)).unwrap();
         }
         assert_eq!(
-            publisher.baseline(&frame(99, 1.0, &voices), Span::default()),
+            publisher.baseline(&frame(99, 1.0, &voices)),
             Err(PublishError::Busy),
             "a full snapshot FIFO refuses rather than reporting lost history"
         );
-        assert_eq!(consumer.drain(|_, _| false), 0, "a declining drainer retains the frame");
+        assert_eq!(consumer.drain(|_| false), 0, "a declining drainer retains the frame");
         let mut seen = Vec::new();
-        consumer.drain(|delivery, _| {
-            let Delivery::Event(CanonicalEvent::Baseline(frame)) = delivery else { panic!() };
+        consumer.drain(|event| {
+            let CanonicalEvent::Baseline(frame) = event else { panic!() };
             seen.push(frame.id);
             true
         });
         assert_eq!(seen, (1..=SNAPSHOT_SLOTS as u64).collect::<Vec<_>>());
-        publisher.baseline(&frame(99, 2.0, &voices), Span::default()).unwrap();
+        publisher.baseline(&frame(99, 2.0, &voices)).unwrap();
         eprintln!(
             "canonical layouts: NoteDelta={} Item={} VoiceBaseline={} SourceBaseline={} ring_payload={} snapshot_fifo={}",
             std::mem::size_of::<NoteDelta>(),

@@ -121,6 +121,17 @@ struct Recorder {
     configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
 }
 
+/// A take file holding its one run, from the harness's clock zero, which is
+/// song time already.
+fn take_writer(
+    path: impl AsRef<std::path::Path>,
+    header: &harmonigraph_take::Header,
+) -> std::io::Result<harmonigraph_take::Writer> {
+    let mut writer = harmonigraph_take::Writer::create(path, header)?;
+    writer.write(&harmonigraph_take::Record::Run(harmonigraph_take::RunRecord::default()))?;
+    Ok(writer)
+}
+
 impl Recorder {
     fn from_env(state: &SharedState) -> Option<Recorder> {
         let path = std::env::var("LATTICE_TAKE").ok()?;
@@ -130,7 +141,7 @@ impl Recorder {
             source: "harmonigraph-standalone".into(),
             ..Default::default()
         };
-        match harmonigraph_take::Writer::create(&path, &header) {
+        match take_writer(&path, &header) {
             Ok(writer) => {
                 eprintln!("recording take: {path}");
                 Some(Recorder {
@@ -837,8 +848,7 @@ mod tests {
         let path = std::env::temp_dir()
             .join(format!("harmonigraph-config-frame-{}.take", std::process::id()));
         let mut recorder = Recorder {
-            writer: harmonigraph_take::Writer::create(&path, &harmonigraph_take::Header::default())
-                .unwrap(),
+            writer: take_writer(&path, &harmonigraph_take::Header::default()).unwrap(),
             last: [f32::NAN; ParamKey::ALL.len()],
             configuration: None,
         };
@@ -878,8 +888,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("harmonigraph-switch-{}.take", std::process::id()));
         app.recorder = Some(Recorder {
-            writer: harmonigraph_take::Writer::create(&path, &harmonigraph_take::Header::default())
-                .unwrap(),
+            writer: take_writer(&path, &harmonigraph_take::Header::default()).unwrap(),
             last: [f32::NAN; ParamKey::ALL.len()],
             configuration: None,
         });

@@ -1072,163 +1072,45 @@ fn a_record_arriving_after_its_sample_was_sequenced_is_still_assigned() {
 }
 
 /// The same lag against the take: a Tune the host runs after the Hub is a
-/// callback behind, so its record is stamped under the Hub's previous
-/// callback. Proving a callback's end complete as it ends would put that
-/// record below the proven frontier and fail the recorder for the session.
+/// callback behind, so the Hub sequences its note a callback after it was
+/// played, and a take stopped then still has it: the Hub publishes what it
+/// collected before a later callback ends the run. The writer's own count
+/// order is not exercised here; this harness drains everything at once.
 #[test]
-fn a_tune_run_after_the_hub_keeps_the_recorder_whole() {
+fn a_tune_run_after_the_hub_has_its_last_notes_in_a_stopped_take() {
     let _scope = crate::test_scope::enter();
-    let (mut hub, capture) = Device::recorded_hub();
+    let (hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut tune) = (hub, Device::new(true));
     hub.activate();
-    let mut tune = Device::new(true);
     tune.activate();
     let dir = std::env::temp_dir().join(format!("harmonigraph-tune-after-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
-    capture.arm();
-    // The Tune runs first, then after the Hub, at the same block boundary.
-    tune.run_format(0, vec![], None, None, 512);
-    hub.run_format(0, vec![], None, None, 512);
-    hub.run_format(512, vec![], None, None, 512);
-    tune.run_format(512, vec![note(1, 0, 60, 0, true)], None, None, 512);
-    hub.run_format(1024, vec![], None, None, 512);
-    tune.run_format(1024, vec![], None, None, 512);
-    assert_eq!(inspect_hub(&hub, |h| h.test_held(0)), 1, "the late copy is sequenced");
-    assert!(!writer.failed(), "a routine lag must not fail the recorder");
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// The last armed callback's notes reach the take after a disarm: a direct
-/// note on the Hub's own track, and a capture from a Tune the host runs after
-/// the Hub, which reaches the Hub only in the callback that observes the
-/// disarm and is stamped with the intent it was played under (#1760).
-#[test]
-fn the_last_armed_callbacks_notes_reach_the_take_after_a_disarm() {
-    let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
-    hub.activate();
-    let mut tune = Device::new(true);
-    tune.activate();
-    let dir = std::env::temp_dir().join(format!("harmonigraph-last-armed-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
     capture.arm();
     let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
-    for raw in [0, 512] {
-        hub.run_format(raw, vec![], None, None, 512);
-        tune.run_format(raw, vec![], None, None, 512);
-    }
-    let played = |id, key| vec![note(id, 0, key, 0, true), note(id, 0, key, 8, false)];
-    hub.run_format(1024, played(1, 60), None, None, 512);
-    tune.run_format(1024, played(2, 64), None, None, 512);
-    capture.stop();
-    for raw in [1536, 2048, 2560] {
-        hub.run_format(raw, vec![], None, None, 512);
-        tune.run_format(raw, vec![], None, None, 512);
-    }
-    writer.stop();
-    writer.drain(&mut capture);
-    assert!(!writer.failed());
-    let take =
-        harmonigraph_take::Take::read(writer.finished.as_ref().expect("the take seals")).unwrap();
-    for key in [60, 64] {
-        let struck = take
-            .notes()
-            .any(|n| n.note == key && matches!(n.kind, harmonigraph_take::NoteKind::On { .. }));
-        assert!(struck, "key {key} reaches the take");
-    }
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// A take stopped in a pause closes its epoch only after the callback that
-/// observed the disarm has published what it sequenced. The late Tune's note
-/// from the last armed callback is stamped armed; behind the closure, a writer
-/// that sealed in between held it and failed the next take.
-#[test]
-fn a_take_stopped_in_a_pause_closes_after_its_last_armed_notes() {
-    let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
-    hub.activate();
-    let mut tune = Device::new(true);
-    tune.activate();
-    capture.arm();
-    let (mut raw, mut position) = (0, 1.0);
-    let mut cycle = |playing: bool, played: Vec<Input>, stop: bool| {
-        if stop {
-            capture.stop();
-        }
-        let at = Some(timeline(position, playing));
-        hub.run_callback(raw, vec![], (None, None), (512, false), at);
+    let mut position = 1.0;
+    let mut cycle = |raw: i64, played: Vec<Input>| {
+        hub.run_callback(raw, vec![], (None, None), (512, false), Some(timeline(position, true)));
         tune.run_format(raw, played, None, None, 512);
-        raw += 512;
-        if playing {
-            position += 512.0 / 48_000.0;
-        }
+        position += 512.0 / 48_000.0;
     };
-    for playing in [true, true, true, true, false, false, false, false] {
-        cycle(playing, vec![], false);
-    }
-    cycle(false, vec![note(7, 0, 67, 0, true), note(7, 0, 67, 64, false)], false);
-    cycle(false, vec![], true);
-    cycle(false, vec![], false);
-    let order = capture.drain_take_order();
-    let closed = order.iter().position(|item| *item == ("epoch complete", Some(1)));
-    let closed = closed.expect("the take closes");
-    let armed = |item: &&(&str, Option<u64>)| **item == ("history", Some(1));
-    assert!(order[..closed].iter().filter(armed).count() >= 2, "the note reaches the lane");
-    assert_eq!(order[closed..].iter().filter(armed).count(), 0, "{order:?}");
-}
-
-/// More captures than one batch holds, from Tunes the host runs after the Hub:
-/// what the batch leaves in the rings is sequenced a callback later still, two
-/// after its input. The proven frontier holds below that backlog, and the
-/// intent it was played under is kept, so it is published and stamped like
-/// any other, and recording, armed or not, carries on.
-#[test]
-fn a_tune_backlog_past_one_batch_keeps_the_recorder_whole() {
-    for armed in [false, true] {
-        let _scope = crate::test_scope::enter();
-        let (mut hub, mut capture) = Device::recorded_hub();
-        hub.activate();
-        let tunes: Vec<Device> = (0..3)
-            .map(|_| {
-                let mut tune = Device::new(true);
-                tune.activate();
-                tune
-            })
-            .collect();
-        let dir = std::env::temp_dir()
-            .join(format!("harmonigraph-tune-backlog-{}-{armed}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        if armed {
-            capture.arm();
-        }
-        let mut writer =
-            harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
-        let cycle = |raw: i64, played: &dyn Fn(usize) -> Vec<Input>| {
-            hub.run_format(raw, vec![], None, None, 512);
-            for (index, tune) in tunes.iter().enumerate() {
-                tune.run_format(raw, played(index), None, None, 512);
-            }
-        };
-        for raw in [0, 512] {
-            cycle(raw, &|_| vec![]);
-        }
-        cycle(1024, &|index| {
-            let id = 10 + index as i32;
-            let mut events = vec![note(id, 0, 60 + index as i16, 0, true)];
-            events.extend((0..760u32).map(|k| expression(id, f64::from(k % 7) * 0.01, 1 + k / 2)));
-            events
-        });
-        let captured: usize =
-            tunes.iter().map(|tune| inspect_tune(tune, |tune| tune.captured as usize)).sum();
-        assert!(captured > crate::tuning::BATCH_EVENTS, "the fixture must overflow one batch");
-        for raw in [1536, 2048, 2560, 3072] {
-            cycle(raw, &|_| vec![]);
-        }
-        writer.drain(&mut capture);
-        assert!(!writer.failed(), "armed: {armed}");
-        std::fs::remove_dir_all(dir).unwrap();
-    }
+    cycle(0, vec![]);
+    // Played in the Tune after the Hub's callback: sequenced at 1024, where it
+    // sounds, inside the run.
+    cycle(512, vec![note(1, 0, 60, 0, true)]);
+    cycle(1024, vec![]);
+    capture.stop();
+    writer.stop();
+    // This callback observes the disarm and ends the run.
+    cycle(1536, vec![]);
+    writer.drain(&mut capture);
+    assert!(!writer.failed(), "a routine lag must not fail the recorder");
+    let sealed = writer.finished.clone().expect("the stopped take seals");
+    let take = harmonigraph_take::Take::read(&sealed).unwrap();
+    let struck = take
+        .notes()
+        .any(|n| n.note == 60 && matches!(n.kind, harmonigraph_take::NoteKind::On { .. }));
+    assert!(struck, "the Tune's last note before the run's end is in the take");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// Armed with the transport stopped, a note played, and disarmed: nothing
@@ -1267,109 +1149,6 @@ fn an_armed_take_whose_transport_never_rolled_draws_no_note() {
     let notes: Vec<_> = take.notes().map(|n| (n.note, n.t)).collect();
     assert!(notes.is_empty(), "an unrecorded note reaches the take: {notes:?}");
     std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// A flood past one batch every callback, across a Stop: the frontier still
-/// moves, to the earliest capture left in the rings and no further, so the
-/// take seals whole once what it recorded is published rather than only once
-/// the flood ends.
-#[test]
-fn a_take_stopped_in_a_flood_seals_before_the_flood_ends() {
-    let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
-    hub.activate();
-    let tunes: Vec<Device> = (0..3)
-        .map(|_| {
-            let mut tune = Device::new(true);
-            tune.activate();
-            tune
-        })
-        .collect();
-    let dir = std::env::temp_dir().join(format!("harmonigraph-flood-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    capture.arm();
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
-    let mut sealed = None;
-    for step in 0..14 {
-        let raw = step * 512;
-        if step == 4 {
-            capture.stop();
-            writer.stop();
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-        for (index, tune) in tunes.iter().enumerate() {
-            let id = 10 + index as i32;
-            let bends = (0..761u32).map(|k| expression(id, f64::from(k % 7) * 0.01, 1 + k / 2));
-            let events = match step {
-                2 => {
-                    std::iter::once(note(id, 0, 60 + index as i16, 0, true)).chain(bends).collect()
-                }
-                3..=9 => std::iter::once(expression(id, 0.05, 0)).chain(bends).collect(),
-                10 => vec![note(id, 0, 60 + index as i16, 0, false)],
-                _ => vec![],
-            };
-            tune.run_format(raw, events, None, None, 512);
-        }
-        writer.drain(&mut capture);
-        assert!(!writer.failed(), "failed at step {step}");
-        if sealed.is_none() && writer.finished.is_some() {
-            sealed = Some(step);
-        }
-    }
-    let sealed = sealed.expect("the take seals");
-    assert!(sealed < 9, "sealed at step {sealed}, after the flood ended");
-    let take = harmonigraph_take::Take::read(writer.finished.as_ref().unwrap()).unwrap();
-    assert!(take.incomplete.is_none(), "{:?}", take.incomplete);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// A cut and joined destruction are where the last callback's end is proven,
-/// since nothing after them can be sequenced before it. A host reset mid-take
-/// keeps the take whole; a lagging Tune's record still in its ring fails only
-/// a take it belonged to, never the recorder when nothing was armed.
-#[test]
-fn the_last_callback_is_proven_at_a_cut_unless_a_record_is_stranded() {
-    for (destroy, lagging, armed) in [
-        (false, false, true),
-        (false, true, true),
-        (true, false, true),
-        (true, true, true),
-        (false, true, false),
-        (true, true, false),
-    ] {
-        let _scope = crate::test_scope::enter();
-        let (mut hub, capture) = Device::recorded_hub();
-        hub.activate();
-        let mut tune = Device::new(true);
-        tune.activate();
-        let dir = std::env::temp_dir()
-            .join(format!("harmonigraph-cut-{}-{destroy}-{lagging}-{armed}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
-        if armed {
-            capture.arm();
-        }
-        for raw in [0, 512, 1024] {
-            tune.run_format(raw, vec![], None, None, 512);
-            hub.run_format(raw, vec![], None, None, 512);
-        }
-        let played = vec![note(1, 0, 64, 0, true), note(1, 0, 64, 8, false)];
-        if lagging {
-            hub.run_format(1536, vec![], None, None, 512);
-            tune.run_format(1536, played, None, None, 512);
-        } else {
-            tune.run_format(1536, played, None, None, 512);
-            hub.run_format(1536, vec![], None, None, 512);
-        }
-        if destroy {
-            capture.stop();
-            drop(hub);
-        } else {
-            hub.host_reset();
-        }
-        assert_eq!(writer.failed(), lagging && armed, "{destroy}, {lagging}, {armed}");
-        std::fs::remove_dir_all(dir).unwrap();
-    }
 }
 
 /// Membership is the epoch. A Tune attaching cuts every paired track, which

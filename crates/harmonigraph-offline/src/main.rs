@@ -52,11 +52,8 @@ OPTIONS:
                            chunkier text relative to the frame.
                            [default: sized so the UI reads like the plugin]
         --fps <N>          Frames per second.  [default: 60]
-        --pass <N>         Which pass of the take to render. Under On disarm
-                           and At bar, a loop wrap or a jump starts the next.
-                           [default: the last]
         --start <SEC>      Skip to here, as a song position — take times are
-                           the pass's own audio position, so 0 is the song's
+                           the take's own audio position, so 0 is the song's
                            start, not the recording's.
                            [default: where the recording begins, less --lead]
         --lead <SEC>       Extra empty frame before the recording starts. The
@@ -110,8 +107,6 @@ struct Args {
     size: Option<[u32; 2]>,
     scale: Option<f32>,
     fps: f64,
-    /// `None` means the take's last pass.
-    pass: Option<u32>,
     /// `None` means "start where the take's capture begins", backed off by
     /// whatever `--lead` asks for — see `start_of_render`. An explicit
     /// `--start 0` is NOT the same thing, which is why this is an Option
@@ -142,7 +137,6 @@ impl Default for Args {
             size: None,
             scale: None,
             fps: 60.0,
-            pass: None,
             start: None,
             lead: None,
             end: None,
@@ -189,7 +183,6 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
             "-s" | "--size" => args.size = Some(parse_size(&value("--size")?)?),
             "--scale" => args.scale = Some(parse_number("--scale", &value("--scale")?)?),
             "--fps" => args.fps = parse_number("--fps", &value("--fps")?)?,
-            "--pass" => args.pass = Some(parse_number("--pass", &value("--pass")?)?),
             "--start" => args.start = Some(parse_number("--start", &value("--start")?)?),
             "--lead" => args.lead = Some(parse_number("--lead", &value("--lead")?)?),
             "--end" => args.end = Some(parse_number("--end", &value("--end")?)?),
@@ -255,7 +248,7 @@ fn output_size(size: Option<[u32; 2]>, config: &harmonigraph_ui::RenderConfig) -
 
 /// Where the video starts, in take time.
 ///
-/// Take times are song positions (a pass starts at the host's transport
+/// Take times are song positions (a take starts at the host's transport
 /// position and runs on with its own audio), so time zero is the song's
 /// start and not the record button's. A passage played from a minute into the
 /// arrangement was captured from 60-odd seconds, and rendering from zero opens
@@ -364,8 +357,7 @@ fn export(args: Args) -> Result<(), String> {
     // the loop — everything between typing the command and having the file.
     let began = std::time::Instant::now();
     let take_path = args.take.ok_or("no take file given (--help for usage)")?;
-    let take =
-        harmonigraph_take::Take::read_pass(&take_path, args.pass).map_err(|e| e.to_string())?;
+    let take = harmonigraph_take::Take::read(&take_path).map_err(|e| e.to_string())?;
     let replacement = args
         .appearance
         .as_ref()
@@ -402,7 +394,7 @@ fn export(args: Args) -> Result<(), String> {
         );
     }
 
-    // The WAV the pass recorded for itself, beside the take file, if any.
+    // The WAV the take recorded, beside the take file, if any.
     let audio_path = take
         .audio_file
         .as_ref()
@@ -906,7 +898,8 @@ mod tests {
             }
             .into(),
         ));
-        let lines = [Record::Header(Header::default()), note(0.2, 60), gap, note(1.2, 64)];
+        let run = Record::Run(harmonigraph_take::RunRecord::default());
+        let lines = [Record::Header(Header::default()), run, note(0.2, 60), gap, note(1.2, 64)];
         let encoded = lines
             .iter()
             .map(|record| ron::to_string(record).unwrap())

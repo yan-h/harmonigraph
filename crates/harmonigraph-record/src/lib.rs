@@ -53,10 +53,10 @@
 //! # Time
 //!
 //! Everything is recorded on the plugin's own presentation clock, the one
-//! the display draws on, with where each input arrived. Song time is chosen
-//! by the reader (`harmonigraph_take`), from `Run` records that say where
-//! each stretch the take recorded without a pause sits in the song: at a
-//! pass's first block that is the **transport position**, and after it, the
+//! the display draws on, timed where it sounds. Song time is chosen by the
+//! reader (`harmonigraph_take`), from `Run` records that say where each
+//! stretch the take recorded without a pause sits in the take's audio: at the
+//! take's first block that is the **transport position**, and after it, the
 //! end of the audio already recorded. So a take's notes share one time base
 //! with its own WAV, and a pause resumes them where the audio got to rather
 //! than where the host says it is (#1760). A take only records while the

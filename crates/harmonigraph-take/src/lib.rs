@@ -17,11 +17,11 @@
 //! One RON-encoded [`Record`] per line, appendable and streamable:
 //!
 //! ```text
-//! Header((version:7,sample_rate:48000.0,...))
-//! Run((pass:1,at:(runtime_session:1,clock_epoch:0,input:0),song:12.0,presentation:3.5,...))
+//! Header((version:8,sample_rate:48000.0,audio_file:Some("take-….wav"),...))
+//! Run((at:3.5,song:12.0))
 //! Param((t:3.5,id:"pitch-class-fade",value:2.0))
 //! Canonical(Delta((event:(t:3.51,...),timing:Some((input:512,...)),...)))
-//! RunEnd((at:(runtime_session:1,clock_epoch:0,input:96000)))
+//! RunEnd((at:5.5))
 //! ```
 //!
 //! Line-oriented rather than one big document for three reasons: the
@@ -31,43 +31,35 @@
 //! take is greppable and hand-editable, which matters a lot the first
 //! time a render comes out wrong.
 //!
-//! # Time and passes
+//! # Time
 //!
-//! A file holds every pass of one armed take, on the clock the plugin's
-//! display runs on (presentation time). Each record also carries where its
-//! input arrived: the Hub's clock and sample, its *stamp*. A delta's stamp is
-//! its own `timing`; a snapshot and a gap carry theirs beside the payload.
+//! A file holds one armed take and names its one WAV. Every record is timed on
+//! the clock the plugin's display runs on (presentation time), where it
+//! sounds.
 //!
-//! A `Run` record opens a stretch the take recorded without a pause, and says
-//! where that stretch sits in the song: `song` is the audio's own position at
-//! the run's first sample, so notes and the WAV share one time base. `RunEnd`
-//! closes it. The reader ([`Take::read_pass`]) routes every stamped record to
-//! the run that holds its stamp, keeps the pass asked for (the last by
-//! default), and translates each run by its one offset into song seconds,
-//! which is what a [`Take`] holds once read. A record in no run is dropped:
-//! the next run's opening snapshot restates what was sounding. A voice it
-//! restates moves by the run its onset was played in, or, struck where no run
-//! recorded, by the first run after it and from no earlier than that run's
-//! start; the snapshot lifts to its latest voice. Parameters and
-//! configuration ride the same ring as `Run` and `RunEnd`, so their place
-//! between those lines is their stamp. Note history without a stamp has no
-//! place in such a file, nor a restated voice that is not accepted output
-//! (known by its lifetime, stamped at its onset), and either is refused.
+//! A `Run` record opens a stretch the take recorded without a pause and says
+//! where it sits in the take's audio: `at` is its start on the presentation
+//! clock and `song` the audio's own position there, so notes and the WAV share
+//! one time base. `RunEnd` closes it. The reader ([`Take::read`]) moves every
+//! record by the offset of the run its own time falls in, which is what a
+//! [`Take`] holds once read, and drops a record that falls in no run: the next
+//! run's opening snapshot restates what was sounding. A voice it restates moves
+//! by the run its onset sounded in, or, begun where nothing recorded, starts
+//! with the snapshot's run. A looped take is one run after another in one
+//! audio file, its loops played end to end.
 //!
-//! A gap marks the passes its inputs touch. An `Incomplete` marker, a failure
-//! of the take, names no pass and marks every one, an earlier whole pass
-//! included (#1766).
+//! A gap warns if it overlaps a run; an `Incomplete` marker, a failure of the
+//! take, always does.
 //!
-//! A file with no `Run` is one pass at offset zero, already in song time: the
-//! standalone's takes and in-memory fixtures, whose note history carries no
-//! stamp. A stamped record in it was played where no run recorded, an armed
-//! take whose transport never rolled, and is dropped.
+//! A file with no `Run` recorded nothing: an armed take whose transport never
+//! rolled. The standalone, whose clock is song time already, opens one run at
+//! zero.
 //!
 //! Song times are deliberately NOT wall-clock or frame times: the whole point
 //! is that the replay chooses its own frame rate.
 
 pub mod canonical;
-pub use canonical::{CanonicalRecord, IncompleteRecord, StampRecord};
+pub use canonical::{CanonicalRecord, IncompleteRecord};
 pub mod configuration;
 pub mod params;
 mod reader;
@@ -90,10 +82,11 @@ use serde::{Deserialize, Serialize};
 /// Version 5 named a baseline's Show flag `participating`; read under the new
 /// key `shown` it defaults to false and hides every source, so the rename is a
 /// version rather than a silent blank render. Version 6 stamped song time on
-/// the audio thread and wrote one file per pass; version 7 records the
-/// display's presentation time with each record's stamp, and the reader
-/// chooses the pass and its song time (#1760). There are no compatibility shims.
-pub const FORMAT_VERSION: u32 = 7;
+/// the audio thread and wrote one file per pass; version 7 routed each record
+/// by where its input arrived and held every pass in one file; version 8 places
+/// each record by when it sounds, in one take with one WAV (#1760). There are
+/// no compatibility shims.
+pub const FORMAT_VERSION: u32 = 8;
 
 /// Conventional file extension. Not enforced anywhere.
 pub const EXTENSION: &str = "take";
@@ -110,6 +103,9 @@ pub struct Header {
     pub appearance: Option<String>,
     /// Free-form: which shell wrote this, and out of what.
     pub source: String,
+    /// File name (not path) of the take's WAV, a sibling of the take file.
+    /// The renderer uses it for the spectrum and the soundtrack.
+    pub audio_file: Option<String>,
 }
 
 impl Header {
@@ -144,6 +140,7 @@ impl Default for Header {
             sample_rate: 48_000.0,
             appearance: None,
             source: String::new(),
+            audio_file: None,
         }
     }
 }
@@ -274,33 +271,26 @@ pub struct ParamRecord {
     pub value: f32,
 }
 
-/// Opens a stretch of one pass the take recorded without a pause.
+/// Opens a stretch the take recorded without a pause.
 ///
-/// `song - presentation` is the run's one offset: every record the run holds
-/// moves by it into song time.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// `song - at` is the run's one offset: every record whose own time falls in
+/// the run moves by it into song time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RunRecord {
-    /// Counts from 1 at the arm; under On disarm and At bar, a loop wrap or a
-    /// jump starts the next.
-    pub pass: u32,
-    /// The run's first input sample.
-    pub at: StampRecord,
-    /// Song seconds of that sample: where the pass's audio has got to, so a
+    /// Presentation seconds of the run's first sample.
+    pub at: f64,
+    /// Song seconds of that sample: where the take's audio has got to, so a
     /// resume continues the WAV rather than the host's position.
     pub song: f64,
-    /// Presentation seconds of that sample, on the Hub's own mapping.
-    pub presentation: f64,
-    /// File name (not path) of the pass's WAV, a sibling of the take file.
-    /// The renderer uses it for the spectrum and the soundtrack.
-    pub audio_file: Option<String>,
 }
 
-/// Closes the open run: `at` is the first sample it did not record.
+/// Closes the open run: `at` is the presentation time of its first sample
+/// that did not record.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RunEndRecord {
-    pub at: StampRecord,
+    pub at: f64,
 }
 
 /// One line of a take.
@@ -311,7 +301,7 @@ pub enum Record {
     Param(ParamRecord),
     Configuration(ConfigurationRecord),
     Canonical(CanonicalRecord),
-    /// A failure of the take. It names no pass, so it marks every one (#1766).
+    /// A failure of the take.
     Incomplete(IncompleteRecord),
     Run(RunRecord),
     RunEnd(RunEndRecord),
@@ -334,16 +324,15 @@ pub struct Take {
     /// and usable; callers should say so rather than pretend the take is
     /// whole.
     pub truncated: bool,
-    /// The hole in the note history the pass read carries, if it has one: the
-    /// FIRST the file names, whether as a `Gap` among the events that touches
-    /// one of the pass's runs, an `Incomplete` marker anywhere in the file, or a
-    /// record the reader had to lift past its bound.
+    /// The hole in the note history the take carries, if it has one: the
+    /// FIRST the file names, whether as a `Gap` that overlaps one of its runs
+    /// or an `Incomplete` marker.
     ///
     /// First rather than last because a later gap adds nothing to the warning:
     /// the reader took the last line once, so a take with two gaps exported
     /// with a warning naming a different gap from its own marker (#895).
     pub incomplete: Option<IncompleteRecord>,
-    /// File name (not path) of the WAV recorded beside the pass read.
+    /// File name (not path) of the WAV recorded beside the take.
     pub audio_file: Option<String>,
     /// Song time of that WAV's first sample.
     ///
@@ -351,10 +340,6 @@ pub struct Take {
     /// and the muxed track would both sit at the wrong place by exactly
     /// however far in you started.
     pub audio_start: Option<f64>,
-    /// The passes the file holds, in order: one for a file with no `Run`.
-    pub passes: Vec<u32>,
-    /// The pass read. `None` only for a take built in memory.
-    pub pass: Option<u32>,
 }
 
 /// Why a take could not be read.
@@ -368,11 +353,6 @@ pub enum ReadError {
     /// Written in an unsupported older or newer format.
     Version(u32),
     InvalidCanonical(usize),
-    /// The file holds no such pass.
-    NoPass {
-        asked: u32,
-        passes: Vec<u32>,
-    },
 }
 
 impl std::fmt::Display for ReadError {
@@ -386,9 +366,6 @@ impl std::fmt::Display for ReadError {
             }
             ReadError::Version(v) => {
                 write!(f, "take is format version {v}, this build understands {FORMAT_VERSION}")
-            }
-            ReadError::NoPass { asked, passes } => {
-                write!(f, "take holds no pass {asked}; it holds {passes:?}")
             }
         }
     }
@@ -424,25 +401,12 @@ fn unfinished_ron(line: &str) -> bool {
 }
 
 impl Take {
-    /// The file's last pass.
     pub fn read(path: impl AsRef<std::path::Path>) -> Result<Take, ReadError> {
-        Take::read_pass(path, None)
-    }
-
-    /// Pass `pass` of the file, or its last with `None`.
-    pub fn read_pass(
-        path: impl AsRef<std::path::Path>,
-        pass: Option<u32>,
-    ) -> Result<Take, ReadError> {
         let file = std::fs::File::open(path)?;
-        Take::parse_pass(std::io::BufReader::new(file), pass)
+        Take::parse(std::io::BufReader::new(file))
     }
 
     pub fn parse(input: impl BufRead) -> Result<Take, ReadError> {
-        Take::parse_pass(input, None)
-    }
-
-    pub fn parse_pass(input: impl BufRead, pass: Option<u32>) -> Result<Take, ReadError> {
         // Keep one line of lookahead to recognize the physical last line: a
         // syntactically unfinished final record can be a half-written line.
         // A complete record with an invalid type/value is corruption even there.
@@ -487,7 +451,7 @@ impl Take {
             }
         }
         let header = header.ok_or(ReadError::MissingHeader)?;
-        reader::assemble(header, records, truncated, pass)
+        reader::assemble(header, records, truncated)
     }
 
     /// The song position of the last recorded event (a gap counts to
@@ -561,18 +525,6 @@ impl Writer {
         writer.write(&Record::Header(header.clone()))?;
         writer.flush()?;
         Ok(writer)
-    }
-
-    /// Make the real buffered file writes fail when flushed, after any prefix
-    /// already written. The replacement handle has no write permission.
-    #[cfg(feature = "test-support")]
-    pub fn make_read_only_for_test(
-        &mut self,
-        path: impl AsRef<std::path::Path>,
-    ) -> std::io::Result<()> {
-        self.out.flush()?;
-        self.out = std::io::BufWriter::new(std::fs::File::open(path)?);
-        Ok(())
     }
 
     /// Buffer one record. The recorder flushes at each worker drain pass,
@@ -720,6 +672,13 @@ mod tests {
         (header, notes, params)
     }
 
+    /// A header line and the one run, from zero, that a file's records are
+    /// read in.
+    fn opened(header: Header) -> String {
+        let run = ron::to_string(&Record::Run(RunRecord::default())).unwrap();
+        format!("{}\n{run}", ron::to_string(&Record::Header(header)).unwrap())
+    }
+
     /// Write the sample take to its own file and read it back. Each
     /// caller gets a distinct path: the tests run in parallel, and a
     /// shared one raced (one test deleting the file another was reading).
@@ -730,6 +689,7 @@ mod tests {
         let path = dir.join(format!("{name}.take"));
         {
             let mut writer = Writer::create(&path, &header).unwrap();
+            writer.write(&Record::Run(RunRecord::default())).unwrap();
             for note in &notes {
                 writer.note(*note).unwrap();
             }
@@ -763,7 +723,7 @@ mod tests {
     #[test]
     fn a_truncated_take_keeps_every_whole_line() {
         let (header, notes, _) = sample();
-        let mut text = ron::to_string(&Record::Header(header)).unwrap();
+        let mut text = opened(header);
         text.push('\n');
         for note in &notes {
             text.push_str(&ron::to_string(&Record::Note(*note)).unwrap());
@@ -784,7 +744,7 @@ mod tests {
         let inside_id = parameter.find("id:\"").unwrap() + "id:\"".len() + 3;
         let text = format!(
             "{}\n{}\n{}",
-            ron::to_string(&Record::Header(header)).unwrap(),
+            opened(header),
             ron::to_string(&Record::Note(notes[0])).unwrap(),
             &parameter[..inside_id]
         );
@@ -825,7 +785,7 @@ mod tests {
     fn records_are_sorted_by_time_however_they_were_written() {
         let header = Header::default();
         let out_of_order = [5.0, 1.0, 7.0, 0.5, 3.0];
-        let mut text = ron::to_string(&Record::Header(header)).unwrap();
+        let mut text = opened(header);
         text.push('\n');
         for t in out_of_order {
             let note = NoteRecord { source: 0, t, channel: 0, note: 60, kind: NoteKind::Off };
@@ -848,7 +808,7 @@ mod tests {
     #[test]
     fn simultaneous_records_keep_their_written_order() {
         let header = Header::default();
-        let mut text = ron::to_string(&Record::Header(header)).unwrap();
+        let mut text = opened(header);
         text.push('\n');
         for kind in [NoteKind::Off, NoteKind::On { velocity: 0.5 }] {
             let note = NoteRecord { source: 0, t: 2.0, channel: 0, note: 60, kind };
@@ -961,7 +921,7 @@ mod tests {
     fn canonical_order_uses_stable_time_order_but_payload_errors_keep_file_precedence() {
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::{NoteEvent, SourceId};
-        let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let header = opened(Header::default());
         let serialize =
             |event| ron::to_string(&Record::Canonical(CanonicalRecord::from_event(event))).unwrap();
         let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 5, true, &[]).unwrap();
@@ -983,7 +943,7 @@ mod tests {
         assert_eq!(take.events.last().unwrap().time(), 3.0);
         assert!(matches!(
             Take::parse(std::io::Cursor::new(format!("{header}\n{frame}\n{note}\n"))),
-            Err(ReadError::InvalidCanonical(3))
+            Err(ReadError::InvalidCanonical(4))
         ));
 
         delta.event.time = 3.0;
@@ -991,7 +951,7 @@ mod tests {
         let invalid_order = format!("{header}\n{late_history}\n{frame}\n");
         assert!(matches!(
             Take::parse(std::io::Cursor::new(&invalid_order)),
-            Err(ReadError::InvalidCanonical(2))
+            Err(ReadError::InvalidCanonical(3))
         ));
         delta.event.kind = harmonigraph_core::NoteEventKind::On { velocity: 2.0 };
         let malformed_duplicate = serialize(CanonicalEvent::Note(delta));
@@ -999,11 +959,11 @@ mod tests {
             Take::parse(std::io::Cursor::new(format!(
                 "{header}\n{note}\n{frame}\n{malformed_duplicate}\n"
             ))),
-            Err(ReadError::InvalidCanonical(4))
+            Err(ReadError::InvalidCanonical(5))
         ));
         assert!(matches!(
             Take::parse(std::io::Cursor::new(format!("{invalid_order}{malformed_duplicate}\n"))),
-            Err(ReadError::InvalidCanonical(4))
+            Err(ReadError::InvalidCanonical(5))
         ));
     }
 
@@ -1022,7 +982,7 @@ mod tests {
             CanonicalEvent::Baseline(&baseline),
         )))
         .unwrap();
-        let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let header = opened(Header::default());
         for invalid in [
             full.replace("note:60", "note:256"),
             full.replace("ObservedDirect", "UnknownProvenance"),
@@ -1030,20 +990,20 @@ mod tests {
             assert_ne!(invalid, full);
             let parsed = Take::parse(std::io::Cursor::new(format!("{header}\n{invalid}")));
             assert!(
-                matches!(parsed, Err(ReadError::Parse(2, _))),
+                matches!(parsed, Err(ReadError::Parse(3, _))),
                 "complete malformed record was accepted: {parsed:?}"
             );
         }
         let mut record = canonical::BaselineRecord::from(&baseline);
         record.voices = vec![row.into(); 65];
-        let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let header = opened(Header::default());
         let invalid =
             ron::to_string(&Record::Canonical(CanonicalRecord::Baseline(Box::new(record))))
                 .unwrap();
         let text = format!("{header}\n{invalid}");
         assert!(matches!(
             Take::parse(std::io::Cursor::new(text)),
-            Err(ReadError::InvalidCanonical(2))
+            Err(ReadError::InvalidCanonical(3))
         ));
         let frame = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
             CanonicalEvent::Baseline(&baseline),
@@ -1057,7 +1017,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             Take::parse(std::io::Cursor::new(format!("{header}\n{frame}\n{later}"))),
-            Err(ReadError::InvalidCanonical(3))
+            Err(ReadError::InvalidCanonical(4))
         ));
     }
 

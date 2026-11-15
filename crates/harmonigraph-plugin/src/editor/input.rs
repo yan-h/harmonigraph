@@ -129,12 +129,10 @@ impl LiveInput {
         let tracker = &mut runtime.tracker;
         let (recorder, tape) = (&mut self.recorder, &mut self.tape_notes);
         recorder.catch_up(tracker, tape);
-        self.consumer.drain(|delivery, _| {
-            if let harmonigraph_record::publication::Delivery::Event(event) = delivery {
-                let result = tracker.handle_canonical_mapped(event, offset);
-                debug_assert!(result.is_ok(), "validated canonical publication");
-                recorder.record(tracker, event.time(), tape);
-            }
+        self.consumer.drain(|event| {
+            let result = tracker.handle_canonical_mapped(event, offset);
+            debug_assert!(result.is_ok(), "validated canonical publication");
+            recorder.record(tracker, event.time(), tape);
             true
         });
     }
@@ -523,7 +521,6 @@ mod tests {
                     .note(
                         NoteEvent::on(start + 0.125, SourceId::DIRECT, 0, 48 + batch as u8, 0.8)
                             .into(),
-                        Default::default(),
                     )
                     .unwrap();
                 notes.observe_clock(end);
@@ -647,25 +644,22 @@ mod tests {
         for (source, time) in [(1, 99.950), (2, 99.995)] {
             let event = NoteEvent::on(time, SourceId(source), 0, 60, 1.0);
             producer
-                .note(
-                    harmonigraph_core::canonical::NoteDelta {
-                        assignment: None,
-                        partial_output: false,
-                        event,
-                        sequence: 1,
-                        lifetime: 1,
-                        provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
-                        timing: Some(harmonigraph_core::canonical::EventTiming {
-                            clock: Default::default(),
-                            input: 0,
-                            planned: None,
-                            sample: 0,
-                            sample_rate: 48000.0,
-                        }),
-                        pitch_microcents: None,
-                    },
-                    Default::default(),
-                )
+                .note(harmonigraph_core::canonical::NoteDelta {
+                    assignment: None,
+                    partial_output: false,
+                    event,
+                    sequence: 1,
+                    lifetime: 1,
+                    provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
+                    timing: Some(harmonigraph_core::canonical::EventTiming {
+                        clock: Default::default(),
+                        input: 0,
+                        planned: None,
+                        sample: 0,
+                        sample_rate: 48000.0,
+                    }),
+                    pitch_microcents: None,
+                })
                 .unwrap();
         }
 
@@ -709,9 +703,9 @@ mod tests {
             }),
             pitch_microcents: None,
         };
-        producer.note(accepted, Default::default()).unwrap();
+        producer.note(accepted).unwrap();
         let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
-        producer.note(event.into(), Default::default()).unwrap();
+        producer.note(event.into()).unwrap();
         shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 21.0);
         assert_eq!(
             shared
@@ -743,7 +737,7 @@ mod tests {
         )
         .unwrap();
         producer.observe_clock(12.0);
-        producer.baseline(&baseline, Default::default()).unwrap();
+        producer.baseline(&baseline).unwrap();
         shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 22.2);
         let note = shared
             .ui
@@ -782,17 +776,14 @@ mod tests {
         );
         use harmonigraph_core::canonical::{GapReason, PublicationGap};
         producer
-            .gap(
-                PublicationGap {
-                    source: Some(SourceId(3)),
-                    time: 2.5,
-                    through: 3.0,
-                    first: 2,
-                    last: 3,
-                    reason: GapReason::PublicationFull,
-                },
-                Default::default(),
-            )
+            .gap(PublicationGap {
+                source: Some(SourceId(3)),
+                time: 2.5,
+                through: 3.0,
+                first: 2,
+                last: 3,
+                reason: GapReason::PublicationFull,
+            })
             .unwrap();
         let resumed = SourceBaseline::new(
             SourceId(3),
@@ -813,7 +804,7 @@ mod tests {
             }],
         )
         .unwrap();
-        producer.baseline(&resumed, Default::default()).unwrap();
+        producer.baseline(&resumed).unwrap();
         shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 22.3);
         let voice =
             shared.ui.picture.runtime.tracker.voices().find(|v| v.source == SourceId(3)).unwrap();

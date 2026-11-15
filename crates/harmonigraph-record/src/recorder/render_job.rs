@@ -29,9 +29,6 @@ pub(super) struct RenderRequest {
     /// the take's header before queueing, so the job keeps the look the take
     /// carried then. It stays `None` only for a take whose header has none.
     pub(super) appearance: Option<String>,
-    /// A session-local completion notice, owned by this request so a new
-    /// recording cannot erase the reason an earlier render was cut short.
-    pub(super) notice: Option<&'static str>,
 }
 
 /// Where `load-plugin.sh` installs the renderer, and where the plugin
@@ -447,7 +444,7 @@ fn run_job(
     current.snapshot.state = ExportStatus::Completed;
     current.snapshot.output = output.clone();
     current.snapshot.progress = progress.read().unwrap_or_default();
-    let detail = rendered_detail(request.notice, &tail.warnings, archive_lost.as_deref());
+    let detail = rendered_detail(&tail.warnings, archive_lost.as_deref());
     current.snapshot.detail = detail.clone();
     Ok((output, detail))
 }
@@ -489,13 +486,12 @@ struct Tail {
 }
 
 /// What a finished job's detail says beyond its Completed state, one line
-/// each: the take's notice, the renderer's warnings and a copy lost at
+/// each: the renderer's warnings and a copy lost at
 /// publication, because Completed alone would say a take with holes in its
 /// note history came out whole. Empty for a clean render, since the job row
 /// already names the video it wrote.
-fn rendered_detail(notice: Option<&str>, warnings: &[String], archive: Option<&str>) -> String {
-    let warnings = warnings.iter().map(String::as_str);
-    notice.into_iter().chain(warnings).chain(archive).collect::<Vec<_>>().join("\n")
+fn rendered_detail(warnings: &[String], archive: Option<&str>) -> String {
+    warnings.iter().map(String::as_str).chain(archive).collect::<Vec<_>>().join("\n")
 }
 
 /// Follow the renderer's stderr to its end, publishing progress as it arrives,

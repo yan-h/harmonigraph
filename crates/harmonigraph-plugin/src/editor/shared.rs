@@ -179,7 +179,7 @@ impl EditorShared {
         // events arriving: music has gaps, and a gap is not a stop.
         self.take_rolling = self.take.is_rolling();
 
-        // One-file triggers finish at transport discontinuities.
+        // Loop end finishes at the wrap.
         let trigger = self.ui.picture.appearance.render.trigger;
         let ends_at_rewind = trigger.ends_at_rewind();
         self.take.set_end_at_rewind(ends_at_rewind);
@@ -189,8 +189,7 @@ impl EditorShared {
         self.take.set_stop_bar(self.ui.picture.appearance.render.stop_at_bar());
 
         // Honor the audio-owned completion even if the trigger changed before
-        // this poll. Stop still waits for every publication lane to close the
-        // prefix; a forward seek carries its cutoff notice into the render.
+        // this poll.
         let ended = self.take.has_ended();
         if self.take.is_recording() && ended {
             self.ui.workspace.interaction.take.recording = false;
@@ -338,12 +337,9 @@ mod tests {
         assert!(shared.take.is_recording());
         // One note captured, as the Hub publishes one into the take's first run.
         recorder.is_armed();
-        let (epoch, pass) = recorder.armed_pass().unwrap();
-        recorder.run(epoch, pass, Default::default(), 0.0, 0.0);
-        let intent = harmonigraph_record::configuration::RecordIntent::armed(epoch);
-        let route = harmonigraph_record::publication::Span::at(Default::default(), 0, intent);
+        recorder.run(0.0, 0.0);
         let on = harmonigraph_core::NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
-        let _ = recorder.publish_note(on.into(), route);
+        let _ = recorder.publish_note(on.into());
         let first_still = 1.0;
         let frame = 1.0 / 144.0;
         let mut now = first_still;

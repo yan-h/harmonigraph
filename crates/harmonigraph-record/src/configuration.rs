@@ -1,6 +1,4 @@
-//! The arm intent and the completion fences. Stop is intent; the producer and
-//! any optional configuration/source owners must close their prefixes before
-//! finalization.
+//! The arm intent and the failure flag.
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// What the GUI last asked of the audio thread: arm a take epoch, or disarm it.
@@ -38,27 +36,12 @@ pub(crate) struct RecordFence {
     pub failed: AtomicBool,
     /// First worker-side failure detail. Audio-thread failures only set `failed`.
     pub failure_message: parking_lot::Mutex<Option<String>>,
-    pub configuration_closed: AtomicU64,
-    pub source_closed: AtomicU64,
-    /// The joined plugin still owns actual source history not yet published.
-    /// Only its retired publication owner may release this failure-close hold.
-    pub retirement_hold: AtomicBool,
     #[cfg(feature = "test-support")]
     pub worker_after_empty: TestPause,
     #[cfg(feature = "test-support")]
     pub worker_before_commands: TestPause,
     #[cfg(feature = "test-support")]
-    pub worker_after_stop: TestPause,
-    #[cfg(all(test, feature = "test-support"))]
-    pub worker_after_finish: TestPause,
-    #[cfg(feature = "test-support")]
     pub worker_finished: AtomicBool,
-    #[cfg(feature = "test-support")]
-    pub worker_empty_visits: AtomicU64,
-    #[cfg(feature = "test-support")]
-    pub worker_before_retirement_check: TestPause,
-    #[cfg(all(test, feature = "test-support"))]
-    pub worker_failure_accounted: AtomicBool,
     #[cfg(all(test, feature = "test-support"))]
     pub worker_stop_processed: AtomicBool,
     #[cfg(feature = "test-support")]
@@ -69,8 +52,6 @@ pub(crate) struct RecordFence {
     pub test_wav_finish_failure: AtomicBool,
     #[cfg(feature = "test-support")]
     pub boundary_pause: TestPause,
-    #[cfg(feature = "test-support")]
-    pub producer_close_pause: TestPause,
 }
 
 #[cfg(feature = "test-support")]

@@ -1,5 +1,5 @@
-//! Pure take-lifecycle decisions. No publication, callback ownership, policy
-//! atomics or pass serialization lives here; the recorder applies the actions.
+//! Pure take-lifecycle decisions: when a block records, where it sits in the
+//! take's audio, and what ends the take. The recorder applies the actions.
 
 /// Forward motion is stronger evidence than accepting a first playing block.
 /// Only the former qualifies a one-file take's rewind as completion (#839).
@@ -10,21 +10,14 @@ pub(super) enum Motion {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Deferred {
-    None,
-    Split,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum State {
     Disarmed,
-    /// No accepted block: there is no pass to split from (#828).
+    /// No accepted block yet.
     Waiting,
     Recording {
         motion: Motion,
-        deferred: Deferred,
     },
-    /// A transport end, not a callback/configuration finalization proof.
+    /// The transport ended the take: a Loop end wrap or the stop bar.
     Complete,
 }
 
@@ -40,7 +33,7 @@ impl State {
 pub(super) struct History {
     pub position: Option<(f64, f64)>,
     pub bar: Option<f64>,
-    /// Contiguous end of the blocks accepted into this pass. Parked host
+    /// Contiguous end of the blocks accepted into this take. Parked host
     /// observations do not move the audio that has already been appended.
     pub recorded_end: Option<f64>,
 }
@@ -64,7 +57,6 @@ pub(super) enum Observation {
 pub(super) enum End {
     Rewind = 1,
     Bar = 2,
-    ForwardSeek = 3,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +66,6 @@ pub(super) enum Action {
     Arm,
     HistoryOnly,
     Record,
-    SplitAndRecord,
     Complete(End),
 }
 
@@ -83,15 +74,15 @@ pub(super) struct Transition {
     pub state: State,
     pub history: History,
     pub action: Action,
-    /// Where a block that records sits in its pass's audio: the transport's
-    /// position at a pass's first block, and the end of the audio already
-    /// recorded after that, so a resume continues the WAV rather than the
-    /// host's position.
+    /// Where a block that records sits in the take's audio: the transport's
+    /// position at the take's first block, and the end of the audio already
+    /// recorded after that, so a resume, a loop wrap or a seek continues the
+    /// WAV rather than the host's position.
     pub origin: Option<f64>,
 }
 
 /// One observation, entirely by value. Bar is observed before transport for
-/// each block: its completion must exclude that block and any deferred split.
+/// each block: its completion must exclude that block.
 /// The two observations remain separate because callers can lack either clock.
 pub(super) fn transition(
     state: State,
@@ -130,24 +121,16 @@ pub(super) fn transition(
         }
         Observation::Transport { position, playing, duration } => {
             next.history.position = Some((position, duration));
-            let (mut motion, mut deferred) = match state {
-                State::Recording { motion, deferred } => (motion, deferred),
-                _ => (Motion::Initial, Deferred::None),
+            let mut motion = match state {
+                State::Recording { motion } => motion,
+                _ => Motion::Initial,
             };
-            let recording = matches!(state, State::Recording { .. });
             let rolling = match crate::transport::step(history.position, position, playing) {
                 crate::transport::Step::Back { rolling } => {
-                    if policy.end_at_rewind {
-                        if motion == Motion::Forward {
-                            next.state = State::Complete;
-                            next.action = Action::Complete(End::Rewind);
-                            return next;
-                        }
-                        deferred = Deferred::None;
-                    } else if recording {
-                        // Waiting has no debt: the first routed block must
-                        // stay in pass 1 so its configuration can close (#828).
-                        deferred = Deferred::Split;
+                    if policy.end_at_rewind && motion == Motion::Forward {
+                        next.state = State::Complete;
+                        next.action = Action::Complete(End::Rewind);
+                        return next;
                     }
                     rolling
                 }
@@ -163,35 +146,16 @@ pub(super) fn transition(
             };
             if rolling {
                 // Host observation history includes parked scrubs. Audio does
-                // not: compare to the accepted prefix, including after a pause.
-                // Match playback's 50 ms jitter allowance, without accumulating
-                // an arbitrary missing interval in an otherwise successful WAV.
-                if history.recorded_end.is_some_and(|end| position > end + 0.05) {
-                    if policy.end_at_rewind {
-                        next.state = State::Complete;
-                        next.action = Action::Complete(End::ForwardSeek);
-                        return next;
-                    }
-                    deferred = Deferred::Split;
-                }
-                // A policy change to a one-file trigger cancels an old debt,
-                // even if resumption is forward rather than another rewind.
-                next.action = if deferred == Deferred::Split && !policy.end_at_rewind {
-                    Action::SplitAndRecord
-                } else {
-                    Action::Record
-                };
-                next.state = State::Recording { motion, deferred: Deferred::None };
-                let audio_origin = if next.action == Action::SplitAndRecord {
-                    position
-                } else {
-                    history.recorded_end.unwrap_or(position)
-                };
+                // not: the block continues the accepted prefix, including after
+                // a pause or a seek.
+                next.action = Action::Record;
+                next.state = State::Recording { motion };
+                let audio_origin = history.recorded_end.unwrap_or(position);
                 next.history.recorded_end =
                     (duration.is_finite() && duration >= 0.0).then_some(audio_origin + duration);
                 next.origin = Some(audio_origin);
-            } else if recording {
-                next.state = State::Recording { motion, deferred };
+            } else if matches!(state, State::Recording { .. }) {
+                next.state = State::Recording { motion };
             }
         }
     }

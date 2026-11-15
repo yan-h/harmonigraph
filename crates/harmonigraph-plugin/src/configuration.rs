@@ -220,14 +220,9 @@ impl Owner {
     ) {
         self.boundary = boundary;
         self.maps.begin(boundary);
-        self.recording.note_intent(boundary.steady_time, recorder.capture_recording_intent());
+        self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
         self.recording.block_frames = boundary.frames;
-        // The whole callback's input is applied and observed inside the same
-        // `process_configuration` call, so configuration for it is settled here
-        // and never holds output publication behind an unconsumed event. Local
-        // steady time, like every other frontier the recording compares.
-        self.recording.prefix = boundary.steady_time.saturating_add(i64::from(boundary.frames));
     }
 
     /// Seed the callback after all queued commands reduce. Adaptive keeps this
@@ -340,21 +335,7 @@ impl Owner {
         self.recording.presentation.at(self.recording.block_start)
     }
 
-    pub fn finish_recording_publication(
-        &mut self,
-        recorder: &mut harmonigraph_record::Recorder,
-        observation_time: f64,
-    ) {
-        self.recording.observation_time = observation_time;
-        self.recording.finish(recorder);
-    }
-    pub fn record(
-        &mut self,
-        recorder: &mut harmonigraph_record::Recorder,
-        origin: Option<f64>,
-        observation_time: f64,
-    ) {
-        self.recording.observation_time = observation_time;
+    pub fn record(&mut self, recorder: &mut harmonigraph_record::Recorder, origin: Option<f64>) {
         if self.snapshot.status & 2 != 0 && recorder.recording_epoch() != 0 {
             recorder.fail_configuration();
         }
@@ -381,9 +362,6 @@ impl Owner {
                 self.recording.configuration(recorder, sample, config);
             }
         }
-        // No closure here: this runs before the Hub publishes this callback's
-        // history, which the previous callback's armed intent can still own.
-        // `finish_recording_publication` closes after it.
         self.recording.registered(end);
     }
 
