@@ -20,6 +20,12 @@ const CELL_GAP: f32 = 1.0;
 /// the sheet is not either.
 const CELL_MIN_H: f32 = 3.0;
 
+/// What the strip's three handles do, which its hover says after the caller's
+/// hint: the strip has them, so no caller writes them (see
+/// [`with_gestures`](super::bar::with_gestures)).
+const DRAGS: &str = "Drag an end to add or drop layers on that side, the middle mark to move \
+     home, between them to slide the whole stack.";
+
 /// Cells on the axis: every sheet [`SEVENS_LAYER_LIMIT`] allows, drawn or not.
 const CELLS: i32 = 2 * SEVENS_LAYER_LIMIT + 1;
 
@@ -244,8 +250,8 @@ impl<'a> LayerStrip<'a> {
         LayerStrip { low, home, high, size, hint: None }
     }
 
-    /// What the hover says the setting is; the strip ends it with the
-    /// gestures it answers to (see [`ValueBar::hint`]).
+    /// What the hover says the setting is; the strip ends it with what its
+    /// handles do and the gestures it answers to (see [`ValueBar::hint`]).
     ///
     /// [`ValueBar::hint`]: super::value::ValueBar::hint
     pub fn hint(mut self, hint: &'a str) -> Self {
@@ -377,7 +383,12 @@ impl<'a> LayerStrip<'a> {
         );
 
         // A double-click puts the stack back on a fresh view's.
-        with_gestures(response, self.hint, true, false)
+        // Formatted only while the pointer is over the strip, as the hover the
+        // gestures go into is.
+        let hint = response
+            .hovered()
+            .then(|| self.hint.map_or_else(|| DRAGS.to_owned(), |hint| format!("{hint} {DRAGS}")));
+        with_gestures(response, hint.as_deref(), true, false)
             .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
 }
@@ -698,9 +709,9 @@ mod tests {
         assert_eq!(lit.iter().filter(|l| **l).count(), 1, "hovering an end lit {lit:?}");
     }
 
-    /// The strip's hover ends with the gestures it answers to, said by the
-    /// shared bar wording rather than by its caller, so a double-click is
-    /// promised as the reset it is.
+    /// The strip's hover ends with what its handles do and the gestures it
+    /// answers to, said by the strip and the shared bar wording rather than by
+    /// its caller, so a double-click is promised as the reset it is.
     #[test]
     fn the_strips_hover_ends_with_its_gestures() {
         use crate::tests::probe::{events_into, themed};
@@ -727,7 +738,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(shown, ["Which sheets.\nDrag to adjust, double-click to reset."]);
+        let gestures = super::super::bar::gestures(&ctx, true, false);
+        assert_eq!(shown, [format!("Which sheets. {DRAGS}\n{gestures}")]);
     }
 
     /// A gesture is decided ONCE and holds, so an end dragged clean past its

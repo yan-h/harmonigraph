@@ -105,7 +105,7 @@ use lattice_node_glow::create_glow_pipelines;
 /// label costs is the rim, and the rim was the text drawn again once per
 /// stamp.
 mod text;
-pub use text::{text_paint_callback, FontAtlas, GlyphInstance, GlyphRuns, SlideAxis};
+pub use text::{text_paint_callback, GlyphInstance, GlyphRuns, MarkSheet, SlideAxis};
 
 /// Generic shadow packing and kernels, shared by every group.
 mod shadow;
@@ -145,7 +145,7 @@ pub struct LatticeLabels {
     pub labels: Vec<Label>,
     /// The drawn marks' own sheet, on the frames it has moved. egui's font
     /// texture reaches the callback through `CallbackResources`.
-    pub marks: Option<FontAtlas>,
+    pub marks: Option<MarkSheet>,
     /// The axes these names travel along, for the reconstruction filter — see
     /// [`SlideAxis`]. An orbiting camera moves a node name both ways at once,
     /// so the UI hands lattice labels [`SlideAxis::Both`].
@@ -950,7 +950,7 @@ struct LatticeCallback {
     /// The scene pass's whole order, back to front — see [`Draw`].
     draws: Vec<Draw>,
     /// The drawn marks' sheet, on its publication frames.
-    marks: Option<FontAtlas>,
+    marks: Option<MarkSheet>,
     /// Which way these names travel, for the glyph shader's filter.
     slide: SlideAxis,
     pluses: Vec<GpuPlus>,

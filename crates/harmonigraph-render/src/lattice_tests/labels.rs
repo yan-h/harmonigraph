@@ -663,7 +663,7 @@ fn a_pane_rebinds_its_sheets_only_when_one_moves() {
     // A mark sheet of another size, which cannot be written into the texture
     // in hand and so makes every bind group naming it stale.
     let mut moved = one_name(&scene, SIZE);
-    moved.marks = Some(FontAtlas {
+    moved.marks = Some(MarkSheet {
         image: std::sync::Arc::new(egui::ColorImage::filled([128, 32], egui::Color32::WHITE)),
         key: 7,
     });

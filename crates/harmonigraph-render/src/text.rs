@@ -94,18 +94,27 @@ impl GlyphInstance {
     };
 }
 
-/// A CPU sheet a glyph can be cut from: the drawn marks' atlas, which no shell
-/// can publish for us because it is the UI crate's own, so each renderer keeps
-/// a GPU copy. egui's font atlas never travels this way: every shell inserts
-/// its renderer texture into `CallbackResources`. The key changes whenever its
-/// pixels do.
+/// The drawn marks' sheet, as a CPU image: no shell can publish it for us,
+/// because it is the UI crate's own, so each renderer keeps a GPU copy. egui's
+/// font atlas never travels this way (see [`published_font`]). The key changes
+/// whenever its pixels do. Tests also use one as the image a stand-in font
+/// texture is made from.
 ///
 /// Cloning shares the pixels: the image is an `Arc`, and the key travels with
 /// it, so two handles on one publication report the same one.
 #[derive(Clone)]
-pub struct FontAtlas {
+pub struct MarkSheet {
     pub image: std::sync::Arc<egui::ColorImage>,
     pub key: u64,
+}
+
+/// egui's font texture as the shell published it to `CallbackResources`,
+/// under its concrete wgpu type: inserted after the frame's texture deltas are
+/// applied and before any callback prepares, so every glyph a batch points at
+/// is in it. Cloning the handle does not copy texture data. `None` before the
+/// shell's first publication, when nothing can be drawn.
+pub(crate) fn published_font(resources: &CallbackResources) -> Option<wgpu::Texture> {
+    resources.get::<wgpu::Texture>().cloned()
 }
 
 /// Draw `glyphs` into `rect`. `pane_id` is unique per batch drawing in the
@@ -127,7 +136,7 @@ pub fn text_paint_callback(
     glyphs: Vec<GlyphInstance>,
     runs: GlyphRuns,
     shadow: Option<harmonigraph_scene::ShadowStyle>,
-    marks: Option<FontAtlas>,
+    marks: Option<MarkSheet>,
     slide: SlideAxis,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
@@ -184,7 +193,7 @@ struct TextCallback {
     glyphs: Vec<GlyphInstance>,
     runs: GlyphRuns,
     shadow: Option<harmonigraph_scene::ShadowStyle>,
-    marks: Option<FontAtlas>,
+    marks: Option<MarkSheet>,
     slide: SlideAxis,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
@@ -358,7 +367,7 @@ impl Sheets {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         font: Option<&wgpu::Texture>,
-        marks: Option<&FontAtlas>,
+        marks: Option<&MarkSheet>,
     ) -> bool {
         let mut recreated = false;
         if let Some(font) = font {
@@ -403,7 +412,7 @@ impl Sheets {
 
 /// One glyph sheet bound by a renderer: egui's shared GPU texture
 /// ([`share`](Self::share), the font atlas) or a private texture uploaded from
-/// a [`FontAtlas`] ([`upload`](Self::upload), the marks' sheet). The key
+/// a [`MarkSheet`] ([`upload`](Self::upload), the marks' sheet). The key
 /// identifies which texture a pane's bind group names.
 pub(crate) struct AtlasTexture {
     texture: Option<wgpu::Texture>,
@@ -425,7 +434,7 @@ impl Default for AtlasTexture {
 impl AtlasTexture {
     /// Whether `atlas` is what this already holds, so the upload can be
     /// skipped.
-    pub(crate) fn holds(&self, atlas: &FontAtlas) -> bool {
+    pub(crate) fn holds(&self, atlas: &MarkSheet) -> bool {
         self.uploaded_key == Some(atlas.key)
     }
 
@@ -477,7 +486,7 @@ impl AtlasTexture {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        atlas: &FontAtlas,
+        atlas: &MarkSheet,
     ) -> bool {
         let size = [atlas.image.width() as u32, atlas.image.height() as u32];
         let recreated = self.texture.is_none() || self.size != size;
@@ -922,7 +931,7 @@ impl TextResources {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         font: Option<&wgpu::Texture>,
-        marks: Option<&FontAtlas>,
+        marks: Option<&MarkSheet>,
     ) {
         if !self.sheets.bind(device, queue, font, marks) {
             return;
@@ -1097,9 +1106,7 @@ impl CallbackTrait for TextCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        // The shell inserts the current egui font texture under its concrete
-        // wgpu type. Cloning this handle does not copy texture data.
-        let shared_atlas = callback_resources.get::<wgpu::Texture>().cloned();
+        let shared_atlas = published_font(callback_resources);
         match callback_resources.get_mut::<TextResources>() {
             // Stale pipelines are the whole of what a reload or a format change
             // owes; the atlas binding beside them updates independently, so
@@ -1115,8 +1122,8 @@ impl CallbackTrait for TextCallback {
         let resources: &mut TextResources =
             callback_resources.get_mut().expect("inserted above when missing");
         resources.bind_sheets(device, queue, shared_atlas.as_ref(), self.marks.as_ref());
-        // No atlas yet means the first frame arrived without one: nothing can
-        // be drawn, and the next frame that sees a change will bring it.
+        // No font texture published yet: nothing can be drawn until the
+        // shell's first publication.
         if resources.sheets.atlas.is_empty() {
             return Vec::new();
         }
@@ -1554,7 +1561,7 @@ pub(crate) mod tests {
     /// Shared with the lattice's own tests, which draw the same glyph through
     /// the same shader in a different pass — so a fixture that changed under
     /// one of them would change under both.
-    pub(crate) fn atlas() -> FontAtlas {
+    pub(crate) fn atlas() -> MarkSheet {
         patch_at([8, 8], 32, 1)
     }
 
@@ -1563,7 +1570,7 @@ pub(crate) mod tests {
     pub(crate) fn font_texture(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        sheet: &FontAtlas,
+        sheet: &MarkSheet,
     ) -> wgpu::Texture {
         let mut held = AtlasTexture::default();
         held.upload(device, queue, sheet);
@@ -1583,19 +1590,19 @@ pub(crate) mod tests {
     /// are never alike (epaint's atlas is 2048 wide against
     /// `MARK_SHEET_WIDTH`), and at 64 the mark's uv normalizes to half of what
     /// the wrong size gives, which is transparency.
-    pub(crate) fn mark_sheet() -> FontAtlas {
+    pub(crate) fn mark_sheet() -> MarkSheet {
         patch_at([16, 0], 64, 1)
     }
 
     /// A `width`x32 sheet with one opaque 8x8 patch at `at`.
-    fn patch_at([left, top]: [usize; 2], width: usize, key: u64) -> FontAtlas {
+    fn patch_at([left, top]: [usize; 2], width: usize, key: u64) -> MarkSheet {
         let mut image = egui::ColorImage::filled([width, 32], egui::Color32::TRANSPARENT);
         for y in top..top + 8 {
             for x in left..left + 8 {
                 image[(x, y)] = egui::Color32::WHITE;
             }
         }
-        FontAtlas { image: std::sync::Arc::new(image), key }
+        MarkSheet { image: std::sync::Arc::new(image), key }
     }
 
     /// The mark of [`mark_sheet`], drawn 8 points wide at (24, 24) — the same
@@ -1622,7 +1629,7 @@ pub(crate) mod tests {
         queue: &wgpu::Queue,
         glyph: GlyphInstance,
         shadow: Option<harmonigraph_scene::ShadowStyle>,
-        sheet: FontAtlas,
+        sheet: MarkSheet,
         slide: SlideAxis,
     ) -> Vec<u8> {
         draw_from_scaled(device, queue, glyph, shadow, sheet, slide, 1.0, 1.0).0
@@ -1634,7 +1641,7 @@ pub(crate) mod tests {
         queue: &wgpu::Queue,
         glyph: GlyphInstance,
         shadow: Option<harmonigraph_scene::ShadowStyle>,
-        sheet: FontAtlas,
+        sheet: MarkSheet,
         slide: SlideAxis,
         ppp: f32,
         point_scale: f32,
@@ -1660,7 +1667,7 @@ pub(crate) mod tests {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         cb: &TextCallback,
-        font: &FontAtlas,
+        font: &MarkSheet,
         size: [u32; 2],
         ppp: f32,
     ) -> Vec<u8> {
@@ -1672,7 +1679,7 @@ pub(crate) mod tests {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         cb: &TextCallback,
-        font: &FontAtlas,
+        font: &MarkSheet,
         size: [u32; 2],
         ppp: f32,
     ) -> (Vec<u8>, crate::spectral_shadow::CellStats) {
@@ -2028,7 +2035,7 @@ pub(crate) mod tests {
             pane_id: 0,
         };
         let mut resources = CallbackResources::default();
-        let sheet = FontAtlas { image: std::sync::Arc::new(image), key: 1 };
+        let sheet = MarkSheet { image: std::sync::Arc::new(image), key: 1 };
         resources.insert(font_texture(&device, &queue, &sheet));
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -2163,9 +2170,9 @@ pub(crate) mod tests {
                     }
                 }
             }
-            FontAtlas { image: std::sync::Arc::new(image), key }
+            MarkSheet { image: std::sync::Arc::new(image), key }
         };
-        let at = |x: f32, pane_id: u64, marks: Option<FontAtlas>| TextCallback {
+        let at = |x: f32, pane_id: u64, marks: Option<MarkSheet>| TextCallback {
             point_scale: 1.0,
             runs: GlyphRuns::default(),
             glyphs: vec![GlyphInstance { rect: [x, 24.0, 8.0, 8.0], atlas: sheet, ..glyph() }],
@@ -2341,6 +2348,7 @@ pub(crate) mod tests {
             .map(|strength| (strength, shadow_at(strength)))
             .collect();
         let full = read[0].1;
+        assert!(full > 32, "the fixture's shadow is too faint to fade: {read:?}");
         assert!(
             read.iter().all(|(strength, shadow)| {
                 shadow.abs_diff((f32::from(full) * strength).round() as u8) <= 2
@@ -2384,6 +2392,10 @@ pub(crate) mod tests {
                 draw(&device, &queue, sliding, None)
             })
             .collect();
+        assert!(
+            frames[0].chunks(4).any(|px| px[3] > 200),
+            "the glyph drew nothing, so no step could show"
+        );
         let (worst, at) = (1..frames.len())
             .map(|i| {
                 let step = frames[i - 1]
@@ -2412,12 +2424,12 @@ pub(crate) mod tests {
     /// and the ink between them is never in doubt; a hairline's are the SAME
     /// texel's two sides, and it is that — one stroke about a pixel wide —
     /// that a small accidental is made of and that sub-pixel phase shows on.
-    fn hairline_sheet() -> FontAtlas {
+    fn hairline_sheet() -> MarkSheet {
         let mut image = egui::ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
         for y in 8..16 {
             image[(8, y)] = egui::Color32::WHITE;
         }
-        FontAtlas { image: std::sync::Arc::new(image), key: 2 }
+        MarkSheet { image: std::sync::Arc::new(image), key: 2 }
     }
 
     /// The same hairline turned on its side: one opaque texel ROW, eight
@@ -2429,12 +2441,12 @@ pub(crate) mod tests {
     /// across. Sampling is separable, so nothing about the sideways reading
     /// carries over to this one: the two axes pass or fail independently, and
     /// that is the whole point of having both fixtures.
-    fn hairline_sheet_across() -> FontAtlas {
+    fn hairline_sheet_across() -> MarkSheet {
         let mut image = egui::ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
         for x in 8..16 {
             image[(x, 8)] = egui::Color32::WHITE;
         }
-        FontAtlas { image: std::sync::Arc::new(image), key: 3 }
+        MarkSheet { image: std::sync::Arc::new(image), key: 3 }
     }
 
     /// A stroke a pixel wide keeps its weight as it slides, instead of
@@ -2515,7 +2527,7 @@ pub(crate) mod tests {
                         &queue,
                         sliding,
                         None,
-                        FontAtlas { image: sheet.image.clone(), key: sheet.key },
+                        MarkSheet { image: sheet.image.clone(), key: sheet.key },
                         slide,
                     )
                     .chunks(4)
@@ -2575,7 +2587,7 @@ pub(crate) mod tests {
                 for y in 8..16 {
                     image[(column, y)] = egui::Color32::WHITE;
                 }
-                let sheet = FontAtlas { image: std::sync::Arc::new(image), key: column as u64 };
+                let sheet = MarkSheet { image: std::sync::Arc::new(image), key: column as u64 };
                 let ppp = 2.0;
                 draw_from_scaled(
                     &device,
@@ -2660,7 +2672,7 @@ pub(crate) mod tests {
                         &queue,
                         sliding,
                         None,
-                        FontAtlas { image: sheet.image.clone(), key: sheet.key },
+                        MarkSheet { image: sheet.image.clone(), key: sheet.key },
                         SlideAxis::Both,
                     )
                     .chunks(4)

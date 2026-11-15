@@ -41,10 +41,8 @@ impl CallbackTrait for LatticeCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        // The shell publishes egui's current font texture under its concrete
-        // wgpu type before callbacks prepare. Clone the handle before taking a
-        // mutable borrow from the resource map; its pixels remain shared.
-        let shared_atlas = callback_resources.get::<wgpu::Texture>().cloned();
+        // Cloned out before taking a mutable borrow from the resource map.
+        let shared_atlas = crate::text::published_font(callback_resources);
         // Lazily (re)create shared resources. Recreate if the target format
         // changed (it can't today, but this keeps the invariant explicit).
         let recreate = callback_resources

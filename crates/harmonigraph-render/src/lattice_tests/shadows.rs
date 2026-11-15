@@ -833,6 +833,8 @@ fn neither_shadow_bar_at_its_bottom_casts_or_allocates() {
     let (no_width, no_width_atlas) = shot(0.0, 1.0);
     let (no_depth, no_depth_atlas) = shot(0.4, 0.0);
     let (cast, cast_atlas) = shot(0.4, 1.0);
+    let unnamed = shooter.shot(&scene_of(0.0, 1.0));
+    assert!(differing_pixels(&unnamed, &no_width) > 0, "the name drew nothing");
     assert_eq!(no_width_atlas, None, "a frame at no Shadow width allocated a cell");
     assert_eq!(no_depth_atlas, None, "a frame at no Shadow depth allocated a cell");
     assert!(cast_atlas.is_some(), "a frame of three casters at a Shadow open allocated nothing");

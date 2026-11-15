@@ -263,9 +263,7 @@ fn sevens_rows(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     )
     .hint(
         "Which seventh layers the lattice draws and which of them is home, \
-             counted in seventh steps from the layer containing C. Drag an end to \
-             add or drop layers on that side, the middle mark to move home, \
-             between them to slide the whole stack.",
+             counted in seventh steps from the layer containing C.",
     )
     .show(ui);
 

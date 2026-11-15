@@ -700,8 +700,9 @@ impl TextBatch {
     /// corner is the origin and the render scale decides the pixels.
     ///
     /// The font atlas reaches both callbacks as egui's renderer texture,
-    /// which every shell publishes. Every nonempty batch carries the current
-    /// mark sheet for the renderer to compare.
+    /// which every shell publishes. Every batch, a resting lattice's empty one
+    /// included, carries the current mark sheet: an `Arc` clone, which the
+    /// renderer's key compare keeps from being uploaded again.
     pub(crate) fn lattice_labels(
         &mut self,
         painter: &egui::Painter,
@@ -733,10 +734,11 @@ impl TextBatch {
     }
 }
 
-/// Current immutable marks for every nonempty batch. Only the renderer knows
-/// which snapshot reached `prepare`; a discarded callback must not suppress
-/// the next publication. Its uploaded-key check avoids redundant GPU writes.
-fn marks_snapshot(ctx: &egui::Context) -> Option<harmonigraph_render::FontAtlas> {
+/// Current immutable marks for every batch handed to a callback. Only the
+/// renderer knows which snapshot reached `prepare`; a discarded callback must
+/// not suppress the next publication. Its uploaded-key check avoids redundant
+/// GPU writes.
+fn marks_snapshot(ctx: &egui::Context) -> Option<harmonigraph_render::MarkSheet> {
     let sheet = mark_sheet(ctx);
     let sheet = sheet.lock().expect("the mark sheet is never held across a panic");
     // Nothing has ever been packed — a shell that draws no note names, or a
@@ -744,7 +746,7 @@ fn marks_snapshot(ctx: &egui::Context) -> Option<harmonigraph_render::FontAtlas>
     if sheet.key == 0 {
         return None;
     }
-    Some(harmonigraph_render::FontAtlas { image: sheet.image.clone(), key: sheet.key })
+    Some(harmonigraph_render::MarkSheet { image: sheet.image.clone(), key: sheet.key })
 }
 
 /// Where one mark sits in the sheet.
@@ -1359,7 +1361,7 @@ mod tests {
                 let published =
                     labels.marks.as_ref().expect("each batch supplies the current marks");
                 if let Some(held) = &first {
-                    let held: &harmonigraph_render::FontAtlas = held;
+                    let held: &harmonigraph_render::MarkSheet = held;
                     assert_eq!(
                         published.key, held.key,
                         "the fixture must keep the sheet unchanged"

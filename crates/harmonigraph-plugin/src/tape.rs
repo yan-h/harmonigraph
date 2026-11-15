@@ -45,8 +45,7 @@ pub(crate) use worker::Worker;
 /// Capacity of the playback ring, in interleaved samples: 0.68 s of stereo at
 /// 96 kHz. It holds the [`worker::LEAD_SECONDS`] the worker keeps queued for
 /// stereo up to about 262 kHz, so at every rate from 44.1 to 192 kHz. Above
-/// that (352.8 or 384 kHz stereo), or with more than two channels at 192 kHz,
-/// free slots cap the queue short of the lead.
+/// that (352.8 or 384 kHz), free slots cap the queue short of the lead.
 const PLAYBACK_SAMPLES: usize = 1 << 17;
 /// Pieces in flight. The worker sends at most one a step per cue.
 const PIECES: usize = 256;
