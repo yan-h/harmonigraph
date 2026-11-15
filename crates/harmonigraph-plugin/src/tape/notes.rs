@@ -183,11 +183,6 @@ impl Recorder {
     }
 }
 
-/// Marks between two of a pass's checkpoints: what bounds a chase. A dense
-/// pass (MPE pressure on four notes for half an hour, 675k marks) replays
-/// from its start in 4.6 ms, under the editor lock, at every cue and seam.
-const CHECKPOINT: usize = 1024;
-
 /// What the display drew with, sampled once a step: what an audition draws
 /// its spot with in place of the live values.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -207,40 +202,12 @@ pub(crate) struct PassNotes {
     pub events: Vec<(i64, Mark)>,
     /// What the display drew with from each frame on, sorted.
     pub drawn: Vec<(i64, Drawn)>,
-    /// The voices held after the first `n` events, every [`CHECKPOINT`]
-    /// events, so a chase replays from the nearest one rather than the
-    /// pass's start. A mark placed among them drops those after it, and
-    /// they are taken again as the timeline grows.
-    checkpoints: Vec<(usize, BTreeMap<VoiceKey, Sounding>)>,
 }
 
 impl PassNotes {
     pub(crate) fn place(&mut self, frame: i64, mark: Mark) {
         let at = self.events.partition_point(|(f, _)| *f <= frame);
         self.events.insert(at, (frame, mark));
-        self.checkpoints.retain(|(n, _)| *n <= at);
-        loop {
-            let last = self.checkpoints.last().map_or(0, |(n, _)| *n);
-            let to = last + CHECKPOINT;
-            if to > self.events.len() {
-                break;
-            }
-            let mut replay = self.replay_from(last);
-            while replay.next < to {
-                self.events[replay.next].1.apply(&mut replay.held);
-                replay.next += 1;
-            }
-            self.checkpoints.push((to, replay.held));
-        }
-    }
-
-    /// A replay standing after the checkpoint at `n` events, or the start.
-    fn replay_from(&self, n: usize) -> Replay {
-        self.checkpoints
-            .iter()
-            .rev()
-            .find(|(at, _)| *at == n)
-            .map_or_else(Replay::default, |(at, held)| Replay { next: *at, held: held.clone() })
     }
 
     /// What `frame` was drawn with: the last change at or before it, else
@@ -283,13 +250,11 @@ impl Replay {
         }
     }
 
-    /// The voices `notes` holds at `frame`, read on from the last
-    /// checkpoint before it.
+    /// The voices `notes` holds at `frame`, read from the pass's start: a
+    /// chase at a cue or seam, which a pass of a few minutes replays in well
+    /// under a millisecond.
     pub(crate) fn at(notes: &PassNotes, frame: i64) -> Replay {
-        let before = notes.events.partition_point(|(f, _)| *f < frame);
-        let start =
-            notes.checkpoints.iter().rev().find(|(n, _)| *n <= before).map_or(0, |(n, _)| *n);
-        let mut replay = notes.replay_from(start);
+        let mut replay = Replay::default();
         replay.advance(notes, frame, |_, _, _| {});
         replay
     }
@@ -764,32 +729,6 @@ mod tests {
         player.heard(&mut tracker, &store, &passes, heard, 50.2);
         assert_eq!(tape_voices(&tracker), [(60, 50.2)]);
         assert_eq!(player.audition.map(|a| (a.clock, a.song)), Some((50.2, 2.2)));
-    }
-
-    /// A chase read from a checkpoint is the chase read from the start, and
-    /// still is after a mark lands among the checkpoints.
-    #[test]
-    fn a_checkpointed_chase_matches_one_replayed_from_the_start() {
-        let mut notes = PassNotes::default();
-        for i in 0..3 * CHECKPOINT as i64 {
-            let note = 40 + (i % 32) as u8;
-            notes.place(i * 10, if i % 64 < 32 { on(note) } else { off(note) });
-        }
-        // Late, and early in the pass: a release before most checkpoints.
-        notes.place(15, off(40));
-        let whole = |frame: i64| {
-            let mut held = BTreeMap::new();
-            for (_, mark) in notes.events.iter().filter(|(f, _)| *f < frame) {
-                mark.apply(&mut held);
-            }
-            held
-        };
-        // Every checkpoint after the late mark was taken again, so a chase
-        // into the middle of the pass reads from one.
-        assert_eq!(notes.checkpoints.len(), notes.events.len() / CHECKPOINT);
-        for frame in [0, 16, 10_235, 10_250, 15_000, 20_480, 25_000, 30_000, i64::MAX] {
-            assert_eq!(Replay::at(&notes, frame).held, whole(frame), "frame {frame}");
-        }
     }
 
     /// Tape mode's roll is what an audition would play: each stretch's notes
