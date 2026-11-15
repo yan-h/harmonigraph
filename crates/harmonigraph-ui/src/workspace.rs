@@ -466,7 +466,7 @@ pub(crate) fn show(
     let reset = std::mem::take(&mut viewer.interaction.reset_layout);
     // A fold or a dock move reshapes the layout, starting from the layout as
     // drawn.
-    let edited = (before.position, before.folded) != (layout.position, layout.folded);
+    let edited = !unchanged;
     if edited {
         *layout.sizes_at(before.position) = before.settled(floor);
     }
