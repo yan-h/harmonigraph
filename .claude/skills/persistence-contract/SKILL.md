@@ -50,9 +50,11 @@ The floor is no guard against a dropped variant, though it is easy to assume oth
 it compares a document's version, not the variants it names, so a project an earlier build saved at the current version passes it,
 and raising it would refuse every older document whole rather than cost the one key.
 
-What makes the loss acceptable is that it is LOUD and HELD —
-`install_document` writes each cut key to the Console and opens it, and a host save stores the document as it came until a frame has drawn the editor.
-`a_document_naming_any_one_unknown_variant_costs_that_key_alone` in `crates/harmonigraph-ui/src/tests/persist.rs` holds both, for every variant a filled document writes,
+What makes the loss acceptable is that it is LOUD and bounded —
+`install_document` writes each cut key to the Console and opens it, and only that key is lost.
+A host save then stores the settings as they stand, like any other:
+the document as it came is not kept back.
+`a_document_naming_any_one_unknown_variant_costs_that_key_alone` in `crates/harmonigraph-ui/src/tests/persist.rs` holds this for every variant a filled document writes,
 so retiring a variant owes that test nothing.
 
 The take and export door, `AppearanceDocument::parse`, keeps the strict parse (#1757 Q5):
@@ -62,6 +64,7 @@ a take whose recorded look names a dropped variant refuses to export, and the of
 
 A host restore installs into the editor state through `install_document`, and a host save serializes out of it through `save_answer`;
 nothing reads a saved document back, so a window opening or closing installs nothing (#1757).
+The one exception to "a save stores what the editor holds": an editor never opened since it was fresh or restored empty saves `""`, so its project keeps following the fresh look of whichever build loads it.
 A restore therefore resets what it installs and nothing else, and a window session resets only what belongs to the window (`start_window_session`).
 A new persisted field needs no step at either:
 `UiPersist::capture` and `apply_persist` are its two sites.
