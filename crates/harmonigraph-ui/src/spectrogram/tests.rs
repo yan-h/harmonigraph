@@ -1286,12 +1286,21 @@ fn the_snapshot_follows_the_fold_and_not_the_read() {
     assert!(!Arc::ptr_eq(&base, &fresh), "a new column reused the old run");
     assert_ne!(fresh.last(), base.last(), "the open slab kept its old average");
     // A Clear followed by a history of the same length and newest time,
-    // which only the slabs themselves tell from the one before it.
+    // each ending in a slab of silence: its newest slab is the shared silent
+    // slab before the Clear and after it, so the first key, the length and
+    // the newest allocation all match, and only the pyramid's generation
+    // tells the two histories apart.
+    for i in [600, 601] {
+        spectrum.push_history(at(i), &power(0.0));
+    }
+    let before = draw(&mut spectrum, &base_view, from);
     spectrum.clear_history();
-    for i in 0..600 {
-        spectrum.push_history(at(i), &power(0.125));
+    for i in 0..602 {
+        spectrum.push_history(at(i), &power(if i < 600 { 0.125 } else { 0.0 }));
     }
     let cleared = draw(&mut spectrum, &base_view, from);
+    assert_eq!(cleared.len(), before.len(), "the fixture's runs are not alike");
+    assert!(Arc::ptr_eq(cleared.last().unwrap(), before.last().unwrap()), "a silent newest slab");
     assert_eq!(cleared[100][1000], q(0.125), "a Clear served the run from before it");
     // And the slab width, through the ladder.
     let coarse_view = PaneView { depth_len: 200.0, ..base_view };
