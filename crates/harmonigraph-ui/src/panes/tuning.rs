@@ -331,9 +331,6 @@ pub(super) fn tuning_pane(
             egui::RichText::new(too_many_pitches_notice()).color(theme::armed()),
         );
         true
-    } else if state.runtime.configuration_status & 4 != 0 {
-        crate::widgets::label(ui, "Tuning applied; host notification was rejected");
-        true
     } else if state.runtime.configuration_status & 8 != 0 {
         crate::widgets::label(ui, "Tuning change refused: pending command storage is full");
         true

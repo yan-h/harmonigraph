@@ -438,11 +438,11 @@ fn stopped_continuity_edges_emit_only_the_accepted_blocks() {
             let t = 5.0 + step;
             assert_eq!(b.rec.observe_transport(t, false, duration * 2.0).is_some(), accepted);
             if accepted {
-                b.rec.params(t, [0.5; ParamKey::ALL.len()]);
+                b.rec.params(t, [0.5; ParamKey::HOST.len()]);
                 b.rec.audio(&mut std::iter::repeat_n(0.25, frames * 4), frames * 4);
             }
             let entries: Vec<_> = std::iter::from_fn(|| b.entries.pop().ok()).collect();
-            assert_eq!(entries.len(), if accepted { ParamKey::ALL.len() + 1 } else { 0 });
+            assert_eq!(entries.len(), if accepted { ParamKey::HOST.len() + 1 } else { 0 });
             if accepted {
                 assert!(entries.iter().all(|entry| match entry {
                     Entry::Param { t: time, .. } => *time == t,
@@ -765,11 +765,11 @@ fn configuration_audio_exhaustion_marks_the_recording_incomplete() {
 fn params_record_only_changes() {
     let mut b = Bench::new();
     b.arm();
-    let mut values = [0.0f32; ParamKey::ALL.len()];
+    let mut values = [0.0f32; ParamKey::HOST.len()];
     b.rec.params(0.0, values);
     assert_eq!(
         b.pushed().len(),
-        ParamKey::ALL.len(),
+        ParamKey::HOST.len(),
         "arming resets to NaN, so a take's first block writes a full set"
     );
 
@@ -910,7 +910,7 @@ fn stopping_a_take_that_is_not_running_does_nothing() {
 fn the_shipped_rings_have_room_for_what_the_audio_thread_pushes() {
     let (mut rec, ctrl) = channel();
     ctrl.recording.store(true, Ordering::Relaxed);
-    rec.params(0.0, [0.5; ParamKey::ALL.len()]);
+    rec.params(0.0, [0.5; ParamKey::HOST.len()]);
     rec.audio(&mut std::iter::repeat_n(0.0f32, 512), 512);
     ctrl.tick(true, 1);
     assert!(!ctrl.status().contains("DROPPED"), "a shipped ring dropped: {}", ctrl.status());

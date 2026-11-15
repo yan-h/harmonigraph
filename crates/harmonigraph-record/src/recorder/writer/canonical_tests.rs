@@ -51,7 +51,7 @@ fn what_arrives_after_the_seal_is_dropped() {
     writer.drain(&mut capture);
     let sealed = writer.finished.clone().expect("sealed");
     recorder.publish_note(NoteEvent::on(2.5, SourceId::DIRECT, 0, 64, 0.8).into()).expect_both();
-    recorder.params(2.5, [0.5; ParamKey::ALL.len()]);
+    recorder.params(2.5, [0.5; ParamKey::HOST.len()]);
     writer.drain(&mut capture);
     assert!(!writer.failed());
     assert_eq!(harmonigraph_take::Take::read(&sealed).unwrap().notes().count(), 2);

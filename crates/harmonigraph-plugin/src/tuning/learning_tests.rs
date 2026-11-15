@@ -22,10 +22,10 @@ fn learn_hears_more_held_voices_than_the_adaptive_context_holds() {
     let mut hub = Device::new(false);
     hub.activate();
     musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
-    let mailbox = hub_wrapper(&hub).configuration_handle().unwrap();
-    let fifth = || crate::configuration::view(mailbox.visible().0, false).resolved.tuning.three;
+    let settings = settings(&hub);
+    let fifth = || settings.visible().view.resolved.tuning.three;
     let learn = ConfigEdit { learning: Some(true), ..Default::default() };
-    mailbox.submit(crate::configuration::packet(learn)).unwrap();
+    assert!(settings.submit(learn));
     // Every Tune pairs before any plays: a pairing is a session cut.
     let tunes: Vec<_> = (0..5)
         .map(|_| {
@@ -56,10 +56,10 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         let mut hub = Device::new(false);
         hub.activate();
         // Armed through the owner, so its own gate is what refuses and recovers.
-        let mailbox = hub_wrapper(&hub).configuration_handle().unwrap();
+        let settings = settings(&hub);
         let learn = ConfigEdit { learning: Some(true), ..Default::default() };
-        mailbox.submit(crate::configuration::packet(learn)).unwrap();
-        let refused = || mailbox.visible().0.status & 1 != 0;
+        assert!(settings.submit(learn));
+        let refused = || settings.visible().view.status & 1 != 0;
         let mut bad = Device::new(true);
         bad.shared().set_retune(false);
         bad.activate();
@@ -102,7 +102,7 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         hub.run(448, vec![], None);
         assert_eq!(heard(&hub), Ok(0), "reset and departure both authoritatively cut state");
         assert!(!refused(), "the owner recovers with the state, not at a host reset");
-        let revision = mailbox.visible().0.revision;
+        let revision = settings.visible().view.resolved.revision;
         // A just third, so what Learn derives differs from the 12-TET it heard.
         let bend = f64::from(harmonigraph_core::tuning::FIVE_JUST - 400.0) / 100.0;
         let mut triad: Vec<_> = [60, 64, 67].map(|key| note(key, 0, key as i16, 0, true)).to_vec();
@@ -112,7 +112,7 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         hub.run(576, vec![], None);
         assert_eq!(heard(&hub), Ok(3));
         assert_ne!(
-            mailbox.visible().0.revision,
+            settings.visible().view.resolved.revision,
             revision,
             "a complete new chord is learned after recovery"
         );

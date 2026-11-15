@@ -179,6 +179,10 @@ fn hub_wrapper(device: &Device) -> &nice_plug::wrapper::clap::Wrapper<crate::Har
     assert!(!device.tuner);
     unsafe { &*((*device.plugin).plugin_data.cast()) }
 }
+/// The Hub's tuning configuration, as the editor submits to and reads it.
+fn settings(device: &Device) -> std::sync::Arc<crate::configuration::Settings> {
+    hub_wrapper(device).test_inspect_plugin(|plugin| plugin.params.settings.clone())
+}
 fn inspect_hub<R>(device: &Device, f: impl FnOnce(&hub::Hub) -> R) -> R {
     hub_wrapper(device).test_inspect_plugin(|plugin| f(plugin.aggregation.as_ref().unwrap()))
 }

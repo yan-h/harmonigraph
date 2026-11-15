@@ -65,12 +65,16 @@ pub(super) fn frame(
     let wall = shared.input.frame_wall(timing, now);
     let now = shared.input.display_now(wall);
     let sample_rate = shared.input.sample_rate();
+    if state.params.settings.take_legacy_notice() {
+        shared.ui.log(crate::configuration::LEGACY_AXES);
+    }
     // Snapshot current host movement before arming or queuing a render.
+    let configuration = state.params.settings.visible();
     shared.ui.picture.appearance.sync_camera(&PluginParamBackend {
         params: &state.params,
         setter: &setter,
         gesture: &shared.gesture,
-        configuration: None,
+        configuration,
     });
     shared.sync_take(sample_rate);
 
@@ -78,7 +82,7 @@ pub(super) fn frame(
         params: &state.params,
         setter: &setter,
         gesture: &shared.gesture,
-        configuration: state.params.configuration.get().map(|mailbox| mailbox.visible()),
+        configuration,
     };
     // Last frame's costs that the shell measures and the UI cannot: they
     // happen after `root_ui` returns.

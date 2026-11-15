@@ -140,9 +140,7 @@ fn translated(mut shape: LatticeMap, offset: LatticePos) -> LatticeMap {
 pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     let document = params.maps.read();
     let mut editor = params.map_editor.lock();
-    if let Some(mailbox) = params.configuration.get() {
-        editor.restore(mailbox.accepted_restore.load(std::sync::atomic::Ordering::Acquire));
-    }
+    editor.restore(params.settings.restored());
     let adopted = *params.map_playback.lock();
     // An arrow press that has landed, or any other change to the lanes,
     // retires the memo of what the last press sent.
@@ -291,12 +289,7 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
         MapEdit::Move(id, step) => params.maps.write().move_by(id, step),
     };
     if document_changed {
-        if let Some(mailbox) = params.configuration.get() {
-            mailbox.dirty.store(true, std::sync::atomic::Ordering::Release);
-        }
-        if let Some(session) = params.session.get() {
-            session.request_main();
-        }
+        params.settings.changed();
     }
 }
 
@@ -324,7 +317,6 @@ pub struct AudioMaps {
     pub playback: MapPlayback,
     history: VecDeque<Entry>,
     pub boundary: ConfigurationBoundary,
-    adopted: bool,
     engine_revision: u64,
     seed_mode: i32,
     seed_map: i32,
@@ -349,7 +341,6 @@ impl AudioMaps {
                 transport_seconds: None,
                 playing: false,
             },
-            adopted: false,
             engine_revision: 0,
             seed_mode: params.tuning_engine.value(),
             seed_map: 0,
@@ -373,7 +364,6 @@ impl AudioMaps {
             self.history.clear();
         }
         self.boundary = boundary;
-        self.adopted = false;
     }
     pub fn adopt(&mut self, config: ResolvedConfig) {
         // Copies only fixed geometry, never names or heap storage, on audio —
@@ -403,7 +393,6 @@ impl AudioMaps {
         self.playback.offset = self.offsets.total();
         self.set_follow(Follow::from_index(self.seed_follow));
         self.resolve();
-        self.adopted = true;
         self.push(self.boundary.steady_time, config);
     }
     fn set_engine(&mut self, engine: TuningEngine) {
@@ -460,11 +449,6 @@ impl AudioMaps {
             }
             self.resolve();
             self.push(event.sample.unwrap_or(self.boundary.steady_time), config);
-        }
-    }
-    pub fn tuning_changed(&mut self, sample: i64, config: ResolvedConfig) {
-        if self.adopted {
-            self.push(sample, config);
         }
     }
     /// The state the latest observation leaves, under `config`: what an attack

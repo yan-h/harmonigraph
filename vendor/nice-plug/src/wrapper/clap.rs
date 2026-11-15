@@ -34,77 +34,38 @@ pub trait EditorHost: Send + Sync {
 /// Provides auxiliary metadata needed for a CLAP plugin.
 #[allow(unused_variables)]
 pub trait ClapPlugin: Plugin {
-    /// Prepared nonmusical setup without allocating a configuration mailbox.
+    /// Plugin-owned saved settings, prepared before and committed after a restore.
     /// Obtained off audio once, then used independently of the plugin mutex.
     fn clap_setup(&self) -> Option<std::sync::Arc<dyn setup::Setup>> { None }
-    /// Default-disabled semantic configuration ownership. The parameter list
-    /// names up to five float parameters; other plugins retain the legacy path.
+    /// Default-disabled configuration walk: each process callback hands the
+    /// plugin its boundary, then every owned input in order with its exact
+    /// sample, then the group's end. The plugin owns its configuration and
+    /// how edits reach it; other plugins retain the legacy path.
     const CLAP_CONFIGURATION: bool = false;
     /// Discrete state selectors may support automation without additive modulation.
     /// These parameter IDs omit the modulation capability and refuse mod events.
     const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] = &[];
-    const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] = &[];
-    const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[];
 
     /// Called once, before the editor is created, with the host's side of
     /// it: the editor is the host's to destroy, so an editor with a close
     /// button of its own tells the host through this.
     fn clap_editor_host(&mut self, host: std::sync::Arc<dyn EditorHost>) {}
 
-    /// Called once off audio, before editor construction. The handle's methods
-    /// are off-thread only; the wrapper retains all shared allocations.
-    fn clap_configuration_install(
-        &mut self,
-        handle: std::sync::Arc<configuration::ConfigurationMailbox>,
-    ) {
-    }
-
-    /// Off-thread parsing, with no live plugin lock. Musical fields are excluded
-    /// from generic state application and never parsed from `initialize()`.
-    fn clap_configuration_prepare(
-        state: &nice_plug_core::plugin::PluginState,
-    ) -> Result<configuration::ConfigurationEdit, configuration::SubmitError> {
-        Err(configuration::SubmitError::Invalid)
-    }
-
-    /// Resolve a fixed accepted restore preview off thread, separately from its
-    /// still-queued semantic operation. View and save consume this same value.
-    fn clap_configuration_preview(
-        snapshot: configuration::ConfigurationSnapshot,
-    ) -> configuration::ConfigurationSnapshot {
-        snapshot
-    }
-
-    fn clap_configuration_save(
-        snapshot: configuration::ConfigurationSnapshot,
-        state: &mut nice_plug_core::plugin::PluginState,
-    ) {
-    }
-
-    /// All following hooks are inside the process allocation guard. Returning
-    /// None retains the exact command/input cursor; this is work backpressure.
+    /// All following hooks are inside the process allocation guard.
     fn clap_configuration_begin(&mut self, boundary: configuration::ConfigurationBoundary) {}
-    /// Every command accepted before this callback has been applied. Fix the
-    /// block's effective configuration here; nothing later in the callback may
-    /// move it, so an edit arriving mid-block waits for the next one.
+    /// Apply every edit accepted before this callback and fix the block's
+    /// effective configuration here; nothing later in the callback may move
+    /// it but the walk's own input, so an edit arriving mid-block waits for
+    /// the next one.
     fn clap_configuration_adopt(&mut self) {}
     /// Actual wrapper sub-block boundaries, including in-callback transport cuts.
     /// These are NOT configuration boundaries; `adopt` is the only one.
     fn clap_configuration_segment(&mut self, start: u32, frames: u32) {}
-    fn clap_configuration_apply(
-        &mut self,
-        command: configuration::ConfigurationCommand,
-        commit: configuration::ConfigurationCommit,
-    ) -> Option<configuration::ConfigurationSnapshot> {
-        None
-    }
     fn clap_configuration_observe(&mut self, event: configuration::OwnedInput) {}
-    fn clap_configuration_group_end(
-        &mut self,
-        sample: i64,
-    ) -> Option<configuration::ConfigurationEdit> {
-        None
-    }
+    /// The walk has observed every input of the callback.
+    fn clap_configuration_group_end(&mut self, sample: i64) {}
+    /// Owned input was lost: a capture the host's events did not fit, or one
+    /// they made invalid.
     fn clap_configuration_fault(&mut self) {}
     /// Owned raw ingress and bounded host output, independent of configuration.
     const CLAP_PERFORMANCE: bool = false;

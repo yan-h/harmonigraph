@@ -97,7 +97,7 @@ pub enum Entry {
     Configuration(harmonigraph_take::ConfigurationRecord),
     /// Exactly this committed audio prefix belongs at this point in the stream.
     AudioSamples(usize),
-    /// `key` is an index into [`ParamKey::ALL`] — an id string would mean
+    /// `key` is an index into [`ParamKey::HOST`] — an id string would mean
     /// allocating on the audio thread.
     Param {
         t: f64,
@@ -247,7 +247,7 @@ pub struct Recorder {
     /// Reset to NaN on arm so the take's first block writes a full set — a
     /// take that inherited "no change since last time" would replay with
     /// default tuning.
-    last_params: [f32; ParamKey::ALL.len()],
+    last_params: [f32; ParamKey::HOST.len()],
     lifecycle: State,
     /// Independent position/duration and bar observations, including rejected scrubs.
     history: History,
@@ -297,7 +297,7 @@ impl Recorder {
             producer,
             audio,
             dropped: Arc::default(),
-            last_params: [f32::NAN; ParamKey::ALL.len()],
+            last_params: [f32::NAN; ParamKey::HOST.len()],
             lifecycle: State::Disarmed,
             history: History::default(),
             rolling: Arc::default(),
@@ -429,7 +429,7 @@ impl Recorder {
     fn update_armed(&mut self, armed: bool) -> bool {
         let (action, _) = self.advance(Observation::Armed(armed));
         if action == Action::Arm {
-            self.last_params = [f32::NAN; ParamKey::ALL.len()];
+            self.last_params = [f32::NAN; ParamKey::HOST.len()];
             self.run_opened = false;
             self.latches.clear();
         }
@@ -655,7 +655,7 @@ impl Recorder {
     }
 
     /// Record raw parameter mirrors at plugin-block granularity.
-    pub fn params(&mut self, t: f64, values: [f32; ParamKey::ALL.len()]) {
+    pub fn params(&mut self, t: f64, values: [f32; ParamKey::HOST.len()]) {
         for (i, value) in values.into_iter().enumerate() {
             if self.last_params[i] != value {
                 self.last_params[i] = value;

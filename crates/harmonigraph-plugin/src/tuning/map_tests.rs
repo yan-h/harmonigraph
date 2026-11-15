@@ -202,23 +202,15 @@ fn lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice()
 
 #[test]
 fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
-    use nice_plug::prelude::Param;
     let _scope = crate::test_scope::enter();
     let mut hub = Device::new(false);
     hub.activate();
     let (first, second) = install(&hub);
     hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
-    let axis_value = hub_wrapper(&hub)
-        .test_inspect_plugin(|plugin| plugin.params.three.preview_normalized(699.0));
-    hub.run(
-        512,
-        vec![
-            note(1, 0, 67, 9, true),
-            note(2, 0, 79, 10, true),
-            parameter("tuning-three", f64::from(axis_value), 10),
-        ],
-        None,
-    );
+    hub.run(256, vec![note(1, 0, 67, 9, true)], None);
+    let fifth = harmonigraph_core::tuning::microcents(699.0);
+    assert!(settings(&hub).submit(harmonigraph_core::configuration::ConfigEdit::axis(1, fifth)));
+    hub.run(512, vec![note(2, 0, 79, 10, true)], None);
     assert_eq!(
         voice(&hub, crate::tuning::DIRECT, 67).frozen_offset_microcents,
         first.correction(67, Tuning::just())
@@ -336,9 +328,8 @@ fn a_held_over_onset_keeps_its_own_blocks_configuration_across_an_editor_edit() 
     // The Hub runs first in this block, so the source's G is held over.
     hub.run_format(1536, vec![], None, None, 512);
     source.run_format(1536, vec![note(1, 0, 55, 0, true)], None, None, 512);
-    let mailbox = hub_wrapper(&hub).configuration_handle().unwrap();
     let edit = ConfigEdit::axis(1, harmonigraph_core::tuning::microcents(699.0));
-    mailbox.submit(crate::configuration::packet(edit)).unwrap();
+    assert!(settings(&hub).submit(edit));
     hub.run_format(2048, vec![note(2, 0, 67, 0, true)], None, None, 512);
     let just = harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST);
     let held_over = voice(&hub, 0, 55);

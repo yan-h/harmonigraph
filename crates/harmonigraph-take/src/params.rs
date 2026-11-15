@@ -97,9 +97,24 @@ impl ParamKey {
         Self::CameraPanY,
     ];
 
-    /// The structural tuning parameters (Tuning section of the UI).
+    /// The structural tuning parameters (Tuning section of the UI). The plugin
+    /// owns these as settings rather than host parameters (#1756), so a take
+    /// records them in its configuration records, not as parameters.
     pub const TUNING: [ParamKey; 5] =
         [ParamKey::COffset, ParamKey::Three, ParamKey::Five, ParamKey::Seven, ParamKey::Tolerance];
+
+    /// Every key but [`TUNING`](Self::TUNING): the plugin's host parameters,
+    /// and the parameter lane a take records.
+    pub const HOST: [ParamKey; 8] = [
+        ParamKey::Fade,
+        ParamKey::DarkestPitch,
+        ParamKey::BrightestPitch,
+        ParamKey::CameraYaw,
+        ParamKey::CameraPitch,
+        ParamKey::CameraDistance,
+        ParamKey::CameraPanX,
+        ParamKey::CameraPanY,
+    ];
 
     /// Pitch->color gradient endpoints (the Pitch color range on the
     /// Mappings page).
