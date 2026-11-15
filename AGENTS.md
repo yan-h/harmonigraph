@@ -149,6 +149,14 @@ Neither gets a handler or a repair of its own.
 The per-type `sanitize` repairs stay for the one thing the next section asks of them:
 the value on screen is the value the file holds.
 
+**Cases the spectrogram history goes without** (PR #1793), each with its cost when it occurs:
+
+- A column dated at or before the newest, which no feeder writes: debug tests fail; in release it averages into each level's open slab, and one dated far ahead freezes the heatmap until Clear display history.
+- A crash inside the slab pyramid's fold: the levels it reached keep that column and the rest miss it, drawn so until the slabs scroll out; the input worker restarts its analysis as before.
+- A Clear pressed while the input worker analyzes: one step's audio from just before the press, a few milliseconds, stays in the emptied history.
+- A shell rate other than 48 kHz or 96 kHz: the live edge reads its lag at 48 kHz, up to 9% off (15 ms at Precise, 44.1 kHz), inside the strip's 120 ms freshness allowance.
+- The standalone synth below 5 frames a second: each frame restarts its run, so the heatmap draws nothing until frames come faster.
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
