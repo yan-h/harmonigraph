@@ -120,8 +120,6 @@ pub(crate) enum Reason {
     End,
     /// The host stopped reporting a song position.
     NoPosition,
-    /// No audio arrived from the worker in time.
-    Starved,
 }
 
 impl Reason {
@@ -134,7 +132,6 @@ impl Reason {
             Reason::Reset => "a plugin reset",
             Reason::End => "the end of what is recorded",
             Reason::NoPosition => "the host reported no song position",
-            Reason::Starved => "no audio from the input worker",
         }
     }
 }

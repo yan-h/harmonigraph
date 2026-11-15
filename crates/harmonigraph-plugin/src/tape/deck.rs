@@ -14,11 +14,6 @@ use harmonigraph_ui::tape::TapeRequest;
 use super::{Event, Piece, Reason, Shared, NO_REQUEST, STOP};
 use crate::audio_ingress::{Heard, TapePlay};
 
-/// How long a cue may wait for its first audio, or a playing one go without,
-/// before it gives up: so a stalled or missing worker cannot hold the tape,
-/// and with it `KeepAlive`, open for good.
-const STARVED_SECONDS: f64 = 0.5;
-
 /// One block as the deck needs it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BlockIn {
@@ -44,13 +39,9 @@ pub(crate) struct BlockOut {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Play {
     Idle,
-    /// Waiting for the first piece, for this many seconds so far.
-    Cued {
-        waited: f64,
-    },
-    Playing {
-        starved: f64,
-    },
+    /// Waiting for the first piece.
+    Cued,
+    Playing,
     /// Ramping down over this many frames still to go, then ending.
     Fading {
         left: usize,
@@ -158,8 +149,8 @@ impl Deck {
             Play::Idle => {}
             // Already going: the newest reason is the one that keeps it down.
             Play::Fading { reason: why, .. } => *why = reason,
-            Play::Cued { .. } => self.end(reason),
-            Play::Playing { .. } => {
+            Play::Cued => self.end(reason),
+            Play::Playing => {
                 let of = super::store::fade_frames(rate);
                 self.play = Play::Fading { left: of, of, reason };
                 // Same serial, inactive: the worker stops assembling, and the
@@ -174,7 +165,7 @@ impl Deck {
         self.serial = (self.serial | 1) + 2;
         self.cue_position = position;
         self.played = 0.0;
-        self.play = Play::Cued { waited: 0.0 };
+        self.play = Play::Cued;
         self.shared.cue_position.store(position.to_bits(), Ordering::Relaxed);
         self.shared.cue.store(self.serial, Ordering::Release);
         self.emit(Event::Started { position });
@@ -240,7 +231,7 @@ impl Deck {
         let from = self.cue_position + self.played;
         // Before the mix, which bumps the serial when the cue ends in it.
         let cue = self.serial;
-        let frames = self.mix(planes, block.frames, duration);
+        let frames = self.mix(planes, block.frames);
         self.mixed = frames > 0;
         self.publish(Some(position), rolling);
         let play = if frames > 0 {
@@ -256,8 +247,8 @@ impl Deck {
     /// What Tape mode draws: the transport, and where the audition is.
     fn publish(&self, position: Option<f64>, rolling: bool) {
         let heard = match self.play {
-            Play::Playing { .. } | Play::Fading { .. } => self.cue_position + self.played,
-            Play::Idle | Play::Cued { .. } => f64::NAN,
+            Play::Playing | Play::Fading { .. } => self.cue_position + self.played,
+            Play::Idle | Play::Cued => f64::NAN,
         };
         let shared = &self.shared;
         shared.position.store(position.unwrap_or(f64::NAN).to_bits(), Ordering::Relaxed);
@@ -267,9 +258,9 @@ impl Deck {
 
     /// Mix whatever has been assembled for the current cue into `planes`;
     /// how many frames of tape were added, from the block's first.
-    fn mix(&mut self, planes: &mut [&mut [f32]], frames: usize, duration: f64) -> usize {
+    fn mix(&mut self, planes: &mut [&mut [f32]], frames: usize) -> usize {
         let active =
-            matches!(self.play, Play::Cued { .. } | Play::Playing { .. } | Play::Fading { .. });
+            matches!(self.play, Play::Cued | Play::Playing | Play::Fading { .. });
         let mut at = 0;
         while at < frames || !active {
             if self.piece.is_none() {
@@ -323,7 +314,7 @@ impl Deck {
             self.piece = Some((piece, left - n));
             self.played += n as f64 * piece.speed / f64::from(piece.rate);
             match self.play {
-                Play::Cued { .. } => self.play = Play::Playing { starved: 0.0 },
+                Play::Cued => self.play = Play::Playing,
                 Play::Fading { left: 0, reason, .. } => {
                     self.end(reason);
                     return at;
@@ -334,26 +325,11 @@ impl Deck {
         if !active {
             return 0;
         }
-        match &mut self.play {
-            Play::Cued { waited } => {
-                *waited += duration;
-                if *waited > STARVED_SECONDS {
-                    self.end(Reason::Starved);
-                }
-            }
-            Play::Playing { starved } if at < frames => {
-                *starved += duration * (frames - at) as f64 / frames as f64;
-                if *starved > STARVED_SECONDS {
-                    self.end(Reason::Starved);
-                }
-            }
-            Play::Playing { starved } => *starved = 0.0,
-            // Nothing left to fade through.
-            Play::Fading { reason, .. } if at < frames => {
-                let reason = *reason;
+        // Nothing left to fade through.
+        if let Play::Fading { reason, .. } = self.play {
+            if at < frames {
                 self.end(reason);
             }
-            _ => {}
         }
         at
     }
