@@ -396,7 +396,7 @@ impl Hub {
         self.detect_loop(callback);
         // Adopt even on callbacks with no note input: silence expiry below
         // must use the current policy, not the last onset's configuration.
-        self.sequencer.config = owner.reducer.resolved().into();
+        self.sequencer.config = owner.current().into();
         // Silence expires released memory against the completed input
         // frontier, which is this callback's start: everything before it has
         // been sequenced, and nothing after it has arrived.
@@ -560,8 +560,7 @@ impl Hub {
             // the history out from under it (a song-time locate does not).
             // Every engine then assigns from what it holds now, as #920 asked
             // of Adaptive, rather than leaving the onset raw.
-            let attack =
-                owner.maps.at(sample).unwrap_or_else(|| owner.maps.live(owner.reducer.resolved()));
+            let attack = owner.in_force(sample);
             if self.sequencer.engine_revision != attack.engine_revision {
                 self.sequencer.forget_history();
                 self.sequencer.context.fill(None);

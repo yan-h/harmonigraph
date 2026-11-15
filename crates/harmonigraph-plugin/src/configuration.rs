@@ -169,7 +169,7 @@ pub struct Owner {
     pub(crate) maps: crate::lattice_maps::AudioMaps,
     /// Every edit reduces here the moment it arrives, in arrival order, so the
     /// reducer's own combined-edit/preset/unlock semantics are untouched.
-    pub(crate) reducer: ConfigReducer,
+    reducer: ConfigReducer,
     learning: LearningState<{ crate::tuning::HELD_VOICES }>,
     learned: Option<LearnedTuning>,
     pub snapshot: ConfigurationSnapshot,
@@ -222,6 +222,18 @@ impl Owner {
     /// Automation the walk reduces later lands in the history at its own sample.
     pub fn adopt(&mut self) {
         self.maps.adopt(self.reducer.resolved());
+    }
+
+    /// The configuration, engine and map in force at `sample`: the history's
+    /// entry for it, or, where the history no longer reaches it, the live
+    /// state. The Hub assigns from this and a take records it.
+    pub fn in_force(&self, sample: i64) -> crate::lattice_maps::AttackState {
+        self.maps.at(sample).unwrap_or_else(|| self.maps.live(self.current()))
+    }
+
+    /// The configuration every edit reduced so far leaves.
+    pub fn current(&self) -> ResolvedConfig {
+        self.reducer.resolved()
     }
 
     pub fn reset(&mut self, recorder: &mut harmonigraph_record::Recorder) {
@@ -325,9 +337,8 @@ impl Owner {
         recorder.record(self.take_time(), origin);
         if recorder.recording() {
             // What the Hub assigned from, at the segment's start and at each
-            // change inside it: the history, or the reducer where it is gone.
-            let config = self.maps.at(start).map_or(self.reducer.resolved(), |state| state.config);
-            self.recording.configuration(recorder, start, config);
+            // change inside it.
+            self.recording.configuration(recorder, start, self.in_force(start).config);
             for (sample, state) in self.maps.changes(start, end) {
                 self.recording.configuration(recorder, sample, state.config);
             }

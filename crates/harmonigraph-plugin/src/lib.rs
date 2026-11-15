@@ -1173,7 +1173,7 @@ impl ClapPlugin for Harmonigraph {
         event: nice_plug::wrapper::clap::configuration::OwnedInput,
     ) {
         let owner = self.configuration.as_mut().unwrap();
-        owner.maps.observe(event, owner.reducer.resolved());
+        owner.maps.observe(event, owner.current());
     }
     fn clap_configuration_group_end(
         &mut self,
