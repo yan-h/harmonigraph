@@ -513,12 +513,6 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     scene
 }
 
-/// The slot beside middle C's, as a mask — a second sector for the two ends to
-/// land on separately.
-///
-/// Taken off the layout the fixture actually draws rather than named: a mark on
-/// a slot outside the drawn ring has no sector to extend and no angle to be
-/// drawn at, so it would read as the mark having vanished.
 /// Give `node` the light [`NodeMotion::step`](harmonigraph_scene::NodeMotion::step)
 /// writes, its own reading as its layers stand: what a fixture that has set a
 /// node's layers calls before drawing it, so its halo is not a stale reading.
@@ -526,6 +520,12 @@ pub(super) fn read_light(node: &mut harmonigraph_scene::NodeInstance) {
     node.glow.light = node.glow_light();
 }
 
+/// The slot beside middle C's, as a mask — a second sector for the two ends to
+/// land on separately.
+///
+/// Taken off the layout the fixture actually draws rather than named: a mark on
+/// a slot outside the drawn ring has no sector to extend and no angle to be
+/// drawn at, so it would read as the mark having vanished.
 pub(super) fn slot_beside_middle_c() -> u32 {
     let (low, high) = harmonigraph_scene::OctaveLayout::default().slots(0.0);
     let c = harmonigraph_scene::MIDDLE_C_SLOT as i32;
