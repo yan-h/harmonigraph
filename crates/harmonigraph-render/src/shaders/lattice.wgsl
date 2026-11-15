@@ -1728,7 +1728,13 @@ fn mark_extension(
 // strip's layer between `inner` and `outer`. A slot whose slice is the band
 // reads the shared strip itself, so where every marked slice is, this is
 // [`mark_extension`]'s answer; the light's own reading (`ink_at`) takes the
-// marks angularly and keeps that.
+// marks angularly and keeps that. `slot` is the slot whose mark covers the
+// fragment most, whose sector's colour the mark wears.
+struct DrawnMarks {
+    layer: NodeLayer,
+    slot: i32,
+}
+
 fn drawn_marks(
     in: VsOut,
     slots: u32,
@@ -1740,10 +1746,11 @@ fn drawn_marks(
     outer: f32,
     aa: f32,
     analytic: bool,
-) -> NodeLayer {
+) -> DrawnMarks {
     let top = ring.base + i32(oct_span()) - 1;
     var sd = EMPTY_DISTANCE;
     var coverage = 0.0;
+    var slot = ring.base;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let s = i32(i);
         if (slots & (1u << i)) == 0u || s < ring.base || s > top {
@@ -1763,9 +1770,12 @@ fn drawn_marks(
         }
         let layer = outer_glyph(s, ring, uv, own, r.x, r.y, aa);
         sd = min(sd, layer.sd);
-        coverage = max(coverage, layer.coverage);
+        if layer.coverage > coverage {
+            coverage = layer.coverage;
+            slot = s;
+        }
     }
-    return NodeLayer(sd, strip.level, coverage);
+    return DrawnMarks(NodeLayer(sd, strip.level, coverage), slot);
 }
 
 // One wedge's own frame, which both readings below are taken in.
@@ -2218,7 +2228,7 @@ fn base_node_ink(
     if mark_out > mark_in {
         mark_strip = glyph_band(d, mark_in, mark_out, 1.0, aa);
     }
-    let melody_layer = drawn_marks(
+    let melody = drawn_marks(
         in,
         in.marks.x,
         oct,
@@ -2230,7 +2240,7 @@ fn base_node_ink(
         aa,
         analytic,
     );
-    let bass_layer = drawn_marks(
+    let bass = drawn_marks(
         in,
         in.marks.y,
         oct,
@@ -2242,6 +2252,8 @@ fn base_node_ink(
         aa,
         analytic,
     );
+    let melody_layer = melody.layer;
+    let bass_layer = bass.layer;
     let melody_cov = layer_coverage(melody_layer);
     let bass_cov = layer_coverage(bass_layer);
     let melody_mask = melody_layer.coverage * mask_level(melody_layer.level);
@@ -2255,10 +2267,8 @@ fn base_node_ink(
     // layer already runs between two adjacent indicators.
     var mark = max(melody_cov, bass_cov);
     var mark_mask = max(melody_mask, bass_mask);
-    // Each mask names one slot (`NodeInstance::melody_slots`), and the mark
-    // wears that sector's colour.
-    let owner = select(in.marks.y, in.marks.x, melody_cov > bass_cov);
-    let mark_rgb = oct_slot_colour(in.cents, i32(firstTrailingBit(owner)));
+    let owner = select(bass.slot, melody.slot, melody_cov > bass_cov);
+    let mark_rgb = oct_slot_colour(in.cents, owner);
     // Safety taper only. The radii above are already capped inside the
     // billboard (a circle of radius QUAD_MARGIN fits the square quad), so
     // this just keeps a soft edge from ending on the boundary; starting it
