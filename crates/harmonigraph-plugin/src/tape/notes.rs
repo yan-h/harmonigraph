@@ -79,8 +79,9 @@ pub(crate) struct Recorder {
 }
 
 /// Marks the live drain may hold for one step, swapped out every step: past
-/// it a step's marks are lost, which takes more than one drain of the
-/// 4,096-slot publication ring brings.
+/// it the step's further marks are lost. One event can make several (a
+/// retrigger an Off and an On, a tuning change a Change per held voice), so
+/// a retrigger split at the cap can lose either half.
 pub(crate) const NOTES: usize = 4096;
 
 impl Recorder {

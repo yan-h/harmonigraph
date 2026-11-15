@@ -152,7 +152,7 @@ the value on screen is the value the file holds.
 
 **Cases the tape goes without** (PR #1789), each with its cost when it occurs:
 
-- Over 4,096 marks in one step: the rest are lost with a Console line, and a lost release holds its note to the pass's end on playback.
+- More marks than one step holds (4,096): the rest are lost with a Console line, a lost release holds its note to the pass's end on playback, and a retrigger split at the cap can lose either half.
 - A very dense pass: a chase replays it from its start, about 4.6 ms under the editor lock for 30 minutes of MPE pressure, once per cue or seam.
 - A host block with no song position: a waiting cue still starts, and the transport step reads the position before the gap.
 - A stalled input worker: a cue reads Playing and holds `KeepAlive` until the next click, Stop or play.
