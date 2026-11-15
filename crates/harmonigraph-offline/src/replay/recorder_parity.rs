@@ -259,8 +259,8 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         roll_snapshot(&state.runtime.tracker, 1.0, 0.0)
     );
     let actual = roll_snapshot(&state.runtime.tracker, 1.0, 0.0);
-    // A later baseline repairs final pitch even if disk decoding loses exact
-    // tuning. The pre-gap trajectory must retain it, and must not bridge loss.
+    // The gap draws nothing: the note is held through it as one line, and the
+    // later baseline restates the pitch it holds (#1798 F1).
     assert_eq!(
         actual,
         [RollSnapshot {
@@ -271,21 +271,14 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
             start: 0.125,
             end: Some(0.625),
             observed_until: None,
-            history_complete: false,
+            history_complete: true,
             end_pitch: 60.375,
-            segments: vec![
-                ((0.125, 60.0), (0.25, 60.375)),
-                ((0.25, 60.375), (0.375, 60.375)),
-                ((0.5, 60.375), (0.625, 60.375)),
-            ],
+            segments: vec![((0.125, 60.0), (0.25, 60.375)), ((0.25, 60.375), (0.625, 60.375))],
         }]
     );
-    // The gap is the break in the trajectory above; what is left to say is
-    // that the empty baseline after it answered for the source on both lanes.
+    // Nothing is left sounding on either lane.
     for tracker in [&direct, &state.runtime.tracker] {
         assert_eq!(tracker.held_count(), 0);
-        assert!(tracker.source_current_certain(source));
-        assert!(!tracker.history_missing(), "the recovered source leaves nothing missing");
     }
 
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();

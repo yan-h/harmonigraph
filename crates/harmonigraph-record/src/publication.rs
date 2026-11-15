@@ -399,8 +399,11 @@ mod tests {
     #[test]
     fn a_full_lane_reports_its_outage_without_another_audio_callback() {
         let (mut publisher, mut consumer) = channel();
+        // Each press with the lifetime its snapshot row names (see `held`).
         for note in [60, 72] {
-            publisher.note(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8).into()).unwrap();
+            let mut on: NoteDelta = NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8).into();
+            on.lifetime = u64::from(note) + 1;
+            publisher.note(on).unwrap();
         }
         // Bends rather than repeated attacks: one onset per key, so a note the
         // snapshot restores can be checked against the onset it really had.
@@ -430,9 +433,7 @@ mod tests {
         assert_eq!(drained, PUBLICATION_RING, "the reserved cell carried the gap");
         assert_eq!(gaps, 1);
         assert_eq!(held_at_gap, Some(2), "the fixture must reach the gap holding both keys");
-        assert_eq!(tracker.held_count(), 0, "the gap clears stale held state");
-        assert!(!tracker.source_current_certain(SourceId::DIRECT));
-        assert!(tracker.history_missing());
+        assert_eq!(tracker.held_count(), 2, "a gap leaves the held set to the next snapshot");
 
         // The refresh restores what is sounding NOW and nothing else: key 60
         // was released while the lane was full and does not come back.
@@ -441,12 +442,11 @@ mod tests {
             tracker.handle_canonical(event).unwrap();
             true
         });
-        assert!(tracker.source_current_certain(SourceId::DIRECT));
         assert_eq!(tracker.held_count(), 1);
-        let restored = tracker.roll().notes().find(|n| n.note == 72 && n.end.is_none()).unwrap();
-        assert_eq!(restored.start, 0.0, "the snapshot restores, it does not re-attack");
-        assert!(!restored.history_complete, "the roll records the history it never saw");
-        assert!(!tracker.history_missing(), "and nothing is missing any more");
+        let pressed: Vec<_> = tracker.roll().notes().filter(|n| n.note == 72).collect();
+        assert_eq!(pressed.len(), 1, "the snapshot continues the press, it does not re-attack");
+        assert!(pressed[0].is_live());
+        assert!(!pressed[0].history_complete, "the roll records the history it never saw");
     }
 
     #[test]

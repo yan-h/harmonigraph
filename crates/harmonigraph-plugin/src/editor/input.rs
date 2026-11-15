@@ -756,18 +756,9 @@ mod tests {
                 .count(),
             1
         );
-        use harmonigraph_core::canonical::{GapReason, PublicationGap};
-        producer
-            .gap(PublicationGap {
-                source: Some(SourceId(3)),
-                time: 2.5,
-                through: 3.0,
-                first: 2,
-                last: 3,
-                reason: GapReason::PublicationFull,
-            })
-            .unwrap();
-        let resumed = SourceBaseline::new(
+        // A baseline restating source 3's note at a new pitch, which breaks
+        // its line at the baseline's own time.
+        let restated = SourceBaseline::new(
             SourceId(3),
             1,
             3.5,
@@ -778,13 +769,13 @@ mod tests {
                 lifetime: 61,
                 actual_onset: 2.0,
                 velocity: 0.8,
-                pitch_microcents: 7_200_000_000,
+                pitch_microcents: 7_225_000_000,
                 provenance: PitchProvenance::AcceptedOutput,
                 ..Default::default()
             }],
         )
         .unwrap();
-        producer.baseline(&resumed).unwrap();
+        producer.baseline(&restated).unwrap();
         shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 22.3);
         let voice =
             shared.ui.picture.runtime.tracker.voices().find(|v| v.source == SourceId(3)).unwrap();
@@ -800,13 +791,13 @@ mod tests {
         assert_eq!(
             (voice.on_time, note.start),
             (12.0, 12.0),
-            "accepted lifetime resumes its already-mapped onset after gap"
+            "an accepted lifetime keeps its already-mapped onset"
         );
         // The baseline's own time, audio 3.5, is mapped onto the GUI clock too:
-        // the row resumes there.
+        // the restated pitch starts there.
         assert!(
             note.segments(22.3).any(|((start, _), _)| (start - 13.5).abs() < 1e-9),
-            "the resuming baseline lands at GUI 13.5"
+            "the restating baseline lands at GUI 13.5"
         );
     }
 }

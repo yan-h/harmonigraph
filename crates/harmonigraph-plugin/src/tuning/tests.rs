@@ -1658,9 +1658,11 @@ fn missing_steady_time_rejects_the_callback_before_note_admission() {
 }
 
 /// #1195. A source that published and then left still answers for itself
-/// after a stream-wide display gap, so the missing-history banner clears.
-/// The Tune plays and releases a note, then is removed; the Hub's own note
-/// floods the display lane past its ring while nothing drains it.
+/// after a stream-wide display gap, with its row's empty snapshot, so a
+/// display that missed its last release stops drawing that note. The Tune
+/// plays a note; the Hub's own note floods the display lane past its ring
+/// while nothing drains it; the Tune releases its note into that full lane
+/// and is removed.
 #[test]
 fn a_departed_source_answers_after_a_display_gap() {
     use harmonigraph_core::{canonical::CanonicalEvent, NoteTracker, SourceId};
@@ -1670,18 +1672,16 @@ fn a_departed_source_answers_after_a_display_gap() {
     let mut tune = Some(Device::new(true));
     tune.as_mut().unwrap().activate();
     let mut raw = 0;
-    let mut step = |hub: &mut Device, tune: &Option<Device>, input: Vec<Input>| {
+    let step = |hub: &mut Device, tune: &Option<Device>, raw: &mut i64, input: Vec<Input>| {
         if let Some(tune) = tune {
-            tune.run(raw, input, None);
+            tune.run(*raw, input, None);
         }
-        hub.run(raw, vec![], None);
-        raw += 512;
+        hub.run(*raw, vec![], None);
+        *raw += 512;
     };
     let mut display = NoteTracker::new();
-    step(&mut hub, &tune, vec![note(7, 0, 57, 0, true)]);
-    step(&mut hub, &tune, vec![]);
-    step(&mut hub, &tune, vec![note(7, 0, 57, 0, false)]);
-    step(&mut hub, &tune, vec![]);
+    step(&mut hub, &tune, &mut raw, vec![note(7, 0, 57, 0, true)]);
+    step(&mut hub, &tune, &mut raw, vec![]);
     let mut heard = None;
     capture.display_into(&mut display, |event, _| {
         if let CanonicalEvent::Note(delta) = event {
@@ -1690,12 +1690,13 @@ fn a_departed_source_answers_after_a_display_gap() {
     });
     let departed = heard.expect("the Tune's note reached the display");
     assert_ne!(departed, SourceId::DIRECT);
-    tune = None;
-    step(&mut hub, &tune, vec![]);
-    capture.display_into(&mut display, |_, _| {});
+    let held =
+        |display: &NoteTracker| display.held_voices().filter(|v| v.source == departed).count();
+    assert_eq!(held(&display), 1, "the display holds the Tune's note");
 
     // The Hub's own note, and more distinct tunings of it than the display
     // ring holds, with nothing draining it.
+    step(&mut hub, &tune, &mut raw, vec![]);
     hub.run(raw, vec![note(1, 0, 60, 0, true)], None);
     raw += 512;
     for block in 0..8 {
@@ -1703,6 +1704,10 @@ fn a_departed_source_answers_after_a_display_gap() {
         hub.run(raw, bends.collect(), None);
         raw += 512;
     }
+    // The release goes into the full lane, and the Tune leaves.
+    step(&mut hub, &tune, &mut raw, vec![note(7, 0, 57, 0, false)]);
+    step(&mut hub, &tune, &mut raw, vec![]);
+    tune = None;
     let mut gaps = 0;
     let mut answered = false;
     for _ in 0..4 {
@@ -1719,7 +1724,12 @@ fn a_departed_source_answers_after_a_display_gap() {
     }
     assert!(gaps > 0, "the fixture must overflow the display lane");
     assert!(answered, "the departed source must answer for itself after the last gap");
-    assert!(!display.history_missing(), "every source the display heard from has recovered");
+    assert_eq!(
+        held(&display),
+        0,
+        "and the display no longer draws the note it lost the release of"
+    );
+    drop(tune);
 }
 
 /// #1151. A MIDI channel bend moves every voice held on its channel and has

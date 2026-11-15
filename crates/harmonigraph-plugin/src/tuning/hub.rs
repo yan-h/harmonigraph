@@ -1128,9 +1128,10 @@ impl Hub {
         }
         for index in 0..=TUNERS {
             // A row whose Tune has left still pays what it owes, with the empty
-            // snapshot its cleared state makes: a consumer that doubted it
-            // after a gap hears it holds nothing, where silence would leave it
-            // in doubt for the life of the instance (#1195). A row that never
+            // snapshot its cleared state makes: a consumer that missed its last
+            // releases in a gap hears it holds nothing, where silence would
+            // leave those notes drawn for the life of the instance (#1195). A
+            // row that never
             // published has nothing to answer for, and a consumer that never
             // heard of it must not start now.
             let departed = !self.rows[index].live;

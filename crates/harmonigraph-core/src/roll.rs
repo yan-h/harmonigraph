@@ -14,19 +14,18 @@
 //!
 //! A press is written the moment it starts, not when it ends — a piano roll
 //! has to draw the note that is sounding right now — and moves between the
-//! buckets as it is released, lost to a gap, resumed or finished.
+//! buckets as it is released or finished.
 //!
-//! The voice and the timeline still answer differently for six cases, each
-//! written once here, where its bucket move is:
+//! The voice and the timeline still answer differently for five cases, each
+//! written once here, where its bucket move is (the third, a publication gap,
+//! retired with #1798 F1: it changes nothing here, and the next baseline
+//! corrects the held set by rules 5 and 6):
 //!
 //! 1. an off at or before its onset pulses as a voice and is no timeline note
 //!    ([`note_off`](NoteRoll::note_off));
 //! 2. a retrigger without an off ends the old press with no fade, and drops it
 //!    when the retrigger is at or before its onset
 //!    ([`note_on`](NoteRoll::note_on));
-//! 3. a gap releases what it lost into a fade, and a baseline listing the note
-//!    takes it back from the fade or from the past
-//!    ([`replace_source`](NoteRoll::replace_source));
 //! 4. a note hidden at its release is never drawn leaving nor remembered, while
 //!    the timeline follows the current Show switch;
 //! 5. a held note a baseline omits leaves with no fade and no trail mark;
@@ -136,10 +135,10 @@ impl RollNote {
         VoiceKey { source: self.source, channel: self.channel, note: self.note }
     }
 
-    /// When it left the held set — its release, a gap, a reset — which is
-    /// where its fade starts, or `None` while it is held. The precedence
-    /// [`stop`](Self::stop) reads, so a factual off recovered after a gap
-    /// leaves the fade on the gap's time.
+    /// When it left the held set — its release, a reset, or a baseline that
+    /// omitted it — which is where its fade starts, or `None` while it is
+    /// held. A note has an end or an observation's end, never both, and
+    /// `past` is ordered by this.
     fn departed(&self) -> Option<Time> {
         self.observed_until.or(self.end)
     }
@@ -296,16 +295,6 @@ impl RollNote {
         self.end.is_none() && self.observed_until.is_none()
     }
 
-    /// The latest moment the note is known to have stopped at: its release or
-    /// the end of its observation, whichever is LATER when it has both. What
-    /// `past` is ordered by.
-    fn retired(&self) -> Option<Time> {
-        match (self.end, self.observed_until) {
-            (Some(end), Some(until)) => Some(end.max(until)),
-            (end, until) => end.or(until),
-        }
-    }
-
     /// When this note stops: its release, or `now` while it is still
     /// sounding (a held note's segment reaches the present moment).
     pub fn stop(&self, now: Time) -> Time {
@@ -389,7 +378,7 @@ pub struct NoteRoll {
     /// 4). A roll nothing prunes, such as the tape's, keeps what it releases
     /// here for good.
     fading: Vec<RollNote>,
-    /// Finished notes, oldest release first ([`RollNote::retired`]), held so by
+    /// Finished notes, oldest release first ([`RollNote::departed`]), held so by
     /// [`retire`](Self::retire) whatever order the releases arrive in — sources
     /// are mapped onto the clock by their own offsets, so one source's release
     /// can arrive after a later one's. Timeline notes only: `retire` drops a
@@ -425,7 +414,6 @@ impl NoteRoll {
             if at > previous.start {
                 previous.end = Some(at);
                 self.retire(previous);
-                self.enforce_cap();
             }
         }
         self.live.insert(key, RollNote::new(key, velocity, at, at, pitch, Expressions::NEUTRAL));
@@ -466,7 +454,6 @@ impl NoteRoll {
         note.end = Some(at);
         note.off_timeline |= at <= note.start;
         self.release(note);
-        self.enforce_cap();
     }
 
     /// A press leaves the held set with a fade, its `end` or `observed_until`
@@ -497,61 +484,20 @@ impl NoteRoll {
         self.live.get(&key)
     }
 
-    /// A factual accepted release survives loss of the intervening trajectory.
-    ///
-    /// It ends the note a gap closed and nothing else: the note's fade keeps
-    /// the time the gap gave it, so it does not restart.
-    pub(crate) fn observed_release(&mut self, key: VoiceKey, lifetime: u64, at: Time) {
-        let open = |note: &RollNote| {
-            note.key() == key
-                && note.lifetime == Some(lifetime)
-                && note.end.is_none()
-                && note.observed_until.is_some()
-        };
-        if let Some(note) = self.fading.iter_mut().rev().find(|note| open(note)) {
-            note.end = Some(at.max(note.start));
-        } else if let Some(index) = self.past.iter().rposition(open) {
-            let mut note = self.past.remove(index).unwrap();
-            note.end = Some(at.max(note.start));
-            // A recovered off can follow neighbors that ended after the gap.
-            self.retire(note);
-        }
-    }
-
     /// File a finished note into `past` at its place in release order: almost
     /// always the end, but kept sorted on every insert rather than assumed,
     /// because trim, activity and the note cap all read the order. Equal
     /// releases keep their arrival order.
     ///
     /// A note marked off the timeline is dropped instead: it was a voice and
-    /// nothing else. The cap is the caller's, once its whole change is made, so
-    /// a baseline's own retirements cannot evict a note a later row resumes.
+    /// nothing else. The note cap applies as each note is filed.
     fn retire(&mut self, note: RollNote) {
         if note.off_timeline {
             return;
         }
-        let at = note.retired();
-        let index = self.past.partition_point(|other| other.retired() <= at);
+        let at = note.departed();
+        let index = self.past.partition_point(|other| other.departed() <= at);
         self.past.insert(index, note);
-    }
-
-    /// Rule 3: what a gap could not see may have ended, so it is released into
-    /// a fade, the guess the picture recovers from, and marked observed until
-    /// the gap rather than ended — not a release, so a baseline can resume it.
-    /// A stream-wide gap reaches every published source, but not the tape:
-    /// what the tape plays is not published, and its player alone ends it.
-    pub(crate) fn gap(&mut self, source: Option<SourceId>, at: Time) {
-        let keys: Vec<_> = self
-            .published()
-            .into_iter()
-            .filter(|key| source.is_none_or(|source| key.source == source))
-            .collect();
-        for key in keys {
-            let mut note = self.live.remove(&key).unwrap();
-            note.observed_until = Some(at.max(note.start));
-            note.history_complete = false;
-            self.release(note);
-        }
         self.enforce_cap();
     }
 
@@ -569,27 +515,14 @@ impl NoteRoll {
     /// Rule 5: a held note it omits leaves observed until now, straight into
     /// `past` with no fade and no trail mark.
     ///
-    /// Rule 3's second half: a note it lists that a gap closed is resumed —
-    /// from `fading`, so the fade the gap handed out is withdrawn and the
-    /// trail cannot mark a node the music has not left (#936, #946), or from
-    /// `past` once a prune has ended that fade (#953). Same press, same onset,
-    /// with a break in its pitch line. A prune landing between the outage and
-    /// this frame has already recorded the trail mark; what that costs is a
-    /// mark arriving early on a node whose note is still sounding, and
-    /// `NoteHistory::record` is idempotent per cent-key and only the trail
-    /// reads it, so the note's real release overwrites it. Holding the mark
-    /// back needs a third state, released-but-unconfirmed, which is not worth
-    /// carrying for a source that has lost contact with the thing telling it
-    /// what is playing (Yan's call, 2026-09-19).
-    ///
     /// Rule 6: a fading note it lists that has an end — a factual off, a
     /// reset — is retired without a trail mark, since the source says the
     /// note is sounding: filed in `past`, or dropped if it is marked off the
     /// timeline, a rule-1 pulse or a note Clear took. A fresh entry starts at
     /// the row's onset.
     ///
-    /// A note Clear took off the timeline is REVIVED by a row that lists it,
-    /// from `live` or by rule 3: replaced by a fresh entry from the row, so the
+    /// A note Clear took off the timeline is REVIVED by a row that lists it:
+    /// replaced by a fresh entry from the row, so the
     /// Roll draws a flat line from the baseline as it does for any note it has
     /// no history of, and the voice's onset follows it.
     pub(crate) fn replace_source(
@@ -617,22 +550,6 @@ impl NoteRoll {
         }
         for row in voices {
             let key = row.key(source);
-            if !self.live.contains_key(&key) {
-                let open = |note: &RollNote| {
-                    note.end.is_none() && note.observed_until.is_some() && matches(row, note)
-                };
-                let resumed = match self.fading.iter().position(open) {
-                    Some(index) => Some(self.fading.remove(index)),
-                    None => self.past.iter().position(open).and_then(|i| self.past.remove(i)),
-                };
-                if let Some(mut note) = resumed {
-                    let until = note.observed_until.take().unwrap();
-                    let pitch = note.end_pitch();
-                    note.push_point(until, pitch, false);
-                    note.push_point(at, row.pitch(), true);
-                    self.live.insert(key, note);
-                }
-            }
             let ended: Vec<_> = self.fading.extract_if(.., |note| matches(row, note)).collect();
             for note in ended {
                 self.retire(note);
@@ -654,7 +571,6 @@ impl NoteRoll {
             note.history_complete = false;
             self.live.insert(key, note);
         }
-        self.enforce_cap();
     }
 
     /// Record a per-note tuning change on a sounding note. Unknown keys
@@ -703,7 +619,6 @@ impl NoteRoll {
             note.end = Some(at.max(note.start));
             self.release(note);
         }
-        self.enforce_cap();
     }
 
     pub(crate) fn published_off(&mut self, at: Time) {
@@ -741,7 +656,7 @@ impl NoteRoll {
     /// finished note; what is still fading is not finished.
     pub fn trim(&mut self, now: Time) {
         let cutoff = now - Self::MAX_AGE;
-        while self.past.front().is_some_and(|n| n.retired().is_some_and(|e| e < cutoff)) {
+        while self.past.front().is_some_and(|n| n.departed().is_some_and(|e| e < cutoff)) {
             self.past.pop_front();
         }
     }
@@ -756,7 +671,6 @@ impl NoteRoll {
             record(&note.voice());
             self.retire(note);
         }
-        self.enforce_cap();
         self.trim(now);
     }
 
@@ -812,8 +726,13 @@ impl NoteRoll {
             return Some(now);
         }
         let past = self.past.iter().rev().find(|n| !self.hides(n.source));
-        let past = past.and_then(RollNote::retired);
-        self.fading.iter().filter(shown).filter_map(RollNote::retired).chain(past).reduce(Time::max)
+        let past = past.and_then(RollNote::departed);
+        self.fading
+            .iter()
+            .filter(shown)
+            .filter_map(RollNote::departed)
+            .chain(past)
+            .reduce(Time::max)
     }
 
     pub fn len(&self) -> usize {

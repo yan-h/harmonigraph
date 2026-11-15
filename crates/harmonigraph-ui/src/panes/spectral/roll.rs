@@ -2628,9 +2628,11 @@ mod tests {
         assert_eq!(tongue, None, "a spent lead was still handed to the shader");
     }
 
+    /// A baseline that omits a held note stops observing it without releasing
+    /// it (rule 5).
     #[test]
     fn an_observation_cut_removes_the_lead_without_releasing_the_note() {
-        use harmonigraph_core::canonical::{CanonicalEvent, GapReason, PublicationGap};
+        use harmonigraph_core::canonical::SourceBaseline;
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.roll_seconds = 10.0;
@@ -2641,18 +2643,8 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let (_, tongues) = instance_groups(&state, 0.5);
         assert_eq!(one(&tongues).lead_alpha, 1.0);
-        state
-            .runtime
-            .tracker
-            .handle_canonical(CanonicalEvent::Gap(PublicationGap {
-                source: Some(SourceId::DIRECT),
-                time: 1.0,
-                through: 1.0,
-                first: 1,
-                last: 1,
-                reason: GapReason::PublicationFull,
-            }))
-            .unwrap();
+        let omitting = SourceBaseline::new(SourceId::DIRECT, 1, 1.0, 0, true, &[]).unwrap();
+        state.runtime.tracker.replace_source(&omitting).unwrap();
         let note = state.roll().notes().next().unwrap();
         assert_eq!(note.end, None);
         assert_eq!(note.observed_until, Some(1.0));

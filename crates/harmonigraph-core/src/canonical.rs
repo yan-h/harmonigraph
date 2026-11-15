@@ -228,10 +228,6 @@ impl CanonicalOrder {
         cursor.state_cut = output_cut;
         Ok(true)
     }
-
-    pub(crate) fn sources(&self) -> impl Iterator<Item = SourceId> + '_ {
-        self.sources.keys().copied()
-    }
 }
 
 /// One complete immutable source frame. A transport carries a handle to this
@@ -392,7 +388,6 @@ mod tests {
         let mut order = CanonicalOrder::default();
         let source = SourceId(1);
         assert_eq!(order.note(SourceId(3), 0), Ok(true));
-        assert_eq!(order.sources().count(), 0);
         assert_eq!(order.note(source, 5), Ok(true));
         assert_eq!(order.baseline(source, 1, 8), Ok(true));
         assert_eq!(order.note(source, 5), Ok(false));
@@ -406,7 +401,6 @@ mod tests {
         assert_eq!(order.note(SourceId(2), 1), Ok(true));
         assert_eq!(order.baseline(SourceId(2), 1, 4), Ok(true));
         assert_eq!(order.note(SourceId(2), 2), Err(InvalidCanonical));
-        assert_eq!(order.sources().collect::<Vec<_>>(), [source, SourceId(2)]);
     }
 
     fn voice(note: u8) -> VoiceBaseline {
@@ -699,8 +693,10 @@ mod tests {
         tracker.replace_source(&rejoin).unwrap();
         assert_eq!(tracker.roll().notes().count(), 1);
     }
+    /// A baseline that restates a note at a new pitch breaks its line there, and
+    /// a full bend buffer's fold keeps that break through a later bend.
     #[test]
-    fn a_full_bend_buffer_preserves_the_gap_after_a_later_expression() {
+    fn a_full_bend_buffer_preserves_a_baselines_break_after_a_later_expression() {
         let source = SourceId(1);
         let mut tracker = NoteTracker::new();
         tracker
@@ -724,17 +720,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(tracker.roll().notes().next().unwrap().segments(0.7).count(), 64);
-        tracker
-            .handle_canonical(CanonicalEvent::Gap(PublicationGap {
-                source: Some(source),
-                time: 1.0,
-                through: 1.9,
-                first: 65,
-                last: 66,
-                reason: GapReason::PublicationFull,
-            }))
-            .unwrap();
-        let row = VoiceBaseline { actual_onset: 0.0, pitch_microcents: 6_063_000_000, ..voice(60) };
+        let row = VoiceBaseline { actual_onset: 0.0, pitch_microcents: 6_070_000_000, ..voice(60) };
         let frame = SourceBaseline::new(source, 1, 2.0, 66, true, &[row]).unwrap();
         tracker.replace_source(&frame).unwrap();
         tracker
@@ -751,8 +737,10 @@ mod tests {
             .unwrap();
         let segments: Vec<_> = tracker.roll().notes().next().unwrap().segments(3.1).collect();
         assert!(
-            segments.iter().all(|((start, _), (end, _))| *end <= 1.0 || *start >= 2.0),
-            "fold crossed missing interval: {segments:?}"
+            segments.iter().all(|((start, p0), (end, p1))| *end < 2.0
+                || *start >= 2.0
+                || (*end == 2.0 && p0 == p1)),
+            "fold crossed the baseline's break: {segments:?}"
         );
         assert!(segments.iter().any(|((start, _), (end, _))| *start == 2.0 && *end == 3.0));
         assert!(segments.len() <= 64);
