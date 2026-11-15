@@ -881,13 +881,11 @@ impl Plugin for Harmonigraph {
         self.samples_processed += block_samples as u64;
         self.presentation_seconds += block_samples as f64 / self.sample_rate;
         self.take.publish_clock(self.presentation_seconds);
-        // `Normal` lets a host stop calling once the input is quiet, which
-        // would freeze an audition mid-phrase (#1719).
-        if tape.sounding {
-            ProcessStatus::KeepAlive
-        } else {
-            ProcessStatus::Normal
-        }
+        // Always, as every Tune does: `Normal` lets a host stop calling once
+        // the input is quiet, which would freeze an audition mid-phrase
+        // (#1719) and leave every Tune's notes uncorrected, including a Tune
+        // added while this track was already asleep.
+        ProcessStatus::KeepAlive
     }
 }
 
@@ -1709,7 +1707,7 @@ mod tests {
             let mut aux = AuxiliaryBuffers { inputs: &mut inputs, outputs: &mut outputs };
             assert!(matches!(
                 plugin.process(&mut main, &mut aux, &mut EmptyProcessContext::new()),
-                ProcessStatus::Normal,
+                ProcessStatus::KeepAlive,
             ));
         }
 
@@ -1933,7 +1931,7 @@ mod tests {
         playing: bool,
         left: &mut [f32],
         right: &mut [f32],
-    ) -> ProcessStatus {
+    ) {
         let mut context = EmptyProcessContext::new();
         context.transport.pos_seconds = Some(position);
         context.transport.playing = playing;
@@ -1941,7 +1939,10 @@ mod tests {
         let mut inputs: [Buffer; 0] = [];
         let mut outputs = [];
         let mut aux = AuxiliaryBuffers { inputs: &mut inputs, outputs: &mut outputs };
-        plugin.process(&mut main, &mut aux, &mut context)
+        assert!(matches!(
+            plugin.process(&mut main, &mut aux, &mut context),
+            ProcessStatus::KeepAlive
+        ));
     }
 
     /// Click in Tape mode, and wait until the input worker has passed the
@@ -1989,8 +1990,8 @@ mod tests {
                     ask(&plugin, harmonigraph_ui::tape::TapeRequest::Cue(position + 100.0));
                 }
                 let (mut left, mut right) = (input.clone(), input.clone());
-                let status = tape_block(&mut plugin, at, playing, &mut left, &mut right);
-                cued |= matches!(status, ProcessStatus::KeepAlive);
+                tape_block(&mut plugin, at, playing, &mut left, &mut right);
+                cued |= plugin.tape.sounding();
                 let bits = |v: &[f32]| v.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
                 assert_eq!(bits(&left), bits(&input), "asked {asked}, block at {at}");
                 assert_eq!(bits(&right), bits(&input), "asked {asked}, block at {at}");
@@ -2022,15 +2023,13 @@ mod tests {
         for (i, at) in song_blocks(&plugin, 0.0, 1.0, 512).into_iter().enumerate() {
             let mut left: Vec<f32> = (0..512).map(|f| song(i * 512 + f, 0)).collect();
             let mut right: Vec<f32> = (0..512).map(|f| song(i * 512 + f, 1)).collect();
-            assert!(matches!(
-                tape_block(&mut plugin, at, true, &mut left, &mut right),
-                ProcessStatus::Normal
-            ));
+            tape_block(&mut plugin, at, true, &mut left, &mut right);
+            assert!(!plugin.tape.sounding());
         }
         let silence = |plugin: &mut Harmonigraph, at: f64| {
             let (mut left, mut right) = (vec![0.0; 512], vec![0.0; 512]);
-            let status = tape_block(plugin, at, false, &mut left, &mut right);
-            (status, left, right)
+            tape_block(plugin, at, false, &mut left, &mut right);
+            (left, right)
         };
         for _ in 0..40 {
             silence(&mut plugin, 0.0);
@@ -2053,8 +2052,8 @@ mod tests {
             // would starve it whenever a busy runner held the worker back.
             let rounds = plugin._input_worker.completed_rounds();
             assert!(a_round_after(&plugin, rounds), "the worker never ran a round");
-            let (status, left, right) = silence(&mut plugin, parked);
-            assert!(matches!(status, ProcessStatus::KeepAlive), "the tape is cued or sounding");
+            let (left, right) = silence(&mut plugin, parked);
+            assert!(plugin.tape.sounding(), "the tape is cued or sounding");
             let start = if heard.is_empty() {
                 left.iter().position(|&s| s != 0.0).unwrap_or(left.len())
             } else {
@@ -2096,8 +2095,8 @@ mod tests {
 
         let input: Vec<f32> = (0..512).map(|f| f as f32).collect();
         let (mut left, mut right) = (input.clone(), input.clone());
-        let status = tape_block(&mut plugin, parked, true, &mut left, &mut right);
-        assert!(matches!(status, ProcessStatus::Normal));
+        tape_block(&mut plugin, parked, true, &mut left, &mut right);
+        assert!(!plugin.tape.sounding());
         assert_eq!((left, right), (input.clone(), input));
     }
 }

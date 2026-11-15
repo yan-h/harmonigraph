@@ -228,6 +228,8 @@ struct Sink {
     reject_kind: Option<u16>,
     reject_attempt: Option<usize>,
     callback_nanos: u128,
+    /// What the callback returned to the host.
+    status: clap_process_status,
     /// Every kind of event the host took, note or parameter. The chronological
     /// floor is the plugin's contract now, and this is what holds it to that:
     /// both `time` expressions in `Tune::schedule` clamp differently, so a
@@ -534,6 +536,7 @@ impl Device {
             reject_kind,
             reject_attempt,
             callback_nanos: 0,
+            status: CLAP_PROCESS_ERROR,
             accepted_time: 0,
         };
         let output =
@@ -569,6 +572,7 @@ impl Device {
         let started = std::time::Instant::now();
         let status = unsafe { (*self.plugin).process.unwrap()(self.plugin, &process) };
         sink.callback_nanos = started.elapsed().as_nanos();
+        sink.status = status;
         assert_eq!(
             status == CLAP_PROCESS_ERROR,
             expect_error,
@@ -1219,6 +1223,17 @@ fn a_second_hub_is_a_fault_status_and_never_a_silence() {
     assert_eq!(output.len(), 2, "the note is still corrected by the Hub that owns the session");
     assert_ne!(tune.shared().status() & session::SECOND_HUB, 0);
     assert_ne!(first.shared().status() & session::SECOND_HUB, 0);
+}
+
+/// A Tune's notes wait on the Hub's callbacks for their corrections, and a
+/// Tune may be added while Harmonigraph's track is quiet, so the Hub asks the
+/// host to keep calling it with no Tune paired and nothing sounding.
+#[test]
+fn the_hub_asks_to_be_kept_running_with_nothing_paired_or_sounding() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    assert_eq!(hub.run(0, vec![], None).status, CLAP_PROCESS_CONTINUE);
 }
 
 /// The delay is `multiplier x advertised maximum frames`, resolved at
