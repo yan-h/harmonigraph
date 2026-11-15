@@ -771,7 +771,9 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
     // it on the next callback, not whenever that source next plays.
     let heard = |device: &Device| {
         device.wrapper().test_inspect_plugin(|plugin| {
-            plugin.configuration.as_ref().unwrap().confirmed.rows().count()
+            let mut scratch = [harmonigraph_core::tuning::PitchClass::from_microcents(0);
+                crate::tuning::LEARN_CLASSES];
+            plugin.aggregation.as_ref().unwrap().learn_classes(&mut scratch).unwrap()
         })
     };
     assert_eq!(heard(&device), 3);
@@ -2266,11 +2268,6 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
         ..Default::default()
     });
     let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 1.0, 0, true, &voices).unwrap();
-    let mut confirmed = ConfirmedPitches::default();
-    confirmed
-        .replace_source(SourceId::DIRECT, &voices.map(|row| row.confirmed(SourceId::DIRECT)))
-        .unwrap();
-    let before: Vec<_> = confirmed.rows().copied().collect();
     let start = std::time::Instant::now();
     nice_assert_no_alloc::assert_no_alloc(|| {
         for _ in 0..SNAPSHOT_SLOTS {
@@ -2286,9 +2283,6 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
             publisher.note(harmonigraph_core::NoteEvent::off(2.0, SourceId::DIRECT, 0, 60).into()),
             Err(PublishError::Lost)
         );
-        // Reporting ownership and failure have no access to musical state.
-        assert!(confirmed.is_complete());
-        assert!(confirmed.rows().copied().eq(before.iter().copied()));
     });
     let duration = start.elapsed();
     // Consume outside the audio guard, then exercise payload reuse under it.

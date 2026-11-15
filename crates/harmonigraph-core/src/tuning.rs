@@ -478,10 +478,65 @@ pub fn learn_tuning(pitch_classes: &[PitchClass]) -> LearnedTuning {
     learn_sorted_classes(&classes)
 }
 
-/// Allocation-free inference from sorted, distinct classes. The confirmed-state
-/// component supplies its fixed scratch slice here, preserving deterministic ties.
+/// Allocation-free inference from sorted, distinct classes. [`LearningState`]
+/// supplies its fixed scratch slice here, preserving deterministic ties.
 pub fn learn_sorted_classes(classes: &[PitchClass]) -> LearnedTuning {
     learn_sorted_classes_counted(classes, &mut 0)
+}
+
+/// The held notes Learn would read are not all known: a source's state lost
+/// an event, so what it holds cannot be listed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Incomplete;
+
+/// Fixed scratch for `N` held classes and an exact class-set memo. Row order,
+/// octave, provenance and unrelated configuration do not alter interval
+/// inference. Re-arming intentionally reopens the same chord. An empty chord
+/// is remembered without changing any axis; incomplete input is never learned.
+pub struct LearningState<const N: usize> {
+    scratch: [PitchClass; N],
+    previous: [PitchClass; N],
+    previous_len: Option<usize>,
+    pub last_pair_visits: usize,
+}
+
+impl<const N: usize> Default for LearningState<N> {
+    fn default() -> Self {
+        Self {
+            scratch: [PitchClass(0); N],
+            previous: [PitchClass(0); N],
+            previous_len: None,
+            last_pair_visits: 0,
+        }
+    }
+}
+
+impl<const N: usize> LearningState<N> {
+    /// Learn from what `classes` writes into the scratch: the held classes,
+    /// sorted and distinct, and how many there are. It is asked only while
+    /// armed, and a class set already learned from yields `None`.
+    pub fn infer(
+        &mut self,
+        armed: bool,
+        classes: impl FnOnce(&mut [PitchClass; N]) -> Result<usize, Incomplete>,
+    ) -> Result<Option<LearnedTuning>, Incomplete> {
+        self.last_pair_visits = 0;
+        if !armed {
+            self.previous_len = None;
+            return Ok(None);
+        }
+        let count = classes(&mut self.scratch)?;
+        let classes = &self.scratch[..count];
+        if self.previous_len == Some(count) && self.previous[..count] == *classes {
+            return Ok(None);
+        }
+        self.previous[..count].copy_from_slice(classes);
+        self.previous_len = Some(count);
+        if classes.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(learn_sorted_classes_counted(classes, &mut self.last_pair_visits)))
+    }
 }
 
 pub(crate) fn learn_sorted_classes_counted(
@@ -789,6 +844,26 @@ mod tests {
         let learned = learn_tuning(&classes);
         let three = learned.three.unwrap();
         assert!((three - THREE_JUST).abs() < 0.01, "three = {three}");
+    }
+
+    /// 256 distinct classes visit every one of their 32,640 pairs once, and the
+    /// same set again is remembered rather than learned twice.
+    #[test]
+    fn learning_state_reaches_every_pair_and_learns_a_class_set_once() {
+        let mut learning = LearningState::<256>::default();
+        let held = |scratch: &mut [PitchClass; 256]| {
+            for (i, class) in scratch.iter_mut().enumerate() {
+                *class = PitchClass::from_microcents(i as i64 * 4_687_499);
+            }
+            Ok(256)
+        };
+        let result = learning.infer(true, held).unwrap().unwrap();
+        assert_eq!(learning.last_pair_visits, 32640);
+        let mut classes = [PitchClass(0); 256];
+        assert_eq!(held(&mut classes), Ok(256));
+        assert_eq!(result, learn_tuning(&classes));
+        assert_eq!(learning.infer(true, held).unwrap(), None);
+        assert_eq!(learning.last_pair_visits, 0);
     }
 
     #[test]

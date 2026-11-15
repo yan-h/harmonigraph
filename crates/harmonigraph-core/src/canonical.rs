@@ -1,9 +1,17 @@
 //! The canonical display/take boundary: observed direct input, accepted output,
-//! complete source replacement and explicit missing history. Runtime lease and
-//! credit validation belongs to the audio owner before this publication boundary.
+//! complete source replacement and explicit missing history, as the Hub
+//! schedules them from its own sequenced rows.
 use crate::configuration::ResolvedConfig;
-use crate::confirmed::{ConfirmedPitch, PitchProvenance, HELD_PER_SOURCE};
 use crate::{Expressions, LatticePos, NoteEvent, NoteEventKind, SourceId, Time, VoiceKey};
+
+/// Held voices one source's baseline can carry.
+pub const HELD_PER_SOURCE: usize = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PitchProvenance {
+    ObservedDirect,
+    AcceptedOutput,
+}
 
 /// What the tuner decided about one attack. It also named the configuration
 /// revision the decision was taken under, for reconstructing historical
@@ -157,15 +165,6 @@ impl VoiceBaseline {
 
     pub fn pitch(&self) -> f32 {
         (self.pitch_microcents as f64 / 100_000_000.0) as f32
-    }
-
-    pub fn confirmed(&self, source: SourceId) -> ConfirmedPitch {
-        ConfirmedPitch {
-            key: self.key(source),
-            lifetime: Some(self.lifetime),
-            pitch_microcents: self.pitch_microcents,
-            provenance: self.provenance,
-        }
     }
 }
 

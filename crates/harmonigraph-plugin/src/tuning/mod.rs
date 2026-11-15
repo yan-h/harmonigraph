@@ -24,9 +24,12 @@ mod tests;
 /// with a reserved index, so a paired Tune never collides with it.
 pub const TUNERS: usize = 16;
 pub const DIRECT: u8 = TUNERS as u8;
-/// Voices one source may hold, and across the whole session. Learn's confirmed
-/// set is sized by the same two numbers, so they are defined once, there.
-pub use harmonigraph_core::confirmed::{HELD_PER_SOURCE, HELD_SESSION};
+/// Voices one source may hold; a source's baseline is sized by it.
+pub use harmonigraph_core::canonical::HELD_PER_SOURCE;
+/// Held voices the adaptive context weighs at once, across every source.
+pub const HELD_SESSION: usize = 256;
+/// Distinct pitch classes Learn can hear at once: every voice every row holds.
+pub const LEARN_CLASSES: usize = (TUNERS + 1) * HELD_PER_SOURCE;
 /// Steps on the Tuning delay parameter. Sixteen still reaches the 512 samples
 /// this delay used to be fixed at even from a 32-frame callback.
 pub const DELAY_MULTIPLIER_MAX: i32 = 16;

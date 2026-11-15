@@ -21,7 +21,6 @@
 
 pub mod canonical;
 pub mod configuration;
-pub mod confirmed;
 pub mod coords;
 pub mod history;
 pub mod lattice_map;

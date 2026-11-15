@@ -548,7 +548,7 @@ Shrinking a buffer does not make its overflow path unreachable.
 | Constant | Value | Resource |
 |---|---:|---|
 | `TUNERS` | 16 | Tune rows in the session; the Hub's own track is a seventeenth source with a reserved index |
-| `HELD_PER_SOURCE` / `HELD_SESSION` | 64 / 256 | Held voices per source / across the session |
+| `HELD_PER_SOURCE` / `HELD_SESSION` | 64 / 256 | Held voices per source / in the adaptive context across the session. Learn is not capped by the second: it hears every voice every row holds |
 | `PENDING_EVENTS` | 8,192 | Retained events in one Tune's delay line, including unrelated MIDI |
 | `CAPTURE_RING` / `REPLY_RING` | 1,024 / 1,024 | The two rings per row. A full capture ring costs that note its correction |
 | `BATCH_EVENTS` | 2,048 | Records one ordering pass holds across every source, and deltas one callback may publish |
@@ -587,6 +587,8 @@ Every row is tuned now, the Hub's own included, so feeding Learn what was emitte
 The old design avoided that only because the Hub's own track was the one thing it did not retune.
 Learn also reads one callback later than it used to, because the Hub's own input is delayed by D like everyone else's;
 the configuration walk that runs it happens before the performance input for that callback is delivered.
+It reads the Hub's rows themselves (`Hub::learn_classes`), as the Hub's callback start leaves them,
+and refuses only while a row has lost an event, since that row's held notes are then unknown (#1751).
 
 Publication is two independent lanes, one for the display and one for the take, and the rule that keeps them independent is stated as a type:
 **no capacity, outcome or cursor on the publication path is a value derived from both lanes.** A full display ring must not hold back a snapshot the take needs, and a take-lane gap must not blank the display.

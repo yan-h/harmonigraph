@@ -1,11 +1,10 @@
-//! Audio-owned effective tuning and the confirmed pitches Learn reads. Session
-//! aggregation, which supplies those pitches every callback, is the Hub in
-//! `tuning`.
+//! Audio-owned effective tuning, and Learn over the held pitch classes the Hub
+//! in `tuning` reads from its rows.
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, PolicyEdit, ResolvedConfig,
     TuningModes,
 };
-use harmonigraph_core::confirmed::{ConfirmedPitches, LearningState};
+use harmonigraph_core::tuning::{Incomplete, LearningState, PitchClass};
 use harmonigraph_core::{LearnedTuning, Tempered, Tuning};
 use harmonigraph_ui::params::{ConfigurationView, ParamKey};
 use nice_plug::plugin::ParamValue;
@@ -171,8 +170,7 @@ pub struct Owner {
     /// Every edit reduces here the moment it arrives, in arrival order, so the
     /// reducer's own combined-edit/preset/unlock semantics are untouched.
     pub(crate) reducer: ConfigReducer,
-    pub(crate) confirmed: ConfirmedPitches,
-    learning: LearningState,
+    learning: LearningState<{ crate::tuning::LEARN_CLASSES }>,
     learned: Option<LearnedTuning>,
     pub snapshot: ConfigurationSnapshot,
     boundary: ConfigurationBoundary,
@@ -195,7 +193,6 @@ impl Owner {
             maps: crate::lattice_maps::AudioMaps::new(params),
             reducer,
             recording: recording::Recording::default(),
-            confirmed: ConfirmedPitches::default(),
             learning: LearningState::default(),
             learned: None,
             snapshot,
@@ -229,7 +226,6 @@ impl Owner {
 
     pub fn reset(&mut self, recorder: &mut harmonigraph_record::Recorder) {
         self.maps.reset();
-        self.confirmed.reset();
         self.learning = LearningState::default();
         self.learned = None;
         self.snapshot.status = 0;
@@ -351,17 +347,23 @@ impl Owner {
     /// A Retune-enabled source reserves the lattice axes only while the engine
     /// actually retunes. Pass through learns the axes from unchanged input.
     ///
-    /// Status bit 1 reports this evaluation alone rather than latching. The
-    /// held state is rebuilt every callback, so the bit clears as soon as a
-    /// departure or a Reset's cut makes it complete again.
-    pub fn group_end(&mut self, retuning: bool) -> Option<ConfigurationEdit> {
+    /// `classes` is the Hub's `learn_classes`, asked only while Learn is armed.
+    /// Status bit 1 reports this evaluation alone rather than latching, so it
+    /// clears as soon as a departure or a Reset's cut makes the rows complete.
+    pub fn group_end(
+        &mut self,
+        retuning: bool,
+        classes: impl FnOnce(
+            &mut [PitchClass; crate::tuning::LEARN_CLASSES],
+        ) -> Result<usize, Incomplete>,
+    ) -> Option<ConfigurationEdit> {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
         self.snapshot.status &= !1;
         if self.snapshot.status & 2 != 0 || !self.maps.playback.engine.learns() {
             return None;
         }
-        match self.learning.infer(&self.confirmed, self.reducer.resolved().modes.learning) {
+        match self.learning.infer(self.reducer.resolved().modes.learning, classes) {
             Ok(Some(learned)) => {
                 self.learned = Some(learned);
                 let mut payload = [0; PAYLOAD_WORDS];

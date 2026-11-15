@@ -13,6 +13,7 @@ use std::sync::Arc;
 use harmonigraph_core::canonical::{NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
+use harmonigraph_core::tuning::{Incomplete, PitchClass};
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
 use nice_plug::wrapper::clap::configuration::OwnedInput;
@@ -22,7 +23,7 @@ use super::event::Event;
 use super::session::{self, HubEnds, Reply};
 use super::state::{Stamp, State};
 use super::tune::Tune;
-use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_SESSION, TUNERS};
+use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_SESSION, LEARN_CLASSES, TUNERS};
 
 type Owner = crate::configuration::Owner;
 
@@ -388,14 +389,10 @@ impl Hub {
         // The Tune half runs first, because it is what turns an editor Reset
         // into the epoch bump this callback then adopts.
         self.tune.begin(callback);
+        // Learn reads the rows as this leaves them (`learn_classes`), before
+        // this callback's input boundary moves them: a cut or departure
+        // adopted here has already emptied what it ended.
         self.adopt();
-        // Learn consumes one complete snapshot at this callback boundary.
-        // Rebuild from empty so earlier sources cannot collide with obsolete
-        // later-source rows at capacity. Cuts and departures need no delta.
-        owner.confirmed.reset();
-        for (source, row) in self.rows.iter().enumerate() {
-            Self::confirm(row, identity(source as u8), &mut owner.confirmed);
-        }
         self.detect_loop(callback);
         // Adopt even on callbacks with no note input: silence expiry below
         // must use the current policy, not the last onset's configuration.
@@ -1095,14 +1092,32 @@ impl Hub {
         }
     }
 
-    /// Learn hears every row, Retune off included: Retune decides what the Hub
-    /// corrects, and an uncorrected note is the player's pitch Learn reads.
-    fn confirm(
-        row: &Row,
-        source: SourceId,
-        confirmed: &mut harmonigraph_core::confirmed::ConfirmedPitches,
-    ) {
-        let _ = row.state.publish_confirmed(source, confirmed);
+    /// The pitch classes Learn reads, sorted and distinct, written into
+    /// `scratch` with their count: every voice every row holds, with its
+    /// adaptive correction taken back off (`State::learnable`), or
+    /// `Incomplete` while any row has lost an event. Learn hears every row,
+    /// Retune off included: Retune decides what the Hub corrects, and an
+    /// uncorrected note is the player's pitch Learn reads.
+    pub fn learn_classes(
+        &self,
+        scratch: &mut [PitchClass; LEARN_CLASSES],
+    ) -> Result<usize, Incomplete> {
+        let mut count = 0;
+        for row in self.rows.iter() {
+            for pitch in row.state.learnable().ok_or(Incomplete)? {
+                scratch[count] = PitchClass::from_microcents(pitch);
+                count += 1;
+            }
+        }
+        scratch[..count].sort_unstable();
+        let mut unique = 0;
+        for i in 0..count {
+            if unique == 0 || scratch[i] != scratch[unique - 1] {
+                scratch[unique] = scratch[i];
+                unique += 1;
+            }
+        }
+        Ok(unique)
     }
 
     fn mapping(&self) -> crate::configuration::Presentation {

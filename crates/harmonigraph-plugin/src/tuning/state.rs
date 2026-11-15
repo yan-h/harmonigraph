@@ -5,11 +5,10 @@
 //! the display and the take show a schedule rather than a confirmation. What
 //! that costs is written down: a note the host refuses is drawn anyway, and
 //! nothing in the protocol can tell.
-use harmonigraph_core::canonical::{NoteDelta, SourceBaseline, VoiceBaseline};
-use harmonigraph_core::confirmed::{
-    ConfirmedPitch, ConfirmedPitches, PitchProvenance, HELD_PER_SOURCE,
+use harmonigraph_core::canonical::{
+    NoteDelta, PitchProvenance, SourceBaseline, VoiceBaseline, HELD_PER_SOURCE,
 };
-use harmonigraph_core::{LatticePos, NoteEvent, NoteEventKind, SourceId, VoiceKey};
+use harmonigraph_core::{LatticePos, NoteEvent, NoteEventKind, SourceId};
 
 use super::event::Event;
 
@@ -127,31 +126,13 @@ impl State {
     /// already chosen and never move. The old design got away with it only
     /// because the Hub's own track was the one thing it did not retune.
     ///
-    /// A source whose state has lost an event has no confirmed pitches rather
-    /// than an empty list of them.
-    pub fn publish_confirmed(&self, source: SourceId, confirmed: &mut ConfirmedPitches) -> bool {
-        if !self.complete {
-            confirmed.invalidate(source);
-            return false;
-        }
-        let empty = ConfirmedPitch {
-            key: VoiceKey { source, channel: 0, note: 0 },
-            lifetime: None,
-            pitch_microcents: 0,
-            provenance: PitchProvenance::AcceptedOutput,
-        };
-        let mut rows = [empty; HELD_PER_SOURCE];
-        let mut count = 0;
-        for voice in self.voices() {
-            rows[count] = ConfirmedPitch {
-                pitch_microcents: voice
-                    .pitch_microcents
-                    .saturating_sub(voice.frozen_offset_microcents),
-                ..voice.confirmed(source)
-            };
-            count += 1;
-        }
-        confirmed.replace_source(source, &rows[..count]).is_ok()
+    /// A source whose state has lost an event has nothing to learn from rather
+    /// than an empty list.
+    pub fn learnable(&self) -> Option<impl Iterator<Item = i64> + '_> {
+        self.complete.then(|| {
+            self.voices()
+                .map(|voice| voice.pitch_microcents.saturating_sub(voice.frozen_offset_microcents))
+        })
     }
 
     pub fn baseline(
