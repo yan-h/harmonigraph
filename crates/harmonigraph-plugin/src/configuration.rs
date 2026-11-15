@@ -338,8 +338,8 @@ impl Owner {
         }
         let start = self.recording.block_start;
         let end = start + i64::from(self.recording.block_frames);
-        self.recording.record(recorder, origin);
-        if self.recording.recording() {
+        recorder.record(self.take_time(), origin);
+        if recorder.recording() {
             // The block's own adopted configuration, and in Lattice Map each
             // timed shared-tuning change at its own sample. There is no
             // historical lookup: the value in force IS the value the Hub used

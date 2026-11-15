@@ -1163,8 +1163,7 @@ impl Hub {
         // nothing recorded — before arming, or in a pause — has its attack in
         // no run, and the take would otherwise play its release and
         // expressions against nothing.
-        if owner.recording.recording() {
-            let run = recorder.recording_run();
+        if let Some(run) = recorder.open_run() {
             if self.opened != Some(run) {
                 self.opened = Some(run);
                 for row in self.rows.iter_mut() {

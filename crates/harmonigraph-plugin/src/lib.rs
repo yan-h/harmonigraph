@@ -954,7 +954,7 @@ impl Plugin for Harmonigraph {
         }
         // A block that records, after the run it belongs to: parameters are
         // timed on the take's own clock and placed by that run.
-        let recorded = self.configuration.as_ref().filter(|owner| owner.recording.recording());
+        let recorded = self.configuration.as_ref().filter(|_| self.take.recording());
         if let Some(at) = recorded.map(|owner| owner.take_time()) {
             self.take.params(at, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
 

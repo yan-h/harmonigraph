@@ -994,31 +994,34 @@ fn a_take_re_armed_with_no_callback_between_records_from_its_first_block() {
 
 /// The run changes when the take is armed and when it records again after a
 /// block it did not — and at nothing else, a loop wrap included, since each
-/// change costs a snapshot of every sounding note (#1129).
+/// change costs a snapshot of every sounding note (#1129). The recorder opens
+/// and closes it itself, from each block's origin.
 #[test]
 fn the_recording_run_changes_at_arming_and_a_resume_only() {
+    fn block(b: &mut Bench, position: f64, playing: bool) -> Option<u64> {
+        let origin = b.rec.observe_transport(position, playing, BLOCK_SECONDS);
+        b.rec.record(position, origin);
+        b.rec.open_run()
+    }
     let mut b = Bench::new();
     b.arm();
-    let armed = b.rec.recording_run();
-    assert!(b.rec.observe_transport(1.0, true, BLOCK_SECONDS).is_some());
-    let first = b.rec.recording_run();
-    assert_ne!(first, armed, "the first block recorded opens a run");
-    assert!(b.rec.observe_transport(1.0 + BLOCK_SECONDS, true, BLOCK_SECONDS).is_some());
-    assert_eq!(b.rec.recording_run(), first, "playback continues it");
+    let first = block(&mut b, 1.0, true);
+    assert!(first.is_some(), "the first block recorded opens a run");
+    assert_eq!(block(&mut b, 1.0 + BLOCK_SECONDS, true), first, "playback continues it");
     // Stopped where it was: not even the contiguous block an export plays.
     for _ in 0..2 {
-        assert!(!b.rec.observe_transport(1.0 + BLOCK_SECONDS, false, BLOCK_SECONDS).is_some());
-        assert_eq!(b.rec.recording_run(), first, "a pause records nothing to start a run");
+        assert_eq!(block(&mut b, 1.0 + BLOCK_SECONDS, false), None, "a pause records nothing");
     }
-    assert!(b.rec.observe_transport(1.0 + BLOCK_SECONDS, true, BLOCK_SECONDS).is_some());
-    let resumed = b.rec.recording_run();
-    assert_ne!(resumed, first, "the resume opens one");
-    assert!(b.rec.observe_transport(1.0 + 2.0 * BLOCK_SECONDS, true, BLOCK_SECONDS).is_some());
-    assert!(
-        b.rec.observe_transport(0.0, true, BLOCK_SECONDS).is_some(),
-        "a plain wrap keeps recording"
-    );
-    assert_eq!(b.rec.recording_run(), resumed, "in the same run");
+    let resumed = block(&mut b, 1.0 + BLOCK_SECONDS, true);
+    assert!(resumed.is_some() && resumed != first, "the resume opens one");
+    block(&mut b, 1.0 + 2.0 * BLOCK_SECONDS, true);
+    assert_eq!(block(&mut b, 0.0, true), resumed, "a plain wrap keeps recording in the same run");
+    // Stop, then Start, before any callback observes the disarm.
+    b.rec.fence.disarm();
+    b.rec.fence.arm(b.rec.fence.epoch() + 1);
+    assert!(b.rec.is_armed());
+    let rearmed = block(&mut b, BLOCK_SECONDS, true);
+    assert!(rearmed.is_some() && rearmed != resumed, "the new take opens its own");
 }
 
 /// The GUI's stop bar reaches the audio thread through `Control`, and the

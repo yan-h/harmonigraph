@@ -29,9 +29,6 @@ pub(crate) struct Recording {
     registered_through: i64,
     /// The intent captured at this callback's boundary.
     pub captured_intent: RecordIntent,
-    /// The recorder's run serial the open run opened under, which moves at a
-    /// resume.
-    run: Option<u64>,
     /// The configuration last written, and the take it was written in: a
     /// stable block writes nothing, and a changed one writes once.
     last: Option<(u64, ResolvedConfig)>,
@@ -44,7 +41,6 @@ impl Default for Recording {
             presentation: Presentation::default(),
             registered_through: i64::MIN,
             captured_intent: RecordIntent::default(),
-            run: None,
             last: None,
             block_start: 0,
             block_frames: 0,
@@ -52,36 +48,9 @@ impl Default for Recording {
     }
 }
 impl Recording {
-    /// Whether this sub-block records.
-    pub fn recording(&self) -> bool {
-        self.run.is_some()
-    }
-
-    fn end_run(&mut self, recorder: &mut Recorder, at: i64) {
-        if self.run.take().is_some() {
-            recorder.run_end(self.presentation.at(at));
-        }
-    }
-
-    /// Close or open this sub-block's run. It records when it has an origin:
-    /// the transport observation gives one only to an armed take that rolls,
-    /// and a block with no transport position gives its local clock to any
-    /// armed take; `origin` is where it sits in the take's audio.
-    pub fn record(&mut self, recorder: &mut Recorder, origin: Option<f64>) {
-        let start = self.block_start;
-        let serial = recorder.recording_run();
-        if self.run.is_some_and(|run| origin.is_none() || serial != run) {
-            self.end_run(recorder, start);
-        }
-        if let (Some(song), None) = (origin, self.run) {
-            recorder.run(self.presentation.at(start), song);
-            self.run = Some(serial);
-        }
-    }
-
     /// The configuration in force from `sample`, written when it changed.
     pub fn configuration(&mut self, recorder: &mut Recorder, sample: i64, config: ResolvedConfig) {
-        if self.run.is_none() {
+        if !recorder.recording() {
             return;
         }
         let take = recorder.recording_epoch();
@@ -100,18 +69,21 @@ impl Recording {
     /// its run, so it closes here. For a host that stops calling the audio
     /// thread after a Stop.
     pub fn close_stopped(&mut self, recorder: &mut Recorder) {
-        if recorder.capture_recording_intent().is_armed() {
-            return;
+        if !recorder.capture_recording_intent().is_armed() {
+            self.end_run(recorder);
         }
-        if self.registered_through != i64::MIN {
-            self.end_run(recorder, self.registered_through);
-        }
+    }
+
+    /// Close the open run where this owner last registered: a run is open
+    /// only after a sub-block that recorded, which registered.
+    fn end_run(&self, recorder: &mut Recorder) {
+        recorder.run_end(self.presentation.at(self.registered_through));
     }
 
     /// A host reset cuts the clock. A run open across it ends here and opens
     /// again on the new clock.
     pub fn reset(&mut self, recorder: &mut Recorder) {
-        self.end_run(recorder, self.registered_through);
+        self.end_run(recorder);
         *self = Self::default();
     }
 }
@@ -133,7 +105,7 @@ mod tests {
         let mut recording =
             Recording { captured_intent: intent, block_start: 1000, ..Default::default() };
         recording.presentation = Presentation { anchor: Some((1000, 5.0)), rate: 48_000.0 };
-        recording.record(&mut recorder, origin);
+        recorder.record(recording.presentation.at(recording.block_start), origin);
         for _ in 0..2 {
             recording.configuration(&mut recorder, 1000, ConfigReducer::default().resolved());
         }
