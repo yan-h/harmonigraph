@@ -92,11 +92,8 @@ pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
         ));
     }
     if status != Status::Failed {
-        // About every 60 Hz refresh, asked a little under one: the shell
-        // paces the link only to a refresh at least 2 ms past the deadline
-        // (egui-baseview's `PACE_MARGIN`), and 16 ms would wait for every
-        // second refresh at 60 and 120 Hz.
-        crate::repaint_after(ui.ctx(), std::time::Duration::from_millis(14));
+        // About every 60 Hz refresh.
+        crate::repaint_after(ui.ctx(), std::time::Duration::from_millis(16));
     }
     ui.ctx().data_mut(|data| data.insert_temp(id(), loading));
     true
@@ -178,13 +175,12 @@ mod tests {
             };
             assert!(loading(&frame()), "the open skipped the loading screen");
             // The splash's own pace, which egui's predicted 1/60 s used to take
-            // whole, repainting the splash on every refresh. A little under a
-            // 60 Hz refresh, for the pacing margin (#1707). From the second
+            // whole, repainting the splash on every refresh. From the second
             // frame, since a fresh context asks to repaint at once.
             let output = frame();
             assert!(loading(&output), "the second frame left the loading screen");
             let delay = output.viewport_output.values().map(|v| v.repaint_delay).min().unwrap();
-            assert_eq!(delay, std::time::Duration::from_millis(14), "the splash's poll");
+            assert_eq!(delay, std::time::Duration::from_millis(16), "the splash's poll");
             assert!(output
                 .shapes
                 .iter()

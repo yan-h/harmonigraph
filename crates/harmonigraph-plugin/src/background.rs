@@ -251,22 +251,37 @@ thread_local! {
 /// view in the first hold, and plays the notes of the tape the blocks just
 /// taken carried into the tracker there, on their audio's clock; its console
 /// lines wait for the second.
+///
+/// **A still window is asked to draw what a step started**
+/// ([`EguiState::request_pass`]): any note it struck, played or from the
+/// tape, and sound after a still stretch. A still window runs no pass until
+/// something asks, so without this the first note after silence was drawn at
+/// its next idle poll, up to about 56 ms at 144 Hz. Sound asks only as it
+/// starts: once a picture shows it moving, the window draws every refresh
+/// until it stops, and a picture that does not show it has nothing new to
+/// draw. What else a step changes (the tape's view, a Console line) is drawn
+/// at the idle poll.
 fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::Worker) {
-    let taken = {
+    let (taken, struck) = {
         let mut guard = shared.lock();
         let shared = &mut *guard;
         let now = shared.input.now();
         let open = editor_state.is_open();
         let settings = &shared.ui.picture.appearance.spectrum;
         tape.exchange(&mut shared.ui.picture.runtime.tape, settings, open);
+        let onset = newest_onset(&shared.ui.picture.runtime);
         let taken =
             shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
         std::mem::swap(&mut shared.input.tape_notes, &mut tape.inbox);
         if let Some(taken) = &taken {
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
-        taken
+        (taken, newest_onset(&shared.ui.picture.runtime) > onset)
     };
+    // Asked once the lock is let go, so the pass it runs does not wait on it.
+    if struck {
+        editor_state.request_pass();
+    }
     if let Some(taken) = &taken {
         for (block, samples) in taken.blocks() {
             tape.capture(block, samples);
@@ -288,9 +303,8 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
     }
     let mut guard = shared.lock();
     let shared = &mut *guard;
-    if let Some(taken) = taken {
-        shared.input.give(&mut shared.ui.picture.runtime, taken);
-    }
+    let resumed =
+        taken.is_some_and(|taken| shared.input.give(&mut shared.ui.picture.runtime, taken));
     for line in tape.logs.drain(..) {
         shared.ui.picture.runtime.console.log(line);
     }
@@ -306,6 +320,17 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
         // `EditorShared::poll_take_end`.
         shared.poll_take_end();
     }
+    drop(guard);
+    if resumed {
+        editor_state.request_pass();
+    }
+}
+
+/// When the newest voice the tracker draws was struck, `None` while it draws
+/// none: a step that moves it on struck a note, a retrigger of a held key
+/// included, since that starts a voice of its own.
+fn newest_onset(runtime: &harmonigraph_ui::VisualRuntime) -> Option<f64> {
+    runtime.tracker.voices().map(|voice| voice.on_time).reduce(f64::max)
 }
 
 /// A [`step`] that survives its own panic. One would otherwise end the
@@ -656,6 +681,32 @@ mod tests {
         h.step();
         assert!(h.columns() > 0, "the worker left the audio to a frame");
         assert_eq!(h.voices(), 1, "the worker left the notes to a frame");
+    }
+
+    /// A step that starts something asks the open window to draw it on its
+    /// next frame: any note it strikes, a note joining a held one included,
+    /// and the first sound after silence. A release, and sound that goes on,
+    /// ask nothing.
+    #[test]
+    fn a_step_asks_the_window_to_draw_what_it_starts() {
+        let mut h = harness();
+        h.editor_state.set_open(true);
+        let asked = |h: &Harness| h.editor_state.pass_request.take();
+        h.push_note(1.0, 60);
+        h.step();
+        assert!(asked(&h), "the first note waited for the idle poll");
+        h.push_note(1.5, 64);
+        h.step();
+        assert!(asked(&h), "a note joining a held one waited for the idle poll");
+        h.push_note_off(1.6, 64);
+        h.step();
+        assert!(!asked(&h), "a release");
+        h.push_audio(20_000);
+        h.step();
+        assert!(asked(&h), "the first sound waited for the idle poll");
+        h.push_audio(20_000);
+        h.step();
+        assert!(!asked(&h), "sound that goes on");
     }
 
     /// A take ends itself with the window SHUT, which is the state a Bitwig

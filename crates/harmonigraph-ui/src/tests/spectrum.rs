@@ -710,6 +710,47 @@ fn a_setting_listens_as_long_at_every_sample_rate() {
     );
 }
 
+/// One batch as the analysis hands it over: its arrival, newest frame at
+/// `newest`, and a column of `power` in every bucket dated there.
+fn batch(newest: f64, power: f32) -> [Delivery; 2] {
+    [
+        Delivery::Arrival { newest },
+        Delivery::Column(Box::new(crate::spectrum::AnalyzedColumn {
+            time: newest,
+            power: [power; harmonigraph_core::spectrum::SPECTRUM_BINS],
+            step: AudioSpectrum::FFT_INTERVAL,
+        })),
+    ]
+}
+
+/// A hand-over says when it brings sound back to a still spectrum, which is
+/// when the plugin's input worker asks a still window to draw: the first
+/// batch heard, and one heard more than a hold after the last; never
+/// silence, nor sound that goes on.
+#[test]
+fn a_hand_over_says_when_sound_comes_back() {
+    let cfg = SpectrumConfig::default();
+    let mut spectrum = AudioSpectrum::default();
+    let step = AudioSpectrum::FFT_INTERVAL;
+    assert!(!spectrum.give(batch(100.0, 0.0), &cfg), "silence");
+    assert!(spectrum.give(batch(100.0 + step, 1.0), &cfg), "the first sound");
+    assert!(!spectrum.give(batch(100.0 + 2.0 * step, 1.0), &cfg), "sound going on");
+    let back = 100.0 + 2.0 * step + AudioSpectrum::HOLD_SECONDS + step;
+    assert!(spectrum.give(batch(back, 1.0), &cfg), "sound after a still stretch");
+
+    // A column just over the floor under a slow attack: the raw column is
+    // heard, which the heatmap scrolls, while the smoothed curve stays under.
+    let slow = SpectrumConfig { attack: 1.0, ..SpectrumConfig::default() };
+    let mut spectrum = AudioSpectrum::default();
+    let faint = 2.0 * harmonigraph_core::spectrogram::POWER_FLOOR;
+    assert!(spectrum.give(batch(100.0, faint), &slow), "heard by the heatmap alone");
+    assert!(!spectrum.give(batch(100.0 + step, faint), &slow), "faint sound going on");
+    assert_eq!(spectrum.last_audible().curve, None, "the fixture's curve was heard too");
+    // Then loud enough to lift the curve while the heatmap hears on: the
+    // curve comes back alone.
+    assert!(spectrum.give(batch(100.0 + 2.0 * step, 1.0), &slow), "heard again by the curve alone");
+}
+
 /// The costs the slab pyramid adds, for the numbers #1758 quotes: a column
 /// folded into all sixteen levels, a silent one on the fast path, and the
 /// hold of the editor lock a mono catch-up takes, 371 columns given at

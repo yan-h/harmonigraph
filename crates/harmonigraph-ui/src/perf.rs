@@ -183,8 +183,8 @@ fn tag_line(
 }
 
 /// The headline rate's colour. Only a low rate while something is animating is
-/// flagged: `fps` counts UI passes, which run on every link tick, and an idle
-/// editor's link is slowed to its poll, so an idle number carries no news.
+/// flagged: `fps` counts UI passes, which a still editor runs only at its
+/// poll, so an idle number carries no news.
 ///
 /// Judged against `target_fps`, the rate the link was asked for (display rate
 /// over the Editor frame rate divisor), so a divided rate running on target
@@ -705,9 +705,8 @@ mod tests {
         assert_eq!(frame_health(60.0, Some(144.0), false), green, "an idle editor is not judged");
     }
 
-    /// A still editor's link is slowed to its poll, so its passes run at
-    /// about 18 a second on a 144 Hz display; the first note restores the
-    /// chosen rate at once. The headline is a mean held over a quarter second,
+    /// A still editor runs its passes only at its poll, about 18 a second on
+    /// a 144 Hz display; the first note brings back the chosen rate at once. The headline is a mean held over a quarter second,
     /// so it reads the idle rate for up to half a second after, and judging
     /// that against the new target flashed red on every first note. A slow
     /// rate held through a whole animating window still reads red.

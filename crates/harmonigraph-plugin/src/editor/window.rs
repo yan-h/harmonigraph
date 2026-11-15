@@ -263,7 +263,8 @@ impl Editor for LatticeEditor {
                         .unwrap_or(WindowScalePolicy::SystemScaleFactor),
                 )
                 .with_graphics_config(graphics)
-                .with_size_source(size_source),
+                .with_size_source(size_source)
+                .with_pass_request(self.egui_state.pass_request.clone()),
             WindowState::new(self.shared.clone(), self.params.clone(), Arc::downgrade(&pop_out)),
             |egui_ctx: &Context, _queue, state: &mut WindowState| {
                 // Everything this context owes the shared UI state, which is

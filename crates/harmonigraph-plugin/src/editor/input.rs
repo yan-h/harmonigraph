@@ -212,15 +212,21 @@ impl LiveInput {
         }
     }
     /// Hand what [`Self::analyze`] made to the spectrum, and put the analysis
-    /// back.
-    pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, taken: Taken) {
+    /// back. Whether that brought sound back to a spectrum gone still
+    /// ([`AudioSpectrum::give`](harmonigraph_ui::AudioSpectrum::give)).
+    pub(crate) fn give(
+        &mut self,
+        runtime: &mut harmonigraph_ui::VisualRuntime,
+        taken: Taken,
+    ) -> bool {
         let Taken { analysis, mut audio } = taken;
-        runtime.spectrum.give(audio.deliveries.drain(..), &audio.config);
+        let resumed = runtime.spectrum.give(audio.deliveries.drain(..), &audio.config);
         debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
         self.analysis = Some(analysis);
         audio.samples.clear();
         audio.blocks.clear();
         self.spare = audio;
+        resumed
     }
     /// The wall clock used to observe incoming batches: seconds since
     /// the PLUGIN was instantiated, not since the window opened.
@@ -367,7 +373,6 @@ mod tests {
                 target_timestamp: media + vsync + refresh,
                 refresh,
                 divisor: 1,
-                woken: 0,
             };
             let wall = shared.input.frame_wall(Some(timing), fired);
             if late_ms / 1000.0 < refresh {
@@ -391,7 +396,6 @@ mod tests {
                 target_timestamp,
                 refresh,
                 divisor: 1,
-                woken: 0,
             };
             assert_eq!(shared.input.frame_wall(Some(timing), observed), observed);
         }

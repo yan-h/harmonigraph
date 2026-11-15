@@ -80,7 +80,6 @@ impl EditorLock {
         let gestures =
             shared.gesture.replace([false; harmonigraph_ui::params::ParamKey::ALL.len()]);
         end_gestures(gestures);
-        shared.forget_frames();
     }
 }
 

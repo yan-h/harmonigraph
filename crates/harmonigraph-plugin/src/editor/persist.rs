@@ -27,6 +27,10 @@ pub struct EguiState {
     pub(super) host_resized: AtomicCell<Option<(u32, u32)>>,
     #[serde(skip)]
     open: AtomicBool,
+    /// How a thread that changes what the open window shows asks it to draw
+    /// that on its next frame (see [`Self::request_pass`]).
+    #[serde(skip)]
+    pub(crate) pass_request: egui_baseview::PassRequest,
     /// The editor kept in the host's window rather than its own (see
     /// `PopOut`), from the System tab. Saved with the project; a project
     /// from before it was opens in the editor's own window, which is the
@@ -42,6 +46,7 @@ impl EguiState {
             requested_size: AtomicCell::new(None),
             host_resized: AtomicCell::new(None),
             open: AtomicBool::new(false),
+            pass_request: Default::default(),
             docked: AtomicBool::new(false),
         })
     }
@@ -70,6 +75,17 @@ impl EguiState {
     /// seam between threads and not just a bit.
     pub(crate) fn set_open(&self, open: bool) {
         self.open.store(open, Ordering::Release);
+    }
+
+    /// Ask the open window to run its UI on its next frame, from any thread.
+    ///
+    /// A still window runs no pass until something asks for one or its idle
+    /// poll comes due, and a change made off its thread asks nothing by
+    /// itself: without this it is drawn up to a poll later. Asking while the
+    /// window is shut costs one store, and the next window's first frame runs
+    /// a pass anyway.
+    pub(crate) fn request_pass(&self) {
+        self.pass_request.request();
     }
 }
 

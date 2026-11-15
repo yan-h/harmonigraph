@@ -168,17 +168,13 @@ through one the button reads down.
 `Cargo.toml` gains an empty `[workspace]` table so `cargo test --manifest-path` reaches the unit tests over the mask arithmetic;
 ci.sh runs them.
 macOS only.
-- **Patch 7** (`src/platform/macos/view.rs`): a new frame divisor takes effect at once (#1676).
-The link schedules its next frame before running this one, so a divisor set from a frame paced only the interval after the next frame, and one set between frames waited out the old divisor's whole interval.
-Now a divisor set inside a link frame re-paces from that frame's target, and a changed one set between frames (an input event) lets the next refresh draw,
-which records the divisor it cut short in that frame's `FrameTiming::woken`, so a frame log can tell a frame the event brought forward from one the link paced, and a late one from either.
-egui-baseview Patch 21 needs both, to slow the link while the editor idles and restore it on the next refresh.
-macOS only, like the divisor.
 - **Upgrade**: read the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) first;
 its disposition table is a snapshot that stops at Patch 6, so dispose of later patches from their entries here.
+Patch 7 (#1692's re-pace of a changed divisor, with `FrameTiming::woken`) was retired whole in #1747, with the idle pacing it served;
+a divisor set from a frame takes effect after the one frame the link has already scheduled.
 baseview 0.4 drives frames from a display link too, but pauses it while idle and has no divisor, watchdog or frame timing.
 Download the new crates.io tarball into `vendor/baseview`,
-re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the display link with its divisor (re-paced at once when it changes), watchdog and frame timing, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
+re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the display link with its divisor, watchdog and frame timing, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
 - **Upstreaming**: declined (2026-07-19).
 Kept as a local patch rather than proposed upstream.
 
@@ -196,6 +192,7 @@ glyph coordinates then point into a stale atlas (scrambled text).
 Force a render whenever `textures_delta` is non-empty.
 Only visible for apps that throttle repaints;
 always-repaint apps mask it.
+Since Patch 22 every pass renders, so no delta can outlive its pass and the forcing term is gone.
 - **Patch 3** (`src/window.rs` + both renderers): stale-frame ("ghost")
 recovery after window occlusion.
 `Renderer::render` now returns whether a frame was actually presented;
@@ -224,12 +221,12 @@ the idle poll included, which went unnoticed because the plugin shell then reque
 Fix:
 keep the EARLIEST pending deadline rather than overwriting it, and schedule the next one from the instant a frame actually painted instead of leaving it unset (clearing it to `None` cost a whole tick, so every capped interval ran one tick long).
 Found while adding the System pane's frame-rate cap, which was first built on exactly this mechanism and did nothing at all without the fix;
-the cap is now baseview's frame divisor (Patch 6), and this fix still serves every delayed repaint, the idle poll among them.
+the cap is now baseview's frame divisor (Patch 6).
+Since Patch 22 no pass runs without drawing, so only the second half is left: the deadline is set by the pass that draws, from its frame time.
 - **Patch 6** (`src/window.rs`): pass baseview's frame divisor through, so the
 app can pace its own window.
 `Queue::set_frame_divisor` sets the app's chosen rate from inside a frame (applied after the frame returns, where the `Window` is reachable —
-the same deferred shape `resize` already uses);
-since Patch 21 baseview's divisor is that rate or a multiple of it while the editor idles.
+the same deferred shape `resize` already uses).
 This is what makes a frame rate setting enforceable:
 egui's `request_repaint_after` cannot do it, since egui keeps the SMALLEST delay requested in a pass and any zero-delay `request_repaint` (input event, hover animation, a sounding voice) also forces the next pass to zero —
 so a cap built on it evaporates exactly when the UI is busy.
@@ -347,10 +344,10 @@ keeps refusing to present (#989).
 A present refused three times in a row (`REFUSALS_BEFORE_BACKOFF`) is offered another only every 250 ms (`SURFACE_RETRY`) instead of every timer tick, because an occluded window's acquire is refused rather than waited on, and drawing anyway submitted 60-144 unpresented frames a second against 13-37 ms of GPU work with nothing pacing them —
 wgpu reclaims a frame's staged uploads only when its submission completes, so outrunning the device grew the in-flight set into gigabytes within a minute of switching away from the host.
 Keyed on the refusals rather than the occlusion event, since wgpu-hal and baseview read occlusion off different windows and can disagree, and the first present that lands (or an `Occluded(false)`) clears the backoff.
-Texture deltas stay exempt and are checked first, so a frame carrying one is never skipped and glyph coordinates never point into a stale atlas.
+Texture deltas need no exemption: every pass renders (Patch 22), so a frame carrying one is never skipped and glyph coordinates never point into a stale atlas.
 The same change also runs `free_textures` on all three render exits instead of only past the acquire:
 a `free`-only delta on a bailing frame used to drop egui's texture-manager ids permanently, leaking the retired atlas exactly when the backoff above forces a frame through on the strength of consuming that delta.
-`wants_render` and `after_render` are pure functions with their own tests in `vendor/egui-baseview`, which `ci.sh` runs.
+`pass_due` (Patch 22's, which carries this backoff) and `after_render` are pure functions with their own tests in `vendor/egui-baseview`, which `ci.sh` runs.
 - **Patch 18** (`src/window.rs`, `src/translate.rs`): reserve app shortcuts from the host (#1433).
 `KeyCapture::CaptureShortcuts` captures its listed `egui::KeyboardShortcut`s even when no widget has keyboard focus, so the editor's appearance undo and redo (Cmd+Z, Cmd+Shift+Z, and Ctrl+Y off macOS) never reach the DAW while the editor window has the keyboard.
 Every other key still passes to the host unless egui has a use for it, which `egui_claims_key` decides:
@@ -377,20 +374,26 @@ without it, a worktree under `.claude/worktrees/` walks past its own root to the
 `tick_ms` and `render_ms` leave out the drawable wait, which `acquire_ms` reports on its own:
 with three drawables, a frame the display paces waits most of a refresh for one in steady state, and a total counting that read as a frame that was always nearly too slow.
 The `frame-log` feature (macOS, wgpu) writes every frame's timing to `~/Library/Logs/Harmonigraph/`:
-the display link's timestamps, frame divisor and `woken` from baseview patches 4 and 7, the app's chosen divisor the pacing served (which Patch 21 multiplies while the editor idles), the frame's stages, when it submitted, the layer's `maximumDrawableCount`,
+the display link's timestamps and frame divisor from baseview patch 4, the frame's stages, when it submitted, the layer's `maximumDrawableCount`,
 and, through the wgpu-hal present observer, the GPU's start and end on the present's command buffer and the drawable's `presentedTime`.
 Together they classify a missed refresh as a late link callback, a wait for a drawable, late CPU or GPU work, or a late latch.
+A frame that runs no UI pass (Patch 22) still logs a tick row, with nothing submitted, so a log shows what deciding that cost.
 `frame_log::event` is public so the plugin can add its own rows on the same clock and frame (#1670).
 Built only on request (`--features frame-log` on the plugin);
 `tools/frame-log-summary.py` reads the log.
-- **Patch 21** (`src/window.rs`): skip the display link's frames that could draw nothing (#1676).
-The UI pass runs on every frame the link paces, drawn or not, so an idle editor waiting out its 50 ms poll ran it on every refresh: 107 ms per second of Bitwig's main thread at 144 Hz.
-After the render decision, `paced_divisor` sets the link to the first of the app's chosen frames (`Queue::set_frame_divisor`) at least `PACE_MARGIN` (2 ms) past the next repaint deadline, which is the frame that would draw anyway (one closer draws only if its callback and UI pass run no more than that much sooner, a coin toss just under 60 or 120 Hz, so it is skipped: #1703), never more than `MAX_FRAME_GAP` (0.08 s) apart unless the chosen rate is.
-`MAX_FRAME_GAP` is public so the plugin can assert its 0.1 s stall threshold sits a refresh above it.
-A frame asked for at once (an animating editor, input, an egui animation) puts the chosen divisor back, and so does any event, before egui sees it (`on_event`), so input draws on the next refresh.
-A size change holds the chosen divisor for `RESIZE_HOLD` (0.2 s): on macOS a host resize is no event, only a size polled at the top of a frame, so an idling link stepped a border drag at the poll.
-What changes on another thread, a note, audio or a host parameter, is seen at the next deadline, up to one poll later than on a link that ran every refresh.
-Needs baseview Patch 7.
+- **Patch 22** (`src/window.rs`, `src/frame_log.rs`): decide whether a frame runs the UI before running it (#1676, #1747).
+Upstream ran the UI pass on every frame to find out whether it should draw, so an idle editor waiting out its 50 ms poll ran it on every refresh: 107 ms per second of Bitwig's main thread at 144 Hz.
+Now the display link runs at the app's chosen rate (Patch 6) and `on_frame` does the host-frame duties first, measuring the gap since the last frame and asking the `SizeSource`, then returns before the UI unless a pass is due (`pass_due`):
+something asked for one, or the frame lands past the deadline the last pass left.
+What asks: any event (`on_event`) and a `PassRequest`, which another thread holds and sets when it changes what the UI shows (the plugin's input worker, on a note or on sound after silence); the window's events set the same flag.
+The deadline and the frame time it is compared with are both on the frame clock (`frame_at`: the link's target refresh, or now for a frame the link did not ask for), so the comparison is between two refreshes rather than two moments callbacks ran at;
+a frame at or past it is due, and where a deadline falls exactly on a refresh (the poll at 60 and 120 Hz) and the clocks put it a hair either side, the frame that loses runs nothing, so the tie costs no pass (#1708).
+Every pass that runs renders.
+While Patch 17's backoff is armed, its retry decides alone, a request included, so a thread asking on every change cannot reopen #989's unpaced submits; the request stays set for the retry's pass.
+A size from the `SizeSource` runs that frame's pass whatever the backoff says, since the source hands each size over once and only a pass applies it.
+`Queue::longest_tick_gap` hands the app the longest gap between link frames since its last pass, measured on every frame, for its stall check.
+It replaces Patch 21 (#1692, #1707), which slowed the link's divisor to land on the frame the idle poll drew on, and is retired whole with baseview Patch 7:
+`paced_divisor`, `PACE_MARGIN`, `MAX_FRAME_GAP`, `RESIZE_HOLD`, the restore of the chosen divisor on every event and the earliest-deadline keep for undrawn passes all went with it.
 - **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package;
 its disposition table is a snapshot that stops at Patch 17, so dispose of later patches from their entries here.
 The egui 0.36 publication trigger is met and investigated,

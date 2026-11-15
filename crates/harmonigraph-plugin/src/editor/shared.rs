@@ -20,9 +20,6 @@ pub struct EditorShared {
     /// [`EditorLock`](super::EditorLock)) — and it logs a failure to start
     /// into the same console. Its tests read back the history it filled.
     pub(crate) ui: SharedState,
-    /// When the previous GUI update ran, if it was paced; used to detect
-    /// event-loop stalls. See [`note_frame`](Self::note_frame).
-    last_frame: Option<Instant>,
     /// Active begin_set/end_set automation gestures, including simultaneous camera axes.
     pub(super) gesture: std::cell::Cell<[bool; harmonigraph_ui::params::ParamKey::ALL.len()]>,
     /// Take recording, driven from the Video pane's toggle.
@@ -73,7 +70,6 @@ impl EditorShared {
                 recorder: Default::default(),
             },
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
-            last_frame: None,
             gesture: std::cell::Cell::new([false; harmonigraph_ui::params::ParamKey::ALL.len()]),
             take,
             take_rolling: false,
@@ -229,52 +225,7 @@ impl EditorShared {
         self.poll_take_end_at(now);
         self.poll_take_end_at(now + Self::STOP_SECONDS);
     }
-
-    /// Record a GUI frame, logging a console warning when the event loop
-    /// stalled since the previous one (run-loop mode issues, host
-    /// blocking, ...) so freezes stay attributable.
-    ///
-    /// Only a gap out of a `paced` frame counts: one the display link asked
-    /// for, or any frame off macOS, where a fixed timer drives them all. A
-    /// macOS view whose link has paused (minimized, or ordered out) runs on
-    /// baseview's watchdog, a frame every 0.1 s or slower, and that cadence is
-    /// the pause rather than a stall: counted, it logged a line per tick.
-    pub(super) fn note_frame(&mut self, paced: bool) {
-        self.note_frame_at(Instant::now(), paced);
-    }
-
-    /// Forget the last frame as the editor closes: this state outlives the
-    /// window, and the reopened editor's first frame is no stall, however long
-    /// it was shut.
-    pub(super) fn forget_frames(&mut self) {
-        self.last_frame = None;
-    }
-
-    fn note_frame_at(&mut self, now: Instant, paced: bool) {
-        let gap = self.last_frame.map(|t| now.duration_since(t).as_secs_f64());
-        self.last_frame = paced.then_some(now);
-        if let Some(gap) = gap.filter(|g| *g > STALL_GAP) {
-            self.ui
-                .picture
-                .runtime
-                .console
-                .log(format!("frame stall: {:.0} ms between updates", gap * 1000.0));
-        }
-    }
 }
-
-/// The gap between paced frames, in seconds, past which a frame logs a stall.
-///
-/// An idle editor's display link is slowed on purpose, to as much as the
-/// shell's [`egui_baseview::MAX_FRAME_GAP`] between passes (#1676), and those
-/// gaps land on whole refreshes with run-loop jitter on top. So a stall is
-/// only a gap at least one whole 60 Hz refresh past that cap: equal to it, half
-/// of all idle gaps logged as stalls.
-const STALL_GAP: f64 = 0.1;
-const _: () = assert!(
-    STALL_GAP > egui_baseview::MAX_FRAME_GAP + 1.0 / 60.0,
-    "the stall threshold must sit a refresh above the shell's idle frame gap",
-);
 
 /// Open `dir` in the file browser, creating it first: before the first take
 /// it does not exist yet, and it is where that take will go anyway.
@@ -410,45 +361,5 @@ mod tests {
         let appearance = harmonigraph_ui::AppearanceDocument::parse(&blob).unwrap();
         assert_eq!(appearance.serialize(), expected);
         std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    /// A view whose display link has paused (the editor docked while Bitwig
-    /// is in the background, or its own window minimized) runs on the
-    /// watchdog, a frame every 0.1 s or slower. Those frames are its cadence,
-    /// not stalls, and logged as stalls they filled the console in minutes.
-    /// The first gap out of a paced frame is still one.
-    #[test]
-    fn watchdog_frames_after_a_paused_link_are_not_stalls() {
-        let (_notes, consumer) = harmonigraph_record::publication::channel();
-        let (_audio, audio_consumer) = crate::audio_ingress::channel(64);
-        let (_recorder, control) = harmonigraph_record::channel();
-        let mut shared = EditorShared::new(
-            consumer,
-            audio_consumer,
-            Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            control,
-        );
-        let start = std::time::Instant::now();
-        let at = |seconds: f64| start + std::time::Duration::from_secs_f64(seconds);
-        let stalls = |shared: &EditorShared| {
-            let console = &shared.ui.picture.runtime.console;
-            console.lines().filter(|line| line.starts_with("frame stall")).count()
-        };
-        shared.note_frame_at(at(0.0), true);
-        shared.note_frame_at(at(0.007), true);
-        assert_eq!(stalls(&shared), 0);
-        shared.note_frame_at(at(0.5), true);
-        assert_eq!(stalls(&shared), 1, "a gap between two link frames is a stall");
-        shared.note_frame_at(at(0.7), false);
-        assert_eq!(stalls(&shared), 2, "so is the first gap out of a link frame");
-        for tick in 1..=50 {
-            shared.note_frame_at(at(0.7 + 0.21 * f64::from(tick)), false);
-        }
-        shared.note_frame_at(at(11.5), true);
-        shared.note_frame_at(at(11.507), true);
-        assert_eq!(stalls(&shared), 2, "neither the watchdog's ticks nor the link's return");
-        shared.forget_frames();
-        shared.note_frame_at(at(16.5), false);
-        assert_eq!(stalls(&shared), 2, "nor the first frame of a reopened editor");
     }
 }

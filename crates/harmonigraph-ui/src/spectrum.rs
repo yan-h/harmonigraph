@@ -485,14 +485,31 @@ impl AudioSpectrum {
     /// it is making: they join the emptied history, at most one step's audio
     /// from just before the press (the worker polls every 4 ms while the
     /// window is open), as if the press had come that much sooner.
+    ///
+    /// Whether it brought sound back to a spectrum that had gone still: a
+    /// stamp on either reading ([`Heard`]) more than
+    /// [`HOLD_SECONDS`](Self::HOLD_SECONDS) after the one before it, or the
+    /// first. By then every picture of it had stopped moving (the curve a hold
+    /// after its last heard batch, the heatmap later still), so a still window
+    /// has to be asked to draw it. Sound that goes on asks nothing more: a
+    /// picture that shows it keeps the window drawing, and one that does not
+    /// has nothing new to draw.
     pub fn give(
         &mut self,
         deliveries: impl IntoIterator<Item = Delivery>,
         config: &SpectrumConfig,
-    ) {
+    ) -> bool {
+        let before = self.last_audible;
         for delivery in deliveries {
             self.apply(delivery, config);
         }
+        let after = self.last_audible;
+        let resumed = |was: Option<f64>, heard: Option<f64>| match (was, heard) {
+            (_, None) => false,
+            (None, Some(_)) => true,
+            (Some(was), Some(heard)) => heard > was + Self::HOLD_SECONDS,
+        };
+        resumed(before.curve, after.curve) || resumed(before.column, after.column)
     }
 
     /// Keep one delivery as it is made: an inline shell's
