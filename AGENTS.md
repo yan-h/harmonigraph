@@ -111,6 +111,41 @@ the guard-ledger audit (#1709) found the top tenth of the regression tests absor
 and #836, #1107, #1112 and #1714 each paid that down one test at a time.
 A neighbouring test is a model for size, not for where its inputs come from.
 
+## The stakes record: one composer on macOS in Bitwig, and three failures that are severe
+
+Price a case from this section, as the global preferences say:
+how often it occurs here, and what it costs when it does.
+
+**Use.** Yan alone, composing in Bitwig Studio on macOS 14 or later, on Apple silicon with a 144 Hz display,
+and exporting the pieces as videos.
+One or two personal Bitwig projects hold saved state.
+Anyone else builds from source with rough edges promised (README), and no case is handled for their sake.
+Linux is only where cloud agent sessions build and test.
+Nobody runs the plugin on Linux, X11 or Windows, so a case only those platforms reach is outside the use.
+
+**Normal load.** A chord of about six tones with a handful of held notes, inside the caps of 64 held voices per source and 256 per session;
+an editor drawing at up to 144 Hz;
+sessions of tens of minutes;
+exports of a minute or two at 1440p60 or 720p60, never over the ten-minute cap.
+A figure that appears only in a test or a review finding is not load:
+24 held notes at 2048², or more than 2,048 events in the callback that stops a take.
+
+**Severe failures, and the parts they live in.**
+
+- Saved editor state (the look, slots, presets and undo) lost or changed with nothing saying so (#1740, PR #1764).
+- A video export, or the take behind it, that is wrong with nothing saying so (PR #340).
+- Time taken from Bitwig's main thread or from the audio thread:
+  a still picture once cost the main thread 280-320 ms a second (#1673).
+
+Everything else is cheap:
+a warning, a glitch for a frame, a bar dragged back after reopening a project, an old take that no longer loads.
+
+**A case outside the use** is refused, or falls back to the default, with a line in the Console (`harmonigraph-ui/src/state.rs`).
+One that no producer writes is a `debug_assert` and not a release workaround (#1631).
+Neither gets a handler or a repair of its own.
+The per-type `sanitize` repairs stay for the one thing the next section asks of them:
+the value on screen is the value the file holds.
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
