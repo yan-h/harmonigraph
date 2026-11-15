@@ -57,9 +57,13 @@ impl std::fmt::Debug for SizeSource {
 /// A frame runs the UI only when something asks for it (see `pass_due`): an
 /// event, a size from [`SizeSource`], the repaint deadline the last pass left,
 /// or this. A change made on another thread reaches none of the others, so
-/// without it the window sees the change at the UI's next deadline.
+/// without it the window sees the change at the UI's next deadline. The
+/// window's own events ask through the same flag.
 ///
-/// One flag however many ask: a pass shows every change made before it.
+/// One flag however many ask: a pass shows every change made before it. While
+/// the surface is refusing to present, a request waits for the surface's next
+/// retry like everything else, so asking on every change cannot submit frames
+/// faster than a refusing surface drains them (#989).
 #[derive(Clone, Debug, Default)]
 pub struct PassRequest(Arc<AtomicBool>);
 
@@ -68,6 +72,11 @@ impl PassRequest {
     /// thread on every change: one store.
     pub fn request(&self) {
         self.0.store(true, Ordering::Release);
+    }
+
+    /// Whether a pass has been asked for since the last take, leaving it set.
+    fn asked(&self) -> bool {
+        self.0.load(Ordering::Acquire)
     }
 
     /// Whether a pass has been asked for since the last take, clearing it:
@@ -443,11 +452,9 @@ where
     /// the frame time of the last pass plus the repaint delay it asked for.
     /// `None` while it asks for none.
     repaint_after: Option<Instant>,
-    /// See [`PassRequest`].
+    /// See [`PassRequest`]: another thread's requests, and this window's
+    /// events.
     pass_request: PassRequest,
-    /// Something on this thread asked for the next pass: an event, or a size
-    /// from [`SizeSource`].
-    pass_asked: bool,
     tick_gaps: TickGaps,
     /// How many frames in a row the surface has refused to present. Reset by
     /// the first one that lands. See [`REFUSALS_BEFORE_BACKOFF`].
@@ -628,7 +635,6 @@ where
             close_requested,
             repaint_after: Some(start_time),
             pass_request: settings.pass_request.clone(),
-            pass_asked: false,
             tick_gaps: TickGaps::default(),
             refused_presents: 0,
             retry_after: None,
@@ -747,9 +753,9 @@ const SURFACE_RETRY: Duration = Duration::from_millis(250);
 /// Whether this frame runs the UI pass, and so draws: every pass that runs
 /// renders, so this is decided before the pass rather than after it.
 ///
-/// A pass is due when something asked for it (`asked`: an event, a size from
-/// [`SizeSource`], a [`PassRequest`]), or when the frame lands past the
-/// deadline the last pass left (`repaint_after`). Every other frame returns
+/// A pass is due when something asked for it (`asked`: an event or another
+/// thread's [`PassRequest`]), or when the frame lands past the deadline the
+/// last pass left (`repaint_after`). Every other frame returns
 /// before the UI runs, which is what an idle editor's frames are: before this,
 /// the pass ran on every refresh to find out whether anything had changed, and
 /// cost a still editor 107 ms of Bitwig's main thread a second at 144 Hz
@@ -793,9 +799,11 @@ const SURFACE_RETRY: Duration = Duration::from_millis(250);
 /// So a refusing surface is still offered a frame every [`SURFACE_RETRY`], and
 /// the first one that presents clears the backoff.
 ///
-/// A pass asked for runs whatever the backoff says: what asks is an event or
-/// another thread's change, which come seldom, and the backoff exists to stop
-/// an animating UI's deadline of now from submitting every frame.
+/// While the backoff is armed the retry decides alone, a request included: a
+/// thread may ask on every change, and honouring that would be the same
+/// unpaced submit loop. The request stays set, so the retry's pass draws it.
+/// A size from [`SizeSource`] is the one thing that runs a pass at once
+/// whatever this says (see `on_frame`): the source hands each size over once.
 ///
 /// Texture deltas need no term of their own, as they did while a pass could
 /// run without drawing: they are uploaded only inside `render()`, and every
@@ -806,11 +814,15 @@ fn pass_due(
     retry_after: Option<Instant>,
     frame_at: Instant,
 ) -> bool {
-    // A refusing surface is paced by its own clock, never the UI's: the UI
-    // asks for a zero-delay repaint on every animating frame, and honouring
-    // that is the spin the backoff exists to stop.
-    let due = retry_after.or(repaint_after).and_then(|due| due.checked_add(DEADLINE_SLACK));
-    asked || due.is_some_and(|due| frame_at > due)
+    let past = |due: Instant| due.checked_add(DEADLINE_SLACK).is_some_and(|due| frame_at > due);
+    match retry_after {
+        // A refusing surface is paced by its own clock, never the UI's: the UI
+        // asks for a zero-delay repaint on every animating frame, and
+        // honouring that, or a request on every change, is the spin the
+        // backoff exists to stop.
+        Some(retry) => past(retry),
+        None => asked || repaint_after.is_some_and(past),
+    }
 }
 
 /// How far past its deadline a frame must land for its pass to be due.
@@ -1054,16 +1066,20 @@ mod pass_due_tests {
         assert!(pass_due(false, animating(now), retry, now));
     }
 
-    /// An idle UI's deadline is ahead, so its frames run nothing; an event, a
-    /// size or another thread's request runs the next one, backed off or not,
-    /// and a UI that asks for nothing at all runs none until something asks.
+    /// An idle UI's deadline is ahead, so its frames run nothing; an event or
+    /// another thread's request runs the next one, unless the surface is
+    /// backed off, when it waits for the retry; and a UI that asks for nothing
+    /// at all runs none until something asks.
     #[test]
     fn a_frame_runs_a_pass_only_when_asked_or_due() {
         let now = Instant::now();
         let poll = now.checked_add(Duration::from_millis(50));
         assert!(!pass_due(false, poll, None, now));
         assert!(pass_due(true, poll, None, now), "asked");
-        assert!(pass_due(true, poll, now.checked_add(SURFACE_RETRY), now), "asked, backed off");
+        let armed = now.checked_add(SURFACE_RETRY);
+        assert!(!pass_due(true, poll, armed, now), "asked, backed off");
+        let retry = now.checked_sub(SURFACE_RETRY);
+        assert!(pass_due(true, poll, retry, now), "asked, at the retry");
         assert!(!pass_due(false, None, None, now), "nothing asked for");
     }
 
@@ -1152,20 +1168,20 @@ where
         // the frame is built for a window that has stopped being that size,
         // and lands in a surface that is already the new one. Asked every
         // frame, the ones that run no pass included, since the source is also
-        // where the app does its own host-window duties.
+        // where the app does its own host-window duties. A size it gives runs
+        // this frame's pass whatever the backoff says: the source hands it
+        // over once, and only a pass applies it to the window.
         let old_physical_size = self.physical_size;
-        if let Some(size) = self.size_source.as_ref().and_then(SizeSource::take) {
-            let adopted = PhySize::new(
+        let resized = self.size_source.as_ref().and_then(SizeSource::take).map(|size| {
+            self.physical_size = PhySize::new(
                 (size.width * self.pixels_per_point as f64).round().max(1.0) as u32,
                 (size.height * self.pixels_per_point as f64).round().max(1.0) as u32,
             );
-            self.physical_size = adopted;
-            self.pass_asked = true;
-        }
+        });
 
         let frame_at = frame_at(timing, tick_start);
-        self.pass_asked |= self.pass_request.take();
-        if !pass_due(self.pass_asked, self.repaint_after, self.retry_after, frame_at) {
+        let asked = self.pass_request.asked();
+        if resized.is_none() && !pass_due(asked, self.repaint_after, self.retry_after, frame_at) {
             #[cfg(all(feature = "frame-log", target_os = "macos"))]
             crate::frame_log::end(crate::frame_log::Tick {
                 window: std::ptr::from_ref(self) as usize,
@@ -1179,7 +1195,7 @@ where
             });
             return;
         }
-        self.pass_asked = false;
+        self.pass_request.take();
 
         self.egui_time = egui_time(self.egui_time, self.start_time, frame_at);
         self.egui_input.time = Some(self.egui_time);
@@ -1361,7 +1377,7 @@ where
     fn on_event(&mut self, window: &mut Window, event: Event) -> EventStatus {
         // Any event runs the UI on the next frame (see `pass_due`): whatever
         // it changes is drawn on the next refresh.
-        self.pass_asked = true;
+        self.pass_request.request();
 
         // Parent/embedded windows do not always gain keyboard focus
         // Automatically on click. Request focus explicitly before forwarding the event.
@@ -1566,9 +1582,9 @@ where
                         // Re-exposed after occlusion: the compositor may
                         // have kept showing a stale snapshot of the window,
                         // and this event runs a pass on the next frame like
-                        // any other. Drop the backoff the occlusion earned
-                        // too, so a surface not ready for that frame is
-                        // offered the next ones rather than one 250 ms later.
+                        // any other once the backoff the occlusion earned is
+                        // dropped, as it is here, so that frame and the next
+                        // ones are offered rather than one 250 ms later.
                         // This is a shortcut, never the way back: the retry
                         // recovers a window whose `Occluded(false)` never
                         // arrives, which is why `pass_due` is keyed on

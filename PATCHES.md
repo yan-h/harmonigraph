@@ -383,11 +383,12 @@ Built only on request (`--features frame-log` on the plugin);
 Upstream ran the UI pass on every frame to find out whether it should draw, so an idle editor waiting out its 50 ms poll ran it on every refresh: 107 ms per second of Bitwig's main thread at 144 Hz.
 Now the display link runs at the app's chosen rate (Patch 6) and `on_frame` does the host-frame duties first, measuring the gap since the last frame and asking the `SizeSource`, then returns before the UI unless a pass is due (`pass_due`):
 something asked for one, or the frame lands past the deadline the last pass left.
-What asks: any event (`on_event`), a size from the `SizeSource`, and a `PassRequest`, which another thread holds and sets when it changes what the UI shows (the plugin's input worker, on a first note or on sound after silence).
+What asks: any event (`on_event`) and a `PassRequest`, which another thread holds and sets when it changes what the UI shows (the plugin's input worker, on a note or on sound after silence); the window's events set the same flag.
 The deadline and the frame time it is compared with are both on the frame clock (`frame_at`: the link's target refresh, or now for a frame the link did not ask for), so the comparison is between two refreshes rather than two moments callbacks ran at;
 a frame must land `DEADLINE_SLACK` (0.5 ms) past it, so a deadline exactly on a refresh (the poll at 60 and 120 Hz) waits one refresh more every time rather than on a coin toss (#1708).
 Every pass that runs renders.
-Patch 17's backoff defers the deadline while a surface refuses, but a pass asked for runs regardless, since what asks comes seldom.
+While Patch 17's backoff is armed, its retry decides alone, a request included, so a thread asking on every change cannot reopen #989's unpaced submits; the request stays set for the retry's pass.
+A size from the `SizeSource` runs that frame's pass whatever the backoff says, since the source hands each size over once and only a pass applies it.
 `Queue::longest_tick_gap` hands the app the longest gap between link frames since its last pass, measured on every frame, for its stall check.
 It replaces Patch 21 (#1692, #1707), which slowed the link's divisor to land on the frame the idle poll drew on, and is retired whole with baseview Patch 7:
 `paced_divisor`, `PACE_MARGIN`, `MAX_FRAME_GAP`, `RESIZE_HOLD`, the restore of the chosen divisor on every event and the earliest-deadline keep for undrawn passes all went with it.
