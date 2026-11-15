@@ -169,7 +169,7 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
         lines.iter().any(|l| l.contains("stopped after 0.10 s by the transport started")),
         "{lines:?}"
     );
-    assert!(lines.iter().any(|l| l.contains("from the parked playhead")), "{lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("carried tape")), "{lines:?}");
 }
 
 #[test]

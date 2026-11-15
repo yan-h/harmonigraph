@@ -367,10 +367,11 @@ impl Deck {
     /// the console. Pure observation: nothing here changes what is played.
     fn watch_for_leak(&mut self, position: f64, rolling: bool) {
         // A block with tape in it, followed by playback continuing from that
-        // block, means the tape block was playback's first.
-        if rolling && self.mixed {
-            let advanced = self.last.is_some_and(|(last, _)| position > last);
-            self.emit(Event::TapeBeforeRolling { position, advanced });
+        // block, means the tape block was playback's first. Playback that
+        // starts from the parked playhead instead is the normal path after
+        // an audition, and the cut keeps tape out of it.
+        if rolling && self.mixed && self.last.is_some_and(|(last, _)| position > last) {
+            self.emit(Event::TapeBeforeRolling { position });
         }
     }
 }

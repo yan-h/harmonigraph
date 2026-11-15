@@ -153,10 +153,9 @@ pub(crate) enum Event {
     Reset {
         sounding: bool,
     },
-    /// A rolling block followed a block that carried tape.
+    /// A rolling block continued from a block that carried tape.
     TapeBeforeRolling {
         position: f64,
-        advanced: bool,
     },
 }
 
