@@ -149,6 +149,11 @@ Neither gets a handler or a repair of its own.
 The per-type `sanitize` repairs stay for the one thing the next section asks of them:
 the value on screen is the value the file holds.
 
+**Cases gone without**, each with the pull request that left it:
+
+- A project saved with an Analyzer region folded before region folds kept their space reopens with the Analyzer at its folded width, and unfolding gives the width back to nothing; a divider drag does (#1785).
+- A section fold clicked on a frame whose pass egui repeats draws the new fold in the old window for that one frame (#1785).
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
