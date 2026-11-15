@@ -216,6 +216,11 @@ impl Session {
     pub fn is_stop(&self, adopted: u64) -> bool {
         self.stop_epoch.load(Ordering::Acquire) > adopted
     }
+    /// Whether `epoch` is a transport Stop's own, so no other cut landed after
+    /// it.
+    pub fn stopped_at(&self, epoch: u64) -> bool {
+        self.stop_epoch.load(Ordering::Acquire) == epoch
+    }
     pub fn register(&self) -> u64 {
         self.next.fetch_add(1, Ordering::AcqRel) + 1
     }

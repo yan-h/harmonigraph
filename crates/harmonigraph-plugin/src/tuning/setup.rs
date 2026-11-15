@@ -87,7 +87,8 @@ pub struct Shared {
     /// frames means no activation has been seen yet.
     pub active_frames: AtomicU32,
     active_rate: AtomicU64,
-    /// Onsets this instance emitted without a correction, since its last cut.
+    /// Onsets this instance emitted without a correction, since the last cut
+    /// that was not a transport Stop's.
     pub misses: AtomicU64,
     hub: bool,
 }

@@ -179,7 +179,7 @@ impl Tune {
         // The bump is what makes this the session's cut rather than only this
         // Tune's. The Note-Offs it stages go to the host, so without it the
         // Hub would still be holding every voice this just ended.
-        self.take_cut(session::session().cut());
+        self.take_cut(session::session().cut(), false);
         self.claim();
         self.publish_delay();
     }
@@ -223,7 +223,7 @@ impl Tune {
         }
         let epoch = session.epoch();
         if epoch != self.epoch {
-            self.take_cut(epoch);
+            self.take_cut(epoch, session.stopped_at(epoch));
         }
         let mut status = 0;
         if session.hub() == 0 {
@@ -249,7 +249,13 @@ impl Tune {
     /// The cut. Note-Off every held voice, neutralise the pedals, forget the
     /// line, adopt the new epoch. Nothing waits on anyone, and a fault never
     /// reaches here — a fault is a status, not a cut.
-    fn take_cut(&mut self, epoch: u64) {
+    ///
+    /// A cut that is a transport Stop's, with no other cut after it, keeps the
+    /// missed-correction count: its advice is about the delay setting rather
+    /// than the stretch of playing the cut ends, and Stop is when it gets read.
+    /// Every other cut clears it: Reset all voices, and any Tune's
+    /// reactivation, attach or detach, not only this one's.
+    fn take_cut(&mut self, epoch: u64, stop: bool) {
         // The queue is sized for one cut's worth: every held voice, and every
         // pedal that is down. It can still overflow, because a cut whose
         // Note-Offs did not all reach the wire leaves them queued and a second
@@ -277,7 +283,9 @@ impl Tune {
         // in. Carrying one past the cut that ended that context would report a
         // full ring against notes that were never in it.
         self.status = 0;
-        self.misses = 0;
+        if !stop {
+            self.misses = 0;
+        }
         self.epoch = epoch;
         if let Link::Direct { out, back } = &mut self.link {
             out.clear();
@@ -297,7 +305,7 @@ impl Tune {
     /// owe is the cut every other trigger takes, announced so the Hub lets go
     /// of the voices this ends.
     pub fn stop(&mut self) {
-        self.take_cut(session::session().cut());
+        self.take_cut(session::session().cut(), false);
         // The host may stop callbacks here, so end() cannot publish this count.
         self.shared.held.store(0, Ordering::Relaxed);
         self.publish_voices();
@@ -343,7 +351,7 @@ impl Tune {
                     Link::Direct { .. } => session::session().stop(),
                     _ => self.epoch,
                 };
-                self.take_cut(epoch);
+                self.take_cut(epoch, true);
             }
             self.playing = playing;
             return;

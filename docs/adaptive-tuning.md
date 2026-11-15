@@ -230,7 +230,7 @@ The measured Bitwig spike ran at D = 2,048 and did not search for a minimum, so 
 
 An onset that reached its own emission time with no correction sounds at its raw pitch, and the Tune counts it:
 `3 notes sounded uncorrected - raise the delay and play again`.
-The count clears at every cut.
+The count clears at every cut but a transport Stop, which is when it gets read: Reset all voices, and any Tune's reactivation, attach or detach, clears every Tune's count.
 
 Two states are *not* a missed deadline, and the status names them rather than counting them as evidence that the delay is too small:
 no Harmonigraph in the process, and no free row.

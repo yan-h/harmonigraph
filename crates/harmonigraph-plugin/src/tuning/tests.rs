@@ -973,6 +973,56 @@ fn a_full_copy_ring_costs_a_correction_rather_than_a_note() {
     assert_ne!(pair.status() & session::RING_FULL, 0);
 }
 
+/// The missed-correction count is advice about the delay, read when playing
+/// stops, so a transport Stop keeps it while its cut clears the fault bits.
+/// Reset all voices and a reactivation clear it, a Reset landing right behind
+/// the Stop included.
+#[test]
+fn missed_corrections_survive_a_stop_and_clear_at_reset_or_reactivation() {
+    let _scope = crate::test_scope::enter();
+    let edge = |pair: &mut Pair, playing: bool| {
+        let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+        if !playing {
+            value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        }
+        pair.tune.run(pair.raw, vec![Input::Transport(value)], None);
+        pair.hub.run(pair.raw, vec![Input::Transport(value)], None);
+        pair.raw += 512;
+    };
+    for clear in ["Reset", "reactivation", "Reset behind the Stop"] {
+        let mut pair = Pair::new();
+        edge(&mut pair, true);
+        // A full copy ring: the note sounds raw, a miss, beside RING_FULL.
+        let mut input: Vec<_> = (0..CAPTURE_RING).map(|_| raw_midi([0xb0, 20, 0], 0)).collect();
+        input.push(note(1, 0, 60, 0, true));
+        pair.step(input);
+        for _ in 0..3 {
+            pair.idle();
+        }
+        assert_eq!((pair.misses(), pair.status() & session::RING_FULL), (1, session::RING_FULL));
+        edge(&mut pair, false);
+        if clear == "Reset behind the Stop" {
+            // The Hub takes the Reset before the Tune adopts the Stop.
+            pair.hub.shared().request_reset();
+            pair.hub.run(pair.raw, vec![], None);
+            pair.raw += 512;
+        } else {
+            for _ in 0..2 {
+                pair.idle();
+            }
+            assert_eq!((pair.misses(), pair.status()), (1, 0), "Stop keeps the count alone");
+            match clear {
+                "Reset" => pair.hub.shared().request_reset(),
+                _ => pair.tune.reactivate_format(48000.0, 512),
+            }
+        }
+        for _ in 0..2 {
+            pair.idle();
+        }
+        assert_eq!(pair.misses(), 0, "{clear}");
+    }
+}
+
 /// A reply reaches the onset with its serial or it reaches nothing. After a
 /// cut the epoch has moved, so an answer minted before it is discarded rather
 /// than attached to whatever now holds that serial.
