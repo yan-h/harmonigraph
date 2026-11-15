@@ -184,7 +184,14 @@ mod tests {
         let samples: Vec<_> = (0..48000)
             .map(|i| (std::f32::consts::TAU * 523.2511 * i as f32 / 48000.0).sin())
             .collect();
-        state.runtime.spectrum.push_samples(&samples, 1, 48000.0, 1.0, &state.appearance.spectrum);
+        crate::spectrum::heard_at(
+            &mut state.runtime.spectrum,
+            &samples,
+            1,
+            48000.0,
+            1.0,
+            &state.appearance.spectrum,
+        );
         let window = state.appearance.view.scrolled(&state.appearance.camera, 1.0);
         let audio = compose(&mut state, &window, 1.0);
         assert!(audio.nodes.iter().any(|n| n.audio_ring > 0.0), "fixture must carry audio ink");

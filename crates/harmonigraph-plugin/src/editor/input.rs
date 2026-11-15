@@ -40,11 +40,11 @@ pub(crate) struct LiveInput {
 /// moved out with it: what [`LiveInput::analyze`] runs without the lock.
 pub(crate) struct Taken {
     analysis: harmonigraph_ui::SpectrumAnalysis,
-    /// The history's epoch at take: a Clear before the give keeps this
+    /// The history's Clear count at take: a Clear before the give keeps this
     /// step's columns out (see [`AudioSpectrum::give`]).
     ///
     /// [`AudioSpectrum::give`]: harmonigraph_ui::AudioSpectrum::give
-    epoch: u32,
+    clears: u32,
     audio: TakenAudio,
 }
 
@@ -184,7 +184,7 @@ impl LiveInput {
         debug_assert!(self.analysis.is_some(), "the analysis was given back");
         audio.blocks[0].restart |= self.analysis.is_none();
         let analysis = self.analysis.take().unwrap_or_default();
-        Some(Taken { analysis, epoch: runtime.spectrum.history_epoch(), audio })
+        Some(Taken { analysis, clears: runtime.spectrum.clears(), audio })
     }
     /// Run the FFTs over what [`Self::take`] moved out, with no lock held.
     pub(crate) fn analyze(taken: &mut Taken) {
@@ -223,8 +223,8 @@ impl LiveInput {
     /// Hand what [`Self::analyze`] made to the store, and put the analysis
     /// back.
     pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, taken: Taken) {
-        let Taken { analysis, epoch, mut audio } = taken;
-        runtime.spectrum.give(epoch, audio.deliveries.drain(..), &audio.config);
+        let Taken { analysis, clears, mut audio } = taken;
+        runtime.spectrum.give(clears, audio.deliveries.drain(..), &audio.config);
         debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
         self.analysis = Some(analysis);
         audio.samples.clear();

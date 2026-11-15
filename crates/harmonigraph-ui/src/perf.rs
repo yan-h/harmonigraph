@@ -109,13 +109,20 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
         // The roll's geometry, which `verts` does not see: it goes to the
         // GPU as instances on the roll's own buffer, four vertices a note.
         rows.push((1, "roll", format!("{} notes", perf.roll_notes), None));
-        // What the spectrogram's two caches are NOT absorbing: a fold of the
-        // whole window, and an upload of the whole slab grid. Both should read
-        // zero while a window merely scrolls; anything else is a layer that has
-        // fallen back to sending the picture from scratch, which costs
-        // milliseconds and megabytes and looks exactly like a correct picture.
-        let (folds, uploads) = perf.spec_fallbacks;
-        rows.push((1, "spec", format!("{folds:.0}/s refold · {uploads:.0}/s full"), None));
+        // The spectrogram history's guard, as totals: columns it dropped and
+        // times the history reset, both zero while every feeder dates its
+        // columns forward. Then what the grid's delta upload is NOT absorbing:
+        // an upload of the whole slab grid, which should read zero while a
+        // window merely scrolls, and costs megabytes while looking exactly
+        // like a correct picture.
+        let (drops, resets) = perf.spec_guard;
+        let uploads = perf.spec_uploads;
+        rows.push((
+            1,
+            "spec",
+            format!("{drops} dropped · {resets} reset · {uploads:.0}/s full"),
+            None,
+        ));
         rows.push((0, "gpu mem", gpu_memory_row(&perf.gpu_memory), None));
         // The whole host process, which in a shared plug-in host is every
         // other plugin beside us too (#1512): context for reading `memory`
@@ -576,9 +583,8 @@ mod tests {
     /// are the rows most exposed to this and the last to be covered: each
     /// carries TWO independently-named quantities inside one format string, so
     /// a transposition needs no second row to hide in and no type to disagree
-    /// with. Reading a refold rate as an upload rate sends the next
-    /// investigation to the aggregator when the grid's delta is what stopped
-    /// absorbing — and
+    /// with. Reading a drop count as a reset count sends the next
+    /// investigation to the wrong feeder bug — and
     /// `spec` is the readout kept precisely because it is the one that would
     /// have caught both of the spectrogram's silent performance bugs.
     ///
@@ -613,7 +619,8 @@ mod tests {
             prims: 7,
             verts: 5000,
             roll_notes: 13,
-            spectrogram_fallbacks: Default::default(),
+            spectrogram_uploads: Default::default(),
+            spectrogram_guard: Default::default(),
             target_fps: None,
         };
         let mut perf = PerfStats::default();
@@ -636,7 +643,8 @@ mod tests {
                 },
             );
         }
-        perf.spec_fallbacks = (14.0, 15.0);
+        perf.spec_guard = (14, 15);
+        perf.spec_uploads = 16.0;
         let mb = |n: u64| n * 1024 * 1024;
         perf.footprint_bytes = mb(490);
         perf.heap_bytes = Some(mb(210));
@@ -676,7 +684,7 @@ mod tests {
             ("verts", "5k in 7 prims"),
             ("roll", "13 notes"),
             // The two caches, in the order the labels name them.
-            ("spec", "14/s refold · 15/s full"),
+            ("spec", "14 dropped · 15 reset · 16/s full"),
             // The whole host process, apart from ours.
             ("host mem", "490 MB"),
             // Ours: the counted heap and the GPU record's live total.
@@ -796,9 +804,11 @@ mod tests {
         // placeholder and hides the widest case.
         perf.record(
             FrameCosts {
-                // Enough of both to lay out at their widest: the row carries
-                // two rates, so a build falling back hard is the long case.
-                spectrogram_fallbacks: (900, 900),
+                // Enough of each to lay out at their widest: the row carries
+                // two totals and a rate, so a build falling back hard is the
+                // long case.
+                spectrogram_uploads: 900,
+                spectrogram_guard: (90_000, 90_000),
                 shell_ms: 1.0,
                 cpu_ms: 2.0,
                 tess_ms: 3.0,

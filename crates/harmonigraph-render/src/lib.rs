@@ -76,8 +76,8 @@ pub use surround::{
 };
 
 /// The spectrogram's heatmap — the pane's other heavy layer, and the one whose
-/// picture a CPU compose would build texel by texel. Here the aggregator's slab
-/// grid is the texture and the read is per fragment, so a zoom, a resize or a
+/// picture a CPU compose would build texel by texel. Here the slab pyramid's
+/// run is the texture and the read is per fragment, so a zoom, a resize or a
 /// palette change is a uniform.
 mod spectrogram;
 pub use spectrogram::{

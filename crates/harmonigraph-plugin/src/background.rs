@@ -41,10 +41,11 @@
 //! core (and estimated 0.7% at a 32 ms hop). The original 2026-08-09
 //! [#305](https://github.com/yan-h/harmonigraph/pull/305) measured 0.417 ms,
 //! about 5.2%. Neither is a current full-plugin or silent-input measurement.
-//! Memory remains bounded by [`SpectrumHistory`]'s ~54 MiB power sums;
-//! the history already outlives the window. A different hop is not the only
-//! possible cost reduction, and would need to preserve the store tiers,
-//! `live_slab` ladder on their shared `FFT_INTERVAL` grid.
+//! Folding each column into every level of the spectrogram's slab pyramid
+//! costs about 11 µs more (#1758), and the pyramid's memory, about 30 MB
+//! when full, is bounded by its rings. A different hop is not the only
+//! possible cost reduction, and would need to keep the pyramid's levels on
+//! the `live_slab` ladder of their shared `FFT_INTERVAL` grid.
 //!
 //! **With the window shut, a step also does the frame's other duties:** the
 //! ageing a frame gets from `begin_frame`
@@ -65,7 +66,6 @@
 //! is dated, so their join would scroll across the heatmap as a seam (#324).
 //!
 //! [`EditorShared::poll_take_end`]: crate::editor::EditorShared::poll_take_end
-//! [`SpectrumHistory`]: harmonigraph_core::SpectrumHistory
 //! [`SpectrumConfig::default`]: harmonigraph_ui::SpectrumConfig
 
 #[cfg(test)]
@@ -231,10 +231,13 @@ thread_local! {
 /// **The lock is waited for, not tried**: this thread never runs on the
 /// host's main thread, so waiting out a frame costs the host nothing, and a
 /// frame or a window opening waits on this thread only for a take (a copy of
-/// what the ring holds) or a give (appending its columns): microseconds for
-/// the two or three columns a step usually brings, and a few milliseconds at
-/// most for a full ring's 170, reachable only after this thread was starved
-/// for 1.37 s. The FFTs between them, some 10 ms for that ring through Fast
+/// what the ring holds) or a give (folding its columns into every level of the
+/// spectrogram's history, 11 µs a column): a few tens of microseconds for the
+/// two or three columns a step usually brings, and a few milliseconds for a
+/// catch-up's: the ring's 131,072 samples are 341 mono columns at 48 kHz,
+/// after this thread was starved for 2.7 s, and 371 at 44.1 kHz after 3 s
+/// (about 4.5 ms), more at lower rates; one such hold may cost a frame. The FFTs
+/// between them, some 10 ms for a full stereo ring through Fast
 /// at 48 kHz and 36 through Precise (see
 /// [`SpectrumAnalysis::feed_source`](harmonigraph_ui::SpectrumAnalysis::feed_source)),
 /// hold nothing. The thread runs at the GUI's
