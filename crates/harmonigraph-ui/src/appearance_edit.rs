@@ -22,7 +22,9 @@ pub(crate) const APPEARANCE_SHORTCUTS: &[egui::KeyboardShortcut] = &[
 /// The appearance as undo and the slots hold it: the document's camera, view
 /// and spectrum, with the fields the host owns
 /// ([`AppearanceDocument::copy_host_owned`]) reset on capture and the live
-/// document's kept on apply. Output settings are not part of a look.
+/// document's kept on apply. The Stars solo is treated the same: a viewing aid
+/// for one sitting (`StarSettings::star_solo`), which a stored look would
+/// otherwise bring into a later window. Output settings are not part of a look.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct Look {
@@ -42,6 +44,8 @@ impl Look {
             (&mut look.camera, &mut look.view),
             (&Camera::default(), &ViewConfig::default()),
         );
+        look.view.atmosphere.stars.star_solo = Default::default();
+        look.spectrum.atmosphere.stars.star_solo = Default::default();
         look
     }
 
@@ -51,6 +55,8 @@ impl Look {
             (&mut look.camera, &mut look.view),
             (&appearance.camera, &appearance.view),
         );
+        look.view.atmosphere.stars.star_solo = appearance.view.atmosphere.stars.star_solo;
+        look.spectrum.atmosphere.stars.star_solo = appearance.spectrum.atmosphere.stars.star_solo;
         appearance.camera = look.camera;
         appearance.view = look.view;
         appearance.spectrum = look.spectrum;
@@ -762,6 +768,30 @@ mod tests {
         assert_eq!(moved.camera.target, target);
         assert_eq!((moved.view.center_fives, moved.view.center_threes), centers);
         assert_eq!(Look::capture(&moved), Look::capture(&other));
+    }
+
+    /// The Stars solo is a viewing aid for one sitting. The slots and their
+    /// histories outlive the window (#1764), so one that travelled in a look
+    /// would come back, in a later window, with the slot stored while it was on.
+    #[test]
+    fn a_look_carries_no_star_solo_into_the_next_window() {
+        let mut state = crate::tests::probe::fresh();
+        let soloed = |state: &crate::state::SharedState| {
+            let appearance = &state.picture.appearance;
+            (
+                appearance.view.atmosphere.stars.star_solo[0],
+                appearance.spectrum.atmosphere.stars.star_solo[0],
+            )
+        };
+        state.picture.appearance.view.atmosphere.stars.star_solo[0] = true;
+        state.picture.appearance.spectrum.atmosphere.stars.star_solo[0] = true;
+        let editor = &mut state.workspace.interaction.appearance_editor;
+        editor.switch(1, &mut state.picture.appearance);
+        assert_eq!(soloed(&state), (true, true), "a slot switch leaves the aid as it is");
+        state.start_window_session();
+        let editor = &mut state.workspace.interaction.appearance_editor;
+        editor.switch(0, &mut state.picture.appearance);
+        assert_eq!(soloed(&state), (false, false));
     }
 
     #[test]
