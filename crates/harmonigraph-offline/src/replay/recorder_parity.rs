@@ -148,7 +148,7 @@ fn accepted_exact(
     pitch_microcents: Option<i64>,
 ) -> harmonigraph_core::canonical::NoteDelta {
     use harmonigraph_core::canonical::NoteDelta;
-    use harmonigraph_core::confirmed::PitchProvenance;
+    use harmonigraph_core::canonical::PitchProvenance;
     NoteDelta {
         event,
         sequence,
@@ -162,8 +162,8 @@ fn accepted_exact(
 
 #[test]
 fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
+    use harmonigraph_core::canonical::PitchProvenance;
     use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
-    use harmonigraph_core::confirmed::PitchProvenance;
     use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, SourceId};
     use harmonigraph_record::publication::Lane;
     use harmonigraph_record::testing;

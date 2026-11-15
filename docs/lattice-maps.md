@@ -360,15 +360,14 @@ not its delayed output time.
 History retains 8192 distinct effective states without audio allocation.
 It survives song-time seeks and resets on steady-clock discontinuities.
 Late records can use previous callbacks' states;
-a record outside retained or known history raises the policy fault only under Lattice Map,
-where the map that sample ran under is exactly what was lost and guessing at one would retune the onset to a shape nobody selected.
-Adaptive decides from the block configuration, which is still in hand, so it assigns from that and raises nothing.
+a record outside retained or known history is assigned from the live state under every engine and raises nothing:
+the configuration the reducer holds now, and under Lattice Map the map, offsets and Follow the latest observation left (#920, #1792).
+A Lattice Map note struck just before a steady-clock discontinuity is therefore tuned by the current map rather than left raw.
 This does not extend the transport's existing correction deadline or callback-order latency requirements.
 
-Map attacks use this timestamped shared tuning;
-Adaptive retains its existing block-adoption semantics.
-Recording segments also split at Map-mode shared-tuning changes,
-so replay sees the same axis-change boundaries.
+Every engine's attacks use this timestamped shared tuning,
+and recording segments split at each shared-tuning change it holds,
+so replay sees the same axis-change boundaries (#1749).
 Each accepted voice carries its resolved onset configuration,
 chosen node and frozen correction through display and take publication.
 Existing player expression remains live.

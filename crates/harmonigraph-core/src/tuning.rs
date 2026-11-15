@@ -478,19 +478,85 @@ pub fn learn_tuning(pitch_classes: &[PitchClass]) -> LearnedTuning {
     learn_sorted_classes(&classes)
 }
 
-/// Allocation-free inference from sorted, distinct classes. The confirmed-state
-/// component supplies its fixed scratch slice here, preserving deterministic ties.
+/// Allocation-free inference from sorted, distinct classes. [`LearningState`]
+/// supplies its fixed scratch slice here, preserving deterministic ties.
 pub fn learn_sorted_classes(classes: &[PitchClass]) -> LearnedTuning {
-    learn_sorted_classes_counted(classes, &mut 0)
+    debug_assert!(classes.windows(2).all(|pair| pair[0] < pair[1]));
+    let [three, five, seven] = learn_primes(classes);
+    LearnedTuning { c_offset: learn_c_offset(classes), three, five, seven }
 }
 
-pub(crate) fn learn_sorted_classes_counted(
-    classes: &[PitchClass],
-    pair_visits: &mut usize,
-) -> LearnedTuning {
-    debug_assert!(classes.windows(2).all(|pair| pair[0] < pair[1]));
-    let [three, five, seven] = learn_primes(classes, pair_visits);
-    LearnedTuning { c_offset: learn_c_offset(classes), three, five, seven }
+/// The held notes Learn would read are not all known: a source's state lost
+/// an event, so what it holds cannot be listed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Incomplete;
+
+/// Distinct pitch classes one inference reads at most. It visits every pair,
+/// so its audio-thread cost grows with the square: 0.10 ms at 256 classes,
+/// 1.6 ms at the 1,088 every held voice could make (release build).
+pub const LEARN_CLASSES_MAX: usize = 256;
+
+/// Why an armed Learn did not run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unlearnable {
+    Incomplete,
+    /// More distinct classes than [`LEARN_CLASSES_MAX`] are held.
+    TooManyClasses,
+}
+
+/// Fixed scratch for `N` held pitches and an exact class-set memo. Row order,
+/// octave, provenance and unrelated configuration do not alter interval
+/// inference. Re-arming intentionally reopens the same chord. An empty chord
+/// is remembered without changing any axis; incomplete input is never learned.
+pub struct LearningState<const N: usize> {
+    scratch: [PitchClass; N],
+    previous: [PitchClass; N],
+    previous_len: Option<usize>,
+}
+
+impl<const N: usize> Default for LearningState<N> {
+    fn default() -> Self {
+        Self { scratch: [PitchClass(0); N], previous: [PitchClass(0); N], previous_len: None }
+    }
+}
+
+impl<const N: usize> LearningState<N> {
+    /// Learn from what `held` writes into the scratch: the class of every held
+    /// pitch, in any order and with repeats, and how many it wrote. It is
+    /// asked only while armed, and a class set already learned from yields
+    /// `None`.
+    pub fn infer(
+        &mut self,
+        armed: bool,
+        held: impl FnOnce(&mut [PitchClass; N]) -> Result<usize, Incomplete>,
+    ) -> Result<Option<LearnedTuning>, Unlearnable> {
+        if !armed {
+            self.previous_len = None;
+            return Ok(None);
+        }
+        let held = held(&mut self.scratch).map_err(|Incomplete| Unlearnable::Incomplete)?;
+        self.scratch[..held].sort_unstable();
+        let mut count = 0;
+        for i in 0..held {
+            if count == 0 || self.scratch[i] != self.scratch[count - 1] {
+                self.scratch[count] = self.scratch[i];
+                count += 1;
+            }
+        }
+        if count > LEARN_CLASSES_MAX {
+            return Err(Unlearnable::TooManyClasses);
+        }
+        let classes = &self.scratch[..count];
+        if self.previous_len == Some(count) && self.previous[..count] == *classes {
+            return Ok(None);
+        }
+        self.previous[..count].copy_from_slice(classes);
+        self.previous_len = Some(count);
+        if classes.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(learn_sorted_classes(classes)))
+    }
 }
 
 /// The sounding pitch class closest to C, as a signed cents offset in
@@ -520,7 +586,7 @@ fn learn_c_offset(classes: &[PitchClass]) -> Option<f32> {
 /// are candidates — a fourth implies a fifth, since octaves are assumed
 /// perfectly tuned — and the candidate closest to just wins, if within
 /// [`LEARN_RANGE_CENTS`].
-fn learn_primes(classes: &[PitchClass], pair_visits: &mut usize) -> [Option<f32>; 3] {
+fn learn_primes(classes: &[PitchClass]) -> [Option<f32>; 3] {
     let mut best = [
         (PitchClass::from_cents(THREE_JUST), None::<PitchClass>),
         (PitchClass::from_cents(FIVE_JUST), None),
@@ -528,7 +594,6 @@ fn learn_primes(classes: &[PitchClass], pair_visits: &mut usize) -> [Option<f32>
     ];
     for (i, &a) in classes.iter().enumerate() {
         for &b in &classes[i + 1..] {
-            *pair_visits += 1;
             for interval in [a - b, b - a] {
                 for (target, best_so_far) in &mut best {
                     let diff = interval.distance_to(*target);
@@ -789,6 +854,45 @@ mod tests {
         let learned = learn_tuning(&classes);
         let three = learned.three.unwrap();
         assert!((three - THREE_JUST).abs() < 0.01, "three = {three}");
+    }
+
+    /// A class set is learned from as `learn_tuning` would, and the same set
+    /// again is remembered rather than learned twice.
+    #[test]
+    fn learning_state_learns_a_class_set_once() {
+        // Each of 256 classes held twice, in descending order: the state
+        // sorts and deduplicates what it is handed.
+        let mut learning = LearningState::<512>::default();
+        let held = |scratch: &mut [PitchClass; 512]| {
+            for (i, class) in scratch.iter_mut().enumerate() {
+                *class = PitchClass::from_microcents((255 - i as i64 % 256) * 4_687_499);
+            }
+            Ok(512)
+        };
+        let result = learning.infer(true, held).unwrap().unwrap();
+        let mut classes = [PitchClass(0); 512];
+        assert_eq!(held(&mut classes), Ok(512));
+        assert_eq!(result, learn_tuning(&classes));
+        assert_eq!(learning.infer(true, held).unwrap(), None);
+    }
+
+    /// Learn refuses past 256 distinct classes, however many voices hold them.
+    #[test]
+    fn learning_refuses_more_distinct_classes_than_its_cap() {
+        let held = |classes: usize| {
+            move |scratch: &mut [PitchClass; 1024]| {
+                for (i, class) in scratch.iter_mut().enumerate() {
+                    *class = PitchClass::from_microcents((i % classes) as i64 * 4_000_000);
+                }
+                Ok(1024)
+            }
+        };
+        let mut learning = LearningState::<1024>::default();
+        assert!(learning.infer(true, held(LEARN_CLASSES_MAX)).unwrap().is_some());
+        assert_eq!(
+            learning.infer(true, held(LEARN_CLASSES_MAX + 1)),
+            Err(Unlearnable::TooManyClasses)
+        );
     }
 
     #[test]
