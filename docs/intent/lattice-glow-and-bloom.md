@@ -15,3 +15,7 @@ One line per decision; the audit reads this before asking anything.
 - A held or fading halo takes a gradient, range, width or tuning change in the frame its note does; no record asked for the old ease toward it over the Glow times. #1759 Q1
 - A held halo's colour arrives where its note says, live and in exports, rather than stalling short of it. #1759 Q2
 - Halos still fading survive a big chord arriving. #1759 Q3
+
+## 2026-11-14 (drift audit, #1784)
+
+- Clear display history (the Video pane's clear) keeps a held note's halo lit where it is, and drops only released notes' lights; a held halo no longer goes dark and fades back up over the Glow attack. Yan, 2026-11-14. #1784 G1

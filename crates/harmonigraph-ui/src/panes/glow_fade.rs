@@ -273,6 +273,13 @@ impl GlowFade {
         let frame = self.frame;
         self.nodes.retain(|_, lit| lit.seen == frame && (lit.level > 0.0 || lit.target > 0.0));
     }
+
+    /// Drop the lights whose node had nothing left to light it as of the last
+    /// step — released notes' halos still riding their release — and keep
+    /// every sounding one where it is (`PictureState::clear_accumulated`).
+    pub(crate) fn clear_released(&mut self) {
+        self.nodes.retain(|_, lit| lit.target > 0.0);
+    }
 }
 
 #[cfg(test)]
@@ -659,6 +666,35 @@ mod tests {
         let mut scene = scene_at(&state, 1.5);
         fade.step(&mut scene, &state.appearance.view, 1.5);
         assert!(fade.moving, "a released light is falling");
+    }
+
+    /// Clear display history keeps a held note's halo where it is and drops a
+    /// released one's: under an attack, a held light that restarted would
+    /// start dark and fade back up.
+    #[test]
+    fn a_clear_keeps_held_halos_and_drops_released_ones() {
+        let mut state = lit(0.5, 2.5);
+        for note in [60, 64] {
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
+        }
+        // Every lit node's level, and whether its own layers still light it.
+        let levels = |state: &mut PictureState, now: f64| {
+            let mut scene = scene_at(state, now);
+            apply(&mut scene, state, 0, now);
+            let lit = scene.nodes.iter().filter(|n| n.glow.level > 0.0);
+            lit.map(|n| (n.lattice_pos, n.glow.level, n.glow_target() > 0.0)).collect::<Vec<_>>()
+        };
+        levels(&mut state, 0.0);
+        levels(&mut state, 1.0);
+        state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 64));
+        let before = levels(&mut state, 1.5);
+        let held: Vec<_> = before.iter().filter(|n| n.2).copied().collect();
+        assert!(held.iter().any(|n| n.0 == LatticePos::ORIGIN), "the held C is not lit");
+        assert!(held.len() < before.len(), "the released E's halo was already gone");
+        state.clear_accumulated();
+        // At the same clock, so a carried light moves by nothing and a new one
+        // starts dark.
+        assert_eq!(levels(&mut state, 1.5), held, "a held halo moved, or a released one stayed");
     }
 
     /// A new light's level attacks from darkness, and what it is made of
