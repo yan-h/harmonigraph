@@ -22,7 +22,7 @@ const CELL_MIN_H: f32 = 3.0;
 
 /// What the strip's three handles do, which its hover says after the caller's
 /// hint: the strip has them, so no caller writes them (see
-/// [`with_gestures`](super::bar::with_gestures)).
+/// [`with_gestures`]).
 const DRAGS: &str = "Drag an end to add or drop layers on that side, the middle mark to move \
      home, between them to slide the whole stack.";
 
