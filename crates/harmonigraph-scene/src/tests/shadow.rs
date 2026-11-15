@@ -28,8 +28,7 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
             },
             ..ViewConfig::default()
         };
-        let scene =
-            scene_of(&NoteTracker::new(), &Tuning::default(), &view, &FrameParams::default(), 0.0);
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
         for (group, drawn) in scene.view.shadow.groups().into_iter().enumerate() {
             assert_eq!(drawn, want[group], "the picture drew group {group} at {asked:?}");
         }

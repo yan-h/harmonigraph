@@ -10,7 +10,7 @@
 //!   + tuning -> node/marker lists and initial voice envelopes.
 //! - [`motion`] — carried lattice animation and melody/bass marks ([`NodeMotion`]).
 //! - [`view`] — [`ViewConfig`] (persisted visual settings and their serde
-//!   defaults) and [`FrameParams`].
+//!   defaults).
 //! - [`style`] — the visual-style enums and their shader indices, and the
 //!   pitch gradient's knobs.
 //! - [`octaves`] — where the octave indicators sit around a node: how many,
@@ -188,6 +188,30 @@ pub const MAX_DRAWN_NODES: usize = 20480;
 /// deliberately still before its ends read at all, which is a different
 /// instrument rather than more of this one.
 pub const MARK_DELAY_MAX: f32 = 1.0;
+
+/// The longest Note fade on offer ([`ViewConfig::fade_time`]): the bar's far
+/// end, and what load sanitation holds a saved one to.
+///
+/// A second, which is where a fade stops being a release and starts being a
+/// held image of a note that is already over: past it the lattice shows a
+/// chord the player has left, and the reading of what is DOWN goes with it.
+/// The same line the mark Delay is drawn on ([`MARK_DELAY_MAX`]), so the two
+/// note-wide times share one scale and can be read against each other.
+pub const FADE_TIME_MAX: f32 = 1.0;
+
+/// The top of the Pitch color range's axis ([`ViewConfig::darkest_pitch`] and
+/// [`ViewConfig::brightest_pitch`]), in MIDI notes; the floor is note 0. Both
+/// ends span the whole axis, so the pair reads as one two-handle control, and
+/// their order is kept by [`COLOR_RANGE_MIN_SPAN`] rather than by a split.
+pub const PITCH_COLOR_MAX: f32 = 120.0;
+
+/// Closest the two ends of the Pitch color range may come — the span the
+/// color gradient covers, which is a different bar from the analyzer's window
+/// on the same axis. An octave: a gradient aimed tighter than one has notes a
+/// semitone apart at opposite ends of the spectrum, and nothing about the
+/// analyzer's own floor (`PITCH_RANGE_MIN_SPAN` in harmonigraph-ui, which is
+/// about how small type may be drawn) says anything about that.
+pub const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 
 /// The narrowest and widest the spectral kernel can be set to
 /// ([`ViewConfig::spectral_width`]), in cents — the bar's two ends, and what
@@ -587,7 +611,7 @@ pub struct NodeInstance {
     /// both.
     pub bass_slots: u32,
     /// How far each mark has eased in, 0..1: a mark grows on over the Fade
-    /// duration ([`FrameParams::fade_time`]) from the moment its note TOOK
+    /// duration ([`ViewConfig::fade_time`]) from the moment its note TOOK
     /// that end (plus whatever wait [`ViewConfig::mark_delay`] asks for
     /// first), rather than appearing at full the frame it is claimed.
     /// Separate from `presence_with_opacity` because a mark can be arriving while the
@@ -1037,10 +1061,6 @@ pub struct Scene {
     /// Where `pitch_lut`'s entries stand along the range, which the shader maps
     /// a `t` through before indexing (see [`LutSpacing`]).
     pub pitch_lut_spacing: LutSpacing,
-    /// Gradient endpoints (MIDI notes) the shader maps a glyph's pitch through
-    /// to index `pitch_lut`; copied from [`FrameParams`].
-    pub darkest_pitch: f32,
-    pub brightest_pitch: f32,
     /// One quad-uv length of the home sheet, as a world length
     /// (`marker_world`): what converts the marker field between the units its
     /// own draws are in and the units every glow bar is dialled in.

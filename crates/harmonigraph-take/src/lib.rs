@@ -17,9 +17,9 @@
 //! One RON-encoded [`Record`] per line, appendable and streamable:
 //!
 //! ```text
-//! Header((version:8,sample_rate:48000.0,audio_file:Some("take-….wav"),...))
+//! Header((version:9,sample_rate:48000.0,audio_file:Some("take-….wav"),...))
 //! Run((at:3.5,song:12.0))
-//! Param((t:3.5,id:"pitch-class-fade",value:2.0))
+//! Param((t:3.5,id:"camera-yaw",value:0.5))
 //! Canonical(Delta((event:(t:3.51,...),sequence:4,lifetime:2,...)))
 //! RunEnd((at:5.5))
 //! ```
@@ -84,9 +84,11 @@ use serde::{Deserialize, Serialize};
 /// version rather than a silent blank render. Version 6 stamped song time on
 /// the audio thread and wrote one file per pass; version 7 routed each record
 /// by where its input arrived and held every pass in one file; version 8 places
-/// each record by when it sounds, in one take with one WAV (#1760). There are
-/// no compatibility shims.
-pub const FORMAT_VERSION: u32 = 8;
+/// each record by when it sounds, in one take with one WAV (#1760); version 9
+/// reads the Note fade and the Pitch color range from the recorded look, where
+/// version 8 recorded them as parameter lanes a newer reader ignores and its
+/// look left at the fresh value (#1744). There are no compatibility shims.
+pub const FORMAT_VERSION: u32 = 9;
 
 /// Conventional file extension. Not enforced anywhere.
 pub const EXTENSION: &str = "take";
@@ -579,32 +581,6 @@ impl Drop for Writer {
 mod tests {
     use super::*;
 
-    /// The two note-wide times — the Fade and the mark Delay — are read
-    /// against each other, so the Fade has to present like the view setting
-    /// above it: a linear bar, and the unit on the NUMBER rather than in the
-    /// name. Pinned because the bar itself is built from these answers and
-    /// nothing else would notice them drifting.
-    #[test]
-    fn the_fade_bar_reads_like_the_note_times_beside_it() {
-        assert!(!ParamKey::Fade.logarithmic(), "a linear second, like the Delay");
-        assert_eq!(ParamKey::Fade.label(), "Note fade", "the unit is not in the name");
-        // The SCALE the other two answers are premised on, and the one thing
-        // here with a reach past the bar: this range is what the host exposes
-        // to an automation lane, so moving it re-reads every lane recorded
-        // against it. The linear travel above is only defensible while a
-        // Fade's whole range is one second — at a hundred, its usable settings
-        // really would be crushed into the bar's first percent.
-        assert_eq!(*ParamKey::Fade.range().start(), 0.0);
-        assert_eq!(
-            *ParamKey::Fade.range().end(),
-            1.0,
-            "one second, the same as the Delay bar above it",
-        );
-        assert_eq!(ParamKey::Fade.unit(), (1000.0, " ms", 0));
-        assert!(ParamKey::Tolerance.logarithmic());
-        assert_eq!(ParamKey::Tolerance.unit(), (1.0, "¢", 3));
-    }
-
     /// Where the render starts is anchored to this, so it has to answer for a
     /// take with no notes: a passage carrying sound but no MIDI. Arming writes
     /// a full parameter snapshot regardless, so the params are what keep the
@@ -623,7 +599,7 @@ mod tests {
             note: 60,
             kind: NoteKind::On { velocity: 0.8 },
         };
-        let param = |t| ParamRecord { t, id: "pitch-class-fade".into(), value: 1.0 };
+        let param = |t| ParamRecord { t, id: "camera-yaw".into(), value: 1.0 };
 
         // Notes and params: the earlier wins, and it is the param snapshot
         // that arming wrote — which is the real capture point.
@@ -668,7 +644,7 @@ mod tests {
             NoteRecord { source: 0, t: 1.0, channel: 0, note: 60, kind: NoteKind::Off },
             NoteRecord { source: 0, t: 2.0, channel: 3, note: 0, kind: NoteKind::SessionReset },
         ];
-        let params = vec![ParamRecord { t: 0.0, id: "pitch-class-fade".into(), value: 2.5 }];
+        let params = vec![ParamRecord { t: 0.0, id: "camera-yaw".into(), value: 2.5 }];
         (header, notes, params)
     }
 
@@ -791,7 +767,7 @@ mod tests {
             let note = NoteRecord { source: 0, t, channel: 0, note: 60, kind: NoteKind::Off };
             text.push_str(&ron::to_string(&Record::Note(note)).unwrap());
             text.push('\n');
-            let param = ParamRecord { t, id: "pitch-class-fade".into(), value: t as f32 };
+            let param = ParamRecord { t, id: "camera-yaw".into(), value: t as f32 };
             text.push_str(&ron::to_string(&Record::Param(param)).unwrap());
             text.push('\n');
         }

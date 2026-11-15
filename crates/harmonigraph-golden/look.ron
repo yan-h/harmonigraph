@@ -40,6 +40,8 @@
                 chroma: true,
             ),
         ),
+        darkest_pitch: 24.0,
+        brightest_pitch: 108.0,
         band_width: 0.13792306,
         ring_inner: 0.76295096,
         ring_gap: 0.05,
@@ -55,6 +57,7 @@
         spectral_ring_hysteresis: 0.09639671,
         spectral_ring_attack: 0.03,
         spectral_ring_release: 0.25,
+        fade_time: 0.33941916,
         fade_shape: 0.31350955,
         note_animation: (
             stagger_spread: 0.6026367,

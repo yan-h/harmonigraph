@@ -1,6 +1,5 @@
 //! Lattice note layers, their sizes and timing. Their light follows on the same page.
 
-use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, StackBar, ValueBar};
 use harmonigraph_scene::{
     SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MAX_SPAN, MIN_SPAN, PITCH_CEIL,
@@ -218,21 +217,14 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
 }
 
 /// Shared visibility timing followed by the MIDI slices' motion and ordering.
-pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
-    let key = ParamKey::Fade;
-    let mut seconds = params.get(key);
-    let before = seconds;
-    let fresh = (key.default_value(), super::fresh_view().fade_shape);
-    let response = crate::widgets::fade(ui, &mut seconds, &mut view.fade_shape, fresh);
-    if response.drag_started() {
-        params.begin_set(key);
-    }
-    if seconds != before {
-        params.set(key, seconds);
-    }
-    if response.drag_stopped() {
-        params.end_set(key);
-    }
+pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    let fresh = super::fresh_view();
+    crate::widgets::fade(
+        ui,
+        &mut view.fade_time,
+        &mut view.fade_shape,
+        (fresh.fade_time, fresh.fade_shape),
+    );
     ui.add_enabled_ui(view.marks_draw(), |ui| {
         ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Mark delay")
             .default_value(super::fresh_view().mark_delay)

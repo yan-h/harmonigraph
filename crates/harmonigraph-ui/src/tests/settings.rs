@@ -157,8 +157,8 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
 
     // A unit-length arrival, which is the whole curve: the shape lives in the
     // fraction and not in the seconds, so any positive duration draws it.
-    let envelope = harmonigraph_scene::ViewConfig::default()
-        .envelope(&harmonigraph_scene::FrameParams { fade_time: 1.0, ..Default::default() });
+    let envelope =
+        harmonigraph_scene::ViewConfig { fade_time: 1.0, ..Default::default() }.envelope();
     let (left, right) = (points[0].x, points[points.len() - 1].x);
     let (floor, ceiling) = (points[0].y, points[points.len() - 1].y);
     assert!(right > left, "the line runs backwards, {left} to {right}");

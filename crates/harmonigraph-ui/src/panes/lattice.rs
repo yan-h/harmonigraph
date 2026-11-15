@@ -205,7 +205,6 @@ pub(crate) fn compose_scene(
         &state.appearance.view,
         window,
         &extra,
-        &state.runtime.frame_params,
         state.appearance.camera,
         hovered,
         std::mem::take(&mut state.surfaces.spare_nodes),
@@ -1296,7 +1295,7 @@ mod tests {
         // No arrival ramp: the scene below is derived 50ms in, a fraction of
         // any real Fade, and a label's alpha rides its node's presence.
         // This suite is about where a label is DRAWN, not how lit it is.
-        state.runtime.frame_params.fade_time = 0.0;
+        state.appearance.view.fade_time = 0.0;
         // A chord spread across the lattice, so nodes land all over the pane
         // and (zoomed in) well outside it.
         for note in [55u8, 60, 62, 64, 67, 69, 71] {
@@ -1598,7 +1597,7 @@ mod tests {
         let mut state = fresh();
         // A long arrival, so the climb through the reserve's band is a stretch
         // to sample rather than a frame of it.
-        state.runtime.frame_params.fade_time = 1.0;
+        state.appearance.view.fade_time = 1.0;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let scene = {
             let window = state.appearance.view.reach();
@@ -1667,7 +1666,7 @@ mod tests {
     #[test]
     fn a_departing_name_held_whole_leaves_no_marker_under_it() {
         let mut state = fresh();
-        state.runtime.frame_params.fade_time = 1.0;
+        state.appearance.view.fade_time = 1.0;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let scene = {
@@ -1877,7 +1876,7 @@ mod tests {
         state.appearance.view.marker_ink = 24.0;
         // A long fade, so the release is a stretch to sample in rather than a
         // frame of it, and the arrival has landed well before the first sample.
-        state.runtime.frame_params.fade_time = 1.0;
+        state.appearance.view.fade_time = 1.0;
         // Every slice moving at once, so the release starts at the key-up. The
         // stagger delays a slice's departure by its place in the sweep, which
         // can put the start of the release past the mid-release sample below.
@@ -1945,7 +1944,7 @@ mod tests {
     fn a_released_names_ink_dims_through_the_fade_out_delay() {
         let mut state = fresh();
         state.appearance.view.marker_ink = 24.0;
-        state.runtime.frame_params.fade_time = 1.0;
+        state.appearance.view.fade_time = 1.0;
         state.appearance.view.note_animation.stagger_spread = 0.0;
         // Longer than the sample is after the off, so the presence is still
         // held when the ink is read.
@@ -1980,10 +1979,7 @@ mod tests {
         // Pruned first, as the editor's own frame does: a trail record is
         // written the frame a release finishes, so a sample that only derived
         // would find the kept name still unrecorded and nothing named at all.
-        state
-            .runtime
-            .tracker
-            .prune(secs, &state.appearance.view.envelope(&state.runtime.frame_params));
+        state.runtime.tracker.prune(secs, &state.appearance.view.envelope());
         let scene = {
             let window = state.appearance.view.reach();
             compose_scene(state, &window, 1.0, None, 0, secs)

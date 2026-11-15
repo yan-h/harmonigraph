@@ -297,7 +297,6 @@ mod tests {
             &state.runtime.tuning,
             &state.appearance.view,
             &state.appearance.view.reach(),
-            &state.runtime.frame_params,
             state.appearance.camera,
             None,
         );
@@ -306,7 +305,7 @@ mod tests {
             &state.runtime.tracker,
             &state.runtime.tuning,
             &state.appearance.view,
-            &state.appearance.view.envelope(&state.runtime.frame_params),
+            &state.appearance.view.envelope(),
             &harmonigraph_scene::RingFade::default(),
             now,
         );
@@ -326,7 +325,7 @@ mod tests {
         state.appearance.view.glow_reach = 0.8;
         state.appearance.view.glow_attack = attack;
         state.appearance.view.glow_release = release;
-        state.runtime.frame_params.fade_time = 0.0;
+        state.appearance.view.fade_time = 0.0;
         state
     }
 
@@ -578,7 +577,7 @@ mod tests {
     fn a_restruck_pitch_class_on_a_lingering_halo_brings_no_dip() {
         const RELEASE: f64 = 2.5;
         let mut state = lit(0.05, RELEASE as f32);
-        state.runtime.frame_params.fade_time = 0.3;
+        state.appearance.view.fade_time = 0.3;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
         let mut level = |state: &PictureState, now: f64| {

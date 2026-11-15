@@ -61,6 +61,8 @@ fn poisoned_view() -> ViewConfig {
         note_names: NoteNames::Played,
         show_map_indicators: base.show_map_indicators,
         pitch_gradient,
+        darkest_pitch: nan,
+        brightest_pitch: nan,
         band_width: nan,
         ring_inner: nan,
         ring_gap: nan,
@@ -76,6 +78,7 @@ fn poisoned_view() -> ViewConfig {
         spectral_ring_hysteresis: nan,
         spectral_ring_attack: nan,
         spectral_ring_release: nan,
+        fade_time: nan,
         fade_shape: nan,
         note_bloom: nan,
         note_animation: NoteAnimationConfig {
@@ -224,8 +227,6 @@ fn scene_floats(scene: &Scene) -> Floats {
         background,
         pitch_lut,
         pitch_lut_spacing,
-        darkest_pitch,
-        brightest_pitch,
         marker_unit,
         glow_clock,
     } = scene;
@@ -328,8 +329,6 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.vec4("background", *background);
     f.luts("pitch_lut", pitch_lut);
     f.many("pitch_lut_spacing", [pitch_lut_spacing.at, pitch_lut_spacing.share]);
-    f.one("darkest_pitch", *darkest_pitch);
-    f.one("brightest_pitch", *brightest_pitch);
     f.one("marker_unit", *marker_unit);
 
     // Nothing to walk here, and that is worth saying rather than leaving as a
@@ -394,7 +393,10 @@ fn broken(scene: &Scene) -> Vec<String> {
 
 #[test]
 fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
-    let scene = scene_of(&sounding(), &Tuning::default(), &poisoned_view(), &plain_frame(), 0.0);
+    // Past the fresh Note fade a NaN one repairs to, so the held note has
+    // arrived and the node layers it lights are in the walk.
+    const NOW: f64 = 1.0;
+    let scene = scene_of(&sounding(), &Tuning::default(), &poisoned_view(), NOW);
 
     // The fixture has to ARRIVE, or the sweep below passes over an empty
     // picture and reads as coverage while measuring nothing.
@@ -424,7 +426,6 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         &Tuning::default(),
         &normalized,
         &poisoned_view().reach(),
-        &plain_frame(),
         Camera::default(),
         None,
     );
@@ -433,9 +434,9 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         &sounding(),
         &Tuning::default(),
         &normalized,
-        &normalized.envelope(&plain_frame()),
+        &normalized.envelope(),
         &RingFade::default(),
-        0.0,
+        NOW,
     );
     // The view's half of the claim, by name, before the comparisons below:
     // a NaN would also fail those, unnamed, and an infinity left on both sides
@@ -451,7 +452,7 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
 
     // A nonzero arm makes the marker walk reach its geometry and ink too.
     let drawable = ViewConfig { plus_arm: 0.5, ..poisoned_view() };
-    let scene = scene_of(&sounding(), &Tuning::default(), &drawable, &plain_frame(), 0.0);
+    let scene = scene_of(&sounding(), &Tuning::default(), &drawable, NOW);
     assert!(!scene.pluses.is_empty(), "a real arm still shipped no marker field");
     let names = broken(&scene);
     assert!(names.is_empty(), "a NaN view reached the marked scene at: {}", names.join(", "));

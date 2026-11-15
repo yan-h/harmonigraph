@@ -10,19 +10,18 @@ pub(super) fn animated_snapshot(
     tuning: &harmonigraph_core::Tuning,
     view: &harmonigraph_scene::ViewConfig,
     window: &harmonigraph_scene::DrawnWindow,
-    frame: &harmonigraph_scene::FrameParams,
     camera: harmonigraph_scene::Camera,
     hovered: Option<harmonigraph_core::LatticePos>,
     now: f64,
 ) -> Scene {
     let mut scene =
-        harmonigraph_scene::derive_scene(tracker, tuning, view, window, frame, camera, hovered);
+        harmonigraph_scene::derive_scene(tracker, tuning, view, window, camera, hovered);
     harmonigraph_scene::NodeMotion::default().step(
         &mut scene,
         tracker,
         tuning,
         view,
-        &view.envelope(frame),
+        &view.envelope(),
         &harmonigraph_scene::RingFade::default(),
         now,
     );
@@ -242,8 +241,6 @@ pub(super) fn parity_scene() -> Scene {
             Vec4::new(t, 0.4, 1.0 - t, 1.0)
         }),
         pitch_lut_spacing: harmonigraph_scene::LutSpacing::EVEN,
-        darkest_pitch: 24.0,
-        brightest_pitch: 108.0,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv
         // every glow bar is dialled in.
