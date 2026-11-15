@@ -593,11 +593,6 @@ struct GpuInstance {
     /// than folded into the dead `params.y`/`params.z` floats because the
     /// shader masks them bitwise, which needs a flat-interpolated `u32`.
     marks: [u32; 2],
-    /// Each mark's own color (see `NodeInstance::melody_color`): the sector it
-    /// links back to, not a fixed livery, so a ring reads as belonging to the
-    /// indicator it points at.
-    melody_color: [f32; 4],
-    bass_color: [f32; 4],
     /// Billboard size factor: 1 on the home sheet, smaller with every step off
     /// it (`NodeInstance::scale`).
     scale: f32,
@@ -643,7 +638,7 @@ impl GpuInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 2 => Float32x3, 3 => Uint32x3, 15 => Uint32x4,
             4 => Float32, 6 => Uint32x2,
-            7 => Float32x4, 8 => Float32x4, 10 => Float32, 11 => Float32,
+            10 => Float32, 11 => Float32,
             12 => Float32x3, 1 => Uint32x3
         ],
     };

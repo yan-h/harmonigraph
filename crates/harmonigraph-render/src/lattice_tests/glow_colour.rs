@@ -391,8 +391,6 @@ fn two_colour_node(band_width: f32, mark_width: f32) -> Scene {
     assert_eq!(node.cents, 0.0, "the slots above are read for a node on C");
     node.octaves = std::array::from_fn(|s| f32::from(s.abs_diff(c) <= 1));
     node.presence_with_opacity = 1.0;
-    // The marks' slots' own colour, which is the colour they are drawn in.
-    node.melody_color = glam::Vec4::new(0.0, 1.0, 0.0, 1.0);
     node.melody_slots =
         (low..=high).filter(|s| s.abs_diff(c as i32) > 1).fold(0, |mask, s| mask | 1 << s);
     node.melody_level = 1.0;

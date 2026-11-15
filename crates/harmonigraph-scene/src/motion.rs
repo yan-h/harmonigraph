@@ -984,13 +984,6 @@ impl NodeMotion {
             node.melody_level = melody_level * fades[melody_slot];
             node.bass_slots = bass_slots;
             node.bass_level = bass_level * fades[bass_slot];
-            let color = |slot| {
-                let pitch = scene.octave_layout.slot_pitch(slot as i32, node.cents);
-                let t = crate::color::ramp_t(pitch, scene.darkest_pitch, scene.brightest_pitch);
-                crate::color::sample_lut(t as f32, &scene.pitch_lut, scene.pitch_lut_spacing)
-            };
-            node.melody_color = color(melody_slot);
-            node.bass_color = color(bass_slot);
             if scene.spectral.ring_draws() {
                 node.audio_ring =
                     fade.level(&scene.octave_layout, node.cents).max(node.presence_with_opacity);

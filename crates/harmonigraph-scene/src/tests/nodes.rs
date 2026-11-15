@@ -980,8 +980,7 @@ fn an_inverted_color_range_still_derives_a_scene() {
         FrameParams { darkest_pitch: 110.0, brightest_pitch: 108.0, ..FrameParams::default() };
     let view = ViewConfig::default();
     let scene = scene_of(&held(60), &Tuning::default(), &view, &frame, 0.0);
-    let origin = origin_node(&scene);
-    assert!(origin.melody_color.is_finite(), "a mark color must be a color");
+    assert!(scene.pitch_lut.iter().all(|c| c.is_finite()), "the pitch colours must be colours");
 }
 
 /// The octave indicator lit by a note stands for the pitch that note has ON
@@ -1023,9 +1022,9 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
         "a C4 lit the indicator for pitch {drawn}, an octave off the note that lit it",
     );
 
-    // And the mark takes the colour of the sector it extends, so a slot an
-    // octave out is also a mark a seventh of the ramp away from the disc it
-    // sits on -- the mismatch the one colour table exists to have ruled out.
+    // And the mark extends that same sector, whose colour the shader looks
+    // up from the slot: a slot an octave out would be a mark a seventh of the
+    // ramp away from the disc it sits on.
     NodeMotion::default().step(
         &mut scene,
         &tracker,
@@ -1039,16 +1038,6 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     let marked: Vec<usize> =
         (0..OCTAVE_SLOTS).filter(|&s| origin.melody_slots >> s & 1 == 1).collect();
     assert_eq!(marked, lit, "the melody mark names the octave that sounds");
-    let frame = FrameParams::default();
-    // The gradient the scene was built with — `view`'s, which is not
-    // `Gradient::default()`: that is the gradient type's own default,
-    // and a fresh view is free to open elsewhere.
-    let want =
-        pitch_lut_color(drawn, frame.darkest_pitch, frame.brightest_pitch, view.pitch_gradient);
-    assert!(
-        (origin.melody_color - want).length() < 1e-5,
-        "the ring is coloured for a slot the indicator is not drawn at",
-    );
 }
 
 /// A fresh node draws its octave band and fits the active layers inside the

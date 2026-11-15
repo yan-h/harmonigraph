@@ -69,6 +69,51 @@ fn a_melody_bass_mark_extends_the_slice_it_names() {
     );
 }
 
+/// Each mark wears the colour of the sector it extends, which the shader looks
+/// up from the mark's own slot: the two ends on two octaves, under a ramp red
+/// at one and green at the other, draw one red mark and one green.
+#[test]
+fn each_mark_wears_its_own_slots_colour() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let beside = slot_beside_middle_c();
+    let shot = |gpu: &mut Shooter, melody, bass| {
+        let mut scene = single_marked_node(melody, bass);
+        let (dark, bright) = (scene.darkest_pitch, scene.brightest_pitch);
+        let c = harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0;
+        scene.pitch_lut = std::array::from_fn(|k| {
+            let pitch =
+                dark + (bright - dark) * k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+            if (pitch - c).abs() < 6.0 {
+                glam::Vec4::new(1.0, 0.0, 0.0, 1.0)
+            } else {
+                glam::Vec4::new(0.0, 1.0, 0.0, 1.0)
+            }
+        });
+        gpu.shot(&scene)
+    };
+    let unmarked = shot(&mut gpu, 0, 0);
+    let both = shot(&mut gpu, MIDDLE_C, beside);
+    // Red and green summed over one mark's own footprint in the shot with both.
+    let worn = |alone: &[u8]| {
+        let mut sum = [0u64; 2];
+        for ((a, b), px) in unmarked.chunks(4).zip(alone.chunks(4)).zip(both.chunks(4)) {
+            if a != b {
+                sum[0] += u64::from(px[0]);
+                sum[1] += u64::from(px[1]);
+            }
+        }
+        sum
+    };
+    let melody = worn(&shot(&mut gpu, MIDDLE_C, 0));
+    let bass = worn(&shot(&mut gpu, 0, beside));
+    eprintln!("melody mark red/green {melody:?}; bass mark {bass:?}");
+    assert!(melody[0] > 4 * melody[1], "the melody mark is not its slot's red: {melody:?}");
+    assert!(bass[1] > 4 * bass[0], "the bass mark is not its slot's green: {bass:?}");
+}
+
 /// The audio ring reads the spectrum AROUND each octave: it draws inside the
 /// octave band on the band's own angles, a partial dead on the node paints
 /// down the middle of the wedge, and a detuned one paints off-centre in the

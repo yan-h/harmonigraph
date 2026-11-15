@@ -141,8 +141,6 @@ impl LatticeCallback {
             },
             cents: n.cents,
             marks: [n.melody_slots, n.bass_slots],
-            melody_color: n.melody_color.to_array(),
-            bass_color: n.bass_color.to_array(),
             scale: n.scale,
             ring: n.audio_ring,
             // The row is settled by the walk below, which numbers the lit

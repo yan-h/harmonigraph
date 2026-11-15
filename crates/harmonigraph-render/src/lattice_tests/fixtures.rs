@@ -122,8 +122,6 @@ pub(super) fn parity_scene() -> Scene {
             },
             melody_level: if i == 0 || i == 4 { 1.0 } else { 0.0 },
             bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
-            melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
-            bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
             // Lit and settled: the light's own clock is the shell's pass and
             // no shell has run here, so this fixture is the picture with
             // nothing carried — which is exactly what a still image of the
@@ -484,11 +482,6 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // a freshly-held note.
         melody_level: f32::from(melody_slots != 0),
         bass_level: f32::from(bass_slots != 0),
-        // Distinct hues so the both-ends check below can tell the two
-        // marks apart; in the app these are the marked SECTORS' colors,
-        // which are the same color wherever the two name one sector.
-        melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
-        bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
         // Lit and settled: one node, nothing carried.
         glow: harmonigraph_scene::GlowStep { level: 1.0, light: None },
         ..harmonigraph_scene::NodeInstance::at(

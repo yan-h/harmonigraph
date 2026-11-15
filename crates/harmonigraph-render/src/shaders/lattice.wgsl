@@ -492,11 +492,6 @@ struct Instance {
     // octave slot. Which SECTOR each mark continues outward (see
     // mark_extension); its fade level rides params.y/params.z.
     @location(6) marks: vec2<u32>,
-    // Each mark's own color: its own sector's pitch off the ramp, with no lift
-    // on top of it (see NodeInstance::melody_color), so a mark reads as the
-    // indicator it extends rather than as a fixed livery.
-    @location(7) melody_color: vec4<f32>,
-    @location(8) bass_color: vec4<f32>,
     // The billboard's size factor: 1 on the home sheet, smaller with every
     // step off it. See ViewConfig::sevens_size.
     @location(10) scale: f32,
@@ -554,8 +549,6 @@ struct VsOut {
     // (`spread_union`, `cell_reach`). Zero on every other draw.
     @location(5) @interpolate(flat) cell_texel: f32,
     @location(6) @interpolate(flat) marks: vec2<u32>,
-    @location(7) @interpolate(flat) melody_color: vec4<f32>,
-    @location(8) @interpolate(flat) bass_color: vec4<f32>,
     // The circle the node fits inside (`node_rim`, or a swelled slice's reach
     // past it — `slices_outer`), in this node's uv — computed once in the
     // vertex shader because the billboard is sized on it.
@@ -734,8 +727,6 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     out.motion = inst.motion;
     out.cents = inst.cents;
     out.marks = inst.marks;
-    out.melody_color = inst.melody_color;
-    out.bass_color = inst.bass_color;
     out.rim = rim;
     out.swell = swell;
     out.ring = inst.ring;
@@ -1137,8 +1128,7 @@ fn oct_slot_lit(cents: f32, octaves: vec3<u32>, slot: i32) -> vec4<f32> {
 
 // The colour of slot `slot` LIT on a node whose pitch class is `cents`,
 // stated once, here: the slice wears it ([`oct_slot_lit`]), the mark extending
-// that slice wears it (`NodeInstance::melody_color` is the CPU's reading of
-// the same table), and the light reads both layers in it ([`ink_at`]).
+// that slice wears it, and the light reads both layers in it ([`ink_at`]).
 fn oct_slot_colour(cents: f32, slot: i32) -> vec3<f32> {
     // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this node's pitch
     // class for the glyph's true pitch.
@@ -2265,7 +2255,10 @@ fn base_node_ink(
     // layer already runs between two adjacent indicators.
     var mark = max(melody_cov, bass_cov);
     var mark_mask = max(melody_mask, bass_mask);
-    let mark_rgb = select(in.bass_color.rgb, in.melody_color.rgb, melody_cov > bass_cov);
+    // Each mask names one slot (`NodeInstance::melody_slots`), and the mark
+    // wears that sector's colour.
+    let owner = select(in.marks.y, in.marks.x, melody_cov > bass_cov);
+    let mark_rgb = oct_slot_colour(in.cents, i32(firstTrailingBit(owner)));
     // Safety taper only. The radii above are already capped inside the
     // billboard (a circle of radius QUAD_MARGIN fits the square quad), so
     // this just keeps a soft edge from ending on the boundary; starting it
@@ -2373,7 +2366,7 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
             let melody = select(0.0, in.params.y, (in.marks.x & bit) != 0u);
             let bass = select(0.0, in.params.z, (in.marks.y & bit) != 0u);
             let level = max(melody, bass) * opacity;
-            let color = select(in.bass_color.rgb, in.melody_color.rgb, melody > bass);
+            let color = oct_slot_colour(in.cents, slot);
             let shape = outer_glyph(slot, oct, uv, glyph_band(d, strip.x, strip.y, level, soft), strip.x, strip.y, soft);
             let taper = 1.0 - smoothstep(QUAD_MARGIN - 0.04, QUAD_MARGIN, d);
             let coverage = layer_coverage(shape) * taper;
@@ -2992,8 +2985,7 @@ fn ink_at(row: LightRow, oct: OctRing, angle: f32) -> vec4<f32> {
     // The marks, in the strip past the outermost ring: each slot's mark at its
     // own light, and the strongest owns the direction exactly as it owns the
     // pixel in `node_ink`, in the colour of the sector it extends — the
-    // slot's own pitch, which is what `NodeInstance::melody_color` is on the
-    // CPU (`the_halos_mark_colour_is_its_slots`). The depth the strip is
+    // slot's own pitch, as the drawn mark wears it. The depth the strip is
     // dialled to, capped at the quad the way the layer's own is, weighs it.
     // Slots the ring has no room for are skipped, as `mark_extension` skips
     // them: `oct_sector` has no angle to put one at.

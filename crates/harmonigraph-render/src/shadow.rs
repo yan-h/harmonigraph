@@ -238,8 +238,8 @@ impl ShadowBox {
     ///
     /// Scattered rather than consecutive because a vertex attribute's location
     /// has to be under sixteen and a node's rows already reach fifteen; which
-    /// four are free is what picks them. Together the two fill all sixteen, so
-    /// a node attribute added now has to share a slot with one already there.
+    /// four are free is what picks them. Together the two leave only 7 and 8
+    /// free.
     pub(crate) const BESIDE_NODES: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,

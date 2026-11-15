@@ -1496,8 +1496,6 @@ mod tests {
             presence_with_opacity: presence,
             presence_without_opacity: presence,
             departing: true,
-            melody_color: glam::Vec4::ONE,
-            bass_color: glam::Vec4::ONE,
             ..harmonigraph_scene::NodeInstance::at(
                 harmonigraph_core::LatticePos::new(0, 0, if on_home { 0 } else { 1 }),
                 glam::Vec3::ZERO,

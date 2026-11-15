@@ -574,6 +574,11 @@ pub struct NodeInstance {
     /// A MASK rather than a slot index because 0 then says
     /// "unmarked" on its own, which a `0` index could not — and because it is
     /// what the shader tests a slot against.
+    ///
+    /// The mark wears the colour of the sector it extends, which the shader
+    /// looks up from this slot's pitch as it does the slice's: the slot's
+    /// pitch rather than the marking voice's, since a note past either end of
+    /// the ring folds onto the outermost slot.
     pub melody_slots: u32,
     /// The same for the bass — the lowest held note. A slot set in BOTH
     /// masks is a note that is at once the melody and the bass (a lone held
@@ -598,20 +603,6 @@ pub struct NodeInstance {
     /// mark of each kind; the slots above say which sector it extends.
     pub melody_level: f32,
     pub bass_level: f32,
-    /// Each mark's color: the color of the SECTOR it extends — the pitch
-    /// of that slot on this node, through [`color::pitch_lut_color`] — so a
-    /// mark reads as that indicator continued rather than as a fixed livery.
-    /// Taken from the strongest carried slot (it can change
-    /// mid-crossfade). No lift on top of the ramp: the roll and the glyphs
-    /// both wear it as the table hands it over, whatever the gradient's
-    /// brightness is dialled to, so a mark that lightened its own copy would
-    /// sit a shade whiter than the slice it continues.
-    ///
-    /// The slot's pitch rather than the marking VOICE's: a note past either end
-    /// of the ring folds onto the outermost slot, and a mark carrying the
-    /// unfolded pitch would then sit a register off the sector it extends.
-    pub melody_color: Vec4,
-    pub bass_color: Vec4,
     /// How much of the audio ring this node wears, 0..=1 — the gate's answer
     /// for its wedges ([`RingGate`]) carried on the note Fade ([`RingFade`]),
     /// and never less than the node's own
@@ -698,8 +689,6 @@ impl NodeInstance {
             bass_slots: 0,
             melody_level: 0.0,
             bass_level: 0.0,
-            melody_color: Vec4::ZERO,
-            bass_color: Vec4::ZERO,
             // No audio has been measured, so nothing can be held back yet.
             audio_ring: 1.0,
             glow: GlowStep::default(),

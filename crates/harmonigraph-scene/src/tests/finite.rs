@@ -249,8 +249,6 @@ fn scene_floats(scene: &Scene) -> Floats {
             bass_slots: _,
             melody_level,
             bass_level,
-            melody_color,
-            bass_color,
             audio_ring,
             glow,
             trail,
@@ -265,8 +263,6 @@ fn scene_floats(scene: &Scene) -> Floats {
         f.one(format!("nodes[{i}].cents"), *cents);
         f.one(format!("nodes[{i}].melody_level"), *melody_level);
         f.one(format!("nodes[{i}].bass_level"), *bass_level);
-        f.vec4(&format!("nodes[{i}].melody_color"), *melody_color);
-        f.vec4(&format!("nodes[{i}].bass_color"), *bass_color);
         f.one(format!("nodes[{i}].audio_ring"), *audio_ring);
         let GlowStep { level, light } = glow;
         f.one(format!("nodes[{i}].glow.level"), *level);
