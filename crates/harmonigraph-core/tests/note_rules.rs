@@ -26,8 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use harmonigraph_core::canonical::{
-    CanonicalEvent, EventTiming, GapReason, NoteDelta, PublicationGap, SourceBaseline,
-    VoiceBaseline,
+    CanonicalEvent, GapReason, NoteDelta, PublicationGap, SourceBaseline, VoiceBaseline,
 };
 use harmonigraph_core::confirmed::PitchProvenance;
 use harmonigraph_core::{
@@ -317,10 +316,6 @@ impl Run<'_> {
         assert_eq!(rows(&after.roll), expected, "off {key:?} at {at}");
     }
 
-    fn timing() -> EventTiming {
-        EventTiming { sample: 48_000, sample_rate: 48_000.0 }
-    }
-
     /// One published delta, mapped onto the clock by the current offset.
     fn publish(&mut self, event: NoteEvent, lifetime: u64, pitch: Option<i64>) {
         let sequence = self.sequence.entry(event.source).or_default();
@@ -330,7 +325,6 @@ impl Run<'_> {
             sequence: *sequence,
             lifetime,
             provenance: PitchProvenance::AcceptedOutput,
-            timing: Some(Self::timing()),
             pitch_microcents: pitch,
             ..NoteDelta::from(event)
         };
@@ -573,7 +567,6 @@ impl Run<'_> {
                 note: p.key.note,
                 lifetime: p.lifetime,
                 actual_onset: p.onset,
-                onset: Some(Self::timing()),
                 pitch_microcents: i64::from(p.key.note) * 100_000_000
                     + self.rng.pick(&[0, 30_000_000]),
                 velocity: p.velocity,

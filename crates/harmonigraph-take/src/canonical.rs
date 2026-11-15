@@ -7,23 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ConfigurationRecord, NoteRecord};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TimingRecord {
-    pub sample: i64,
-    pub sample_rate: f64,
-}
-impl From<EventTiming> for TimingRecord {
-    fn from(t: EventTiming) -> Self {
-        Self { sample: t.sample, sample_rate: t.sample_rate }
-    }
-}
-impl From<TimingRecord> for EventTiming {
-    fn from(t: TimingRecord) -> Self {
-        Self { sample: t.sample, sample_rate: t.sample_rate }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProvenanceRecord {
     #[default]
@@ -85,7 +68,6 @@ pub struct DeltaRecord {
     pub sequence: u64,
     pub lifetime: u64,
     pub provenance: ProvenanceRecord,
-    pub timing: Option<TimingRecord>,
     pub pitch_microcents: Option<i64>,
     pub assignment: Option<AssignmentRecord>,
     pub partial_output: bool,
@@ -97,7 +79,6 @@ impl From<NoteDelta> for DeltaRecord {
             sequence: d.sequence,
             lifetime: d.lifetime,
             provenance: d.provenance.into(),
-            timing: d.timing.map(Into::into),
             pitch_microcents: d.pitch_microcents,
             assignment: d.assignment.map(Into::into),
             partial_output: d.partial_output,
@@ -111,7 +92,6 @@ impl From<DeltaRecord> for NoteDelta {
             sequence: d.sequence,
             lifetime: d.lifetime,
             provenance: d.provenance.into(),
-            timing: d.timing.map(Into::into),
             pitch_microcents: d.pitch_microcents,
             assignment: d.assignment.map(Into::into),
             partial_output: d.partial_output,
@@ -128,7 +108,6 @@ pub struct VoiceRecord {
     pub host_note_id: i32,
     pub lifetime: u64,
     pub actual_onset: f64,
-    pub onset: Option<TimingRecord>,
     pub pitch_microcents: i64,
     pub onset_pitch_microcents: i64,
     pub player_tuning: f64,
@@ -156,7 +135,6 @@ impl From<VoiceBaseline> for VoiceRecord {
             host_note_id: v.host_note_id,
             lifetime: v.lifetime,
             actual_onset: v.actual_onset,
-            onset: v.onset.map(Into::into),
             pitch_microcents: v.pitch_microcents,
             onset_pitch_microcents: v.onset_pitch_microcents,
             player_tuning: v.player_tuning,
@@ -181,7 +159,6 @@ impl From<&VoiceRecord> for VoiceBaseline {
             host_note_id: v.host_note_id,
             lifetime: v.lifetime,
             actual_onset: v.actual_onset,
-            onset: v.onset.map(Into::into),
             pitch_microcents: v.pitch_microcents,
             onset_pitch_microcents: v.onset_pitch_microcents,
             player_tuning: v.player_tuning,

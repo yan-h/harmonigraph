@@ -10,7 +10,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use harmonigraph_core::canonical::{EventTiming, NoteDelta, VoiceBaseline};
+use harmonigraph_core::canonical::{NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
 use harmonigraph_core::{policy, LatticePos, SourceId};
@@ -995,14 +995,12 @@ impl Hub {
         let index = usize::from(record.source);
         let identity = identity(record.source);
         let time = self.presentation(scheduled);
-        let timing = EventTiming { sample: scheduled, sample_rate: self.rate };
         self.rows[index].sequence += 1;
         let stamp = Stamp {
             source: identity,
             sequence: self.rows[index].sequence,
             lifetime: record.serial,
             time,
-            timing,
         };
         let delta = self.rows[index].state.apply(event, stamp);
         if let Some(assigned) = assignment {

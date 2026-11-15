@@ -5,14 +5,6 @@ use crate::configuration::ResolvedConfig;
 use crate::confirmed::{ConfirmedPitch, PitchProvenance, HELD_PER_SOURCE};
 use crate::{Expressions, LatticePos, NoteEvent, NoteEventKind, SourceId, Time, VoiceKey};
 
-/// Exact sample provenance survives presentation-clock mapping and take routing.
-/// `sample` is actual accepted output for AcceptedOutput, observed input otherwise.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct EventTiming {
-    pub sample: i64,
-    pub sample_rate: f64,
-}
-
 /// What the tuner decided about one attack. It also named the configuration
 /// revision the decision was taken under, for reconstructing historical
 /// configuration from a note; #712 settled that configuration is adopted per
@@ -35,7 +27,6 @@ pub struct NoteDelta {
     pub sequence: u64,
     pub lifetime: u64,
     pub provenance: PitchProvenance,
-    pub timing: Option<EventTiming>,
     /// Exact current accepted pitch, when this delta establishes one. The f32
     /// in NoteEvent remains the presentation adapter, never pitch authority.
     pub pitch_microcents: Option<i64>,
@@ -54,7 +45,6 @@ impl From<NoteEvent> for NoteDelta {
             sequence: 0,
             lifetime: 0,
             provenance: PitchProvenance::ObservedDirect,
-            timing: None,
             pitch_microcents: None,
             assignment: None,
             partial_output: false,
@@ -68,8 +58,7 @@ impl NoteDelta {
             || (self.provenance == PitchProvenance::ObservedDirect
                 && self.event.source != SourceId::DIRECT)
             || (self.provenance == PitchProvenance::AcceptedOutput
-                && (self.sequence == 0 || self.lifetime == 0 || self.timing.is_none()))
-            || self.timing.is_some_and(|t| !t.valid())
+                && (self.sequence == 0 || self.lifetime == 0))
             || self.assignment.is_some_and(|a| a.decision == 0 || !a.player_tuning.is_finite())
             || (self.partial_output
                 && (self.provenance != PitchProvenance::AcceptedOutput
@@ -91,12 +80,6 @@ impl NoteDelta {
     }
 }
 
-impl EventTiming {
-    fn valid(self) -> bool {
-        self.sample_rate.is_finite() && self.sample_rate > 0.0
-    }
-}
-
 /// Saved factual state, not a new emitted attack. Musical provenance is optional
 /// for observed DIRECT and intentionally unretuned output.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,7 +92,6 @@ pub struct VoiceBaseline {
     /// voice carries one, so a baseline row names the press it continues.
     pub lifetime: u64,
     pub actual_onset: Time,
-    pub onset: Option<EventTiming>,
     pub pitch_microcents: i64,
     /// Absolute pitch at attack, retained independently of later player bends.
     pub onset_pitch_microcents: i64,
@@ -137,7 +119,6 @@ impl Default for VoiceBaseline {
             host_note_id: -1,
             lifetime: 0,
             actual_onset: 0.0,
-            onset: None,
             pitch_microcents: 0,
             onset_pitch_microcents: 0,
             player_tuning: 0.0,
@@ -322,11 +303,9 @@ impl SourceBaseline {
                 || !voice.velocity.is_finite()
                 || !(0.0..=1.0).contains(&voice.velocity)
                 || !voice.expressions.valid()
-                || voice.onset.is_some_and(|t| !t.valid())
                 || voice.lifetime == 0
                 || (voice.provenance == PitchProvenance::ObservedDirect
                     && self.source != SourceId::DIRECT)
-                || (voice.provenance == PitchProvenance::AcceptedOutput && voice.onset.is_none())
                 || self.voices()[..i].iter().any(|old| {
                     old.key(self.source) == voice.key(self.source) || old.lifetime == voice.lifetime
                 })
@@ -435,7 +414,6 @@ mod tests {
             note,
             lifetime: u64::from(note) + 1,
             actual_onset: 1.0,
-            onset: Some(EventTiming { sample: 48000, sample_rate: 48000.0 }),
             pitch_microcents: i64::from(note) * 100_000_000,
             velocity: 0.8,
             provenance: PitchProvenance::AcceptedOutput,
@@ -488,10 +466,6 @@ mod tests {
             sequence,
             lifetime: 61,
             provenance: PitchProvenance::AcceptedOutput,
-            timing: Some(EventTiming {
-                sample: (event.time * 48000.0) as i64,
-                sample_rate: 48000.0,
-            }),
             pitch_microcents: None,
         }
     }
@@ -515,7 +489,6 @@ mod tests {
         let kind = |kind| NoteEvent { kind, ..good.event };
         let decision = Some(AssignmentMetadata { decision: 0, ..good.assignment.unwrap() });
         let direct = PitchProvenance::ObservedDirect;
-        let no_rate = |t| Some(EventTiming { sample_rate: 0.0, ..t });
         for (what, bad) in [
             ("note", NoteDelta { event: NoteEvent { note: 128, ..good.event }, ..good }),
             ("velocity", NoteDelta { event: kind(NoteEventKind::On { velocity: 1.5 }), ..good }),
@@ -524,7 +497,6 @@ mod tests {
                 NoteDelta { provenance: direct, partial_output: false, ..good },
             ),
             ("output lifetime", NoteDelta { lifetime: 0, ..good }),
-            ("zero rate", NoteDelta { timing: no_rate(good.timing.unwrap()), ..good }),
             ("decision", NoteDelta { assignment: decision, ..good }),
             ("partial off", NoteDelta { event: kind(NoteEventKind::Off), ..good }),
         ] {
@@ -552,7 +524,7 @@ mod tests {
         let row = VoiceBaseline { actual_onset: 2.0, ..voice(60) };
         assert!(frame(&[row, voice(64)]).is_ok());
         // A direct voice names its press by a lifetime like any other.
-        let observed = VoiceBaseline { provenance: direct, onset: None, ..row };
+        let observed = VoiceBaseline { provenance: direct, ..row };
         let direct_frame =
             |voice| SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 64, true, &[voice]);
         assert!(direct_frame(observed).is_ok());
@@ -563,9 +535,7 @@ mod tests {
         for (what, bad) in [
             ("note", VoiceBaseline { note: 128, ..row }),
             ("onset after the frame", VoiceBaseline { actual_onset: 3.0, ..row }),
-            ("onset rate", VoiceBaseline { onset: no_rate(row.onset.unwrap()), ..row }),
             ("direct from a source", VoiceBaseline { provenance: direct, ..row }),
-            ("output onset", VoiceBaseline { onset: None, ..row }),
             ("same key", VoiceBaseline { lifetime: 99, ..row }),
             ("same lifetime", VoiceBaseline { note: 64, ..row }),
         ] {

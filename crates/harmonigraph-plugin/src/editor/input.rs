@@ -651,10 +651,6 @@ mod tests {
                     sequence: 1,
                     lifetime: 1,
                     provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
-                    timing: Some(harmonigraph_core::canonical::EventTiming {
-                        sample: 0,
-                        sample_rate: 48000.0,
-                    }),
                     pitch_microcents: None,
                 })
                 .unwrap();
@@ -682,7 +678,7 @@ mod tests {
         producer.observe_clock(11.0);
         // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
         // at GUI=12; neither its batch nor a later idle poll is a new clock.
-        use harmonigraph_core::canonical::{EventTiming, NoteDelta};
+        use harmonigraph_core::canonical::NoteDelta;
         use harmonigraph_core::confirmed::PitchProvenance;
         let accepted = NoteDelta {
             assignment: None,
@@ -691,7 +687,6 @@ mod tests {
             sequence: 1,
             lifetime: 61,
             provenance: PitchProvenance::AcceptedOutput,
-            timing: Some(EventTiming { sample: 96000, sample_rate: 48000.0 }),
             pitch_microcents: None,
         };
         producer.note(accepted).unwrap();
@@ -721,7 +716,6 @@ mod tests {
                 note: 72,
                 lifetime: 62,
                 provenance: PitchProvenance::AcceptedOutput,
-                onset: accepted.timing,
                 actual_onset: 2.0,
                 velocity: 0.8,
                 pitch_microcents: 7_200_000_000,
@@ -788,7 +782,6 @@ mod tests {
                 note: 72,
                 lifetime: 61,
                 actual_onset: 2.0,
-                onset: accepted.timing,
                 velocity: 0.8,
                 pitch_microcents: 7_200_000_000,
                 provenance: PitchProvenance::AcceptedOutput,

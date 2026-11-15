@@ -1,5 +1,5 @@
 //! Exercise the executable boundary as well as the encoder's unit fixtures.
-use harmonigraph_take::canonical::{DeltaRecord, TimingRecord};
+use harmonigraph_take::canonical::DeltaRecord;
 use harmonigraph_take::{
     CanonicalRecord, Header, NoteKind, NoteRecord, Record, RunRecord, WavWriter, Writer,
 };
@@ -31,10 +31,8 @@ fn take(path: &Path, seconds: f64, trigger: RenderTrigger, tail: Option<f64>) {
     take.write(&Record::Run(RunRecord::default())).unwrap();
     // Each note timed where it sounds.
     for (t, kind) in [(0.0, NoteKind::On { velocity: 0.8 }), (0.25, NoteKind::Off)] {
-        let sample = (t * 48_000.0) as i64;
-        let timing = TimingRecord { sample, sample_rate: 48_000.0 };
         let event = NoteRecord { t, kind, note: 60, ..Default::default() };
-        let note = DeltaRecord { event, timing: Some(timing), ..Default::default() };
+        let note = DeltaRecord { event, ..Default::default() };
         take.write(&Record::Canonical(CanonicalRecord::Delta(note))).unwrap();
     }
     take.flush().unwrap();

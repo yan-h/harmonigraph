@@ -20,7 +20,7 @@
 //! Header((version:8,sample_rate:48000.0,audio_file:Some("take-….wav"),...))
 //! Run((at:3.5,song:12.0))
 //! Param((t:3.5,id:"pitch-class-fade",value:2.0))
-//! Canonical(Delta((event:(t:3.51,...),timing:Some((sample:512,...)),...)))
+//! Canonical(Delta((event:(t:3.51,...),sequence:4,lifetime:2,...)))
 //! RunEnd((at:5.5))
 //! ```
 //!
@@ -1037,9 +1037,9 @@ mod tests {
     /// writer emitted them in — `coverage_start` after `t`, sixteen `channels`
     /// of 128 controllers after `voices`, `configuration_revision` first inside
     /// an assignment, `start_samples` after `sample_rate` and `window_points`
-    /// after `appearance` (#895 dropped those two), and `runtime_session`,
-    /// `clock_epoch`, `input` and `planned` first inside a timing and
-    /// `input_onset` before a voice's `actual_onset` (#1780). A
+    /// after `appearance` (#895 dropped those two), and a delta's `timing` and
+    /// a voice's `onset`, each in its last shape with every key it ever had,
+    /// and `input_onset` before a voice's `actual_onset` (#1780). A
     /// hand-shortened stand-in would prove nothing about the nested vector RON
     /// actually has to skip.
     ///
@@ -1070,7 +1070,6 @@ mod tests {
             correction_microcents: 0,
             player_tuning: 0.0,
         });
-        delta.timing = Some(EventTiming { sample: 144_000, sample_rate: 48_000.0 });
         let note = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
             CanonicalEvent::Note(delta),
         )))
@@ -1084,6 +1083,8 @@ mod tests {
         assert_eq!(current.events.len(), 2, "and reach both records");
 
         // What the pre-prune writer put in the same two records.
+        const TIMING: &str = "(runtime_session:1,clock_epoch:0,input:143000,planned:Some(144000),\
+                              sample:144000,sample_rate:48000.0)";
         let channel = format!(
             "(controllers:[{}],controller_valid:(0,0),pitch_bend:None,pressure:None,program:None)",
             ["0"; 128].join(",")
@@ -1092,13 +1093,11 @@ mod tests {
         let aged_frame = frame
             .replace("t:2.0,", "t:2.0,coverage_start:2.0,")
             .replace("actual_onset:", "input_onset:0.0,actual_onset:")
+            .replace(",pitch_microcents:", &format!(",onset:Some({TIMING}),pitch_microcents:"))
             .replace(")))", &format!("{channels})))"));
         let aged_note = note
             .replace("assignment:Some((", "assignment:Some((configuration_revision:9,")
-            .replace(
-                "timing:Some((",
-                "timing:Some((runtime_session:1,clock_epoch:0,input:143000,planned:Some(144000),",
-            );
+            .replace(",pitch_microcents:", &format!(",timing:Some({TIMING}),pitch_microcents:"));
         let aged_header = header
             .replace("sample_rate:48000.0,", "sample_rate:48000.0,start_samples:Some(1024),")
             .replace("appearance:None,", "appearance:None,window_points:Some((1000.0,700.0)),");
@@ -1109,10 +1108,8 @@ mod tests {
         assert!(aged_frame.contains("input_onset:0.0,actual_onset:"), "{aged_frame}");
         assert!(aged_frame.contains(",channels:[(controllers:[0,"), "{aged_frame}");
         assert!(aged_note.contains("configuration_revision:9"), "{aged_note}");
-        assert!(
-            aged_note.contains("runtime_session:1,clock_epoch:0,input:143000,planned:Some(144000)"),
-            "{aged_note}"
-        );
+        assert!(aged_frame.contains(&format!("onset:Some({TIMING})")), "{aged_frame}");
+        assert!(aged_note.contains(&format!("timing:Some({TIMING})")), "{aged_note}");
         assert!(aged_header.contains("start_samples:Some(1024)"), "{aged_header}");
         assert!(aged_header.contains("window_points:Some((1000.0,700.0))"), "{aged_header}");
         let aged = format!("{aged_header}\n{run}\n{aged_frame}\n{aged_note}");

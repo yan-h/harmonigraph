@@ -1461,21 +1461,19 @@ mod tests {
     }
 
     /// One voice as a canonical source PUBLISHES it: accepted output, with the
-    /// lifetime a baseline resumes it by and a real `onset`.
+    /// lifetime a baseline resumes it by.
     ///
     /// `AcceptedOutput` is the load-bearing field and the reason this helper
     /// exists: `VoiceBaseline::default()` is `ObservedDirect`, which
     /// `SourceBaseline::validate` rejects on every source but
     /// [`SourceId::DIRECT`] — so the obvious fixture is refused, and refused
-    /// for a reason that has nothing to do with the note. Saying
-    /// `AcceptedOutput` then requires a real `onset`, and every restated voice
-    /// needs a nonzero lifetime.
+    /// for a reason that has nothing to do with the note. Every restated voice
+    /// also needs a nonzero lifetime.
     fn published_voice(note: u8, lifetime: u64) -> VoiceBaseline {
         VoiceBaseline {
             note,
             lifetime,
             actual_onset: 1.0,
-            onset: Some(crate::canonical::EventTiming { sample: 48_000, sample_rate: 48_000.0 }),
             pitch_microcents: i64::from(note) * 100_000_000,
             velocity: 0.8,
             provenance: crate::confirmed::PitchProvenance::AcceptedOutput,

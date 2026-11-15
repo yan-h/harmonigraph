@@ -147,14 +147,13 @@ fn accepted_exact(
     lifetime: u64,
     pitch_microcents: Option<i64>,
 ) -> harmonigraph_core::canonical::NoteDelta {
-    use harmonigraph_core::canonical::{EventTiming, NoteDelta};
+    use harmonigraph_core::canonical::NoteDelta;
     use harmonigraph_core::confirmed::PitchProvenance;
     NoteDelta {
         event,
         sequence,
         lifetime,
         provenance: PitchProvenance::AcceptedOutput,
-        timing: Some(EventTiming { sample: (event.time * 48_000.0) as i64, sample_rate: 48_000.0 }),
         pitch_microcents,
         assignment: None,
         partial_output: false,
@@ -163,7 +162,7 @@ fn accepted_exact(
 
 #[test]
 fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
-    use harmonigraph_core::canonical::{EventTiming, SourceBaseline, VoiceBaseline};
+    use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
     use harmonigraph_core::confirmed::PitchProvenance;
     use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, SourceId};
     use harmonigraph_record::publication::Lane;
@@ -211,10 +210,6 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         note: 60,
         lifetime: LIFETIME,
         actual_onset: ORIGIN + 0.125,
-        onset: Some(EventTiming {
-            sample: ((ORIGIN + 0.125) * 48_000.0) as i64,
-            sample_rate: 48_000.0,
-        }),
         pitch_microcents: 6_037_500_000,
         onset_pitch_microcents: 6_000_000_000,
         velocity: 0.8,
