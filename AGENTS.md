@@ -149,6 +149,10 @@ Neither gets a handler or a repair of its own.
 The per-type `sanitize` repairs stay for the one thing the next section asks of them:
 the value on screen is the value the file holds.
 
+**Cases gone without**, each with the PR that left it out:
+
+- More than `MAX_LIGHTS` lit nodes reaching the lattice renderer: `GlowFade` is the only cap, and the renderer checks it with a `debug_assert` alone (#1791).
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
