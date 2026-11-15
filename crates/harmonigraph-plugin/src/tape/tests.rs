@@ -361,19 +361,33 @@ fn a_pass_turns_warm_where_it_has_settled_and_not_a_chunk_later() {
     let settle = (SETTLE_SECONDS * RATE) as i64;
     record_in(300, &mut worker, &mut source, 0, 1000 + settle + 5000);
     // Played again from 1.0 s, then a pass alone further on.
-    record_in(400, &mut worker, &mut source, 1000, 1000 + settle + 5000);
-    record_in(400, &mut worker, &mut source, 40_000, 40_000 + settle + 2000);
+    let block = 400;
+    record_in(block, &mut worker, &mut source, 1000, 1000 + settle + 5000);
+    let (alone, to) = (40_000, 40_000 + settle + 2000);
+    record_in(block, &mut worker, &mut source, alone, to);
+    // Where a pass from `start` recorded up to `to` reaches: the end of the
+    // block holding `to - 1`. A pass turns warm at the first block that
+    // starts settled.
+    let reach =
+        |start: i64, to: i64| start + ((to - start) as usize).div_ceil(block) as i64 * block as i64;
+    let warm = |start: i64| reach(start, start + settle);
     let store = worker.store().unwrap();
     let owner =
         |frame: i64| store.chunks().find(|c| (c.start..c.end).contains(&frame)).unwrap().stamp.pass;
     assert_eq!(owner(1000), 1, "cold never overwrites warm");
-    assert_eq!(owner(1000 + settle - 1), 1);
-    assert_eq!(owner(1000 + settle), 2, "once settled, the fresher pass wins");
+    assert_eq!(owner(warm(1000) - 1), 1);
+    assert_eq!(owner(warm(1000)), 2, "once settled, the fresher pass wins");
     let mut view = TapeView::default();
     worker.exchange(&mut view, &SpectrumConfig::default(), true);
-    let alone: Vec<(f64, f64, bool)> =
-        view.spans.iter().filter(|s| s.start >= 40.0).map(|s| (s.start, s.end, s.warm)).collect();
-    assert_eq!(alone, [(40.0, 50.0, false), (50.0, 52.0, true)]);
+    let seconds = |frame: i64| frame as f64 / RATE;
+    let spans: Vec<(f64, f64, bool)> = view
+        .spans
+        .iter()
+        .filter(|s| s.start >= seconds(alone))
+        .map(|s| (s.start, s.end, s.warm))
+        .collect();
+    let (warm, end) = (seconds(warm(alone)), seconds(reach(alone, to)));
+    assert_eq!(spans, [(seconds(alone), warm, false), (warm, end, true)]);
 }
 
 /// A cue cut partway through a piece must leave nothing of that piece in the
