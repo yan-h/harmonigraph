@@ -324,13 +324,10 @@ impl Owner {
         let end = start + i64::from(self.recording.block_frames);
         recorder.record(self.take_time(), origin);
         if recorder.recording() {
-            // The history the Hub assigned from, at the segment's start and at
-            // each change inside it. An empty history at `start` means no
-            // callback has adopted since it was cleared, so nothing has been
-            // resolved since the take's last configuration record.
-            if let Some(state) = self.maps.at(start) {
-                self.recording.configuration(recorder, start, state.config);
-            }
+            // What the Hub assigned from, at the segment's start and at each
+            // change inside it: the history, or the reducer where it is gone.
+            let config = self.maps.at(start).map_or(self.reducer.resolved(), |state| state.config);
+            self.recording.configuration(recorder, start, config);
             for (sample, state) in self.maps.changes(start, end) {
                 self.recording.configuration(recorder, sample, state.config);
             }
