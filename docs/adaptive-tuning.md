@@ -283,16 +283,25 @@ a preset must not become a mixture of old locks and new axes —
 and it publishes one resolved configuration containing the effective tuning, tempered commas and policy-v3 controls.
 Those controls cover the keyboard tuning, neighborhood radius and axes, pitch flexibility, register weight per octave, a shared half-life, repetition tolerance, silence timeout and transport resets;
 their exact ranges and defaults live in the [implementation record](adaptive-tuning-plugin.md#controls).
-The UI mirrors that resolved configuration rather than running a competing authority, and restoring state or automating tuning works with the editor never opened.
+The UI mirrors that resolved configuration rather than running a competing authority, and restoring state works with the editor never opened.
+
+The five tuning axes (C offset, fifth, third, seventh and tolerance) are the plugin's own settings, not host parameters ([#1756](https://github.com/yan-h/harmonigraph/issues/1756)):
+nothing automates, modulates or maps them.
+The raw axes, the links, Learn and the adaptive policy are one record in the plugin's `musical-settings` field.
+The editor queues typed edits that the Hub's audio owner applies in arrival order,
+and the owner publishes the result through one seqlock that the editor and a save read.
+A restore queues its record behind any edit already queued, and until the owner applies it the editor shows the restored record and a save stores it.
+An applied editor edit or Learn result has the host mark the project modified;
+Bitwig's own undo does not cover them.
 
 Adoption is **sample-exact**, under every engine.
 At the start of each enclosing Hub audio callback, pending editor edits are adopted coherently and enter one sample-indexed configuration history at the block's start;
-host automation of an axis enters it at its own input sample.
+Lattice Map automation enters it at its own input sample.
 Every assignment group uses the configuration in force at its input sample,
 including a record held over from an earlier callback;
 the batch runs to completion at its input boundary.
 Where the history no longer reaches that sample (a steady-clock regression clears it), every engine assigns from the live state:
-the configuration the reducer holds now, which includes any later host automation in that block, and under Lattice Map the current map (#1792).
+the configuration the reducer holds now, and under Lattice Map the current map (#1792).
 Once assigned, the adaptive correction and harmonic onset reference stay fixed through later edits and delayed emission.
 Already sounding notes keep that choice while later player expression and MIDI channel bend can still move their emitted pitch.
 
@@ -303,7 +312,7 @@ and applies at the block's start after the walk, so it rides the next adoption r
 Display and recording use the configuration actually adopted, and take replay reuses the recorded pitches, times and configurations instead of re-running inference.
 
 Ordinary tuning edits do not reset the plugin or change its reported latency.
-An editor edit or a Learn result can wait about one host block; host automation lands at its own sample, so the DAW's block size does not change assignment results near it.
+An editor edit or a Learn result can wait about one host block; Lattice Map automation lands at its own sample, so the DAW's block size does not change assignment results near it.
 Replay of a recorded take still follows the recorded results.
 
 ## Membership
@@ -635,7 +644,10 @@ The vendored `nice-plug` wrapper supplies what the plugin cannot get for itself:
 It is now the return value of the push rather than a later completion, which is why the callback that chose the event is the one that hears about it.
 
 The [CLAP boundary audit](audits/clap-boundary-1415.md) records the lock ownership, input-pool reuse argument and allocation-check reach.
-Configuration command reduction snapshots the queued prefix once per callback so concurrent restores cannot extend audio-thread work indefinitely.
+The owned-parameter mailbox it audited went with #1756:
+its notification, gesture and modulation layers existed only to make the tuning axes host-automatable.
+What the wrapper keeps of configuration is the walk, which hands the plugin each callback's boundary and then every owned input in order with its exact sample.
+The plugin's own edit queue snapshots its queued prefix once per callback, so concurrent edits and restores cannot extend audio-thread work indefinitely.
 
 Removed from it during the #712 simplification:
 the retain-and-acknowledge input contract (`Consumption::Pending`), the legacy input walker, and a second complete notification emitter reachable only from fixtures.
@@ -657,17 +669,10 @@ A CLAP output list is sorted by time, so Tune keeps its own cursor and emits at 
 which it can, because the delay line already emits in due order.
 
 The two halves no longer share that cursor, and the ordering they used to negotiate by interleaving on time is settled once instead:
-**the wrapper's own parameter and configuration output follows the plugin's, floored at the high-water mark of what the callback has already put on the wire.** Which side gives way is the decision.
+**the wrapper's own parameter output follows the plugin's, at the high-water mark of what the callback has already put on the wire.** Which side gives way is the decision.
 A note's offset is the output's content;
 a parameter report only has to be recorded in order, so where the two would cross it is the parameter that moves later.
-It also reads correctly, because a value observed during a callback shaped none of that callback's notes —
-the configuration in force was frozen at `clap_configuration_adopt` before the first of them.
-
-The floor is a mark rather than a pin because what the host RECORDS is the other thing at stake in an offset.
-A notification keeps its own mapped sample unless something later is already out, so nothing is moved that did not have to be;
-pinning every one of them to the sub-block's last sample would have been a line shorter and would have cost them all their timing, since without `SAMPLE_ACCURATE_AUTOMATION` a steady-transport callback is a single sub-block and that sample is the whole buffer's last.
-The mark cannot exceed that sample either, because the plugin's events for a sub-block are all inside it —
-so a notification mapping past the sub-block still waits for the one that contains it.
+The wrapper's output is the editor's own host-parameter edits, which have no source sample of their own, so each takes the mark.
 
 An error exit is the one place the plugin's output goes dark:
 invalid input, a missing host list and `CLAP_PROCESS_ERROR` all give `clap_performance_finalize` a writer that refuses everything, so the Tune retains its flush for a callback the host will read instead of spending it on one it has already lost.
