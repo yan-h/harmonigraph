@@ -39,7 +39,7 @@ cargo build --release -p harmonigraph-offline
 
 ## Saved appearance
 
-Takes use format v8 and carry a version-1 appearance document captured when recording is armed.
+Takes use format v9 and carry a version-1 appearance document captured when recording is armed.
 It contains camera, view, spectrum and the whole video configuration;
 dock layout, selected editor page, the Spiral's framing and other workspace settings stay in the editor save.
 Automatic export uses that recorded appearance, including the captured Aspect and Output size.

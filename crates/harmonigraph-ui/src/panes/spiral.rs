@@ -820,8 +820,8 @@ fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
     let mut voices: Vec<harmonigraph_core::Voice> = state.runtime.tracker.voices().collect();
     voices.sort_unstable_by(|a, b| a.pitch.total_cmp(&b.pitch).then(a.key().cmp(&b.key())));
     // One envelope for the whole pane, as every other caller takes it: it is a
-    // property of the view and the frame, and rebuilding it per voice would
-    // read as if it could vary between them.
+    // property of the view, and rebuilding it per voice would read as if it
+    // could vary between them.
     let env = state.appearance.view.envelope();
     let intensity = state.appearance.view.intensity.sanitized();
     voices

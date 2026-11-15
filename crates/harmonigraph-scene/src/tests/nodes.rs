@@ -669,7 +669,7 @@ fn octaves_fade_independently() {
 #[test]
 fn one_fade_time_carries_every_layer_of_the_node() {
     // The core, the octave glyphs and the melody/bass marks all ride the
-    // single Fade param: release a two-note chord and half a fade later every
+    // single Note fade: release a two-note chord and half a fade later every
     // one of them is half-way down. One time for the whole node, so a release
     // reads as one gesture rather than as layers leaving at their own pace.
     let mut tracker = NoteTracker::new();

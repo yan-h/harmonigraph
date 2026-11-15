@@ -407,8 +407,8 @@ pub fn root_ui(
 }
 
 /// Everything that must happen once per frame before any pane draws:
-/// refresh the per-frame mirrors of the parameters and age out voices
-/// whose fade has completed.
+/// follow the host's camera and tuning parameters and age out voices whose
+/// fade has completed.
 ///
 /// [`root_ui`] calls this itself. It is public for shells that compose
 /// their own layout instead of using the dock — the offline renderer

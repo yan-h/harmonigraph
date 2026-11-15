@@ -406,7 +406,7 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, now: f64) {
     // The note envelope, the same one every layer of a node runs on: the ring
     // is one of those layers, so it arrives and leaves on the Fade rather than
     // on a duration of its own. Assembled through `ViewConfig::envelope`, which
-    // is the one place the Fade param and the Fade curve are put back together.
+    // is the one place the Fade time and the Fade curve are put together.
     let env = state.appearance.view.envelope();
     state.runtime.ring_fade.advance(&harmonigraph_scene::RingGate::new(&scene.spectral), &env, now);
     // What the drawn ring is still moving on: the display it reads, its own
