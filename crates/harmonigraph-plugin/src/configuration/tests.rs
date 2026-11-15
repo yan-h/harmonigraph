@@ -483,7 +483,7 @@ fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
 }
 
 #[test]
-fn real_same_sample_initial_tuning_is_in_learning_before_any_gui_drain() {
+fn a_same_sample_initial_tuning_reaches_learning() {
     learn_the_played_third(true, false);
 }
 
@@ -692,10 +692,10 @@ unsafe impl Sync for Device {}
 
 /// The restored modes are the saved ones, read back as themselves: two
 /// patterns that differ in every bit and neither of which is the default, so a
-/// preview, a save or an adoption that dropped, swapped or defaulted one
+/// readback, a save or an adoption that dropped, swapped or defaulted one
 /// cannot agree with the others by accident.
 #[test]
-fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
+fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
     let _scope = crate::test_scope::enter();
     for (gui, (meantone, marvel, learning)) in [false, true]
         .into_iter()
@@ -709,27 +709,27 @@ fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
         (restoring.meantone, restoring.marvel, restoring.learning) = (meantone, marvel, learning);
         state.fields.insert(MUSICAL_SETTINGS.into(), serde_json::to_string(&restoring).unwrap());
         device.load(state, gui);
-        let preview = shown(&settings).view;
-        assert!(preview.pending);
-        let preview = preview.resolved;
+        let readback = shown(&settings).view;
+        assert!(readback.pending);
+        let readback = readback.resolved;
         let restored_modes = TuningModes {
             tempered: Tempered { syntonic: meantone, septimal_kleisma: marvel },
             learning,
         };
-        assert_eq!(preview.modes, restored_modes);
-        assert_eq!(preview.tuning.three, 700_000_000, "the preview's tuning is the restored one");
+        assert_eq!(readback.modes, restored_modes);
+        assert_eq!(readback.tuning.three, 700_000_000, "the readback's tuning is the restored one");
         let saved_host = saved(&device.save());
         assert_eq!(
             (saved_host.meantone, saved_host.marvel, saved_host.learning),
             (meantone, marvel, learning)
         );
-        assert_eq!(saved_host.reducer().resolved().modes, preview.modes);
+        assert_eq!(saved_host.reducer().resolved().modes, readback.modes);
         assert_eq!(
             saved(&device.wrapper().get_state_object()).reducer().resolved().modes,
-            preview.modes
+            readback.modes
         );
         device.run(0, vec![], false);
-        assert_eq!(shown(&settings).view.resolved.modes, preview.modes);
+        assert_eq!(shown(&settings).view.resolved.modes, readback.modes);
         // And the reducer the audio thread runs Learn and tempering under
         // holds them too, not only the words that report it.
         let adopted = device
@@ -1841,7 +1841,7 @@ fn a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take(
 }
 
 #[test]
-fn configuration_observed_disarmed_does_not_become_later_armed_automation() {
+fn a_configuration_applied_before_arming_records_once_as_the_takes_initial_value() {
     let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = recorded_device();
     device.activate();
@@ -1951,7 +1951,7 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
 }
 
 #[test]
-fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
+fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
@@ -2255,7 +2255,6 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
     }
 }
 
-/// Goes with #1756, which retires host automation of the axes.
 #[test]
 fn every_engine_records_a_tuning_edit_at_the_callback_that_applies_it() {
     let _scope = crate::test_scope::enter();
