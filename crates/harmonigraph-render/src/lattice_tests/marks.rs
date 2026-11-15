@@ -71,16 +71,31 @@ fn a_melody_bass_mark_extends_the_slice_it_names() {
 
 /// Each mark wears the colour of the sector it extends, which the shader looks
 /// up from the mark's own slot: the two ends on two octaves, under a ramp red
-/// at one and green at the other, draw one red mark and one green.
+/// at one and green at the other, draw one red mark and one green — on the
+/// settled node's path and on the one a node still arriving takes.
 #[test]
 fn each_mark_wears_its_own_slots_colour() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
+    for arriving in [false, true] {
+        each_mark_wears_its_own_slots_colour_at(&mut gpu, arriving);
+    }
+}
+
+fn each_mark_wears_its_own_slots_colour_at(gpu: &mut Shooter, arriving: bool) {
     let beside = slot_beside_middle_c();
     let shot = |gpu: &mut Shooter, melody, bass| {
         let mut scene = single_marked_node(melody, bass);
+        if arriving {
+            // A hair short of settled, which is what takes the animated path.
+            scene.view.note_animation = harmonigraph_scene::NoteAnimationConfig {
+                radial_start: -1.0,
+                ..Default::default()
+            };
+            scene.nodes[0].slice_progress = [0.999; harmonigraph_scene::OCTAVE_SLOTS];
+        }
         let (dark, bright) = (scene.darkest_pitch, scene.brightest_pitch);
         let c = harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0;
         scene.pitch_lut = std::array::from_fn(|k| {
@@ -94,8 +109,8 @@ fn each_mark_wears_its_own_slots_colour() {
         });
         gpu.shot(&scene)
     };
-    let unmarked = shot(&mut gpu, 0, 0);
-    let both = shot(&mut gpu, MIDDLE_C, beside);
+    let unmarked = shot(gpu, 0, 0);
+    let both = shot(gpu, MIDDLE_C, beside);
     // Red and green summed over one mark's own footprint in the shot with both.
     let worn = |alone: &[u8]| {
         let mut sum = [0u64; 2];
@@ -107,11 +122,14 @@ fn each_mark_wears_its_own_slots_colour() {
         }
         sum
     };
-    let melody = worn(&shot(&mut gpu, MIDDLE_C, 0));
-    let bass = worn(&shot(&mut gpu, 0, beside));
-    eprintln!("melody mark red/green {melody:?}; bass mark {bass:?}");
-    assert!(melody[0] > 4 * melody[1], "the melody mark is not its slot's red: {melody:?}");
-    assert!(bass[1] > 4 * bass[0], "the bass mark is not its slot's green: {bass:?}");
+    let melody = worn(&shot(gpu, MIDDLE_C, 0));
+    let bass = worn(&shot(gpu, 0, beside));
+    eprintln!("arriving {arriving}: melody mark red/green {melody:?}; bass mark {bass:?}");
+    assert!(
+        melody[0] > 4 * melody[1],
+        "arriving {arriving}: the melody mark is not red: {melody:?}"
+    );
+    assert!(bass[1] > 4 * bass[0], "arriving {arriving}: the bass mark is not green: {bass:?}");
 }
 
 /// The audio ring reads the spectrum AROUND each octave: it draws inside the
