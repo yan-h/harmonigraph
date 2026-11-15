@@ -1805,7 +1805,7 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     let samples: Vec<f32> = (0..48_000)
         .map(|i| 100.0 * (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin())
         .collect();
-    state.runtime.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
+    crate::spectrum::heard_at(&mut state.runtime.spectrum, &samples, 1, sr, 1.0, &cfg);
 
     // A screen of its own: `rect` here runs to 1200x400, which SCREEN could
     // not hold, and this fixture is about what the curve reaches inside the

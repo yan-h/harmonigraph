@@ -397,26 +397,6 @@ impl CanonicalRecord {
             Self::Note(_) | Self::Gap(_) => Ok(true),
         }
     }
-    pub fn translate(&mut self, offset: f64) {
-        match self {
-            Self::Note(n) => n.t += offset,
-            Self::Delta(d) => d.event.t += offset,
-            Self::Baseline(b) => {
-                b.t += offset;
-                for v in &mut b.voices {
-                    v.input_onset += offset;
-                    v.actual_onset += offset;
-                    if let Some(a) = &mut v.assignment {
-                        a.t += offset;
-                    }
-                }
-            }
-            Self::Gap(g) => {
-                g.t += offset;
-                g.through += offset;
-            }
-        }
-    }
     pub fn note(&self) -> Option<NoteRecord> {
         match self {
             Self::Note(n) => Some(*n),

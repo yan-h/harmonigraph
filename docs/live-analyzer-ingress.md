@@ -32,6 +32,11 @@ One input worker drains this consumer, open window or shut (#1559):
 it takes the notes and the audio under the editor's lock,
 runs the FFTs with the lock free,
 and hands the columns to the store under it again.
+`LiveInput` owns the analysis and moves it out with the audio it takes (#1758);
+the hand-over carries the analysis's lag,
+which the frame reads until the next one,
+and the history's Clear count at take,
+so a Clear during the FFTs keeps their columns out.
 Opening or closing the editor introduces no source epoch and moves no drain.
 Offline seeking remains a separate access mechanism.
 
@@ -51,15 +56,17 @@ and on a source rewind by re-anchoring the newest sample at the shown time or la
 Its shown time never rewinds,
 so mapped dates only advance and audio does not pin a separate permanent offset that could drift away from notes.
 So new columns never land at or before the retained history tail.
-`SpectrumStore::push_history` asserts that order (a `debug_assert!`) rather than enforcing it:
-the incremental heatmap aggregation relies on strictly increasing dates, and no plugin path breaks them.
+`SpectrumStore::take` asserts that order (a `debug_assert!`):
+the heatmap's slab pyramid writes each slab once, and no plugin path breaks the order.
 Timestamps are neither clamped nor rewritten.
-Arrival-dated analysis still appends every column.
-Its smoothed anchor can step back by up to 50 ms in one batch,
-which the offline renderer's contiguous batches never do,
-nor the standalone app's synth, which never renders more samples than the time elapsed;
-a build without the assert would meet such a date in the heatmap aggregator,
-which rebuilds its grid on a date that steps back.
+No feeder dates its columns by when they arrive (#1758):
+the offline renderer counts frames from the first it reads of its soundtrack,
+and the standalone app's synth counts the frames it renders and, after a stall over 200 ms, starts a new run whose first column dates after the last of the run before, however its resolution changed,
+so their dates only advance too.
+A release build meets a backward date at the pyramid's guard instead (#1758):
+a column up to a second at or before the newest is dropped,
+and one further back resets the history,
+both counted on the performance overlay.
 Factual note timestamps and take/export clocks are unchanged.
 
 This is a timing and ownership contract improvement,

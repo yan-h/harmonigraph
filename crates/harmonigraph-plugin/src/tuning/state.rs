@@ -59,9 +59,6 @@ impl State {
     pub fn voice(&self, lifetime: u64) -> Option<&VoiceBaseline> {
         self.voices().find(|voice| voice.lifetime == lifetime)
     }
-    pub fn count(&self) -> usize {
-        self.voices().count()
-    }
     /// The cell an onset will replace or occupy. The Hub checks this before
     /// assigning or replying, so a refused voice cannot acquire a correction.
     pub fn onset_cell(&self, channel: u8, note: u8) -> Option<usize> {

@@ -41,7 +41,6 @@ use harmonigraph_scene::Scene;
 
 mod bloom_chain;
 mod gpu_timer;
-mod ink_history;
 mod lattice_frame;
 mod lattice_pipelines;
 mod lattice_prepare;
@@ -58,7 +57,6 @@ use lattice_pipelines::*;
 use lattice_targets::*;
 
 pub mod gpu_memory;
-pub mod shader_assets;
 /// Progress for interactive editor initialization; offline rendering remains synchronous.
 pub mod startup;
 
@@ -78,8 +76,8 @@ pub use surround::{
 };
 
 /// The spectrogram's heatmap — the pane's other heavy layer, and the one whose
-/// picture a CPU compose would build texel by texel. Here the aggregator's slab
-/// grid is the texture and the read is per fragment, so a zoom, a resize or a
+/// picture a CPU compose would build texel by texel. Here the slab pyramid's
+/// run is the texture and the read is per fragment, so a zoom, a resize or a
 /// palette change is a uniform.
 mod spectrogram;
 pub use spectrogram::{
@@ -576,12 +574,9 @@ struct GpuInstance {
     world_pos: [f32; 3],
     /// x: the node's presence with Opacity
     /// ([`harmonigraph_scene::NodeInstance::presence_with_opacity`]), y: melody
-    /// mark level, z: bass mark level (see lattice.wgsl). The first three are levels the same
-    /// node draws at, read together by the layers that draw it. w is the
-    /// glow's target ([`harmonigraph_scene::NodeInstance::glow_target`]), which the
-    /// presence outlasts after a release, for [`ink_history`]; the shader
-    /// never reads it.
-    params: [f32; 4],
+    /// mark level, z: bass mark level (see lattice.wgsl): three levels the same
+    /// node draws at, read together by the layers that draw it.
+    params: [f32; 3],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
     octaves: [u32; 3],
@@ -619,10 +614,10 @@ struct GpuInstance {
     /// is a level because a ring arrives and leaves on the Fade like every
     /// other layer of a node (see `harmonigraph_scene::RingFade`).
     ring: f32,
-    /// Carried brightness, stable ink row, and the renderer's color-history
-    /// coefficient, followed by display-only breathing. Untimed snapshots
-    /// seed current ink with coefficient 1 and no breathing modulation.
-    glow: [f32; 4],
+    /// The node's light: its carried level, its row of this frame's light
+    /// table and ink strip (this frame's order, see [`LightRow`]), and the
+    /// display-only breathing `prepare` settles, 1 where nothing breathes.
+    glow: [f32; 3],
     /// How thick each octave's lit slice is drawn (`NodeInstance::thickness`),
     /// laid out as [`octaves`](Self::octaves) is on a scale of its own
     /// ([`pack_thickness`]).
@@ -646,12 +641,48 @@ impl GpuInstance {
         // lattice.wgsl's `Instance` readable side by side.
         //
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x3, 2 => Float32x4, 3 => Uint32x3, 15 => Uint32x4,
+            0 => Float32x3, 2 => Float32x3, 3 => Uint32x3, 15 => Uint32x4,
             4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32, 11 => Float32,
-            12 => Float32x4, 1 => Uint32x3
+            12 => Float32x3, 1 => Uint32x3
         ],
     };
+}
+
+/// One lit node's row of the frame's light table: what its light is made of
+/// ([`GlowLight`](harmonigraph_scene::GlowLight)) and the pitch class its slot
+/// colours are looked up at, which the reading pass turns into that node's
+/// row of the ink strip (`fs_ink_strip`, `LightRow` in lattice.wgsl).
+///
+/// Rows are THIS frame's: the lit instances in the order they ship, assigned
+/// where each is pushed and drawn in the same `prepare` that uploads them, so
+/// nothing about a row outlives the frame and no row has an owner to keep.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LightRow {
+    /// The node's pitch class in cents, as the instance carries it — the one
+    /// per-node input the reading takes that is not a weight, so it is never
+    /// stepped: a tuning change moves a halo at once (#1759, Q1).
+    cents: f32,
+    l: [f32; harmonigraph_scene::OCTAVE_SLOTS],
+    p: [f32; harmonigraph_scene::OCTAVE_SLOTS],
+    m: [f32; harmonigraph_scene::OCTAVE_SLOTS],
+}
+
+// The rule a light's colour rests on: every per-node input to the reading is
+// a weight over the slot colours, carried and stepped as one
+// (`GlowLight::step`), save `cents` alone. A second unstepped input would snap
+// where every other one eases, so adding one has to edit this line and say
+// why it is not a weight.
+const _: () = assert!(
+    std::mem::size_of::<LightRow>() == 4 + std::mem::size_of::<harmonigraph_scene::GlowLight>()
+);
+
+impl LightRow {
+    fn new(cents: f32, light: harmonigraph_scene::GlowLight) -> Self {
+        let harmonigraph_scene::GlowLight { l, p, m } = light;
+        Self { cents, l, p, m }
+    }
 }
 
 /// Pack a grid of per-bucket levels into the rows `spectrum_color_level()` in
@@ -777,7 +808,7 @@ pub struct LatticeStats {
     ///
     /// "Prepare" undersells it, and the three fields below exist because the
     /// name misled for a long time: this callback does not merely stage data.
-    /// It also encodes shadows, ink history/convolution, glow, ordered scene
+    /// It also encodes shadows, the ink strip and its convolution, glow, ordered scene
     /// composition and optional bloom onto egui's encoder — CPU work in the
     /// frame, sitting inside a row the overlay calls "buf up".
     /// NaN means no callback has published since the previous consumption.
@@ -875,9 +906,12 @@ impl LatticeFrames {
 struct LatticeCallback {
     pipeline_cache: Option<std::sync::Arc<LatticePipelineCache>>,
     instances: Vec<GpuInstance>,
-    /// Row owners in exactly the shipped instance order, after sorting and culling.
-    glow_owners: Vec<u64>,
-    glow_timing: Option<harmonigraph_scene::GlowTiming>,
+    /// Every lit instance's row of the light table, in the order they ship
+    /// (see [`LightRow`]); each lit instance's `glow[1]` is its index here.
+    lights: Vec<LightRow>,
+    /// The scene's [`glow_clock`](harmonigraph_scene::Scene::glow_clock), which
+    /// the glow's material, texture and breathing travel by.
+    glow_clock: Option<f64>,
     /// [`ViewConfig::glow_draws`](harmonigraph_scene::ViewConfig::glow_draws)
     /// for the scene this frame was built from: the same answer that packed
     /// the glow uniform group or zeroed it.
@@ -945,7 +979,7 @@ impl Drop for LatticeCallback {
         use std::mem::take;
         frames.give_back(lattice_frame::FrameVecs {
             instances: take(&mut self.instances),
-            glow_owners: take(&mut self.glow_owners),
+            lights: take(&mut self.lights),
             breathing_at: take(&mut self.breathing_at),
             glyphs: take(&mut self.glyphs),
             casters: take(&mut self.casters),
@@ -1092,6 +1126,11 @@ struct CompiledLatticeResources {
     /// angle, and a filtered lookup across its rows would blend one node's
     /// colour into its neighbour's.
     strip_layout: wgpu::BindGroupLayout,
+    /// The light table, as the reading pass takes it: one read-only storage
+    /// buffer at the FRAGMENT stage alone, which is the only stage that reads
+    /// it (`fs_ink_strip`) — naming the vertex stage too would ask the adapter
+    /// for vertex storage, which a downlevel backend need not have.
+    light_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     shadow_cell_pipelines: shadow::CellPipelines,
     /// A 1x1 atlas in [`shadow_layout`](Self::shadow_layout), standing in at
@@ -1133,7 +1172,7 @@ struct LatticeResources {
 /// retained by one UI state across editor windows.
 /// Only instance, device and target format key this slot: camera, pane dimensions,
 /// elapsed hidden time and drawing history do not affect compilation. The
-/// cached value contains no pane targets, ink history, font atlas or timer.
+/// cached value contains no pane targets, ink strip, font atlas or timer.
 /// Reopening clones GPU handles and allocates fresh window-owned mutable state.
 #[derive(Default)]
 pub struct LatticePipelineCache {
@@ -1241,10 +1280,13 @@ struct PaneBuffers {
     /// is replaced — and `glyph_sheet_keys` is which bindings it names.
     glyph_bind_group: Option<wgpu::BindGroup>,
     glyph_sheet_keys: (u64, u64),
-    /// GPU colour history, keyed on this pane's identity and row capacity,
-    /// independently of the viewport targets. A release can have no current
-    /// ink, so resizing must retain these rows rather than reseeding them.
-    ink_history: Option<InkStrip>,
+    /// The light table and the ink strip it is read into, while the view draws
+    /// a glow. Per pane because a pane's passes are encoded in its own
+    /// `prepare`, and a shared table would be overwritten under an earlier
+    /// pane's pass by a later pane's upload. Holds nothing a frame does not
+    /// write whole, so it is rebuilt taller whenever a frame lights more nodes
+    /// than it has rows for, and nothing is lost.
+    ink_strip: Option<InkStrip>,
     ink_kernel: lattice_node_glow::InkKernel,
     material_tile: Option<lattice_material::Tile>,
     /// How far the glow material has drifted, the stars travelled and the
@@ -1257,21 +1299,23 @@ struct PaneBuffers {
 
 impl PaneBuffers {
     /// Called under the same drawable-geometry guard as target maintenance.
-    /// Glow-off discards history; otherwise only a capacity change replaces it.
-    /// A fresh strip resolves every carried row to mix = 1, reseeding from
-    /// current ink. That deliberately does not preserve an inkless release on
-    /// growth. Viewport size, render scale and bloom never key this history.
-    fn ensure_ink_history(
+    /// Glow-off drops the strip; otherwise it grows to hold this frame's `rows`
+    /// and never shrinks, so a lattice that once lit a big chord does not
+    /// rebuild it on every chord after.
+    fn ensure_ink_strip(
         &mut self,
         device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
+        layouts: StripLayouts<'_>,
         want: bool,
         rows: u32,
     ) {
         if !want {
-            self.ink_history = None;
-        } else if self.ink_history.as_ref().is_none_or(|strip| strip.rows != rows) {
-            self.ink_history = Some(InkStrip::new(device, layout, rows));
+            self.ink_strip = None;
+        } else if self.ink_strip.as_ref().is_none_or(|strip| strip.rows < rows) {
+            // The old one goes first, as the offscreen targets do: it holds
+            // nothing the new one needs, and the two need not be alive at once.
+            self.ink_strip = None;
+            self.ink_strip = Some(InkStrip::new(device, layouts, rows));
         }
     }
 }
@@ -1357,6 +1401,19 @@ impl CompiledLatticeResources {
                 count: None,
             }],
         });
+        let light_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lattice_light_table_bind_group_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
         let glow_statistics_layout = lattice_node_glow::statistics_layout(device);
         let glyph_layout = text::glyph_bind_group_layout(device);
         let glyph_shader = text::glyph_shader(device, &text_source());
@@ -1374,6 +1431,7 @@ impl CompiledLatticeResources {
                 },
                 glyph: &glyph_layout,
                 strip: &strip_layout,
+                light: &light_layout,
                 statistics: &glow_statistics_layout,
             },
             &progress,
@@ -1495,6 +1553,7 @@ impl CompiledLatticeResources {
             glow_dummy_bind_group,
             bloom_dummy: glow_dummy,
             strip_layout,
+            light_layout,
             sampler,
             shadow_cell_pipelines,
             shadow_dummy_bind_group,
@@ -1663,7 +1722,7 @@ impl LatticeResources {
                 ),
                 glyph_bind_group: None,
                 glyph_sheet_keys: (u64::MAX, u64::MAX),
-                ink_history: None,
+                ink_strip: None,
                 ink_kernel: Default::default(),
                 material_tile: None,
                 material_travel: Default::default(),
@@ -1698,14 +1757,18 @@ impl LatticeResources {
                 .is_none_or(|o| o.size != size || o.screen_size != screen_size)
             {
                 // Release the large old images before allocating replacements,
-                // as before. The pane-owned ink history stays alive beside them.
+                // as before.
                 pane.offscreen = None;
                 pane.offscreen =
                     Some(Offscreen::new(device, &shared, &pane.uniform_buffer, size, screen_size));
             }
             // Empty geometry skips both decisions, as before: this is target
             // maintenance, not a hidden-view lifecycle or retirement policy.
-            pane.ensure_ink_history(device, &self.compiled.strip_layout, wants.glow, wants.rows);
+            let layouts = StripLayouts {
+                strip: &self.compiled.strip_layout,
+                light: &self.compiled.light_layout,
+            };
+            pane.ensure_ink_strip(device, layouts, wants.glow, wants.rows);
             if let Some(offscreen) = pane.offscreen.as_mut() {
                 offscreen.ensure_glow(device, &shared, wants.glow);
                 offscreen.ensure_shadow(device, &shared, wants.shadow);
@@ -1769,7 +1832,8 @@ struct PaneTargets {
     /// The names' shadow atlas, at the size this frame's cells pack to, or
     /// none where no name casts one (`Offscreen::ensure_shadow`).
     shadow: Option<[u32; 2]>,
-    /// The ink strip's height: the row map's own capacity.
+    /// How many nodes this frame lights: the rows its light table and ink
+    /// strip have to hold.
     rows: u32,
     /// How many casters this frame's kernels are packed for — the storage
     /// buffer at group 3 and the bind group naming it, which grow together

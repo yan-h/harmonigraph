@@ -53,23 +53,19 @@ fn parity_path(name: &str) -> std::path::PathBuf {
 }
 
 /// Deltas with no sequence, lifetime or timing, which is what a reset carries:
-/// the take lane's route translates them onto the take's clock, and both lanes
-/// draw the same roll.
+/// a run at offset zero holds them, and both lanes draw the same roll.
 #[test]
 fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
     use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, SourceId};
-    use harmonigraph_record::configuration::RecordAddress;
-    use harmonigraph_record::publication::Route;
     use harmonigraph_record::testing;
 
     const ORIGIN: f64 = 10.0;
-    let address = RecordAddress { epoch: 1, pass: 1 };
-    let route = Route { address: Some(address), time_offset: -ORIGIN };
     let (mut recorder, mut capture) = testing::channel();
     capture.arm();
     assert!(recorder.is_armed());
     let path = parity_path("unsequenced");
     let mut writer = testing::FileWriter::new(&capture, path.clone());
+    recorder.run(0.0, 0.0);
     let live_events = [
         NoteEvent::on(ORIGIN + 0.125, SourceId::DIRECT, 0, 60, 0.8),
         NoteEvent {
@@ -84,17 +80,14 @@ fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
         NoteEvent::source_reset(ORIGIN + 0.625, SourceId::DIRECT),
     ];
     for live in live_events {
-        recorder.publish_note(live.into(), route).expect_both();
+        recorder.publish_note(live.into()).expect_both();
     }
 
     let mut direct = NoteTracker::new();
     assert_eq!(capture.display_into(&mut direct, |_, _| {}), live_events.len());
     capture.stop();
     assert!(!recorder.is_armed());
-    recorder.configuration_pass_complete(address);
-    recorder.configuration_epoch_complete(1);
-    recorder.source_pass_complete(address, ORIGIN + 1.0);
-    recorder.source_epoch_complete(1, ORIGIN + 1.0);
+    recorder.run_end(ORIGIN + 1.0);
     writer.stop();
     writer.drain(&mut capture);
     assert!(!writer.failed());
@@ -106,13 +99,13 @@ fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
     assert_eq!(take.events.len(), live_events.len());
     let mut replay = Replay::new(take);
     let mut state = PictureState::new(TextureFormat::Bgra8Unorm);
-    replay.advance_to(&mut state.runtime, 1.0);
+    replay.advance_to(&mut state.runtime, ORIGIN + 1.0);
     assert!(replay.is_spent());
     assert_eq!(
         roll_snapshot(&direct, ORIGIN + 1.0, ORIGIN),
-        roll_snapshot(&state.runtime.tracker, 1.0, 0.0)
+        roll_snapshot(&state.runtime.tracker, ORIGIN + 1.0, ORIGIN)
     );
-    let actual = roll_snapshot(&state.runtime.tracker, 1.0, 0.0);
+    let actual = roll_snapshot(&state.runtime.tracker, ORIGIN + 1.0, ORIGIN);
     assert_eq!(
         actual,
         [
@@ -179,54 +172,47 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     use harmonigraph_core::canonical::{ClockId, EventTiming, SourceBaseline, VoiceBaseline};
     use harmonigraph_core::confirmed::PitchProvenance;
     use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, SourceId};
-    use harmonigraph_record::configuration::RecordAddress;
-    use harmonigraph_record::publication::{Lane, Route};
+    use harmonigraph_record::publication::Lane;
     use harmonigraph_record::testing;
 
     const ORIGIN: f64 = 10.0;
     const LIFETIME: u64 = 61;
     let source = SourceId(1);
-    let address = RecordAddress { epoch: 1, pass: 1 };
-    let route = Route { address: Some(address), time_offset: -ORIGIN };
     let (mut recorder, mut capture) = testing::channel();
     capture.arm();
     assert!(recorder.is_armed());
     let path = parity_path("canonical");
     let mut writer = testing::FileWriter::new(&capture, path.clone());
     let configuration = harmonigraph_core::configuration::ConfigReducer::default().resolved();
-    recorder.configuration_at(address, 0.0, configuration);
+    // One run whose presentation ORIGIN is song zero.
+    recorder.run(ORIGIN, 0.0);
+    recorder.configuration(ORIGIN, configuration);
 
     recorder
-        .publish_note(
-            accepted_exact(
-                NoteEvent::on(ORIGIN + 0.125, source, 0, 60, 0.8),
-                1,
-                LIFETIME,
-                Some(6_000_000_000),
-            ),
-            route,
-        )
+        .publish_note(accepted_exact(
+            NoteEvent::on(ORIGIN + 0.125, source, 0, 60, 0.8),
+            1,
+            LIFETIME,
+            Some(6_000_000_000),
+        ))
         .expect_both();
     // The absurd f32 adapter value makes this assert the exact canonical field,
     // not merely that both consumers made the same mistake.
     recorder
-        .publish_note(
-            accepted_exact(
-                NoteEvent {
-                    time: ORIGIN + 0.25,
-                    source,
-                    channel: 0,
-                    note: 60,
-                    kind: NoteEventKind::Tuning { semitones: 99.0 },
-                },
-                2,
-                LIFETIME,
-                Some(6_037_500_000),
-            ),
-            route,
-        )
+        .publish_note(accepted_exact(
+            NoteEvent {
+                time: ORIGIN + 0.25,
+                source,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Tuning { semitones: 99.0 },
+            },
+            2,
+            LIFETIME,
+            Some(6_037_500_000),
+        ))
         .expect_both();
-    recorder.publication_lost(ORIGIN + 0.375, route);
+    recorder.publication_lost(ORIGIN + 0.375);
     let row = VoiceBaseline {
         note: 60,
         lifetime: LIFETIME,
@@ -246,33 +232,26 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         ..Default::default()
     };
     let repaired = SourceBaseline::new(source, 1, ORIGIN + 0.5, 2, true, &[row]).unwrap();
-    recorder.publish_baseline(Lane::Take, &repaired, route).unwrap();
-    recorder.publish_baseline(Lane::Display, &repaired, route).unwrap();
+    recorder.publish_baseline(Lane::Take, &repaired).unwrap();
+    recorder.publish_baseline(Lane::Display, &repaired).unwrap();
     recorder
-        .publish_note(
-            accepted_exact(NoteEvent::off(ORIGIN + 0.625, source, 0, 60), 3, LIFETIME, None),
-            route,
-        )
+        .publish_note(accepted_exact(
+            NoteEvent::off(ORIGIN + 0.625, source, 0, 60),
+            3,
+            LIFETIME,
+            None,
+        ))
         .expect_both();
     let empty = SourceBaseline::new(source, 2, ORIGIN + 0.75, 3, true, &[]).unwrap();
-    recorder.publish_baseline(Lane::Take, &empty, route).unwrap();
-    recorder.publish_baseline(Lane::Display, &empty, route).unwrap();
+    recorder.publish_baseline(Lane::Take, &empty).unwrap();
+    recorder.publish_baseline(Lane::Display, &empty).unwrap();
 
     let mut direct = NoteTracker::new();
     assert_eq!(capture.display_into(&mut direct, |_, _| {}), 6);
     capture.stop();
     assert!(!recorder.is_armed());
+    recorder.run_end(ORIGIN + 1.0);
     writer.stop();
-    writer.drain(&mut capture);
-    assert!(!writer.failed());
-    assert!(writer.finished.is_none(), "producer closure does not complete configuration/source");
-    recorder.configuration_pass_complete(address);
-    recorder.configuration_epoch_complete(1);
-    writer.drain(&mut capture);
-    assert!(!writer.failed());
-    assert!(writer.finished.is_none(), "configuration closure does not complete the source");
-    recorder.source_pass_complete(address, ORIGIN + 0.75);
-    recorder.source_epoch_complete(1, ORIGIN + 0.75);
     writer.drain(&mut capture);
     assert!(!writer.failed());
     assert_eq!(writer.finished.as_ref(), Some(&path));
@@ -335,6 +314,8 @@ fn camera_records_override_replacement_and_replay_at_any_frame_cadence() {
     let path = parity_path("camera");
     let mut writer =
         harmonigraph_take::Writer::create(&path, &harmonigraph_take::Header::default()).unwrap();
+    let run = harmonigraph_take::RunRecord::default();
+    writer.write(&harmonigraph_take::Record::Run(run)).unwrap();
     for (t, values) in
         [(12.0, [0.4, 0.3, 12.0, 1.0, 0.0]), (12.125, [0.8, -0.3, 8.0, 12.25, -7.375])]
     {

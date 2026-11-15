@@ -74,9 +74,6 @@ in_group() {
 # worktree has built: formatting, prose, clippy and rustdoc. Clippy and rustdoc
 # were five of the 27 Full CI failures on 2026-10-19..21, each a ~10 min round
 # on a macOS runner. The tests are left out on purpose: they are the minutes.
-# So is the Metal corpus, a build of its own: knowing it is stale saves no
-# round, since the PR's own Metal shader assets run generates the replacement
-# either way.
 quick=
 quick() {
   quick=1
@@ -152,15 +149,6 @@ run python3 -B .claude/tests/markdown-links.py
 
 # Real compressed state sections must retain distinct instances and JSON strings.
 run python3 -B .claude/tests/read-plugin-state.py
-
-# A generated Metal artifact must pass its run's validation before import.
-run python3 -B .claude/tests/shader-assets.py
-# The committed Metal corpus's hashes and recorded compiler options, which
-# `metal_corpus` below does not read. A corpus whose options this tooling no
-# longer accepts (a wgpu-hal bump, a changed flag mapping) is stale, and the
-# Metal shader assets run generates its replacement; this is the red check
-# until it is imported. Pure Python, so it gates off macOS too.
-run python3 -B tools/shader-assets.py verify
 
 # The frame-log summary must hold each frame to the divisor that paced it.
 run python3 -B .claude/tests/frame-log-summary.py
@@ -286,83 +274,6 @@ golden_diff() {
     ${GOLDEN_FRAMES:+--base-frames "$GOLDEN_FRAMES"}
 }
 run golden_diff
-
-# ...and the one question none of the runs above can ask: is the committed Metal
-# corpus still valid for THIS tree's shaders? A key the corpus is missing makes
-# the renderer compile that library from source and carry on, so every gate here
-# passes against a stale corpus. The only local trace was an `eprintln!` that
-# libtest replays for FAILING tests, which on a green run is never — so the
-# documented grep for it answered "fine" in both states, and did that for a
-# whole batch of sessions before anyone ran it against a corpus known to be
-# stale (#947). The real verdict arrived on the PR, as a `Metal shader assets`
-# workflow failing `strict-catalog` beside a green Full CI.
-#
-# This gate is now the ONE failing verdict on a stale corpus: the workflow
-# still generates the replacement, but reports the staleness rather than
-# failing on it. Both failing made every stale corpus two red checks — red
-# together on all 94 pushes where both finished, 302 of 594 CI failures from
-# July to November — and neither ever caught a defect the other missed. So
-# this line is no longer one of two: dropping it, or letting it skip on the
-# macOS runner, would leave a stale corpus with no red check at all.
-#
-# `strict` is what turns that into a red test here: it drops the
-# compile-from-source fallback, so a missing key becomes a rejected library and
-# a pipeline that fails naming the key and the pass it was for. The test is the
-# CATALOG rather than the golden frames, because the catalog is the enumeration
-# of production constructors the corpus is generated FROM — so it covers every
-# library in the corpus, where the goldens cover only what they happen to draw
-# (6 of them, on the stale tree this was measured against). It is the same test
-# in the same mode that the workflow reports as `strict-catalog`, so the verdict
-# here and the verdict there are one thing.
-#
-# The cost is one more compilation of harmonigraph-render, under
-# `shader-assets-tools` — 12.8s on an 8-core M-series, and no dependency: the
-# feature only admits the catalog, the per-pane `asset_catalog` constructors it
-# calls, and the `Export` mode — plus 0.9s to run. Folding the feature into the
-# run ABOVE would make it free, and is deliberately not done: that gate's whole
-# argument is that it runs render's tests in the feature set the bundle ships,
-# and this feature is not in it. `isolated` is the group with room, having
-# finished ~47s ahead of `workspace` on the run #922 landed against.
-#
-# Two ways this gate could pass while guarding nothing, both checked here rather
-# than assumed, since a guard that cannot fail is the defect it exists to catch.
-# A libtest filter that matches NO test exits 0, so a renamed or moved test
-# would make this a green no-op — hence the count. And the corpus is a Metal
-# artifact whose module is `cfg(target_os = "macos")`, so off Darwin the count
-# could never be met and the gate would go red for a reason that is not a
-# defect; there it skips instead. A macOS machine with no Metal adapter still
-# FAILS, deliberately, on the same policy as HARMONIGRAPH_REQUIRE_GPU.
-metal_corpus() {
-  echo "  HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render production_metal_asset_catalog"
-  if [ "$(uname -s)" != Darwin ]; then
-    echo "  skipped — the Metal corpus exists only on macOS"
-    return
-  fi
-  local corpus corpus_status=0
-  corpus=$(HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
-    --features shader-assets-tools -- --ignored --exact \
-    shader_assets::catalog::production_metal_asset_catalog 2>&1) || corpus_status=$?
-  echo "$corpus"
-  if [ "$corpus_status" != 0 ]; then
-    echo "✗ the committed Metal corpus does not cover this tree's shaders." >&2
-    echo "  The Metal shader assets run for this push generates the replacement when its" >&2
-    echo "  check fails (without a PR: gh workflow run \"Metal shader assets\" --ref <branch>)." >&2
-    echo "  Once it finishes, import that corpus with tools/shader-assets.py fetch," >&2
-    echo "  into the SAME commit as the change." >&2
-    return 1
-  fi
-  case "$corpus" in
-    *"test result: ok. 1 passed"*)
-      echo "  ok — every production library resolved from the committed corpus"
-      ;;
-    *)
-      echo "✗ the strict-catalog filter matched no test, so this gate guarded nothing." >&2
-      echo "  Did shader_assets::catalog::production_metal_asset_catalog move or get renamed?" >&2
-      return 1
-      ;;
-  esac
-}
-run metal_corpus
 
 # The vendored crates are `exclude`d from the workspace (the `[workspace]`
 # table's own key, in Cargo.toml), so `--workspace` compiles them as

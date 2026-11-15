@@ -19,3 +19,9 @@ Yan’s decisions recorded for future drift audits.
 
 ## 2026-11-14 (premises audit, #1739)
 - The live spectrogram history goes to `propose-rework` as one shared slab pyramid on the absolute grid (F2′): about half the memory, the same picture in the dock and the preview, the per-surface aggregator gone. #1739 F2′
+
+## 2026-11-14 (F2′ rework, #1758)
+
+- The heatmap reads one shared slab pyramid, so every surface at a rung draws the same slabs: older history is no longer redrawn on a Span change or a late open, and the Video preview shows the history the dock does (#1758 Q B, yes). A future change to the stored encoding reaches old history only as it scrolls out. Each plugin instance folds its columns while its editor is shut, about 11 µs a column, and under 1 µs a silent one.
+- A history that cannot trust its own fold resets as Clear display history does: a column more than a second behind the newest, or a crash inside the fold (#1758 Q A, yes).
+- The heatmap's far edge is cut one slab past the window rather than at the last column before it, so a pause drawn in a lifted silence colour reaches the edge (#1758 Q C, yes).

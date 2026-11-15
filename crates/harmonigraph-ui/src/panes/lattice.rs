@@ -1505,7 +1505,6 @@ mod tests {
                 on_home,
                 0.0,
                 false,
-                0,
             )
         }
     }

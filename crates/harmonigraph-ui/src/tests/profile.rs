@@ -201,6 +201,7 @@ fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) 
     held_chord(&mut state, 0.0);
 
     let mut phase = 0.0f64;
+    let mut feed = crate::spectrum::TestFeed::default();
     let (mut ui_ms, mut tess_ms) = (Vec::new(), Vec::new());
     let (mut shapes, mut verts, mut idx) = (0, 0, 0);
     let mut busy = Busy::default();
@@ -212,7 +213,7 @@ fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) 
         let t = h.next_time();
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
         let cfg = state.picture.appearance.spectrum;
-        state.picture.runtime.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
+        feed.feed(&mut state.picture.runtime.spectrum, &audio, 1, RATE, t, &cfg);
         busy.step(&mut state, t, load.notes_per_frame);
 
         let events = load.hover.map(|at| vec![egui::Event::PointerMoved(at)]).unwrap_or_default();
@@ -339,14 +340,11 @@ fn profile_allocations() {
     held_chord(&mut state, 0.0);
 
     let mut phase = 0.0f64;
+    let mut feed = crate::spectrum::TestFeed::default();
     let mut phases = [(0usize, 0usize); 3];
-    let mut at_warmup = 0;
 
     for i in 0..(WARMUP + FRAMES) {
         let t = h.next_time();
-        if i == WARMUP {
-            at_warmup = state.picture.surfaces.spectrogram.spectrogram_fallbacks().0;
-        }
         let counting = i >= WARMUP;
         let mut charge = |slot: usize, from: (usize, usize)| {
             let now = mark();
@@ -359,7 +357,7 @@ fn profile_allocations() {
         let at = mark();
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
         let cfg = state.picture.appearance.spectrum;
-        state.picture.runtime.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
+        feed.feed(&mut state.picture.runtime.spectrum, &audio, 1, RATE, t, &cfg);
         charge(0, at);
 
         let at = mark();
@@ -379,10 +377,10 @@ fn profile_allocations() {
             bytes as f64 / FRAMES as f64 / 1024.0,
         );
     }
-    let (rebuilds, _) = state.picture.surfaces.spectrogram.spectrogram_fallbacks();
+    let (drops, resets) = state.picture.runtime.spectrum.guard_counts();
     println!(
-        "spectrogram over {FRAMES} frames: {} re-aggregations; uploads unmeasured (no GPU acknowledgement)",
-        rebuilds - at_warmup,
+        "spectrogram over {FRAMES} frames: {drops} dropped, {resets} reset; uploads unmeasured \
+         (no GPU acknowledgement)",
     );
 }
 
@@ -433,12 +431,13 @@ fn profile_picture_panes() {
         let body = egui::vec2(1000.0, 900.0);
         held_chord(&mut state, 0.0);
         let mut phase = 0.0;
+        let mut feed = crate::spectrum::TestFeed::default();
         let mut samples = Vec::new();
         for i in 0..(WARMUP + 240) {
             let t = i as f64 / 60.0;
             let audio = chord_samples(FRAME_SAMPLES, &mut phase);
             let cfg = state.picture.appearance.spectrum;
-            state.picture.runtime.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
+            feed.feed(&mut state.picture.runtime.spectrum, &audio, 1, RATE, t, &cfg);
             let start = std::time::Instant::now();
             let _ = super::probe::frame_into(
                 &ctx,
@@ -471,12 +470,13 @@ fn profile_shape_census() {
     held_chord(&mut state, 0.0);
 
     let mut phase = 0.0;
+    let mut feed = crate::spectrum::TestFeed::default();
     let mut out = None;
     for _ in 0..(WARMUP + 30) {
         let t = h.next_time();
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
         let cfg = state.picture.appearance.spectrum;
-        state.picture.runtime.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
+        feed.feed(&mut state.picture.runtime.spectrum, &audio, 1, RATE, t, &cfg);
         out = Some(h.frame(&mut state, vec![]));
     }
 
@@ -546,6 +546,7 @@ fn profile_visual_runtime() {
             held_chord(&mut state, 0.0);
         }
         let mut phase = 0.0;
+        let mut feed = crate::spectrum::TestFeed::default();
         let mut total = Vec::new();
         let mut analysis = Vec::new();
         let mut frame = Vec::new();
@@ -555,7 +556,8 @@ fn profile_visual_runtime() {
             let audio = if audio_on { chord_samples(FRAME_SAMPLES, &mut phase) } else { vec![] };
             let start_allocs = ALLOCS.load(std::sync::atomic::Ordering::Relaxed);
             let start = std::time::Instant::now();
-            state.picture.runtime.spectrum.push_samples(
+            feed.feed(
+                &mut state.picture.runtime.spectrum,
                 &audio,
                 1,
                 RATE,

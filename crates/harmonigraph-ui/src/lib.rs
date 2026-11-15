@@ -21,6 +21,8 @@ mod workspace;
 /// What the UI persists of the analyzer's display settings, and the serde
 /// defaults behind them.
 mod config;
+/// The editor door's per-key decode of a saved document.
+mod persist_keys;
 mod runtime;
 /// The spectrogram heatmap's texture-ring/cache machinery. The pane that
 /// draws it, `panes::spectral::spectrogram`, holds only the mesh and the
@@ -31,6 +33,8 @@ mod spectrum;
 /// [`SharedState`] and the blob it saves itself into.
 mod state;
 pub mod tape;
+#[cfg(feature = "testing")]
+pub mod testing;
 /// The Video pane's settings, which the appearance document carries.
 mod video;
 pub use runtime::VisualRuntime;
@@ -60,10 +64,7 @@ pub(crate) use config::{
 // where the panes, both shells and the offline renderer name them. They are
 // declared in `video` beside the appearance document that carries them, so a
 // new one is one declaration and one name here, in this crate alone.
-pub use spectrum::{
-    AnalyzedColumn, AudioSpectrum, Delivery, LentAnalysis, SpectrogramColumn, SpectrumAnalysis,
-    SpectrumHistory,
-};
+pub use spectrum::{AnalyzedColumn, AudioSpectrum, Delivery, SpectrumAnalysis};
 pub use state::{
     CameraPreset, Console, EditorPrefs, ExportAction, FrameRate, Interaction, PictureState,
     SharedState, SurfaceState, TakeState,
@@ -233,7 +234,7 @@ pub(crate) fn gesture_open(ctx: &egui::Context) -> bool {
 /// the standalone harness the same via its `App::ui` hook).
 ///
 /// The rest of the sequence a shell runs around this — theming a new context,
-/// releasing the old one's textures, the fold floor, the saved layout, and
+/// releasing the old one's textures, the fold floor, the window session, and
 /// spending what a fold leaves the window needing — is [`shell`], which both
 /// shells call rather than keep in step by hand.
 ///
@@ -378,7 +379,8 @@ pub fn root_ui(
             cpu_ms,
             &state.picture.instruments.lattice_stats,
             state.picture.instruments.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
-            state.picture.surfaces.spectrogram.spectrogram_fallbacks(),
+            state.picture.surfaces.spectrogram.full_uploads(),
+            state.picture.runtime.spectrum.guard_counts(),
         ),
         now,
         Workload {
@@ -584,7 +586,8 @@ pub(crate) struct Moving {
     /// A lattice node still moving after its voice was pruned
     /// ([`NodeMotion::moving`](harmonigraph_scene::NodeMotion::moving): a
     /// departure's Fade-out delay, its stagger and the presence it holds for
-    /// them), or a node's Background glow still falling
+    /// them), or a node's Background glow still moving: its level falling, or
+    /// its colour still easing toward its reading
     /// ([`GlowFade::fading_at`](panes::glow_fade::GlowFade::fading_at)), which
     /// can outlast the slices by many seconds.
     releasing: bool,

@@ -43,3 +43,21 @@
 Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
 
 - Takes are recorded on the display's clock and the offline reader chooses passes and song time (take v7; earlier passes come out through `--pass N` rather than separate files): the reason takes were stamped in song time, lining up with a separate audio bounce, is gone (#903, #972, #1196, #1342). To `propose-rework` as F3′'s take half; the Tape half waits until Tape has been used in Bitwig. First declined on delegation as quiet; reopened after a Fable review and answered by Yan. #1739 F3′
+
+## 2026-11-14 (F3′ take half, #1760)
+
+- Passes are stored as one take file per arm, with one WAV per pass beside it, and the offline reader chooses the pass and its song time from the file: the full rework, so the closure code is rewritten. #1760 Q1
+- A loss of note history that touched no recorded run does not mark a take incomplete: it warned about a hole the take did not have. #1760 Q2
+- Takes recorded before take v7, the 2026-11-04 one included, are not converted: they render only with a renderer from before the cut (`c423bf44`). #1760 Q3
+- Behaviour holds only at the end: the reader and the cut to v7 are one PR. #1760 Q4
+- A failed take warns on every pass, an earlier whole one included: the `PassClosed` record that kept a pass closed before the failure whole is dropped, with the proof that wrote it. Gaps still mark only the passes their inputs touch. #1766
+
+## 2026-11-14 (take v8, F3′ simplified; tracked in #1760 and #1761)
+
+Yan approved a search's three relaxations; each supersedes part of the entry above.
+
+- R1: a record is placed by when it sounds, not where its input arrived. It supersedes step 1′'s input-placement rule and the routing in #1760 Q1. A note or release within about one delay of a pause or the take's end is drawn where it sounds, or dropped when no audio was recorded there.
+- R2: the writer decides when a take is closed, rather than a proof on the audio thread. A plugin destroyed mid-take fails the take. The frontier it first sealed behind, and its flood caveat, are superseded by Yan's answer on #1776: a stopped take seals when its run's end is written.
+- Seeks record on (Yan, on #1776): neither a forward seek nor, under Transport stop, a backward jump ends a take; Loop end still ends at the wrap, and Transport stop ends after 0.4 s of stillness.
+- R3: a take is one WAV with no passes. It supersedes `--pass N`: a looped take renders all its loops as one video, and `--start` picks out the last. #1766's failure-marks-every-pass rule becomes the plain rule that a failure marks the take.
+- Takes v7 and older stop loading, with no converter.

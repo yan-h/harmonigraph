@@ -1,5 +1,8 @@
 //! Exercise the executable boundary as well as the encoder's unit fixtures.
-use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, WavWriter, Writer};
+use harmonigraph_take::canonical::{DeltaRecord, TimingRecord};
+use harmonigraph_take::{
+    CanonicalRecord, Header, NoteKind, NoteRecord, Record, RunRecord, WavWriter, Writer,
+};
 use harmonigraph_ui::RenderTrigger;
 use std::path::Path;
 use std::process::Command;
@@ -14,27 +17,26 @@ fn take(path: &Path, seconds: f64, trigger: RenderTrigger, tail: Option<f64>) {
     let mut wav = WavWriter::create(path.with_extension("wav"), 48_000.0, 1).unwrap();
     wav.write(&vec![0.0; (seconds * 48_000.0) as usize]).unwrap();
     wav.finish().unwrap();
+    let wav = path.with_extension("wav").file_name().unwrap().to_str().unwrap().to_owned();
     let mut take = Writer::create(
         path,
         &Header {
             appearance: Some(appearance.serialize()),
-            audio_file: Some(
-                path.with_extension("wav").file_name().unwrap().to_str().unwrap().into(),
-            ),
-            audio_start: Some(0.0),
+            audio_file: Some(wav),
             ..Default::default()
         },
     )
     .unwrap();
+    // One run at offset zero.
+    take.write(&Record::Run(RunRecord::default())).unwrap();
+    // Each note timed where it sounds.
     for (t, kind) in [(0.0, NoteKind::On { velocity: 0.8 }), (0.25, NoteKind::Off)] {
-        take.write(&Record::Note(NoteRecord {
-            t,
-            kind,
-            note: 60,
-            source: 1,
-            ..Default::default()
-        }))
-        .unwrap();
+        let input = (t * 48_000.0) as i64;
+        let timing =
+            TimingRecord { input, sample: input, sample_rate: 48_000.0, ..Default::default() };
+        let event = NoteRecord { t, kind, note: 60, ..Default::default() };
+        let note = DeltaRecord { event, timing: Some(timing), ..Default::default() };
+        take.write(&Record::Canonical(CanonicalRecord::Delta(note))).unwrap();
     }
     take.flush().unwrap();
 }

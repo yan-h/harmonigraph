@@ -313,7 +313,7 @@ pub struct SpectrumConfig {
     /// different hop, and there is no way to tell from the bar whether it is
     /// smoothing over a fiftieth of a second or a fifth of one. A time is
     /// converted to its coefficient against the hop actually in use
-    /// (`AudioSpectrum::push_samples`), so what the bar says is what the
+    /// (`SpectrumStore::take`), so what the bar says is what the
     /// analyzer does.
     pub attack: f32,
     /// How long it takes to FALL toward a quieter one, in seconds.

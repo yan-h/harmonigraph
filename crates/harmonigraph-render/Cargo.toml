@@ -15,8 +15,6 @@ doctest = false
 # Enabled by the standalone harness; release plugin bundles are built
 # per-package and never activate it.
 hot-reload = ["dep:naga"]
-# Export/strict validation of generated assets; no toolchain work during builds.
-shader-assets-tools = []
 # For other crates' tests: one device's own GPU memory peak
 # (`gpu_memory::snapshot_of`), since a test shares its process, and so the
 # record, with other tests' devices.
@@ -36,9 +34,6 @@ naga = { workspace = true, optional = true }
 # Held at 0.4, which eframe and vendored egui-baseview pin; moves to 1.0
 # with the GUI stack (docs/gui-cohort-feasibility.md).
 pollster = "0.4"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-harmonigraph-metal-assets = { workspace = true }
 
 # The GPU memory record (`gpu_memory`) reads liveness and sizes off the Metal
 # objects under wgpu: the same crates, at the same versions, as `wgpu-hal`.

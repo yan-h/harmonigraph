@@ -10,6 +10,11 @@ license.workspace = true
 # (#1181). Drop this with the first doc example that should run.
 doctest = false
 
+[features]
+# A look edit and its undo depth for the plugin's #1740 test (`testing`
+# module). Only the plugin's dev-dependencies enable it.
+testing = []
+
 [dependencies]
 harmonigraph-core = { workspace = true }
 harmonigraph-analysis = { workspace = true }

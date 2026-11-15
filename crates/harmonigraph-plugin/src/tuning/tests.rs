@@ -198,6 +198,18 @@ fn transport(time: u32, tempo: f64) -> Input {
     event.tempo = tempo;
     Input::Transport(event)
 }
+/// A callback's own transport, at `seconds` on the timeline, which is what the
+/// take's lifecycle reads to decide whether a block records.
+fn timeline(seconds: f64, playing: bool) -> clap_event_transport {
+    let mut event: clap_event_transport = unsafe { std::mem::zeroed() };
+    event.header = header::<clap_event_transport>(CLAP_EVENT_TRANSPORT, 0);
+    event.flags = CLAP_TRANSPORT_HAS_TEMPO
+        | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE
+        | if playing { CLAP_TRANSPORT_IS_PLAYING } else { 0 };
+    event.tempo = 120.0;
+    event.song_pos_seconds = (seconds * 2_147_483_648.0) as i64;
+    event
+}
 unsafe extern "C" fn size(events: *const clap_input_events) -> u32 {
     unsafe { &*((*events).ctx.cast::<Vec<Input>>()) }.len() as u32
 }
@@ -724,8 +736,8 @@ fn initial_expressions_survive_unpaired_and_missed_reply_fallback() {
 
 /// #1127. A snapshot never covers history still waiting to publish. The Hub's
 /// first callback owes every row a snapshot, and here it also collects a late
-/// onset whose input sample no segment of this callback covers, so the delta
-/// waits for `end`'s forced flush while `publish` builds snapshots. Both lanes are
+/// onset, which `publish` puts on both lanes before it builds the snapshots
+/// that cover it. Both lanes are
 /// read on this thread by consumers that refuse history at or below a cut they
 /// have adopted: the display's tracker, and a tracker fed the take lane. That
 /// second one holds the take to the same rule the writer does (it fences on
@@ -1060,79 +1072,83 @@ fn a_record_arriving_after_its_sample_was_sequenced_is_still_assigned() {
 }
 
 /// The same lag against the take: a Tune the host runs after the Hub is a
-/// callback behind, so its record routes through the segment the Hub's
-/// previous callback left open. Proving a callback's end complete as it ends
-/// would retire that segment under it and fail the recorder for the session.
+/// callback behind, so the Hub sequences its note a callback after it was
+/// played, and a take stopped then still has it: the Hub publishes what it
+/// collected before a later callback ends the run. The writer's own count
+/// order is not exercised here; this harness drains everything at once.
 #[test]
-fn a_tune_run_after_the_hub_keeps_the_recorder_whole() {
+fn a_tune_run_after_the_hub_has_its_last_notes_in_a_stopped_take() {
     let _scope = crate::test_scope::enter();
-    let (mut hub, capture) = Device::recorded_hub();
+    let (hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut tune) = (hub, Device::new(true));
     hub.activate();
-    let mut tune = Device::new(true);
     tune.activate();
     let dir = std::env::temp_dir().join(format!("harmonigraph-tune-after-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
     capture.arm();
-    // The Tune runs first, then after the Hub, at the same block boundary.
-    tune.run_format(0, vec![], None, None, 512);
-    hub.run_format(0, vec![], None, None, 512);
-    hub.run_format(512, vec![], None, None, 512);
-    tune.run_format(512, vec![note(1, 0, 60, 0, true)], None, None, 512);
-    hub.run_format(1024, vec![], None, None, 512);
-    tune.run_format(1024, vec![], None, None, 512);
-    assert_eq!(inspect_hub(&hub, |h| h.test_held(0)), 1, "the late copy is sequenced");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
+    let mut position = 1.0;
+    let mut cycle = |raw: i64, played: Vec<Input>| {
+        hub.run_callback(raw, vec![], (None, None), (512, false), Some(timeline(position, true)));
+        tune.run_format(raw, played, None, None, 512);
+        position += 512.0 / 48_000.0;
+    };
+    cycle(0, vec![]);
+    // Played in the Tune after the Hub's callback: sequenced at 1024, where it
+    // sounds, inside the run.
+    cycle(512, vec![note(1, 0, 60, 0, true)]);
+    cycle(1024, vec![]);
+    capture.stop();
+    writer.stop();
+    // This callback observes the disarm and ends the run.
+    cycle(1536, vec![]);
+    writer.drain(&mut capture);
     assert!(!writer.failed(), "a routine lag must not fail the recorder");
+    let sealed = writer.finished.clone().expect("the stopped take seals");
+    let take = harmonigraph_take::Take::read(&sealed).unwrap();
+    let struck = take
+        .notes()
+        .any(|n| n.note == 60 && matches!(n.kind, harmonigraph_take::NoteKind::On { .. }));
+    assert!(struck, "the Tune's last note before the run's end is in the take");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A cut and joined destruction are where the last callback's end is proven,
-/// since nothing after them can be sequenced before it. A host reset mid-take
-/// keeps the take whole; a lagging Tune's record still in its ring fails only
-/// a take it belonged to, never the recorder when nothing was armed.
+/// Armed with the transport stopped, a note played, and disarmed: nothing
+/// recorded, so the take draws nothing, though the note was played armed.
 #[test]
-fn the_last_callback_is_proven_at_a_cut_unless_a_record_is_stranded() {
-    for (destroy, lagging, armed) in [
-        (false, false, true),
-        (false, true, true),
-        (true, false, true),
-        (true, true, true),
-        (false, true, false),
-        (true, true, false),
-    ] {
-        let _scope = crate::test_scope::enter();
-        let (mut hub, capture) = Device::recorded_hub();
-        hub.activate();
-        let mut tune = Device::new(true);
-        tune.activate();
-        let dir = std::env::temp_dir()
-            .join(format!("harmonigraph-cut-{}-{destroy}-{lagging}-{armed}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
-        if armed {
-            capture.arm();
-        }
-        for raw in [0, 512, 1024] {
-            tune.run_format(raw, vec![], None, None, 512);
-            hub.run_format(raw, vec![], None, None, 512);
-        }
-        let played = vec![note(1, 0, 64, 0, true), note(1, 0, 64, 8, false)];
-        if lagging {
-            hub.run_format(1536, vec![], None, None, 512);
-            tune.run_format(1536, played, None, None, 512);
-        } else {
-            tune.run_format(1536, played, None, None, 512);
-            hub.run_format(1536, vec![], None, None, 512);
-        }
-        if destroy {
-            capture.stop();
-            drop(hub);
-        } else {
-            hub.host_reset();
-        }
-        assert_eq!(writer.failed(), lagging && armed, "{destroy}, {lagging}, {armed}");
-        std::fs::remove_dir_all(dir).unwrap();
+fn an_armed_take_whose_transport_never_rolled_draws_no_note() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-never-rolled-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    capture.arm();
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
+    let mut raw = 0;
+    let mut step = |hub: &Device, events: Vec<Input>| {
+        hub.run_callback(raw, events, (None, None), (512, false), Some(timeline(5.0, false)));
+        raw += 512;
+    };
+    for _ in 0..3 {
+        step(&hub, vec![]);
     }
+    step(&hub, vec![note(1, 0, 60, 0, true), note(1, 0, 60, 100, false)]);
+    for _ in 0..3 {
+        step(&hub, vec![]);
+    }
+    capture.stop();
+    for _ in 0..4 {
+        step(&hub, vec![]);
+    }
+    writer.stop();
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let sealed = writer.finished.clone().expect("the take seals");
+    let take = harmonigraph_take::Take::read(&sealed).unwrap();
+    let notes: Vec<_> = take.notes().map(|n| (n.note, n.t)).collect();
+    assert!(notes.is_empty(), "an unrecorded note reaches the take: {notes:?}");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// Membership is the epoch. A Tune attaching cuts every paired track, which

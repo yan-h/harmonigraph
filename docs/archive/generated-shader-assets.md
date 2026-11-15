@@ -2,7 +2,8 @@
 
 This is the feasibility investigation for [#699](https://github.com/yan-h/harmonigraph/issues/699).
 This historical report describes probe commit `06d3f0a8`; its reconstruction commands apply at that commit.
-The subsequent [production integration](../metal-shader-assets.md) replaces the copied-backend experiment with one installed provider and embedded assets.
+The subsequent [production integration](https://github.com/yan-h/harmonigraph/blob/c423bf44/docs/metal-shader-assets.md) replaced the copied-backend experiment with one installed provider and embedded assets,
+and #1746 deleted that integration in turn: shaders compile from source, and the editor's loading job starts at plugin activation.
 The measured results below remain evidence from the original probe, not measurements of that later integration.
 
 ## Recommendation and scope
@@ -73,13 +74,13 @@ Production image coverage and fallback controls passed in the workflow described
 ## Reproduction
 
 This section reproduces probe commit `06d3f0a8`, whose `backend.py` and `exercise.py` were removed from the current tree.
-For current code, use the [production workflow](../metal-shader-assets.md).
+The later [production workflow](https://github.com/yan-h/harmonigraph/blob/c423bf44/docs/metal-shader-assets.md) went with the corpus in #1746.
 
 The local machine has Command Line Tools but no `metal` or `metallib` executable.
 The existing macOS CI job can obtain Apple's Metal toolchain, as the earlier #704 probe already does.
 No local toolchain installation is required to inspect exported inputs or run downloaded libraries.
 
-From the repository root, use a fresh experiment directory (historical only — #751 deleted `backend.py` and `exercise.py`, and #1222 deleted the rest of [`tools/metal-precompile/`](https://github.com/yan-h/harmonigraph/tree/4f1d6995/tools/metal-precompile), the later one-pipeline `compile.py` probe, superseded by `tools/shader-assets.py`):
+From the repository root, use a fresh experiment directory (historical only — #751 deleted `backend.py` and `exercise.py`, and #1222 deleted the rest of [`tools/metal-precompile/`](https://github.com/yan-h/harmonigraph/tree/4f1d6995/tools/metal-precompile), the later one-pipeline `compile.py` probe, superseded by [`tools/shader-assets.py`](https://github.com/yan-h/harmonigraph/blob/c423bf44/tools/shader-assets.py), itself deleted with the corpus in #1746):
 
 ```sh
 python3 tools/metal-precompile/backend.py prepare /tmp/generated-metal-assets

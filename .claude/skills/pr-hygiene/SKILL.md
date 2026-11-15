@@ -6,7 +6,7 @@ description: How review, squashing, and agent definitions work in this repo. Use
 # Review happens at the merge boundary, not on the branch
 
 GitHub Actions runs `ci.sh` as the automatic full gate for pull requests and pushes to `main`, one job per gate group (`./ci.sh <group>`), reported as a single `Full CI` check.
-It runs every gate `ci.sh` lists, one `run` line each (`grep -nE '^(quick )?run ' ci.sh`), the committed Metal corpus among them since #965,
+It runs every gate `ci.sh` lists, one `run` line each (`grep -nE '^(quick )?run ' ci.sh`),
 and reports every gate that failed rather than stopping at the first —
 not judgement.
 
@@ -80,8 +80,7 @@ What it guaranteed is now `main`'s own run, on every push:
 two PRs that each passed alone are first tested together there, and a red `main` is fixed before anything else merges.
 So a PR that touches code another PR has just landed merges `main` in and lets `Full CI` run anyway, because passing alone is all its check said;
 one that does not can merge as it stands.
-`Metal shader assets` is NOT required: its `paths:` filter keeps it off most PRs and therefore out of the required-checks scheme.
-GitHub's auto-merge waits on required checks alone, so `gh pr merge --auto --squash` would land a shader-path PR at `Full CI` green with the corpus job still running or red (#943);
+`Full CI` is the only required check, and GitHub's auto-merge waits on required checks alone, so `gh pr merge --auto --squash` lands at `Full CI` green whatever else is still running or red (#943);
 `mergeStateStatus` accounts for every check, which is why it is the gate.
 
 **The global default is to squash unless the commits are separable; what makes them separable here:** not how many there are —

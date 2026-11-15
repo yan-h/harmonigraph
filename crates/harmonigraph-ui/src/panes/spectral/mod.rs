@@ -24,7 +24,7 @@ pub(crate) mod spectrogram;
 mod tape;
 
 /// The Span drag's gain, reached by `spectrogram`'s
-/// `a_span_drag_refolds_once_per_rung_crossed` so that its fixture drags at the
+/// `a_span_drag_changes_level_once_per_rung_crossed` so that its fixture drags at the
 /// rate the pane drags at rather than at a copy of it — the whole claim there
 /// is about how far a drag travels between ladder rungs, which this sets.
 #[cfg(test)]
@@ -380,8 +380,8 @@ pub(crate) fn spectral_pane(
         })
         .collect();
 
-    // Nothing to pump here: the analyzer runs off the samples the shell pushes
-    // (see `AudioSpectrum::push_samples`), so the spectrogram's columns arrive
+    // Nothing to pump here: the analyzer runs off the samples the shell feeds
+    // (see `SpectrumAnalysis::feed_source`), so the spectrogram's columns arrive
     // whether or not the curve is drawn — and whether or not this pane is.
     // The far share of the depth axis: a spectrogram heatmap of the audio
     // and/or the piano roll of what has been played, both on the same
@@ -474,7 +474,7 @@ pub(crate) fn spectral_pane(
         state.runtime.tempered,
     );
     if show_spectrum && split > 0.0 {
-        let mut voices: Vec<&harmonigraph_core::Voice> =
+        let mut voices: Vec<harmonigraph_core::Voice> =
             state.runtime.tracker.voices().filter(|v| !namer.shows_node(v.pitch_class)).collect();
         // Translucent bands accumulate where they overlap, so the paint
         // order is part of the picture. The tracker's own order is stable —

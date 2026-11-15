@@ -817,7 +817,7 @@ struct Sounding {
 /// the nearest end — the disc has no place for it, and drawing it at the rim
 /// would put a mark on a pitch nothing is playing.
 fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
-    let mut voices: Vec<&harmonigraph_core::Voice> = state.runtime.tracker.voices().collect();
+    let mut voices: Vec<harmonigraph_core::Voice> = state.runtime.tracker.voices().collect();
     voices.sort_unstable_by(|a, b| a.pitch.total_cmp(&b.pitch).then(a.key().cmp(&b.key())));
     // One envelope for the whole pane, as every other caller takes it: it is a
     // property of the view and the frame, and rebuilding it per voice would
@@ -1255,7 +1255,7 @@ mod tests {
         let samples: Vec<f32> =
             (0..48_000).map(|i| (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin()).collect();
         let cfg = state.appearance.spectrum;
-        state.runtime.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
+        crate::spectrum::heard_at(&mut state.runtime.spectrum, &samples, 1, sr, 1.0, &cfg);
         let tone_midi = 69.0 + 12.0 * (1_000.0f32 / 440.0).log2();
 
         let meshes: Vec<egui::Mesh> = painted(&mut state, SpiralView::default(), 1.0)

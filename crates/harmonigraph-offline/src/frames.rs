@@ -82,7 +82,6 @@ impl Renderer {
     /// usable GPU adapter — callers decide whether that is fatal. Tests use
     /// the shared GPU requirement, which makes unavailable GPUs fatal in CI.
     pub fn new(size: [u32; 2]) -> Option<Renderer> {
-        harmonigraph_render::shader_assets::initialize();
         #[cfg(test)]
         let (device, queue) = harmonigraph_render::test_gpu_device()?;
         #[cfg(not(test))]
@@ -638,6 +637,22 @@ mod tests {
     /// at amplitude 1/k, which is the signal the whole spectral-lattice family
     /// is judged on — its constellation is PREDICTED by the harmonic series
     /// rather than measured (see `panes::spectral_fold`'s own tests).
+    /// Mono `samples` analyzed into `state`'s spectrum as one run, its newest
+    /// frame heard at `now`.
+    fn analyze(
+        state: &mut PictureState,
+        samples: &[f32],
+        rate: f32,
+        now: f64,
+        cfg: &harmonigraph_ui::SpectrumConfig,
+    ) {
+        let origin = now - (samples.len() - 1) as f64 / f64::from(rate);
+        let mut analysis = harmonigraph_ui::SpectrumAnalysis::default();
+        let spectrum = &mut state.runtime.spectrum;
+        analysis
+            .feed_source(samples, 1, rate, origin, cfg, |delivery| spectrum.apply(delivery, cfg));
+    }
+
     fn sawtooth(midi: f32, rate: f32) -> Vec<f32> {
         let f = harmonigraph_core::spectrum::midi_to_hz(midi);
         (0..rate as usize)
@@ -1034,7 +1049,7 @@ mod tests {
         state.runtime.frame_params.fade_time = 0.0;
         hold(&mut state, &[48]);
         let cfg = state.appearance.spectrum;
-        state.runtime.spectrum.push_samples(&sawtooth(48.0, RATE), 1, RATE, NOW, &cfg);
+        analyze(&mut state, &sawtooth(48.0, RATE), RATE, NOW, &cfg);
 
         // Two distances, because the two questions are asked at different
         // ones. Whether the constellation READS is a question about a screen
@@ -1323,7 +1338,7 @@ mod tests {
         hold(&mut state, &CHORD);
         let mut now = 1.0;
         let cfg = state.appearance.spectrum;
-        state.runtime.spectrum.push_samples(&sawtooth(55.0, RATE), 1, RATE, now, &cfg);
+        analyze(&mut state, &sawtooth(55.0, RATE), RATE, now, &cfg);
         let params = crate::replay::ReplayParams::default();
 
         // A few frames at `size`, after reading back every frame in flight,

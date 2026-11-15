@@ -53,8 +53,8 @@ OPTIONS:
                            [default: sized so the UI reads like the plugin]
         --fps <N>          Frames per second.  [default: 60]
         --start <SEC>      Skip to here, as a song position — take times are
-                           the host transport's, so 0 is the song's start, not
-                           the recording's.
+                           the take's own audio position, so 0 is the song's
+                           start, not the recording's.
                            [default: where the recording begins, less --lead]
         --lead <SEC>       Extra empty frame before the recording starts. The
                            render already opens where the take was captured,
@@ -248,7 +248,8 @@ fn output_size(size: Option<[u32; 2]>, config: &harmonigraph_ui::RenderConfig) -
 
 /// Where the video starts, in take time.
 ///
-/// Take times are the host's TRANSPORT position, so time zero is the song's
+/// Take times are song positions (a take starts at the host's transport
+/// position and runs on with its own audio), so time zero is the song's
 /// start and not the record button's. A passage played from a minute into the
 /// arrangement was captured from 60-odd seconds, and rendering from zero opens
 /// the video with a minute of empty lattice — nothing was recorded there to
@@ -393,9 +394,8 @@ fn export(args: Args) -> Result<(), String> {
         );
     }
 
-    // The WAV the take recorded for itself, beside the take file, if any.
+    // The WAV the take recorded, beside the take file, if any.
     let audio_path = take
-        .header
         .audio_file
         .as_ref()
         .map(|name| {
@@ -406,17 +406,17 @@ fn export(args: Args) -> Result<(), String> {
         })
         .filter(|path| path.is_file());
 
-    if take.header.audio_file.is_some() && audio_path.is_none() {
+    if take.audio_file.is_some() && audio_path.is_none() {
         // A missing recording would otherwise produce a silent render with
         // no spectrum and no explanation.
         eprintln!(
             "warning: take names {:?} but it is not beside the take",
-            take.header.audio_file.as_deref().unwrap_or_default()
+            take.audio_file.as_deref().unwrap_or_default()
         );
     }
     let mut audio = audio_path.as_deref().map(crate::wav::read).transpose()?;
 
-    let audio_start = take.header.audio_start.unwrap_or(0.0);
+    let audio_start = take.audio_start.unwrap_or(0.0);
 
     let end = end_of_render(
         args.end,
@@ -429,7 +429,7 @@ fn export(args: Args) -> Result<(), String> {
     // Where the recording begins: its first event, or the start of its own
     // audio if that came first (an audio part can be captured before anything
     // is played, and a take may carry no notes at all).
-    let capture_start = match (take.first_event(), take.header.audio_start) {
+    let capture_start = match (take.first_event(), take.audio_start) {
         (Some(event), Some(audio)) => Some(event.min(audio)),
         (only, None) => only,
         (None, only) => only,
@@ -742,7 +742,7 @@ mod tests {
     }
 
     /// The render opens where the RECORDING did, wherever in the song that
-    /// falls — the bug being that take times are transport positions, so a
+    /// falls — the bug being that take times are song positions, so a
     /// passage played from a minute in used to open on a minute of empty
     /// lattice.
     #[test]
@@ -898,7 +898,8 @@ mod tests {
             }
             .into(),
         ));
-        let lines = [Record::Header(Header::default()), note(0.2, 60), gap, note(1.2, 64)];
+        let run = Record::Run(harmonigraph_take::RunRecord::default());
+        let lines = [Record::Header(Header::default()), run, note(0.2, 60), gap, note(1.2, 64)];
         let encoded = lines
             .iter()
             .map(|record| ron::to_string(record).unwrap())

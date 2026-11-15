@@ -19,9 +19,7 @@ unless something path-dependent in the crate forces a rebuild: #1572's head
 linked the base's `harmonigraph-analysis` and failed to compile, and a head that
 had compiled would have been drawn with the base's code. sccache serves the
 registry crates either way, and the base's directory persists with its source,
-so only the first draw against a new base pays for it. Both draw through
-source-compiled shaders, so a stale Metal corpus on a shader PR cannot pass for
-a picture change.
+so only the first draw against a new base pays for it.
 
 Writes `target/golden-diff/`: `base/` and `head/` (the frames), `sheets/` (a
 contact sheet per moved frame), `report.md`, and `changed`: the table's rows,
@@ -103,7 +101,7 @@ def frames_key(ref):
 def draw(tree, into, target):
     """Run the golden tests in `tree`, building into `target`, writing every frame under `into`."""
     environment = dict(os.environ, HARMONIGRAPH_GOLDEN_WRITE=str(into),
-                       HARMONIGRAPH_REQUIRE_GPU="1", HARMONIGRAPH_SHADER_ASSETS="source",
+                       HARMONIGRAPH_REQUIRE_GPU="1",
                        CARGO_TARGET_DIR=str(target))
     print(f"▶ drawing {tree.relative_to(ROOT) if tree != ROOT else 'the working tree'}"
           f" into {os.path.relpath(into, ROOT)}", flush=True)

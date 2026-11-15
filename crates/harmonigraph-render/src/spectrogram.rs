@@ -1,4 +1,4 @@
-//! The spectrogram's heatmap, read out of the aggregator's slab grid in the
+//! The spectrogram's heatmap, read out of a run of the slab pyramid in the
 //! fragment shader rather than out of a picture composed for it.
 //!
 //! The grid arrives as DATA — `capacity` slots of `bins` stored-dB bytes, one
@@ -65,8 +65,8 @@ pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
 /// `key` living in slot `key.rem_euclid(capacity)`.
 ///
 /// The GPU copy is padded per slab (see [`slab_stride`]) and is otherwise
-/// these bytes exactly — the aggregator's own store, not a picture built from
-/// it.
+/// these bytes exactly — the pyramid's own slabs, not a picture built from
+/// them.
 #[derive(Clone)]
 pub struct SpectrogramGrid {
     pub capacity: u32,
@@ -85,14 +85,14 @@ pub struct SpectrogramGrid {
 /// hold the same allocations for everything else, and
 /// [`GridBuffer::changed_slabs`] finds the few that moved by pointer instead of
 /// reading the whole run. That is exact only because a slab is never written
-/// once shared: the aggregator writes the slab it is still filling through
+/// once shared: the pyramid writes the slab it is still filling through
 /// `Arc::make_mut`, which copies it whenever a snapshot holds it.
 pub type SpectrogramSlab = Arc<[u8]>;
 
 impl SpectrogramGrid {
     /// Cut a slab-major byte run into slabs of `bins` bytes, in fresh
     /// allocations — a fixture helper for tests in this crate and the UI's; the
-    /// live aggregator builds its slabs one at a time and shares them.
+    /// live pyramid builds its slabs one at a time and shares them.
     pub fn slabs_of(bytes: &[u8], bins: usize) -> Arc<[SpectrogramSlab]> {
         bytes.chunks_exact(bins).map(SpectrogramSlab::from).collect()
     }
@@ -299,8 +299,9 @@ impl GridBuffer {
     ///
     /// The same allocation is the same bytes (see [`SpectrogramSlab`]), so a slab both
     /// snapshots share costs a pointer comparison. A different allocation —
-    /// the slab being filled, or every slab after a refold — is compared by
-    /// bytes, so a refold that reproduced a slab still skips its write.
+    /// the slab being filled, or every slab of another level after a rung
+    /// change — is compared by bytes, so a slab that came out the same still
+    /// skips its write.
     fn changed_slabs(&self, grid: &SpectrogramGrid) -> Vec<usize> {
         let previous = &self.snapshot;
         if previous.first_key == grid.first_key && Arc::ptr_eq(&previous.run, &grid.run) {
@@ -1014,11 +1015,3 @@ impl SpectrogramHeadless {
 
 #[cfg(test)]
 pub(crate) mod tests;
-
-#[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
-pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) {
-    let resources = SpectrogramResources::new(device, format);
-    // Runtime creation stays lazy, but the strict Metal catalog must cover
-    // every production route before the first enabled atmospheric frame.
-    drop(atmosphere::Pipelines::new(device, format, &resources.pipelines.layout));
-}

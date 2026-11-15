@@ -39,15 +39,9 @@ impl<P: ClapPlugin> Wrapper<P> {
     }
 
     pub(super) fn retire_configuration(&self) {
-        let runtime = self.configuration.lock().take();
-        if let Some(runtime) = runtime {
-            let unfinished = !runtime.commands.is_empty()
-                || self.owned_input.lock().as_ref().is_some_and(|input| input.get(0).is_some());
-            // All callbacks have joined. Dropping these original owners is an
-            // explicit disposal, with no guessed application or completion cut.
-            self.plugin.lock().clap_configuration_retire(unfinished);
-            drop(runtime);
-        }
+        // All callbacks have joined. Dropping these original owners is an
+        // explicit disposal, with no guessed application or completion cut.
+        drop(self.configuration.lock().take());
     }
 
     pub(super) fn install_configuration(self: &Arc<Self>) {

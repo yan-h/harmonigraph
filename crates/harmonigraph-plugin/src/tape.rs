@@ -97,7 +97,7 @@ pub(crate) struct Piece {
     frames: usize,
     channels: usize,
     rate: f32,
-    /// Song frames per frame heard: below 1 the worker stretched the cue.
+    /// Song frames per frame heard: any but 1 is a cue the worker stretched.
     speed: f64,
     /// Coverage ends after these frames: the cue is over.
     last: bool,

@@ -163,6 +163,26 @@ mod tests {
         tracker.roll().clone()
     }
 
+    /// A header and the one run, from time 0 at offset zero, that a fixture's
+    /// records are read in.
+    fn opened() -> String {
+        use harmonigraph_take::{Record, RunRecord};
+        let run = ron::to_string(&Record::Run(RunRecord::default())).unwrap();
+        format!("{}\n{run}", ron::to_string(&Record::Header(Header::default())).unwrap())
+    }
+
+    /// `records` as the recorder writes them: in one run from time 0, at
+    /// offset zero.
+    fn one_run(records: impl IntoIterator<Item = harmonigraph_take::CanonicalRecord>) -> String {
+        use harmonigraph_take::Record;
+        let mut text = opened();
+        for record in records.into_iter().map(Record::Canonical) {
+            text.push('\n');
+            text.push_str(&ron::to_string(&record).unwrap());
+        }
+        text
+    }
+
     fn take_with(notes: Vec<NoteRecord>, params: Vec<ParamRecord>) -> Take {
         Take {
             header: Header::default(),
@@ -171,6 +191,7 @@ mod tests {
             configurations: Vec::new(),
             truncated: false,
             incomplete: None,
+            ..Default::default()
         }
     }
 
@@ -193,7 +214,7 @@ mod tests {
         use harmonigraph_take::{CanonicalRecord, Record};
         let source = SourceId::DIRECT;
         let silent = SourceBaseline::new(source, 1, 3.0, 0, true, &[]).unwrap();
-        let mut text = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let mut text = opened();
         for record in [
             CanonicalRecord::from_event(CanonicalEvent::Note(
                 NoteEvent::on(1.0, source, 0, 60, 0.8).into(),
@@ -239,7 +260,7 @@ mod tests {
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::confirmed::PitchProvenance;
         use harmonigraph_core::{NoteEvent, SourceId};
-        use harmonigraph_take::{CanonicalRecord, Record};
+        use harmonigraph_take::CanonicalRecord;
         let source = SourceId(1);
         let delta = |event: NoteEvent, sequence| {
             CanonicalRecord::from_event(CanonicalEvent::Note(NoteDelta {
@@ -260,8 +281,7 @@ mod tests {
             }))
         };
         let empty = SourceBaseline::new(source, 1, 5.0, 4, true, &[]).unwrap();
-        let mut text = ron::to_string(&Record::Header(Header::default())).unwrap();
-        for record in [
+        let text = one_run([
             delta(NoteEvent::on(1.0, source, 0, 60, 0.8), 1),
             CanonicalRecord::from_event(CanonicalEvent::Gap(PublicationGap {
                 source: Some(source),
@@ -273,10 +293,7 @@ mod tests {
             })),
             delta(NoteEvent::off(4.0, source, 0, 60), 4),
             CanonicalRecord::from_event(CanonicalEvent::Baseline(&empty)),
-        ] {
-            text.push('\n');
-            text.push_str(&ron::to_string(&Record::Canonical(record)).unwrap());
-        }
+        ]);
         let take = Take::parse(std::io::Cursor::new(text)).unwrap();
         for cadence in [0.001, 1.0 / 24.0, 1.0 / 60.0] {
             let mut replay = Replay::new(take.clone());
@@ -311,7 +328,7 @@ mod tests {
         let source = SourceId::DIRECT;
         let off = SourceBaseline::new(source, 1, 0.03, 0, false, &[]).unwrap();
         let rejoin = SourceBaseline::new(source, 2, 0.08, 0, true, &[]).unwrap();
-        let mut text = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let mut text = opened();
         for record in [
             CanonicalRecord::from_event(CanonicalEvent::Note(
                 NoteEvent::on(0.01, source, 0, 60, 0.8).into(),
@@ -353,7 +370,7 @@ mod tests {
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::confirmed::PitchProvenance;
         use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
-        use harmonigraph_take::{CanonicalRecord, Record};
+        use harmonigraph_take::CanonicalRecord;
         let source = SourceId(1);
         let delta = |event: NoteEvent, sequence| {
             CanonicalRecord::from_event(CanonicalEvent::Note(NoteDelta {
@@ -432,11 +449,7 @@ mod tests {
             CanonicalRecord::from_event(CanonicalEvent::Baseline(&recovered)),
             delta(NoteEvent::off(0.4, source, 0, 60), 9),
         ];
-        let mut encoded = ron::to_string(&Record::Header(Header::default())).unwrap();
-        for event in events {
-            encoded.push('\n');
-            encoded.push_str(&ron::to_string(&Record::Canonical(event)).unwrap());
-        }
+        let encoded = one_run(events);
         let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
         assert!(take.incomplete.is_some());
         let roll_snapshot = |roll: &harmonigraph_core::NoteRoll| {
@@ -496,7 +509,7 @@ mod tests {
         use harmonigraph_core::configuration::{ConfigEdit, ConfigMutation, ConfigReducer};
         use harmonigraph_take::{ConfigurationRecord, Record};
         let mut reducer = ConfigReducer::default();
-        let mut encoded = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let mut encoded = opened();
         let mut expected = Vec::new();
         for (t, edit) in [
             (0.005, ConfigEdit { learning: Some(true), ..Default::default() }),
@@ -558,7 +571,7 @@ mod tests {
         let mut config = ConfigReducer::default().resolved();
         assert!(config.modes.tempered.syntonic, "the fresh default links Meantone");
         config.modes.tempered.syntonic = false;
-        let mut encoded = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let mut encoded = opened();
         encoded.push('\n');
         encoded.push_str(
             &ron::to_string(&Record::Configuration(ConfigurationRecord::new(1.0, config))).unwrap(),
@@ -598,7 +611,7 @@ mod tests {
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         let mut replay = Replay::new(take_with(vec![on(0.5, 60), off(0.6, 60)], vec![]));
         replay.advance_to(&mut state.runtime, 1.0);
-        let voice = *state.runtime.tracker.voices().next().unwrap();
+        let voice = state.runtime.tracker.voices().next().unwrap();
         assert_eq!(voice.on_time, 0.5);
         // Released at 0.6 with a 1 s straight-line fade: 40% gone by t=1.0.
         // The envelope is spelled out rather than taken from the state's view
@@ -633,8 +646,7 @@ mod tests {
             NoteEvent::on(2.0, a, 0, 60, 0.9),
             NoteEvent::session_reset(2.25),
         ];
-        let mut encoded =
-            ron::to_string(&harmonigraph_take::Record::Header(Header::default())).unwrap();
+        let mut encoded = opened();
         for event in events {
             encoded.push('\n');
             encoded
@@ -659,8 +671,9 @@ mod tests {
         assert!(replay.is_spent());
 
         for roll in [state.runtime.tracker.roll(), &roll_from_all_events(replay.take())] {
-            let notes: Vec<_> =
+            let mut notes: Vec<_> =
                 roll.notes().map(|n| (n.source, n.start, n.end, n.end_pitch())).collect();
+            notes.sort_by(|x, y| x.partial_cmp(y).unwrap());
             assert_eq!(
                 notes,
                 vec![

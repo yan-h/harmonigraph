@@ -164,6 +164,7 @@ pub fn save(snapshot: ConfigurationSnapshot, state: &mut PluginState) {
 }
 
 mod recording;
+pub(crate) use recording::Presentation;
 
 pub struct Owner {
     pub(crate) maps: crate::lattice_maps::AudioMaps,
@@ -222,11 +223,6 @@ impl Owner {
         self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
         self.recording.block_frames = boundary.frames;
-        // The whole callback's input is applied and observed inside the same
-        // `process_configuration` call, so configuration for it is settled here
-        // and never holds output publication behind an unconsumed event. Local
-        // steady time, like every other frontier the recording compares.
-        self.recording.prefix = boundary.steady_time.saturating_add(i64::from(boundary.frames));
     }
 
     /// Seed the callback after all queued commands reduce. Adaptive keeps this
@@ -245,7 +241,7 @@ impl Owner {
         (clock == self.recording.clock).then_some(self.block)
     }
 
-    pub fn reset(&mut self, recorder: &harmonigraph_record::Recorder) {
+    pub fn reset(&mut self, recorder: &mut harmonigraph_record::Recorder) {
         self.maps.reset();
         self.confirmed.reset();
         self.learning = LearningState::default();
@@ -333,71 +329,40 @@ impl Owner {
         self.recording.captured_intent
     }
 
-    pub fn recording_route(
-        &self,
-        timing: harmonigraph_core::canonical::EventTiming,
-        presentation_time: f64,
-    ) -> Result<harmonigraph_record::publication::Route, ()> {
-        self.recording.route(timing.clock, timing.sample, presentation_time)
+    /// The take's presentation time at this sub-block's start, on the Hub's
+    /// own mapping: what a parameter recorded here is timed at.
+    pub fn take_time(&self) -> f64 {
+        self.recording.presentation.at(self.recording.block_start)
     }
 
-    pub fn finish_recording_publication(
-        &mut self,
-        recorder: &mut harmonigraph_record::Recorder,
-        observation_time: f64,
-    ) {
-        self.recording.observation_time = observation_time;
-        self.recording.finish(recorder);
-    }
-    pub fn record(
-        &mut self,
-        recorder: &mut harmonigraph_record::Recorder,
-        origin: Option<f64>,
-        observation_time: f64,
-    ) {
-        self.recording.observation_time = observation_time;
+    pub fn record(&mut self, recorder: &mut harmonigraph_record::Recorder, origin: Option<f64>) {
         if self.snapshot.status & 2 != 0 && recorder.recording_epoch() != 0 {
             recorder.fail_configuration();
         }
         let start = self.recording.block_start;
-        let frames = self.recording.block_frames;
-        let end = start + i64::from(frames);
-        let rate = f64::from(self.boundary.sample_rate);
-        let effective = |state: crate::lattice_maps::AttackState| {
-            if state.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap {
-                state.config
-            } else {
-                self.block
+        let end = start + i64::from(self.recording.block_frames);
+        self.recording.record(recorder, origin);
+        if self.recording.recording() {
+            // The block's own adopted configuration, and in Lattice Map each
+            // timed shared-tuning change at its own sample. There is no
+            // historical lookup: the value in force IS the value the Hub used
+            // for every group it started there.
+            let effective = |state: crate::lattice_maps::AttackState| {
+                if state.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
+                {
+                    state.config
+                } else {
+                    self.block
+                }
+            };
+            let config = self.maps.at(start).map_or(self.block, effective);
+            self.recording.configuration(recorder, start, config);
+            for (sample, state) in self.maps.changes(start, end) {
+                let config = effective(state);
+                self.recording.configuration(recorder, sample, config);
             }
-        };
-        let mut config = self.maps.at(start).map_or(self.block, effective);
-        let mut cursor = start;
-        for (sample, state) in self.maps.changes(start, end) {
-            let next = effective(state);
-            if next == config {
-                continue;
-            }
-            self.recording.block_start = cursor;
-            self.recording.block_frames = (sample - cursor) as u32;
-            self.recording.segment(
-                recorder,
-                origin.map(|t| t + (cursor - start) as f64 / rate),
-                rate,
-                config,
-            );
-            cursor = sample;
-            config = next;
         }
-        self.recording.block_start = cursor;
-        self.recording.block_frames = (end - cursor) as u32;
-        self.recording.segment(
-            recorder,
-            origin.map(|t| t + (cursor - start) as f64 / rate),
-            rate,
-            config,
-        );
-        self.recording.block_start = start;
-        self.recording.block_frames = frames;
+        self.recording.registered(end);
     }
 
     /// A Retune-enabled source reserves the lattice axes only while the engine

@@ -29,7 +29,6 @@ fn a_node_behind_another(lit: bool) -> Scene {
     front.octaves.fill(1.0);
     front.world_pos = glam::vec3(0.9, 0.0, 1.0);
     scene.nodes.push(front);
-    rows_per_node(&mut scene);
     scene
 }
 
@@ -204,7 +203,6 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
         scene.view.note_bloom = 1.0;
         assert!(differing_pixels(&shot(&scene, 0.0), &shot(&scene, 1.0)) > 50);
         scene.nodes.remove(0);
-        rows_per_node(&mut scene);
         assert_eq!(
             shot(&scene, 0.0),
             shot(&scene, 1.0),
@@ -290,7 +288,6 @@ fn a_node_at_no_darkness_still_hides_the_node_behind() {
 fn a_lone_ring() -> Scene {
     let mut scene = a_node_behind_another(true);
     scene.nodes.pop();
-    rows_per_node(&mut scene);
     scene
 }
 
@@ -315,10 +312,8 @@ fn a_bare_place(scene: &mut Scene, z: f32) -> usize {
             true,
             0.0,
             false,
-            node as u32,
         )
     });
-    rows_per_node(scene);
     node
 }
 

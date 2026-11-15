@@ -5,7 +5,7 @@
 //! time along, so what you hear and what you played read against each other.
 //!
 //! It's a layer under the roll, not a pane. The heatmap is a handful of quads
-//! whose fragments read the aggregator's slab grid themselves (see
+//! whose fragments read a run of the slab pyramid themselves (see
 //! [`harmonigraph_render::spectrogram_paint_callback`]), filtered across both
 //! axes so it reads as one smooth, filled image rather than a mesh of flat
 //! cells (which looked blocky) or interpolated triangles (which floated and
@@ -19,7 +19,7 @@ use harmonigraph_render::SpectrogramVertex;
 
 use super::axes::{power_db, Axes, PitchScale, TimeAxis};
 use crate::spectrogram::{
-    frame_data, hold_time, read_of, run_for, slab_drawn, Columns, PaneView, Plan, TexLayout,
+    frame_data, hold_time, read_of, run_for, slab_drawn, PaneView, Plan, TexLayout,
 };
 use crate::PictureState;
 use harmonigraph_scene::Gradient;
@@ -240,12 +240,11 @@ pub(crate) fn draw_spectrogram(
     let target_format = state.surfaces.target_format;
     // The roll and heatmap share the same scrolling time window.
     let time = TimeAxis::new(state, split, now);
-    let spectrum = &state.runtime.spectrum;
+    let spectrum = &mut state.runtime.spectrum;
     let surfaces = &mut state.surfaces.spectrogram;
-    let enough = spectrum.history().len() >= 2;
-    if !enough {
+    let Some(newest) = spectrum.newest_column() else {
         return;
-    }
+    };
 
     let view = PaneView {
         ppp: crate::spectrogram::pane_ppp(painter.ctx()),
@@ -255,23 +254,16 @@ pub(crate) fn draw_spectrogram(
         scale: *scale,
         cfg,
     };
-    let hist = spectrum.history();
-    let columns = Columns {
-        first: hist.partition_point(|c| c.time < time.oldest()).saturating_sub(1),
-        newest: hist.back().map_or(now, |c| c.time),
-    };
-    let plan = Plan::new(&view, &columns, surfaces.at(surface).held_bucket);
+    let plan = Plan::new(&view, time.oldest(), surfaces.at(surface).held_level);
 
-    // The run already on the surface when the aggregator folded nothing new
-    // into it, and a fresh one otherwise. The pitch axis, the rows and the
-    // colours are uniforms, so a zoom, a resize or a palette drag reaches
-    // neither.
-    let Some(layout) = run_for(spectrum.history(), surfaces, surface, &plan) else {
+    // The run already on the surface when no slab of it moved, and a fresh
+    // one otherwise. The pitch axis, the rows and the colours are uniforms,
+    // so a zoom, a resize or a palette drag reaches neither.
+    let Some(layout) = run_for(spectrum.pyramid(), surfaces, surface, &plan) else {
         return;
     };
 
-    let (d_near, d_far) =
-        strip_depths(&time, split, &layout, columns.newest, spectrum.column_lag());
+    let (d_near, d_far) = strip_depths(&time, split, &layout, newest, spectrum.column_lag());
     let points_per_ms = time.region_depth_len(axes) / (time.window() as f32 * 1000.0);
 
     let vertices = heatmap_vertices(axes, &time, &layout, d_near, d_far);
@@ -289,11 +281,7 @@ pub(crate) fn draw_spectrogram(
     // audible one moves anything, since silence draws in the bed's colour,
     // unless a tilt lifts silence off it, when every column's edges show.
     let reach = time.window() + layout.bucket + cfg.atmosphere.tail();
-    let moving = if silence_shows(&cfg) {
-        hist.back().map(|column| column.time)
-    } else {
-        spectrum.last_audible().column
-    };
+    let moving = if silence_shows(&cfg) { Some(newest) } else { spectrum.last_audible().column };
     state.surfaces.moving_this_frame.audible(moving.is_some_and(|t| t + reach >= now));
     // The painter's own clip is what bounds the heatmap: the quads reach past
     // the pane wherever the oldest slab starts before the region, and the callback draws against the whole
@@ -408,11 +396,6 @@ mod gap_tests {
                     "the first resumed occupied slab must already produce a callback"
                 );
                 let time = TimeAxis::new(&state, 0.0, now);
-                let hist = state.runtime.spectrum.history();
-                let columns = Columns {
-                    first: hist.partition_point(|c| c.time < time.oldest()).saturating_sub(1),
-                    newest: hist.back().unwrap().time,
-                };
                 let view = PaneView {
                     ppp: 1.0,
                     pitch_len: axes.pitch_len(),
@@ -421,9 +404,9 @@ mod gap_tests {
                     scale,
                     cfg,
                 };
-                let plan = Plan::new(&view, &columns, None);
+                let plan = Plan::new(&view, time.oldest(), None);
                 let layout = run_for(
-                    state.runtime.spectrum.history(),
+                    state.runtime.spectrum.pyramid(),
                     &mut state.surfaces.spectrogram,
                     0,
                     &plan,
@@ -470,23 +453,35 @@ mod gap_tests {
             }
         }
 
-        // Once retention has removed every old column, the cold pane retains
-        // its established startup rule: wait for two columns and two slabs.
+        // A pause longer than the history reaches (621 s) draws as silence
+        // like any shorter one: the far edge holds rather than regrowing.
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         state.appearance.spectrum.roll_seconds = 12.0;
         state.runtime.spectrum.push_history(1.0, &[1.0; SPECTRUM_BINS]);
         state.runtime.spectrum.push_history(622.0, &[0.25; SPECTRUM_BINS]);
-        assert_eq!(
-            state.runtime.spectrum.history().len(),
-            1,
-            "the fixture must exceed history retention"
-        );
         let axes = Axes::new(rect, &state.appearance.spectrum);
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
         let output =
             ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
                 draw_spectrogram(ui.painter(), &axes, &scale, &mut state, 0.0, 622.0, 0);
             });
-        assert!(!output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Callback(_))));
+        assert!(
+            output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Callback(_))),
+            "the long pause regrew the strip from the now-line as at startup",
+        );
+        let time = TimeAxis::new(&state, 0.0, 622.0);
+        let cfg = state.appearance.spectrum;
+        let view = PaneView {
+            ppp: 1.0,
+            pitch_len: axes.pitch_len(),
+            depth_len: time.region_depth_len(&axes),
+            window: time.window(),
+            scale,
+            cfg,
+        };
+        let plan = Plan::new(&view, time.oldest(), None);
+        let spectrum = &mut state.runtime.spectrum;
+        let layout = run_for(spectrum.pyramid(), &mut state.surfaces.spectrogram, 0, &plan);
+        assert_eq!(time.depth_of(layout.unwrap().t_origin), 1.0, "the pause drew to the far edge");
     }
 }

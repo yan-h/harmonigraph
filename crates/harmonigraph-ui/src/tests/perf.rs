@@ -306,13 +306,13 @@ fn an_undrawable_perf_overlay_position_is_dropped() {
     state.workspace.interaction.prefs.perf_pos = Some(egui::pos2(123.0, 456.0));
 
     // NaN reaches the tessellator as geometry, and a blob is a file someone
-    // can edit — see `load_persist`, which repairs the spiral framing for the
+    // can edit — see `install_document`, which repairs the spiral framing for the
     // same reason.
     let mut restored = fresh();
     let saved = state.save_persist();
     let edited = saved.replacen("x:123.0", "x:NaN", 1);
     assert_ne!(edited, saved, "the position must be in the blob to edit");
-    assert!(restored.load_persist(&edited));
+    assert!(restored.install_document(&edited));
     assert_eq!(
         restored.workspace.interaction.prefs.perf_pos, None,
         "an undrawable position should be dropped"
@@ -345,7 +345,7 @@ fn the_performance_overlay_ships_off() {
 
     // A refused load would leave the fresh default, and pass for that reason.
     let mut restored = fresh();
-    assert!(restored.load_persist(&old), "the blob without show_perf did not load");
+    assert!(restored.install_document(&old), "the blob without show_perf did not load");
     assert!(
         !restored.workspace.interaction.prefs.show_perf,
         "a blob without show_perf opens with the overlay off"

@@ -121,9 +121,6 @@ pub trait ClapPlugin: Plugin {
     /// Main-thread service while deactivated, also before activation changes
     /// state. No process callback can overlap this hook. Do not call the host.
     fn clap_main_inactive(&mut self) {}
-    /// Joined wrapper destruction disposes its remaining configuration input,
-    /// commands and learning. This is terminal ownership, not a sample prefix.
-    fn clap_configuration_retire(&mut self, unfinished: bool) {}
     fn clap_main_destroy(&mut self) {}
     /// Serialized audio lifecycle; allocation/deallocation guards include these.
     fn clap_performance_start(&mut self) {}

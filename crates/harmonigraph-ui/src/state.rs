@@ -102,6 +102,12 @@ pub enum ExportAction {
 pub struct SharedState {
     pub picture: PictureState,
     pub workspace: Workspace,
+    /// Nothing installed and no window opened since the state was fresh: a
+    /// host save stores `""`, so a project whose editor was never opened keeps
+    /// following the fresh look of whichever build loads it (#1757 Q2). An
+    /// empty restore leaves it as it was, so one into an editor that has held
+    /// settings never turns its later saves into `""`.
+    untouched: bool,
 }
 
 /// Shared live/offline picture. A picture pane cannot access the editor dock,
@@ -190,15 +196,15 @@ pub struct SurfaceState {
     /// is the one place that is hardest to notice and most expensive to get
     /// wrong.
     pub background: glam::Vec4,
-    /// Where every node's own light has got to, and which row of the ink strip
-    /// is keeping its colour, per lattice surface
-    /// ([`GlowFade`](crate::panes::glow_fade::GlowFade)). Runtime-only.
+    /// Where every node's own light has got to, and what it is made of, per
+    /// lattice surface ([`GlowFade`](crate::panes::glow_fade::GlowFade)).
+    /// Runtime-only.
     ///
     /// Here for the reason the two above it are: the offline renderer carries
     /// this struct between frames and nothing else, so a light kept anywhere
     /// else would linger live and not in an export. Keyed by the surface id
-    /// each lattice pane claims, because the strip it describes is that pane's
-    /// own texture.
+    /// each lattice pane claims, because each draws its own window and lights
+    /// the nodes in it.
     pub(crate) glow_fade: std::collections::HashMap<usize, crate::panes::glow_fade::GlowFade>,
     /// One entrance per visible node, independent of optional Glow. Runtime only.
     pub(crate) node_motion: std::collections::HashMap<usize, harmonigraph_scene::NodeMotion>,
@@ -253,7 +259,7 @@ pub struct EditorPrefs {
     /// `ViewConfig` is what a recorded frame is composed from, and a laptop
     /// dialling its panel down must not change what a render of the same
     /// project comes out looking like. [`root_ui`](crate::root_ui), the
-    /// System bar and `load_persist` read it; the offline renderer never
+    /// System bar and `install_document` read it; the offline renderer never
     /// reaches any of them.
     pub ui_scale: f32,
     /// Hide the editor's tab and fold bars for a continuous live picture.
@@ -521,8 +527,8 @@ impl Default for Instruments {
 /// recorded frame cannot depend on this. The standalone harness and the
 /// non-macOS shells draw when their windowing stack asks, whatever this says.
 ///
-/// Persisted in the editor blob, so dropping a variant fails the whole parse
-/// and drops layout and camera with it (see the persistence-contract skill).
+/// Persisted in the editor blob, so dropping a variant costs a project that
+/// saved it this key, with a Console line (see the persistence-contract skill).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FrameRate {
     #[default]
@@ -580,7 +586,11 @@ impl CameraPreset {
 
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
-        Self { picture: PictureState::new(target_format), workspace: Workspace::default() }
+        Self {
+            picture: PictureState::new(target_format),
+            workspace: Workspace::default(),
+            untouched: true,
+        }
     }
 
     pub fn log(&mut self, line: impl Into<String>) {
@@ -591,44 +601,63 @@ impl SharedState {
     /// (section layout, camera, view settings). Parameters are NOT included —
     /// they live in the host's plugin state.
     ///
-    /// The plugin writes this enclosing editor document into `params.ui_state`
-    /// when the window closes, and serializes it live for a host save made
-    /// with the window open. Recording instead serializes the live appearance
-    /// directly, so capture never depends on either.
+    /// A plugin host save stores this through [`save_answer`](Self::save_answer),
+    /// and the standalone harness on the way out. Recording instead serializes
+    /// the live appearance directly, so capture never depends on either.
     pub fn save_persist(&self) -> String {
         // Keep the editor document in the same RON format as appearance.
-        ron::to_string(&UiPersist {
-            version: UI_PERSIST_VERSION,
-            layout: self.workspace.layout.clone(),
-            analyzer_regions: self.workspace.interaction.analyzer_regions.clone(),
-            appearance: self.picture.appearance.clone(),
-            camera_presets: self.workspace.interaction.camera_presets.clone(),
-            look_slots: self.workspace.interaction.appearance_editor.slots.clone(),
-            prefs: self.workspace.interaction.prefs.clone(),
-        })
-        .unwrap_or_default()
+        ron::to_string(&UiPersist::capture(&self.workspace, &self.picture.appearance))
+            .unwrap_or_default()
     }
 
-    /// Restore the whole editor document. Refused input leaves the current
-    /// content intact, opens the Console so its explanation is visible, and
-    /// reports why there. Appearance normalization is shared with
-    /// recording/export; workspace restoration remains editor-only.
-    pub fn load_persist(&mut self, serialized: &str) -> bool {
-        let persist = match ron::from_str::<UiPersist>(serialized) {
-            Ok(persist) => persist,
+    /// What a host save stores: the live settings, serialized, or `""` for an
+    /// editor nobody has opened since it was fresh. The live state is the
+    /// only copy of the settings: a restore installs into it, a save
+    /// serializes out of it, and nothing reads a saved document back.
+    pub fn save_answer(&self) -> std::sync::Arc<str> {
+        if self.untouched {
+            "".into()
+        } else {
+            self.save_persist().into()
+        }
+    }
+
+    /// Install a saved editor document: a host restore, or the standalone
+    /// harness's last run.
+    ///
+    /// The empty document is what an editor never opened saves, so it installs
+    /// the fresh settings (#1757 Q3); a save then stores `""` only if the
+    /// editor has held nothing else and no window has opened. A value naming a variant this build does not have costs its
+    /// own key, which opens at its default (#1757 Q4); refused input leaves the
+    /// current content intact. Either loss opens the Console and says there
+    /// what was lost; a save then stores the settings as they stand, like any
+    /// other. Appearance normalization is shared with recording/export;
+    /// workspace restoration remains editor-only.
+    ///
+    /// A restore discards the look slots' undo histories; a window closing and
+    /// reopening does not (#1740).
+    ///
+    /// Whether the document's settings were installed, whole or in part.
+    pub fn install_document(&mut self, serialized: &str) -> bool {
+        if serialized.is_empty() {
+            self.apply_persist(UiPersist::capture(
+                &Workspace::default(),
+                &crate::AppearanceDocument::default(),
+            ));
+            return true;
+        }
+        let (persist, dropped) = match crate::persist_keys::decode::<UiPersist>(serialized) {
+            Ok(decoded) => decoded,
             // SAYING SO is the whole point of this arm. Nothing in the tree
-            // reads an older spelling any more, so a blob naming a variant
-            // this build has dropped — a retired orientation or sweep mode, or
-            // a selected tab that no longer exists — fails the parse HERE, and
-            // what falls out is the layout, the camera and every view setting
-            // reverting at once. A dropped KEY is the other case entirely and
-            // costs nothing: serde skips one it has no field for, which is how
-            // a blob still carrying the retired `dock` loads intact, tabs and
-            // all. The version floor cannot catch it: the version is read out of a
-            // value that never parsed. An accepted break, but not a silent
-            // one — a project opening at defaults with no explanation reads
-            // as data loss, and this is the difference between that and a
-            // break someone chose.
+            // reads an older spelling any more, so what fails here — a value
+            // that is not RON, or a dropped variant no key holds of its own —
+            // costs the layout, the camera and every view setting at once. A
+            // dropped variant under a key costs that key alone, and a dropped
+            // KEY nothing: serde skips one it has no field for, which is how a
+            // blob still carrying the retired `dock` loads intact. An accepted
+            // break, but not a silent one — a project opening at defaults with
+            // no explanation reads as data loss, and this is the difference
+            // between that and a break someone chose.
             Err(err) => {
                 return self.refuse_persist(format!("the blob did not parse ({err})"));
             }
@@ -645,15 +674,35 @@ impl SharedState {
                 return self.refuse_persist(err);
             }
         };
+        self.apply_persist(UiPersist { appearance, ..persist });
+        self.untouched = false;
+        if dropped.is_empty() {
+            return true;
+        }
+        for lost in dropped {
+            self.log(format!(
+                "persist dropped {} — this build has no {}, so that setting opens at its default",
+                lost.key, lost.variant,
+            ));
+        }
+        self.reveal_console();
+        true
+    }
+
+    /// Every write an install makes, from a document whose appearance is
+    /// already normalized.
+    fn apply_persist(&mut self, persist: UiPersist) {
         self.workspace.interaction.prefs = persist.prefs;
         self.workspace.interaction.prefs.sanitize();
         self.workspace.layout = persist.layout;
         self.workspace.layout.sanitize();
         self.workspace.interaction.analyzer_regions = persist.analyzer_regions;
         self.workspace.interaction.analyzer_regions.sanitize();
+        // A restore into an open window replaces the layout a fold or a
+        // divider drag in flight was made for.
         self.workspace.layout_runtime = workspace::Runtime::default();
         self.workspace.window_size_change = egui::Vec2::ZERO;
-        self.picture.install_appearance(appearance);
+        self.picture.install_appearance(persist.appearance);
         let mut look_slots = persist.look_slots;
         look_slots.sanitize();
         self.workspace.interaction.appearance_editor =
@@ -662,18 +711,45 @@ impl SharedState {
         for preset in &mut self.workspace.interaction.camera_presets {
             preset.sanitize();
         }
-        true
     }
 
-    /// Reject a saved document loudly. The Console is the last settings tab,
-    /// a diagnostic rather than a page visited while playing, so refusal
-    /// selects it and unfolds the settings: the diagnostic is the only thing
-    /// that explains why the editor opened on fresh state.
+    /// Reject a saved document loudly, leaving the current content as it was.
     fn refuse_persist(&mut self, reason: String) -> bool {
         self.log(format!("persist ignored — {reason}"));
+        self.reveal_console();
+        false
+    }
+
+    /// An install lost something. The Console is the last settings tab, a
+    /// diagnostic rather than a page visited while playing, so this selects it
+    /// and unfolds the settings: the diagnostic is the only thing that
+    /// explains why the editor opened on fresh settings.
+    fn reveal_console(&mut self) {
         self.workspace.layout.select(panes::Tab::Console);
         self.workspace.layout.folded[workspace::Section::Settings as usize] = false;
-        false
+    }
+
+    /// Start drawing in a newly built window. The state outlives every window,
+    /// so what a session carries is the settings, the look slots and their
+    /// undo histories; what belongs to the window that closed is reset here.
+    /// From the first window on, a save stores the settings it shows.
+    pub(crate) fn start_window_session(&mut self) {
+        self.untouched = false;
+        self.workspace.layout_runtime = workspace::Runtime::default();
+        self.workspace.window_size_change = egui::Vec2::ZERO;
+        self.workspace.interaction.appearance_editor.start_window_session();
+        // The new window lays the Analyzer out afresh.
+        self.workspace.interaction.analyzer_regions.relayout();
+        // A viewing aid for one sitting, never saved (`StarSettings::star_solo`).
+        self.picture.appearance.view.atmosphere.stars.star_solo = Default::default();
+        self.picture.appearance.spectrum.atmosphere.stars.star_solo = Default::default();
+    }
+
+    /// The window is closing: an appearance edit still open, a drag the close
+    /// cut off, becomes one undo entry. The plugin's close calls this before
+    /// it refreshes a save's fallback, so the fallback holds the session.
+    pub fn end_window_session(&mut self) {
+        self.workspace.interaction.appearance_editor.end_window_session(&self.picture.appearance);
     }
 }
 
@@ -683,7 +759,7 @@ impl SharedState {
 /// saved dock with missing or doubled tabs; since #1056 the layout is fixed
 /// and every tab is always placed, so a tab change no longer owes one.
 ///
-/// A bump costs the whole blob, not the layout alone: `load_persist` refuses
+/// A bump costs the whole blob, not the layout alone: `install_document` refuses
 /// anything below this outright, so camera, view, spectrum and render settings
 /// all fall back to defaults with it. That is what lets a format change be
 /// made outright rather than shimmed.
@@ -695,7 +771,7 @@ impl SharedState {
 /// saved by the previous build carries. Changing the ids again would buy that
 /// gate back at the price of orphaning every project that loads the plugin,
 /// which is the worse trade; the refusal is made audible instead. See
-/// [`SharedState::load_persist`], which sets out both halves and which of its
+/// [`SharedState::install_document`], which sets out both halves and which of its
 /// callers each covers.
 ///
 /// 7: camera, view, spectrum, spiral and render moved into one appearance
@@ -715,7 +791,7 @@ pub(crate) const UI_PERSIST_VERSION: u32 = 7;
 #[serde(default)]
 pub(crate) struct UiPersist {
     /// serde(default) reads a pre-versioning blob as version 0, which is below
-    /// the floor — [`SharedState::load_persist`] refuses it entirely.
+    /// the floor — [`SharedState::install_document`] refuses it entirely.
     pub(crate) version: u32,
     pub(crate) layout: workspace::Layout,
     /// See [`Interaction::analyzer_regions`]: the half of a folded region
@@ -726,6 +802,21 @@ pub(crate) struct UiPersist {
     pub(crate) look_slots: crate::appearance_edit::Slots,
     /// See [`EditorPrefs`]; a blob without them opens at their defaults.
     pub(crate) prefs: EditorPrefs,
+}
+
+impl UiPersist {
+    /// The saved half of a workspace and its appearance.
+    fn capture(workspace: &Workspace, appearance: &crate::AppearanceDocument) -> Self {
+        UiPersist {
+            version: UI_PERSIST_VERSION,
+            layout: workspace.layout.clone(),
+            analyzer_regions: workspace.interaction.analyzer_regions.clone(),
+            appearance: appearance.clone(),
+            camera_presets: workspace.interaction.camera_presets.clone(),
+            look_slots: workspace.interaction.appearance_editor.slots.clone(),
+            prefs: workspace.interaction.prefs.clone(),
+        }
+    }
 }
 
 impl PictureState {

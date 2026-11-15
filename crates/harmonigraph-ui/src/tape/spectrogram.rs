@@ -11,7 +11,7 @@
 //! **Bytes, not powers.** A column is stored as the heatmap's own dB bytes,
 //! and level `n` of the pyramid holds slabs of `2^n` columns, each the power
 //! mean of the level-0 bytes it covers, read back through [`db_of`]. Merging
-//! from bytes rather than from bfloat16 powers can move a merged cell by one
+//! from bytes rather than from powers can move a merged cell by one
 //! [`DB_STEP`](harmonigraph_core::spectrogram::DB_STEP), never more, because
 //! every level is merged from level 0 in one step rather than level from
 //! level. It halves the memory a power store would take, and no zoom ever

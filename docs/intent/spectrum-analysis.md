@@ -41,12 +41,21 @@ Yan’s decisions recorded for future drift audits.
 ## 2026-11-02 (drift audit, #1635)
 
 - The spectrum/history now-line stays at the 2 pt line width, deliberately heavier than the 1 pt spectrum outline (#1585): the two share a colour, not a weight. #1635 Spectrum Q1, #1631
-- Replace the defensive rule that drops a source-dated column not newer than the history's tail with a debug assertion: the clock only moves forward, so a break in ordering should fail tests loudly rather than be worked around in release builds. #1635 Spectrum Q2, #1631
+- Replace the defensive rule that drops a source-dated column not newer than the history's tail with a debug assertion: the clock only moves forward, so a break in ordering should fail tests loudly rather than be worked around in release builds. #1635 Spectrum Q2, #1631 (Superseded 2026-11-14 by the guard below, #1758: the assertion stays, and release builds now drop or reset instead of drawing a backward column.)
 
 ## 2026-11-14 (premises audit, #1739)
 
 Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
 
 - Tape keeps its own note recorder joined by presentation time until Tape has been used in Bitwig; feeding it from the take lane is F3′'s Tape half, deferred while the take half goes to `propose-rework` (see `video-export.md`). #1739
-- Under the slab pyramid, release builds drop a column not dated after the newest folded one, keeping the debug assertion and counting drops on the overlay. This reopens the 2026-11-02 line above (#1635 Q2): its reason still holds, but a backward column would misdraw a write-once pyramid for up to ten minutes. #1739 D10
-- The analyzer reads a frame on request; drawing at once after a longer-frame switch holds its first column until it dates after the newest (or relies on the guard above). Part of F2′. #1739
+- The analyzer reads a frame on request; drawing at once after a longer-frame switch holds its first column until it dates after the newest (or relies on the guard above). Part of F2′. #1739 (Not done: #1770 found the guard never drops or resets a column on a resolution switch, so this would remove nothing. #1758)
+
+## 2026-11-14 (F2′ rework, #1758 PR A)
+
+- Each feeder owns its analysis and dates its columns from a frame zero it states: the plugin from its clock mapping, the offline renderer from the first soundtrack frame it reads, the standalone synth from the frames it renders. Nothing dates columns by when they arrive, so the smoothed arrival anchor is gone, and the standalone synth's stall over 200 ms draws as a gap rather than sliding its columns back into line. After the plugin's input worker recovers from a crash, the newest edge keeps the lag of the resolution that drew it. #1758, #1761
+
+## 2026-11-14 (F2′ rework, #1758 PR B)
+
+- The heatmap's history is one slab pyramid, a level per rung of the slab ladder, written once as each column arrives and never redrawn from stored columns. A rung change, a late open and the Video preview read what was folded on arrival. Answered yes to #1758 Q B; Yan, 2026-11-14.
+- Under the slab pyramid, release builds drop a column not dated after the newest folded one, keeping the debug assertion and counting drops on the overlay (#1739 D10). A column more than a second behind the newest, or a crash inside the fold, resets the history as Clear display history does, counted too, rather than dropping every correct column after a mis-dated one. This supersedes the 2026-11-02 line above (#1635 Spectrum Q2): its reason still holds, but a backward column would misdraw a write-once history for up to ten minutes. #1758 Q A; Yan, 2026-11-14.
+- The bfloat16 rounding of stored powers goes with the column store it halved (#1505): a slab averages the analyzer's f32 power. A bucket whose mean sits on a dB step can draw one step lighter or darker. #1758

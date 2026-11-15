@@ -1142,33 +1142,40 @@ mod tests {
 
     /// A whole export puts the take's soundtrack where the take says it
     /// started. The test above holds the sink to the offset it is given; this
-    /// one holds the export to the offset it computes, for a take whose first
-    /// note comes before its audio, so the two clocks differ.
+    /// one holds the export to the offset it computes, for an export that
+    /// starts after its take's audio does, so the two clocks differ.
     #[test]
     fn an_export_sounds_the_takes_audio_at_the_take_time_it_was_recorded() {
-        use harmonigraph_take::{Header, NoteKind, NoteRecord, Record};
+        use harmonigraph_take::canonical::{DeltaRecord, TimingRecord};
+        use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, RunRecord};
         let Some(ffmpeg) = real_ffmpeg() else { return };
         let dir =
             std::env::temp_dir().join(format!("harmonigraph-export-sync-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // The audio starts half a second into the take and clicks half a
-        // second into itself: one second of take time. The render opens on
-        // the first note, a quarter second in, so the click is heard 0.75 s
-        // into the video.
+        // second into itself: one second of take time. The render starts at
+        // 0.75, so the click is heard 0.25 s into the video.
         write_wav(&dir.join("click.wav"), 48_000, 1.0, Some(0.5));
-        let header = Header {
-            audio_file: Some("click.wav".into()),
-            audio_start: Some(0.5),
-            ..Header::default()
+        let run = RunRecord { at: 0.0, song: 0.5 };
+        let header = Header { audio_file: Some("click.wav".into()), ..Default::default() };
+        // Sounding a quarter second into the run.
+        let note = DeltaRecord {
+            event: NoteRecord {
+                t: 0.25,
+                note: 60,
+                kind: NoteKind::On { velocity: 0.8 },
+                ..Default::default()
+            },
+            timing: Some(TimingRecord {
+                input: 12_000,
+                sample: 12_000,
+                sample_rate: 48_000.0,
+                ..Default::default()
+            }),
+            ..Default::default()
         };
-        let note = NoteRecord {
-            source: 1,
-            t: 0.25,
-            channel: 0,
-            note: 60,
-            kind: NoteKind::On { velocity: 0.8 },
-        };
-        let take = [Record::Header(header), Record::Note(note)]
+        let note = Record::Canonical(harmonigraph_take::CanonicalRecord::Delta(note));
+        let take = [Record::Header(header), Record::Run(run), note]
             .iter()
             .map(|record| ron::to_string(record).unwrap())
             .collect::<Vec<_>>()
@@ -1182,6 +1189,7 @@ mod tests {
             size: Some([64, 36]),
             scale: Some(1.0),
             fps: 20.0,
+            start: Some(0.75),
             end: Some(1.25),
             encoder: Some(VideoEncoder::X264),
             ffmpeg: Some(ffmpeg.display().to_string()),
@@ -1214,8 +1222,8 @@ mod tests {
         // few samples, differently across encoder versions, where an offset
         // added rather than subtracted moves it a whole second.
         assert!(
-            peak.abs_diff(36_000) <= 48,
-            "the click is heard {} s into the video, not 0.75 s",
+            peak.abs_diff(12_000) <= 48,
+            "the click is heard {} s into the video, not 0.25 s",
             peak as f64 / 48_000.0
         );
         std::fs::remove_dir_all(dir).unwrap();

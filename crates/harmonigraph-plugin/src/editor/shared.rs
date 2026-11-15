@@ -14,12 +14,11 @@ use super::ASSUMED_SURFACE_FORMAT;
 pub struct EditorShared {
     pub(crate) input: LiveInput,
     /// Crate-visible because [`crate::background`] shares this state with the
-    /// frame, and shares more of it than a drainer would need: it applies the
-    /// host's restored blob through this field WHOLE — dock, camera, view and
-    /// every setting, off the GUI thread, while the window is shut (see
-    /// [`crate::background`], and `Restore` there) — as well as logging a
-    /// failure to start into the same console. Its tests read back the history
-    /// it filled.
+    /// frame, and shares more of it than a drainer would need: its holds of
+    /// the editor lock install a host restore into this field WHOLE — dock,
+    /// camera, view and every setting, off the GUI thread (see
+    /// [`EditorLock`](super::EditorLock)) — and it logs a failure to start
+    /// into the same console. Its tests read back the history it filled.
     pub(crate) ui: SharedState,
     /// When the previous GUI update ran, if it was paced; used to detect
     /// event-loop stalls. See [`note_frame`](Self::note_frame).
@@ -46,6 +45,10 @@ pub struct EditorShared {
     /// The input worker could not be started, so the window's frames drain
     /// the rings themselves, as they did before it existed.
     pub(crate) frame_drains: bool,
+    /// The device every window of this editor opens on (#698). Here rather
+    /// than on the editor because activation creates it, before any window,
+    /// and starts compiling on it ([`super::start_graphics`]).
+    pub(crate) gpu_context: egui_baseview::SharedGpuContext,
 }
 
 impl EditorShared {
@@ -65,6 +68,7 @@ impl EditorShared {
                 audio_position: None,
                 audio_origin: 0.0,
                 spare: Default::default(),
+                analysis: Some(Default::default()),
                 tape_notes: Vec::new(),
                 recorder: Default::default(),
             },
@@ -76,6 +80,7 @@ impl EditorShared {
             take_last_count: 0,
             take_still_since: None,
             frame_drains: false,
+            gpu_context: egui_baseview::SharedGpuContext::default(),
         }
     }
 
@@ -174,7 +179,7 @@ impl EditorShared {
         // events arriving: music has gaps, and a gap is not a stop.
         self.take_rolling = self.take.is_rolling();
 
-        // One-file triggers finish at transport discontinuities.
+        // Loop end finishes at the wrap.
         let trigger = self.ui.picture.appearance.render.trigger;
         let ends_at_rewind = trigger.ends_at_rewind();
         self.take.set_end_at_rewind(ends_at_rewind);
@@ -184,8 +189,7 @@ impl EditorShared {
         self.take.set_stop_bar(self.ui.picture.appearance.render.stop_at_bar());
 
         // Honor the audio-owned completion even if the trigger changed before
-        // this poll. Stop still waits for every publication lane to close the
-        // prefix; a forward seek carries its cutoff notice into the render.
+        // this poll.
         let ended = self.take.has_ended();
         if self.take.is_recording() && ended {
             self.ui.workspace.interaction.take.recording = false;
@@ -331,14 +335,11 @@ mod tests {
         shared.ui.workspace.interaction.take.recording = true;
         shared.sync_take(48_000.0);
         assert!(shared.take.is_recording());
-        // One note captured, as the Hub publishes one into the take's first pass.
+        // One note captured, as the Hub publishes one into the take's first run.
         recorder.is_armed();
-        let route = harmonigraph_record::publication::Route {
-            address: recorder.configuration_address(),
-            time_offset: 0.0,
-        };
+        recorder.run(0.0, 0.0);
         let on = harmonigraph_core::NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
-        let _ = recorder.publish_note(on.into(), route);
+        let _ = recorder.publish_note(on.into());
         let first_still = 1.0;
         let frame = 1.0 / 144.0;
         let mut now = first_still;

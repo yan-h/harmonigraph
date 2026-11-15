@@ -111,7 +111,7 @@ fn is_float(text: &str) -> bool {
 fn loaded(edge: Edge) -> SharedState {
     let serialized = poisoned(edge);
     let mut state = fresh();
-    assert!(state.load_persist(&serialized));
+    assert!(state.install_document(&serialized));
     // Plugin and standalone editor shells share this load door. Check the
     // complete view invariant, including fields that have no value bar.
     let mut normalized = state.picture.appearance.view.clone();

@@ -3,13 +3,12 @@ use std::time::Instant;
 
 use egui_baseview::Queue;
 use nice_plug::prelude::{GuiContext, ParamSetter};
-use parking_lot::Mutex;
 
 use crate::{HarmonigraphParams, PluginParamBackend};
 
+use super::lock::EditorLock;
 use super::persist::EguiState;
 use super::pop_out::PopOut;
-use super::shared::EditorShared;
 
 /// The plugin's per-frame GUI work: take the frame's lock, close out the note
 /// frame, reconcile the take — and then hand the state the input worker has
@@ -39,21 +38,16 @@ pub(super) fn frame(
     let shell_start = Instant::now();
     let setter = ParamSetter::new(context);
 
-    // One lock for the whole frame. The audio thread only ever touches the
-    // rtrb producers, and the editor-drop path runs on this same GUI thread.
-    // The other parties hold it briefly: the input worker, for its take and
-    // its give but never for its FFTs, and a host state save with the window
-    // open (`UiState`'s `map`), for one serialization on the host's main
-    // thread, which is this thread on macOS and Windows and a different one
-    // on X11.
+    // One lock for the whole frame, which also installs a host restore made
+    // since the last holder (a preset load, an undo; see `EditorLock`). The
+    // audio thread only ever touches the rtrb producers, and the editor-drop
+    // path runs on this same GUI thread. The other parties hold it briefly:
+    // the input worker, for its take and its give but never for its FFTs, and
+    // a host state save (`UiState`'s `map`), for one serialization on the
+    // host's main thread, which is this thread on macOS and Windows and a
+    // different one on X11.
     let mut guard = state.shared.lock();
     let shared = &mut *guard;
-
-    // A host restore since the last frame (a preset load, an undo), which
-    // nothing else applies to an open window. The input worker's next take
-    // reads the settings it leaves, which decide how the samples taken then
-    // are analyzed.
-    state.params.ui_state.apply_restore(&mut shared.ui);
 
     // The display link's timing for this frame, or `None` for one it did not ask
     // for (the watchdog's, an occlusion repaint).
@@ -161,7 +155,7 @@ pub(super) fn frame(
 
 /// State handed to egui-baseview's run loop.
 pub(super) struct WindowState {
-    pub(super) shared: Arc<Mutex<EditorShared>>,
+    pub(super) shared: Arc<EditorLock>,
     pub(super) params: Arc<HarmonigraphParams>,
     pub(super) pop_out: Weak<PopOut>,
     /// What the frame log was last told the editor was doing.
@@ -171,7 +165,7 @@ pub(super) struct WindowState {
 
 impl WindowState {
     pub(super) fn new(
-        shared: Arc<Mutex<EditorShared>>,
+        shared: Arc<EditorLock>,
         params: Arc<HarmonigraphParams>,
         pop_out: Weak<PopOut>,
     ) -> Self {

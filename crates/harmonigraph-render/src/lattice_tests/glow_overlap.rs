@@ -31,7 +31,6 @@ fn scene(levels: &[f32], gain: f32, separated: bool) -> Scene {
             node
         })
         .collect();
-    rows_per_node(&mut scene);
     for _ in 0..12 {
         scene.camera.pan(CENTRE - on_screen(&scene, SIZE, glam::Vec3::ZERO));
     }
@@ -82,13 +81,12 @@ fn read_glow_binding(shooter: &Shooter, binding: &wgpu::BindGroup) -> Vec<u8> {
 }
 
 #[test]
-fn a_held_nodes_light_breathes_without_advancing_its_ink_history() {
+fn a_held_nodes_light_breathes_without_accumulating_anything() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 0.75, false);
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.3, release: 2.5 });
+    scene.glow_clock = Some(0.0);
     let first = glow(&mut shooter, &scene);
-    scene.glow_timing.as_mut().unwrap().now = 4.0;
+    scene.glow_clock = Some(4.0);
     shooter.shot_again(&scene);
     let later = read_glow(&shooter);
     assert!(first.iter().any(|&v| v > 20), "the held node must light the target");
@@ -98,11 +96,11 @@ fn a_held_nodes_light_breathes_without_advancing_its_ink_history() {
     assert_eq!(later, glow(&mut shooter, &scene));
     scene.view.atmosphere.breath_amount = 0.0;
     let steady = glow(&mut shooter, &scene);
-    scene.glow_timing.as_mut().unwrap().now = 0.0;
+    scene.glow_clock = Some(0.0);
     assert_eq!(steady, glow(&mut shooter, &scene), "zero depth must stop breathing");
     scene.view.atmosphere.breath_amount = 1.0;
     scene.view.atmosphere.texture_depth = 0.0;
-    scene.glow_timing.as_mut().unwrap().now = 4.0;
+    scene.glow_clock = Some(4.0);
     assert_ne!(steady, glow(&mut shooter, &scene), "breathing works with both stages off");
 }
 
@@ -123,8 +121,7 @@ fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
         // than testing their subpixel average at this small size.
         scene.view.atmosphere.texture_scale = 4.0;
         scene.view.atmosphere.breath_amount = 0.0;
-        scene.glow_timing =
-            Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.3, release: 2.5 });
+        scene.glow_clock = Some(0.0);
         let smooth = glow(&mut shooter, &scene);
         scene.view.atmosphere.texture_depth = 1.0;
         let textured = glow(&mut shooter, &scene);
@@ -160,7 +157,7 @@ fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
                 brightest_ratio - darkest_ratio > 0.25,
                 "Clouds: texture must vary spatially, not just dim the halo ({darkest_ratio}..{brightest_ratio})"
             );
-        scene.glow_timing.as_mut().unwrap().now = 8.0;
+        scene.glow_clock = Some(8.0);
         shooter.shot_again(&scene);
         let later = read_glow(&shooter);
         assert_ne!(textured, later, "materials must drift inside a held glow");
@@ -181,8 +178,7 @@ fn watercolor_motion_and_silence_use_the_production_light() {
     scene.view.atmosphere.material_amount = 0.0;
     scene.view.atmosphere.material_settings.wash_size = 2.0;
     scene.view.atmosphere.material_speed = 1.0;
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
+    scene.glow_clock = Some(0.0);
     let baseline = glow(&mut shooter, &scene);
     scene.view.atmosphere.material_amount = 1.0;
     let smooth = glow(&mut shooter, &scene);
@@ -199,12 +195,12 @@ fn watercolor_motion_and_silence_use_the_production_light() {
         assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1), "premultiplied light");
         assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
     }
-    scene.glow_timing.as_mut().unwrap().now = 8.0;
+    scene.glow_clock = Some(8.0);
     shooter.shot_again(&scene);
     let moved = read_glow(&shooter);
     assert_ne!(smooth, moved, "held notes still show material motion");
     scene.view.atmosphere.material_speed = 0.0;
-    scene.glow_timing.as_mut().unwrap().now = 16.0;
+    scene.glow_clock = Some(16.0);
     shooter.shot_again(&scene);
     assert_eq!(moved, read_glow(&shooter), "zero speed freezes washes where they are");
     scene.view.atmosphere.material_amount = 0.0;
@@ -239,8 +235,7 @@ fn materials_drift_stays_continuous_across_axis_wraps() {
         scene.view.atmosphere.breath_amount = 0.0;
         scene.view.atmosphere.material_settings.wash_size = 2.0;
         scene.view.atmosphere.material_speed = 1.0;
-        scene.glow_timing =
-            Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
+        scene.glow_clock = Some(0.0);
         scene.view.atmosphere.material_amount = 0.0;
         let plain = glow(&mut shooter, &scene);
         scene.view.atmosphere.material_amount = 1.0;
@@ -273,10 +268,10 @@ fn materials_drift_stays_continuous_across_axis_wraps() {
             let velocity = (drift(1.0) - drift(0.0)) * cells;
             for boundary in [40.0, 200.0] {
                 let crossing = (boundary * velocity.signum() - origin) / velocity;
-                scene.glow_timing.as_mut().unwrap().now = crossing - 0.0001;
+                scene.glow_clock = Some(crossing - 0.0001);
                 shooter.shot_again(&scene);
                 let before = read_glow(&shooter);
-                scene.glow_timing.as_mut().unwrap().now = crossing + 0.0001;
+                scene.glow_clock = Some(crossing + 0.0001);
                 shooter.shot_again(&scene);
                 let after = read_glow(&shooter);
                 let largest_step =
@@ -333,11 +328,10 @@ fn nudged(
 ) -> (u8, u8) {
     let largest_step =
         |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 600.0, attack: 0.0, release: 0.0 });
+    scene.glow_clock = Some(600.0);
     let held = glow(shooter, &scene);
     nudge(&mut scene.view.atmosphere);
-    scene.glow_timing.as_mut().unwrap().now += 0.0001;
+    *scene.glow_clock.as_mut().unwrap() += 0.0001;
     shooter.shot_again(&scene);
     let carried = largest_step(&held, &read_glow(shooter));
     (carried, largest_step(&held, &glow(shooter, &scene)))
@@ -391,16 +385,15 @@ fn a_frame_without_a_glow_clock_holds_the_travel() {
     a.breath_amount = 0.0;
     a.texture_depth = 1.0;
     a.texture_scale = 4.0;
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 600.0, attack: 0.0, release: 0.0 });
+    scene.glow_clock = Some(600.0);
     shooter.shot_again(&scene);
     scene.view.atmosphere.texture_speed *= 0.99;
-    scene.glow_timing.as_mut().unwrap().now += 0.0001;
+    *scene.glow_clock.as_mut().unwrap() += 0.0001;
     shooter.shot_again(&scene);
     let dragged = read_glow(&shooter);
-    let clock = scene.glow_timing.take();
+    let clock = scene.glow_clock.take();
     shooter.shot_again(&scene);
-    scene.glow_timing = clock.map(|c| harmonigraph_scene::GlowTiming { now: c.now + 0.0001, ..c });
+    scene.glow_clock = clock.map(|now| now + 0.0001);
     shooter.shot_again(&scene);
     let back = largest_step(&dragged, &read_glow(&shooter));
     assert!(back <= 2, "sudden channel step {back}");
@@ -425,8 +418,7 @@ fn textures_feed_materials_before_sampling() {
         scene.view.atmosphere.breath_amount = 0.0;
         scene.view.atmosphere.texture_depth = 0.85;
         scene.view.atmosphere.texture_scale = 4.0;
-        scene.glow_timing =
-            Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
+        scene.glow_clock = Some(0.0);
         let texture_only = glow(&mut shooter, &scene);
         scene.view.atmosphere.material_settings.wash_size = 1.0;
         scene.view.atmosphere.material_style = material;
@@ -493,8 +485,7 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
     scene.view.atmosphere.breath_amount = 0.0;
     scene.view.atmosphere.texture_speed = 0.0;
     scene.view.atmosphere.material_speed = 0.0;
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
+    scene.glow_clock = Some(0.0);
     let still = glow(&mut shooter, &scene);
     let geometry = |shooter: &Shooter| {
         shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
@@ -503,7 +494,7 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
             .map(|tile| tile.geometry_binding())
     };
     let original_tile = geometry(&shooter).unwrap();
-    scene.glow_timing.as_mut().unwrap().now = 8.0;
+    scene.glow_clock = Some(8.0);
     shooter.shot_again(&scene);
     assert_eq!(still, read_glow(&shooter), "both zero speeds freeze held light");
     // The material's drift is built up frame by frame, so it moves only as
@@ -511,7 +502,7 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
     for (texture_speed, material_speed) in [(1.0, 0.0), (0.0, 1.0)] {
         scene.view.atmosphere.texture_speed = texture_speed;
         scene.view.atmosphere.material_speed = material_speed;
-        scene.glow_timing.as_mut().unwrap().now += 8.0;
+        *scene.glow_clock.as_mut().unwrap() += 8.0;
         shooter.shot_again(&scene);
         assert_ne!(still, read_glow(&shooter), "each stage moves independently");
         assert_eq!(
@@ -522,7 +513,7 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
     }
     // Back to the clock's start, as a render started over: the carried pane's
     // drift starts over there too, and draws what a fresh pane does.
-    scene.glow_timing.as_mut().unwrap().now = 0.0;
+    scene.glow_clock = Some(0.0);
     // Texture edits and positive material amount never invalidate active geometry.
     scene.view.atmosphere.texture_depth = 0.4;
     scene.view.atmosphere.texture_scale = 4.0;
@@ -984,8 +975,7 @@ fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() 
     scene.view.atmosphere.texture_depth = 0.0;
     scene.view.atmosphere.breath_amount = 0.0;
     scene.view.atmosphere.material_style = LatticeMaterial::Stars;
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 1.0, attack: 0.0, release: 0.0 });
+    scene.glow_clock = Some(1.0);
     scene.view.atmosphere.material_amount = 0.0;
     let raw = glow(&mut shooter, &scene);
     let hue = raw.as_chunks::<4>().0.iter().max_by_key(|p| p[3]).unwrap();
@@ -1021,7 +1011,7 @@ fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() 
                 }
             }
         }
-        scene.glow_timing.as_mut().unwrap().now = 2.0;
+        scene.glow_clock = Some(2.0);
         shooter.shot_again(&scene);
         assert_ne!(painted, read_glow(&shooter), "star motion must advance: {resolution}");
         for node in &mut scene.nodes {
@@ -1033,7 +1023,7 @@ fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() 
             "silent stars retain no independent light: {resolution}"
         );
         scene.nodes[0].glow.level = 1.0;
-        scene.glow_timing.as_mut().unwrap().now = 1.0;
+        scene.glow_clock = Some(1.0);
     }
 }
 
@@ -1052,8 +1042,7 @@ fn dense_stars_follow_the_pattern_darkness_of_their_light() {
     // the lattice draws what it stores `LATTICE_STAR_SIZE_SCALE` times over.
     scene.view.atmosphere.stars = harmonigraph_scene::StarSettings::default()
         .scaled(1.0 / harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 1.0, attack: 0.0, release: 0.0 });
+    scene.glow_clock = Some(1.0);
     let mut mean = |material, depth| {
         scene.view.atmosphere.material_style = material;
         scene.view.atmosphere.texture_depth = depth;
@@ -1072,8 +1061,7 @@ fn stars_carried_material_and_resolution_transitions_match_fresh_panes() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
     scene.view.atmosphere.breath_amount = 0.0;
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 3.0, attack: 0.0, release: 0.0 });
+    scene.glow_clock = Some(3.0);
     for (style, amount, resolution, scale) in [
         (LatticeMaterial::Stars, 1.0, 1.0, 1.0),
         (LatticeMaterial::Stars, 1.0, 0.75, 1.0),
@@ -1133,8 +1121,7 @@ fn the_clouds_detail_fades_where_it_is_finer_than_the_glow_texel() {
     };
     scene.view.atmosphere.texture_scale = PATTERN;
     scene.view.atmosphere.breath_amount = 0.0;
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.3, release: 2.5 });
+    scene.glow_clock = Some(0.0);
     // Detail cells per glow texel, as `nebula_light` reckons them: the fixture
     // has to stand well inside the fade for this to measure it.
     let detail = 5.0 * 2.3 / (PATTERN * GLOW_TEXELS as f32);

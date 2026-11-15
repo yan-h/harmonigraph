@@ -114,7 +114,6 @@ pub fn derive_scene_with_extra(
             pos.sevens == view.center_sevens,
             node_cents,
             hovered == Some(pos),
-            nodes.len() as u32,
         ));
         node_pcs.push(node_pc);
     }
@@ -126,8 +125,6 @@ pub fn derive_scene_with_extra(
     if let Some(field) = TrailField::build(tracker.history(), view) {
         field.apply(&mut nodes, &node_pcs, tuning);
     }
-
-    let nodes_len = nodes.len() as u32;
 
     // Every radius on a node, off the one stack the size bars describe
     // (`ViewConfig::rings`): each ring
@@ -164,11 +161,7 @@ pub fn derive_scene_with_extra(
         // The shader divides each marker's world radius by this fixed unit
         // to recover the arm its bar was dialled at.
         marker_unit: marker_world(1.0),
-        // A row per node, so a scene nothing has carried still reads one strip
-        // row per node — the shell's pass hands out rows of its own and raises
-        // this to their high-water mark.
-        glow_rows: nodes_len,
-        glow_timing: None,
+        glow_clock: None,
         view: normalized,
     }
 }

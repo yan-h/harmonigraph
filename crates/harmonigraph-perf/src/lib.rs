@@ -202,11 +202,15 @@ pub struct FrameCosts {
     /// reaches egui's. Four vertices each, against the several hundred a
     /// stroked rounded rect costs.
     pub roll_notes: u32,
-    /// The spectrogram's cache fallbacks since the plugin opened: full
-    /// re-aggregations of the window, and full uploads of the slab grid.
-    /// CUMULATIVE, so the readout below can difference them into a rate without
-    /// a dropped frame losing an event.
-    pub spectrogram_fallbacks: (u32, u32),
+    /// The spectrogram's full uploads of its slab grid since the plugin
+    /// opened. CUMULATIVE, so the readout below can difference it into a rate
+    /// without a dropped frame losing an event.
+    pub spectrogram_uploads: u32,
+    /// The spectrogram history's guard since the plugin opened: columns it
+    /// dropped for a date at or just before the newest, and the times the
+    /// history reset. Totals, shown as totals: both read zero while every
+    /// feeder dates forward, which every shipped feeder does.
+    pub spectrogram_guard: (u32, u32),
     /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
     /// `update_buffers` — so it is billed to the buffer uploads.
     pub prepare_ms: f32,
@@ -573,23 +577,26 @@ pub struct PerfStats {
     pub prims: u32,
     pub verts: u32,
     pub roll_notes: u32,
-    /// The spectrogram's fallbacks PER SECOND — window re-aggregations and ring
-    /// full uploads — latched with everything else.
+    /// The spectrogram's ring full uploads PER SECOND, latched with
+    /// everything else.
     ///
     /// A rate and not a total, because the total climbs by one whenever the
     /// layout legitimately changes and would read the same as a cache that has
-    /// stopped working. What tells those apart is how FAST it climbs: both of
-    /// this pane's silent performance bugs sat at hundreds a second while a
+    /// stopped working. What tells those apart is how FAST it climbs: the
+    /// pane's silent performance bugs sat at hundreds a second while a
     /// healthy build sits at zero.
-    pub spec_fallbacks: (f32, f32),
+    pub spec_uploads: f32,
+    /// The spectrogram history guard's totals, latched with everything else:
+    /// see [`FrameCosts::spectrogram_guard`].
+    pub spec_guard: (u32, u32),
     /// The frame rate the display link was last asked for, which the headline
     /// rate is judged against. Kept across the frames the link did not ask for
     /// (the watchdog's and the occlusion repaint's, which carry none), so one
     /// of them does not drop the colour back to the fixed thresholds. `None`
     /// where no link ever paced the window: the standalone.
     pub target_fps: Option<f32>,
-    /// The totals the rates were last differenced from.
-    last_fallbacks: (u32, u32),
+    /// The total the upload rate was last differenced from.
+    last_uploads: u32,
     /// The host process's smoothed physical footprint in bytes, refreshed about
     /// once a second (0 when the platform can't report it).
     ///
@@ -646,9 +653,10 @@ impl Default for PerfStats {
             prims: 0,
             verts: 0,
             roll_notes: 0,
-            spec_fallbacks: (0.0, 0.0),
+            spec_uploads: 0.0,
+            spec_guard: (0, 0),
             target_fps: None,
-            last_fallbacks: (0, 0),
+            last_uploads: 0,
             footprint_bytes: 0,
             heap_bytes: None,
             gpu_memory: Default::default(),
@@ -680,7 +688,8 @@ impl FrameCosts {
         cpu_ms: f32,
         lattice: &harmonigraph_render::LatticeStats,
         roll_notes: u32,
-        spectrogram_fallbacks: (u32, u32),
+        spectrogram_uploads: u32,
+        spectrogram_guard: (u32, u32),
     ) -> FrameCosts {
         use std::sync::atomic::Ordering::Relaxed;
         // The callback runs after the UI: these are the preceding rendered
@@ -716,7 +725,8 @@ impl FrameCosts {
             prims: shell.prims,
             verts: shell.verts,
             roll_notes,
-            spectrogram_fallbacks,
+            spectrogram_uploads,
+            spectrogram_guard,
             encode_ms: shell.encode_ms,
             submit_ms: shell.submit_ms,
             target_fps: shell.target_fps,
@@ -797,14 +807,11 @@ impl PerfStats {
             // than reporting the opening build as an infinite rate.
             let elapsed = now - self.last_readout;
             if elapsed.is_finite() && elapsed > 0.0 {
-                let rate =
-                    |total: u32, then: u32| (total.saturating_sub(then) as f64 / elapsed) as f32;
-                self.spec_fallbacks = (
-                    rate(costs.spectrogram_fallbacks.0, self.last_fallbacks.0),
-                    rate(costs.spectrogram_fallbacks.1, self.last_fallbacks.1),
-                );
+                let uploads = costs.spectrogram_uploads.saturating_sub(self.last_uploads);
+                self.spec_uploads = (f64::from(uploads) / elapsed) as f32;
             }
-            self.last_fallbacks = costs.spectrogram_fallbacks;
+            self.last_uploads = costs.spectrogram_uploads;
+            self.spec_guard = costs.spectrogram_guard;
             self.last_readout = now;
         }
         self.workload = workload;
@@ -1019,7 +1026,7 @@ mod tests {
         let samples = [None, Some(2.0), None, None, None, None, Some(10.0)];
         for (frame, draw_gpu_ms) in samples.into_iter().enumerate() {
             let shell = ShellTimings { draw_gpu_ms, ..Default::default() };
-            let costs = FrameCosts::assemble(shell, 0.0, &stats, 0, (0, 0));
+            let costs = FrameCosts::assemble(shell, 0.0, &stats, 0, 0, (0, 0));
             perf.record(costs, frame as f64 * 0.01, Workload::default());
         }
         assert_eq!(perf.windows[Stage::DrawGpu as usize].n, 2);
@@ -1041,7 +1048,7 @@ mod tests {
         use std::sync::atomic::Ordering::Relaxed;
 
         let stats = LatticeStats::default();
-        let assemble = || FrameCosts::assemble(ShellTimings::default(), 0.0, &stats, 0, (0, 0));
+        let assemble = || FrameCosts::assemble(ShellTimings::default(), 0.0, &stats, 0, 0, (0, 0));
         let publish_cpu = |prepare: f32| {
             stats.poll_ms.store(1.0f32.to_bits(), Relaxed);
             stats.write_ms.store(2.0f32.to_bits(), Relaxed);
@@ -1135,46 +1142,42 @@ mod tests {
     /// same as a cache that has stopped working; what tells them apart is how
     /// fast it climbs.
     #[test]
-    fn the_overlay_reports_cache_fallbacks_as_a_rate() {
+    fn the_overlay_reports_full_uploads_as_a_rate() {
         let mut perf = PerfStats::default();
         let mut now = 0.0;
-        let mut totals = (0u32, 0u32);
-        let mut tick = |perf: &mut PerfStats, now: &mut f64, folds: u32, uploads: u32| {
-            totals = (totals.0 + folds, totals.1 + uploads);
+        let mut total = 0u32;
+        let mut tick = |perf: &mut PerfStats, now: &mut f64, uploads: u32| {
+            total += uploads;
             *now += 1.0 / 60.0;
             perf.record(
-                FrameCosts { spectrogram_fallbacks: totals, ..Default::default() },
+                FrameCosts { spectrogram_uploads: total, ..Default::default() },
                 *now,
                 Workload::default(),
             );
         };
 
-        // A healthy build: the caches absorb every frame, so nothing is counted
+        // A healthy build: the delta absorbs every frame, so nothing is counted
         // and the rate stays at zero however long it runs.
         for _ in 0..120 {
-            tick(&mut perf, &mut now, 0, 0);
+            tick(&mut perf, &mut now, 0);
         }
-        assert_eq!(perf.spec_fallbacks, (0.0, 0.0), "an idle build must read zero");
+        assert_eq!(perf.spec_uploads, 0.0, "an idle build must read zero");
 
         // One legitimate re-layout — a resize, say. A total would now read
         // "1 forever"; the rate returns to zero once it is past.
-        tick(&mut perf, &mut now, 1, 1);
+        tick(&mut perf, &mut now, 1);
         for _ in 0..120 {
-            tick(&mut perf, &mut now, 0, 0);
+            tick(&mut perf, &mut now, 0);
         }
-        assert_eq!(perf.spec_fallbacks, (0.0, 0.0), "a one-off re-layout must not linger");
+        assert_eq!(perf.spec_uploads, 0.0, "a one-off re-layout must not linger");
 
-        // And the failure this exists to show: a layer falling back on every
-        // frame, at 60 Hz.
+        // And the failure this exists to show: a full upload on every frame,
+        // at 60 Hz.
         for _ in 0..120 {
-            tick(&mut perf, &mut now, 1, 1);
+            tick(&mut perf, &mut now, 1);
         }
-        let (folds, uploads) = perf.spec_fallbacks;
-        assert!((folds - 60.0).abs() < 5.0, "a per-frame refold read as {folds}/s, not ~60");
-        assert!(
-            (uploads - 60.0).abs() < 5.0,
-            "a per-frame full upload read as {uploads}/s, not ~60"
-        );
+        let uploads = perf.spec_uploads;
+        assert!((uploads - 60.0).abs() < 5.0, "a per-frame full upload read as {uploads}/s");
     }
 
     #[test]
@@ -1536,7 +1539,7 @@ mod tests {
         // assertion below, so it has to show it found the list first: a plain
         // reading, and the one field whose type is not a bare `f32`.
         assert!(
-            fields.contains(&"tick_ms") && fields.contains(&"spectrogram_fallbacks"),
+            fields.contains(&"tick_ms") && fields.contains(&"spectrogram_guard"),
             "the field list did not parse: {fields:?}",
         );
         for field in fields {

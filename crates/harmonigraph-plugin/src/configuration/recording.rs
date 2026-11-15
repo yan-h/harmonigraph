@@ -1,317 +1,126 @@
-//! Which recording pass and time origin own an output sample. Each segment
-//! records its adopted configuration; the owner splits segments at timed
-//! shared-tuning changes in Lattice Map mode.
+//! What the take needs from the audio thread: which stretches recorded, where
+//! each sits in the take's audio, and the configuration in force. Every record
+//! is timed where it sounds, and the take's reader places it by that time
+//! (#1760).
 use harmonigraph_core::canonical::ClockId;
 use harmonigraph_core::configuration::ResolvedConfig;
-use harmonigraph_record::{
-    configuration::{RecordAddress, RecordIntent, RECORD_PASSES},
-    Recorder,
-};
+use harmonigraph_record::{configuration::RecordIntent, Recorder};
 
-// A segment lives only while output inside it is still unpublished, and
-// contiguous callbacks on one pass and rate merge into one. Distinct spans
-// therefore need a transport discontinuity or a pass change each; exhaustion
-// is an explicit configuration failure, not growth on the audio thread.
-const SEGMENTS: usize = 64;
+/// The Hub's mapping from its samples to the take's presentation clock,
+/// anchored once at activation. A run states where it opens on it, and every
+/// delta is timed on it, so the two must be one function.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Presentation {
+    pub anchor: Option<(i64, f64)>,
+    pub rate: f64,
+}
 
-#[derive(Clone, Copy)]
-struct Segment {
-    clock: ClockId,
-    start: i64,
-    end: i64,
-    address: Option<RecordAddress>,
-    origin: f64,
-    rate: f64,
+impl Presentation {
+    pub fn at(self, sample: i64) -> f64 {
+        let (anchor, time) = self.anchor.unwrap_or((0, 0.0));
+        if self.rate <= 0.0 {
+            return time;
+        }
+        time + (sample as f64 - anchor as f64) / self.rate
+    }
 }
-#[derive(Clone, Copy)]
-struct Pass {
-    address: RecordAddress,
-    end: Option<i64>,
-    /// The last configuration written to this pass, so a stable block writes
-    /// nothing and a changed one writes once.
-    last: Option<ResolvedConfig>,
-    configuration_complete: bool,
-    source_complete: bool,
-}
+
 pub(crate) struct Recording {
     pub clock: ClockId,
-    /// Continuous presentation clock for publication controls and loss markers.
-    pub observation_time: f64,
-    source_prefix: Option<i64>,
+    pub presentation: Presentation,
     registered_through: i64,
-    segments: [Option<Segment>; SEGMENTS],
-    passes: [Option<Pass>; RECORD_PASSES],
-    current: Option<RecordAddress>,
+    /// The intent captured at this callback's boundary.
     pub captured_intent: RecordIntent,
-    pub prefix: i64,
+    /// The recorder's run serial the open run opened under, which moves at a
+    /// resume.
+    run: Option<u64>,
+    /// The configuration last written, and the take it was written in: a
+    /// stable block writes nothing, and a changed one writes once.
+    last: Option<(u64, ResolvedConfig)>,
     pub block_start: i64,
     pub block_frames: u32,
-    /// Terminal wrapper ownership, separate from successful configuration and
-    /// source prefixes. Original recording routes remain until actual join cuts.
-    pub retired_configuration: Option<bool>,
-    pub retirement_finished: bool,
 }
 impl Default for Recording {
     fn default() -> Self {
         Self {
             clock: ClockId::default(),
-            observation_time: 0.0,
-            source_prefix: None,
+            presentation: Presentation::default(),
             registered_through: i64::MIN,
-            segments: [None; SEGMENTS],
-            passes: [None; RECORD_PASSES],
-            current: None,
             captured_intent: RecordIntent::default(),
-            prefix: 0,
+            run: None,
+            last: None,
             block_start: 0,
             block_frames: 0,
-            retired_configuration: None,
-            retirement_finished: false,
         }
     }
 }
 impl Recording {
-    pub fn has_pass(&self, epoch: u64) -> bool {
-        self.passes.iter().flatten().any(|pass| pass.address.epoch == epoch)
+    /// Whether this sub-block records.
+    pub fn recording(&self) -> bool {
+        self.run.is_some()
     }
 
-    /// A joined callback boundary can observe Stop: no callback still owns an
-    /// earlier armed intent. Close only the span actually registered, leaving
-    /// both existing frontiers to prove it whole.
-    pub fn observe_joined_disarm(&mut self, recorder: &mut Recorder) {
-        let intent = recorder.capture_recording_intent();
-        if intent.is_armed() {
+    fn end_run(&mut self, recorder: &mut Recorder, at: i64) {
+        if self.run.take().is_some() {
+            recorder.run_end(self.presentation.at(at));
+        }
+    }
+
+    /// Close or open this sub-block's run. It records when it has an origin:
+    /// the transport observation gives one only to an armed take that rolls,
+    /// and a block with no transport position gives its local clock to any
+    /// armed take; `origin` is where it sits in the take's audio.
+    pub fn record(&mut self, recorder: &mut Recorder, origin: Option<f64>) {
+        let start = self.block_start;
+        let serial = recorder.recording_run();
+        if self.run.is_some_and(|run| origin.is_none() || serial != run) {
+            self.end_run(recorder, start);
+        }
+        if let (Some(song), None) = (origin, self.run) {
+            recorder.run(self.presentation.at(start), song);
+            self.run = Some(serial);
+        }
+    }
+
+    /// The configuration in force from `sample`, written when it changed.
+    pub fn configuration(&mut self, recorder: &mut Recorder, sample: i64, config: ResolvedConfig) {
+        if self.run.is_none() {
             return;
         }
-        self.captured_intent = intent;
-        recorder.is_armed_at(intent);
-        if let Some(address) = self.current.take() {
-            if let Some(pass) = self.passes.iter_mut().flatten().find(|p| p.address == address) {
-                pass.end = Some(self.registered_through);
-            } else {
-                recorder.fail_configuration();
-            }
+        let take = recorder.recording_epoch();
+        if self.last != Some((take, config)) {
+            recorder.configuration(self.presentation.at(sample), config);
+            self.last = Some((take, config));
         }
     }
-    pub fn dispose_retired_configuration(&mut self, recorder: &mut Recorder) {
-        let unfinished = self.retired_configuration.expect("joined configuration producer");
-        // Retain every already-applied change at its original recording route.
-        self.finish(recorder);
-        if unfinished
-            && self
-                .segments
-                .iter()
-                .flatten()
-                .any(|segment| segment.address.is_some() && segment.end > self.prefix)
-        {
-            recorder.fail_configuration();
+
+    /// This sub-block is registered through `end`.
+    pub fn registered(&mut self, end: i64) {
+        self.registered_through = end;
+    }
+
+    /// A joined boundary with the take disarmed: no callback can still close
+    /// its run, so it closes here. For a host that stops calling the audio
+    /// thread after a Stop.
+    pub fn close_stopped(&mut self, recorder: &mut Recorder) {
+        if recorder.capture_recording_intent().is_armed() {
+            return;
+        }
+        if self.registered_through != i64::MIN {
+            self.end_run(recorder, self.registered_through);
         }
     }
-    /// All original source producers have joined/sealed and every final actual
-    /// cut has been published or explicitly lost. No synthetic prefix or seed.
-    pub fn finish_retired_publication(&mut self, recorder: &mut Recorder, unknown_held: bool) {
-        assert!(self.retired_configuration.is_some());
-        if unknown_held
-            || self.passes.iter().flatten().any(|pass| !pass.configuration_complete)
-            || self
-                .segments
-                .iter()
-                .flatten()
-                .any(|segment| segment.address.is_some() && segment.end > self.prefix)
-        {
-            recorder.fail_configuration();
-        }
-        self.segments.fill(None);
-        self.passes.fill(None);
-        self.current = None;
-        self.retirement_finished = true;
-        recorder.retired_publication_complete();
-    }
-    pub fn reset(&mut self, recorder: &Recorder) {
-        if self.segments.iter().flatten().any(|s| {
-            s.address.is_some()
-                && (s.end > self.prefix || self.source_prefix.is_none_or(|through| s.end > through))
-        }) {
-            recorder.fail_configuration();
-        }
+
+    /// A host reset cuts the clock. A run open across it ends here and opens
+    /// again on the new clock.
+    pub fn reset(&mut self, recorder: &mut Recorder) {
+        self.end_run(recorder, self.registered_through);
         let Some(epoch) = self.clock.epoch.checked_add(1) else {
             recorder.fail_configuration();
             return;
         };
         let clock = ClockId { epoch, ..self.clock };
         *self = Self { clock, ..Self::default() };
-    }
-
-    /// ONLY the canonical audio owner may supply this proof: every actual
-    /// output strictly before `through` has acquired an immutable recording
-    /// route or an explicit publication-failure disposition. Source receipt,
-    /// held baseline and configuration progress are insufficient.
-    ///
-    /// A sample here is the Hub's own steady timeline, the same one the
-    /// segments below are cut on, so there is no offset between them to apply.
-    pub fn source_frontier(&mut self, clock: ClockId, through: i64) -> Result<(), ()> {
-        if clock != self.clock {
-            return Err(());
-        }
-        if self.source_prefix.is_some_and(|old| through < old) {
-            return Err(());
-        }
-        self.source_prefix = Some(through);
-        Ok(())
-    }
-
-    /// The end of the last segment registered, if any has been since the
-    /// clock was last cut.
-    pub fn registered_through(&self) -> Option<i64> {
-        (self.registered_through != i64::MIN).then_some(self.registered_through)
-    }
-
-    pub fn route(
-        &self,
-        clock: ClockId,
-        sample: i64,
-        presentation_time: f64,
-    ) -> Result<harmonigraph_record::publication::Route, ()> {
-        if clock != self.clock || !presentation_time.is_finite() {
-            return Err(());
-        }
-        let segment = self
-            .segments
-            .iter()
-            .flatten()
-            .find(|s| s.clock == clock && s.start <= sample && sample < s.end)
-            .ok_or(())?;
-        let t = segment.origin + (sample - segment.start) as f64 / segment.rate;
-        Ok(harmonigraph_record::publication::Route {
-            address: segment.address,
-            time_offset: t - presentation_time,
-        })
-    }
-    pub fn segment(
-        &mut self,
-        recorder: &mut Recorder,
-        origin: Option<f64>,
-        rate: f64,
-        config: ResolvedConfig,
-    ) {
-        let (start, end) = (self.block_start, self.block_start + i64::from(self.block_frames));
-        let address = origin.and_then(|_| recorder.configuration_address());
-        let next_current = if origin.is_some() {
-            address
-        } else if recorder.configuration_address().is_none() {
-            None
-        } else {
-            self.current
-        };
-        if next_current != self.current {
-            if let Some(old) = self.current {
-                if let Some(pass) = self.passes.iter_mut().flatten().find(|p| p.address == old) {
-                    pass.end = Some(start);
-                } else {
-                    recorder.fail_configuration();
-                }
-            }
-            if let Some(address) = next_current {
-                if let Some(cell) = self.passes.iter_mut().find(|p| p.is_none()) {
-                    *cell = Some(Pass {
-                        address,
-                        end: None,
-                        last: None,
-                        configuration_complete: false,
-                        source_complete: false,
-                    });
-                } else {
-                    recorder.fail_configuration();
-                }
-            }
-            self.current = next_current;
-        }
-        // Include explicit non-recording provenance. A later arm can never claim
-        // input first observed while disarmed, even when that work drains late.
-        let recorded_address = address
-            .filter(|a| a.epoch == self.captured_intent.epoch() && self.captured_intent.is_armed());
-        let segment = Segment {
-            clock: self.clock,
-            start,
-            end,
-            address: recorded_address,
-            origin: origin.unwrap_or(0.0),
-            rate,
-        };
-        if let Some(previous) = self.segments.iter_mut().flatten().find(|s| {
-            s.clock == segment.clock
-                && s.end == start
-                && s.address == segment.address
-                && s.rate == rate
-                && (s.address.is_none()
-                    || s.origin + (start - s.start) as f64 / rate == segment.origin)
-        }) {
-            previous.end = end;
-        } else if let Some(cell) = self.segments.iter_mut().find(|s| s.is_none()) {
-            *cell = Some(segment);
-        } else {
-            recorder.fail_configuration();
-            return;
-        }
-
-        self.registered_through = end;
-        // The block's own adopted configuration, written once per pass per
-        // change. There is no historical lookup: the value in force over this
-        // segment IS the value the Hub used for every group it started here.
-        if let Some(address) = recorded_address {
-            if let Some(pass) = self.passes.iter_mut().flatten().find(|p| p.address == address) {
-                if pass.last != Some(config) {
-                    recorder.configuration_at(address, segment.origin, config);
-                    pass.last = Some(config);
-                }
-            } else {
-                recorder.fail_configuration();
-            }
-        }
-        self.finish(recorder);
-    }
-
-    pub fn finish(&mut self, recorder: &mut Recorder) {
-        for cell in &mut self.passes {
-            let Some(pass) = cell.as_mut() else {
-                continue;
-            };
-            if pass.last.is_some()
-                && pass.end.is_some_and(|end| self.prefix >= end)
-                && !pass.configuration_complete
-            {
-                recorder.configuration_pass_complete(pass.address);
-                pass.configuration_complete = true;
-            }
-            if pass.end.is_some_and(|end| self.source_prefix.is_some_and(|prefix| prefix >= end))
-                && !pass.source_complete
-            {
-                recorder.source_pass_complete(pass.address, self.observation_time);
-                pass.source_complete = true;
-            }
-            if pass.configuration_complete && pass.source_complete {
-                *cell = None;
-            }
-        }
-        // A segment is only a route for output that has not been published
-        // yet; both frontiers past its end retire it.
-        for cell in &mut self.segments {
-            if cell.is_some_and(|s| {
-                s.end <= self.prefix && self.source_prefix.is_some_and(|through| s.end <= through)
-            }) {
-                *cell = None;
-            }
-        }
-        // A concurrent GUI stop cannot close an epoch whose armed callback
-        // may still begin another recording segment later in this same block.
-        let epoch = self.captured_intent.epoch();
-        if !self.captured_intent.is_armed()
-            && self.current.is_none()
-            && !self.passes.iter().flatten().any(|p| p.address.epoch == epoch)
-        {
-            recorder.configuration_epoch_complete(epoch);
-            recorder.source_epoch_complete(epoch, self.observation_time);
-        }
     }
 }
 
@@ -320,65 +129,36 @@ mod tests {
     use super::*;
     use harmonigraph_core::configuration::ConfigReducer;
 
-    /// Every sample crossing this boundary is already on the Hub's own steady
-    /// timeline, which is the timeline the segments are cut on: a route asks
-    /// for the sample it means, with nothing subtracted on the way in.
+    /// A run is stated on the presentation clock the Hub times its records on,
+    /// and the configuration in force is written once inside it.
     #[test]
-    fn output_frontier_and_recording_routes_read_samples_on_the_adopted_hub_clock() {
-        let (mut recorder, capture) = harmonigraph_record::testing::channel();
+    fn a_run_opens_on_the_presentation_clock_with_its_configuration() {
+        let (mut recorder, mut capture) = harmonigraph_record::testing::channel();
         capture.arm();
-        recorder.is_armed();
-        recorder.observe_transport(20.0, true, 64.0 / 48_000.0);
-        let clock = ClockId { runtime_session: 7, epoch: 3 };
-        let mut recording = Recording {
-            clock,
-            captured_intent: RecordIntent::armed(1),
-            prefix: 1040,
-            block_start: 1000,
-            block_frames: 40,
-            ..Default::default()
+        let intent = recorder.capture_recording_intent();
+        recorder.is_armed_at(intent);
+        let origin = recorder.observe_transport(20.0, true, 64.0 / 48_000.0);
+        let mut recording =
+            Recording { captured_intent: intent, block_start: 1000, ..Default::default() };
+        recording.presentation = Presentation { anchor: Some((1000, 5.0)), rate: 48_000.0 };
+        recording.record(&mut recorder, origin);
+        for _ in 0..2 {
+            recording.configuration(&mut recorder, 1000, ConfigReducer::default().resolved());
+        }
+        recording.registered(1040);
+        let entries = capture.drain_entries();
+        let Some(harmonigraph_record::Entry::Run { at, song }) = entries.first().copied() else {
+            panic!("the first recorded block opens a run");
         };
-        let config = ConfigReducer::default().resolved();
-        recording.segment(&mut recorder, Some(20.0), 48000.0, config);
-        recording.source_frontier(clock, 1024).unwrap();
-        recording.finish(&mut recorder);
-        assert_eq!(recording.source_prefix, Some(1024));
-        assert_eq!(
-            recording.segments.iter().flatten().count(),
-            1,
-            "configuration prefix1040 cannot retire source prefix1024"
-        );
-        // Sample 1032 is offset 32 into the segment that starts at 1000, so it
-        // is 32 samples past that segment's 20.0 s origin.
-        let route = recording.route(clock, 1032, 1032.0 / 48000.0).unwrap();
-        assert_eq!(route.address, Some(RecordAddress { epoch: 1, pass: 1 }));
-        assert!((1032.0 / 48000.0 + route.time_offset - (20.0 + 32.0 / 48000.0)).abs() < 1e-12);
-        assert!(recording.route(clock, 1039, 0.0).unwrap().address.is_some());
-        // Explicit disarmed span stays distinct from a later recording segment.
+        assert_eq!((at, song), (5.0, 20.0));
+        assert_eq!(entries.len(), 2, "one configuration while it holds");
+
         capture.stop();
-        recorder.is_armed();
-        recording.captured_intent = RecordIntent::disarmed(1);
-        recording.block_start = 1040;
-        recording.block_frames = 40;
-        recording.segment(&mut recorder, None, 48000.0, config);
-        assert_eq!(recording.route(clock, 1040, 0.0).unwrap().address, None);
-        capture.arm();
-        recorder.is_armed();
-        recording.captured_intent = recorder.capture_recording_intent();
-        recording.block_start = 1080;
-        recording.segment(&mut recorder, Some(5.0), 48000.0, config);
-        assert_eq!(recording.route(clock, 1040, 0.0).unwrap().address, None);
-        let new_clock = ClockId { epoch: 4, ..clock };
-        assert!(recording.route(new_clock, 1032, 0.0).is_err());
-        assert!(recording.source_frontier(new_clock, 2000).is_err());
-        assert_eq!(recording.source_prefix, Some(1024));
-        recording.reset(&recorder);
-        recording.block_start = 0;
-        recording.block_frames = 64;
-        recording.segment(&mut recorder, None, 48000.0, config);
-        assert!(
-            recording.route(clock, 32, 0.0).is_err(),
-            "old epoch raw32 must not match new epoch [0,64)"
-        );
+        recording.close_stopped(&mut recorder);
+        let entries = capture.drain_entries();
+        let Some(harmonigraph_record::Entry::RunEnd { at }) = entries.first().copied() else {
+            panic!("the stopped run closes");
+        };
+        assert_eq!(at, 5.0 + 40.0 / 48_000.0);
     }
 }
