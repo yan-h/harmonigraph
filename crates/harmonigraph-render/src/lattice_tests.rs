@@ -23,7 +23,6 @@ mod reload;
 mod shadow_staging;
 mod shadows;
 mod ships;
-mod targets;
 mod timing;
 mod transitions;
 

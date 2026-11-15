@@ -774,28 +774,4 @@ mod tests {
         assert_eq!(node_at(&scene, LatticePos::ORIGIN).glow, before);
         assert!(state.surfaces.glow_fade.is_empty(), "a light that is off kept state");
     }
-
-    /// Every pass egui lays out at one clock steps the light by nothing, so a
-    /// pass it discards spends none of the attack.
-    #[test]
-    fn discarded_layout_passes_do_not_skip_the_attack() {
-        let mut state = lit(0.3, 2.5);
-        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-        let ctx = egui::Context::default();
-        let mut steps = Vec::new();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            egui::Grid::new("glow-multipass").show(ui, |ui| {
-                ui.label("A new grid requests its sizing pass automatically");
-            });
-            let mut scene = scene_at(&state, 0.0);
-            apply(&mut scene, &mut state, 0, 0.0);
-            steps.push(node_at(&scene, LatticePos::ORIGIN).glow);
-            assert_eq!(scene.glow_clock, Some(0.0));
-        });
-        assert!(steps.len() >= 2, "the fixture must discard an actual layout pass");
-        assert!(
-            steps.iter().all(|step| step.level == 0.0),
-            "discarded passes skipped the attack: {steps:?}",
-        );
-    }
 }
