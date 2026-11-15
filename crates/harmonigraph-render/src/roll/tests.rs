@@ -237,6 +237,7 @@ pub(crate) fn centered_note() -> RollInstance {
         center: [128.0, 128.0],
         half_extent: [12.0, 60.0],
         shear: 0.0,
+        rounding: 0.0,
         lead: 0.0,
         lead_fade: 0.0,
         lead_alpha: 0.0,
@@ -976,6 +977,37 @@ fn a_notes_corners_are_square() {
         near(corner, [255, 0, 0, 255]),
         "the tap's corner is missing ({corner:?}) — something is rounding it off",
     );
+}
+
+/// A box rounded at its whole half extent is a disc, which is how the
+/// Spiral's dots draw: its ink is a circle's area, not a square's, and it
+/// reaches the same distance from its centre along the diagonal as along
+/// an axis.
+#[test]
+fn a_box_rounded_at_its_half_extent_is_a_disc() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    // White on black with no cut, so every byte is the disc's coverage.
+    let dot = RollInstance {
+        half_extent: [12.0, 12.0],
+        rounding: 12.0,
+        core: [255; 4],
+        aura: [0; 4],
+        ..centered_note()
+    };
+    let frame = draw(&device, &queue, vec![dot], wgpu::Color::BLACK);
+    let ink: f32 = (0..SIZE[1])
+        .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
+        .map(|(x, y)| f32::from(pixel(&frame, x, y)[0]) / 255.0)
+        .sum();
+    let disc = std::f32::consts::PI * 12.0 * 12.0;
+    assert!((ink - disc).abs() < 0.01 * disc, "the dot's ink is {ink}, not a disc's {disc}");
+    // A pixel centre 11.5 points out along an axis, inside the edge, and one
+    // 12 points out along the diagonal, on it.
+    let (axis, diagonal) = (pixel(&frame, 139, 128)[0], pixel(&frame, 136, 136)[0]);
+    assert!(axis > 250, "the disc stops short along its axis: {axis}");
+    assert!(diagonal.abs_diff(255 / 2) < 40, "the disc's edge is not round: {diagonal}");
 }
 
 /// The cut must still stand OUTSIDE a note floored to its minimum

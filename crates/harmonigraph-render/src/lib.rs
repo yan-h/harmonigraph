@@ -88,9 +88,6 @@ pub use spectrogram::{
 #[cfg(test)]
 mod dial_nudges;
 mod dot_surround;
-/// A halo alone, over marks a pane drew for itself — the third caller of
-/// [`BloomChain`], and the one that draws no picture of its own.
-mod glow;
 mod lattice_material;
 mod lattice_node_glow;
 mod lattice_stars;
@@ -98,7 +95,6 @@ mod material_cells;
 mod stars;
 mod travel;
 pub use dot_surround::{dot_surround_paint_callback, SurroundDot};
-pub use glow::{glow_paint_callback, GlowDot};
 use lattice_node_glow::create_glow_pipelines;
 
 /// Label text, for the same reason the roll has its own callback: what a

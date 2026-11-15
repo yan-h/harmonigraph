@@ -108,6 +108,9 @@ struct VertexOut {
     /// The center line's pitch drift per point of depth: 0 for a held note,
     /// non-zero for a glide, which shears the box into a parallelogram.
     @location(2) @interpolate(flat) shear: f32,
+    /// How far the box's corners are rounded, in points: 0 for a note, the
+    /// radius for a dot. See [`box_distance`].
+    @location(3) @interpolate(flat) rounding: f32,
     /// Three to a slot, since a stage passes sixteen at most:
     /// - `x`: whether the box is a lead, and how long, in points — 0 for the
     ///   ordinary segment that is all note. See [`lead_coverage`].
@@ -147,6 +150,7 @@ fn vs_note_cut(
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
+    @location(3) rounding: f32,
     // Lead, lead fade and lead alpha; span then ramp.
     // Packed, since a vertex takes sixteen at most.
     @location(4) lead: vec3<f32>,
@@ -159,7 +163,7 @@ fn vs_note_cut(
     @location(7) tremolo: vec2<f32>,
 ) -> VertexOut {
     return note_vertex(
-        vertex, center, half_extent, shear, lead, core, aura, span_ramp, fade,
+        vertex, center, half_extent, shear, rounding, lead, core, aura, span_ramp, fade,
         taper_depth, taper, tremolo, cut_reach() + locals.feather,
     );
 }
@@ -176,6 +180,7 @@ fn vs_note_body(
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
+    @location(3) rounding: f32,
     @location(4) lead: vec3<f32>,
     @location(8) core: vec4<f32>,
     @location(9) aura: vec4<f32>,
@@ -186,7 +191,7 @@ fn vs_note_body(
     @location(7) tremolo: vec2<f32>,
 ) -> VertexOut {
     return note_vertex(
-        vertex, center, half_extent, shear, lead, core, aura, span_ramp, fade,
+        vertex, center, half_extent, shear, rounding, lead, core, aura, span_ramp, fade,
         taper_depth, taper, tremolo, locals.feather,
     );
 }
@@ -198,6 +203,7 @@ fn note_vertex(
     center: vec2<f32>,
     half_extent: vec2<f32>,
     shear: f32,
+    rounding: f32,
     lead: vec3<f32>,
     core: vec4<f32>,
     aura: vec4<f32>,
@@ -247,6 +253,7 @@ fn note_vertex(
     out.local = local;
     out.half_extent = half_extent;
     out.shear = shear;
+    out.rounding = rounding;
     out.lead = lead;
     out.taper_depth = taper_depth;
     out.taper = taper;
@@ -385,17 +392,22 @@ fn lead_coverage(in: VertexOut) -> f32 {
 /// A ribbon whose width holds still along this instance is the parallelogram,
 /// at that width; one whose width moves is [`tapered_distance`]. Both are
 /// exact, so an unmoving note draws exactly as it did before widths moved.
+///
+/// A box with a `rounding` is the box that much smaller, grown back by it
+/// in every direction: rounded, and a disc where it is the half extent,
+/// which is how the Spiral's dots come out round.
 fn box_distance(in: VertexOut) -> f32 {
     let t = in.taper;
     if (all(t == vec4<f32>(t.x))) {
-        return parallelogram_distance(in, in.half_extent.x * t.x);
+        let r = in.rounding;
+        return parallelogram_distance(in, in.half_extent.x * t.x - r, in.half_extent.y - r) - r;
     }
     return tapered_distance(in);
 }
 
 /// [`box_distance`] for a ribbon `half_pitch` either side of its center line
-/// all along.
-fn parallelogram_distance(in: VertexOut, half_pitch: f32) -> f32 {
+/// all along, `half_along` either side of its center along depth.
+fn parallelogram_distance(in: VertexOut, half_pitch: f32, half_along: f32) -> f32 {
     let slope = in.shear;
     // A bent note is a sheared box: its long edges run at `slope`, its ends
     // stay square across the depth axis, `half_extent.x` either side of the
@@ -411,13 +423,10 @@ fn parallelogram_distance(in: VertexOut, half_pitch: f32) -> f32 {
     // thousands — and that segment's surround and antialiasing ramp became a
     // hairline strip through the whole pane.
     //
-    // Square corners, always: a note is a rectangle in the pane's two axes,
-    // and rounding one was a setting until it turned out to be doing nothing a
-    // piano roll wants — on the notes short enough for it to show (a tapped
-    // key), the radius clamps to the note's own half-length and turns it into
-    // a bead. The surround's own corners are round, being a constant distance
-    // from a square one, and that is the shape a note wants wrapped around it.
-    let half_along = in.half_extent.y;
+    // Square corners for a note: a note is a rectangle in the pane's two axes
+    // (`RollInstance::rounding`). The surround's own corners are round, being a
+    // constant distance from a square one, and that is the shape a note wants
+    // wrapped around it.
     // The center line's far end, from the center.
     let end = vec2<f32>(slope * half_along, half_along);
     var p = in.local;

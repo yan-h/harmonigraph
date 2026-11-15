@@ -27,7 +27,7 @@ pub(crate) fn bloom_sizes(screen: [u32; 2]) -> ([u32; 2], [u32; 2]) {
 ///
 /// One chain, every picture. The lattice feeds it the scene without its
 /// labels; the piano roll feeds it the notes rendered again offscreen
-/// (`crate::roll`); the spiral's dots feed it through `crate::glow`. That they
+/// (`crate::roll`), the spiral's dots among them. That they
 /// are the same four steps in the same order over the same fractions is the
 /// whole of what makes one bloom strength mean one halo, and it is a claim a
 /// second copy cannot keep: the step that matters

@@ -79,6 +79,7 @@ fn instances(work: &Workload, points: [f32; 2]) -> Vec<RollInstance> {
             center: [(start + 0.5 * duration) * per_second, points[1] - (key + 0.5) * semitone],
             half_extent: [half_pitch, half_depth],
             shear: 0.0,
+            rounding: 0.0,
             lead: 0.0,
             lead_fade: 0.0,
             lead_alpha: 0.0,

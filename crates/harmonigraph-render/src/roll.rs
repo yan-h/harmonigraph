@@ -65,7 +65,9 @@ pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
 ];
 
 /// One note segment: a solid box in the pane's (pitch, depth) plane, its
-/// color, and the backdrop cut standing outside every one of its sides.
+/// color, and the backdrop cut standing outside every one of its sides. Or one
+/// of the Spiral's dots, which is a box rounded into a disc
+/// ([`rounding`](Self::rounding)).
 ///
 /// Reading outward: [`core`](Self::core), then the cut fading out over its
 /// reach, which is the whole roll's and rides in the uniform rather than here,
@@ -83,14 +85,23 @@ pub struct RollInstance {
     /// the note's painted extent: it is filled to its edge and nothing
     /// straddles the boundary.
     ///
-    /// No corner radius: a note is a rectangle, always. Rounding was a setting
-    /// and is gone — on the notes short enough for it to show at all, it only
-    /// ever rounded a tapped key into a bead.
     pub half_extent: [f32; 2],
     /// The center line's pitch drift per point of depth: 0 for a held note,
     /// non-zero for a glide, which makes the box a parallelogram rather than
     /// needing a second shape.
     pub shear: f32,
+    /// How far the box's corners are rounded, in points: 0 for a note, and a
+    /// dot's radius for a dot, whose box is a square of that half extent.
+    ///
+    /// A note is a rectangle, always. Rounding a note was a setting and is
+    /// gone — on the notes short enough for it to show at all, it only ever
+    /// rounded a tapped key into a bead. What rounds a box is the Spiral, whose
+    /// dots are the same notes drawn somewhere else, through this renderer so
+    /// that they bloom through its chain.
+    ///
+    /// Read for a box that neither shears nor tapers, which is the one shape a
+    /// dot is; the rest stay square.
+    pub rounding: f32,
     /// Whether this box is a LEAD, and how long: a stretch of ribbon carried on
     /// past where the note itself stops, drawn as its own instance beside the
     /// note's box, in points, and 0 for an ordinary segment that is all note.
@@ -190,6 +201,7 @@ impl RollInstance {
             0 => Float32x2, // center
             1 => Float32x2, // half_extent
             2 => Float32,   // shear
+            3 => Float32,   // rounding
             // Several to a slot, since a vertex takes sixteen at most.
             4 => Float32x3, // lead, lead_fade, lead_alpha
             8 => Unorm8x4,  // core
@@ -371,8 +383,9 @@ pub(crate) struct RollResources {
     pipelines: RollPipelines,
     /// Every roll this renderer has drawn, by pane id, and never swept, like
     /// the lattice's panes. An id is a surface — the docked pane, the
-    /// Render preview, one placement of an export — so the map holds as many
-    /// entries as there are surfaces, and it goes with the `CallbackResources`
+    /// Render preview, one placement of an export — or the Spiral's dots, so
+    /// the map holds one entry more than there are surfaces, and it goes with
+    /// the `CallbackResources`
     /// it lives in when the editor window closes or the export ends. Until
     /// then a hidden tab or a closed preview keeps its buffers, bloom chain
     /// and cut targets, so switching back to it rebuilds nothing, and a rest

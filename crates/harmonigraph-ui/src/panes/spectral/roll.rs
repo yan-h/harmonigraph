@@ -723,6 +723,7 @@ fn source_instances(
                         center: [center.x, center.y],
                         half_extent: [half_pitch * grow, half],
                         shear: 0.0,
+                        rounding: 0.0,
                         // The whole box is lead, so its opacity and configured tip
                         // fade apply from the now-line to its analyzer-side tip.
                         lead: lead_px,
@@ -826,6 +827,7 @@ fn source_instances(
                 center: [center.x, center.y],
                 half_extent: [half_pitch, half_depth],
                 shear: slope,
+                rounding: 0.0,
                 lead: 0.0,
                 lead_fade: 0.0,
                 lead_alpha: 0.0,
