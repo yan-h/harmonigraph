@@ -99,8 +99,10 @@ pub struct RollInstance {
     /// dots are the same notes drawn somewhere else, through this renderer so
     /// that they bloom through its chain.
     ///
-    /// Read for a box that neither shears nor tapers, which is the one shape a
-    /// dot is; the rest stay square.
+    /// Read for any box that does not taper; a tapered one stays square. A
+    /// sheared box rounds only roughly, its inset taken across pitch rather
+    /// than square to its flanks. Only the Spiral's dots set it, and they
+    /// neither shear nor taper.
     pub rounding: f32,
     /// How much of the box's LEADING tip is spent fading out, in points: 0 for
     /// an ordinary note, and for a lead — a stretch of ribbon carried on past

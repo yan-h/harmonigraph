@@ -498,8 +498,9 @@ impl Spiral {
 /// never exported or previewed for video (#974). So what it holds between
 /// frames is one of each: the dots' surround buffers are a single instance in
 /// their renderer, the dots and their bloom chain take one id in the roll's
-/// ([`ROLL_PANE`]), and the rim names' instance buffer and their shadow target
-/// take the docked surface's ids. Were a second copy ever drawn, each of those
+/// ([`SPIRAL_ROLL_PANE`](super::lattice::SPIRAL_ROLL_PANE)), and the rim
+/// names' instance buffer and their shadow target take the docked surface's
+/// ids. Were a second copy ever drawn, each of those
 /// would need a key per copy again, and inside a
 /// scrolling settings tab it would want the Analyzer's own `DOCKED_SURFACE`
 /// gate for the Analyzer's reason — a wheel
@@ -560,7 +561,7 @@ pub(crate) fn spiral_pane(
             bloom,
             harmonigraph_render::SurroundCut::OFF,
             state.surfaces.target_format,
-            ROLL_PANE,
+            super::lattice::SPIRAL_ROLL_PANE,
             1.0,
         ));
     }
@@ -585,10 +586,6 @@ pub(crate) fn spiral_pane(
         1.0,
     );
 }
-
-/// The Spiral's id in the roll renderer's map of panes, clear of the
-/// Analyzer's, whose ids are surfaces (`panes::lattice::pane_id`).
-const ROLL_PANE: u64 = u64::MAX;
 
 /// Drag to slide the disc under the pane, scroll or pinch to magnify it, and
 /// double-click back to the whole disc: the lattice's three gestures on a flat
