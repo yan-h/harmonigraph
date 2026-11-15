@@ -232,6 +232,10 @@ The measured Bitwig spike ran at D = 2,048 and did not search for a minimum, so 
 An onset that reached its own emission time with no correction sounds at its raw pitch, and the Tune counts it:
 `3 notes sounded uncorrected - raise the delay and play again`.
 The count clears at every cut but a transport Stop, which is when it gets read: Reset all voices, and any Tune's reactivation, attach or detach, clears every Tune's count.
+The Tune also sends the Hub a miss record for that onset on its copy ring, and the Hub draws the note, on the lattice and in the take, at the raw pitch it sounds at from then on (#1799).
+A miss usually means the Tune's whole callback ran before the Hub's, so the Hub collects the onset and its miss in one pass:
+the note is drawn corrected only up to the row's latest scheduled time in that pass, nothing for a lone note and at most about one buffer when the row had later events.
+Only a race or a lost reply puts the miss in a later pass, and that note stays drawn corrected for up to about D plus one Hub callback.
 
 Two states are *not* a missed deadline, and the status names them rather than counting them as evidence that the delay is too small:
 no Harmonigraph in the process, and no free row.
@@ -240,8 +244,9 @@ A default of 1x is a starting point, not a reliability guarantee;
 validate the multiplier in the actual project.
 
 One case reaches the counter for a reason a bigger multiplier does fix, and one does not.
-If the Hub's callback runs before a Tune's within a block, every 1x note misses —
+If the order of the Hub's and a Tune's callbacks flips between blocks — the Hub before the Tune in the block a note is played in, after it in the next — that 1x note misses:
 the counter shows it and 2x fixes it.
+A Hub that always runs first is no miss: it collects a block's copies at the start of the next block, before the Tune emits.
 If the copy ring was full, that note was never in the Hub's context at all;
 a larger delay does not make the ring bigger.
 ## Same-sample ordering
@@ -756,7 +761,7 @@ the counter says so.
 2. Tune sees each host refusal, but the Hub does not.
 A refused note or release stays queued for another callback while the display and take keep its scheduled time;
 a refused tuning expression leaves the note uncorrected and sets the dropped-event fault.
-3. If the Hub's callback runs before a Tune's within a block, every 1x note on that Tune misses;
+3. If the order of the Hub's and a Tune's callbacks flips between blocks, the Hub before the Tune in a 1x note's own block and after it in the next, that note misses;
 the counter shows it and 2x fixes it.
 4. Cross-track chord order is arrival order within a Hub callback, sorted by sample;
 branch latency is not corrected.

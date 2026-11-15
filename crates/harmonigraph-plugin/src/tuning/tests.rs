@@ -991,6 +991,100 @@ fn missed_corrections_survive_a_stop_and_clear_at_reset_or_reactivation() {
     }
 }
 
+/// #1799. A note whose correction reaches its Tune too late sounds raw, and
+/// is drawn raw from the Tune's miss on, in the display and in the take. The
+/// usual miss: the Tune's whole callback runs before the Hub's, so the Hub
+/// collects the onset and its miss in one pass and draws the note raw from its
+/// start, though the onset delta itself is published corrected. A just E, so
+/// the correction is a real one.
+#[test]
+fn a_late_reply_draws_the_note_raw_from_the_miss_on() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let mut tune = Device::new(true);
+    tune.activate();
+    let dir = std::env::temp_dir().join(format!("harmonigraph-late-miss-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.take");
+    capture.arm();
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+    let at = |raw: i64| Some(timeline(1.0 + raw as f64 / 48_000.0, true));
+    let hub_block = |raw: i64| hub.run_callback(raw, vec![], (None, None), (512, false), at(raw));
+    let tune_block =
+        |raw: i64, played| tune.run_callback(raw, played, (None, None), (512, false), at(raw));
+    // The Hub runs before the Tune in the block the E is played in, and the
+    // Tune before the Hub in the block it sounds in, so no reply is back.
+    hub_block(0);
+    tune_block(0, vec![note(1, 0, 64, 0, true)]);
+    let sounded = tune_block(512, vec![]);
+    assert!(tuning_of(&sounded.values).is_none(), "the fixture must reach a late reply");
+    hub_block(512);
+    let mut display = harmonigraph_core::NoteTracker::new();
+    capture.display_into(&mut display, |_, _| {});
+    let drawn = display.held_voices().find(|v| v.note == 64).unwrap();
+    assert_eq!(drawn.pitch, 64.0, "the display draws the pitch the note sounds at");
+    for raw in [1024, 1536] {
+        hub_block(raw);
+        tune_block(raw, vec![]);
+    }
+    tune_block(2048, vec![note(1, 0, 64, 0, false)]);
+    hub_block(2048);
+    for raw in [2560, 3072] {
+        tune_block(raw, vec![]);
+        hub_block(raw);
+    }
+    capture.stop();
+    writer.stop();
+    hub_block(3584);
+    writer.drain(&mut capture);
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for record in &take.events {
+        record.apply(&mut tracker).unwrap();
+    }
+    let onset = take.events.iter().find_map(|record| match record {
+        harmonigraph_take::CanonicalRecord::Delta(delta)
+            if matches!(delta.event.kind, harmonigraph_take::NoteKind::On { .. }) =>
+        {
+            delta.pitch_microcents
+        }
+        _ => None,
+    });
+    assert!(
+        matches!(onset, Some(pitch) if pitch != 6_400_000_000),
+        "the fixture's onset must be published corrected: {onset:?}"
+    );
+    let note = tracker.roll().notes().find(|n| n.note == 64).unwrap();
+    assert_eq!(note.end_pitch(), 64.0, "the take draws the pitch the note sounded at");
+    drop(writer);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// #1799. A miss names its onset by serial, so one for a voice already
+/// released changes nothing, even with a new press held on the same key.
+#[test]
+fn a_miss_for_a_released_voice_changes_nothing() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let mut tune = Device::new(true);
+    tune.activate();
+    hub.run(0, vec![], None);
+    tune.run(0, vec![note(1, 0, 64, 0, true)], None);
+    // The first E sounds raw here, a miss, as the second takes its key.
+    let sounded = tune.run(512, vec![note(1, 0, 64, 0, false), note(2, 0, 64, 1, true)], None);
+    assert!(tuning_of(&sounded.values).is_none(), "the fixture must reach a late reply");
+    hub.run(512, vec![], None);
+    let output = tune.run(1024, vec![], None);
+    assert!(tuning_of(&output.values).is_some(), "the second E is corrected");
+    let held = inspect_hub(&hub, |hub| hub.test_voice(0, 0, 64)).unwrap();
+    assert_eq!(held.host_note_id, 2);
+    assert_ne!(held.frozen_offset_microcents, 0, "the miss left the second E corrected");
+}
+
 /// A reply reaches the onset with its serial or it reaches nothing. After a
 /// cut the epoch has moved, so an answer minted before it is discarded rather
 /// than attached to whatever now holds that serial.
