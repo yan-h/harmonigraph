@@ -291,8 +291,8 @@ host automation of an axis enters it at its own input sample.
 Every assignment group uses the configuration in force at its input sample,
 including a record held over from an earlier callback;
 the batch runs to completion at its input boundary.
-Where the history no longer reaches that sample (a steady-clock regression clears it), Adaptive assigns from the configuration the reducer holds now,
-while Lattice Map refuses, since the map that sample ran under is what was lost.
+Where the history no longer reaches that sample (a steady-clock regression clears it), every engine assigns from the live state:
+the configuration the reducer holds now, which includes any later host automation in that block, and under Lattice Map the current map (#1792).
 Once assigned, the adaptive correction and harmonic onset reference stay fixed through later edits and delayed emission.
 Already sounding notes keep that choice while later player expression and MIDI channel bend can still move their emitted pitch.
 

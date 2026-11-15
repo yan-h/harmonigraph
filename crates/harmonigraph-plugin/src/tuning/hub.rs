@@ -553,48 +553,26 @@ impl Hub {
             while end < self.batch.len() && self.batch[end].sample == sample {
                 end += 1;
             }
-            if let Some(attack) = owner.maps.at(sample) {
-                if self.sequencer.engine_revision != attack.engine_revision {
-                    self.sequencer.forget_history();
-                    self.sequencer.context.fill(None);
-                    self.sequencer.engine = attack.playback.engine;
-                    self.sequencer.engine_revision = attack.engine_revision;
-                }
-                self.sequencer.map = attack.playback.map;
-                self.sequencer.follow = attack.playback.follow;
-                self.sequencer.config = attack.config.into();
-                for position in index..end {
-                    self.apply(position, attack.config);
-                }
-            } else {
-                // Outside retained configuration, which is routine rather than
-                // exotic: a record the ring holds over carries a sample from
-                // before this callback, and a steady-clock regression clears
-                // the history out from under it (a song-time locate does not).
-                //
-                // Lattice Map refuses, and the refusal is the point — the map
-                // that sample ran under is exactly what was lost, and guessing
-                // at one would retune the onset to a shape nobody selected.
-                // Adaptive assigns from the configuration the reducer holds
-                // now (#920), since the same refusal would uncorrect the onset
-                // and raise a fault for nothing. `at` is also what would have
-                // said which engine that sample ran under, so the live
-                // selection is the only one left to read; it is restored after
-                // the group either way, because adopting an engine is the
-                // `Some` arm's job.
-                let config = owner.reducer.resolved();
-                let restore = self.sequencer.engine;
-                self.sequencer.engine = owner.maps.playback.engine;
-                self.sequencer.config = config.into();
-                if self.sequencer.engine == TuningEngine::LatticeMap {
-                    // Keep controller/release processing and publication truthful.
-                    self.status |= session::POLICY;
-                    self.sequencer.engine = TuningEngine::Off;
-                }
-                for position in index..end {
-                    self.apply(position, config);
-                }
-                self.sequencer.engine = restore;
+            // The state in force at the group's own sample, or, where the
+            // history no longer reaches it, the live one. That is routine
+            // rather than exotic: a record the ring holds over carries a sample
+            // from before this callback, and a steady-clock regression clears
+            // the history out from under it (a song-time locate does not).
+            // Every engine then assigns from what it holds now, as #920 asked
+            // of Adaptive, rather than leaving the onset raw.
+            let attack =
+                owner.maps.at(sample).unwrap_or_else(|| owner.maps.live(owner.reducer.resolved()));
+            if self.sequencer.engine_revision != attack.engine_revision {
+                self.sequencer.forget_history();
+                self.sequencer.context.fill(None);
+                self.sequencer.engine = attack.playback.engine;
+                self.sequencer.engine_revision = attack.engine_revision;
+            }
+            self.sequencer.map = attack.playback.map;
+            self.sequencer.follow = attack.playback.follow;
+            self.sequencer.config = attack.config.into();
+            for position in index..end {
+                self.apply(position, attack.config);
             }
             index = end;
         }

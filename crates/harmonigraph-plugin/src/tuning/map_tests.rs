@@ -352,11 +352,11 @@ fn adaptive_assigns_from_the_tuning_in_force_at_the_attacks_own_sample() {
 /// Hub is a callback behind by construction, and `collect` leaves whatever
 /// passes `BATCH_EVENTS` in the ring on top of that.
 ///
-/// Lattice Map is right to refuse there: the map that sample ran under is
-/// exactly what was lost. Adaptive assigns from the configuration the reducer
-/// holds now (#920), so the same refusal would uncorrect the onset for nothing.
+/// Every engine then assigns from the state it holds now, as it would have had
+/// the history still reached that sample (#920, #1792), rather than leaving the
+/// onset raw.
 #[test]
-fn a_locate_that_outruns_a_retained_onset_refuses_only_in_lattice_map() {
+fn a_retained_onset_behind_a_clock_regression_is_assigned_from_the_live_state() {
     for engine in [TuningEngine::Adaptive, TuningEngine::LatticeMap] {
         // The same onset twice: once with the next callback in sequence, which
         // is the control, and once with it located behind the sample the
@@ -389,11 +389,7 @@ fn a_locate_that_outruns_a_retained_onset_refuses_only_in_lattice_map() {
         let (node, correction, policy) = landed[0];
         assert!(node.is_some() && correction != 0, "{engine:?} corrects a record it caught up to");
         assert!(!policy, "{engine:?} refuses nothing when the history is still there");
-        if engine == TuningEngine::LatticeMap {
-            assert_eq!(landed[1], (None, 0, true), "the map that sample ran under was lost");
-        } else {
-            assert_eq!(landed[1], landed[0], "a lost map history is not Adaptive's to refuse");
-        }
+        assert_eq!(landed[1], landed[0], "{engine:?} assigns a record the history lost");
     }
 }
 

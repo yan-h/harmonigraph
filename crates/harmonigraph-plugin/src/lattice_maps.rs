@@ -467,9 +467,13 @@ impl AudioMaps {
             self.push(sample, config);
         }
     }
+    /// The state the latest observation leaves, under `config`: what an attack
+    /// the history no longer reaches is assigned from.
+    pub fn live(&self, config: ResolvedConfig) -> AttackState {
+        AttackState { config, playback: self.playback, engine_revision: self.engine_revision }
+    }
     fn push(&mut self, sample: i64, config: ResolvedConfig) {
-        let state =
-            AttackState { config, playback: self.playback, engine_revision: self.engine_revision };
+        let state = self.live(config);
         if let Some(last) = self.history.back_mut() {
             if last.sample == sample {
                 last.state = state;
