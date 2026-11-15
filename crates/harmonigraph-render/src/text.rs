@@ -94,9 +94,11 @@ impl GlyphInstance {
     };
 }
 
-/// A CPU sheet a glyph can be cut from: the drawn marks' atlas, or egui's font
-/// atlas in a shell that cannot publish its renderer texture to callbacks.
-/// The key changes whenever its pixels do.
+/// A CPU sheet a glyph can be cut from: the drawn marks' atlas, which no shell
+/// can publish for us because it is the UI crate's own, so each renderer keeps
+/// a GPU copy. egui's font atlas never travels this way: every shell inserts
+/// its renderer texture into `CallbackResources`. The key changes whenever its
+/// pixels do.
 ///
 /// Cloning shares the pixels: the image is an `Arc`, and the key travels with
 /// it, so two handles on one publication report the same one.
@@ -106,32 +108,12 @@ pub struct FontAtlas {
     pub key: u64,
 }
 
-/// The CPU sheets a frame publishes to a renderer: egui's font atlas, for
-/// shells that cannot hand a callback their own renderer texture, and the
-/// drawn marks' own sheet. `None` on the frames a sheet has not moved.
-///
-/// One struct rather than two arguments because both are `Option<FontAtlas>`
-/// and nothing but the position told them apart — a call that swapped them
-/// would upload each sheet into the other's binding, and every label in the
-/// picture would be cut from the wrong texture. The same pair reaches the
-/// lattice's callback through [`crate::LatticeLabels`]'s named fields, which
-/// is where this shape was already safe.
-#[derive(Default)]
-pub struct SheetUploads {
-    /// egui's font atlas, and only where its renderer texture cannot be
-    /// published through `CallbackResources`. A shell that publishes one
-    /// leaves this `None` on every frame.
-    pub font: Option<FontAtlas>,
-    /// The drawn marks' sheet, which no shell can publish for us: it is this
-    /// crate's own, and each renderer keeps a GPU copy.
-    pub marks: Option<FontAtlas>,
-}
-
 /// Draw `glyphs` into `rect`. `pane_id` is unique per batch drawing in the
 /// same frame and the same across frames for one live copy: each id keeps its
 /// own instance buffer and shadow atlas (the pipeline and the sheets are
-/// shared) — see [`TextResources::panes`]. [`SheetUploads`] is the sheets a
-/// frame may bring.
+/// shared) — see [`TextResources::panes`]. `marks` is the drawn marks' sheet,
+/// on the frames it may have moved; egui's font texture reaches the callback
+/// through `CallbackResources`, where the shell inserts it.
 ///
 /// `slide` is the axis this pane's text scrolls along, which the reconstruction
 /// filter follows — see [`SlideAxis`]. `runs` says which glyphs make one name
@@ -145,7 +127,7 @@ pub fn text_paint_callback(
     glyphs: Vec<GlyphInstance>,
     runs: GlyphRuns,
     shadow: Option<harmonigraph_scene::ShadowStyle>,
-    sheets: SheetUploads,
+    marks: Option<FontAtlas>,
     slide: SlideAxis,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
@@ -154,7 +136,7 @@ pub fn text_paint_callback(
     debug_assert!(!glyphs.is_empty(), "an empty text batch adds no callback");
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        TextCallback { point_scale, glyphs, runs, shadow, sheets, slide, target_format, pane_id },
+        TextCallback { point_scale, glyphs, runs, shadow, marks, slide, target_format, pane_id },
     )
 }
 
@@ -202,7 +184,7 @@ struct TextCallback {
     glyphs: Vec<GlyphInstance>,
     runs: GlyphRuns,
     shadow: Option<harmonigraph_scene::ShadowStyle>,
-    sheets: SheetUploads,
+    marks: Option<FontAtlas>,
     slide: SlideAxis,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
@@ -368,23 +350,21 @@ impl Sheets {
     /// Take whatever this frame published, and say whether any binding was
     /// REPLACED — which is what makes every bind group naming one stale.
     ///
-    /// `shared_atlas` is egui's own renderer texture where the shell publishes
-    /// it; the CPU fallback in `uploads` wins over it, because a shell that
-    /// sends one is a shell whose texture cannot be reached.
+    /// `font` is egui's own renderer texture, as the shell published it to
+    /// `CallbackResources`; `marks` is the drawn marks' sheet, on the frames
+    /// it may have moved.
     pub(crate) fn bind(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        shared_atlas: Option<&wgpu::Texture>,
-        uploads: &SheetUploads,
+        font: Option<&wgpu::Texture>,
+        marks: Option<&FontAtlas>,
     ) -> bool {
         let mut recreated = false;
-        if let Some(atlas) = uploads.font.as_ref().filter(|a| !self.atlas.holds(a)) {
-            recreated |= self.atlas.upload(device, queue, atlas);
-        } else if let Some(atlas) = shared_atlas {
-            recreated |= self.atlas.share(atlas);
+        if let Some(font) = font {
+            recreated |= self.atlas.share(font);
         }
-        if let Some(marks) = uploads.marks.as_ref().filter(|a| !self.marks.holds(a)) {
+        if let Some(marks) = marks.filter(|a| !self.marks.holds(a)) {
             recreated |= self.marks.upload(device, queue, marks);
         }
         recreated
@@ -421,32 +401,24 @@ impl Sheets {
     }
 }
 
-/// One glyph sheet bound by a renderer: either egui's shared GPU texture or a
-/// private texture uploaded from a [`FontAtlas`] fallback. The key identifies
-/// which texture a pane's bind group names.
+/// One glyph sheet bound by a renderer: egui's shared GPU texture
+/// ([`share`](Self::share), the font atlas) or a private texture uploaded from
+/// a [`FontAtlas`] ([`upload`](Self::upload), the marks' sheet). The key
+/// identifies which texture a pane's bind group names.
 pub(crate) struct AtlasTexture {
     texture: Option<wgpu::Texture>,
     size: [u32; 2],
     /// Monotonic identity of the texture allocation that bind groups name.
     binding_key: u64,
-    /// The CPU fallback publication currently held in a private texture.
-    fallback_key: Option<u64>,
-    /// Whether `texture` belongs to egui rather than this binding. A fallback
-    /// upload must allocate its own texture even when the dimensions match.
-    shared: bool,
+    /// The publication an upload last copied, so an unchanged one is skipped.
+    uploaded_key: Option<u64>,
 }
 
 impl Default for AtlasTexture {
     /// The generation starts at the pane's empty sentinel, so the first
     /// allocation wraps to zero and cannot read as already bound.
     fn default() -> Self {
-        AtlasTexture {
-            texture: None,
-            size: [0, 0],
-            binding_key: u64::MAX,
-            fallback_key: None,
-            shared: false,
-        }
+        AtlasTexture { texture: None, size: [0, 0], binding_key: u64::MAX, uploaded_key: None }
     }
 }
 
@@ -454,7 +426,7 @@ impl AtlasTexture {
     /// Whether `atlas` is what this already holds, so the upload can be
     /// skipped.
     pub(crate) fn holds(&self, atlas: &FontAtlas) -> bool {
-        !self.shared && self.fallback_key == Some(atlas.key)
+        self.uploaded_key == Some(atlas.key)
     }
 
     /// Nothing has ever been uploaded: the first frame arrived without an
@@ -488,14 +460,12 @@ impl AtlasTexture {
     /// in-place atlas patch keeps every bind group valid, while a full egui
     /// atlas replacement changes identity even at the same dimensions.
     pub(crate) fn share(&mut self, texture: &wgpu::Texture) -> bool {
-        if self.shared && self.texture.as_ref() == Some(texture) {
+        if self.texture.as_ref() == Some(texture) {
             return false;
         }
         self.size = [texture.width(), texture.height()];
         self.texture = Some(texture.clone());
         self.binding_key = self.binding_key.wrapping_add(1);
-        self.fallback_key = None;
-        self.shared = true;
         true
     }
 
@@ -510,7 +480,7 @@ impl AtlasTexture {
         atlas: &FontAtlas,
     ) -> bool {
         let size = [atlas.image.width() as u32, atlas.image.height() as u32];
-        let recreated = self.shared || self.texture.is_none() || self.size != size;
+        let recreated = self.texture.is_none() || self.size != size;
         if recreated {
             self.texture = Some(crate::gpu_memory::texture(
                 device,
@@ -532,7 +502,6 @@ impl AtlasTexture {
             self.size = size;
             self.binding_key = self.binding_key.wrapping_add(1);
         }
-        self.shared = false;
         let texture = self.texture.as_ref().expect("created above");
         queue.write_texture(
             texture.as_image_copy(),
@@ -544,7 +513,7 @@ impl AtlasTexture {
             },
             wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
         );
-        self.fallback_key = Some(atlas.key);
+        self.uploaded_key = Some(atlas.key);
         recreated
     }
 }
@@ -952,10 +921,10 @@ impl TextResources {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        shared_atlas: Option<&wgpu::Texture>,
-        uploads: &SheetUploads,
+        font: Option<&wgpu::Texture>,
+        marks: Option<&FontAtlas>,
     ) {
-        if !self.sheets.bind(device, queue, shared_atlas, uploads) {
+        if !self.sheets.bind(device, queue, font, marks) {
             return;
         }
         let sizes = self.sheets.sizes();
@@ -1145,7 +1114,7 @@ impl CallbackTrait for TextCallback {
         }
         let resources: &mut TextResources =
             callback_resources.get_mut().expect("inserted above when missing");
-        resources.bind_sheets(device, queue, shared_atlas.as_ref(), &self.sheets);
+        resources.bind_sheets(device, queue, shared_atlas.as_ref(), self.marks.as_ref());
         // No atlas yet means the first frame arrived without one: nothing can
         // be drawn, and the next frame that sees a change will bring it.
         if resources.sheets.atlas.is_empty() {
@@ -1379,7 +1348,7 @@ pub(crate) mod tests {
                 runs: GlyphRuns::default(),
                 glyphs: vec![glyph()],
                 shadow: Some(style),
-                sheets: SheetUploads { font: Some(atlas()), marks: None },
+                marks: None,
                 slide: SlideAxis::default(),
                 target_format: FORMAT,
                 pane_id: 0,
@@ -1397,6 +1366,7 @@ pub(crate) mod tests {
             harmonigraph_scene::ShadowStyle { width: 1.0, depth: 0.0, ..Default::default() },
         ] {
             let mut resources = CallbackResources::default();
+            resources.insert(font_texture(&device, &queue, &atlas()));
             assert!(!prepare(style, &mut resources), "{style:?} allocated a shadow atlas");
             assert!(prepare(casting, &mut resources), "the casting fixture packed no cell");
             assert!(!prepare(style, &mut resources), "{style:?} kept last frame's atlas");
@@ -1469,12 +1439,8 @@ pub(crate) mod tests {
         let mut resources = TextResources::new(&device, &queue, FORMAT);
 
         // A sheet in hand, the way a frame that has drawn one label leaves it.
-        resources.bind_sheets(
-            &device,
-            &queue,
-            None,
-            &SheetUploads { font: Some(atlas()), marks: Some(mark_sheet()) },
-        );
+        let font = font_texture(&device, &queue, &atlas());
+        resources.bind_sheets(&device, &queue, Some(&font), Some(&mark_sheet()));
         assert!(
             !resources.sheets.atlas.is_empty() && !resources.sheets.marks.is_empty(),
             "the fixture never filled the atlas bindings, so what follows measures nothing",
@@ -1516,25 +1482,21 @@ pub(crate) mod tests {
 
     /// The shell's font texture is keyed by GPU-resource identity. A patch to
     /// the same allocation keeps pane bind groups valid; a full rebuild at the
-    /// same dimensions still replaces the allocation and must rebind them. A
-    /// fallback source also owns its allocation even when its publication key
-    /// collides with the shared binding's generation.
+    /// same dimensions still replaces the allocation and must rebind them.
     #[test]
     fn a_callback_tracks_the_shared_font_texture_by_resource_identity() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let sheet = atlas();
-        let mut uploaded = AtlasTexture::default();
-        uploaded.upload(&device, &queue, &sheet);
-        let shared = uploaded.texture.expect("the fixture uploads a texture");
+        let shared = font_texture(&device, &queue, &sheet);
 
         let cb = TextCallback {
             point_scale: 1.0,
             runs: GlyphRuns::default(),
             glyphs: vec![glyph()],
             shadow: None,
-            sheets: SheetUploads::default(),
+            marks: None,
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
@@ -1584,27 +1546,6 @@ pub(crate) mod tests {
             first_key,
             "a new allocation must rebuild bind groups"
         );
-        let replacement_key = rebound.sheets.atlas.key();
-
-        resources.get_mut::<TextResources>().unwrap().bind_sheets(
-            &device,
-            &queue,
-            None,
-            &SheetUploads { font: Some(sheet.clone()), marks: None },
-        );
-        let fallback = resources.get::<TextResources>().unwrap();
-        assert!(!fallback.sheets.atlas.shared, "the CPU fallback must own its texture");
-        assert_ne!(
-            fallback.sheets.atlas.texture.as_ref(),
-            Some(&replacement),
-            "the fallback wrote into egui's shared texture",
-        );
-        assert_ne!(
-            fallback.sheets.atlas.key(),
-            replacement_key,
-            "switching sources kept the binding generation despite replacing the allocation",
-        );
-        assert!(fallback.sheets.atlas.holds(&sheet), "the fallback publication was not recorded");
     }
 
     /// A stand-in atlas: one opaque 8x8 "glyph" at (8, 8), with nothing
@@ -1615,6 +1556,18 @@ pub(crate) mod tests {
     /// one of them would change under both.
     pub(crate) fn atlas() -> FontAtlas {
         patch_at([8, 8], 32, 1)
+    }
+
+    /// `sheet` on the GPU, as a shell hands egui's font texture to the
+    /// callbacks: inserted into `CallbackResources` under its wgpu type.
+    pub(crate) fn font_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        sheet: &FontAtlas,
+    ) -> wgpu::Texture {
+        let mut held = AtlasTexture::default();
+        held.upload(device, queue, sheet);
+        held.texture.expect("an upload makes a texture")
     }
 
     /// And a stand-in MARK sheet, with its patch somewhere the font atlas has
@@ -1693,22 +1646,25 @@ pub(crate) mod tests {
             runs: GlyphRuns::default(),
             glyphs: vec![glyph],
             shadow,
-            sheets: SheetUploads { font: Some(sheet), marks: None },
+            marks: None,
             slide,
             target_format: FORMAT,
             pane_id: 0,
         };
-        (draw_callback(device, queue, &cb, size, ppp), size)
+        (draw_callback(device, queue, &cb, &sheet, size, ppp), size)
     }
 
+    /// Prepare and paint `cb` over a shell that published `font` as egui's
+    /// font texture.
     fn draw_callback(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         cb: &TextCallback,
+        font: &FontAtlas,
         size: [u32; 2],
         ppp: f32,
     ) -> Vec<u8> {
-        draw_scheduled(device, queue, cb, size, ppp).0
+        draw_scheduled(device, queue, cb, font, size, ppp).0
     }
 
     /// [`draw_callback`], with the cells its pane packed.
@@ -1716,10 +1672,12 @@ pub(crate) mod tests {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         cb: &TextCallback,
+        font: &FontAtlas,
         size: [u32; 2],
         ppp: f32,
     ) -> (Vec<u8>, crate::spectral_shadow::CellStats) {
         let mut resources = CallbackResources::default();
+        resources.insert(font_texture(device, queue, font));
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(device, queue, &screen, &mut encoder, &mut resources);
@@ -1755,7 +1713,7 @@ pub(crate) mod tests {
             glyphs: vec![letter(16.0), letter(24.0), letter(32.0)],
             runs,
             shadow: Some(harmonigraph_scene::ShadowStyle { width, depth: 1.0, spread: 0.5 }),
-            sheets: SheetUploads { font: Some(atlas()), marks: None },
+            marks: None,
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
@@ -1777,9 +1735,9 @@ pub(crate) mod tests {
             return;
         };
         let (frame, one) =
-            draw_scheduled(&device, &queue, &word(GlyphRuns::default(), 1.0), SIZE, 1.0);
+            draw_scheduled(&device, &queue, &word(GlyphRuns::default(), 1.0), &atlas(), SIZE, 1.0);
         let split = GlyphRuns { names: vec![1, 2], layers: Vec::new() };
-        let (_, three) = draw_scheduled(&device, &queue, &word(split, 1.0), SIZE, 1.0);
+        let (_, three) = draw_scheduled(&device, &queue, &word(split, 1.0), &atlas(), SIZE, 1.0);
         assert_eq!((one.cells, three.cells), (1, 3), "one cell per name");
         assert!(
             3 * one.cell_texels < 2 * three.cell_texels,
@@ -1803,9 +1761,9 @@ pub(crate) mod tests {
         };
         let mut cb = word(GlyphRuns::default(), 1.0);
         cb.glyphs.truncate(1);
-        let single = draw_callback(&device, &queue, &cb, SIZE, 1.0);
+        let single = draw_callback(&device, &queue, &cb, &atlas(), SIZE, 1.0);
         cb.glyphs.push(cb.glyphs[0]);
-        let doubled = draw_callback(&device, &queue, &cb, SIZE, 1.0);
+        let doubled = draw_callback(&device, &queue, &cb, &atlas(), SIZE, 1.0);
         assert!(pixel(&single, 14, 28)[3] > 0, "the fixture casts no shadow two points out");
         assert!(single == doubled, "a second glyph on the first changed the name's shadow");
     }
@@ -1825,14 +1783,14 @@ pub(crate) mod tests {
                 depth: 1.0,
                 ..Default::default()
             }),
-            sheets: SheetUploads { font: Some(atlas()), marks: None },
+            marks: None,
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
         };
-        let together = draw_callback(&device, &queue, &cb, SIZE, 1.0);
+        let together = draw_callback(&device, &queue, &cb, &atlas(), SIZE, 1.0);
         cb.runs = GlyphRuns { names: vec![1, 2], layers: vec![1, 2] };
-        let layered = draw_callback(&device, &queue, &cb, SIZE, 1.0);
+        let layered = draw_callback(&device, &queue, &cb, &atlas(), SIZE, 1.0);
         // x=26 is back ink within the front glyph's shadow, but outside
         // its fill. Keeping both glyphs in one name must preserve it.
         assert_eq!(pixel(&together, 26, 28), [255; 4]);
@@ -1977,12 +1935,13 @@ pub(crate) mod tests {
             // The letter where `glyph` puts it, the mark 16 points to its left.
             glyphs: vec![glyph(), GlyphInstance { rect: [8.0, 24.0, 8.0, 8.0], ..mark() }],
             shadow: None,
-            sheets: SheetUploads { font: Some(atlas()), marks: Some(mark_sheet()) },
+            marks: Some(mark_sheet()),
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
         };
         let mut resources = CallbackResources::default();
+        resources.insert(font_texture(&device, &queue, &atlas()));
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
@@ -2063,15 +2022,14 @@ pub(crate) mod tests {
                 })
                 .collect(),
             shadow: None,
-            sheets: SheetUploads {
-                font: Some(FontAtlas { image: std::sync::Arc::new(image), key: 1 }),
-                marks: None,
-            },
+            marks: None,
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
         };
         let mut resources = CallbackResources::default();
+        let sheet = FontAtlas { image: std::sync::Arc::new(image), key: 1 };
+        resources.insert(font_texture(&device, &queue, &sheet));
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
@@ -2143,6 +2101,7 @@ pub(crate) mod tests {
         };
 
         let mut resources = CallbackResources::default();
+        resources.insert(font_texture(&device, &queue, &atlas()));
         let (docked, preview) = (at(0), at(1));
         prepare(&docked, &mut resources);
         prepare(&preview, &mut resources);
@@ -2155,11 +2114,12 @@ pub(crate) mod tests {
         assert!(held(&resources, 1) == before, "the pane that stopped drawing lost its glyphs");
     }
 
-    /// A pane whose text is already prepared keeps it when a LATER pane in the
-    /// same frame brings a grown atlas.
+    /// A pane whose marks are already prepared keeps them when a LATER pane in
+    /// the same frame brings a grown mark sheet. egui's font texture cannot
+    /// arrive this way: the shell publishes it once, before any `prepare`.
     ///
     /// Which pane brings one is not a property of the pane: it is whichever
-    /// happened to lay out a glyph nobody had drawn before, so on any frame the
+    /// happened to lay out a mark nobody had drawn before, so on any frame the
     /// panes ahead of it in paint order have already had their `prepare` and
     /// will not get another before they are painted. Both halves of what
     /// [`TextResources::bind_sheets`] hands them are checked here, and each
@@ -2180,16 +2140,11 @@ pub(crate) mod tests {
     /// off a patch that exists solely in the grown half, which no pane still
     /// bound to the old texture can reach.
     #[test]
-    fn a_prepared_pane_survives_a_later_pane_growing_the_atlas() {
-        for sheet in [GlyphInstance::TYPE, GlyphInstance::MARK] {
-            prepared_pane_survives_atlas_growth(sheet);
-        }
-    }
-
-    fn prepared_pane_survives_atlas_growth(sheet: u32) {
+    fn a_prepared_pane_survives_a_later_pane_growing_the_mark_sheet() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
+        let sheet = GlyphInstance::MARK;
         // An opaque 8x8 patch at (8, 8), and — once the atlas is tall enough to
         // hold one — a second at (8, 40), which is reachable only through a
         // texture of the grown size. Everything else stays transparent, so a
@@ -2210,24 +2165,20 @@ pub(crate) mod tests {
             }
             FontAtlas { image: std::sync::Arc::new(image), key }
         };
-        // The standalone harness requires a font sheet even for mark-only batches.
-        let fallback_font = atlas();
-        let at = |x: f32, pane_id: u64, atlas: Option<FontAtlas>| TextCallback {
+        let at = |x: f32, pane_id: u64, marks: Option<FontAtlas>| TextCallback {
             point_scale: 1.0,
             runs: GlyphRuns::default(),
             glyphs: vec![GlyphInstance { rect: [x, 24.0, 8.0, 8.0], atlas: sheet, ..glyph() }],
             shadow: None,
-            sheets: if sheet == GlyphInstance::TYPE {
-                SheetUploads { font: atlas, marks: None }
-            } else {
-                SheetUploads { font: Some(fallback_font.clone()), marks: atlas }
-            },
+            marks,
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id,
         };
 
         let mut resources = CallbackResources::default();
+        // Every glyph waits for a font texture, a mark included.
+        resources.insert(font_texture(&device, &queue, &atlas()));
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let rect =
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
@@ -2301,7 +2252,7 @@ pub(crate) mod tests {
                     runs: GlyphRuns::default(),
                     glyphs: vec![reaching],
                     shadow: None,
-                    sheets: SheetUploads::default(),
+                    marks: None,
                     slide: SlideAxis::default(),
                     target_format: FORMAT,
                     pane_id: 0,

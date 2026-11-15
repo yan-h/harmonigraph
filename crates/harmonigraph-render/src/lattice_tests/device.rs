@@ -60,7 +60,8 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
         image: std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::WHITE)),
         key: 99,
     };
-    window.sheets.atlas.upload(&shooter.device, &shooter.queue, &atlas);
+    let font = crate::text::tests::font_texture(&shooter.device, &shooter.queue, &atlas);
+    window.sheets.atlas.share(&font);
     window.sheets.marks.upload(&shooter.device, &shooter.queue, &atlas);
     // Clone the compiled owner out of a populated, still-live context. Its
     // type excludes mutable state, and constructing another context must
@@ -77,7 +78,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
         assert!(fresh.state == TimerState::Idle);
         assert!(!std::sync::Arc::ptr_eq(&fresh.ready, &timer.ready));
     }
-    assert!(window.sheets.atlas.holds(&atlas) && window.sheets.marks.holds(&atlas));
+    assert!(window.sheets.atlas.view().is_some() && window.sheets.marks.holds(&atlas));
     drop(reset);
     shooter.resources = CallbackResources::default();
 

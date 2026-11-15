@@ -31,24 +31,6 @@
 
 use harmonigraph_render::GlyphInstance;
 
-/// Tell this context that its shell publishes egui's font texture to wgpu
-/// paint callbacks after applying the current frame's texture deltas.
-///
-/// The timing is the contract: a shell that can only expose the previous
-/// frame's texture must leave the fallback mirror enabled, or a glyph first
-/// rasterized this frame will point into texels the callback cannot read yet.
-pub fn use_renderer_font_texture(ctx: &egui::Context) {
-    ctx.data_mut(|data| {
-        data.insert_temp(egui::Id::new("harmonigraph_renderer_font_texture"), true);
-    });
-}
-
-fn renderer_font_texture_is_current(ctx: &egui::Context) -> bool {
-    ctx.data(|data| {
-        data.get_temp::<bool>(egui::Id::new("harmonigraph_renderer_font_texture")).unwrap_or(false)
-    })
-}
-
 /// A text scale snapped so that text of `base` points lands on a whole
 /// PHYSICAL pixel.
 ///
@@ -263,24 +245,6 @@ pub(crate) fn spectral_labels(surface: usize) -> u64 {
     batch(surface, 2)
 }
 
-/// One glyph as the mirror identifies it: its size, its character, and the
-/// TEXEL it was found at.
-///
-/// The texel is what makes this exact rather than nearly right. What the
-/// mirror has to guarantee is that every glyph a batch points at exists, at
-/// those coordinates, in the copy of the atlas the GPU holds — so the thing to
-/// notice is a glyph turning up somewhere we have not uploaded, whatever the
-/// reason. Keyed on (size, character) alone it misses the commonest reason of
-/// all: epaint bins a glyph's subpixel position into four cells and caches
-/// each separately (`SubpixelBin`, and its place in `GlyphCacheKey`), so one
-/// character at one size is up to FOUR images at four texels, chosen by what
-/// precedes it in the string. A digit shifting column between `-13.69` and
-/// `-13.71` lands in a cell the atlas has never held, the pair says "seen",
-/// and the glyph samples blank space until something else forces a refresh —
-/// which is a digit dropping out of the lattice's cents readout and coming
-/// back a frame later.
-type GlyphKey = (u32, char, [u16; 2]);
-
 /// A uniform magnification applied to every quad a batch emits: a factor, and
 /// the point it is taken about.
 ///
@@ -339,29 +303,6 @@ pub(crate) struct TextBatch {
     /// by [`TextBatch::attached_to`] and empty for every other pane, which has
     /// nothing for a glyph to belong to.
     labels: Vec<harmonigraph_render::Label>,
-    /// Every glyph this batch drew — the probe that decides whether egui has
-    /// rasterized something our mirror of its atlas has not seen. See
-    /// [`GlyphKey`] and [`AtlasMirror`].
-    ///
-    /// Filled only in a shell that needs the fallback, which is what
-    /// [`TextBatch::publishes_font_texture`] answers: the plugin and the
-    /// offline renderer hand their callbacks egui's own GPU texture and never
-    /// consult a mirror, so every key they built here was thrown away at the
-    /// flush that follows.
-    drawn: Vec<GlyphKey>,
-    /// Whether this batch's shell publishes egui's font texture to the paint
-    /// callbacks — [`renderer_font_texture_is_current`], asked once for the
-    /// batch instead of once per glyph.
-    ///
-    /// Remembered rather than re-read, and the reason is not the `ctx.data`
-    /// lock. The collecting side and the flushing side have to give the SAME
-    /// answer: [`atlas_if_changed`] reads an empty `drawn` as "no glyph this
-    /// pane drew is new", so a batch that skipped its pushes and then took the
-    /// fallback arm would tell that mirror nothing had moved while handing the
-    /// renderer glyphs it has never held. One read cannot disagree with
-    /// itself. Nothing flips it under a batch either — the two shells that
-    /// publish call `use_renderer_font_texture` before their first frame.
-    publishes_font_texture: Option<bool>,
     /// In force for the piece being drawn, if any. See [`Magnify`].
     magnify: Option<Magnify>,
     /// Test-only: which glyphs came from which piece of text. The glyphs
@@ -511,12 +452,6 @@ impl TextBatch {
         out
     }
 
-    /// See [`publishes_font_texture`](Self::publishes_font_texture) the field:
-    /// asked of the context on first use and held for the rest of the batch.
-    fn publishes_font_texture(&mut self, ctx: &egui::Context) -> bool {
-        *self.publishes_font_texture.get_or_insert_with(|| renderer_font_texture_is_current(ctx))
-    }
-
     /// Add one piece of text, shadowed. `outline` should be the ground the
     /// text stands on (`theme::picture` over a picture pane), which contrasts
     /// with any text color by construction; a transparent one draws the
@@ -548,7 +483,6 @@ impl TextBatch {
         let (said, font_size) = (text.clone(), font.size);
         #[cfg(test)]
         let first = self.glyphs.len();
-        let font_size_bits = font.size.to_bits();
         let galley = painter.layout_no_wrap(text, font, egui::Color32::PLACEHOLDER);
         // Placed at whatever position it is handed, NOT rounded onto a whole
         // physical pixel — for EVERY pane that draws through this batch, not
@@ -588,8 +522,6 @@ impl TextBatch {
         // everywhere the caller wants the rasterized size; see [`Magnify`] for
         // why a label that follows a zoom does not.
         let k = self.magnify.map_or(1.0, |m| m.factor);
-        // Only where a mirror is going to read them. See [`Self::drawn`].
-        let probe = !self.publishes_font_texture(painter.ctx());
         for row in &galley.rows {
             for glyph in &row.glyphs {
                 if glyph.uv_rect.is_nothing() {
@@ -599,9 +531,6 @@ impl TextBatch {
                 let min = pos + row.pos.to_vec2() + left_top.to_vec2();
                 let min = self.magnify.map_or(min, |m| m.point(min));
                 let rect = [min.x, min.y, glyph.uv_rect.size.x * k, glyph.uv_rect.size.y * k];
-                if probe {
-                    self.drawn.push((font_size_bits, glyph.chr, glyph.uv_rect.min));
-                }
                 self.glyphs.push(GlyphInstance {
                     rect,
                     uv: [
@@ -749,22 +678,12 @@ impl TextBatch {
             self.pieces.clear();
             self.marks.clear();
         }
-        let atlas = if self.publishes_font_texture(painter.ctx()) {
-            None
-        } else {
-            atlas_if_changed(
-                painter.ctx(),
-                &state.instruments.font_atlas,
-                std::mem::take(&mut self.drawn),
-            )
-        };
-        let marks = marks_snapshot(painter.ctx());
         painter.add(harmonigraph_render::text_paint_callback(
             rect,
             std::mem::take(&mut self.glyphs),
             std::mem::take(&mut self.runs),
             shadow,
-            harmonigraph_render::SheetUploads { font: atlas, marks },
+            marks_snapshot(painter.ctx()),
             slide,
             state.surfaces.target_format,
             pane_id,
@@ -780,44 +699,20 @@ impl TextBatch {
     /// and the pass that draws them is the pane's own — where the pane's
     /// corner is the origin and the render scale decides the pixels.
     ///
-    /// The font atlas normally reaches both callbacks as egui's renderer
-    /// texture. The `atlas` value below is the independently tracked fallback
-    /// for shells that cannot publish that texture. Every nonempty batch
-    /// carries the current mark sheet for the renderer to compare.
+    /// The font atlas reaches both callbacks as egui's renderer texture,
+    /// which every shell publishes. Every nonempty batch carries the current
+    /// mark sheet for the renderer to compare.
     pub(crate) fn lattice_labels(
         &mut self,
         painter: &egui::Painter,
         rect: egui::Rect,
-        state: &crate::PictureState,
     ) -> harmonigraph_render::LatticeLabels {
         #[cfg(test)]
         {
             self.pieces.clear();
             self.marks.clear();
         }
-        // A batch that drew nothing publishes nothing. [`flush`](Self::flush)
-        // says this by returning outright; this has a value to hand back, so
-        // it skips the publication alone — and it has to skip it explicitly,
-        // because `atlas_if_changed` cannot tell "no glyphs to check" from "a
-        // mirror holding nothing". Until the first lattice name is drawn its
-        // `seen` is empty, which is the arm that reports a resize, so an
-        // empty `drawn` would hand back the whole atlas and a new key on
-        // every frame — and the lattice pane draws no names before the first
-        // note or hover under the sounding-only visibility mode.
-        let (atlas, marks) = if self.glyphs.is_empty() {
-            (None, None)
-        } else {
-            let atlas = if self.publishes_font_texture(painter.ctx()) {
-                None
-            } else {
-                atlas_if_changed(
-                    painter.ctx(),
-                    &state.instruments.lattice_atlas,
-                    std::mem::take(&mut self.drawn),
-                )
-            };
-            (atlas, marks_snapshot(painter.ctx()))
-        };
+        let marks = marks_snapshot(painter.ctx());
         let mut glyphs = std::mem::take(&mut self.glyphs);
         // The lattice's names are its `labels`, so the runs go with the glyphs
         // they counted.
@@ -829,7 +724,6 @@ impl TextBatch {
         harmonigraph_render::LatticeLabels {
             glyphs,
             labels: std::mem::take(&mut self.labels),
-            atlas,
             marks,
             // An orbiting camera carries a node name across the screen and up
             // it at once, so the lattice reconstructs both axes. See
@@ -837,126 +731,6 @@ impl TextBatch {
             slide: harmonigraph_render::SlideAxis::Both,
         }
     }
-}
-
-/// What one glyph renderer has received from an egui context.
-///
-/// The plugin and offline shells publish egui's GPU font texture directly, so
-/// the font fields below serve only the CPU fallback used by other shells.
-/// The mark sheet always uses the publication key because it is packed here
-/// rather than by egui. There is one tracker for the text callback and one for
-/// the lattice callback because each owns its own mark texture and fallback
-/// font texture.
-///
-/// The fallback cannot drain egui's texture-delta channel because egui's own
-/// renderer consumes it. The atlas exposes no version, so a glyph found at a
-/// texel the fallback has never uploaded makes that copy stale.
-///
-/// The three fields below are guards on top of that, each for a way the whole
-/// atlas can move at once — cheaper to notice wholesale than one glyph at a
-/// time, and `size` and `ppp` also cover the case where a rearrangement lands
-/// a DIFFERENT glyph on a texel some key already claims.
-///
-/// See [`snap_scale`] for why the fallback still bounds the number of distinct
-/// glyph sizes it can be asked to publish.
-#[derive(Default)]
-pub(crate) struct AtlasMirror {
-    seen: std::collections::HashSet<GlyphKey>,
-    /// The fallback atlas size; a resize moves every glyph.
-    size: [usize; 2],
-    /// The scale factor it was taken at, as bits — the third way every glyph
-    /// moves, and the one the others can miss.
-    ///
-    /// A key carries a POINT size, but egui rasterizes at PHYSICAL pixels, so
-    /// the same size is a different image at a different scale. Changing it
-    /// appends every glyph afresh — epaint's own cache is keyed on the scale
-    /// too — while the atlas dimensions stay put: measured at 1x and 2x, the
-    /// atlas is `[2048, 32]` both times and 'A' sits at texels `[90, 0]`
-    /// against `[111, 0]`. The keys move with the texels, so `seen` does now
-    /// catch this on its own; this stays because it is the cheap wholesale
-    /// version of the same fact, and because a glyph landing where an old key
-    /// already points is the one arrangement a per-glyph probe cannot see.
-    /// Dragging the window between a Retina display and an external monitor is
-    /// the ordinary way to do it.
-    ppp: u32,
-    /// How full egui said its atlas was when the fallback last copied it — the
-    /// fourth way every glyph moves, and the only signal that egui has thrown
-    /// the atlas away and started over.
-    ///
-    /// `Fonts::begin_pass` rebuilds the entire font store once the atlas passes
-    /// 80% full, re-rasterizing every glyph at fresh UVs. Zoom-scaled labels are
-    /// what put that within reach: a label's size follows the camera and the
-    /// pitch range, so a session walks through many more sizes than the handful
-    /// of constants the panes used to draw at, and each one fills more of the
-    /// atlas. The other triggers can both miss it — the rebuilt atlas regrows
-    /// through whatever size the mirror recorded, and the panes report the same
-    /// pairs they always did — so the DROP in fill ratio is what says it
-    /// happened. (It only ever drops there; new glyphs raise it.) Everything in
-    /// `seen` is stale with it, so it goes too.
-    fill: f32,
-    /// Bumped on every fallback refresh; the callback compares it against
-    /// what it last uploaded.
-    key: u64,
-}
-
-impl AtlasMirror {
-    /// Forget the context this describes, so the next flush publishes.
-    ///
-    /// All four guards above read one egui `Context`, and a shell that builds
-    /// a second one leaves them answering for an atlas nobody is drawing from.
-    /// See [`release_context_resources`](crate::PictureState::release_context_resources),
-    /// which is the one caller.
-    ///
-    /// `key` is deliberately kept: it counts publications rather than
-    /// describing an atlas, and a renderer that survived the context still
-    /// compares against the last one it uploaded, so it has to keep rising.
-    pub(crate) fn forget_context(&mut self) {
-        self.seen.clear();
-        self.size = [0, 0];
-        self.ppp = 0;
-        self.fill = 0.0;
-    }
-}
-
-/// egui's font atlas, on the frames the fallback mirror needs it, and `None`
-/// on the rest.
-fn atlas_if_changed(
-    ctx: &egui::Context,
-    mirror: &std::sync::Mutex<AtlasMirror>,
-    drawn: Vec<GlyphKey>,
-) -> Option<harmonigraph_render::FontAtlas> {
-    let mut mirror = mirror.lock().expect("the label mirror is never held across a panic");
-    // A resize (or the overflow that clears the atlas and starts over)
-    // rearranges everything, so it counts as a change on its own.
-    let size = ctx.fonts(|fonts| fonts.font_image_size());
-    // So does a scale change, which repacks the atlas without resizing it — see
-    // [`AtlasMirror::ppp`]. The pairs already seen were rasterized at the old
-    // scale and say nothing about the new one, so they go with it: every glyph
-    // the panes draw counts as unseen again, which is also what refills `seen`.
-    let ppp = ctx.pixels_per_point().to_bits();
-    // ...and so does the rebuild egui does when its atlas fills up, which
-    // repacks every glyph without either of the two above having to change.
-    // See [`AtlasMirror::fill`].
-    let fill = ctx.fonts(|fonts| fonts.font_atlas_fill_ratio());
-    let rebuilt = fill < mirror.fill;
-    mirror.fill = fill;
-    if ppp != mirror.ppp || rebuilt {
-        mirror.seen.clear();
-    }
-    let resized = mirror.seen.is_empty() || size != mirror.size;
-    // Every pair is inserted, so this is not `any`, which would stop at the first new one.
-    let mut fresh = false;
-    for pair in drawn {
-        fresh |= mirror.seen.insert(pair);
-    }
-    if !fresh && !resized {
-        return None;
-    }
-    mirror.size = size;
-    mirror.ppp = ppp;
-    mirror.key = mirror.key.wrapping_add(1);
-    let image = std::sync::Arc::new(ctx.fonts(|fonts| fonts.image()));
-    Some(harmonigraph_render::FontAtlas { image, key: mirror.key })
 }
 
 /// Current immutable marks for every nonempty batch. Only the renderer knows
@@ -1580,7 +1354,6 @@ mod tests {
                 let labels = batch.lattice_labels(
                     ui.painter(),
                     egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
-                    &state.picture,
                 );
                 assert_eq!(labels.glyphs.len(), 1, "a nonempty mark batch must reach publication");
                 let published =
@@ -1602,7 +1375,7 @@ mod tests {
                     labels.glyphs,
                     harmonigraph_render::GlyphRuns::default(),
                     None,
-                    harmonigraph_render::SheetUploads { font: labels.atlas, marks: labels.marks },
+                    labels.marks,
                     harmonigraph_render::SlideAxis::Both,
                     state.picture.surfaces.target_format,
                     0,
@@ -1610,55 +1383,6 @@ mod tests {
                 ));
             });
         }
-    }
-
-    /// Lay `text` out at `ppp` and report exactly what a pane drawing it would
-    /// hand [`atlas_if_changed`]: the keys of its glyphs, with the atlas
-    /// dimensions alongside.
-    fn draw_at(
-        ctx: &egui::Context,
-        font: &egui::FontId,
-        text: &str,
-        ppp: f32,
-    ) -> ([usize; 2], Vec<GlyphKey>) {
-        ctx.set_pixels_per_point(ppp);
-        let mut drawn = None;
-        // Twice: the first pass asks for glyphs the atlas may not hold yet, and
-        // the rasterization it triggers lands for the next one.
-        for _ in 0..2 {
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let galley = ui.painter().layout_no_wrap(
-                    text.to_owned(),
-                    font.clone(),
-                    egui::Color32::WHITE,
-                );
-                drawn = Some(
-                    galley.rows[0]
-                        .glyphs
-                        .iter()
-                        .map(|g| (font.size.to_bits(), g.chr, g.uv_rect.min))
-                        .collect::<Vec<_>>(),
-                );
-            });
-        }
-        (ctx.fonts(|fonts| fonts.font_image_size()), drawn.expect("the closure runs"))
-    }
-
-    /// Collect the keys a batch reports for `text`, exactly as a pane would.
-    fn batch_keys(ctx: &egui::Context, font: &egui::FontId, text: &str) -> Vec<GlyphKey> {
-        let mut batch = TextBatch::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            batch.text(
-                ui.painter(),
-                egui::pos2(20.0, 20.0),
-                egui::Align2::LEFT_TOP,
-                text.to_owned(),
-                font.clone(),
-                egui::Color32::WHITE,
-                egui::Color32::BLACK,
-            );
-        });
-        batch.drawn
     }
 
     /// The `k` appended by the spectral frequency formatter reaches the
@@ -1715,7 +1439,6 @@ mod tests {
                 renderer.update_texture(&device, &queue, *id, delta);
             }
         }
-        use_renderer_font_texture(&context);
 
         let mut state = crate::PictureState::new(FORMAT);
         state.appearance.view.shadow.spectral_text =
@@ -1737,11 +1460,8 @@ mod tests {
                     egui::Color32::GREEN,
                     egui::Color32::RED,
                 );
-                // Off the galley rather than off `batch.drawn`, which this
-                // shell does not fill: it published the renderer's own
-                // texture above, so there is no mirror to probe for. The
-                // galley is where the batch read its own glyphs from, and
-                // the same skip of the blanks puts the two in step.
+                // Off the galley, which is where the batch read its own glyphs
+                // from; the same skip of the blanks puts the two in step.
                 let galley = painter.layout_no_wrap(label, font, egui::Color32::PLACEHOLDER);
                 let k = galley.rows[0]
                     .glyphs
@@ -1882,46 +1602,6 @@ mod tests {
         assert_eq!(distinct.len(), ids.len(), "two batches share an id: {ids:?}");
     }
 
-    /// A lattice that drew no names hands over no atlas.
-    ///
-    /// [`TextBatch::flush`] returns early on an empty batch, and
-    /// [`TextBatch::lattice_labels`] has to do the same on its own —
-    /// `atlas_if_changed` cannot cover for it. `seen` is empty until the
-    /// first lattice glyph is handed over, so `resized` is true, an empty
-    /// `drawn` finds nothing fresh but takes that arm anyway, and every call
-    /// publishes: a whole `ColorImage` cloned out of egui and a new key,
-    /// which the renderer answers with a full-atlas `write_texture` and a
-    /// rebuilt glyph bind group. Once per frame, per lattice pane, for as
-    /// long as it lasts.
-    ///
-    /// It lasts in the resting state from the editor opening until the first
-    /// note or hover under the sounding-only visibility mode, and it comes
-    /// back whenever the mirror is
-    /// cleared with the lattice idle — a drag between the Retina display and
-    /// an external monitor, or the window closing and reopening.
-    #[test]
-    fn a_lattice_that_drew_no_names_hands_over_no_atlas() {
-        let ctx = egui::Context::default();
-        let state = crate::tests::probe::fresh();
-        mark_sheet(&ctx).lock().expect("fresh sheet").patch(mark_at(MarkKind::Plus, 11.0), 0);
-        let mut published = 0usize;
-        // Several frames: the first publication is the one that would seed
-        // `seen` and quiet the rest, and with nothing drawn there is none.
-        for _ in 0..3 {
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let mut batch = TextBatch::default();
-                let labels = batch.lattice_labels(
-                    ui.painter(),
-                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
-                    &state.picture,
-                );
-                published +=
-                    usize::from(labels.atlas.is_some()) + usize::from(labels.marks.is_some());
-            });
-        }
-        assert_eq!(published, 0, "an empty batch publishes no atlas, on any frame");
-    }
-
     /// A stacked name is ONE shadow caster however many pieces it is drawn
     /// in, and a piece drawn on its own, as an axis label is, is one of its
     /// own: the runs the renderer makes casters of end after the label and
@@ -1964,169 +1644,6 @@ mod tests {
         assert_eq!(label, 3, "the label is three glyphs");
         assert!(marks >= 2, "the name should be drawn in several pieces, got {marks} marks");
         assert_eq!(names, vec![label, total], "one run for the label and one for the name");
-    }
-
-    /// A shell that installs egui's current GPU texture makes a CPU atlas
-    /// publication pure duplication. The glyph run still has to reach the
-    /// callback; only the cloned image is omitted.
-    ///
-    /// And the PROBE that would have fed that publication is not collected
-    /// either — a [`GlyphKey`] per glyph per frame, built for a mirror this
-    /// shell never asks. `drawn` is read by `atlas_if_changed` and by nothing
-    /// else, so where that is not called there is nothing to fill.
-    #[test]
-    fn a_renderer_font_texture_replaces_the_cpu_atlas_publication() {
-        let ctx = egui::Context::default();
-        use_renderer_font_texture(&ctx);
-        let state = crate::tests::probe::fresh();
-        let mut result = (0usize, false, 0usize);
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let mut batch = TextBatch::default();
-            batch.text(
-                ui.painter(),
-                egui::pos2(20.0, 20.0),
-                egui::Align2::LEFT_TOP,
-                "C4".to_owned(),
-                crate::theme::picture_font(13.0),
-                egui::Color32::WHITE,
-                egui::Color32::BLACK,
-            );
-            let probed = batch.drawn.len();
-            let labels = batch.lattice_labels(
-                ui.painter(),
-                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
-                &state.picture,
-            );
-            result = (labels.glyphs.len(), labels.atlas.is_some(), probed);
-        });
-        assert!(result.0 > 0, "the fixture must hand glyphs to the renderer");
-        assert!(!result.1, "the current renderer texture makes a CPU clone redundant");
-        assert_eq!(result.2, 0, "{} glyph keys collected for a mirror nobody reads", result.2);
-        // Non-vacuous: the same glyphs ARE probed in a shell that needs the
-        // fallback, which is the only thing that reads them.
-        let fallback = egui::Context::default();
-        let mut probed = 0usize;
-        let _ = fallback.run_ui(egui::RawInput::default(), |ui| {
-            let mut batch = TextBatch::default();
-            batch.text(
-                ui.painter(),
-                egui::pos2(20.0, 20.0),
-                egui::Align2::LEFT_TOP,
-                "C4".to_owned(),
-                crate::theme::picture_font(13.0),
-                egui::Color32::WHITE,
-                egui::Color32::BLACK,
-            );
-            probed = batch.drawn.len();
-        });
-        assert_eq!(probed, result.0, "the fallback shell must probe every glyph it drew");
-    }
-
-    /// A character the atlas has never rasterized THERE is a glyph the mirror
-    /// has never uploaded, whatever its (size, character) says.
-    ///
-    /// epaint bins a glyph's subpixel position into four cells and caches each
-    /// separately, so one character at one size is up to four images at four
-    /// texels — chosen by what precedes it in the string. This is the ordinary
-    /// case, not a corner: the lattice's cents readout reformats as a note
-    /// bends, a digit shifts column, and it lands in a cell nothing has
-    /// uploaded. Keyed on the pair alone the mirror reports "seen" and that
-    /// digit samples blank space — it drops out of the readout and comes back
-    /// a frame later, when some genuinely new pair happens to force a refresh.
-    ///
-    /// Both strings are laid out BEFORE the mirror is made, so every glyph is
-    /// already in the atlas and its dimensions have settled. Without that the
-    /// second draw grows the atlas and the size guard refreshes for it — which
-    /// is what happens in a fresh editor for a few seconds, and is exactly why
-    /// this went unnoticed: the bug needs an atlas that has stopped growing,
-    /// which is every session after the first moments.
-    #[test]
-    fn a_glyph_at_a_new_texel_refreshes_the_mirror() {
-        let ctx = egui::Context::default();
-        let font = crate::theme::picture_font(13.0);
-        for _ in 0..2 {
-            batch_keys(&ctx, &font, "Ai");
-            batch_keys(&ctx, &font, "iA");
-        }
-        let settled = ctx.fonts(|fonts| fonts.font_image_size());
-
-        let state = crate::tests::probe::fresh();
-        let first = batch_keys(&ctx, &font, "Ai");
-        let mirror = &state.picture.instruments.font_atlas;
-        assert!(atlas_if_changed(&ctx, mirror, first.clone()).is_some(), "the first mirror");
-        assert!(atlas_if_changed(&ctx, mirror, first.clone()).is_none(), "nothing has moved");
-
-        // The same character at the same size, pushed along by what is now in
-        // front of it. Every PAIR here is one the mirror has already seen...
-        let swapped = batch_keys(&ctx, &font, "iA");
-        let (a, moved) = (first[0], swapped[1]);
-        assert_eq!((a.0, a.1), (moved.0, moved.1), "the same size and character");
-        assert_ne!(a.2, moved.2, "...rasterized at a texel of its own");
-        assert!(
-            swapped.iter().all(|k| first.iter().any(|seen| (seen.0, seen.1) == (k.0, k.1))),
-            "every pair here is one the mirror has already been shown",
-        );
-        assert_eq!(ctx.fonts(|fonts| fonts.font_image_size()), settled, "the atlas has not grown");
-
-        // ...so the texel is the whole of what stands between that glyph and a
-        // blank rectangle where a digit should be.
-        assert!(
-            atlas_if_changed(&ctx, mirror, swapped).is_some(),
-            "a glyph at an unuploaded texel must refresh the mirror",
-        );
-    }
-
-    /// Every field the mirror compares describes ONE egui context, so the
-    /// mirror belongs to that context and dies with it.
-    ///
-    /// [`PictureState`](crate::PictureState) outlives the context — the plugin's
-    /// editor builds a fresh one per window — while the atlas texture and the
-    /// per-pane bind groups the mirror is a mirror OF live in the renderer,
-    /// which the new window builds fresh alongside it. A mirror carried across
-    /// therefore answers for texels in a texture nobody allocated: it reports
-    /// "already uploaded", the callback finds no atlas and paints nothing, and
-    /// the pane's labels are simply absent — the lattice's note names, the
-    /// analyzer's, the learn badge — with no frame that recovers them, because
-    /// the mirror is itself the only thing that would ask.
-    ///
-    /// [`release_context_resources`](crate::PictureState::release_context_resources)
-    /// is where a shell says the context is gone, and clearing the mirror
-    /// there is what bounds this to the window that opened it.
-    ///
-    /// The two contexts here draw the same text at the same scale, which is
-    /// what a reopened window does before anything moves: same atlas
-    /// dimensions, same fill ratio, same glyphs at the same texels. That is
-    /// the case none of the mirror's four guards can see. A window whose
-    /// first frame asks for LESS than the last one rasterized drops the fill
-    /// ratio and refreshes on that, which is why this survives casual use.
-    #[test]
-    fn a_fresh_context_is_shown_the_atlas_again() {
-        let font = crate::theme::picture_font(13.0);
-        let mut state = crate::tests::probe::fresh();
-
-        // A window's worth of labels, settled: the second pass draws what the
-        // first pass rasterized, which is where the keys stop moving.
-        let ctx = egui::Context::default();
-        batch_keys(&ctx, &font, "C4 Eb5 G7");
-        let opened = batch_keys(&ctx, &font, "C4 Eb5 G7");
-        {
-            let mirror = &state.picture.instruments.font_atlas;
-            assert!(atlas_if_changed(&ctx, mirror, opened.clone()).is_some(), "the first mirror");
-            assert!(atlas_if_changed(&ctx, mirror, opened.clone()).is_none(), "nothing has moved");
-        }
-
-        // The window closes and another opens: a new context, and a new
-        // renderer holding no atlas at all.
-        state.picture.release_context_resources();
-        let reopened = egui::Context::default();
-        batch_keys(&reopened, &font, "C4 Eb5 G7");
-        let drawn = batch_keys(&reopened, &font, "C4 Eb5 G7");
-        assert_eq!(drawn, opened, "the same labels rasterize to the same texels");
-
-        assert!(
-            atlas_if_changed(&reopened, &state.picture.instruments.font_atlas, drawn).is_some(),
-            "a context that has never been handed the atlas must be handed it",
-        );
     }
 
     /// A scale that follows a zoom takes a new value on every frame of a drag,
@@ -2321,45 +1838,5 @@ mod tests {
         }
         assert!(ladder(1.0, 0.0, ppp).1.is_finite(), "a zero base");
         assert!(ladder(1.0, base, 0.0).1.is_finite(), "a zero scale factor");
-    }
-
-    /// A SCALE change re-rasterizes every glyph and hands out new UVs, and the
-    /// mirror's other two triggers are both blind to it: the atlas keeps its
-    /// dimensions, and a pane drawing the same characters at the same POINT size
-    /// reports no pair it has not seen. Without a trigger of its own the GPU
-    /// would hold the old pixels while every glyph indexes the new layout, so
-    /// each label would sample whatever now sits where its glyph used to.
-    ///
-    /// The two assertions before the point are what makes it one: they pin the
-    /// egui behaviour the bug is made of, so if a future version repacks to a
-    /// different SIZE this stops quietly passing for the wrong reason.
-    #[test]
-    fn a_scale_change_refreshes_the_mirror_though_nothing_else_moves() {
-        let state = crate::tests::probe::fresh();
-        let ctx = egui::Context::default();
-        let font = egui::FontId::proportional(12.0);
-
-        let (size_1x, drawn_1x) = draw_at(&ctx, &font, "Ag1", 1.0);
-        let mirror = &state.picture.instruments.font_atlas;
-        assert!(atlas_if_changed(&ctx, mirror, drawn_1x.clone()).is_some(), "the first mirror");
-        assert!(
-            atlas_if_changed(&ctx, mirror, drawn_1x.clone()).is_none(),
-            "an unchanged frame must not re-upload the atlas — that is the point of the mirror"
-        );
-
-        let (size_2x, drawn_2x) = draw_at(&ctx, &font, "Ag1", 2.0);
-        assert_eq!(size_2x, size_1x, "the atlas takes the new glyphs at the SAME dimensions");
-        let point_size = |k: &GlyphKey| (k.0, k.1);
-        assert_eq!(
-            drawn_2x.iter().map(point_size).collect::<Vec<_>>(),
-            drawn_1x.iter().map(point_size).collect::<Vec<_>>(),
-            "the pane asks for the same characters at the same POINT size",
-        );
-        assert_ne!(drawn_2x, drawn_1x, "...and they are rasterized somewhere else entirely");
-
-        assert!(
-            atlas_if_changed(&ctx, mirror, drawn_2x).is_some(),
-            "a scale change must refresh the mirror: the UVs moved, so the pixels must follow"
-        );
     }
 }

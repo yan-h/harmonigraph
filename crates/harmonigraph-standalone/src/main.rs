@@ -50,11 +50,7 @@ fn main() -> eframe::Result {
                 cc.wgpu_render_state.as_ref().expect("eframe was built with the wgpu backend");
             let mut app = App::new(render_state.target_format);
             // Everything a shell owes a context it has just built: theme, the
-            // release of the previous context's textures, the fold floor and
-            // the window session. The release is a no-op in this harness,
-            // whose state is built alongside the one context it will ever use
-            // — but the day it grows a second window it stops being one, and
-            // it is not this shell's call to make.
+            // fold floor and the window session.
             harmonigraph_ui::shell::Opening { ctx: &cc.egui_ctx, state: &mut app.state }.open();
             // Then the layout saved last run (eframe's storage, where the
             // plugin has the host's project), installed once, as a host
@@ -585,8 +581,9 @@ impl eframe::App for App {
         harmonigraph_ui::shell::limit_font_atlas(input);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let now = self.start.elapsed().as_secs_f64();
+        publish_font_texture(frame);
 
         let source = self.source_picker(ui.ctx());
         let now = self.input_frame(source, now);
@@ -627,6 +624,24 @@ impl eframe::App for App {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(UI_STATE_STORAGE_KEY, harmonigraph_ui::shell::close(&self.state));
+    }
+}
+
+/// Hand the label callbacks egui's font texture, as the plugin's and the
+/// offline renderer's shells do (Patch 13).
+///
+/// eframe runs `ui` before it applies the frame's texture deltas, so this is
+/// the texture as the previous frame left it. A delta that patches it in
+/// place lands before the callbacks prepare; one that replaces it (the atlas
+/// growing, or egui's rebuild at 80% full) leaves the labels on the retired
+/// texture for one frame, in this harness only. Before the first paint there
+/// is no texture, and the labels wait for one.
+fn publish_font_texture(frame: &eframe::Frame) {
+    let Some(render_state) = frame.wgpu_render_state() else { return };
+    let mut renderer = render_state.renderer.write();
+    let font = renderer.texture(&egui::TextureId::default()).and_then(|t| t.texture.clone());
+    if let Some(font) = font {
+        renderer.callback_resources.insert(font);
     }
 }
 

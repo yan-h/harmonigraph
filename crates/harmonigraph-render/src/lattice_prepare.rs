@@ -100,7 +100,7 @@ impl CallbackTrait for LatticeCallback {
         // recorded against. Old texture, new size, which is exactly the
         // mismatch the text callback's version exists to prevent, arriving by
         // the other road.
-        let _ = resources.sheets.bind(device, queue, shared_atlas.as_ref(), &self.sheets);
+        let _ = resources.sheets.bind(device, queue, shared_atlas.as_ref(), self.marks.as_ref());
         // The first frames of a session can arrive before any pane has drawn a
         // glyph, and the labels wait for a font texture. Gated on the FONT
         // atlas alone: a mark is always drawn beside a letter, so a frame with
