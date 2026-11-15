@@ -869,6 +869,7 @@ fn the_lights_colour_seams_run_at_one_width_from_its_edge_to_the_centre() {
     for slot in low.max(0)..=high.min(harmonigraph_scene::OCTAVE_SLOTS as i32 - 1) {
         node.octaves[slot as usize] = 1.0;
     }
+    read_light(node);
     // The octave band is the ink the light's colour is read off, and it is the
     // only layer on: nothing is drawn inside it, so every pixel sampled below
     // is light and nothing else.

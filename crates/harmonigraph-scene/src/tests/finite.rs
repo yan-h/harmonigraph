@@ -266,7 +266,8 @@ fn scene_floats(scene: &Scene) -> Floats {
         f.one(format!("nodes[{i}].audio_ring"), *audio_ring);
         let GlowStep { level, light } = glow;
         f.one(format!("nodes[{i}].glow.level"), *level);
-        if let Some(GlowLight { l, p, m }) = light {
+        {
+            let GlowLight { l, p, m } = light;
             f.many(&format!("nodes[{i}].glow.light.l"), *l);
             f.many(&format!("nodes[{i}].glow.light.p"), *p);
             f.many(&format!("nodes[{i}].glow.light.m"), *m);

@@ -214,6 +214,7 @@ fn a_marked_slice_the_note_has_left_keeps_the_whole_light() {
             ..Default::default()
         };
         scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 0.0;
+        read_light(&mut scene.nodes[0]);
         scene.view.glow_reach = reach;
         scene.view.glow_strength = 1.5;
         scene.view.glow_wash = wash;
@@ -294,6 +295,7 @@ fn a_node_wearing_only_an_audio_ring_gives_off_no_light() {
         node.melody_slots = 0;
         node.bass_slots = 0;
         node.audio_ring = 1.0;
+        read_light(node);
         scene.view.glow_reach = reach;
         scene.view.glow_strength = 1.5;
         scene
@@ -399,6 +401,7 @@ fn two_colour_node(band_width: f32, mark_width: f32) -> Scene {
     // No analyzer at all: `parity_scene` is silent, and an empty annulus is the
     // ring layer's own off switch.
     node.audio_ring = 1.0;
+    read_light(node);
 
     scene.view.glow_reach = 0.8;
     scene.view.glow_strength = 1.5;
@@ -453,6 +456,7 @@ fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
         let node = &mut scene.nodes[0];
         node.presence_with_opacity = 0.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        read_light(node);
         scene
     };
     // The band alone: the ring's width dialled to nothing, which is the layer's
@@ -516,6 +520,7 @@ fn a_silent_slice_puts_none_of_its_ground_in_the_light() {
         let node = &mut scene.nodes[0];
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
+        read_light(node);
         scene
     };
     let dark = || -> Scene {
@@ -594,6 +599,7 @@ fn a_slice_part_way_out_carries_that_much_of_the_light() {
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.octaves[lit] = 1.0;
         node.octaves[beside] = releasing;
+        read_light(node);
         scene.view.glow_reach = reach;
         scene.view.glow_strength = 1.5;
         scene
@@ -716,6 +722,7 @@ fn a_nodes_light_has_no_ripple_the_ink_does_not() {
         // slices carry light at all.
         let node = &mut scene.nodes[0];
         node.octaves = std::array::from_fn(|i| f32::from(i % 2 == 0));
+        read_light(node);
         scene.view.glow_reach = reach;
         scene.view.glow_strength = 1.5;
         scene.view.glow_blend = 0.0;
@@ -807,6 +814,7 @@ fn a_node_added_to_a_pane_lights_in_its_own_colour() {
             node.melody_level = 0.0;
             node.world_pos = glam::Vec3::new(-1.8, 0.0, 0.0);
             node.lattice_pos = harmonigraph_core::LatticePos::new(-1, 0, 0);
+            read_light(&mut node);
             node
         };
         let mark = {
@@ -815,6 +823,7 @@ fn a_node_added_to_a_pane_lights_in_its_own_colour() {
             node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
             node.world_pos = glam::Vec3::new(1.8, 0.0, 0.0);
             node.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);
+            read_light(&mut node);
             node
         };
         scene.nodes = if arrived { vec![band, mark] } else { vec![band] };
@@ -907,6 +916,7 @@ fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
         let mut scene = two_colour_node(WIDTH, WIDTH);
         scene.nodes[0].melody_slots = 0;
         scene.nodes[0].melody_level = 0.0;
+        read_light(&mut scene.nodes[0]);
         let mut idle = scene.nodes[0];
         idle.world_pos.x += 1.2;
         idle.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
@@ -950,7 +960,7 @@ fn fading_node() -> Scene {
     node.presence_with_opacity = 0.0;
     node.melody_slots = 0;
     node.melody_level = 0.0;
-    node.glow = harmonigraph_scene::GlowStep { level: 0.5, light: Some(light) };
+    node.glow = harmonigraph_scene::GlowStep { level: 0.5, light };
     scene
 }
 

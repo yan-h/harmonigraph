@@ -404,7 +404,7 @@ pub const PITCH_LUT_N: usize = 64;
 /// draw exactly as they do with the glow off, which is the graceful end of a
 /// halo nobody can pick out of four thousand others anyway. The shell's glow
 /// pass lights no more than this (`GlowFade` in harmonigraph-ui), and the
-/// renderer reads no more rows than this for a scene nothing has carried.
+/// renderer asserts it in debug builds rather than capping again.
 pub const MAX_LIGHTS: usize = 4096;
 
 /// What a node's light is made of: how much light each of its layers puts on
@@ -478,11 +478,10 @@ pub struct GlowStep {
     /// attack and release, so it can be above zero on a node whose every layer
     /// has gone silent — which is the whole of what makes a halo linger.
     pub level: f32,
-    /// What the light is made of as carried, or `None` where nothing carries
-    /// it, and the renderer reads the node's own
-    /// [`glow_light`](NodeInstance::glow_light) instead — a fixture, a golden
-    /// frame, a snapshot.
-    pub light: Option<GlowLight>,
+    /// What the light is made of. Out of [`NodeMotion::step`] it is the node's
+    /// own [`glow_light`](NodeInstance::glow_light); the shell's pass replaces
+    /// it with where that reading has got to.
+    pub light: GlowLight,
 }
 
 /// One lattice node, ready for instanced rendering.
@@ -839,8 +838,8 @@ impl NodeInstance {
 
     /// What this node's light is made of as it stands: every slot's light, its
     /// reach and its mark (see [`GlowLight`]). The one constructor of that
-    /// reading — the shell's glow pass steps toward it, and the renderer reads
-    /// it for a node nothing carries.
+    /// reading — [`NodeMotion::step`] writes it, and the shell's glow pass
+    /// steps toward it.
     pub fn glow_light(&self) -> GlowLight {
         let l = self.octaves.map(|level| level.clamp(0.0, 1.0));
         let mut m = [0.0_f32; OCTAVE_SLOTS];

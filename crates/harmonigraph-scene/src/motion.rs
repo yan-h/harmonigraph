@@ -993,7 +993,8 @@ impl NodeMotion {
             // presence that waits on the slices (`NodeInstance::glow_target`).
             // Stateless snapshots draw it as it stands; the shell's glow pass
             // steps the level, and what the light is made of, toward it.
-            node.glow.level = node.glow_target();
+            let light = node.glow_light();
+            node.glow = crate::GlowStep { level: light.level(), light };
         }
         scene.pluses = crate::derive::derive_pluses(
             view,

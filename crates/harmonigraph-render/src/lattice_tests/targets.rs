@@ -42,7 +42,7 @@ fn bloom_and_size_changes_replace_only_their_own_targets() {
     node.presence_with_opacity = 0.0;
     node.melody_slots = 0;
     node.melody_level = 0.0;
-    node.glow = harmonigraph_scene::GlowStep { level: 0.8, light: Some(light) };
+    node.glow = harmonigraph_scene::GlowStep { level: 0.8, light };
     let bloomed = shooter.shot(&scene);
     assert!(total_light(&bloomed) > 64, "the carried light must be visible");
     let color = target(&shooter).color_view.clone();

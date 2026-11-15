@@ -251,7 +251,7 @@ impl GlowFade {
                     if lit.level < GONE && target <= 0.0 {
                         lit.level = 0.0;
                     }
-                    GlowStep { level: lit.level, light: Some(lit.light) }
+                    GlowStep { level: lit.level, light: lit.light }
                 }
                 // A node with no light yet and none arriving is left alone, and
                 // so is one past the most a surface lights at once — its
@@ -264,7 +264,7 @@ impl GlowFade {
                         node.lattice_pos,
                         Lit { level, light: goal, target, seen: self.frame },
                     );
-                    GlowStep { level, light: Some(goal) }
+                    GlowStep { level, light: goal }
                 }
             };
         }
@@ -409,7 +409,7 @@ mod tests {
         let (released, now) = step(&state, 0.8);
         assert_eq!(now.level(), 0.0, "the note must be gone by the release's first step");
         let level_share = released.level / held.level;
-        let light = |step: &GlowStep| step.light.expect("a lit node carries its light").l[slot];
+        let light = |step: &GlowStep| step.light.l[slot];
         let light_share = light(&released) / light(&held);
         assert!(level_share < 0.9, "the release moved nothing: {level_share}");
         assert!(
@@ -485,7 +485,7 @@ mod tests {
                 let mut scene = scene_at(state, now);
                 fade.step(&mut scene, &state.appearance.view, now);
                 let node = node_at(&scene, LatticePos::ORIGIN);
-                (node.glow.light.expect("the node is lit"), node.glow_light())
+                (node.glow.light, node.glow_light())
             };
             let frames = (0..=30).map(|k| AT + f64::from(k - 30) / 60.0);
             let (from, _) = frames.map(|now| step(&state, now)).last().unwrap();
@@ -592,7 +592,7 @@ mod tests {
                 "at {now:.3}s the colour still had {easing} to move and the loop slept",
             );
             let share = 1.0 - (-(now - 20.0) / RELEASE).exp() as f32;
-            let carried = glow.light.expect("the node is lit");
+            let carried = glow.light;
             let mut expected = before;
             expected.step(&goal, share);
             assert!(
@@ -623,7 +623,7 @@ mod tests {
                 .collect();
             scene
         };
-        let lit = |scene: &Scene| scene.nodes.iter().filter(|n| n.glow.light.is_some()).count();
+        let lit = |scene: &Scene| scene.nodes.iter().filter(|n| n.glow.level > 0.0).count();
         let mut fade = GlowFade::default();
         let mut first = window(0);
         fade.step(&mut first, &state.appearance.view, 0.0);
@@ -635,7 +635,7 @@ mod tests {
         fade.step(&mut half, &state.appearance.view, 0.05);
         assert_eq!(lit(&half), MAX_LIGHTS, "newcomers ahead of carried lights overran the cap");
         assert!(
-            half.nodes.iter().filter(|n| n.lattice_pos.threes >= 0).all(|n| n.glow.light.is_some()),
+            half.nodes.iter().filter(|n| n.lattice_pos.threes >= 0).all(|n| n.glow.level > 0.0),
             "a carried light lost its place to a newcomer",
         );
         let mut moved = window(100_000);
@@ -677,7 +677,7 @@ mod tests {
             fade.step(&mut scene, &state.appearance.view, time);
             let node = node_at(&scene, LatticePos::ORIGIN);
             assert!((node.glow.level - expected).abs() < 0.001, "attack at {time}: {node:?}");
-            assert_eq!(node.glow.light, Some(node.glow_light()), "the light was not seeded whole");
+            assert_eq!(node.glow.light, node.glow_light(), "the light was not seeded whole");
         }
     }
 
@@ -758,7 +758,7 @@ mod tests {
         });
         assert!(steps.len() >= 2, "the fixture must discard an actual layout pass");
         assert!(
-            steps.iter().all(|step| step.level == 0.0 && step.light.is_some()),
+            steps.iter().all(|step| step.level == 0.0),
             "discarded passes skipped the attack: {steps:?}",
         );
     }
