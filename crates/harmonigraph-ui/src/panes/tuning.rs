@@ -835,7 +835,9 @@ fn instance_controls(
                         ui.data_mut(|data| data.remove::<u32>(id));
                     }
                 } else {
-                    delay_text.on_hover_text("Harmonigraph's own input needs one buffer.");
+                    delay_text.on_hover_text(
+                        "Harmonigraph's own input is corrected in the callback it arrives in.",
+                    );
                 }
             });
         });
@@ -857,7 +859,7 @@ fn instance_controls(
                 .button("Apply to all tuners")
                 .on_hover_text(
                     "Each tuner reports its own latency; Source details overrides one. \
-                     Harmonigraph's own input stays at one buffer.",
+                     Harmonigraph's own input has no delay.",
                 )
                 .clicked()
             {

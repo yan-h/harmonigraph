@@ -36,7 +36,7 @@ pub fn snapshots() -> Vec<TuningInstance> {
             let output = shared.last_output.load(Ordering::Relaxed);
             let name = shared.name.lock().unwrap().clone();
             let misses = shared.misses.load(Ordering::Relaxed);
-            let status = if active == 0 {
+            let status = if frames == 0 {
                 "Waiting for host activation".to_owned()
             } else if misses != 0 {
                 format!(
@@ -68,9 +68,13 @@ pub fn snapshots() -> Vec<TuningInstance> {
                 notes_in: shared.notes_in.load(Ordering::Relaxed),
                 notes_out: shared.notes_out.load(Ordering::Relaxed),
                 misses,
-                delay: requested,
-                max_delay: if shared.is_hub() { 1 } else { DELAY_MULTIPLIER_MAX as u32 },
-                delay_text: setup::delay_text(requested, active, frames, rate),
+                delay: if shared.is_hub() { 0 } else { requested },
+                max_delay: if shared.is_hub() { 0 } else { DELAY_MULTIPLIER_MAX as u32 },
+                delay_text: if shared.is_hub() {
+                    "No tuning delay".to_owned()
+                } else {
+                    setup::delay_text(requested, active, frames, rate)
+                },
                 status,
                 last_pitch: (input != i64::MIN && output != i64::MIN)
                     .then_some((input as f64 / 1_000_000.0, output as f64 / 1_000_000.0)),

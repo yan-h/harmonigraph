@@ -79,7 +79,7 @@ A later implementation should not broaden a row merely because its rejected bran
 | State authority | **What the Hub scheduled** — input plus that source's D, derived from its own sequenced input | Actual emitted output, reported back by each Tune and reconciled against the plan | One authority cannot disagree with itself. The reconciliation was two provenances, an output ring, a journal and a dual-provenance reducer, to establish a fact the Hub had already computed | A real downstream pitch-feedback mechanism exists and is worth integrating |
 | Pitch output | CLAP per-note tuning expression for the adaptive correction, composed with live player expression; MIDI channel bend remains MIDI | MTS-ESP, MPE or VST3 note output | Matches sample-timed per-voice assignments and the actual host while adding no external tuning service; Bitwig converts a note effect's per-note pitch to MPE or VST3 note expression downstream, so the instrument's own format is not restricted | A required instrument cannot consume it |
 | Session transport | An in-process session under a documented Bitwig hosting mode, with **exactly one Hub per process** and no pairing choice | A saved pairing UUID with auto-join, ambiguity handling and a popup to resolve it | One Hub is the only case that has ever existed here. Pairing became one atomic load of one slot, which deleted the offer/return/lease handoff and every way it could stall | Two Harmonigraphs in one process become a configuration worth supporting rather than a fault to report |
-| Hub ownership | Full Harmonigraph, normally on Master. **It is a Tune plus the policy**: it delays its own notes by D and is sequenced as a seventeenth source | A headless conductor, or an elected Tune peer; and separately, a direct observation path for the Hub's own MIDI that skipped the delay | Reuses the existing configuration, display, take and combined-audio location without another authority. Making its own track ordinary deletes `direct.rs` and the DIRECT half of every predicate that used to have one | The Hub cannot stay active in the supported graph, or a project needs tuning without a full Harmonigraph |
+| Hub ownership | Full Harmonigraph, normally on Master. **It is a Tune plus the policy**: its own notes run through a Tune, at zero delay, and are sequenced as a seventeenth source | A headless conductor, or an elected Tune peer; and separately, a direct observation path for the Hub's own MIDI that skipped the delay | Reuses the existing configuration, display, take and combined-audio location without another authority. Making its own track ordinary deletes `direct.rs` and the DIRECT half of every predicate that used to have one | The Hub cannot stay active in the supported graph, or a project needs tuning without a full Harmonigraph |
 | Missed assignment deadline | **Attempt to emit on time, uncorrected, and count the miss.** A late reply is discarded | Keep that one attack pending and take its valid late assignment | Waiting for one note is what every stall in the #712 tree grew out of: per-note pending states, linked work cells, two late-playback rules and atomic same-key replacement all exist to make waiting safe. A raw note and a counter cost one note's tuning; waiting cost the whole track | A musical requirement makes a late correct pitch better than an on-time raw one — which is the judgment this reverses, so it needs new evidence rather than a preference |
 | Participation UI | Central per-instance and global Retune/Show controls in Harmonigraph, mirrored locally in each Tune | Host bypass as the only control, or one switch coupling retuning and visibility | A source can pass through and remain visible without influencing adaptive tuning | A new per-source musical role is needed |
 | Player pitch | Preserve the player's MIDI bend and per-note pitch expression, and add one frozen adaptive correction on top | Center the bend and replace the expression | Player gestures remain expressive, and policy v3 can score their absolute onset pitch without changing its frozen adaptive choice later | A required gesture cannot be represented by this composition |
@@ -174,7 +174,8 @@ into the display and the take through the existing two publication lanes.
 Tunes run no assignment policy and hold no copy of the Hub's state.
 
 The Hub's own MIDI takes exactly that path.
-It embeds a Tune whose ring is a direct call, so its track is delayed by D, assigned by the same policy and published through the same row as any other.
+It embeds a Tune whose ring is a direct call, so its track is assigned by the same policy and published through the same row as any other.
+That Tune runs at zero delay: its correction is queued at the input boundary before any sub-block of the same callback is scheduled, so the round trip needs none.
 There is no second observation path to keep in step with the first.
 
 Work is bounded per callback and runs to completion inside it.
@@ -194,7 +195,7 @@ and that number is fixed for the whole activation.
 Each Tune persists its own multiplier as an ordinary plugin parameter and reports the resulting latency from it at activation, before any Hub pairing exists.
 The Hub's **Tuning → Tuning sources → Tuning delay** controls offer **Apply to all tuners** as a convenience.
 Per-instance overrides live in **Source details**, and each Tune that changes requests its own reactivation.
-The Hub's own input uses a fixed one-buffer delay.
+The Hub's own input has no delay.
 
 The editor shows the multiplier, the sample count and the milliseconds together —
 `2x buffer - 128 samples / 2.67 ms` —
@@ -595,7 +596,7 @@ Learning is the one consumer that reads something else:
 it is given the **player's** pitch, with the adaptive correction taken back off.
 Every row is tuned now, the Hub's own included, so feeding Learn what was emitted would make it a fixed point that infers the axes it has already chosen.
 The old design avoided that only because the Hub's own track was the one thing it did not retune.
-Learn also reads one callback later than it used to, because the Hub's own input is delayed by D like everyone else's;
+Learn also reads one callback later than it used to, because it reads the Hub's own input through the Hub's rows like everyone else's;
 the configuration walk that runs it happens before the performance input for that callback is delivered.
 It reads the Hub's rows themselves (`Hub::held_classes`), as the Hub's callback start leaves them,
 and refuses only while a row has lost an event, since that row's held notes are then unknown (#1751).

@@ -852,8 +852,7 @@ fn initial_expression_order_and_identity_match_in_both_production_routes() {
                 hub.run(0, vec![], None);
                 tune.run(512, vec![], None).values
             } else {
-                hub.run(0, input, None);
-                hub.run(512, vec![], None).values
+                hub.run(0, input, None).values
             };
             let published: Vec<_> = capture
                 .display_events()
@@ -1936,8 +1935,184 @@ fn channel_bend_fanout_overflow_is_not_silent() {
     hub.run(2048, vec![], None);
     assert_eq!(notes, 2048, "fixture must exhaust the pending queue");
     assert!(gaps > 0, "lost bend history must be explicit");
+    // The last bend sounds at its own sample: Harmonigraph's own input has no
+    // delay, and the repair's block starts 32 samples before it.
     assert!(
-        repaired_at >= (1024.0 + 512.0 + 32.0) / 48000.0,
+        repaired_at >= (1024.0 + 32.0) / 48000.0,
         "repair must not place the last bend at an earlier retained delta's time"
     );
+}
+
+/// One block on a Tune and the Hub, both told the transport at `at` blocks,
+/// playing or parked. A Tune at 1x sounds what it is given one block later.
+fn take_block(hub: &Device, tune: &Device, raw: i64, played: Vec<Input>, at: f64, playing: bool) {
+    let position = timeline(at * 512.0 / 48_000.0, playing);
+    tune.run_callback(raw, played, (None, None), (512, false), Some(position));
+    hub.run_callback(raw, vec![], (None, None), (512, false), Some(position));
+}
+
+/// The notes a take draws for `key`, replayed as the renderer does.
+fn drawn(take: &harmonigraph_take::Take, key: u8) -> Vec<(f64, Option<f64>)> {
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for record in &take.events {
+        record.apply(&mut tracker).unwrap();
+    }
+    tracker.roll().notes().filter(|n| n.note == key).map(|n| (n.start, n.end)).collect()
+}
+
+/// #1760 on a Tune's row, where a record sounds a block after it is played: a
+/// paused take reads whole, every note drawn and on its soundtrack. The first
+/// two bend in the last block a take records, so the bend sounds in the pause
+/// and is dropped: `parked-at-start` parks at the last played block's own
+/// position, and `input-in-parked-block` plays into the first parked block,
+/// which still records. `release-in-parked-block` releases there, sounding in
+/// the pause: the release is dropped with it, and the resume's snapshot, which
+/// no longer lists the note, ends it. A note whose release was not recorded
+/// draws without an end.
+#[test]
+fn a_paused_take_reads_whole_with_a_tunes_records_sounding_in_the_pause() {
+    let on = |id, key, t| note(id, 0, key, t, true);
+    let off = |id, key, t| note(id, 0, key, t, false);
+    // (raw sample, events, transport position in blocks, playing)
+    type Step = (i64, Vec<Input>, f64, bool);
+    let park = |raw: i64, at: f64| -> Step { (raw, vec![], at, false) };
+    let play = |raw: i64, events: Vec<Input>, at: f64| -> Step { (raw, events, at, true) };
+    // Per key: the notes drawn, and whether each drew its release.
+    type Drawn = &'static [(u8, usize, bool)];
+    let cases: [(&str, Vec<Step>, Drawn); 3] = [
+        (
+            "parked-at-start",
+            vec![
+                play(0, vec![on(10, 60, 80)], 0.0),
+                play(512, vec![expression(10, 0.5, 480)], 1.0),
+                park(1024, 1.0),
+                park(1536, 1.0),
+                play(2048, vec![], 2.0),
+                play(2560, vec![], 3.0),
+                play(3072, vec![off(10, 60, 0)], 4.0),
+            ],
+            &[(60, 1, false)],
+        ),
+        (
+            "input-in-parked-block",
+            vec![
+                play(0, vec![on(10, 60, 80)], 0.0),
+                play(512, vec![], 1.0),
+                (1024, vec![expression(10, 0.5, 480)], 2.0, false),
+                park(1536, 2.0),
+                park(2048, 2.0),
+                play(2560, vec![], 2.0),
+                play(3072, vec![], 3.0),
+                play(3584, vec![off(10, 60, 0)], 4.0),
+            ],
+            &[(60, 1, false)],
+        ),
+        (
+            "release-in-parked-block",
+            vec![
+                play(0, vec![on(10, 60, 80)], 0.0),
+                play(512, vec![], 1.0),
+                (1024, vec![off(10, 60, 480)], 2.0, false),
+                park(1536, 2.0),
+                park(2048, 2.0),
+                play(2560, vec![on(12, 64, 16)], 2.0),
+                play(3072, vec![off(12, 64, 16)], 3.0),
+                play(3584, vec![], 4.0),
+            ],
+            &[(60, 1, false), (64, 1, true)],
+        ),
+    ];
+    for (name, steps, expected) in cases {
+        let _scope = crate::test_scope::enter();
+        let (mut hub, mut capture) = Device::recorded_hub();
+        let mut tune = Device::new(true);
+        hub.activate();
+        tune.activate();
+        capture.arm();
+        let dir = std::env::temp_dir()
+            .join(format!("harmonigraph-tune-paused-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.take");
+        let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+        let (mut raw, mut at) = (0, 0.0);
+        for (block, events, position, playing) in steps {
+            take_block(&hub, &tune, block, events, position, playing);
+            (raw, at) = (block, position);
+        }
+        // Parked from here: the last record sounds and is published, and the
+        // run ends.
+        for _ in 0..4 {
+            raw += 512;
+            take_block(&hub, &tune, raw, vec![], at, false);
+        }
+        writer.drain(&mut capture);
+        assert!(!writer.failed(), "{name}");
+        let take = harmonigraph_take::Take::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(take.incomplete.is_none(), "{name}: nothing was lost");
+        let soundtrack = take.audio_start.unwrap();
+        for &(key, count, released) in expected {
+            let notes = drawn(&take, key);
+            assert_eq!(notes.len(), count, "{name}: key {key}: {notes:?}");
+            assert!(
+                notes.iter().all(|&(start, end)| end.is_some() == released && start >= soundtrack),
+                "{name}: key {key} on the soundtrack from {soundtrack}: {notes:?}"
+            );
+        }
+        drop(writer);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// #1771 on a Tune's row: a note struck just before the take is armed sounds a
+/// block later, inside the take's first run, whose opening snapshot restates
+/// it. The Hub gave it a lifetime when it was struck, so the snapshot continues
+/// the note the take recorded rather than opening a second one beside it.
+#[test]
+fn a_tune_note_restated_by_a_snapshot_stays_one_note_with_its_history() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    let mut tune = Device::new(true);
+    hub.activate();
+    tune.activate();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-tune-restated-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.take");
+    // Struck in a block no take owns; it sounds a block later, once one does.
+    take_block(&hub, &tune, 0, vec![note(10, 0, 60, 80, true)], 0.0, true);
+    capture.arm();
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+    take_block(&hub, &tune, 512, vec![], 1.0, true);
+    take_block(&hub, &tune, 1024, vec![], 2.0, true);
+    take_block(&hub, &tune, 1536, vec![note(10, 0, 60, 0, false)], 3.0, true);
+    for (raw, at) in [(2048, 4.0), (2560, 5.0)] {
+        take_block(&hub, &tune, raw, vec![], at, true);
+    }
+    for raw in [3072, 3584] {
+        take_block(&hub, &tune, raw, vec![], 5.0, false);
+    }
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let onset = take.events.iter().any(|record| {
+        matches!(record.note(), Some(n) if n.note == 60
+            && matches!(n.kind, harmonigraph_take::NoteKind::On { .. }))
+    });
+    assert!(onset, "the onset sounds where the take records");
+    let restated = take.events.iter().any(|record| {
+        matches!(record, CanonicalRecord::Baseline(frame)
+            if frame.voices.iter().any(|voice| voice.note == 60))
+    });
+    assert!(restated, "and the run's opening snapshot restates it");
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for record in &take.events {
+        record.apply(&mut tracker).unwrap();
+    }
+    let notes: Vec<_> = tracker.roll().notes().filter(|n| n.note == 60).collect();
+    assert_eq!(notes.len(), 1, "one press, one note: {:?}", take.events);
+    assert!(notes[0].history_complete, "continued with its history");
+    assert!(notes[0].end.is_some(), "through the release it recorded");
+    drop(writer);
+    std::fs::remove_dir_all(dir).unwrap();
 }

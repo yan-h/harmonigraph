@@ -294,9 +294,9 @@ struct Row {
 
 pub struct Hub {
     pub shared: Arc<setup::Shared>,
-    /// The Hub's own track. It is a Tune, so its notes are delayed by D and it
-    /// is sequenced as a seventeenth source rather than observed as a special
-    /// case. Its ring is a direct call.
+    /// The Hub's own track. It is a Tune, at zero delay, so it is sequenced as
+    /// a seventeenth source rather than observed as a special case. Its ring
+    /// is a direct call.
     pub tune: Tune,
     id: u64,
     ends: Option<Box<[Option<HubEnds>; TUNERS]>>,
@@ -380,11 +380,10 @@ impl Hub {
         self.rate = rate;
         self.anchor = None;
         self.seconds = None;
-        // The Hub's own delay is the same knob every Tune has, at 1x: its
-        // input is already at the Hub, so one buffer is all its own round trip
-        // can need.
-        self.tune.activate(rate, frames, 1);
-        self.shared.active_multiplier.store(1, Ordering::Release);
+        // No delay at all: the Hub's own input is already at the Hub, and its
+        // correction is queued at the input boundary before any sub-block of
+        // the same callback is scheduled, so the round trip needs none.
+        self.tune.activate(rate, frames, 0);
         self.shared.publish_format(rate, frames);
     }
 

@@ -132,13 +132,11 @@ fn central_edits_include_harmonigraph_and_use_each_tuners_host_latency() {
     }
     assert!(instances::snapshots().iter().all(|row| !row.retune && !row.show));
     let output = pair.hub.run_format(pair.raw, vec![note(1, 0, 60, 0, true)], None, None, 512);
-    assert!(output.values.is_empty());
     pair.raw += 512;
-    let output = pair.hub.run_format(pair.raw, vec![], None, None, 512);
     assert_eq!(
         output.values.len(),
         1,
-        "Harmonigraph's own input passes through without correction"
+        "Harmonigraph's own input passes through without correction or delay"
     );
     assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0);
 
