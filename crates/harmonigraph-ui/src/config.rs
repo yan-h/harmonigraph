@@ -626,11 +626,13 @@ impl SpectrumConfig {
 
     /// How far behind the now-line the newest live column sits even when
     /// nothing is wrong: [`column_lag`](Self::column_lag) at 48 kHz, which a
-    /// frame reads for the heatmap's fresh edge and for how long the curve
-    /// still moves. A frame does not know its shell's rate, and needs none:
-    /// a resolution is a length of time, so the lag is the same at the studio
-    /// rates to within 9% (Precise's 172 ms is 187 at 44.1 kHz), inside the
-    /// edge's 120 ms allowance for delivery.
+    /// frame reads for the live heatmap's fresh edge. A frame does not know
+    /// its shell's rate, and needs none: a resolution is a length of time,
+    /// so the lag is exact at 48, 96 and 192 kHz and up to 9% long at 44.1, 88.2
+    /// and 176.4 kHz (Precise's 172 ms is 187 at 44.1 kHz), inside the
+    /// edge's 120 ms allowance for delivery. Rates below 44.1 kHz are outside
+    /// the use. An export's edge does not read this: it reads ahead at the
+    /// soundtrack's own rate.
     ///
     /// Read from the settings, so for a frame or two after a switch to a
     /// shorter resolution, while the columns still come from the longer one,

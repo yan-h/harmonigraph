@@ -151,11 +151,12 @@ the value on screen is the value the file holds.
 
 **Cases the spectrogram history goes without** (PR #1793), each with its cost when it occurs:
 
-- A column dated at or before the newest, which no feeder writes: debug tests fail; in release it averages into each level's open slab, and one dated far ahead freezes the heatmap until Clear display history.
+- A column dated wrongly, which no feeder writes: debug tests fail. In release one dated at or before the newest averages into each level's open slab; one dated far ahead erases every level's history and the heatmap draws blank until Clear display history, or until real time reaches that date.
+- An analysis not given back before the next take, which the input worker's recovery after a panic rules out: a release build analyzes on from a fresh analyzer dated from the interrupted run's frame zero, so its columns date backward, as above.
 - A crash inside the slab pyramid's fold: the levels it reached keep that column and the rest miss it, drawn so until the slabs scroll out; the input worker restarts its analysis as before.
-- A Clear pressed while the input worker analyzes: one step's audio from just before the press, a few milliseconds, stays in the emptied history.
-- A shell rate other than 48 kHz or 96 kHz: the live edge reads its lag at 48 kHz, up to 9% off (15 ms at Precise, 44.1 kHz), inside the strip's 120 ms freshness allowance.
-- The standalone synth below 5 frames a second: each frame restarts its run, so the heatmap draws nothing until frames come faster.
+- A Clear pressed while the input worker analyzes: the audio that step took from before the press stays in the emptied history, a few milliseconds normally, and as much as it took when it catches up after a stall (up to the 1.37 s audio ring).
+- 44.1, 88.2 and 176.4 kHz: the live heatmap's fresh edge reads its lag at 48 kHz, up to 9% off (15 ms at Precise, 44.1 kHz), inside the strip's 120 ms freshness allowance; rates below 44.1 kHz are outside the use. An export's edge is exact: it reads ahead at the soundtrack's own rate.
+- The standalone synth below 5 frames a second: each frame restarts its run, so the heatmap and the curve draw nothing until frames come faster.
 
 ## Backwards compatibility is not a constraint
 
