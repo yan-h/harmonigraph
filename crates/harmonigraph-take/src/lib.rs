@@ -54,6 +54,10 @@
 //! place in such a file, nor a restated voice that is not accepted output
 //! (known by its lifetime, stamped at its onset), and either is refused.
 //!
+//! A gap marks the passes its inputs touch. An `Incomplete` marker, a failure
+//! of the take, names no pass and marks every one, an earlier whole pass
+//! included (#1766).
+//!
 //! A file with no `Run` is one pass at offset zero, already in song time: the
 //! standalone's takes and in-memory fixtures, whose note history carries no
 //! stamp. A stamped record in it was played where no run recorded, an armed
@@ -307,13 +311,10 @@ pub enum Record {
     Param(ParamRecord),
     Configuration(ConfigurationRecord),
     Canonical(CanonicalRecord),
-    /// A failure that touched every pass not closed above this line.
+    /// A failure of the take. It names no pass, so it marks every one (#1766).
     Incomplete(IncompleteRecord),
     Run(RunRecord),
     RunEnd(RunEndRecord),
-    /// Every record of this pass, and of every pass before it, is above this
-    /// line, so a failure below it leaves them whole.
-    PassClosed(u32),
 }
 
 /// A whole take, read into memory. Per-block expression records can make
@@ -335,8 +336,8 @@ pub struct Take {
     pub truncated: bool,
     /// The hole in the note history the pass read carries, if it has one: the
     /// FIRST the file names, whether as a `Gap` among the events that touches
-    /// one of the pass's runs, an `Incomplete` marker below no `PassClosed` for
-    /// it, or a record the reader had to lift past its bound.
+    /// one of the pass's runs, an `Incomplete` marker anywhere in the file, or a
+    /// record the reader had to lift past its bound.
     ///
     /// First rather than last because a later gap adds nothing to the warning:
     /// the reader took the last line once, so a take with two gaps exported
