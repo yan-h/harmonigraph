@@ -1481,7 +1481,6 @@ fn the_display_shows_the_schedule_rather_than_the_input() {
         })
         .expect("the onset reached the display lane with its own timing");
     assert_eq!(onset.sample, 64 + 512, "the sample it is scheduled to sound at");
-    assert_eq!(onset.planned, Some(onset.sample));
 }
 
 /// A paired Tune's pressure reaches the display as an expression on the note

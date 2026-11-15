@@ -1166,11 +1166,7 @@ mod tests {
                 kind: NoteKind::On { velocity: 0.8 },
                 ..Default::default()
             },
-            timing: Some(TimingRecord {
-                sample: 12_000,
-                sample_rate: 48_000.0,
-                ..Default::default()
-            }),
+            timing: Some(TimingRecord { sample: 12_000, sample_rate: 48_000.0 }),
             ..Default::default()
         };
         let note = Record::Canonical(harmonigraph_take::CanonicalRecord::Delta(note));

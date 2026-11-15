@@ -318,7 +318,7 @@ impl Run<'_> {
     }
 
     fn timing() -> EventTiming {
-        EventTiming { planned: None, sample: 48_000, sample_rate: 48_000.0 }
+        EventTiming { sample: 48_000, sample_rate: 48_000.0 }
     }
 
     /// One published delta, mapped onto the clock by the current offset.

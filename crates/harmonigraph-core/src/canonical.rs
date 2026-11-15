@@ -7,10 +7,8 @@ use crate::{Expressions, LatticePos, NoteEvent, NoteEventKind, SourceId, Time, V
 
 /// Exact sample provenance survives presentation-clock mapping and take routing.
 /// `sample` is actual accepted output for AcceptedOutput, observed input otherwise.
-/// Aggregation has no assignment and leaves `planned` absent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EventTiming {
-    pub planned: Option<i64>,
     pub sample: i64,
     pub sample_rate: f64,
 }
@@ -442,7 +440,7 @@ mod tests {
             lifetime: u64::from(note) + 1,
             input_onset: 0.0,
             actual_onset: 1.0,
-            onset: Some(EventTiming { planned: None, sample: 48000, sample_rate: 48000.0 }),
+            onset: Some(EventTiming { sample: 48000, sample_rate: 48000.0 }),
             pitch_microcents: i64::from(note) * 100_000_000,
             velocity: 0.8,
             provenance: PitchProvenance::AcceptedOutput,
@@ -496,7 +494,6 @@ mod tests {
             lifetime: 61,
             provenance: PitchProvenance::AcceptedOutput,
             timing: Some(EventTiming {
-                planned: None,
                 sample: (event.time * 48000.0) as i64,
                 sample_rate: 48000.0,
             }),

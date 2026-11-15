@@ -1038,7 +1038,7 @@ mod tests {
     /// of 128 controllers after `voices`, `configuration_revision` first inside
     /// an assignment, `start_samples` after `sample_rate` and `window_points`
     /// after `appearance` (#895 dropped those two), and `runtime_session`,
-    /// `clock_epoch` and `input` first inside a timing (#1778). A
+    /// `clock_epoch`, `input` and `planned` first inside a timing (#1780). A
     /// hand-shortened stand-in would prove nothing about the nested vector RON
     /// actually has to skip.
     ///
@@ -1069,7 +1069,7 @@ mod tests {
             correction_microcents: 0,
             player_tuning: 0.0,
         });
-        delta.timing = Some(EventTiming { planned: None, sample: 144_000, sample_rate: 48_000.0 });
+        delta.timing = Some(EventTiming { sample: 144_000, sample_rate: 48_000.0 });
         let note = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
             CanonicalEvent::Note(delta),
         )))
@@ -1093,7 +1093,10 @@ mod tests {
             .replace(")))", &format!("{channels})))"));
         let aged_note = note
             .replace("assignment:Some((", "assignment:Some((configuration_revision:9,")
-            .replace("timing:Some((", "timing:Some((runtime_session:1,clock_epoch:0,input:143000,");
+            .replace(
+                "timing:Some((",
+                "timing:Some((runtime_session:1,clock_epoch:0,input:143000,planned:Some(144000),",
+            );
         let aged_header = header
             .replace("sample_rate:48000.0,", "sample_rate:48000.0,start_samples:Some(1024),")
             .replace("appearance:None,", "appearance:None,window_points:Some((1000.0,700.0)),");
@@ -1103,7 +1106,10 @@ mod tests {
         assert!(aged_frame.contains("coverage_start:2.0"), "{aged_frame}");
         assert!(aged_frame.contains(",channels:[(controllers:[0,"), "{aged_frame}");
         assert!(aged_note.contains("configuration_revision:9"), "{aged_note}");
-        assert!(aged_note.contains("runtime_session:1,clock_epoch:0,input:143000"), "{aged_note}");
+        assert!(
+            aged_note.contains("runtime_session:1,clock_epoch:0,input:143000,planned:Some(144000)"),
+            "{aged_note}"
+        );
         assert!(aged_header.contains("start_samples:Some(1024)"), "{aged_header}");
         assert!(aged_header.contains("window_points:Some((1000.0,700.0))"), "{aged_header}");
         let aged = format!("{aged_header}\n{run}\n{aged_frame}\n{aged_note}");

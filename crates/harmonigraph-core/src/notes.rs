@@ -1475,11 +1475,7 @@ mod tests {
             note,
             lifetime,
             actual_onset: 1.0,
-            onset: Some(crate::canonical::EventTiming {
-                planned: None,
-                sample: 48_000,
-                sample_rate: 48_000.0,
-            }),
+            onset: Some(crate::canonical::EventTiming { sample: 48_000, sample_rate: 48_000.0 }),
             pitch_microcents: i64::from(note) * 100_000_000,
             velocity: 0.8,
             provenance: crate::confirmed::PitchProvenance::AcceptedOutput,

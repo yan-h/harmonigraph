@@ -652,7 +652,6 @@ mod tests {
                     lifetime: 1,
                     provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
                     timing: Some(harmonigraph_core::canonical::EventTiming {
-                        planned: None,
                         sample: 0,
                         sample_rate: 48000.0,
                     }),
@@ -692,7 +691,7 @@ mod tests {
             sequence: 1,
             lifetime: 61,
             provenance: PitchProvenance::AcceptedOutput,
-            timing: Some(EventTiming { planned: None, sample: 96000, sample_rate: 48000.0 }),
+            timing: Some(EventTiming { sample: 96000, sample_rate: 48000.0 }),
             pitch_microcents: None,
         };
         producer.note(accepted).unwrap();

@@ -154,11 +154,7 @@ fn accepted_exact(
         sequence,
         lifetime,
         provenance: PitchProvenance::AcceptedOutput,
-        timing: Some(EventTiming {
-            planned: None,
-            sample: (event.time * 48_000.0) as i64,
-            sample_rate: 48_000.0,
-        }),
+        timing: Some(EventTiming { sample: (event.time * 48_000.0) as i64, sample_rate: 48_000.0 }),
         pitch_microcents,
         assignment: None,
         partial_output: false,
@@ -217,7 +213,6 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         input_onset: ORIGIN + 0.125,
         actual_onset: ORIGIN + 0.125,
         onset: Some(EventTiming {
-            planned: None,
             sample: ((ORIGIN + 0.125) * 48_000.0) as i64,
             sample_rate: 48_000.0,
         }),

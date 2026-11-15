@@ -995,8 +995,7 @@ impl Hub {
         let index = usize::from(record.source);
         let identity = identity(record.source);
         let time = self.presentation(scheduled);
-        let timing =
-            EventTiming { planned: Some(scheduled), sample: scheduled, sample_rate: self.rate };
+        let timing = EventTiming { sample: scheduled, sample_rate: self.rate };
         self.rows[index].sequence += 1;
         let stamp = Stamp {
             source: identity,

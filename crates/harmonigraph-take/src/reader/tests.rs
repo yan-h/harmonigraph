@@ -35,11 +35,7 @@ fn delta(sequence: u64, key: u8, on: bool, input: i64) -> Record {
     delta.sequence = sequence;
     delta.lifetime = u64::from(key);
     delta.provenance = ProvenanceRecord::AcceptedOutput;
-    delta.timing = Some(TimingRecord {
-        planned: Some(input + DELAY),
-        sample: input + DELAY,
-        sample_rate: RATE,
-    });
+    delta.timing = Some(TimingRecord { sample: input + DELAY, sample_rate: RATE });
     Record::Canonical(CanonicalRecord::Delta(delta))
 }
 
@@ -54,7 +50,6 @@ fn struck(note: u8, input: i64) -> VoiceBaseline {
         input_onset: presentation(input),
         actual_onset: presentation(input + DELAY),
         onset: Some(harmonigraph_core::canonical::EventTiming {
-            planned: None,
             sample: input + DELAY,
             sample_rate: RATE,
         }),

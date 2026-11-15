@@ -270,7 +270,6 @@ mod tests {
                 lifetime: 61,
                 provenance: PitchProvenance::AcceptedOutput,
                 timing: Some(EventTiming {
-                    planned: None,
                     sample: (event.time * 48000.0) as i64,
                     sample_rate: 48000.0,
                 }),
@@ -378,7 +377,6 @@ mod tests {
                 lifetime: 61,
                 provenance: PitchProvenance::AcceptedOutput,
                 timing: Some(EventTiming {
-                    planned: None,
                     sample: (event.time * 48000.0) as i64,
                     sample_rate: 48000.0,
                 }),
@@ -393,7 +391,7 @@ mod tests {
             lifetime: 61,
             input_onset: 0.09,
             actual_onset: 0.1,
-            onset: Some(EventTiming { planned: None, sample: 4800, sample_rate: 48000.0 }),
+            onset: Some(EventTiming { sample: 4800, sample_rate: 48000.0 }),
             pitch_microcents: 6_025_000_000,
             velocity: 0.8,
             provenance: PitchProvenance::AcceptedOutput,
