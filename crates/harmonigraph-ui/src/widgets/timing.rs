@@ -2,18 +2,25 @@
 use super::plot::{curve, value_bar, Plot};
 use crate::theme;
 use egui::{Response, Ui};
+use harmonigraph_scene::FADE_TIME_MAX;
 
 /// `fresh` is where a double-click puts the time and the curve back.
+///
+/// The plot's width is the longest fade on offer, [`FADE_TIME_MAX`], the same
+/// ceiling the bar beside it and `ViewConfig::sanitize` hold the time to.
 pub(crate) fn fade(ui: &mut Ui, seconds: &mut f32, shape: &mut f32, fresh: (f32, f32)) -> Response {
     let plot = Plot::with_fields(ui, "Note fade", 2);
-    let (duration_response, next) = plot.handle(ui, "Fade duration", *seconds, 1.0);
+    // The time as a share of the plot's width.
+    let at = *seconds / FADE_TIME_MAX;
+    let (duration_response, next) = plot.handle(ui, "Fade duration", at, 1.0);
     if let Some(p) = next {
-        *seconds = p.x;
+        *seconds = p.x * FADE_TIME_MAX;
     }
+    let at = *seconds / FADE_TIME_MAX;
     let sample = |shape, p| {
         harmonigraph_core::Envelope { attack_time: 1.0, shape, ..Default::default() }.attack(p, 0.0)
     };
-    let (_, next) = plot.handle(ui, "Fade shape", *seconds * 0.5, sample(*shape, 0.5));
+    let (_, next) = plot.handle(ui, "Fade shape", at * 0.5, sample(*shape, 0.5));
     if let Some(p) = next {
         // Invert the production envelope at its midpoint, retaining its single shape dial.
         let (mut lo, mut hi) = (0.0, 1.0);
@@ -28,14 +35,21 @@ pub(crate) fn fade(ui: &mut Ui, seconds: &mut f32, shape: &mut f32, fresh: (f32,
         *shape = (lo + hi) * 0.5;
     }
     let numeric = plot.fields(ui, |ui| {
-        let numeric =
-            value_bar(ui, (seconds, fresh.0), 0.0..=1.0, ["Note fade", "Time"], 1000.0, " ms");
+        let numeric = value_bar(
+            ui,
+            (seconds, fresh.0),
+            0.0..=FADE_TIME_MAX,
+            ["Note fade", "Time"],
+            1000.0,
+            " ms",
+        );
         value_bar(ui, (shape, fresh.1), 0.0..=1.0, ["Fade curve", "Curve"], 100.0, "%");
         numeric
     });
-    curve(&plot, ui, |p| (p * *seconds, sample(*shape, p as f64)), super::value::curve_color());
-    plot.dot(ui, *seconds, 1.0);
-    plot.dot(ui, *seconds * 0.5, sample(*shape, 0.5));
+    let at = *seconds / FADE_TIME_MAX;
+    curve(&plot, ui, |p| (p * at, sample(*shape, p as f64)), super::value::curve_color());
+    plot.dot(ui, at, 1.0);
+    plot.dot(ui, at * 0.5, sample(*shape, 0.5));
     plot.response.on_hover_text("Note fade controls MIDI slices, marks, labels and ring visibility. A release during arrival reverses from the current level. The background glow has its own attack and release, and Fade-out delay adds a hold before a released node leaves.");
     duration_response | numeric
 }
