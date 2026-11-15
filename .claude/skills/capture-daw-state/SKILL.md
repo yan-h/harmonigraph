@@ -21,8 +21,13 @@ Camera movement belongs to the five `camera-*` host parameters;
 the camera snapshot in `ui-state` can lag automation while the editor is closed, so the script overlays the saved host parameters in every output, as the live editor does.
 A project saved with the window open by a build from before #1301 holds the values of the last window close instead, and nothing warns;
 if the numbers look stale, ask Yan to save it again from a current build.
-Host-automatable params (tuning, camera movement) were never affected,
+Host-automatable params (the Lattice Map and its lanes, camera movement) were never affected,
 which is why such a project can show fresh params next to a stale or missing `ui-state`.
+
+The tuning axes, their links, Learn and the adaptive policy are not params (#1795):
+the plugin saves them in its `musical-settings` field, the axes in microcents in `TuningAxis::index` order,
+and the script prints that field as saved under `--- settings ---`.
+A `tuning-*` param in a project saved before then is labelled retired, since the plugin ignores it on load.
 
 ## Where the projects live
 
@@ -31,7 +36,8 @@ they're under `~/Library/CloudStorage/GoogleDrive-*/My Drive/music/`, which Spot
 Auto-backups count as saves.
 
 A project using adaptive tuning holds more instances than the editor's:
-each **Harmonigraph Tune** (its own plugin, `com.yan-h.harmonigraph-tune`) has one `tuning_delay` param and no `ui-state`, by design.
+each **Harmonigraph Tune** (its own plugin, `com.yan-h.harmonigraph-tune`) has no param and no `ui-state`, by design;
+its Tuning delay is `delay` in its `tuning-instance` field, which the script prints.
 The script prints every instance numbered, and labels a Tune as one;
 the one with the `appearance` block is the editor's.
 An output showing only Tune instances means the scan stopped short, not that the window was never closed.

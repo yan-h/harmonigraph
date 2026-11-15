@@ -17,10 +17,13 @@ editor shows it, open window or not (`UiState` in
 crates/harmonigraph-plugin/src/editor/persist.rs). Builds before issue #1301
 wrote it only when the editor window CLOSED, so a project such a build saved
 with the window open holds whatever was there before: open it in a current
-build, save, and re-run. (Host-automatable params — tuning — were never
-affected; those live in the param system.) Camera movement
+build, save, and re-run. (Host-automatable params — the Lattice Map and its
+lanes — were never affected; those live in the param system.) Camera movement
 now also belongs to host params. The camera in the UI blob can lag automation
 while the window is closed; all outputs below overlay those saved host values.
+The tuning axes, their links and the adaptive policy are no host params: the
+plugin saves them in `fields["musical-settings"]`, and each instance's Retune,
+Show, name and (a Tune's) Tuning delay in `fields["tuning-instance"]`.
 
 WHERE THE BYTES ACTUALLY ARE
 ----------------------------
@@ -54,20 +57,30 @@ import zlib
 STATE_START = b'{"version"'
 
 # Every nice-plug plugin saves this same JSON shape, so a project's other
-# plugins are found too. One of these param ids marks an instance as ours when
-# it has no ui-state to show it (`#[id]`s in crates/harmonigraph-plugin/src/lib.rs
-# and tuning/plugin.rs); without the check another plugin read as an editor
-# "never open before a save", a warning a session acts on.
-OUR_PARAMS = {"camera-yaw", "tuning-engine", "tuning_delay"}
+# plugins are found too. An instance is ours when it holds one of our saved
+# fields, or one of the editor's param ids (`#[id]`s in
+# crates/harmonigraph-plugin/src/lib.rs); without the check another plugin read
+# as an editor "never open before a save", a warning a session acts on.
+# A Harmonigraph Tune exports no host parameter, so it is the instance of ours
+# with none of the editor's.
+EDITOR_PARAMS = {"camera-yaw", "tuning-engine"}
+# The plugin-owned settings, printed as saved (`MUSICAL_SETTINGS` in
+# crates/harmonigraph-plugin/src/configuration.rs, `tuning/setup.rs`).
+SETTINGS_FIELDS = ("musical-settings", "tuning-instance")
 
-# Host parameters a current build no longer declares, and the look field that
-# holds the setting now. A project saved before #1744 still carries their
-# values; the plugin ignores them on load, so they are labelled rather than
-# shown as live.
+# Host parameters a current build no longer declares, with the PR that retired
+# each and where the setting lives now. A project saved before then still
+# carries their values; the plugin ignores them on load, so they are labelled
+# rather than shown as live.
 RETIRED_PARAMS = {
-    "pitch-class-fade": "view.fade_time",
-    "darkest-pitch": "view.darkest_pitch",
-    "brightest-pitch": "view.brightest_pitch",
+    "pitch-class-fade": "#1744, ignored on load; the look's view.fade_time holds it",
+    "darkest-pitch": "#1744, ignored on load; the look's view.darkest_pitch holds it",
+    "brightest-pitch": "#1744, ignored on load; the look's view.brightest_pitch holds it",
+    **{
+        f"tuning-{axis}": "#1795, ignored on load; the musical-settings field holds it"
+        for axis in ("c-offset", "three", "five", "seven", "tolerance")
+    },
+    "tuning_delay": "#1801, ignored on load; the tuning-instance field's delay holds it",
 }
 
 VIEW_SOURCE = pathlib.Path(__file__).resolve().parent / "crates/harmonigraph-scene/src/view/mod.rs"
@@ -141,8 +154,8 @@ def find_states(path: pathlib.Path):
     """Every plugin instance's state in the project.
 
     The whole file, not the first section that yields one: adaptive tuning
-    puts Harmonigraph Tune instances in a project (each one `tuning_delay`
-    param and no `ui-state`), and they sit in separate compressed sections
+    puts Harmonigraph Tune instances in a project (each a `tuning-instance`
+    field, no param and no `ui-state`), and they sit in separate compressed sections
     from the editor's. Stopping at the first productive one reported a Tune
     alone and read as "the editor was never closed".
     A full scan is about 13 s on a 600 KB project."""
@@ -155,7 +168,8 @@ def find_states(path: pathlib.Path):
             ui = st.get("fields", {}).get("ui-state")
             if isinstance(ui, str) and ui.startswith('"'):
                 st["fields"]["ui-state"] = json.loads(ui)
-            ours = ui is not None or OUR_PARAMS & set(st.get("params", {}))
+            ours = (ui is not None or "tuning-instance" in st.get("fields", {})
+                    or EDITOR_PARAMS & set(st.get("params", {})))
             key = json.dumps(st, sort_keys=True)
             if key not in seen and "fields" in st and ours:
                 seen.add(key)
@@ -310,11 +324,16 @@ def main() -> None:
         print("\n--- params (host-automatable; always current) ---")
         for k, v in sorted(st.get("params", {}).items()):
             retired = RETIRED_PARAMS.get(k)
-            note = f"  (retired by #1744, ignored on load; the look's {retired} holds it)" if retired else ""
+            note = f"  (retired by {retired})" if retired else ""
             print(f"  {k}: {list(v.values())[0]}{note}")
+        settings = [(k, st["fields"][k]) for k in SETTINGS_FIELDS if k in st.get("fields", {})]
+        if settings:
+            print("\n--- settings (plugin-owned; saved with the project) ---")
+            for k, v in settings:
+                print(f"  {k}: {v}")
         if not ui:
             # A Tune has no editor, so its missing ui-state is not the trap.
-            if set(st.get("params", {})) == {"tuning_delay"}:
+            if not EDITOR_PARAMS & set(st.get("params", {})):
                 print("\n(a Harmonigraph Tune — no editor, so no ui-state)")
             else:
                 print("\n(no ui-state field — the editor was never open before a save)")
