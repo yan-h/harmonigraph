@@ -210,9 +210,15 @@ impl GlowFade {
         let mut lights =
             scene.nodes.iter().filter(|n| self.nodes.contains_key(&n.lattice_pos)).count();
         // Two coefficients for the whole frame: every node's light runs on the
-        // same pair of times, and which of the two it takes is which way its
-        // level is going — RISING only while visibly below its target, by
-        // more than half a code value. A level attacking toward a target
+        // same pair of times, and which of the two it takes is whether
+        // something in it is coming up — RISING while its level, or any slot's
+        // light, is visibly below where it is heading, by more than half a code
+        // value. So a note joining a node already lit at full brings its colour
+        // in on the attack, while a note leaving, or a mark moving onto a slot
+        // already sounding, eases on the release (#1784 G2). One coefficient
+        // for the whole light still, level and weights alike (#1626): a
+        // handoff that brings one octave in as another leaves runs on the
+        // attack whole. A level or a weight attacking toward a target
         // approaches it without landing, so a test of `target > level` alone
         // would hand a held light's colour the attack for as long as it is
         // held, and the release where an attack of 0 lands it exactly: which
@@ -238,7 +244,9 @@ impl GlowFade {
                 Some(lit) => {
                     lit.seen = self.frame;
                     lit.target = target;
-                    let rising = target - lit.level > VISIBLE_STEP;
+                    let arriving =
+                        goal.l.iter().zip(&lit.light.l).any(|(goal, l)| goal - l > VISIBLE_STEP);
+                    let rising = target - lit.level > VISIBLE_STEP || arriving;
                     let mix = if rising { up } else { down };
                     lit.level += (target - lit.level) * mix;
                     lit.light.step(&goal, mix);
@@ -557,6 +565,44 @@ mod tests {
             assert!(awake, "the halo's colour was still easing at {now}s and asked for nothing");
         }
         assert!(!level_at(&state, 6.0).1, "the colour arrived and the loop stayed awake");
+    }
+
+    /// A note joining a node already lit at full level brings its colour in
+    /// over the Glow attack, not the release (#1784 G2): the octave above a
+    /// held C, on the same node, is most of the way into the light within
+    /// three attack constants, where the release would have it a fifth of the
+    /// way.
+    #[test]
+    fn a_note_joining_a_lit_node_brings_its_colour_in_on_the_attack() {
+        const ATTACK: f64 = 0.2;
+        let mut state = lit(ATTACK as f32, 2.5);
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let mut fade = GlowFade::default();
+        let mut step = |state: &PictureState, now: f64| {
+            let mut scene = scene_at(state, now);
+            fade.step(&mut scene, &state.appearance.view, now);
+            let node = node_at(&scene, LatticePos::ORIGIN);
+            (node.glow, node.glow_light())
+        };
+        for k in 0..=60 {
+            step(&state, f64::from(k) * 0.05);
+        }
+        let (held, _) = step(&state, 3.0);
+        state.runtime.tracker.handle_event(NoteEvent::on(3.0, SourceId::DIRECT, 0, 72, 1.0));
+        let (_, goal) = step(&state, 3.0);
+        let before = held.light;
+        let joined = (0..harmonigraph_scene::OCTAVE_SLOTS)
+            .find(|&s| goal.l[s] > 0.0 && before.l[s] <= 0.0)
+            .expect("the octave above lights a slot of its own");
+        assert!(held.level > 0.99 && goal.level() > 0.99, "the node must already be lit at full");
+        let mut now = 3.0;
+        while now < 3.0 + 3.0 * ATTACK {
+            now += 1.0 / 144.0;
+            step(&state, now);
+        }
+        let (glow, _) = step(&state, now);
+        let share = glow.light.l[joined] / goal.l[joined];
+        assert!(share > 0.9, "the joining octave is {share:.2} of the way in after three attacks");
     }
 
     /// Under an attack slower than the release, a handoff on a held light

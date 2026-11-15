@@ -912,8 +912,10 @@ pub struct ViewConfig {
     pub glow_accumulation: f32,
     /// How fast a node's light follows the node, in seconds: the time constant
     /// of the exponential its LEVEL and its COLOUR are both carried on — this
-    /// one while the light is coming up, [`glow_release`](Self::glow_release)
-    /// once it is going down.
+    /// one while something in the light is coming up (its level, or a slot's
+    /// light: a note joining a node already lit brings its colour in on this),
+    /// [`glow_release`](Self::glow_release) otherwise, a note leaving or a mark
+    /// moving onto a slot already sounding included (#1784 G2).
     ///
     /// Its own pair rather than the note Fade every drawn layer rides, because
     /// the light is not one of those layers. A halo is the slow part of the

@@ -19,3 +19,4 @@ One line per decision; the audit reads this before asking anything.
 ## 2026-11-14 (drift audit, #1784)
 
 - Clear display history (the Video pane's clear) keeps a held note's halo lit where it is, and drops only released notes' lights; a held halo no longer goes dark and fades back up over the Glow attack. Yan, 2026-11-14. #1784 G1
+- When a note joins a node already lit, the halo's colour change toward the newly sounding slot eases at the Glow attack, not the release; a colour change as notes leave keeps the release. Yan, 2026-11-14. #1784 G2
