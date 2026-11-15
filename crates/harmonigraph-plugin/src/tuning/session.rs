@@ -10,17 +10,6 @@ use std::sync::{Mutex, OnceLock};
 
 use super::{event::Event, CAPTURE_RING, REPLY_RING, TUNERS};
 
-#[cfg(test)]
-thread_local! {
-    /// Suspend an actual Reset callback between its two publications.
-    static RESET_PAUSE: std::cell::RefCell<Option<std::sync::Arc<std::sync::Barrier>>> = const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-pub fn test_pause_reset(gate: std::sync::Arc<std::sync::Barrier>) {
-    RESET_PAUSE.with_borrow_mut(|pause| *pause = Some(gate));
-}
-
 /// Status bits. Each one shows in the editor and in `HG-TUNING`. All but
 /// [`CLOCK`] and [`DROPPED`] are cosmetic and never stop a note: an unassigned
 /// note sounds at its raw pitch, which is the whole of what such a fault costs
@@ -166,12 +155,10 @@ pub struct Session {
     /// Harmonigraphs loaded in this process. More than one is a fault on all
     /// of them rather than a choice to resolve.
     hubs: AtomicUsize,
-    /// Bumped by every attach, detach and explicit Reset. A Tune that adopts a
-    /// new value cuts; that is the entire lifecycle protocol.
+    /// Bumped by every attach, detach and cut, Reset all voices included. A
+    /// Tune that adopts a new value cuts; that is the entire lifecycle
+    /// protocol.
     epoch: AtomicU64,
-    /// Completed explicit Resets, observed independently of the voice-cut
-    /// epoch: a Hub may adopt the cut before its producer completes.
-    reset_generation: AtomicU64,
     /// Only the Hub's own Tune publishes Stop, before that Hub adopts.
     stop_epoch: AtomicU64,
     next: AtomicU64,
@@ -187,7 +174,6 @@ pub fn session() -> &'static Session {
         hub: AtomicU64::new(0),
         hubs: AtomicUsize::new(0),
         epoch: AtomicU64::new(1),
-        reset_generation: AtomicU64::new(0),
         stop_epoch: AtomicU64::new(0),
         next: AtomicU64::new(0),
         rows: std::array::from_fn(|_| Row::new()),
@@ -208,11 +194,6 @@ impl Session {
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::SeqCst)
     }
-    /// A completion counter rather than an epoch-valued reason: concurrent
-    /// Reset producers may finish out of epoch order, but cannot regress this.
-    pub fn reset_generation(&self) -> u64 {
-        self.reset_generation.load(Ordering::Acquire)
-    }
     pub fn is_stop(&self, adopted: u64) -> bool {
         self.stop_epoch.load(Ordering::Acquire) > adopted
     }
@@ -227,24 +208,8 @@ impl Session {
     fn bump(&self) -> u64 {
         self.epoch.fetch_add(1, Ordering::SeqCst) + 1
     }
-    /// Explicit Reset. Every paired Tune cuts and the Hub clears its context.
-    pub fn reset(&self) {
-        self.bump();
-        // A test hook inside the callback's allocation guard, so it is let
-        // allocate: a thread's first touch of the thread-local registers its
-        // destructor, and on macOS a `Barrier`'s first wait boxes its lock
-        // (#1713). The `nice_assert_no_alloc` escape hatch, per lib.rs.
-        #[cfg(test)]
-        nice_assert_no_alloc::permit_alloc(|| {
-            if let Some(gate) = RESET_PAUSE.with_borrow_mut(Option::take) {
-                gate.wait();
-                gate.wait();
-            }
-        });
-        self.reset_generation.fetch_add(1, Ordering::AcqRel);
-    }
-    /// A cut that changes no membership: a host format change, or a host reset
-    /// on one instance. It is still every track's cut, because the Hub holds
+    /// A cut that changes no membership: Reset all voices, a host format
+    /// change, or a host reset on one instance. It is still every track's cut, because the Hub holds
     /// context for voices the cutting Tune has just ended and the cut's
     /// Note-Offs go to the host rather than into the ring. Taking one without
     /// bumping would leave those voices sounding in the policy, the display

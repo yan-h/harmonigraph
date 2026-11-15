@@ -31,9 +31,6 @@ mod map_tests;
 /// configuration until the host resets the plugin. Edits still apply.
 pub(crate) const CONFIGURATION_FAULT_NOTICE: &str =
     "Host input was lost: a take recorded now refuses its tuning until the plugin is reset. Deactivate and reactivate the plugin in the host to recover; tuning edits still apply.";
-/// Configuration status bit 1: the held notes cannot be read for Learn.
-pub(crate) const HELD_STATE_INCOMPLETE_NOTICE: &str =
-    "Learning unavailable: held state is incomplete. Reset to recover.";
 /// Configuration status bit 16: more distinct pitches are held than Learn reads.
 pub(crate) fn too_many_pitches_notice() -> String {
     format!(
@@ -284,12 +281,6 @@ pub(super) fn tuning_pane(
             crate::widgets::label(
                 ui,
                 egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
-            );
-            true
-        } else if state.runtime.configuration_status & ConfigurationView::LEARN_INCOMPLETE != 0 {
-            crate::widgets::label(
-                ui,
-                egui::RichText::new(HELD_STATE_INCOMPLETE_NOTICE).color(theme::armed()),
             );
             true
         } else if state.runtime.configuration_status & ConfigurationView::TOO_MANY_CLASSES != 0 {

@@ -67,8 +67,6 @@ pub struct Tune {
     /// Registration id, minted once per instance. Zero before registration.
     id: u64,
     link: Link,
-    /// The Reset generation this Tune has already turned into a session cut.
-    setup: u64,
     /// The epoch this Tune runs under. A different session epoch is the cut.
     epoch: u64,
     serial: u64,
@@ -117,7 +115,6 @@ impl Tune {
             shared,
             id: 0,
             link,
-            setup: 0,
             epoch: 0,
             serial: 0,
             delay: 0,
@@ -214,13 +211,6 @@ impl Tune {
     /// and lifecycle in full; there is no third thing to agree with them.
     fn adopt(&mut self) {
         let session = session::session();
-        // The editor's Reset bumps the
-        // session epoch, so every paired track cuts, not just this one.
-        let setup = self.shared.reset_generation();
-        if setup != self.setup {
-            self.setup = setup;
-            session.reset();
-        }
         let epoch = session.epoch();
         if epoch != self.epoch {
             self.take_cut(epoch, session.stopped_at(epoch));
@@ -257,23 +247,19 @@ impl Tune {
     /// reactivation, attach or detach, not only this one's.
     fn take_cut(&mut self, epoch: u64, stop: bool) {
         // The queue is sized for one cut's worth: every held voice, and every
-        // pedal that is down. It can still overflow, because a cut whose
-        // Note-Offs did not all reach the wire leaves them queued and a second
-        // cut over voices played in between arrives on top of them. What must
-        // not happen is that a Note-Off goes missing in silence, so what did
-        // not fit is carried past the status reset below and reported.
-        let mut lost = 0;
+        // pedal that is down. Only a second cut stacked on one whose Note-Offs
+        // the host has not yet taken can overflow it, and what does not fit is
+        // dropped.
         for cell in self.held.iter_mut() {
             if let Some(voice) = cell.take() {
-                let off = Event::note_off(voice.id, voice.channel, voice.key, false);
-                lost += u64::from(self.cut.push(off).is_err());
+                let _ = self.cut.push(Event::note_off(voice.id, voice.channel, voice.key, false));
             }
         }
         for channel in 0..16u8 {
             for (bit, cc) in PEDALS.iter().enumerate() {
                 if self.pedals[usize::from(channel)] & (1 << bit) != 0 {
                     let neutral = Event::Midi { port: 0, data: [0xb0 | channel, *cc, 0], flags: 0 };
-                    lost += u64::from(self.cut.push(neutral).is_err());
+                    let _ = self.cut.push(neutral);
                 }
             }
             self.pedals[usize::from(channel)] = 0;
@@ -290,12 +276,6 @@ impl Tune {
         if let Link::Direct { out, back } = &mut self.link {
             out.clear();
             back.clear();
-        }
-        // After the reset, because a Note-Off this cut could not queue is owed
-        // by the context the cut starts rather than by the one it ended.
-        if lost != 0 {
-            self.dropped += lost;
-            self.status |= session::DROPPED;
         }
     }
 

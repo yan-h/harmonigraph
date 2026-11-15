@@ -1002,8 +1002,7 @@ fn a_reply_from_before_the_cut_is_discarded_rather_than_attached() {
     pair.tune.run(pair.raw, vec![note(1, 0, 60, 0, true)], None);
     pair.hub.run(pair.raw, vec![], None);
     pair.raw += 512;
-    pair.tune.shared().request_reset();
-    pair.tune.main();
+    pair.tune.host_reset();
     let output = pair.idle();
     assert!(
         tuning_of(&output).is_none(),
@@ -1016,22 +1015,34 @@ fn a_reply_from_before_the_cut_is_discarded_rather_than_attached() {
 }
 
 /// #787, retargeted. The Apply that used to park a row behind ten wait
-/// reasons is now one epoch bump: it cuts what is sounding, and the very next
-/// phrase is corrected again. Audio resuming is the whole assertion.
+/// reasons is now one epoch bump: it cuts what is sounding, forgets the
+/// history, and the very next phrase is corrected again.
 #[test]
 fn reset_cuts_and_audio_resumes_within_two_callbacks() {
     let _scope = crate::test_scope::enter();
     let mut pair = Pair::new();
+    pair.step(vec![note(2, 0, 67, 0, true)]);
+    pair.step(vec![note(2, 0, 67, 0, false)]);
     pair.step(vec![note(1, 0, 60, 0, true)]);
     let sounding = pair.idle();
     assert!(tuning_of(&sounding).is_some(), "the fixture reaches the Reset with a note held");
-    pair.tune.shared().request_reset();
-    pair.tune.main();
-    // The cut owes a Note-Off for the voice it just ended.
-    let cut = pair.idle();
+    assert!(
+        inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0,
+        "and with a released one remembered"
+    );
+    pair.hub.shared().request_reset();
+    // The Hub takes the cut in its next callback; the Tune adopts it in the
+    // one after, and owes a Note-Off for the voice it ended.
+    let mut cut = pair.idle();
+    cut.extend(pair.idle());
     assert!(
         cut.iter().any(|(_, event)| event.release()),
         "the cut releases what it forgot it was holding: {cut:?}"
+    );
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| hub.test_memory()),
+        0,
+        "and the history is forgotten, the voice the cut released included"
     );
     for step in 0..2 {
         pair.step(vec![note(10 + step, 0, 64, 0, true)]);
@@ -1057,8 +1068,7 @@ fn the_cut_releases_every_held_voice_and_neutralises_the_pedals() {
         2,
         "the fixture reaches the cut with two voices and a pedal down: {sounding:?}"
     );
-    pair.tune.shared().request_reset();
-    pair.tune.main();
+    pair.tune.host_reset();
     let cut = pair.idle();
     assert_eq!(
         cut.iter().filter(|(_, event)| event.release()).count(),
@@ -1326,174 +1336,6 @@ fn a_host_reset_on_one_tune_cuts_it_out_of_the_hubs_context() {
     assert!(tuning_of(&pair.idle()).is_some(), "and the session plays on");
 }
 
-/// The Reset classification is "has one happened since I adopted", not "is the
-/// newest bump a Reset". A Reset and an attach landing between two Hub
-/// callbacks is still a Reset, and the memory it was pressed to clear must not
-/// ride out on the attach's epoch.
-#[test]
-fn a_reset_with_an_attach_behind_it_still_clears_released_memory() {
-    let _scope = crate::test_scope::enter();
-    let mut pair = Pair::new();
-    pair.step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 1, true)]);
-    pair.idle();
-    pair.step(vec![note(1, 0, 60, 0, false), note(2, 0, 64, 1, false)]);
-    for _ in 0..2 {
-        pair.idle();
-    }
-    // Nothing is held any more, so the Hub's retained context is exactly the
-    // released memory a Reset is meant to clear.
-    let remembered = inspect_hub(&pair.hub, |hub| hub.test_next_context());
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0, "no voice is still held");
-    assert!(
-        !remembered.context.is_empty(),
-        "the fixture reaches the Reset with released memory to clear: {remembered:?}"
-    );
-    // The Reset and the attach land in the same window: the Tune turns the
-    // request into the session's Reset on its callback, a second Tune joins,
-    // and only then does the Hub get a callback to adopt any of it.
-    pair.tune.shared().request_reset();
-    pair.tune.main();
-    pair.tune.run(pair.raw, vec![], None);
-    let mut joining = Device::new(true);
-    joining.activate();
-    pair.hub.run(pair.raw, vec![], None);
-    pair.raw += 512;
-    let after = inspect_hub(&pair.hub, |hub| hub.test_next_context());
-    assert!(
-        after.context.is_empty(),
-        "the attach behind the Reset did not reclassify it: {after:?}"
-    );
-    drop(joining);
-}
-
-/// Each producer owns a real exported Tune on its callback thread. The barrier
-/// suspends Session::reset after its cut, before its memory-reset publication.
-/// Retain the barrier here so its last Arc is never freed in an audio callback.
-struct ResetProducer {
-    gate: std::sync::Arc<std::sync::Barrier>,
-    start: Option<std::sync::mpsc::SyncSender<i64>>,
-    done: std::sync::mpsc::Receiver<()>,
-    thread: Option<std::thread::JoinHandle<()>>,
-    paused: bool,
-}
-impl ResetProducer {
-    fn new() -> Self {
-        let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
-        let pause = gate.clone();
-        let (start, receive) = std::sync::mpsc::sync_channel(0);
-        let (completed, done) = std::sync::mpsc::sync_channel(0);
-        let thread = std::thread::spawn(move || {
-            let mut tune = Device::new(true);
-            tune.activate();
-            completed.send(()).unwrap();
-            let Ok(raw) = receive.recv() else { return };
-            tune.shared().request_reset();
-            session::test_pause_reset(pause);
-            tune.run(raw, vec![], None);
-            completed.send(()).unwrap();
-            // Keep membership stable until the fixture has observed completion.
-            let _ = receive.recv();
-        });
-        done.recv().unwrap();
-        Self { gate, start: Some(start), done, thread: Some(thread), paused: false }
-    }
-    fn pause(&mut self, raw: i64) {
-        self.start.as_ref().unwrap().send(raw).unwrap();
-        self.gate.wait();
-        self.paused = true;
-    }
-    fn finish(&mut self) {
-        self.gate.wait();
-        self.paused = false;
-        self.done.recv().unwrap();
-    }
-}
-impl Drop for ResetProducer {
-    fn drop(&mut self) {
-        if self.paused {
-            self.gate.wait();
-            let _ = self.done.recv();
-        }
-        self.start.take();
-        let result = self.thread.take().unwrap().join();
-        if !std::thread::panicking() {
-            result.unwrap();
-        }
-    }
-}
-
-/// #1713. The pause runs inside the callback's allocation guard, and on macOS
-/// a std `Barrier`'s lock is boxed by whichever wait reaches it first. The
-/// fixture above only gets there first when its callback thread outruns
-/// `pause`, which aborted the whole binary in CI; a one-party barrier makes
-/// the hook's own wait the first every time.
-#[test]
-fn the_reset_pause_may_allocate_inside_the_callback_guard() {
-    let _scope = crate::test_scope::enter();
-    session::test_pause_reset(std::sync::Arc::new(std::sync::Barrier::new(1)));
-    nice_assert_no_alloc::assert_no_alloc(|| session::session().reset());
-}
-
-fn seed_released_memory(pair: &mut Pair) {
-    pair.step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 1, true)]);
-    pair.idle();
-    pair.step(vec![note(1, 0, 60, 0, false), note(2, 0, 64, 1, false)]);
-    pair.idle();
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0);
-    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0);
-}
-
-#[test]
-fn a_reset_completed_after_hub_adoption_still_clears_released_memory() {
-    let _scope = crate::test_scope::enter();
-    let mut pair = Pair::new();
-    let mut producer = ResetProducer::new();
-    seed_released_memory(&mut pair);
-    producer.pause(pair.raw);
-    let cut_epoch = session::session().epoch();
-    pair.idle();
-    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0, "cut alone retains memory");
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_epoch()), cut_epoch);
-    producer.finish();
-    assert_eq!(session::session().epoch(), cut_epoch, "completion adds no second voice cut");
-    pair.idle();
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_memory()), 0);
-    // This completion is consumed once: subsequent ordinary membership cuts
-    // retain newly released memory, rather than reapplying the old Reset.
-    seed_released_memory(&mut pair);
-    drop(producer);
-    pair.idle();
-    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0);
-}
-
-#[test]
-fn reset_producers_completing_out_of_order_each_clear_released_memory() {
-    let _scope = crate::test_scope::enter();
-    let mut pair = Pair::new();
-    let mut older = ResetProducer::new();
-    let mut newer = ResetProducer::new();
-    seed_released_memory(&mut pair);
-    older.pause(pair.raw);
-    newer.pause(pair.raw);
-    pair.idle();
-    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0);
-    newer.finish();
-    pair.idle();
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_memory()), 0);
-    seed_released_memory(&mut pair);
-    let cut_epoch = session::session().epoch();
-    older.finish();
-    assert_eq!(session::session().epoch(), cut_epoch);
-    pair.idle();
-    assert_eq!(
-        inspect_hub(&pair.hub, |hub| hub.test_memory()),
-        0,
-        "the older producer completing last cannot regress or hide the reset reason"
-    );
-    drop(older);
-    drop(newer);
-}
-
 /// The two publication lanes stay independent, and the display shows what the
 /// Hub scheduled: input plus that source's D, not the sample it arrived at.
 #[test]
@@ -1608,8 +1450,7 @@ fn an_onset_past_the_held_ceiling_is_refused_before_copy_and_output() {
         .expect("the fixture must exercise a nonzero frozen correction");
     pair.step(vec![expression(id, 0.25, 0)]);
     assert!((tuning_of(&pair.idle()).unwrap() - (0.25 + correction)).abs() < 1e-9);
-    pair.tune.shared().request_reset();
-    pair.tune.main();
+    pair.tune.host_reset();
     let cut = pair.idle();
     let ended: Vec<_> = cut
         .iter()

@@ -74,8 +74,8 @@ pub struct Shared {
     /// reports the latency it implies; the Hub's own input has no delay.
     pub requested_multiplier: AtomicU32,
     pub(super) diagnostics: super::diagnostics::Shared,
-    /// The Reset counter the editor bumps
-    /// and the audio owner turns into one cut for the session.
+    /// The Reset counter the editor bumps on Harmonigraph's own row, and the
+    /// Hub turns into one cut for the session plus forgetting its history.
     reset: AtomicU64,
     wake: OnceLock<Arc<dyn Fn() + Send + Sync>>,
     dirty: AtomicBool,
@@ -203,15 +203,16 @@ impl Shared {
     pub fn is_hub(&self) -> bool {
         self.hub
     }
-    /// The editor's Reset. Clear the musical context and re-pair, which the
-    /// audio owner performs as one cut across every row. It saves nothing, so
-    /// the project is not marked modified.
+    /// The editor's Reset, which the pane sends to Harmonigraph's own row: the
+    /// Hub performs it as one cut across every row and forgets its history. A
+    /// Tune's own counter is read by nothing. It saves nothing, so the project
+    /// is not marked modified.
     pub fn request_reset(&self) {
         self.reset.fetch_add(1, Ordering::AcqRel);
         self.request_main();
     }
-    /// The generation an audio owner compares against its own. A change is a
-    /// Reset; there is no acknowledgement and nothing to wait for.
+    /// The generation the Hub compares against its own. A change is a Reset;
+    /// there is no acknowledgement and nothing to wait for.
     pub fn reset_generation(&self) -> u64 {
         self.reset.load(Ordering::Acquire)
     }

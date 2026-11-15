@@ -6,7 +6,7 @@
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
 };
-use harmonigraph_core::tuning::{Incomplete, LearningState, PitchClass, Unlearnable};
+use harmonigraph_core::tuning::{LearningState, PitchClass, TooManyClasses};
 use harmonigraph_core::{Tempered, Tuning};
 use harmonigraph_ui::params::ConfigurationView;
 use nice_plug::plugin::PluginState;
@@ -528,9 +528,8 @@ impl Owner {
     /// through learns the axes from unchanged input.
     ///
     /// `classes` is the Hub's `held_classes`, asked only while Learn is armed.
-    /// `LEARN_INCOMPLETE` and `TOO_MANY_CLASSES` report this evaluation alone
-    /// rather than latching, so each clears as soon as what is held allows
-    /// Learn again.
+    /// `TOO_MANY_CLASSES` reports this evaluation alone rather than latching,
+    /// so it clears as soon as what is held allows Learn again.
     ///
     /// Learn applies at the block's start after the walk has pushed later
     /// samples, so it is not pushed into the history: the next `begin`
@@ -538,21 +537,18 @@ impl Owner {
     pub fn group_end(
         &mut self,
         retuning: bool,
-        classes: impl FnOnce(&mut [PitchClass; crate::tuning::HELD_VOICES]) -> Result<usize, Incomplete>,
+        classes: impl FnOnce(&mut [PitchClass; crate::tuning::HELD_VOICES]) -> usize,
     ) {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
-        self.status &= !(ConfigurationView::LEARN_INCOMPLETE | ConfigurationView::TOO_MANY_CLASSES);
+        self.status &= !ConfigurationView::TOO_MANY_CLASSES;
         if self.maps.playback.engine.learns() {
             match self.learning.infer(self.reducer.resolved().modes.learning, classes) {
                 Ok(Some(learned)) => {
                     self.reducer.apply(ConfigMutation::LearnResolved { learned, retuning });
                     self.edited = true;
                 }
-                Err(Unlearnable::Incomplete) => self.status |= ConfigurationView::LEARN_INCOMPLETE,
-                Err(Unlearnable::TooManyClasses) => {
-                    self.status |= ConfigurationView::TOO_MANY_CLASSES
-                }
+                Err(TooManyClasses) => self.status |= ConfigurationView::TOO_MANY_CLASSES,
                 Ok(None) => {}
             }
         }

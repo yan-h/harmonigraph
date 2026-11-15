@@ -386,7 +386,7 @@ Nothing waits on anyone, and no second party has to agree that it happened.
 
 | Trigger | How it reaches everyone |
 |---|---|
-| **Reset all voices** in Harmonigraph's Tuning pane | Bumps the session epoch and marks it a Reset. Every Tune cuts on its next callback; the Hub clears its context and its released memory |
+| **Reset all voices** in Harmonigraph's Tuning pane | The Hub's own: it bumps the session epoch at its next callback and forgets its released memory once the cut has ended every voice. Every Tune cuts on its next callback |
 | Transport Stop | The falling edge of the host's playing flag. Every row sees the same edge in the same callback, so exactly one of them announces it — the Hub's own — and the rest end their own voices and adopt that epoch. It is marked a Stop; released memory then follows the **Reset context on stop** control |
 | The audio engine stopping, or a host reset | The same cut, from `clap_plugin.reset` and `stop_processing`. Marked as neither a Reset nor a Stop, so released memory survives it |
 | A Tune attaching or detaching | Bumps the epoch, so every paired track cuts. This is what buys the absence of a hot-plug reconciliation protocol |
@@ -552,7 +552,7 @@ musical candidate selection and separate Lattice Map assignment dots remain.
 
 These are selected ceilings sized for 16 tracks and 100+ simultaneous notes, not measured throughput.
 Audio transport and policy-selection storage is preallocated.
-Every ceiling has an explicit failure.
+Every ceiling has an explicit failure but the cut's queue, which drops a Note-Off two stacked cuts cannot fit, with no notice (#1798 H5).
 A full local delay line or held set refuses the incoming event;
 copy, reply or policy exhaustion can leave an admitted onset uncorrected.
 Shrinking a buffer does not make its overflow path unreachable.
@@ -564,7 +564,7 @@ Shrinking a buffer does not make its overflow path unreachable.
 | `PENDING_EVENTS` | 8,192 | Retained events in one Tune's delay line, including unrelated MIDI |
 | `CAPTURE_RING` / `REPLY_RING` | 1,024 / 1,024 | The two rings per row. A full capture ring costs that note its correction |
 | `BATCH_EVENTS` | 2,048 | Records one ordering pass holds across every source, and deltas one callback may publish |
-| `CUT_EVENTS` | 112 | Note-offs and pedal neutralizations one cut may owe: every held voice, plus sustain, sostenuto and legato on each of sixteen channels. What does not fit is reported as a dropped event |
+| `CUT_EVENTS` | 112 | Note-offs and pedal neutralizations one cut may owe: every held voice, plus sustain, sostenuto and legato on each of sixteen channels. What does not fit is dropped with no notice |
 | `MAX_CONTEXT` / `MAX_MEMORY` / `MAX_CANDIDATES` | 256 / 24 / 4,096 | Held voices the Hub's context holds across every source, released contributions and the complete local candidate union |
 | `PUBLICATION_RING` / `SNAPSHOT_SLOTS` / `GAP_RESERVE` | 4,096 / 20 / 1 | Publication items, snapshot frames, and the one cell an outage may always spend |
 | `EMIT_PER_CALLBACK` | 512 | Accepted output-event budget, checked between queued inputs. A note and its tuning expression complete together, even when the pair crosses the budget |
@@ -599,8 +599,8 @@ Every row is tuned now, the Hub's own included, so feeding Learn what was emitte
 The old design avoided that only because the Hub's own track was the one thing it did not retune.
 Learn also reads one callback later than it used to, because it reads the Hub's own input through the Hub's rows like everyone else's;
 the configuration walk that runs it happens before the performance input for that callback is delivered.
-It reads the Hub's rows themselves (`Hub::held_classes`), as the Hub's callback start leaves them,
-and refuses only while a row has lost an event, since that row's held notes are then unknown (#1751).
+It reads the Hub's rows themselves (`Hub::held_classes`), as the Hub's callback start leaves them.
+A row that lost a release copy to a full ring and then filled its 64 voices reads its stuck voices, as the lattice draws them, until the next cut (#1798 H5).
 
 Publication is two independent lanes, one for the display and one for the take, and the rule that keeps them independent is stated as a type:
 **no capacity, outcome or cursor on the publication path is a value derived from both lanes.** A full display ring must not hold back a snapshot the take needs, and a take-lane gap must not blank the display.

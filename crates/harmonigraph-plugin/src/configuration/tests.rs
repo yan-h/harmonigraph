@@ -574,11 +574,11 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
         device.wrapper().test_inspect_plugin(|plugin| {
             let mut scratch = [harmonigraph_core::tuning::PitchClass::from_microcents(0);
                 crate::tuning::HELD_VOICES];
-            plugin.aggregation.as_ref().unwrap().held_classes(&mut scratch).unwrap()
+            plugin.aggregation.as_ref().unwrap().held_classes(&mut scratch)
         })
     };
     assert_eq!(heard(&device), 3);
-    crate::tuning::session::session().reset();
+    crate::tuning::session::session().cut();
     device.run(192, vec![], false);
     assert_eq!(heard(&device), 0);
     device.finish_notes(256, &[(60, 60), (64, 64), (67, 67)]);
