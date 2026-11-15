@@ -35,7 +35,7 @@ and hands the columns to the store under it again.
 `LiveInput` owns the analysis and moves it out with the audio it takes (#1758);
 the hand-over carries the analysis's lag,
 which the frame reads until the next one,
-and the history's epoch at take,
+and the history's Clear count at take,
 so a Clear during the FFTs keeps their columns out.
 Opening or closing the editor introduces no source epoch and moves no drain.
 Offline seeking remains a separate access mechanism.

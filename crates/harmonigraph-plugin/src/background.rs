@@ -233,9 +233,10 @@ thread_local! {
 /// frame or a window opening waits on this thread only for a take (a copy of
 /// what the ring holds) or a give (folding its columns into every level of the
 /// spectrogram's history, 11 µs a column): a few tens of microseconds for the
-/// two or three columns a step usually brings, and a few milliseconds at most
-/// for a catch-up's (4 ms for a full mono ring's 371), reachable only after
-/// this thread was starved for 2.7 s, which may cost a frame. The FFTs
+/// two or three columns a step usually brings, and a few milliseconds for a
+/// catch-up's: the ring's 131,072 samples are 341 mono columns at 48 kHz,
+/// after this thread was starved for 2.7 s, and 371 at 44.1 kHz after 3 s
+/// (about 4.5 ms), more at lower rates; one such hold may cost a frame. The FFTs
 /// between them, some 10 ms for a full stereo ring through Fast
 /// at 48 kHz and 36 through Precise (see
 /// [`SpectrumAnalysis::feed_source`](harmonigraph_ui::SpectrumAnalysis::feed_source)),

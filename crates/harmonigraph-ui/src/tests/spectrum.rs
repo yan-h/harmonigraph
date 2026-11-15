@@ -784,7 +784,7 @@ fn the_guard_resets_on_a_long_step_back_and_keeps_the_rest_of_the_batch() {
     spectrum.give(clears, [delivered(101.024, 1.0)], &cfg);
     spectrum.clear_history();
     spectrum.give(clears, [delivered(101.032, 1.0)], &cfg);
-    assert_eq!(spectrum.newest_column(), None, "a chunk from before the Clear joined it");
+    assert_eq!(spectrum.newest_column(), None, "a hand-over taken before the Clear joined it");
 }
 
 /// A crash inside the fold leaves the levels part-folded, which a history
