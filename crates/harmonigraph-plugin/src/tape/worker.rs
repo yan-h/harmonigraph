@@ -141,8 +141,11 @@ pub(crate) struct Worker {
     /// Tape mode's roll was on screen at the last exchange, so worth
     /// building.
     visible: bool,
-    /// A roll built between holds, for the next exchange to hand over.
+    /// A roll built between holds, for the next exchange to hand over, and
+    /// the one it replaced, freed between holds too rather than under the
+    /// editor lock.
     built_roll: Option<Arc<NoteRoll>>,
+    retired_roll: Option<Arc<NoteRoll>>,
 }
 
 /// Song seconds as the console prints them.
@@ -192,6 +195,7 @@ impl Worker {
             roll_shown: None,
             visible: false,
             built_roll: None,
+            retired_roll: None,
         }
     }
 
@@ -503,7 +507,7 @@ impl Worker {
         view.bytes = self.store.as_ref().map_or(0, Store::bytes) + self.book.bytes();
         self.visible = view.showing && open && settings.show_roll;
         if let Some(roll) = self.built_roll.take() {
-            view.notes = roll;
+            self.retired_roll = Some(std::mem::replace(&mut view.notes, roll));
         }
         if self.shown != Some(self.generation) {
             self.shown = Some(self.generation);
@@ -517,6 +521,7 @@ impl Worker {
     /// Rebuild Tape mode's roll if the recording changed under it, with no
     /// lock held: it walks every note recorded.
     pub(crate) fn roll(&mut self) {
+        self.retired_roll = None;
         if !self.visible || self.roll_shown == Some(self.generation) {
             return;
         }
