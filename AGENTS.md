@@ -182,8 +182,8 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 
 **Cases the tuning settings go without** (PR #1795), each with its cost when it occurs:
 
-- More than 128 editor edits queued while the Hub runs no audio: the rest are refused with the Tuning pane's notice and a Console line, and a restore then is refused whole with a Console line.
-- A save between an editor edit and the Hub's next callback stores the configuration before the edit, one host block of it.
+- More than 128 editor edits queued while the Hub runs no audio: the rest are refused with the Tuning pane's notice and a Console line, and a restore then is refused whole with a line in the editor's Console and in the macOS log.
+- A save between an editor edit and the Hub's next callback stores the configuration before the edit: one host block of it while audio runs, and for as long as it does not; the slider and the file both hold the value before the edit until then.
 - After lost input, edits keep applying until the host resets; the fault notice stays and the take refuses its configuration.
 
 ## Backwards compatibility is not a constraint
