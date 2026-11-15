@@ -92,8 +92,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
         ));
     }
     if status != Status::Failed {
-        // About every 60 Hz refresh: a deadline a hair under one is met by it
-        // (egui-baseview's `DEADLINE_SLACK`).
+        // About every 60 Hz refresh.
         crate::repaint_after(ui.ctx(), std::time::Duration::from_millis(16));
     }
     ui.ctx().data_mut(|data| data.insert_temp(id(), loading));

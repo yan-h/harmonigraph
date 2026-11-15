@@ -385,7 +385,7 @@ Now the display link runs at the app's chosen rate (Patch 6) and `on_frame` does
 something asked for one, or the frame lands past the deadline the last pass left.
 What asks: any event (`on_event`) and a `PassRequest`, which another thread holds and sets when it changes what the UI shows (the plugin's input worker, on a note or on sound after silence); the window's events set the same flag.
 The deadline and the frame time it is compared with are both on the frame clock (`frame_at`: the link's target refresh, or now for a frame the link did not ask for), so the comparison is between two refreshes rather than two moments callbacks ran at;
-a frame must land `DEADLINE_SLACK` (0.5 ms) past it, so a deadline exactly on a refresh (the poll at 60 and 120 Hz) waits one refresh more every time rather than on a coin toss (#1708).
+a frame at or past it is due, and where a deadline falls exactly on a refresh (the poll at 60 and 120 Hz) and the clocks put it a hair either side, the frame that loses runs nothing, so the tie costs no pass (#1708).
 Every pass that runs renders.
 While Patch 17's backoff is armed, its retry decides alone, a request included, so a thread asking on every change cannot reopen #989's unpaced submits; the request stays set for the retry's pass.
 A size from the `SizeSource` runs that frame's pass whatever the backoff says, since the source hands each size over once and only a pass applies it.

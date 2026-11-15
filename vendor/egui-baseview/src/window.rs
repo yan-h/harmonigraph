@@ -764,8 +764,11 @@ const SURFACE_RETRY: Duration = Duration::from_millis(250);
 /// `frame_at` and the deadline are both on the frame clock ([`frame_at`]), so
 /// the comparison is between two refreshes of the display's grid rather than
 /// between two moments the callbacks happened to run at, which is what made
-/// it a coin toss on pass-time jitter (#1703, #1708). A frame must land
-/// [`DEADLINE_SLACK`] past the deadline, so one exactly on it waits a refresh.
+/// it a coin toss on pass-time jitter (#1703, #1708). A frame at or past the
+/// deadline is due. A deadline exactly on a refresh (the 50 ms poll at 60 and
+/// 120 Hz) can still fall either side of it by microseconds, but the frame
+/// that loses now runs nothing, so the tie costs no pass, only which refresh
+/// draws.
 ///
 /// Split out of the frame because it is the whole of the decision and the only
 /// part of it a test can reach: the tick around it needs a live window, a
@@ -814,7 +817,7 @@ fn pass_due(
     retry_after: Option<Instant>,
     frame_at: Instant,
 ) -> bool {
-    let past = |due: Instant| due.checked_add(DEADLINE_SLACK).is_some_and(|due| frame_at > due);
+    let past = |due: Instant| frame_at >= due;
     match retry_after {
         // A refusing surface is paced by its own clock, never the UI's: the UI
         // asks for a zero-delay repaint on every animating frame, and
@@ -824,18 +827,6 @@ fn pass_due(
         None => asked || repaint_after.is_some_and(past),
     }
 }
-
-/// How far past its deadline a frame must land for its pass to be due.
-///
-/// A deadline exactly on a refresh, as the 50 ms idle poll is at 60 and 120 Hz,
-/// is then not met by that refresh, whatever microseconds the clocks drift
-/// between the deadline's frame and this one: the poll draws a refresh later,
-/// every 66.7 ms at 60 Hz and 58.3 at 120, rather than every 50 ms or every
-/// other refresh by turns (#1708). Well under any refresh interval (4.2 ms at
-/// 240 Hz), so a deadline of the last frame (a repaint asked for at once) is
-/// met by the next one, and under the 0.67 ms by which harmonigraph-ui's
-/// startup splash's 16 ms passes a 60 Hz refresh.
-const DEADLINE_SLACK: Duration = Duration::from_micros(500);
 
 /// The instant this frame is drawn for: the display link's target refresh,
 /// which a frame the link asked for is on screen by, or `now` for one it did
@@ -1083,35 +1074,17 @@ mod pass_due_tests {
         assert!(!pass_due(false, None, None, now), "nothing asked for");
     }
 
-    /// The idle poll's deadline, set on one refresh, is met by the first
-    /// refresh past it at any rate in use, even where it falls exactly on a
-    /// refresh (50 ms at 60 and 120 Hz) and the two frames' clocks drift by
-    /// microseconds either way: that one waits a refresh more, every time
-    /// (#1708). A deadline of now is met by the next refresh, and the splash's
-    /// 16 ms by the next 60 Hz refresh.
+    /// The idle poll at 144 Hz is met by the eighth refresh, not the seventh,
+    /// and a deadline of the last frame (a repaint asked for at once) by the
+    /// next one.
     #[test]
-    fn a_deadline_is_met_by_the_first_refresh_past_it() {
+    fn a_deadline_is_met_by_the_first_frame_at_or_past_it() {
         let set = Instant::now();
-        let on = |refreshes: f64, refresh: f64, drift_us: f64| {
-            let at = set + Duration::from_secs_f64(refreshes * refresh);
-            let drift = Duration::from_secs_f64(drift_us.abs() / 1e6);
-            if drift_us < 0.0 { at - drift } else { at + drift }
-        };
         let poll = set.checked_add(Duration::from_millis(50));
-        for hz in [59.94, 60.0, 75.0, 90.0, 100.0, 119.88, 120.0, 144.0, 165.0, 240.0] {
-            let refresh = 1.0 / hz;
-            let past = |k: u32| f64::from(k) * refresh > 0.05 + DEADLINE_SLACK.as_secs_f64();
-            let first = (1..).find(|&k| past(k)).unwrap();
-            for drift_us in [-20.0, 0.0, 20.0] {
-                let met = |k: u32| pass_due(false, poll, None, on(f64::from(k), refresh, drift_us));
-                assert_eq!((1..).find(|&k| met(k)), Some(first), "{hz} Hz, {drift_us} us");
-                let next = on(1.0, refresh, drift_us);
-                assert!(pass_due(false, Some(set), None, next), "{hz} Hz: a repaint asked at once");
-            }
-        }
-        assert!(!pass_due(false, poll, None, on(3.0, 1.0 / 60.0, 20.0)), "exactly on it at 60 Hz");
-        let splash = set.checked_add(Duration::from_millis(16));
-        assert!(pass_due(false, splash, None, on(1.0, 1.0 / 60.0, -20.0)), "the splash at 60 Hz");
+        let refresh = Duration::from_secs_f64(1.0 / 144.0);
+        assert!(!pass_due(false, poll, None, set + refresh * 7), "48.6 ms");
+        assert!(pass_due(false, poll, None, set + refresh * 8), "55.6 ms");
+        assert!(pass_due(false, Some(set), None, set + refresh), "a repaint asked at once");
     }
 
     /// A gap counts only out of a frame the display link asked for: the
