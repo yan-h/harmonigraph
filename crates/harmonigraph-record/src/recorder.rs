@@ -200,7 +200,6 @@ impl TakeLatches {
         match self.end.load(Ordering::Relaxed) {
             1 => Some(End::Rewind),
             2 => Some(End::Bar),
-            3 => Some(End::ForwardSeek),
             _ => None,
         }
     }
@@ -265,12 +264,9 @@ pub struct Recorder {
     /// On transport stop countdown reads the count, and a note played before
     /// playback must not start it.
     run_opened: bool,
-    /// Set by the GUI for every trigger whose take is over the moment the
-    /// transport goes backwards — a loop wrapping under
-    /// `AtLoopEnd`, and the host
-    /// returning the playhead under
-    /// `OnTransportStop`.
-    /// The take ends there rather than recording on.
+    /// Set by the GUI under `AtLoopEnd`, whose take is over the moment the
+    /// loop wraps: a backward jump after forward motion ends it there rather
+    /// than recording on.
     end_at_rewind: Arc<AtomicBool>,
     /// What the take in progress has latched, shared with the [`Control`] that
     /// reads it and clears it. See [`TakeLatches`].
@@ -785,7 +781,7 @@ impl Control {
     /// recorded), and the renderer takes the output size from it alone: `size`
     /// is only what the Exports list shows for the job.
     pub fn queue_export(&self, path: std::path::PathBuf, appearance: String, size: [u32; 2]) {
-        let request = RenderRequest { appearance: Some(appearance), notice: None };
+        let request = RenderRequest { appearance: Some(appearance) };
         spawn_render(request, path, Some(size), self.progress.clone(), self.render.clone());
     }
     pub fn export_jobs(&self) -> Vec<harmonigraph_take::render::ExportJob> {

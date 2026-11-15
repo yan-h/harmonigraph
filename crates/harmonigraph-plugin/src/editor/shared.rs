@@ -189,8 +189,7 @@ impl EditorShared {
         self.take.set_stop_bar(self.ui.picture.appearance.render.stop_at_bar());
 
         // Honor the audio-owned completion even if the trigger changed before
-        // this poll. Stop still waits for every publication lane to close the
-        // prefix; a forward seek carries its cutoff notice into the render.
+        // this poll.
         let ended = self.take.has_ended();
         if self.take.is_recording() && ended {
             self.ui.workspace.interaction.take.recording = false;

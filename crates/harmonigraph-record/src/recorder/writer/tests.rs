@@ -164,11 +164,6 @@ impl Bench {
         self.end_at_rewind.store(true, Ordering::Relaxed);
     }
 
-    /// What the GUI publishes for OnTransportStop: a rewind ends the take.
-    fn on_transport_stop(&self) {
-        self.end_at_rewind();
-    }
-
     fn hit_rewind(&self) -> bool {
         self.latches.end() == Some(End::Rewind)
     }
@@ -436,7 +431,7 @@ fn stopped_continuity_edges_emit_only_the_accepted_blocks() {
         ] {
             let mut b = Bench::new();
             b.arm();
-            b.on_transport_stop();
+            b.end_at_rewind();
             assert!(!b.rec.observe_transport(5.0, false, duration).is_some());
             // The NEXT block is twice as long. Using its duration to judge
             // this step would wrongly reject the lower tolerance edge.
@@ -711,14 +706,15 @@ fn a_playhead_restored_after_an_export_does_not_record() {
     assert!(!b.rec.observe_transport(5.0, false, 64.0 / 48_000.0).is_some());
 }
 
-/// #523: even an audio-only stopped export ends at its restore, before
-/// the background debounce can run. Unlike the original fixture's 82-second
-/// leaps, every export step here is one 64-frame callback at 48 kHz.
+/// #523, under Loop end: even an audio-only stopped export ends at its
+/// restore, before the background debounce can run. Unlike the original
+/// fixture's 82-second leaps, every export step here is one 64-frame callback
+/// at 48 kHz.
 #[test]
-fn a_playhead_restored_after_an_export_ends_the_take_there() {
+fn a_playhead_restored_after_an_export_ends_a_loop_end_take_there() {
     let mut b = Bench::new();
     b.arm();
-    b.on_transport_stop();
+    b.end_at_rewind();
     let duration = 64.0 / 48_000.0;
     assert!(!b.rec.observe_transport(4.254, false, duration).is_some());
     for block in 1..=64 {

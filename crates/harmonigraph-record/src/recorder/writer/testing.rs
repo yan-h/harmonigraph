@@ -40,7 +40,6 @@ pub struct Capture {
     /// the display would without standing a writer thread up.
     displayed: publication::Consumer,
     fence: Arc<RecordFence>,
-    latches: Arc<TakeLatches>,
     end_at_rewind: Arc<AtomicBool>,
     _records: rtrb::Consumer<Entry>,
     audio: rtrb::Consumer<f32>,
@@ -133,7 +132,7 @@ impl FileWriter {
                 .unwrap();
         assert!(open.audio.is_some(), "{}", status.lock());
         Self {
-            pump: Pump { latches: capture.latches.clone(), open: Some(open), ..Default::default() },
+            pump: Pump { open: Some(open), ..Default::default() },
             fence: capture.fence.clone(),
             status,
             finished: None,
@@ -159,7 +158,7 @@ impl FileWriter {
             &self.status,
             &self.fence,
         );
-        if let Some((path, _)) = pumped.finished {
+        if let Some(path) = pumped.finished {
             self.finished = Some(path);
         }
     }
@@ -176,7 +175,6 @@ pub fn channel() -> (Recorder, Capture) {
     let recorder = Recorder::new(producer, audio, publication, display, None);
     let capture = Capture {
         fence: recorder.fence.clone(),
-        latches: recorder.latches.clone(),
         end_at_rewind: recorder.end_at_rewind.clone(),
         publications,
         displayed,

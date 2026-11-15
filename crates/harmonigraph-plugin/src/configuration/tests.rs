@@ -1717,10 +1717,11 @@ fn a_sidechain_selection_reaches_the_armed_takes_audio() {
     device.finish_notes(64, &[]);
 }
 
-/// One accepted stopped callback is enough to finish at a restore, with or
-/// without MIDI. The real CLAP path must finalize exactly that audio prefix.
+/// One accepted stopped callback is enough for a take, with or without MIDI:
+/// the restore after it records nothing, and the stillness that follows ends
+/// it. The real CLAP path must finalize exactly that audio prefix.
 #[test]
-fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
+fn a_short_stopped_export_finishes_with_or_without_midi() {
     let _scope = crate::test_scope::enter();
     for with_note in [false, true] {
         let mut device = Device::new();
@@ -1758,9 +1759,9 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
         assert!(shared.lock().take.has_rolled());
         assert_eq!(shared.lock().take.captured() > 0, with_note);
         device.run_transport(320, vec![], false, None, Some(stopped(5.0)));
-        assert!(shared.lock().take.hit_rewind(), "even one callback's restore ends the take");
-        shared.lock().poll_take_end();
-        assert!(!shared.lock().take.is_recording());
+        assert!(!shared.lock().take.hit_rewind(), "the restore records nothing and ends nothing");
+        shared.lock().poll_through_stop_debounce();
+        assert!(!shared.lock().take.is_recording(), "stillness ends even one callback's take");
         device.finish_notes(384, if with_note { &[(10, 60)] } else { &[] });
         drop(shared);
         drop(device);

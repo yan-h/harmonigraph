@@ -57,7 +57,6 @@ pub(super) enum Observation {
 pub(super) enum End {
     Rewind = 1,
     Bar = 2,
-    ForwardSeek = 3,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,13 +149,6 @@ pub(super) fn transition(
                 // not: compare to the accepted prefix, including after a pause.
                 // Match playback's 50 ms jitter allowance, without accumulating
                 // an arbitrary missing interval in an otherwise successful WAV.
-                if policy.end_at_rewind
-                    && history.recorded_end.is_some_and(|end| position > end + 0.05)
-                {
-                    next.state = State::Complete;
-                    next.action = Action::Complete(End::ForwardSeek);
-                    return next;
-                }
                 next.action = Action::Record;
                 next.state = State::Recording { motion };
                 let audio_origin = history.recorded_end.unwrap_or(position);

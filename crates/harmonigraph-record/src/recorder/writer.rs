@@ -55,13 +55,12 @@ pub fn channel() -> (Recorder, Control) {
     let render = Arc::new(RenderControl::default());
 
     let thread_fence = recorder.fence.clone();
-    let thread_latches = recorder.latches.clone();
     let thread_status = status.clone();
     let thread_last_take = last_take.clone();
     let thread_progress = progress.clone();
     let thread_render = render.clone();
     let _ = std::thread::Builder::new().name("harmonigraph-take-writer".into()).spawn(move || {
-        let mut pump = Pump { latches: thread_latches, ..Default::default() };
+        let mut pump = Pump::default();
         loop {
             // What the rings hold, then the commands: an armed item counted
             // here was pushed after the `Start` this poll will see. The record
@@ -112,11 +111,11 @@ pub fn channel() -> (Recorder, Control) {
             // Before the shutdown check below, so a take sealed by the same
             // pass that observed the disconnect is published and rendered
             // rather than going with the thread.
-            if let Some((path, notice)) = pumped.finished {
+            if let Some(path) = pumped.finished {
                 #[cfg(all(test, feature = "test-support"))]
                 thread_fence.worker_after_finish.reach();
                 *thread_last_take.lock() = Some(path.clone());
-                let render = RenderRequest { appearance: None, notice };
+                let render = RenderRequest { appearance: None };
                 spawn_render(render, path, None, thread_progress.clone(), thread_render.clone());
             }
             #[cfg(all(test, feature = "test-support"))]
@@ -159,9 +158,6 @@ pub fn channel() -> (Recorder, Control) {
 /// crate's take coverage — and the two must run the same pump (#895).
 #[derive(Default)]
 struct Pump {
-    /// Shared with the producer: Stop intent can precede the admitted
-    /// callback's completion, so the ready prefix owns the final reason.
-    latches: Arc<TakeLatches>,
     open: Option<Recording>,
     /// Non-RT deduplication only. These cuts authorize no musical reclamation.
     order: harmonigraph_core::canonical::CanonicalOrder,
@@ -176,9 +172,8 @@ struct Pump {
 struct Pumped {
     /// Either lane had something, so the writer must not sleep yet.
     worked: bool,
-    /// A take sealed this pass: where it landed, and the notice its render
-    /// carries — why the take ended early, which only this pass knows.
-    finished: Option<(std::path::PathBuf, Option<&'static str>)>,
+    /// A take sealed this pass: where it landed.
+    finished: Option<std::path::PathBuf>,
     /// Both lanes are drained and no command can arrive: the thread returns.
     shutdown: bool,
 }
@@ -255,16 +250,11 @@ impl Pump {
             let failed = fence.failed.load(Ordering::Acquire);
             match finished {
                 Some((Ok(path), false)) if !failed => {
-                    // Capture the end reason before releasing finishing: the
-                    // next Start clears these shared latches, but this render
-                    // must keep its own.
-                    let notice = (self.latches.end() == Some(End::ForwardSeek))
-                        .then_some("take ended before a forward transport seek");
                     let mut status = status.lock();
                     if matches!(status.as_str(), FINISHING | FINISHING_PREVIOUS) {
                         status.clear();
                     }
-                    pumped.finished = Some((path, notice));
+                    pumped.finished = Some(path);
                 }
                 Some((Err(error), _)) => fence.fail_with_message(error.to_string()),
                 _ => {}

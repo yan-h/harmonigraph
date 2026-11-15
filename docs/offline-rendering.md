@@ -168,31 +168,22 @@ Some hosts report `playing = false` throughout an offline render,
 so continuous stopped progress still records.
 
 A manual scrub inside that same interval is indistinguishable from one export callback:
-it records one block and qualifies a later rewind as the take's end.
+it records one block.
 Repeated accepted tiny scrubs each add one block.
 A larger forward/back scrub before playback contributes nothing and leaves the take armed.
 
-And the take ends where the host puts the playhead BACK, not merely where the transport goes quiet.
-Bitwig restores it the moment an export finishes, which lands in the plugin as one backward block;
-a take still armed at that point goes on to record whatever plays next after the export it holds.
-That is how an 82-second export came out as a 63 KB video of a 0.1-second fragment.
-Under *Transport stop* and *Loop end* a stopped backward step after accepted forward progress ends the take instead,
-including a restore after just one accepted callback.
-Audio-only takes and takes whose notes are still waiting for publication finish there too.
-*Transport stop*, counted in 0.4 s of stillness, also accepts recorded transport progress without waiting for a note.
-Playing hosts retain a 50 ms backward jitter allowance for loop detection.
+Bitwig restores the playhead the moment an export finishes, which lands in the plugin as one backward block with the transport stopped:
+it records nothing, so the export the take holds is not followed by a fragment of the song's start.
+Under *Transport stop* the 0.4 s of stillness that follows ends the take,
+including after just one accepted callback,
+and without waiting for a note.
 
-A forward jump more than 50 ms beyond the recorded audio's expected end also breaks continuity,
-including a seek made while stopped before playback resumes.
-Under *Manually* or *At bar*,
-the take records on, the next block continuing its one WAV:
-a looped take renders all its loops, one after another, as one video;
+A jump while playing, back or forward, records on under every trigger but *Loop end*:
+the next block continues the take's one WAV, so the video shows a jump where you jumped.
+A looped take renders all its loops, one after another, as one video;
 to render only the last, give `--start`.
-Under *Transport stop* or *Loop end*,
-the take finishes before the jump and the automatic render's export row says “take ended before a forward transport seek”.
-You can immediately record another take.
-That notice belongs to the automatic render;
-an explicit later re-render from disk does not repeat it.
+Under *Loop end* a backward jump after accepted forward progress — the loop wrapping — ends the take instead.
+Playing hosts retain a 50 ms backward jitter allowance for loop detection.
 
 #### Rendering automatically when the take ends
 
@@ -220,9 +211,9 @@ it does not need to draw every video frame to preserve those proportions.
 | setting | what ends the take |
 |---|---|
 | Manually | you switch Record take off — predictable, and it works however the transport behaves |
-| Transport stop | the transport stops after something was recorded, goes backwards, or seeks forward beyond the recorded audio — whichever is first; recording disarms at the same moment |
-| Loop end | one arranger-loop pass, ending when the loop wraps or a forward seek breaks audio continuity. With looping off and no seek, it waits for a disarm |
-| At bar | the transport plays through the bar set beside it, ending there. A rewind or forward seek records on rather than ends |
+| Transport stop | the transport stays stopped for 0.4 s after something was recorded; recording disarms at the same moment. A jump records on |
+| Loop end | one arranger-loop pass, ending when the loop wraps. A forward seek records on. With looping off, it waits for a disarm |
+| At bar | the transport plays through the bar set beside it, ending there. A rewind or forward seek records on, so a scrub back and a replay renders every attempt, end to end |
 
 *Transport stop* is what makes **exporting audio produce a video with nothing further to click**:
 arm Record take, export, and both files land together.
