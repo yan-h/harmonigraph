@@ -107,7 +107,7 @@ fn a_stepped_light_reads_as_its_two_readings_mixed() {
     for mix in [0.003, 0.05, 0.5, 0.003, 0.05, 0.5] {
         let (a, b) = (light(&[low, low + 2]), light(&[low + 4]));
         let mut stepped = a;
-        stepped.step(&b, mix);
+        stepped.step(&b, mix, mix);
         trials.push((a, b, stepped, mix));
     }
     let template = scene.nodes[0];

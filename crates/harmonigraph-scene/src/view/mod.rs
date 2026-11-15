@@ -911,11 +911,12 @@ pub struct ViewConfig {
     /// accumulation (1). Only overlapping halos change; a lone glow is identical.
     pub glow_accumulation: f32,
     /// How fast a node's light follows the node, in seconds: the time constant
-    /// of the exponential its LEVEL and its COLOUR are both carried on — this
-    /// one while something in the light is coming up (its level, or a slot's
-    /// light: a note joining a node already lit brings its colour in on this),
-    /// [`glow_release`](Self::glow_release) otherwise, a note leaving or a mark
-    /// moving onto a slot already sounding included (#1784 G2).
+    /// of the exponential its LEVEL and its COLOUR are both carried on, each
+    /// value in its own direction: the level, and each slot's and mark's share
+    /// of the light, rise on this and fall on
+    /// [`glow_release`](Self::glow_release) (#1784 G2). So a note joining a lit
+    /// node brings its colour in on the attack while one leaving takes its
+    /// colour out on the release, both at once in an octave handoff.
     ///
     /// Its own pair rather than the note Fade every drawn layer rides, because
     /// the light is not one of those layers. A halo is the slow part of the
@@ -925,10 +926,9 @@ pub struct ViewConfig {
     /// level is above nothing at all — and its hue morphs toward a new
     /// octave's rather than cutting to it.
     ///
-    /// One pair for both halves, which is what keeps the two from disagreeing:
-    /// the same coefficient `1 - exp(-dt/tau)` carries the level and what the
-    /// light is made of, both on the CPU (`panes::glow_fade` in
-    /// harmonigraph-ui).
+    /// One pair for both halves: the coefficient `1 - exp(-dt/tau)` of the one
+    /// a value is heading by carries the level and what the light is made of,
+    /// both on the CPU (`panes::glow_fade` in harmonigraph-ui).
     /// Inert while [`glow_reach`](Self::glow_reach) is 0 — with no light there
     /// is nothing to carry.
     pub glow_attack: f32,

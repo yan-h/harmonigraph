@@ -444,13 +444,16 @@ impl GlowLight {
         self.l.iter().chain(&self.m).copied().fold(0.0, f32::max).clamp(0.0, 1.0)
     }
 
-    /// Move every weight `mix` of the way toward `target`'s: ONE walk over
-    /// every field, so a field added to the struct is stepped by adding it to
-    /// the pattern below, which the compiler insists on.
-    pub fn step(&mut self, target: &Self, mix: f32) {
+    /// Move every weight toward `target`'s, each in its own direction: `up` of
+    /// the way while it is below its goal, `down` while it is above, as a
+    /// per-channel envelope follower does (#1784 G2). ONE walk over every
+    /// field, so a field added to the struct is stepped by adding it to the
+    /// pattern below, which the compiler insists on.
+    pub fn step(&mut self, target: &Self, up: f32, down: f32) {
         let Self { l, m } = self;
         for (weights, goal) in [l, m].into_iter().zip([&target.l, &target.m]) {
             for (weight, goal) in weights.iter_mut().zip(goal) {
+                let mix = if *goal > *weight { up } else { down };
                 *weight += (goal - *weight) * mix;
             }
         }
@@ -462,10 +465,11 @@ impl GlowLight {
 ///
 /// Out of [`NodeMotion::step`] it is the node's own reading as it stands, which
 /// is what a stateless snapshot draws. The shell's glow pass (`GlowFade` in
-/// harmonigraph-ui) carries both on the Glow attack and release, with ONE
-/// coefficient for the two, so a halo's brightness and its colour cannot come
-/// to disagree about which way it is going (#1626). Nothing about a light is
-/// kept anywhere else: the renderer reads it afresh every frame.
+/// harmonigraph-ui) carries both on the Glow attack and release, each value in
+/// its own direction: the level and every weight rise on the attack and fall on
+/// the release (#1784 G2), on one clock, so a halo's brightness and its colour
+/// are stepped together (#1626). Nothing about a light is kept anywhere else:
+/// the renderer reads it afresh every frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GlowStep {
     /// How lit this node's light is drawn. Out of [`NodeMotion::step`] it is

@@ -18,8 +18,9 @@
 //! ## The whole light is carried here
 //!
 //! A node's light has a LEVEL and a COLOUR. Both are carried here, keyed by the
-//! node's [`LatticePos`], and stepped with ONE coefficient per frame, so the two
-//! cannot come to disagree about which way a light is going (#1626).
+//! node's [`LatticePos`], and stepped together each frame (#1626), every value
+//! in its own direction: rising on the Glow attack, falling on the release
+//! (#1784 G2).
 //!
 //! What is carried for the colour is not a colour. It is what the light is
 //! made of ([`GlowLight`]): how much light each slot and each mark puts on the
@@ -105,8 +106,8 @@ struct Lit {
 ///
 /// A share because the halo's colour is the weights normalised: a light whose
 /// weights all fall together toward nothing — any release — keeps its colour
-/// and is the level's own fall, while a slice swelling under a held note moves
-/// the colour by its share of the light whatever the light's size.
+/// and is the level's own fall, while an octave joining or leaving a held node
+/// moves the colour by its share of the light whatever the light's size.
 fn easing(level: f32, light: &GlowLight, goal: &GlowLight) -> f32 {
     let GlowLight { l, m } = light;
     let pairs =
@@ -195,8 +196,8 @@ impl GlowFade {
         self.at = Some(now);
         self.frame += 1;
         // What moves on its own is a level above its target, and a colour still
-        // easing toward its reading — a handoff, a swell, a look — at any
-        // level. A level rising belongs to a note being played, and a light
+        // easing toward its reading — a handoff, an octave joining, a look —
+        // at any level. A level rising belongs to a note being played, and a light
         // settled at its reading is still, so a mark held with no key down
         // never keeps the loop awake.
         let strength = scene.view.glow_strength;
@@ -206,21 +207,15 @@ impl GlowFade {
         // that has left the window is dropped below, and holds no place.
         let mut lights =
             scene.nodes.iter().filter(|n| self.nodes.contains_key(&n.lattice_pos)).count();
-        // Two coefficients for the whole frame: every node's light runs on the
-        // same pair of times, and which of the two it takes is whether
-        // something in it is coming up — RISING while its level, or any slot's
-        // light, is visibly below where it is heading, by more than half a code
-        // value. So a note joining a node already lit at full brings its colour
-        // in on the attack, while a note leaving, or a mark moving onto a slot
-        // already sounding, eases on the release (#1784 G2). One coefficient
-        // for the whole light still, level and weights alike (#1626): a
-        // handoff that brings one octave in as another leaves runs on the
-        // attack whole. A level or a weight attacking toward a target
-        // approaches it without landing, so a test of `target > level` alone
-        // would hand a held light's colour the attack for as long as it is
-        // held, and the release where an attack of 0 lands it exactly: which
-        // of the two a handoff under a steady light eases on would turn on how
-        // the level rounded. Below the half step it is invisible which.
+        // Two coefficients for the whole frame, every node's light running on
+        // the same pair of times, and each VALUE in it takes its own direction
+        // (#1784 G2): the level, and every slot's and mark's weight, move on
+        // the attack while below where they are heading and on the release
+        // while above, as a per-channel envelope follower does. So a note
+        // joining a node brings its colour in on the attack, one leaving takes
+        // its colour out on the release, and in an octave handoff both happen
+        // at once. A level a joining note's Fade has not yet reached keeps
+        // falling on the release rather than dipping on the attack.
         for node in &mut scene.nodes {
             // What puts LIGHT on this node: the MIDI layers, since a node
             // wearing a mark with no key down is still a node with something of
@@ -241,12 +236,9 @@ impl GlowFade {
                 Some(lit) => {
                     lit.seen = self.frame;
                     lit.target = target;
-                    let arriving =
-                        goal.l.iter().zip(&lit.light.l).any(|(goal, l)| goal - l > VISIBLE_STEP);
-                    let rising = target - lit.level > VISIBLE_STEP || arriving;
-                    let mix = if rising { up } else { down };
+                    let mix = if target > lit.level { up } else { down };
                     lit.level += (target - lit.level) * mix;
-                    lit.light.step(&goal, mix);
+                    lit.light.step(&goal, up, down);
                     // The end of a light, said exactly rather than approached:
                     // a level that only gets small keeps an entry and an
                     // instance for the rest of the session. Only where there
@@ -499,7 +491,7 @@ mod tests {
                 assert_eq!(goal, to, "{what}: the reading moved after the change");
                 let share = 1.0 - (-elapsed / RELEASE).exp() as f32;
                 let mut expected = from;
-                expected.step(&to, share);
+                expected.step(&to, 1.0, share);
                 let fields = |light: &GlowLight| [light.l, light.m].concat();
                 for (i, (got, want)) in fields(&carried).iter().zip(fields(&expected)).enumerate() {
                     assert!(
@@ -577,15 +569,103 @@ mod tests {
         assert!(share > 0.9, "the joining octave is {share:.2} of the way in after three attacks");
     }
 
-    /// Under an attack slower than the release, a handoff on a held light
-    /// whose level has risen to just short of its target — as an attack
-    /// leaves it, never landing — keeps the loop awake until its colour has
-    /// arrived, and the colour eases on the release, as it would had the level
-    /// landed exactly.
+    /// A pitch class struck again in another octave while its halo still
+    /// lingers brings no dip in the halo's brightness: the new slice comes in
+    /// over the note Fade, so its target starts under the lingering level,
+    /// and the level keeps falling no faster than the release carries it until
+    /// the target climbs past it (#1784 G2, B′).
+    #[test]
+    fn a_restruck_pitch_class_on_a_lingering_halo_brings_no_dip() {
+        const RELEASE: f64 = 2.5;
+        let mut state = lit(0.05, RELEASE as f32);
+        state.runtime.frame_params.fade_time = 0.3;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let mut fade = GlowFade::default();
+        let mut level = |state: &PictureState, now: f64| {
+            let mut scene = scene_at(state, now);
+            fade.step(&mut scene, &state.appearance.view, now);
+            node_at(&scene, LatticePos::ORIGIN).glow.level
+        };
+        let mut now = 0.0;
+        while now < 2.0 {
+            level(&state, now);
+            now += 1.0 / 144.0;
+        }
+        state.runtime.tracker.handle_event(NoteEvent::off(now, SourceId::DIRECT, 0, 60));
+        let struck = now + 1.0;
+        while now < struck {
+            level(&state, now);
+            now += 1.0 / 144.0;
+        }
+        let lingering = level(&state, now);
+        assert!(lingering > 0.3 && lingering < 0.9, "the halo must be lingering: {lingering}");
+        state.runtime.tracker.handle_event(NoteEvent::on(now, SourceId::DIRECT, 0, 72, 1.0));
+        let from = now;
+        while now < from + 0.3 {
+            now += 1.0 / 144.0;
+            let got = level(&state, now);
+            let floor = lingering * (-(now - from) / RELEASE).exp() as f32 - 1e-4;
+            assert!(got >= floor, "at {:.3}s the halo dipped to {got} under {floor}", now - from);
+        }
+    }
+
+    /// In an octave handoff on one node — one octave let go as another is
+    /// struck — the arriving octave's light rises on the Glow attack while the
+    /// leaving one's falls on the release (#1784 G2, B′).
+    #[test]
+    fn an_octave_handoff_brings_one_in_on_the_attack_and_lets_one_go_on_the_release() {
+        const ATTACK: f64 = 0.1;
+        const RELEASE: f64 = 2.0;
+        let mut state = lit(ATTACK as f32, RELEASE as f32);
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let mut fade = GlowFade::default();
+        let mut step = |state: &PictureState, now: f64| {
+            let mut scene = scene_at(state, now);
+            fade.step(&mut scene, &state.appearance.view, now);
+            let node = node_at(&scene, LatticePos::ORIGIN);
+            (node.glow, node.glow_light())
+        };
+        for k in 0..=40 {
+            step(&state, f64::from(k) * 0.05);
+        }
+        let (held, before) = step(&state, 2.0);
+        state.runtime.tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 60));
+        state.runtime.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 1.0));
+        let (_, goal) = step(&state, 2.0);
+        let slot = |light: &GlowLight, lit: bool| {
+            (0..harmonigraph_scene::OCTAVE_SLOTS).find(|&s| (light.l[s] > 0.0) == lit)
+        };
+        let leaving = slot(&before, true).expect("C4 lights a slot");
+        let arriving = (0..harmonigraph_scene::OCTAVE_SLOTS)
+            .find(|&s| goal.l[s] > 0.0 && before.l[s] <= 0.0)
+            .expect("C5 lights a slot of its own");
+        assert_eq!(goal.l[leaving], 0.0, "C4 must be gone from the reading");
+        let mut now = 2.0;
+        while now < 2.0 + 3.0 * ATTACK {
+            now += 1.0 / 144.0;
+            step(&state, now);
+        }
+        let (glow, _) = step(&state, now);
+        let elapsed = now - 2.0;
+        let came = glow.light.l[arriving] / goal.l[arriving];
+        let kept = glow.light.l[leaving] / held.light.l[leaving];
+        let release_keeps = (-elapsed / RELEASE).exp() as f32;
+        assert!(came > 0.9, "the arriving octave is only {came:.2} of the way in");
+        assert!(
+            (kept - release_keeps).abs() < 0.01,
+            "the leaving octave kept {kept:.3} where the release keeps {release_keeps:.3}",
+        );
+    }
+
+    /// Under an attack slower than the release, a melody handoff on a held
+    /// light keeps the loop awake until its colour has arrived, and each mark
+    /// takes its own direction: the one arriving on the middle octave rises on
+    /// the attack, the one leaving the top octave falls on the release.
     #[test]
     fn a_handoff_under_a_slow_attack_repaints_until_its_colour_arrives() {
+        const ATTACK: f64 = 2.0;
         const RELEASE: f64 = 0.25;
-        let mut state = lit(2.0, RELEASE as f32);
+        let mut state = lit(ATTACK as f32, RELEASE as f32);
         for note in [60, 72, 84] {
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
@@ -620,16 +700,19 @@ mod tests {
                 awake || easing * strength <= VISIBLE_STEP,
                 "at {now:.3}s the colour still had {easing} to move and the loop slept",
             );
-            let share = 1.0 - (-(now - 20.0) / RELEASE).exp() as f32;
+            let share = |tau: f64| 1.0 - (-(now - 20.0) / tau).exp() as f32;
             let carried = glow.light;
             let mut expected = before;
-            expected.step(&goal, share);
-            assert!(
-                (carried.m[6] - expected.m[6]).abs() < 1e-4,
-                "at {now:.3}s the handoff took {} of the way where the release takes {}",
-                carried.m[6],
-                expected.m[6],
-            );
+            expected.step(&goal, share(ATTACK), share(RELEASE));
+            for slot in [6, 7] {
+                assert!(
+                    (carried.m[slot] - expected.m[slot]).abs() < 1e-4,
+                    "at {now:.3}s the mark on slot {slot} is at {} where its own direction \
+                     takes it to {}",
+                    carried.m[slot],
+                    expected.m[slot],
+                );
+            }
         }
         assert!(to.unwrap().m[6] > 0.0, "the handoff never reached the middle octave");
     }
