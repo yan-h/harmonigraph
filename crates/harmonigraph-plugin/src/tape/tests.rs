@@ -551,6 +551,32 @@ fn a_stopped_block_at_a_new_rate_clears_the_tape() {
     assert!(worker.store().is_some());
 }
 
+/// A chunk closes on the block that takes it past its second. Blocks that do
+/// not divide the second overrun the reserved buffer, which must not be kept
+/// at the doubled size it grew to.
+#[test]
+fn a_committed_chunk_keeps_no_spare_half_of_its_buffer() {
+    let (_, mut worker) = pair();
+    let frames = 150;
+    for i in 0..20 {
+        let first = (i * frames) as u64;
+        let (block, samples) = ring_block_of(frames, first, Some(first as i64), STEREO);
+        worker.capture(block, &samples);
+    }
+    let (block, samples) = ring_block_of(frames, 3000, None, STEREO);
+    worker.capture(block, &samples);
+    let store = worker.store().unwrap();
+    assert!(store.chunks().any(|c| c.end - c.start > RATE as i64), "no chunk overran its second");
+    for chunk in store.chunks() {
+        assert!(
+            chunk.samples.capacity() < chunk.samples.len() * 3 / 2,
+            "{} samples held in a buffer of {}",
+            chunk.samples.len(),
+            chunk.samples.capacity()
+        );
+    }
+}
+
 /// Record song frames `from..to` as one pass whose host reports `tempo`, and
 /// stop.
 fn at_tempo(worker: &mut Worker, source: &mut u64, from: i64, to: i64, tempo: f64) {
