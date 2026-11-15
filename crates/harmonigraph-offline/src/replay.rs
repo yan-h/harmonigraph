@@ -136,6 +136,7 @@ impl Replay {
     }
 
     /// Whether every recorded event has been delivered.
+    #[cfg(test)]
     pub fn is_spent(&self) -> bool {
         self.next_note == self.take.events.len()
             && self.next_param == self.take.params.len()

@@ -1,14 +1,17 @@
 //! Exercise the executable boundary as well as the encoder's unit fixtures.
 use harmonigraph_take::canonical::DeltaRecord;
 use harmonigraph_take::{
-    CanonicalRecord, Header, NoteKind, NoteRecord, Record, RunRecord, WavWriter, Writer,
+    CanonicalRecord, Header, NoteKind, NoteRecord, Record, RunEndRecord, RunRecord, WavWriter,
+    Writer,
 };
 use harmonigraph_ui::RenderTrigger;
 use std::path::Path;
 use std::process::Command;
 
 /// `tail: None` leaves the fresh Tail, so those rows hold the default (0 s) too.
-fn take(path: &Path, seconds: f64, trigger: RenderTrigger, tail: Option<f64>) {
+/// `held` leaves the note sounding when the take's run ends, as a chord held
+/// into a transport stop is: its release sounds after the last recorded block.
+fn take(path: &Path, seconds: f64, trigger: RenderTrigger, tail: Option<f64>, held: bool) {
     let mut appearance = harmonigraph_ui::AppearanceDocument::default();
     appearance.render.trigger = trigger;
     if let Some(tail) = tail {
@@ -30,10 +33,14 @@ fn take(path: &Path, seconds: f64, trigger: RenderTrigger, tail: Option<f64>) {
     // One run at offset zero.
     take.write(&Record::Run(RunRecord::default())).unwrap();
     // Each note timed where it sounds.
-    for (t, kind) in [(0.0, NoteKind::On { velocity: 0.8 }), (0.25, NoteKind::Off)] {
+    let played = [(0.0, NoteKind::On { velocity: 0.8 }), (0.25, NoteKind::Off)];
+    for (t, kind) in played.into_iter().take(if held { 1 } else { 2 }) {
         let event = NoteRecord { t, kind, note: 60, ..Default::default() };
         let note = DeltaRecord { event, ..Default::default() };
         take.write(&Record::Canonical(CanonicalRecord::Delta(note))).unwrap();
+    }
+    if held {
+        take.write(&Record::RunEnd(RunEndRecord { at: seconds })).unwrap();
     }
     take.flush().unwrap();
 }
@@ -86,6 +93,10 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
         // The recorded Tail of 0 ends the video with the audio at 1 s rather
         // than at the last note plus a longer Tail.
         ("recorded-tail-zero", 1.0, RenderTrigger::OnTransportStop, Some(0.0), vec![], 20),
+        // A chord held to the take's end is released there (#1803): at Tail 0
+        // the video still ends with its audio, and a Tail runs in full past it.
+        ("held-tail-zero", 1.0, RenderTrigger::OnTransportStop, Some(0.0), vec![], 20),
+        ("held-tail", 1.0, RenderTrigger::OnTransportStop, Some(4.0), vec![], 100),
         // A queued export takes the Tail from the look it draws with, so the same
         // take recorded with a 4 s Tail still ends with its audio.
         (
@@ -98,7 +109,7 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
         ),
     ] {
         let path = dir.join(format!("{name}.take"));
-        take(&path, seconds, trigger, tail);
+        take(&path, seconds, trigger, tail, name.starts_with("held-"));
         let out = path.with_extension("mp4");
         let result = render(&path, &out, &extra);
         let stderr = String::from_utf8_lossy(&result.stderr);
@@ -113,9 +124,9 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
         }
         assert!(result.status.success(), "{name}: {stderr}");
         assert!(stderr.contains(&format!("done: {frames} frames")), "{name}: {stderr}");
-        // Without `--end` the render covers the take, however close to its
-        // end the last record sounds.
-        assert!(extra.contains(&"--end") || !stderr.contains("still to come"), "{name}: {stderr}");
+        // No row's end falls before its take's last record, however close to
+        // the end that record sounds.
+        assert!(!stderr.contains("still to come"), "{name}: {stderr}");
         let probe = Command::new("ffprobe")
             .args([
                 "-v",
@@ -145,7 +156,7 @@ fn cli_finalizes_the_encoder_after_a_render_write_error() {
     let dir = std::env::temp_dir().join(format!("harmonigraph-cli-failure-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("take.take");
-    take(&path, 0.25, RenderTrigger::OnDisarm, Some(4.0));
+    take(&path, 0.25, RenderTrigger::OnDisarm, Some(4.0), false);
     for exit in [0, 7] {
         let encoder = dir.join("ffmpeg.sh");
         // Closing stdin forces the >64KiB frame through the broken-pipe path.

@@ -418,9 +418,10 @@ fn export(args: Args) -> Result<(), String> {
 
     let audio_start = take.audio_start.unwrap_or(0.0);
 
+    let events_end = take.duration();
     let end = end_of_render(
         args.end,
-        take.duration(),
+        events_end,
         args.tail.unwrap_or(render_config.tail),
         audio.as_ref().map(|a| audio_start + a.seconds()),
     );
@@ -514,10 +515,10 @@ fn export(args: Args) -> Result<(), String> {
         (Err(error), Ok(())) | (Ok(_), Err(error)) => return Err(error),
     };
 
-    // Only an `--end` cuts a take short. The default end is past every
-    // record, and one in its last frame's interval, or at the end itself as
-    // the reader's release of held notes is, is never delivered.
-    if args.end.is_some() && !replay.is_spent() {
+    // Asked of the take's length and not of what the replay delivered: a
+    // record in the last frame's interval, or at the end itself as the
+    // reader's release of held notes is, is never delivered and cuts nothing.
+    if events_end > end {
         eprintln!(
             "note: stopped at {end:.2}s with events still to come — \
              raise --end (or drop it to render the whole take)"
