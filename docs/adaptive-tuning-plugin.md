@@ -199,6 +199,8 @@ The core policy fixtures, `crates/harmonigraph-core/src/policy/fixtures.txt`, we
 since that model retired (#1677) they are committed golden data, and the Rust policy is the reference.
 They record every onset in all eighteen musical examples with their seeded context and with every setting the example declared, named on its case line in the plugin's own integer units.
 A setting the replay cannot honour fails the fixture test rather than replaying at a default the example never chose.
+The replay assembles each onset's context through `policy::context`, the one the Hub's sequencer calls,
+so the fixtures describe production's held-voice order, decay origin and deduplication rather than a copy of them (#1750).
 The test compares coordinates exactly and output pitches within 0.001 cent,
 the axis rounding between the model's floating-point logarithms and the plugin's fixed microcents.
 After a deliberate policy change, this rewrites the node and output of each onset that no longer agrees, leaving the rest, and the PR states every line it moves:

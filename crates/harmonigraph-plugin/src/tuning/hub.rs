@@ -198,31 +198,25 @@ impl Sequencer {
             self.reference_source = None;
         }
     }
-    /// The context one assignment sees: every held voice newest first,
-    /// deduplicated within the repetition tolerance, each decayed by the age of
-    /// its attack at the newest held attack — or, with nothing held, released
-    /// memory (`Memory::append`).
+    /// The context one assignment sees (`policy::context`), into `working`.
     fn fill(&mut self, rate: f64) {
-        self.working.clear();
-        let mut voices = [None; HELD_SESSION];
+        let mut held = [policy::Held::default(); HELD_SESSION];
         let mut count = 0;
         for voice in self.context.iter().flatten() {
-            voices[count] = Some(*voice);
+            held[count] = policy::Held {
+                pitch: voice.context_pitch(),
+                decision: voice.decision,
+                struck: voice.onset,
+            };
             count += 1;
         }
-        voices[..count].sort_unstable_by_key(|v| std::cmp::Reverse(v.unwrap().decision));
-        let newest = voices[..count].iter().flatten().map(|v| v.onset).max().unwrap_or(0);
-        for voice in voices[..count].iter().flatten() {
-            if !self.working.iter().any(|v| {
-                v.pitch.abs_diff(voice.onset_pitch) <= u64::from(self.config.policy.tolerance)
-            }) {
-                self.working.push(policy::ContextPitch {
-                    weight: policy::decay(self.config.policy, newest - voice.onset, rate),
-                    ..voice.context_pitch()
-                });
-            }
-        }
-        self.memory.append(&mut self.working, self.config.policy, rate);
+        policy::context(
+            &mut held[..count],
+            &self.memory,
+            self.config.policy,
+            rate,
+            &mut self.working,
+        );
     }
     /// Drop a context voice without contributing it to released memory. Two
     /// callers, and neither is a note ending: an onset the scheduled state
