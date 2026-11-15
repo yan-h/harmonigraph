@@ -51,6 +51,7 @@ pub struct AudioSpectrum {
     /// [`AudioSpectrum::keep`].
     pub(crate) pyramid: crate::spectrogram::SlabPyramid,
     /// Columns the history has taken: see [`AudioSpectrum::columns_taken`].
+    #[cfg(any(test, feature = "testing"))]
     columns_taken: u64,
 }
 
@@ -220,6 +221,7 @@ impl Default for AudioSpectrum {
             last_samples: None,
             last_audible: Heard::default(),
             pyramid: Default::default(),
+            #[cfg(any(test, feature = "testing"))]
             columns_taken: 0,
         }
     }
@@ -329,6 +331,7 @@ impl SpectrumAnalysis {
     /// The running analyzer's lag: how far behind the newest sample it read
     /// a column is dated. What a shell's tests read to tell which resolution
     /// it analyzed under; a frame reads [`SpectrumConfig::live_lag`].
+    #[cfg(any(test, feature = "testing"))]
     pub fn lag(&self) -> f64 {
         self.analyzer.window_center_offset()
     }
@@ -390,7 +393,10 @@ impl AudioSpectrum {
     /// pyramid's retention), and the heatmap reads back as far as the span
     /// asks.
     fn keep(&mut self, time: f64, power: &SpectrumBuckets, heard: bool) {
-        self.columns_taken += 1;
+        #[cfg(any(test, feature = "testing"))]
+        {
+            self.columns_taken += 1;
+        }
         self.pyramid.push(time, power);
         if heard {
             self.last_audible.column = Some(time);
@@ -542,6 +548,7 @@ impl AudioSpectrum {
     /// How many columns the history has taken since the spectrum was made: a
     /// count that only grows, so a Clear does not hide what a step kept, and
     /// nothing has to read the pyramid to tell.
+    #[cfg(any(test, feature = "testing"))]
     pub fn columns_taken(&self) -> u64 {
         self.columns_taken
     }
