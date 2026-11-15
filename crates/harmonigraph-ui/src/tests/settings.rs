@@ -1358,7 +1358,7 @@ fn a_configuration_fault_asks_for_a_host_reset() {
         state.picture.runtime.configuration_status = status;
         tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT).shapes
     };
-    let too_many = panes::tuning::TOO_MANY_PITCHES_NOTICE;
+    let too_many = &panes::tuning::too_many_pitches_notice();
     assert!(text_y(&shapes(16), too_many).is_some(), "more pitches than Learn reads");
     assert!(text_y(&shapes(0), too_many).is_none());
 }

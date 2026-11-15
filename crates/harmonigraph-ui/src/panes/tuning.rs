@@ -36,8 +36,12 @@ pub(crate) const CONFIGURATION_FAULT_NOTICE: &str =
 pub(crate) const HELD_STATE_INCOMPLETE_NOTICE: &str =
     "Learning unavailable: held state is incomplete. Reset to recover.";
 /// Configuration status bit 16: more distinct pitches are held than Learn reads.
-pub(crate) const TOO_MANY_PITCHES_NOTICE: &str =
-    "Learning paused: more than 256 distinct pitches are held.";
+pub(crate) fn too_many_pitches_notice() -> String {
+    format!(
+        "Learning paused: more than {} distinct pitches are held.",
+        harmonigraph_core::tuning::LEARN_CLASSES_MAX
+    )
+}
 
 /// Interval entry always submits a semantic edit, even when its typed value is
 /// unchanged. Linked readouts use the resolved value; their ordinary edit path
@@ -324,7 +328,7 @@ pub(super) fn tuning_pane(
     } else if state.runtime.configuration_status & 16 != 0 {
         crate::widgets::label(
             ui,
-            egui::RichText::new(TOO_MANY_PITCHES_NOTICE).color(theme::armed()),
+            egui::RichText::new(too_many_pitches_notice()).color(theme::armed()),
         );
         true
     } else if state.runtime.configuration_status & 4 != 0 {
