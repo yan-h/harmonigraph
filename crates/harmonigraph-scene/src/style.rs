@@ -660,8 +660,9 @@ impl Default for ShadowStyle {
     /// persist tests holds it, beside the missing-group sweep.
     fn default() -> ShadowStyle {
         ShadowStyle {
-            // Numbers kept from when this default drew contour shadows, so
-            // the fixtures built on it measure the same widths.
+            // Numbers first chosen for contour shadows (removed in #1499),
+            // kept so the fixtures built on this default measure the widths
+            // they were written against.
             width: 0.418_517_17,
             spread: 0.0,
             // Just under half depth leaves the shadow legible without cutting

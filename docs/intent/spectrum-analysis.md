@@ -5,7 +5,7 @@ Yan’s decisions recorded for future drift audits.
 ## 2026-10-02 (issue sweep)
 
 - Balanced (8192 samples) is the fresh Frequency resolution again. Saved Fast selections remain Fast. #1314 Analysis Q1 (replaced 2026-10-07, below)
-- Document Fast’s loss of low audio-ring fundamentals rather than redesigning the noise floor. The cutoff depends on sample rate and material; harmonics may still light the pitch class. #1314 Analysis Q2
+- Document Fast’s loss of low audio-ring fundamentals rather than redesigning the noise floor. The cutoff depends on sample rate and material; harmonics may still light the pitch class. #1314 Analysis Q2 (Since #1604 frames are sized in time, so the cutoff no longer depends on sample rate, to within 9%; it still depends on the material. #1739)
 
 ## 2026-10-07 (DAW look capture, #1475)
 
@@ -42,6 +42,13 @@ Yan’s decisions recorded for future drift audits.
 
 - The spectrum/history now-line stays at the 2 pt line width, deliberately heavier than the 1 pt spectrum outline (#1585): the two share a colour, not a weight. #1635 Spectrum Q1, #1631
 - Replace the defensive rule that drops a source-dated column not newer than the history's tail with a debug assertion: the clock only moves forward, so a break in ordering should fail tests loudly rather than be worked around in release builds. #1635 Spectrum Q2, #1631 (Superseded 2026-11-14 by the guard below, #1758: the assertion stays, and release builds now drop or reset instead of drawing a backward column.)
+
+## 2026-11-14 (premises audit, #1739)
+
+Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
+
+- Tape keeps its own note recorder joined by presentation time until Tape has been used in Bitwig; feeding it from the take lane is F3′'s Tape half, deferred while the take half goes to `propose-rework` (see `video-export.md`). #1739
+- The analyzer reads a frame on request; drawing at once after a longer-frame switch holds its first column until it dates after the newest (or relies on the guard above). Part of F2′. #1739 (Not done: #1770 found the guard never drops or resets a column on a resolution switch, so this would remove nothing. #1758)
 
 ## 2026-11-14 (F2′ rework, #1758 PR A)
 

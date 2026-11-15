@@ -1,7 +1,7 @@
 # Making a video without recording your screen
 
-The visualization is a pure function of `(note events, parameters, view, camera, now)`.
-Nothing in the draw path consults a wall clock or a random number generator.
+The visualization is deterministic in `(note events, parameters, view, camera)` and the frame times it is stepped through.
+It carries state from frame to frame (glow levels, colour memory, drift), but nothing in the draw path consults a wall clock or a random number generator.
 So the picture does not have to be produced at the same speed as the music —
 you can record the *inputs* once and render the *output* later, as slowly as the GPU needs, at any frame rate and any resolution.
 

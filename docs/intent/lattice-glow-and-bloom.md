@@ -7,6 +7,9 @@ One line per decision; the audit reads this before asking anything.
 
 - A note's Background glow follows the Opacity it is drawn at, as its ink and bloom do. #1315
 
+## 2026-11-14 (premises audit, #1739)
+- The lattice glow's colour is carried on the CPU per frame (a light table the strip pass reads), retiring `InkHistory`, its row allocator and incarnations, and the release-colour loss on strip growth (#665's scoping note). The halo hue then follows gradient, range and width drags at once; judged on contact sheets before it counts as parity. To `propose-rework` with F4′. #1739 F4′ (No contact sheets were made: #1761 ran without them, and #1759 Q1 accepted the change.)
+
 ## 2026-11-14 (F4′ rework, #1759)
 
 - A held or fading halo takes a gradient, range, width or tuning change in the frame its note does; no record asked for the old ease toward it over the Glow times. #1759 Q1

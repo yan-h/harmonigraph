@@ -38,6 +38,12 @@
 - An export row does not name the encoder the renderer opened: with every warning shown, the note that a Hardware export ran through x264 already reaches it, and naming it would make a line on the renderer's stderr a production contract. #1677 area 4 Q2
 - A take recorded to a loop's end honours the Tail like any other take. Its exemption dated from #1147, when the tail was a fixed 4 s; since #1465 Tail is a setting, 0 fresh, so the exemption only overrode a Tail you chose. #1677 area 9 Q1
 
+## 2026-11-14 (premises audit, #1739)
+
+Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
+
+- Takes are recorded on the display's clock and the offline reader chooses passes and song time (take v7; earlier passes come out through `--pass N` rather than separate files): the reason takes were stamped in song time, lining up with a separate audio bounce, is gone (#903, #972, #1196, #1342). To `propose-rework` as F3′'s take half; the Tape half waits until Tape has been used in Bitwig. First declined on delegation as quiet; reopened after a Fable review and answered by Yan. #1739 F3′
+
 ## 2026-11-14 (F3′ take half, #1760)
 
 - Passes are stored as one take file per arm, with one WAV per pass beside it, and the offline reader chooses the pass and its song time from the file: the full rework, so the closure code is rewritten. #1760 Q1

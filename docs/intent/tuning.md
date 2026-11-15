@@ -18,3 +18,12 @@
 
 - Retire the JavaScript adaptive-tuning model, its examples and its fixture exporter: a policy change is no longer designed there first. The Rust policy, with its committed fixtures in `crates/harmonigraph-core/src/policy/fixtures.txt`, is the reference. #1677 area 1 Q1
 - Restored host parameters are clamped by hand in `filter_state`, not in the vendored wrapper's restore loop: a patch there would have to be carried across every wrapper upgrade to replace nine arms. Declined. #1677 R11
+
+## 2026-11-14 (premises audit, #1739)
+
+Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
+
+- The five tuning axes become plugin-owned settings saved in the musical settings, not host parameters: Yan never automates, modulates or maps them, so the owned-parameter mailbox that exists only to make them automatable goes. First declined on delegation by citing `adaptive-tuning.md`'s requirement; reopened after a Fable review noted the requirement's need was not tested, and answered by Yan. #1739 D5, #1756
+- One sample-indexed configuration timeline for every engine; `Owner.block` goes, Learn rides the next adopt, and a lost history falls back to the reducer's configuration under Adaptive. #1739, #1749
+- Check the policy fixtures' context assembly against production's before trusting them as the reference; if a fixture line moves, the context moves into core. #1739, #1750
+- Learn reads the Hub's rows and `ConfirmedPitches` goes, dropping its artificial 256-voice refusal. #1739, #1751
