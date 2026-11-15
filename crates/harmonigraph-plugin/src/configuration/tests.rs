@@ -822,6 +822,26 @@ fn an_axis_edit_marks_the_project_without_a_rescan() {
     assert_eq!(flags & CLAP_PARAM_RESCAN_VALUES, 0, "the values did not change");
 }
 
+/// Opening a project, and Reset all voices, change nothing the project saves,
+/// so neither has the host mark it modified: the musical settings and the
+/// instance's own Retune, Show and name alike.
+#[test]
+fn a_restore_and_a_reset_leave_the_project_unmodified() {
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    device.run(1000, vec![], false);
+    let before = device.service();
+    device.load(restored(&device, 700.0), false);
+    device.run(1064, vec![], false);
+    assert_eq!(device.service(), before, "a restore is not an edit");
+    device
+        .wrapper()
+        .test_inspect_plugin(|plugin| plugin.aggregation.as_ref().unwrap().shared.request_reset());
+    device.run(1128, vec![], false);
+    assert_eq!(device.service(), before, "Reset all voices saves nothing");
+}
+
 /// The queue keeps arrival order across kinds: an edit queued before a restore
 /// is overwritten by it, and one queued after it lands on the restored record.
 #[test]

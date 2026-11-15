@@ -138,10 +138,13 @@ impl Shared {
         self.dirty.store(true, Ordering::Release);
         self.request_main();
     }
-    pub fn set_retune(&self, value: bool) {
+    fn store_retune(&self, value: bool) {
         let _ = self.retune.try_update(Ordering::AcqRel, Ordering::Acquire, |old| {
             ((old & 1 != 0) != value).then_some(((old & !1) + 2) | u64::from(value))
         });
+    }
+    pub fn set_retune(&self, value: bool) {
+        self.store_retune(value);
         self.publish_controls();
         self.changed();
     }
@@ -173,8 +176,11 @@ impl Shared {
             format!("Tune {}", self.instance_id.load(Ordering::Acquire))
         }
     }
-    pub fn set_name(&self, value: String) {
+    fn store_name(&self, value: String) {
         *self.name.lock().unwrap() = value.chars().take(80).collect();
+    }
+    pub fn set_name(&self, value: String) {
+        self.store_name(value);
         self.changed();
     }
     pub fn request_delay(&self, value: u32) {
@@ -196,10 +202,10 @@ impl Shared {
         self.hub
     }
     /// The editor's Reset. Clear the musical context and re-pair, which the
-    /// audio owner performs as one cut across every row.
+    /// audio owner performs as one cut across every row. It saves nothing, so
+    /// the project is not marked modified.
     pub fn request_reset(&self) {
         self.reset.fetch_add(1, Ordering::AcqRel);
-        self.dirty.store(true, Ordering::Release);
         self.request_main();
     }
     /// The generation an audio owner compares against its own. A change is a
@@ -240,10 +246,14 @@ impl Default for InstanceSettings {
 }
 struct Restore(Arc<Shared>, InstanceSettings);
 impl Prepared for Restore {
+    /// What the project holds, stored without the edit setters' `changed()`:
+    /// opening a project is not a change to it.
     fn commit(self: Box<Self>) {
-        self.0.set_retune(self.1.retune);
-        self.0.set_show(self.1.show);
-        self.0.set_name(self.1.name);
+        let Self(shared, settings) = *self;
+        shared.store_retune(settings.retune);
+        shared.show.store(settings.show, Ordering::Release);
+        shared.store_name(settings.name);
+        shared.publish_controls();
     }
 }
 
