@@ -37,3 +37,11 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 - Bitwig's own undo no longer covers edits of the tuning axes, now that they are plugin settings rather than host parameters; no editor undo replaces it. Accepted by Yan. #1756, #1795
 - A project saved while the axes were host parameters opens at fresh axes, keeping its links and policy, with one Console line saying so; there is no compatibility shim. Accepted by Yan. #1756, #1795
 - After lost host input, editor tuning edits and Learn keep applying until the host resets; the fault notice says so, and a take recorded after the loss still refuses its configuration. Accepted by Yan. #1795
+
+## 2026-11-15 (drift audit, #1798)
+
+- Harmonigraph's own input runs at zero delay: its correction comes back within the same callback, so the one buffer it held its own track's MIDI, which the host never compensated, goes. #1798 H1, #1797
+- A note whose correction came back too late is drawn and recorded at the raw pitch it sounded at, not the correction the Hub chose, so a take and its export match the soundtrack. #1798 H2
+- The missed-corrections count and its red name last until Reset all voices or a delay change rather than clearing at every Stop; the other fault notices still clear at every cut. #1798 H3, #1797
+- Tuning Delay becomes a saved Tune setting rather than a host parameter, as #1756 did for the axes; it leaves Bitwig's parameter list and existing Tunes reopen at 1×. #1798 H4, #1797
+- Cut, as cases only review supposed: the Reset generation and its pause hook (Reset comes only from Harmonigraph's own row), Learn's "held state is incomplete" state, rows taking turns past 2,048 records in one callback, and the count of Note-Offs a stacked cut could not queue. #1798 H5, #1797
