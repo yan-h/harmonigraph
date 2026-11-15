@@ -32,7 +32,7 @@ use harmonigraph_render::{SpectrogramGrid, SpectrogramSlab, SpectrogramVertex};
 use super::axes::{Axes, PitchScale, TimeAxis};
 use super::roll::{self, RollDrawOptions, RollSource, Width};
 use super::Navigation;
-use crate::spectrogram::{pane_ppp, pitch_pixels, read_of, PaneView, LIVE_SLAB_CAP, RING_SLOTS};
+use crate::spectrogram::{pane_ppp, pitch_pixels, read_of, PaneView, LIVE_SLAB_CAP};
 use crate::tape::spectrogram::{silent_slab, COLUMN_SECONDS, LEVELS};
 use crate::tape::{Speed, TapeRequest, TapeView};
 use crate::{theme, PictureState};
@@ -323,12 +323,21 @@ fn marks(painter: &egui::Painter, axes: &Axes, view: &TapeView, axis: &SongAxis)
     }
 }
 
-/// Slots in the ring the GPU keeps a run of `slabs` in: the live heatmap's
-/// one size ([`RING_SLOTS`]), which holds any run a region's pixels cut, so a
-/// pan or a zoom never reallocates it. Only the coarsest level's run can be
-/// longer, a song past about 2.3 hours zoomed fully out, and grows by doubling.
-fn ring_slots(slabs: usize) -> u32 {
-    (if slabs <= RING_SLOTS { RING_SLOTS } else { slabs.next_power_of_two() }) as u32
+/// The slabs of `width` seconds a window from `from` to `to` reads: a slab
+/// either side, so the filtered edge of the run is past the region.
+fn run_keys(from: f64, to: f64, width: f64) -> std::ops::RangeInclusive<i64> {
+    (from / width).floor() as i64 - 1..=(to / width).ceil() as i64 + 1
+}
+
+/// Slots in the ring the GPU keeps the run in, sized from the window's width
+/// in slabs and not from the run's length. A pan leaves the width alone,
+/// where the run cuts one slab more or fewer as the window moves against the
+/// slab grid, and a change of ring size reallocates the grid and re-sends all
+/// of it: sized from the run, a drag at an unlucky zoom paid that at every
+/// slab it crossed. The eight spare slots hold the slab either side and both
+/// ends rounding outward.
+fn ring_slots(window_slabs: f64) -> u32 {
+    ((window_slabs.ceil() as usize).next_power_of_two() + 8) as u32
 }
 
 /// The tape's spectrogram over the far region, at the pyramid level whose
@@ -349,13 +358,12 @@ fn heatmap(
     let level =
         (0..LEVELS).find(|&n| window.seconds() / slab_seconds(n) <= target).unwrap_or(LEVELS - 1);
     let width = slab_seconds(level);
-    // A slab either side, so the filtered edge of the run is past the region.
-    let first = (window.from / width).floor() as i64 - 1;
-    let last = (window.to / width).ceil() as i64 + 1;
+    let keys = run_keys(window.from, window.to, width);
+    let first = *keys.start();
     let tape = &state.runtime.tape.spectrogram;
     let run: Arc<[SpectrogramSlab]> =
-        (first..=last).map(|j| tape.slab(level, j).cloned().unwrap_or_else(silent_slab)).collect();
-    let capacity = ring_slots(run.len());
+        keys.map(|j| tape.slab(level, j).cloned().unwrap_or_else(silent_slab)).collect();
+    let capacity = ring_slots(window.seconds() / width);
     // Column k is centred on its own song seconds, so slab j of any level
     // starts half a column before column `j * 2^level`.
     let origin = first as f64 * width - 0.5 * COLUMN_SECONDS;
@@ -801,18 +809,22 @@ fn held(view: &TapeView, at: f64) -> String {
 mod tests {
     use super::*;
 
-    /// A change of ring size reallocates the GPU's grid and re-sends every
-    /// slab in it. A window cuts one slab more or fewer as a pan moves it
-    /// against the slab grid, so no two neighbouring run lengths a region can
-    /// cut may differ in size, or a drag pays that at each slab it crosses.
+    /// The ring is sized from the window's width, which a pan cannot change,
+    /// so it has to hold the run wherever the pan puts the window: at every
+    /// width up to and past the most a region's pixels cut, in slabs of a few
+    /// lengths, with both ends on and off the slab grid.
     #[test]
-    fn a_pan_never_resizes_the_heatmaps_ring() {
-        // One slab either side of the window, and its two ends rounded outward.
-        let longest = LIVE_SLAB_CAP as usize + 4;
-        for slabs in 3..longest {
-            assert_eq!(ring_slots(slabs), ring_slots(slabs + 1), "{slabs} slabs");
+    fn the_heatmaps_ring_holds_the_run_wherever_a_pan_puts_the_window() {
+        for slabs in 1..=LIVE_SLAB_CAP as u32 + 100 {
+            for width in [1.0, 0.021_333_333_333_333_333, 0.341_33] {
+                for (short, pan) in [(0.0, 0.0), (0.0, 0.3), (0.5, 0.9), (0.999, 0.999)] {
+                    let (from, span) = (pan * width, (f64::from(slabs) - short) * width);
+                    let run = run_keys(from, from + span, width);
+                    let cut = (run.end() - run.start() + 1) as u32;
+                    assert!(cut <= ring_slots(span / width), "{slabs} slabs of {width} s at {pan}");
+                }
+            }
         }
-        assert!(ring_slots(longest) as usize >= longest);
     }
 
     #[test]
