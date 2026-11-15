@@ -549,12 +549,12 @@ Shrinking a buffer does not make its overflow path unreachable.
 | Constant | Value | Resource |
 |---|---:|---|
 | `TUNERS` | 16 | Tune rows in the session; the Hub's own track is a seventeenth source with a reserved index |
-| `HELD_PER_SOURCE` / `HELD_SESSION` | 64 / 256 | Held voices per source / in the adaptive context across the session. Learn is not capped by the second: it hears every voice every row holds |
+| `HELD_PER_SOURCE` | 64 | Held voices per source. Learn hears every voice every row holds |
 | `PENDING_EVENTS` | 8,192 | Retained events in one Tune's delay line, including unrelated MIDI |
 | `CAPTURE_RING` / `REPLY_RING` | 1,024 / 1,024 | The two rings per row. A full capture ring costs that note its correction |
 | `BATCH_EVENTS` | 2,048 | Records one ordering pass holds across every source, and deltas one callback may publish |
 | `CUT_EVENTS` | 112 | Note-offs and pedal neutralizations one cut may owe: every held voice, plus sustain, sostenuto and legato on each of sixteen channels. What does not fit is reported as a dropped event |
-| `MAX_CONTEXT` / `MAX_MEMORY` / `MAX_CANDIDATES` | 256 / 24 / 4,096 | Held policy references, released contributions and the complete local candidate union |
+| `MAX_CONTEXT` / `MAX_MEMORY` / `MAX_CANDIDATES` | 256 / 24 / 4,096 | Held voices the Hub's context holds across every source, released contributions and the complete local candidate union |
 | `PUBLICATION_RING` / `SNAPSHOT_SLOTS` / `GAP_RESERVE` | 4,096 / 20 / 1 | Publication items, snapshot frames, and the one cell an outage may always spend |
 | `EMIT_PER_CALLBACK` | 512 | Accepted output-event budget, checked between queued inputs. A note and its tuning expression complete together, even when the pair crosses the budget |
 | `DELAY_MULTIPLIER_MAX` | 16 | Steps on the Tuning delay parameter |

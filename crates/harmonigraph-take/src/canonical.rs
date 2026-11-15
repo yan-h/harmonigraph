@@ -1,6 +1,5 @@
 //! Version 4 canonical records. Serde stays out of the musical core; complete
 //! frames are validated before either live replay or full-roll reconstruction.
-use harmonigraph_core::canonical::PitchProvenance;
 use harmonigraph_core::canonical::*;
 use harmonigraph_core::{Expressions, LatticePos, NoteTracker, SourceId};
 use serde::{Deserialize, Serialize};

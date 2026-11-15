@@ -257,7 +257,6 @@ mod tests {
 
     #[test]
     fn accepted_off_after_gap_is_retained_without_a_held_baseline() {
-        use harmonigraph_core::canonical::PitchProvenance;
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::{NoteEvent, SourceId};
         use harmonigraph_take::CanonicalRecord;
@@ -360,7 +359,6 @@ mod tests {
 
     #[test]
     fn canonical_serialization_has_one_history_at_every_replay_cadence() {
-        use harmonigraph_core::canonical::PitchProvenance;
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
         use harmonigraph_take::CanonicalRecord;

@@ -23,7 +23,7 @@ use super::event::Event;
 use super::session::{self, HubEnds, Reply};
 use super::state::{Stamp, State};
 use super::tune::Tune;
-use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_SESSION, LEARN_CLASSES, TUNERS};
+use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, LEARN_CLASSES, TUNERS};
 
 type Owner = crate::configuration::Owner;
 
@@ -145,7 +145,7 @@ impl Default for Sequencer {
             engine: Default::default(),
             engine_revision: 0,
             map: None,
-            context: vec![None; HELD_SESSION].into_boxed_slice(),
+            context: vec![None; policy::MAX_CONTEXT].into_boxed_slice(),
             memory: policy::Memory::default(),
             config: harmonigraph_core::configuration::ConfigReducer::default().resolved().into(),
             scratch: Box::default(),
@@ -201,7 +201,7 @@ impl Sequencer {
     }
     /// The context one assignment sees (`policy::context`), into `working`.
     fn fill(&mut self, rate: f64) {
-        let mut held = [policy::Held::default(); HELD_SESSION];
+        let mut held = [policy::Held::default(); policy::MAX_CONTEXT];
         let mut count = 0;
         for voice in self.context.iter().flatten() {
             held[count] = policy::Held {
