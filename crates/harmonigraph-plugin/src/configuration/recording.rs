@@ -77,7 +77,9 @@ impl Recording {
     /// Close the open run where this owner last registered: a run is open
     /// only after a sub-block that recorded, which registered.
     fn end_run(&self, recorder: &mut Recorder) {
-        recorder.run_end(self.presentation.at(self.registered_through));
+        if recorder.recording() {
+            recorder.run_end(self.presentation.at(self.registered_through));
+        }
     }
 
     /// A host reset cuts the clock. A run open across it ends here and opens
