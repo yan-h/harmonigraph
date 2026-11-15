@@ -61,7 +61,7 @@ impl Worker {
         let recorder = worker.recorder.as_mut().unwrap();
         assert_no_alloc(|| {
             assert!(recorder.is_armed());
-            recorder.run(1, 1, Default::default(), 0.25, 0.0);
+            recorder.run(0.0, 0.25);
             recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
         });
         fence.worker_after_empty.enabled.store(false, Ordering::Release);
@@ -89,23 +89,19 @@ impl Worker {
         wait_for("Stop processed", || self.fence.worker_stop_processed.load(Ordering::Acquire));
     }
 
-    /// What the configuration owner and the Hub publish once a stopped take's
-    /// next callback observes the disarm: both lanes close the one epoch
-    /// these fixtures record.
+    /// What the owner and the Hub publish once a stopped take's next callback
+    /// observes the disarm: the run's end, and a frontier past it.
     fn close(&mut self) {
         let recorder = self.recorder.as_mut().unwrap();
         assert!(!recorder.is_armed());
-        recorder.configuration_epoch_complete(1);
-        recorder.source_epoch_complete(1, 1.0);
+        recorder.run_end(1.0);
+        recorder.publish_frontier(1.0);
     }
 
     fn assert_failed(&self, cause: &str) {
-        wait_for("failure accounted", || {
-            self.fence.worker_failure_accounted.load(Ordering::Acquire)
-        });
         let control = self.control.as_ref().unwrap();
+        wait_for("failure on the status line", || control.status().contains(cause));
         assert!(self.fence.failed.load(Ordering::Acquire));
-        assert!(self.fence.worker_failure_accounted.load(Ordering::Acquire));
         assert!(!self.fence.finishing.load(Ordering::Acquire));
         assert!(!self.recorder.as_ref().unwrap().wants_audio());
         let message = control.status();
@@ -172,7 +168,7 @@ fn queued_stop_preserves_the_audio_prefix() {
     let recorder = worker.recorder.as_mut().unwrap();
     assert_no_alloc(|| {
         assert!(recorder.is_armed());
-        recorder.run(1, 1, Default::default(), 0.25, 0.0);
+        recorder.run(0.0, 0.25);
         recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
     });
     worker.control.as_ref().unwrap().stop();
@@ -180,32 +176,6 @@ fn queued_stop_preserves_the_audio_prefix() {
     worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
     wait_for("queued Stop", || worker.control.as_ref().unwrap().last_take().is_some());
     assert_eq!(wav_samples(&worker.wav()), PREFIX);
-}
-
-#[test]
-fn queued_rollover_keeps_each_pass_audio() {
-    let mut worker = Worker::queued("queued-rollover");
-    let first = worker.wav();
-    let recorder = worker.recorder.as_mut().unwrap();
-    assert_no_alloc(|| {
-        assert!(recorder.is_armed());
-        assert!(recorder.observe_transport(1.0, true, 64.0 / 48_000.0).is_some());
-        recorder.run(1, 1, Default::default(), 1.0, 0.0);
-        recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
-        assert!(recorder.is_armed());
-        assert!(recorder.observe_transport(0.0, true, 64.0 / 48_000.0).is_some());
-        recorder.run_end(1, Default::default());
-        recorder.run(1, 2, Default::default(), 0.0, 0.0);
-        recorder.audio(&mut [0.75, -0.75].into_iter(), 2);
-    });
-    worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
-    let second =
-        first.with_file_name(format!("{}-2.wav", first.file_stem().unwrap().to_str().unwrap()));
-    wait_for("loop audio written", || std::fs::metadata(&second).is_ok_and(|m| m.len() >= 52));
-    worker.control.as_ref().unwrap().stop();
-    worker.close();
-    wait_for("rollover Stop", || worker.control.as_ref().unwrap().last_take().is_some());
-    assert_eq!((wav_samples(&first), wav_samples(&second)), (PREFIX.to_vec(), vec![0.75, -0.75]));
 }
 
 #[test]
@@ -263,7 +233,7 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         assert_no_alloc(|| {
             assert!(recorder.is_armed());
             assert!(recorder.observe_transport(0.0, true, duration).is_some());
-            recorder.run(1, 1, Default::default(), 0.0, 0.0);
+            recorder.run(0.0, 0.0);
             recorder.audio(&mut std::iter::repeat_n(0.25, 128), 128);
             if paused {
                 assert!(!recorder.observe_transport(0.0, false, duration).is_some());
@@ -280,7 +250,7 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         }
         assert_no_alloc(|| {
             assert!(!recorder.observe_transport(10.0, true, duration).is_some());
-            assert!(recorder.armed_pass().is_none());
+            assert!(!recorder.armed());
         });
         assert!(control.has_ended());
         assert_eq!(control.latches.end(), Some(End::ForwardSeek));
@@ -305,7 +275,6 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         assert!(take.incomplete.is_none());
         assert_eq!(take.audio_start, Some(0.0));
         assert_eq!(wav_samples(&take_path.with_extension("wav")), vec![0.25; 128]);
-        assert_eq!(take.passes, [1], "one pass, ended at the seek");
         // Successful completion releases the ordinary Start gate. A gesture
         // must not leave a permanent failure requiring the plugin to reload.
         control.start(48_000.0, String::new());
@@ -313,13 +282,11 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         assert!(!control.has_ended());
         let recorder = worker.recorder.as_mut().unwrap();
         assert!(recorder.is_armed());
-        let (next, _) = recorder.armed_pass().unwrap();
         testing::set_renderer_program(control, worker.directory.join("no-such-renderer"));
         control.stop();
         assert_no_alloc(|| {
             assert!(!recorder.is_armed());
-            recorder.configuration_epoch_complete(next);
-            recorder.source_epoch_complete(next, 12.0);
+            recorder.publish_frontier(12.0);
         });
         wait_for("second take finalized", || !worker.fence.finishing.load(Ordering::Acquire));
         assert!(!worker.fence.failed.load(Ordering::Acquire));

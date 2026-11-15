@@ -49,10 +49,8 @@ pub struct Capture {
 impl Capture {
     pub fn display_events(&mut self) -> Vec<harmonigraph_take::CanonicalRecord> {
         let mut events = Vec::new();
-        self.displayed.drain(|delivery, _| {
-            if let publication::Delivery::Event(event) = delivery {
-                events.push(harmonigraph_take::CanonicalRecord::from_event(event));
-            }
+        self.displayed.drain(|event| {
+            events.push(harmonigraph_take::CanonicalRecord::from_event(event));
             true
         });
         events
@@ -67,11 +65,9 @@ impl Capture {
             &harmonigraph_core::NoteTracker,
         ),
     ) -> usize {
-        self.displayed.drain(|delivery, _| {
-            if let publication::Delivery::Event(event) = delivery {
-                watch(&event, tracker);
-                tracker.handle_canonical(event).unwrap();
-            }
+        self.displayed.drain(|event| {
+            watch(&event, tracker);
+            tracker.handle_canonical(event).unwrap();
             true
         })
     }
@@ -81,17 +77,11 @@ impl Capture {
     pub fn boundary_entered(&self) -> bool {
         self.fence.boundary_pause.entered.load(Ordering::Acquire)
     }
-    pub fn pause_producer_close(&self, enabled: bool) {
-        self.fence.producer_close_pause.enabled.store(enabled, Ordering::Release);
-    }
-    pub fn producer_close_entered(&self) -> bool {
-        self.fence.producer_close_pause.entered.load(Ordering::Acquire)
-    }
     pub fn arm(&self) {
         self.fence.arm(self.fence.epoch() + 1);
     }
     /// What the GUI publishes for every trigger but On disarm: a rewind after
-    /// forward motion ends the take rather than splitting it.
+    /// forward motion ends the take rather than recording on.
     pub fn end_at_rewind(&self, on: bool) {
         self.end_at_rewind.store(on, Ordering::Relaxed);
     }
@@ -104,29 +94,11 @@ impl Capture {
     }
     pub fn drain_canonical(&mut self) -> Vec<harmonigraph_take::CanonicalRecord> {
         let mut events = Vec::new();
-        self.publications.drain(|delivery, _| {
-            if let publication::Delivery::Event(event) = delivery {
-                events.push(harmonigraph_take::CanonicalRecord::from_event(event));
-            }
+        self.publications.drain(|event| {
+            events.push(harmonigraph_take::CanonicalRecord::from_event(event));
             true
         });
         events
-    }
-    /// The take lane in order, as the writer meets it: each history item by the
-    /// epoch it was played armed under (`None` disarmed), and each closure by
-    /// the epoch it closes.
-    pub fn drain_take_order(&mut self) -> Vec<(&'static str, Option<u64>)> {
-        let mut order = Vec::new();
-        self.publications.drain(|delivery, span| {
-            order.push(match delivery {
-                publication::Delivery::Event(_) => {
-                    ("history", span.intent.is_armed().then(|| span.intent.epoch()))
-                }
-                publication::Delivery::EpochComplete(epoch) => ("epoch complete", Some(epoch)),
-            });
-            true
-        });
-        order
     }
     pub fn drain_audio(&mut self) -> Vec<f32> {
         let mut samples = Vec::new();
@@ -142,9 +114,10 @@ impl Capture {
 ///
 /// **The pump this drives is the worker's own** ([`Pump::pass`]), not a copy of
 /// it: what the writer thread does between polling for a command and sleeping
-/// is exactly what [`FileWriter::drain`] does here. The only halves it does not
-/// have are the ones a command channel owns — no `Start` opens its file (the
-/// constructor does), and nothing can disconnect it.
+/// is exactly what [`FileWriter::drain`] does here, behind the frontier the
+/// recorder last published. The only halves it does not have are the ones a
+/// command channel owns — no `Start` opens its file (the constructor does),
+/// and nothing can disconnect it.
 pub struct FileWriter {
     pump: Pump,
     fence: Arc<RecordFence>,
@@ -152,21 +125,12 @@ pub struct FileWriter {
     pub finished: Option<std::path::PathBuf>,
 }
 impl FileWriter {
-    /// The pass whose WAV the take is writing.
-    pub fn pass(&self) -> Option<u32> {
-        self.pump.open.as_ref().map(|o| o.pass)
-    }
     /// Opens `path` and the WAV beside it, as every `Start` does.
     pub fn new(capture: &Capture, path: std::path::PathBuf) -> Self {
         let status = Mutex::new(String::new());
-        let open = Recording::create(
-            harmonigraph_take::Header::default(),
-            path,
-            capture.fence.epoch(),
-            FIXTURE_SPEC,
-            &status,
-        )
-        .unwrap();
+        let open =
+            Recording::create(harmonigraph_take::Header::default(), path, FIXTURE_SPEC, &status)
+                .unwrap();
         assert!(open.audio.is_some(), "{}", status.lock());
         Self {
             pump: Pump { latches: capture.latches.clone(), open: Some(open), ..Default::default() },
@@ -181,16 +145,20 @@ impl FileWriter {
     ///
     /// [`drain`]: Self::drain
     pub fn stop(&mut self) {
-        self.pump.pending_stop = Some(self.fence.epoch());
+        self.pump.pending_stop = true;
     }
     pub fn drain(&mut self, capture: &mut Capture) {
+        let stop_counted = self.pump.pending_stop;
+        let frontier = self.fence.frontier();
+        let counts = (capture._records.slots(), capture.publications.ready());
         let pumped = self.pump.pass(
             &mut capture._records,
             &mut capture.audio,
             &mut capture.publications,
+            counts,
+            (frontier, stop_counted),
             &self.status,
             &self.fence,
-            false,
         );
         if let Some((path, _)) = pumped.finished {
             self.finished = Some(path);

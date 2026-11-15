@@ -1,11 +1,11 @@
-//! Writer-thread command pump, ordered lane draining, and file finalization.
+//! Writer-thread command pump, lane draining, and file finalization.
 //! File-backed fixtures live below this boundary so recording state stays
 //! private.
 //!
-//! One armed take is one file, holding every pass, with one WAV per pass beside
-//! it. The writer decides nothing about passes or song time: it writes what the
-//! audio thread stamped, drops what was played disarmed, and rotates the WAV at
-//! a `Run` that opens a new pass. The reader chooses the rest (#1760).
+//! One armed take is one file and one WAV beside it. The writer decides
+//! nothing about song time: it writes every item that arrives while a file is
+//! open, and the reader drops what falls in no run. It seals a stopped take
+//! once the audio thread's frontier has passed the take's last `RunEnd`.
 
 use super::*;
 #[cfg(test)]
@@ -34,7 +34,7 @@ fn worker_in(directory: &std::path::Path) -> (Recorder, Control) {
 #[cfg(any(test, feature = "test-support"))]
 const FIXTURE_SPEC: AudioSpec = AudioSpec { sample_rate: 48_000.0, channels: TAKE_CHANNELS as u16 };
 
-/// How long the writer thread sleeps when it finds the ring empty.
+/// How long the writer thread sleeps when it finds the rings empty.
 const DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(20);
 
 /// Build the ring and start the writer thread. Called once, from the
@@ -63,70 +63,51 @@ pub fn channel() -> (Recorder, Control) {
     let _ = std::thread::Builder::new().name("harmonigraph-take-writer".into()).spawn(move || {
         let mut pump = Pump { latches: thread_latches, ..Default::default() };
         loop {
+            // The frontier first, then what the rings hold, then the commands:
+            // an item counted here was pushed before the frontier that covers
+            // it, and an armed one after the `Start` this poll will see. A
+            // Stop seals only once it was pending before the count, which so
+            // holds everything pushed before it.
+            let stop_counted = pump.pending_stop;
+            let frontier = thread_fence.frontier();
+            let counts = (consumer.slots(), publications.ready());
             #[cfg(feature = "test-support")]
             thread_fence.worker_before_commands.reach();
-            let mut waiting_for_start = false;
             #[cfg(all(test, feature = "test-support"))]
             let mut processed_stop = false;
             if !pump.disconnected {
-            match orders.try_recv() {
-                Ok(Command::Start(epoch, header, path, spec)) => {
-                    if pump.pending_stop.is_some() {
-                        thread_fence.fail();
-                    } else {
-                        pump.open =
-                            Recording::create(*header, path, epoch, spec, &thread_status);
+                match orders.try_recv() {
+                    Ok(Command::Start(header, path, spec)) => {
+                        pump.start(*header, path, spec, &thread_status, &thread_fence);
+                    }
+                    Ok(Command::Stop) => {
+                        #[cfg(all(test, feature = "test-support"))]
+                        {
+                            processed_stop = true;
+                        }
+                        pump.pending_stop = true;
+                        if !thread_fence.failed.load(Ordering::Acquire) {
+                            *thread_status.lock() = FINISHING.into();
+                        }
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {
                         #[cfg(feature = "test-support")]
-                        if let Some(audio) = pump.open.as_mut().and_then(|o| o.audio.as_mut())
                         {
-                            if let Some(limit) = *thread_fence.test_wav_limit.lock() {
-                                audio.limit_frames_for_test(limit);
-                            }
-                            if thread_fence.test_wav_finish_failure.load(Ordering::Acquire) {
-                                audio.fail_finish_for_test();
-                            }
-                        }
-                        if pump.open.is_none()
-                        {
-                            thread_fence.fail_with_message(thread_status.lock().clone());
-                            pump.failure.account(&mut pump.open, epoch, &thread_status, Some(&thread_fence), harmonigraph_take::IncompleteRecord {
-                                reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
-                                ..Default::default()
-                            });
+                            thread_fence.worker_empty_visits.fetch_add(1, Ordering::AcqRel);
+                            thread_fence.worker_after_empty.reach();
                         }
                     }
+                    Err(mpsc::TryRecvError::Disconnected) => pump.disconnected = true,
                 }
-                Ok(Command::Stop(epoch)) => {
-                    #[cfg(all(test, feature = "test-support"))]
-                    { processed_stop = true; }
-                    pump.pending_stop = Some(epoch);
-                    if !pump.failure.contains(epoch) {
-                        *thread_status.lock() = FINISHING.into();
-                    }
-                }
-                Err(mpsc::TryRecvError::Empty) => {
-                    // Start can arrive just after this poll and arm a producer
-                    // before the drains below. With no file yet, its records
-                    // and audio still belong to that pending command. An
-                    // accounted failure can dispose its remaining entries.
-                    waiting_for_start = pump.open.is_none()
-                        && !pump.failure.contains(thread_fence.epoch());
-                    #[cfg(feature = "test-support")]
-                    {
-                        thread_fence.worker_empty_visits.fetch_add(1, Ordering::AcqRel);
-                        thread_fence.worker_after_empty.reach();
-                    }
-                }
-                Err(mpsc::TryRecvError::Disconnected) => pump.disconnected = true,
-            }
             }
             let pumped = pump.pass(
                 &mut consumer,
                 &mut audio_consumer,
                 &mut publications,
+                counts,
+                (frontier, stop_counted),
                 &thread_status,
                 &thread_fence,
-                waiting_for_start,
             );
             // Before the shutdown check below, so a take sealed by the same
             // pass that observed the disconnect is published and rendered
@@ -171,27 +152,22 @@ pub fn channel() -> (Recorder, Control) {
     (recorder, control)
 }
 
-/// Everything one writer carries between passes of the pump: the file it is
-/// writing, the two lanes' accounting, and the two terminal conditions.
+/// Everything one writer carries between passes of the pump.
 ///
-/// One struct rather than five locals because [`Pump::pass`] is driven from two
-/// places — the thread above and `testing::FileWriter`, which stands in for it
-/// in every dependent crate's take coverage. Those two used to hold their own
-/// copies of the drain/failure/stop sequence, and the copies had drifted apart:
-/// the test one accounted a failure with no file open, never cleared
-/// `pending_stop` or `finishing`, and had no disconnect tier at all, so four
-/// files across two crates were testing a pump the plugin does not run (#895).
+/// One struct because [`Pump::pass`] is driven from two places — the thread
+/// above and `testing::FileWriter`, which stands in for it in every dependent
+/// crate's take coverage — and the two must run the same pump (#895).
 #[derive(Default)]
 struct Pump {
     /// Shared with the producer: Stop intent can precede the admitted
     /// callback's completion, so the ready prefix owns the final reason.
     latches: Arc<TakeLatches>,
     open: Option<Recording>,
-    fanout: CanonicalFanout,
-    failure: FailureAccount,
-    /// The epoch of the Stop whose prefix is not closed yet.
-    pending_stop: Option<u64>,
-    /// No further command can arrive, so unresolved ownership is lost.
+    /// Non-RT deduplication only. These cuts authorize no musical reclamation.
+    order: harmonigraph_core::canonical::CanonicalOrder,
+    /// A Stop arrived and the take it stops is not sealed yet.
+    pending_stop: bool,
+    /// No further command can arrive.
     disconnected: bool,
 }
 
@@ -208,145 +184,147 @@ struct Pumped {
 }
 
 impl Pump {
-    /// One cross-lane pass: drain the record ring and the publication lane in
-    /// order, flush the open take file, then resolve failure, a ready
-    /// Stop, and shutdown. A killed process can lose the buffered part of this
-    /// pass; an idle worker checks for the next batch every 20 ms.
-    ///
-    /// `waiting_for_start` retains this iteration's records for a `Start` that
-    /// may already have armed a producer — only the command half above can
-    /// observe that, so it is passed in rather than recomputed here.
+    /// Open the take a `Start` names. A take still open is one whose Stop
+    /// never sealed it, which `Control::start` refuses to let happen.
+    fn start(
+        &mut self,
+        header: harmonigraph_take::Header,
+        path: std::path::PathBuf,
+        spec: AudioSpec,
+        status: &Mutex<String>,
+        fence: &RecordFence,
+    ) {
+        if self.open.is_some() {
+            fence.fail();
+            return;
+        }
+        self.order = Default::default();
+        self.open = Recording::create(header, path, spec, status);
+        #[cfg(feature = "test-support")]
+        if let Some(audio) = self.open.as_mut().and_then(|o| o.audio.as_mut()) {
+            if let Some(limit) = *fence.test_wav_limit.lock() {
+                audio.limit_frames_for_test(limit);
+            }
+            if fence.test_wav_finish_failure.load(Ordering::Acquire) {
+                audio.fail_finish_for_test();
+            }
+        }
+        if self.open.is_none() {
+            fence.fail_with_message(status.lock().clone());
+        }
+    }
+
+    /// One pass: drain what the rings held when it was counted into the open
+    /// take, flush it, mark a failure, and seal a stopped take once the
+    /// frontier has passed its last `RunEnd`. An idle worker checks again
+    /// every 20 ms.
+    #[allow(clippy::too_many_arguments)]
     fn pass(
         &mut self,
         consumer: &mut rtrb::Consumer<Entry>,
         audio: &mut rtrb::Consumer<f32>,
         publications: &mut publication::Consumer,
+        (records, items): (usize, usize),
+        (frontier, stop_counted): (f64, bool),
         status: &Mutex<String>,
         fence: &RecordFence,
-        waiting_for_start: bool,
     ) -> Pumped {
         let mut pumped = Pumped::default();
-        let had_records = !waiting_for_start
-            && drain_records(
-                consumer,
-                Some(audio),
-                &mut self.open,
-                status,
-                Some(fence),
-                &self.failure,
-            );
-        let had_publications =
-            self.fanout.drain(publications, &mut self.open, fence, &self.failure) != 0;
+        let had_records = drain_records(consumer, records, audio, &mut self.open, status, fence);
+        let had_publications = self.drain_publications(publications, items, fence) != 0;
         pumped.worked = had_records || had_publications;
+        let failed = fence.failed.load(Ordering::Acquire);
         if let Some(recording) = self.open.as_mut() {
-            if let Err(error) = recording.flush() {
+            if failed && !recording.marked {
+                *status.lock() = CONFIGURATION_FAILURE.into();
+            }
+            let marked = if failed { recording.mark_incomplete() } else { Ok(()) };
+            let written = marked.and_then(|()| recording.flush());
+            if let Err(error) = written {
                 fence.fail_with_message(error.to_string());
             }
         }
         #[cfg(feature = "test-support")]
-        if self.pending_stop.is_some() {
+        if self.pending_stop {
             fence.worker_after_stop.reach();
         }
-
-        // Failure is pending until both lanes, including the independent
-        // loss snapshot, have delivered their retained prefix to its file.
-        if fence.failed.load(Ordering::Acquire) {
-            #[cfg(feature = "test-support")]
-            fence.worker_before_retirement_check.reach();
-            // Acquire the terminal ownership release BEFORE checking the
-            // lanes again; the release may follow their last publication.
-            if !fence.retirement_hold.load(Ordering::Acquire)
-                && !self.failure.contains(fence.epoch())
-                && consumer.is_empty()
-                && publications.settled()
-                && (self.open.is_some() || self.disconnected)
-            {
-                self.failure.account(
-                    &mut self.open,
-                    fence.epoch(),
-                    status,
-                    Some(fence),
-                    harmonigraph_take::IncompleteRecord {
-                        reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
-                        ..Default::default()
-                    },
-                );
-            }
-            if self.failure.contains(fence.epoch()) {
-                // Stop may arrive after the files were already accounted.
-                // It is disposed here on the worker, unrendered, and the
-                // failure status remains visible without another callback.
-                self.pending_stop = None;
-                fence.finishing.store(false, Ordering::Release);
-                #[cfg(all(test, feature = "test-support"))]
-                fence.worker_failure_accounted.store(true, Ordering::Release);
-            }
-        } else if self
-            .pending_stop
-            .is_some_and(|epoch| self.open.as_ref().is_some_and(|o| o.ready(epoch)))
-        {
-            self.pending_stop = None;
-            if let Some(path) = finish_ready(&mut self.open, fence.epoch(), fence) {
-                self.fanout.sealed = fence.epoch();
-                // All admitted callbacks have retired. Capture their final
-                // reason before releasing finishing: the next Start clears
-                // these shared latches, but this render must retain its own.
-                let notice = (self.latches.end() == Some(End::ForwardSeek))
-                    .then_some("take ended before a forward transport seek");
-                // Publish before Start is permitted again. An error may
-                // already own the line; completion only retires its own
-                // finishing message, under the same lock as a refused Start.
-                // Nothing replaces it: the take's export job names the video
-                // from here on, beside Open video folder.
-                let mut status = status.lock();
-                if matches!(status.as_str(), FINISHING | FINISHING_PREVIOUS) {
-                    status.clear();
+        let sealable = self.open.as_ref().is_none_or(|o| o.sealable(frontier));
+        if self.pending_stop && stop_counted && (sealable || self.disconnected) {
+            self.pending_stop = false;
+            let finished = self.open.take().map(|mut open| (open.finish(), open.marked));
+            let failed = fence.failed.load(Ordering::Acquire);
+            match finished {
+                Some((Ok(path), false)) if !failed => {
+                    // Capture the end reason before releasing finishing: the
+                    // next Start clears these shared latches, but this render
+                    // must keep its own.
+                    let notice = (self.latches.end() == Some(End::ForwardSeek))
+                        .then_some("take ended before a forward transport seek");
+                    let mut status = status.lock();
+                    if matches!(status.as_str(), FINISHING | FINISHING_PREVIOUS) {
+                        status.clear();
+                    }
+                    pumped.finished = Some((path, notice));
                 }
-                fence.finishing.store(false, Ordering::Release);
-                pumped.finished = Some((path, notice));
+                Some((Err(error), _)) => fence.fail_with_message(error.to_string()),
+                _ => {}
             }
+            if fence.failed.load(Ordering::Acquire) {
+                *status.lock() = CONFIGURATION_FAILURE.into();
+            }
+            fence.finishing.store(false, Ordering::Release);
         }
-        // Shutdown uses the same cross-lane pump and honors a now-ready
-        // Stop first. Only ownership still unresolved after that is lost.
-        if self.disconnected
-            && !fence.retirement_hold.load(Ordering::Acquire)
-            && consumer.is_empty()
-        {
-            if publications.settled() {
-                if self.open.is_some() {
-                    fence.fail();
-                    self.failure.account(
-                        &mut self.open,
-                        fence.epoch(),
-                        status,
-                        Some(fence),
-                        harmonigraph_take::IncompleteRecord {
-                            reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
-                            ..Default::default()
-                        },
-                    );
-                    *status.lock() =
-                        "recording incomplete: producer disconnected before finalization".into();
-                }
-                pumped.shutdown = true;
-                return pumped;
-            }
-            if self.fanout.waiting_file {
-                // No remaining command can materialize this addressed file.
+        if self.disconnected && consumer.is_empty() && publications.ready() == 0 {
+            // Nothing can stop or feed the take still open: it was destroyed
+            // mid-take, which the recorder's drop has already failed.
+            if let Some(mut open) = self.open.take() {
                 fence.fail();
-                self.failure.account(
-                    &mut self.open,
-                    fence.epoch(),
-                    status,
-                    Some(fence),
-                    harmonigraph_take::IncompleteRecord {
-                        reason: harmonigraph_take::canonical::GapReasonRecord::InvalidRecord,
-                        ..Default::default()
-                    },
-                );
+                let _ = open.mark_incomplete();
+                let _ = open.finish();
+                *status.lock() =
+                    "recording incomplete: producer disconnected before finalization".into();
             }
+            pumped.shutdown = true;
         }
         pumped
+    }
+
+    /// The take's half of publication: every item drained goes to the open
+    /// take, if any. The display has its own lane (#712 §4).
+    fn drain_publications(
+        &mut self,
+        publications: &mut publication::Consumer,
+        items: usize,
+        fence: &RecordFence,
+    ) -> usize {
+        use harmonigraph_core::canonical::CanonicalEvent;
+        let (order, open) = (&mut self.order, &mut self.open);
+        publications.drain_up_to(items, |event| {
+            let accepted = match event {
+                CanonicalEvent::Note(delta) => order.note(delta.event.source, delta.sequence),
+                CanonicalEvent::Baseline(frame) => {
+                    order.baseline(frame.source, frame.id, frame.output_cut)
+                }
+                CanonicalEvent::Gap(_) => Ok(true),
+            };
+            match accepted {
+                Ok(false) => return true,
+                Err(_) => {
+                    if open.is_some() {
+                        fence.fail();
+                    }
+                    return true;
+                }
+                Ok(true) => {}
+            }
+            // A gap is NOT a failure (#712): the reader warns if it overlaps
+            // a run.
+            let record = harmonigraph_take::CanonicalRecord::from_event(event);
+            if open.as_mut().is_some_and(|open| open.writer.canonical(record).is_err()) {
+                fence.fail();
+            }
+            true
+        })
     }
 }
 
@@ -357,160 +335,17 @@ impl Pump {
 #[doc(hidden)]
 pub mod testing;
 
-/// Worker-owned recording disposal proof. A producer's failure flag requests
-/// failure; only flushed file markers (or a reported I/O refusal) account it.
-/// Recording cannot restart after failure until reload, so one exact epoch
-/// suffices. This state grants no source-journal acknowledgement.
-#[derive(Default)]
-struct FailureAccount(std::cell::Cell<Option<u64>>);
-
-impl FailureAccount {
-    fn contains(&self, epoch: u64) -> bool {
-        self.0.get() == Some(epoch)
-    }
-
-    fn account(
-        &self,
-        open: &mut Option<Recording>,
-        epoch: u64,
-        status: &Mutex<String>,
-        fence: Option<&RecordFence>,
-        record: harmonigraph_take::IncompleteRecord,
-    ) {
-        *status.lock() = CONFIGURATION_FAILURE.into();
-        if let Some(recording) = open.as_mut() {
-            if let Err(error) = recording.mark_incomplete(record) {
-                if let Some(fence) = fence {
-                    fence.fail_with_message(error.to_string());
-                } else {
-                    *status.lock() = format!("recording incomplete: {error}");
-                }
-            }
-        }
-        self.0.set(Some(epoch));
-        *open = None;
-    }
-}
-
-/// The take's half of publication. The display has its own lane straight off
-/// the audio thread (#712 §4), so nothing here forwards, repairs or requests
-/// anything on its behalf.
-#[derive(Default)]
-struct CanonicalFanout {
-    waiting_file: bool,
-    /// The last epoch whose take this writer sealed. Its closures proved every
-    /// recorded input published, so what still arrives for it played in no run
-    /// (a pause's late input) and is dropped rather than held.
-    sealed: u64,
-    /// Non-RT deduplication only. These cuts authorize no musical reclamation.
-    order: harmonigraph_core::canonical::CanonicalOrder,
-}
-
-impl CanonicalFanout {
-    fn drain(
-        &mut self,
-        publications: &mut publication::Consumer,
-        open: &mut Option<Recording>,
-        fence: &RecordFence,
-        failure: &FailureAccount,
-    ) -> usize {
-        use harmonigraph_core::canonical::CanonicalEvent;
-        self.waiting_file = false;
-        publications.drain(|delivery, span| {
-            // The take a record or a closure belongs to. History played
-            // disarmed belongs to none, and a loss that only covered such
-            // history touched no recorded run: it is dropped, warning nothing.
-            let epoch = match delivery {
-                publication::Delivery::EpochComplete(epoch) => Some(epoch),
-                publication::Delivery::Event(_) => {
-                    span.intent.is_armed().then(|| span.intent.epoch())
-                }
-            };
-            if epoch.is_some_and(|epoch| epoch <= self.sealed) {
-                return true;
-            }
-            // An armed item can reach this lane before its `Start` command
-            // has opened the take it belongs to. Retain its whole payload.
-            if epoch.is_some_and(|epoch| {
-                !failure.contains(epoch) && open.as_ref().is_none_or(|o| o.epoch < epoch)
-            }) {
-                self.waiting_file = true;
-                return false;
-            }
-            let recording = epoch.and_then(|epoch| open.as_mut().filter(|o| o.epoch == epoch));
-            match delivery {
-                publication::Delivery::EpochComplete(epoch) => {
-                    if failure.contains(epoch) {
-                        return true;
-                    }
-                    match recording {
-                        Some(recording) => recording.source_closed = true,
-                        None => fence.fail(),
-                    }
-                }
-                publication::Delivery::Event(event) => {
-                    let accepted = match event {
-                        CanonicalEvent::Note(delta) => {
-                            self.order.note(delta.event.source, delta.sequence)
-                        }
-                        CanonicalEvent::Baseline(frame) => {
-                            self.order.baseline(frame.source, frame.id, frame.output_cut)
-                        }
-                        CanonicalEvent::Gap(_) => Ok(true),
-                    };
-                    match accepted {
-                        Ok(false) => return true,
-                        Err(_) => {
-                            fence.fail();
-                            return true;
-                        }
-                        Ok(true) => {}
-                    }
-                    if epoch.is_none_or(|epoch| failure.contains(epoch)) {
-                        return true;
-                    }
-                    // A delta's own timing is its stamp; a snapshot and a gap
-                    // carry theirs beside the payload. A gap is NOT a failure
-                    // (#712): it marks the passes it touched, and the export
-                    // warns.
-                    let mut record = harmonigraph_take::CanonicalRecord::from_event(event);
-                    match &mut record {
-                        harmonigraph_take::CanonicalRecord::Baseline(frame) => {
-                            frame.at = Some(stamp(span.first));
-                        }
-                        harmonigraph_take::CanonicalRecord::Gap(gap) => {
-                            gap.inputs = Some([stamp(span.first), stamp(span.last)]);
-                        }
-                        _ => {}
-                    }
-                    // A take sealed before this arrived, or the write failed.
-                    if recording.is_none_or(|recording| recording.writer.canonical(record).is_err())
-                    {
-                        fence.fail();
-                    }
-                }
-            }
-            true
-        })
-    }
-}
-
-/// One armed take: its file, the WAV of the pass being recorded, and how far
-/// the three closers have got.
+/// One armed take: its file, its WAV, and where its runs stand.
 struct Recording {
-    epoch: u64,
     path: std::path::PathBuf,
     writer: harmonigraph_take::Writer,
-    spec: AudioSpec,
-    /// The pass whose WAV is open: 1 until a `Run` opens another.
-    pass: u32,
-    /// That WAV's file name, which every `Run` of the pass names.
+    /// The WAV's file name, which the header names.
     audio_file: Option<String>,
     /// The WAV itself, until it is finalized or a write to it fails.
     audio: Option<harmonigraph_take::WavWriter>,
-    producer_closed: bool,
-    configuration_closed: bool,
-    source_closed: bool,
+    /// Whether a `Run` is open, and where the last one ended.
+    run_open: bool,
+    last_end: Option<f64>,
     /// Whether the file already holds its failure marker.
     marked: bool,
     /// Test hook: fail the marker write once.
@@ -519,12 +354,11 @@ struct Recording {
 }
 
 impl Recording {
-    /// Acquire the take file and pass 1's WAV beside it, both exclusively, so
-    /// a take never writes into another recorder's files or an orphan.
+    /// Acquire the take file and its WAV beside it, both exclusively, so a
+    /// take never writes into another recorder's files or an orphan.
     fn create(
-        header: harmonigraph_take::Header,
+        mut header: harmonigraph_take::Header,
         base: std::path::PathBuf,
-        epoch: u64,
         spec: AudioSpec,
         status: &Mutex<String>,
     ) -> Option<Recording> {
@@ -568,6 +402,7 @@ impl Recording {
                     spec.sample_rate,
                     spec.channels,
                 )?;
+                header.audio_file = wav.file_name().and_then(|n| n.to_str()).map(str::to_owned);
                 let writer = harmonigraph_take::Writer::from_file(take_file, &header)?;
                 Ok::<_, std::io::Error>((writer, audio))
             })();
@@ -591,16 +426,12 @@ impl Recording {
                 *message = format!("recording to {}", path.display());
             }
             return Some(Recording {
-                epoch,
-                audio_file: wav.file_name().and_then(|n| n.to_str()).map(str::to_owned),
+                audio_file: header.audio_file.clone(),
                 path,
                 writer,
-                spec,
-                pass: 1,
                 audio: Some(audio),
-                producer_closed: false,
-                configuration_closed: false,
-                source_closed: false,
+                run_open: false,
+                last_end: None,
                 marked: false,
                 #[cfg(all(test, feature = "test-support"))]
                 fail_marker: false,
@@ -650,54 +481,18 @@ impl Recording {
         })
     }
 
-    /// Open a run. Its pass's audio goes to that pass's own WAV, which the
-    /// first run of the pass opens beside the take: `take-…-2.wav` for pass 2,
-    /// suffixed again if that name is taken.
-    fn run(&mut self, mut record: harmonigraph_take::RunRecord) -> std::io::Result<()> {
-        if record.pass != self.pass {
-            self.finish_audio()?;
-            let stem = self.path.file_stem().and_then(|s| s.to_str()).unwrap_or("take");
-            let name = format!("{stem}-{}", record.pass);
-            let (wav, file) = (0u64..)
-                .map(|suffix| {
-                    let name = if suffix == 0 { name.clone() } else { format!("{name}_{suffix}") };
-                    self.path.with_file_name(format!("{name}.wav"))
-                })
-                .find_map(|wav| match std::fs::File::create_new(&wav) {
-                    Ok(file) => Some(Ok((wav, file))),
-                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => None,
-                    Err(err) => Some(Err(std::io::Error::new(
-                        err.kind(),
-                        format!("cannot create {}: {err}", wav.display()),
-                    ))),
-                })
-                .expect("an unbounded suffix finds a free name")?;
-            let audio = harmonigraph_take::WavWriter::from_file(
-                file,
-                self.spec.sample_rate,
-                self.spec.channels,
-            )?;
-            self.pass = record.pass;
-            self.audio_file = wav.file_name().and_then(|n| n.to_str()).map(str::to_owned);
-            self.audio = Some(audio);
-        }
-        record.audio_file = self.audio_file.clone();
-        self.writer.write(&harmonigraph_take::Record::Run(record))
+    /// Whether a stopped take may seal behind `frontier`: no run is open, and
+    /// everything that sounds before the last one ended is published.
+    fn sealable(&self, frontier: f64) -> bool {
+        !self.run_open && self.last_end.is_none_or(|end| end <= frontier)
     }
 
-    fn ready(&self, epoch: u64) -> bool {
-        self.epoch == epoch
-            && self.producer_closed
-            && self.configuration_closed
-            && self.source_closed
-    }
-
-    /// Write the take's failure marker, once. It names no pass, so it marks
-    /// every pass of the take (#1766).
-    fn mark_incomplete(
-        &mut self,
-        record: harmonigraph_take::IncompleteRecord,
-    ) -> std::io::Result<()> {
+    /// Write the take's failure marker, once.
+    fn mark_incomplete(&mut self) -> std::io::Result<()> {
+        let record = harmonigraph_take::IncompleteRecord {
+            reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
+            ..Default::default()
+        };
         if self.marked {
             return Ok(());
         }
@@ -733,78 +528,28 @@ impl Recording {
     }
 }
 
-/// A stamp as the take file writes it.
-fn stamp(at: publication::Stamp) -> harmonigraph_take::StampRecord {
-    harmonigraph_take::StampRecord::new(at.clock, at.input)
-}
-
-fn finish_ready(
-    open: &mut Option<Recording>,
-    epoch: u64,
-    fence: &RecordFence,
-) -> Option<std::path::PathBuf> {
-    if !open.as_ref().is_some_and(|o| o.ready(epoch)) {
-        return None;
-    }
-    finish_open(open, fence)
-}
-
-fn finish_open(open: &mut Option<Recording>, fence: &RecordFence) -> Option<std::path::PathBuf> {
-    match open.as_mut()?.finish() {
-        Ok(path) => {
-            *open = None;
-            Some(path)
-        }
-        Err(error) => {
-            fence.fail_with_message(error.to_string());
-            None
-        }
-    }
-}
-
-/// Drain the record ring into the open take: runs, configuration, parameters,
-/// audio and the producer's and configuration's closures, in ring order.
+/// Drain `count` entries of the record ring into the open take: runs,
+/// configuration, parameters and audio, in ring order. With no take open they
+/// are consumed and dropped, audio included, so the two rings stay in step.
 fn drain_records(
     consumer: &mut rtrb::Consumer<Entry>,
-    mut audio: Option<&mut rtrb::Consumer<f32>>,
+    count: usize,
+    audio: &mut rtrb::Consumer<f32>,
     open: &mut Option<Recording>,
     status: &Mutex<String>,
-    fence: Option<&RecordFence>,
-    failure: &FailureAccount,
+    fence: &RecordFence,
 ) -> bool {
-    // Start is a separate off-thread message, published before arming. Retain
-    // records if this iteration observed the ring before that command.
-    if open.is_none() && fence.is_some_and(|f| !failure.contains(f.epoch())) {
-        return false;
-    }
-    let fail = || {
-        if let Some(fence) = fence {
-            fence.fail();
-        }
-        *status.lock() = "recording incomplete: a record reached no open take".into();
-    };
     let io_failure = |error: std::io::Error| {
-        if let Some(fence) = fence {
-            fence.fail_with_message(error.to_string());
-        }
+        fence.fail_with_message(error.to_string());
         *status.lock() = error.to_string();
     };
     let mut any = false;
-    while let Ok(entry) = consumer.pop() {
+    for _ in 0..count {
+        let Ok(entry) = consumer.pop() else { break };
         any = true;
         if let Entry::AudioSamples(count) = entry {
-            // Consumed even with nothing to write it to, so the audio ring
-            // stays in step with this one after an accounted failure.
-            let Some(consumer) = audio.as_deref_mut() else {
-                fail();
-                continue;
-            };
-            if consumer.slots() < count {
-                fail();
-                continue;
-            }
-            let Ok(chunk) = consumer.read_chunk(count) else {
-                fail();
+            let Ok(chunk) = audio.read_chunk(count) else {
+                fence.fail();
                 continue;
             };
             if let Some(recording) = open.as_mut() {
@@ -816,46 +561,22 @@ fn drain_records(
             chunk.commit_all();
             continue;
         }
-        if fence.is_some_and(|f| failure.contains(f.epoch())) {
-            continue;
-        }
-        let epoch = match entry {
-            Entry::Run { epoch, .. }
-            | Entry::RunEnd { epoch, .. }
-            | Entry::Configuration { epoch, .. }
-            | Entry::ProducerClosed(epoch)
-            | Entry::ConfigurationEpochComplete(epoch) => Some(epoch),
-            Entry::Param { .. } | Entry::AudioSamples(_) => None,
-        };
-        let Some(recording) = open.as_mut().filter(|o| epoch.is_none_or(|epoch| o.epoch == epoch))
-        else {
-            if epoch.is_some() {
-                fail();
-            }
-            continue;
-        };
+        let Some(recording) = open.as_mut() else { continue };
         let written = match entry {
-            Entry::Run { pass, at, song, presentation, .. } => {
-                recording.run(harmonigraph_take::RunRecord {
-                    pass,
-                    at: stamp(at),
-                    song,
-                    presentation,
-                    audio_file: None,
-                })
+            Entry::Run { at, song } => {
+                recording.run_open = true;
+                recording.writer.write(&harmonigraph_take::Record::Run(
+                    harmonigraph_take::RunRecord { at, song },
+                ))
             }
-            Entry::RunEnd { at, .. } => recording.writer.write(&harmonigraph_take::Record::RunEnd(
-                harmonigraph_take::RunEndRecord { at: stamp(at) },
-            )),
-            Entry::Configuration { config, .. } => recording.writer.configuration(config),
-            Entry::ProducerClosed(_) => {
-                recording.producer_closed = true;
-                Ok(())
+            Entry::RunEnd { at } => {
+                recording.run_open = false;
+                recording.last_end = Some(at);
+                recording.writer.write(&harmonigraph_take::Record::RunEnd(
+                    harmonigraph_take::RunEndRecord { at },
+                ))
             }
-            Entry::ConfigurationEpochComplete(_) => {
-                recording.configuration_closed = true;
-                Ok(())
-            }
+            Entry::Configuration(config) => recording.writer.configuration(config),
             Entry::Param { t, key, value } => {
                 recording.writer.param(harmonigraph_take::ParamRecord {
                     t,

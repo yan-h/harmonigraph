@@ -1,6 +1,4 @@
-//! The arm intent and the completion fences. Stop is intent; the producer and
-//! any optional configuration/source owners must close their prefixes before
-//! finalization.
+//! The arm intent, the frontier the writer seals behind, and the failure flag.
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// What the GUI last asked of the audio thread: arm a take epoch, or disarm it.
@@ -38,11 +36,11 @@ pub(crate) struct RecordFence {
     pub failed: AtomicBool,
     /// First worker-side failure detail. Audio-thread failures only set `failed`.
     pub failure_message: parking_lot::Mutex<Option<String>>,
-    pub configuration_closed: AtomicU64,
-    pub source_closed: AtomicU64,
-    /// The joined plugin still owns actual source history not yet published.
-    /// Only its retired publication owner may release this failure-close hold.
-    pub retirement_hold: AtomicBool,
+    /// Presentation time (as `f64` bits) before which the audio thread has
+    /// published everything that sounds: stored once per callback, after it
+    /// publishes. The writer seals a stopped take once this passes its last
+    /// `RunEnd`.
+    frontier: AtomicU64,
     #[cfg(feature = "test-support")]
     pub worker_after_empty: TestPause,
     #[cfg(feature = "test-support")]
@@ -55,10 +53,6 @@ pub(crate) struct RecordFence {
     pub worker_finished: AtomicBool,
     #[cfg(feature = "test-support")]
     pub worker_empty_visits: AtomicU64,
-    #[cfg(feature = "test-support")]
-    pub worker_before_retirement_check: TestPause,
-    #[cfg(all(test, feature = "test-support"))]
-    pub worker_failure_accounted: AtomicBool,
     #[cfg(all(test, feature = "test-support"))]
     pub worker_stop_processed: AtomicBool,
     #[cfg(feature = "test-support")]
@@ -69,8 +63,6 @@ pub(crate) struct RecordFence {
     pub test_wav_finish_failure: AtomicBool,
     #[cfg(feature = "test-support")]
     pub boundary_pause: TestPause,
-    #[cfg(feature = "test-support")]
-    pub producer_close_pause: TestPause,
 }
 
 #[cfg(feature = "test-support")]
@@ -106,6 +98,13 @@ impl RecordFence {
     }
     pub fn fail(&self) {
         self.failed.store(true, Ordering::Release);
+    }
+    pub fn publish_frontier(&self, time: f64) {
+        self.frontier.store(time.to_bits(), Ordering::Release);
+    }
+    /// The last frontier stored, zero before any.
+    pub fn frontier(&self) -> f64 {
+        f64::from_bits(self.frontier.load(Ordering::Acquire))
     }
 
     /// Worker only: preserve the concrete cause across GUI status refreshes.
