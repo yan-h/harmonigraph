@@ -43,18 +43,13 @@ impl Stretched {
         let preroll = 3 * lead;
         let mut input = vec![0.0; preroll as usize * channels];
         let from = start + lead - preroll;
-        // Only the unbroken coverage that holds the spot, silence around it:
-        // a recording on the far side of a gap is no part of this cue, and
-        // the stretcher's window would smear it into the first frames heard.
-        let mut first = store.holding(start).map_or(start, |chunk| chunk.start);
-        while first > from {
-            let Some(chunk) = store.holding(first - 1) else { break };
-            first = chunk.start;
-        }
-        let first = first.max(from);
-        let covered = store.render(first, &mut input[(first - from) as usize * channels..]);
-        // Coverage that ends inside the look-ahead ends the cue there.
-        let end = covered.ended.then_some(first + covered.frames as i64);
+        // Before the spot, the song as recorded, gaps silent; from it, the
+        // coverage that holds it, which ends the cue where it ends inside the
+        // look-ahead.
+        let (before, after) = input.split_at_mut((start - from) as usize * channels);
+        store.read(from, before);
+        let covered = store.render(start, after);
+        let end = covered.ended.then_some(start + covered.frames as i64);
         stretch.seek(&input, speed);
         Stretched {
             stretch,
@@ -183,10 +178,10 @@ mod tests {
     }
 
     /// Coverage that ends 20 ms after the spot, inside the stretcher's
-    /// look-ahead, ends the cue there, and coverage that starts at the spot
-    /// begins it from silence: neither neighbour across a gap is read in.
+    /// look-ahead, ends the cue there, and the recording past the gap is not
+    /// read in.
     #[test]
-    fn a_cue_hears_only_the_coverage_that_holds_its_spot() {
+    fn a_cue_ends_with_the_coverage_that_holds_its_spot() {
         let chunk = |start: f64, end: f64, pass, value: f32| {
             let (start, end) = ((start * RATE as f64) as i64, (end * RATE as f64) as i64);
             let stamp = Stamp { pass, when: std::time::Instant::now(), pass_start: start };
@@ -200,10 +195,5 @@ mod tests {
         let cut = heard(&store, 0.5);
         assert!((cut.len() as f64 / f64::from(RATE) - 0.04).abs() < 1e-3, "{}", cut.len());
         assert!(loudest(&cut) < 1e-3, "the recording past the gap leaked in");
-
-        let mut store = Store::new(RATE, 1);
-        store.insert(chunk(0.0, 0.99, 1, 0.9));
-        store.insert(chunk(1.0, 2.0, 2, 0.0));
-        assert!(loudest(&heard(&store, 0.5)) < 1e-3, "the recording before the gap leaked in");
     }
 }
