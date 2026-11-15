@@ -64,7 +64,8 @@ a take whose recorded look names a dropped variant refuses to export, and the of
 
 A host restore installs into the editor state through `install_document`, and a host save serializes out of it through `save_answer`;
 nothing reads a saved document back, so a window opening or closing installs nothing (#1757).
-The one exception to "a save stores what the editor holds": an editor never opened since it was fresh or restored empty saves `""`, so its project keeps following the fresh look of whichever build loads it.
+The one exception to "a save stores what the editor holds": an editor that has installed nothing and opened no window since it was fresh saves `""`, so its project keeps following the fresh look of whichever build loads it.
+An empty restore installs the fresh look and leaves that flag as it was.
 A restore therefore resets what it installs and nothing else, and a window session resets only what belongs to the window (`start_window_session`).
 A new persisted field needs no step at either:
 `UiPersist::capture` and `apply_persist` are its two sites.
