@@ -297,8 +297,9 @@ Once assigned, the adaptive correction and harmonic onset reference stay fixed t
 Already sounding notes keep that choice while later player expression and MIDI channel bend can still move their emitted pitch.
 
 A recognized temperament link takes effect with the edit that made it.
-Learn results become effective at the next block boundary, without reducing musical observation to the notes held at a block end:
-Learn reads the whole block's evidence and applies at the block's start after the walk, so it rides the next adoption rather than entering the history out of order.
+Learn results become effective at the next block boundary:
+Learn reads the Hub's rows as the Hub's callback start leaves them, which is everything sequenced through the previous callback,
+and applies at the block's start after the walk, so it rides the next adoption rather than entering the history out of order.
 Display and recording use the configuration actually adopted, and take replay reuses the recorded pitches, times and configurations instead of re-running inference.
 
 Ordinary tuning edits do not reset the plugin or change its reported latency.
