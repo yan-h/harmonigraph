@@ -316,37 +316,6 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
     assert_eq!(found, ids.len());
 }
 
-/// Adaptive reads the configuration timeline Lattice Map does: a fifth
-/// automated at sample 10 tunes the attack at 10, and not the one at 9.
-/// Goes with #1756, which retires host automation of the axes.
-#[test]
-fn adaptive_assigns_from_the_tuning_in_force_at_the_attacks_own_sample() {
-    use nice_plug::prelude::Param;
-    let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
-    hub.activate();
-    install(&hub);
-    hub.run(0, vec![parameter("tuning-engine", 1.0, 0)], None);
-    let axis_value = hub_wrapper(&hub)
-        .test_inspect_plugin(|plugin| plugin.params.three.preview_normalized(699.0));
-    hub.run(
-        512,
-        vec![
-            note(1, 0, 67, 9, true),
-            note(2, 0, 79, 10, true),
-            parameter("tuning-three", f64::from(axis_value), 10),
-        ],
-        None,
-    );
-    let just = harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST);
-    let before = voice(&hub, crate::tuning::DIRECT, 67);
-    let after = voice(&hub, crate::tuning::DIRECT, 79);
-    assert_eq!(before.attack_node, Some(LatticePos::new(1, 0, 0)));
-    assert_eq!(after.attack_node, Some(LatticePos::new(1, 0, 0)));
-    assert!((before.frozen_offset_microcents - i64::from(just - 700_000_000)).abs() < 100);
-    assert!((after.frozen_offset_microcents + 1_000_000).abs() < 100);
-}
-
 /// A record the Hub holds over is assigned under the configuration in force
 /// at its own sample, not the one the next block adopts: an editor edit of the
 /// fifth landing between the two leaves the held-over G on the old fifth,
