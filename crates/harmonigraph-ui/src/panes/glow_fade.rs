@@ -56,7 +56,7 @@ const GONE: f32 = 0.002;
 
 /// Half a step of the 8-bit target the glow is composited into: a change in
 /// the light smaller than this does not move a pixel, so a fade that has fallen
-/// under it has nothing left to repaint for ([`GlowFade::moving`]).
+/// under it has nothing left to repaint for ([`GlowFade::step`]).
 ///
 /// Measured as level times the Background glow gain, which is the shader's
 /// peak without its `GLOW_BASE` of 0.8, so the window errs toward staying
@@ -81,12 +81,6 @@ pub struct GlowFade {
     frame: u64,
     /// The clock the levels stand at, or `None` before the first step.
     at: Option<f64>,
-    /// Whether, as of the last step, some light still moves a pixel on its
-    /// own: the larger of its level's distance above its target and its
-    /// colour's still to move ([`easing`]), times the glow gain, is over
-    /// [`VISIBLE_STEP`]. What the frame loop stays awake for (`releasing` in
-    /// `lib.rs`), asked on the step's own draw.
-    moving: bool,
 }
 
 /// One node's light: where its level and what it is made of have got to.
@@ -95,9 +89,10 @@ struct Lit {
     level: f32,
     light: GlowLight,
     /// The node's [`glow_target`](harmonigraph_scene::NodeInstance::glow_target)
-    /// as of this step, for the pass after the walk over the nodes that says
-    /// which lights to keep. Written on every step that sees the node, and a
-    /// light not seen is dropped, so it never outlives the step it was read on.
+    /// as of the last step that saw it: what the pass after the walk keeps
+    /// lights by, and what [`GlowFade::clear_released`] reads between steps.
+    /// Written on every step that sees the node, and a light a step does not
+    /// see is dropped.
     target: f32,
     /// The step this node was last seen on (see [`GlowFade::frame`]).
     seen: u64,
@@ -147,8 +142,8 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize,
         return;
     }
     let glow = state.surfaces.glow_fade.entry(surface).or_default();
-    glow.step(scene, &state.appearance.view, now);
-    state.surfaces.moving_this_frame.releasing(glow.moving);
+    let moving = glow.step(scene, &state.appearance.view, now);
+    state.surfaces.moving_this_frame.releasing(moving);
 }
 
 /// The attack and release coefficients for a step from `previous` to `now`:
@@ -184,7 +179,13 @@ impl GlowFade {
     /// A new light starts dark when attack is nonzero, including the first
     /// frame, and its level attacks from there; what it is made of starts as
     /// the node's reading whole, since a light at no level shows none of it.
-    fn step(&mut self, scene: &mut Scene, view: &ViewConfig, now: f64) {
+    ///
+    /// Answers whether some light still moves a pixel on its own after the
+    /// step: the larger of its level's distance above its target and its
+    /// colour's still to move ([`easing`]), times the glow gain, is over
+    /// [`VISIBLE_STEP`]. What the frame loop stays awake for (`releasing` in
+    /// `lib.rs`), asked on the step's own draw.
+    fn step(&mut self, scene: &mut Scene, view: &ViewConfig, now: f64) -> bool {
         let (up, down) = coefficients(now, self.at, view.glow_attack, view.glow_release);
         let seed = if view.glow_attack <= 0.0 {
             1.0
@@ -202,7 +203,7 @@ impl GlowFade {
         // settled at its reading is still, so a mark held with no key down
         // never keeps the loop awake.
         let strength = scene.view.glow_strength;
-        self.moving = false;
+        let mut moving = false;
         // The lights this frame sees already, which are what a new one counts
         // against the most a surface lights at once: one carried for a node
         // that has left the window is dropped below, and holds no place.
@@ -241,8 +242,6 @@ impl GlowFade {
                     let mix = if rising { up } else { down };
                     lit.level += (target - lit.level) * mix;
                     lit.light.step(&goal, mix);
-                    let seen = (lit.level - target).max(easing(lit.level, &lit.light, &goal));
-                    self.moving |= seen * strength > VISIBLE_STEP;
                     // The end of a light, said exactly rather than approached:
                     // a level that only gets small keeps an entry and an
                     // instance for the rest of the session. Only where there
@@ -251,6 +250,10 @@ impl GlowFade {
                     if lit.level < GONE && target <= 0.0 {
                         lit.level = 0.0;
                     }
+                    // Asked after the end is said, so the step that ends a
+                    // light asks for no frame after it.
+                    let seen = (lit.level - target).max(easing(lit.level, &lit.light, &goal));
+                    moving |= seen * strength > VISIBLE_STEP;
                     GlowStep { level: lit.level, light: lit.light }
                 }
                 // A node with no light yet and none arriving is left alone, and
@@ -272,6 +275,7 @@ impl GlowFade {
         // there is nothing to carry and nothing to draw.
         let frame = self.frame;
         self.nodes.retain(|_, lit| lit.seen == frame && (lit.level > 0.0 || lit.target > 0.0));
+        moving
     }
 
     /// Drop the lights whose node had nothing left to light it as of the last
@@ -532,8 +536,8 @@ mod tests {
         let mut fade = GlowFade::default();
         let mut level_at = |state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
-            fade.step(&mut scene, &state.appearance.view, now);
-            (node_at(&scene, LatticePos::ORIGIN).glow.level, fade.moving)
+            let moving = fade.step(&mut scene, &state.appearance.view, now);
+            (node_at(&scene, LatticePos::ORIGIN).glow.level, moving)
         };
         let (held, settled_awake) = level_at(&state, 0.5);
         assert!(!settled_awake, "a settled light asked to be repainted");
@@ -570,14 +574,14 @@ mod tests {
         let mut fade = GlowFade::default();
         let mut step = |state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
-            fade.step(&mut scene, &state.appearance.view, now);
+            let moving = fade.step(&mut scene, &state.appearance.view, now);
             let node = node_at(&scene, LatticePos::ORIGIN);
             let lit = fade.nodes[&LatticePos::ORIGIN];
             (
                 node.glow,
                 node.glow_light(),
                 easing(lit.level, &lit.light, &node.glow_light()),
-                fade.moving,
+                moving,
             )
         };
         let mut held = None;
@@ -659,13 +663,39 @@ mod tests {
         let mut fade = GlowFade::default();
         for now in [0.0, 0.5, 1.0] {
             let mut scene = scene_at(&state, now);
-            fade.step(&mut scene, &state.appearance.view, now);
-            assert!(!fade.moving, "a held light asked to be repainted at {now}");
+            let moving = fade.step(&mut scene, &state.appearance.view, now);
+            assert!(!moving, "a held light asked to be repainted at {now}");
         }
         state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let mut scene = scene_at(&state, 1.5);
-        fade.step(&mut scene, &state.appearance.view, 1.5);
-        assert!(fade.moving, "a released light is falling");
+        let moving = fade.step(&mut scene, &state.appearance.view, 1.5);
+        assert!(moving, "a released light is falling");
+    }
+
+    /// The step that ends a light, snapping it to exactly 0, asks for no
+    /// repaint of its own: at a gain of 1 the level just under `GONE` is still
+    /// over a visible step, and the frame after it would draw nothing new.
+    #[test]
+    fn the_step_that_ends_a_light_asks_for_no_repaint() {
+        let mut state = lit(0.0, 0.25);
+        state.appearance.view.glow_strength = 1.0;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let mut fade = GlowFade::default();
+        let mut scene = scene_at(&state, 0.0);
+        fade.step(&mut scene, &state.appearance.view, 0.0);
+        assert!(node_at(&scene, LatticePos::ORIGIN).glow.level > 0.0, "the note lit nothing");
+        state.runtime.tracker.handle_event(NoteEvent::off(0.0, SourceId::DIRECT, 0, 60));
+        let mut now = 0.0;
+        loop {
+            now += 1.0 / 144.0;
+            let mut scene = scene_at(&state, now);
+            let moving = fade.step(&mut scene, &state.appearance.view, now);
+            if node_at(&scene, LatticePos::ORIGIN).glow.level == 0.0 {
+                assert!(!moving, "the light ended at {now:.3}s and asked for another frame");
+                break;
+            }
+            assert!(now < 10.0, "the light never ended");
+        }
     }
 
     /// Clear display history keeps a held note's halo where it is and drops a
