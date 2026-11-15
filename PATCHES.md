@@ -28,21 +28,23 @@ These two diagnostics are now the whole reason the crate stays vendored.
 The context publishes the initial latency while activation is still in progress, as the CLAP latency contract requires, instead of requesting a redundant restart from an already-active wrapper.
 This fixes the Bitwig offline-export stall measured by #615;
 the exported-factory fixture checks one initial latency notification and no restart for a nonzero delay.
-- **Production CLAP ownership** (`src/wrapper/clap/{configuration,configuration_adapter,context,input_adapter,performance,performance_adapter,setup,wrapper}.rs`, `src/wrapper/clap.rs`, `src/wrapper/{state,util}.rs` and `src/wrapper.rs`): the effective-configuration and performance opt-ins share one host-input pool.
-The ordinary processing walker, configuration owner and performance owner each keep a progress cursor over it, and an owned cell is reused only once all three have passed.
+- **Production CLAP ownership** (`src/wrapper/clap/{configuration,configuration_adapter,context,input_adapter,performance,performance_adapter,setup,wrapper}.rs`, `src/wrapper/clap.rs`, `src/wrapper/{state,util}.rs` and `src/wrapper.rs`): the configuration-walk and performance opt-ins share one host-input pool.
+The ordinary processing walker, configuration walk and performance owner each keep a progress cursor over it, and an owned cell is reused only once all three have passed.
+The configuration walk hands the plugin each callback's boundary (`begin`, where it applies its queued edits and fixes the block's configuration), every owned input in order with its exact sample (`observe`), the end of the walk (`group_end`), the actual sub-blocks (`segment`) and lost input (`fault`).
+The plugin owns its configuration and how edits reach it;
+the owned-parameter mailbox that once carried the tuning axes as host parameters, with its notification, gesture, modulation and restore layers, is gone (#1756).
 The retain-and-acknowledge contract that used to sit on top of that pool is gone;
 a plugin that cannot take an input reports a bounded failure instead of holding it.
 The output side allocates nothing: `Output` is a borrow of the host's `clap_output_events` whose one `push(value, time)` calls `try_push` and returns the host's answer, which is what an opted-in plugin cannot get from legacy `send_event`.
 Keeping the list sorted is the caller's contract rather than the wrapper's:
-both halves raise a per-callback high-water mark, the plugin never reads it, and the wrapper floors its own parameter and configuration output at it so that traffic follows the plugin's rather than interleaving with it by time.
+both halves raise a per-callback high-water mark, the plugin never reads it, and the wrapper puts its own parameter output at it so that traffic follows the plugin's rather than interleaving with it by time.
 `PARAMETER_OUTPUT_ATTEMPTS` bounds that half at 512 pushes per callback; the plugin bounds its own.
-Prepared nonautomatable setup validates and reserves capacity before parameter/state mutation, then adopts at the enclosing input boundary.
+A prepared setup validates before the parameters and fields restore, and commits after; what it commits the plugin adopts at its next input boundary.
+A setup's `service` reports what it changed as `Serviced`: a modified project is marked dirty, and changed parameter values or text are rescanned, each only when reported, so a setting kept outside the parameter list marks the project without a rescan, and a parameter whose label names one (the Lattice Map's label names its map) rescans its text.
 Main-thread registration, setup service and joined lifecycle hooks keep registry locking and endpoint reclamation outside audio callbacks.
-Joined wrapper destruction takes the configuration runtime and calls `clap_configuration_retire(unfinished)` before `clap_main_destroy` transfers recording ownership.
-The hook disposes unfinished input, command and learning ownership without claiming successful application or advancing a sample prefix;
+Joined wrapper destruction runs `clap_main_destroy`, which transfers recording ownership;
 the plugin retains original recording routes until joined actual output has a publication disposition.
-Tune's performance-only opt-in creates no configuration mailbox.
-Together these seams expose the parameter hash, reject legacy sends from a performance owner, serialize the overlaid configuration state, and select the measured allocator used by the fixtures.
+Together these seams expose the parameter hash, reject legacy sends from a performance owner, serialize the setup's saved fields beside the parameters, and select the measured allocator used by the fixtures.
 `allocation_probe.rs` instruments the actual debug allocation guard on the calling thread, including deallocation, for exported-factory ownership fixtures;
 it does not measure RSS or other threads.
 See [the adaptive tuning design](docs/adaptive-tuning.md#the-framework-boundary) for what the plugin asks of this boundary.

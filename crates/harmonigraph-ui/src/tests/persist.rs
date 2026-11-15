@@ -1833,7 +1833,11 @@ fn loading_a_project_leaves_the_links_with_the_configuration() {
     assert!(!saved.contains("meantone") && !saved.contains("marvel"), "{saved}");
     let unlinked = harmonigraph_core::Tempered { syntonic: false, septimal_kleisma: false };
     assert_ne!(state.picture.runtime.tempered, unlinked, "the fixture must change the links");
-    state.picture.runtime.tempered = unlinked;
+    for comma in harmonigraph_core::Comma::ALL {
+        let tuning = state.picture.runtime.tuning;
+        let edit = harmonigraph_core::configuration::ConfigEdit::temper(comma, false, tuning);
+        state.picture.runtime.edit_tuning(&Defaults, edit);
+    }
     begin_frame(&mut state.picture, &Defaults, 0.0);
     assert_eq!(state.picture.runtime.tempered, unlinked);
 

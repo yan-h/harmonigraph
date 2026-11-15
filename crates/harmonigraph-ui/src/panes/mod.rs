@@ -1,7 +1,7 @@
 //! Dock panes and their shared controls. The picture settings pages are composed in [`pages`].
 
-use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{RangeBar, ValueBar};
+use crate::params::ParamBackend;
+use crate::widgets::RangeBar;
 use crate::PictureState;
 
 pub mod color;
@@ -325,7 +325,7 @@ pub(super) fn learn_pulse(now: f64) -> f32 {
 }
 
 /// The view a fresh state opens on, built once: where a double-click on one
-/// of its bars puts the value back (see [`ValueBar::default_value`]).
+/// of its bars puts the value back (see [`crate::widgets::ValueBar::default_value`]).
 pub(super) fn fresh_view() -> &'static harmonigraph_scene::ViewConfig {
     static FRESH: std::sync::LazyLock<harmonigraph_scene::ViewConfig> =
         std::sync::LazyLock::new(Default::default);
@@ -337,37 +337,6 @@ pub(super) fn fresh_spectrum() -> &'static crate::SpectrumConfig {
     static FRESH: std::sync::LazyLock<crate::SpectrumConfig> =
         std::sync::LazyLock::new(Default::default);
     &FRESH
-}
-
-/// One editable ValueBar for a parameter, with automation-gesture
-/// bracketing so a drag records as a single host gesture.
-pub(super) fn param_bar(
-    ui: &mut egui::Ui,
-    params: &dyn ParamBackend,
-    key: ParamKey,
-    hint: &str,
-) -> egui::Response {
-    let mut value = params.get(key);
-    let (scale, suffix, decimals) = key.unit();
-    let response = ValueBar::new(&mut value, key.range(), key.label())
-        .eased(key.logarithmic())
-        .unit(scale, suffix)
-        .decimals(decimals)
-        .default_value(key.default_value())
-        .hint(hint)
-        .show(ui);
-    // Bracket drags so the host records one automation gesture per drag;
-    // one-shot changes (typed values) go through set() alone.
-    if response.drag_started() {
-        params.begin_set(key);
-    }
-    if response.changed() {
-        params.set(key, value);
-    }
-    if response.drag_stopped() {
-        params.end_set(key);
-    }
-    response
 }
 
 /// One bar for a soft edge: how far it REACHES past whatever it surrounds, and

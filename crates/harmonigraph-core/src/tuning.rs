@@ -389,6 +389,22 @@ impl Tuning {
         Tuning::from_cents(0.0, THREE_JUST, FIVE_JUST, SEVEN_JUST, 0.5)
     }
 
+    /// The five axes in microcents, indexed by
+    /// [`TuningAxis::index`](crate::configuration::TuningAxis::index).
+    pub fn axes(self) -> [i32; 5] {
+        [self.c_offset, self.three, self.five, self.seven, self.tolerance]
+    }
+
+    /// The inverse of [`axes`](Self::axes).
+    pub fn from_axes([c_offset, three, five, seven, tolerance]: [i32; 5]) -> Self {
+        Tuning { c_offset, three, five, seven, tolerance }
+    }
+
+    /// One axis, in cents.
+    pub fn cents(self, axis: crate::configuration::TuningAxis) -> f32 {
+        cents(self.axes()[axis.index()])
+    }
+
     /// The pitch class of a lattice position under this tuning. Pure integer
     /// microcent arithmetic — `count * step` is exact, so algebraically equal
     /// pitches (e.g. meantone comma-equivalents) come out bit-identical

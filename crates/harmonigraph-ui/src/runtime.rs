@@ -1,7 +1,7 @@
 //! Synchronous visual progression. No dock or viewport is needed to observe
 //! configuration, consume analyzed input, or advance bounded histories.
 
-use crate::params::{self, ParamBackend};
+use crate::params::ParamBackend;
 use crate::{AudioSpectrum, Console};
 use harmonigraph_core::{NoteTracker, PitchClass, Tuning};
 
@@ -14,8 +14,8 @@ pub struct VisualRuntime {
         Option<(harmonigraph_core::LatticePos, crate::lattice_maps::MapOffsetLane)>,
     pub console: Console,
     pub tracker: NoteTracker,
-    /// Snapshot of the tuning parameters, refreshed each frame in
-    /// [`root_ui`](crate::root_ui) so core/scene code never touches the param system.
+    /// The resolved tuning, refreshed each frame in [`root_ui`](crate::root_ui)
+    /// from whichever owner holds the configuration.
     pub tuning: Tuning,
     /// While true, tuning params continuously re-learn from the held notes
     /// (v1's learn mode). Runtime-only; never persisted.
@@ -28,9 +28,6 @@ pub struct VisualRuntime {
     /// and a shell without a configuration owner starts from the reducer's
     /// fresh value.
     pub tempered: harmonigraph_core::Tempered,
-    /// A load/start boundary adopts the next parameter snapshot verbatim,
-    /// without rejudging the links against it.
-    pub(crate) restore_configuration: bool,
     pub(crate) config_reducer: harmonigraph_core::configuration::ConfigReducer,
     /// Offline replay supplies recorded resolved boundaries, never frame-driven detection.
     pub replayed_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
@@ -69,7 +66,6 @@ impl Default for VisualRuntime {
             learn_active: false,
             tempered: harmonigraph_core::configuration::TuningModes::default().tempered,
             config_reducer: Default::default(),
-            restore_configuration: true,
             replayed_configuration: None,
             adaptive_policy: Default::default(),
             configuration_status: 0,
@@ -114,7 +110,7 @@ impl VisualRuntime {
     pub fn observe_configuration(&mut self, params: &dyn ParamBackend) {
         let owned = params.configuration();
         if owned.is_none() && self.replayed_configuration.is_none() {
-            self.learn_step(params);
+            self.learn_step();
         }
 
         if let Some(owned) = owned {
@@ -124,27 +120,7 @@ impl VisualRuntime {
         } else if let Some(recorded) = self.replayed_configuration {
             self.apply_resolved(recorded);
         } else {
-            let modes = self.tuning_modes();
-            let raw = params::tuning_from_params(params);
-            if std::mem::take(&mut self.restore_configuration) {
-                self.config_reducer.apply(
-                    harmonigraph_core::configuration::ConfigMutation::Restore {
-                        raw,
-                        modes,
-                        policy: self.adaptive_policy,
-                    },
-                );
-            } else {
-                self.config_reducer.sync_display(raw, modes, self.adaptive_policy);
-            }
             self.apply_resolved(self.config_reducer.resolved());
-        }
-    }
-
-    fn tuning_modes(&self) -> harmonigraph_core::configuration::TuningModes {
-        harmonigraph_core::configuration::TuningModes {
-            tempered: self.tempered,
-            learning: self.learn_active,
         }
     }
 
@@ -155,9 +131,21 @@ impl VisualRuntime {
         self.learn_active = config.modes.learning;
     }
 
+    /// Install a configuration in this runtime's own reducer without rejudging
+    /// its links, as a project restore would: the standalone's demo tuning,
+    /// and a replay's frames before its take's first configuration record.
+    pub fn open(&mut self, config: harmonigraph_core::configuration::ResolvedConfig) {
+        self.config_reducer.apply(harmonigraph_core::configuration::ConfigMutation::Restore {
+            raw: config.tuning,
+            modes: config.modes,
+            policy: config.policy,
+        });
+        self.apply_resolved(self.config_reducer.resolved());
+    }
+
     /// Apply one tuning action atomically. The synchronous shell uses the same
-    /// reducer as the audio owner; observation only adapts external param changes.
-    pub(crate) fn edit_tuning(
+    /// reducer as the audio owner.
+    pub fn edit_tuning(
         &mut self,
         params: &dyn ParamBackend,
         edit: harmonigraph_core::configuration::ConfigEdit,
@@ -169,26 +157,14 @@ impl VisualRuntime {
             }
             return;
         }
-        self.config_reducer.sync_display(
-            params::tuning_from_params(params),
-            self.tuning_modes(),
-            self.adaptive_policy,
-        );
         self.config_reducer.apply(harmonigraph_core::configuration::ConfigMutation::Edit(edit));
-        for (key, value) in params::ParamKey::TUNING.into_iter().zip(edit.axes) {
-            if let Some(value) = value {
-                params.set(key, value as f32 / 1_000_000.0);
-            }
-        }
         self.apply_resolved(self.config_reducer.resolved());
     }
 
     /// One tick of learn mode (v1 semantics): while armed, whenever the set of
-    /// held pitch classes changes, re-infer the tuning and write it through the
-    /// param backend. Change-detected so the host only sees parameter sets when
-    /// something actually changed. No egui types — testable with a stub
-    /// backend.
-    pub(crate) fn learn_step(&mut self, params: &dyn ParamBackend) {
+    /// held pitch classes changes, re-infer the tuning into the runtime's own
+    /// reducer. Change-detected so a held chord is learned once. No egui types.
+    pub(crate) fn learn_step(&mut self) {
         if !self.learn_active {
             self.last_learned_classes = None;
             return;
@@ -205,29 +181,13 @@ impl VisualRuntime {
             return;
         }
         if !classes.is_empty() {
-            self.config_reducer.sync_display(
-                self.config_reducer.raw(),
-                self.tuning_modes(),
-                self.adaptive_policy,
-            );
             let learned = harmonigraph_core::learn_tuning(&classes);
             // No audio owner and so no Tune source: the lattice axes are the
             // only target, and every value is learned.
-            for (value, key) in [
-                (learned.c_offset, params::ParamKey::COffset),
-                (learned.three, params::ParamKey::Three),
-                (learned.five, params::ParamKey::Five),
-                (learned.seven, params::ParamKey::Seven),
-            ] {
-                if let Some(value) = value {
-                    params.set(key, value);
-                }
-            }
             self.config_reducer.apply(
                 harmonigraph_core::configuration::ConfigMutation::LearnResolved {
                     learned,
                     retuning: false,
-                    raw: params::tuning_from_params(params),
                 },
             );
             self.apply_resolved(self.config_reducer.resolved());

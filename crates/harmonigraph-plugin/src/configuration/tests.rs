@@ -12,21 +12,22 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::*;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
+use harmonigraph_core::configuration::{PolicyEdit, TuningAxis};
+use harmonigraph_core::tuning::microcents;
 use harmonigraph_core::SourceId;
+use harmonigraph_ui::params::ParamKey;
+use nice_plug::plugin::ParamValue;
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[derive(Default)]
 struct Host {
-    reject_one_end: AtomicBool,
     dirty: AtomicUsize,
     callbacks: AtomicUsize,
-    plugin: AtomicUsize,
-    cache: AtomicU64,
-    pause_value: AtomicBool,
-    value_entered: AtomicBool,
-    resume_value: AtomicBool,
+    /// `params.rescan` calls, and the flags of the last.
+    rescans: AtomicUsize,
+    rescan_flags: std::sync::atomic::AtomicU32,
     /// `gui.closed` calls, and whether the last asked for destruction.
     closed: AtomicUsize,
     closed_destroyed: AtomicBool,
@@ -50,20 +51,10 @@ unsafe extern "C" fn request(_: *const clap_host) {}
 unsafe extern "C" fn callback(host: *const clap_host) {
     unsafe { &*((*host).host_data.cast::<Host>()) }.callbacks.fetch_add(1, Ordering::Relaxed);
 }
-unsafe extern "C" fn rescan(host: *const clap_host, _: u32) {
+unsafe extern "C" fn rescan(host: *const clap_host, flags: u32) {
     let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
-    let plugin = stats.plugin.load(Ordering::Relaxed) as *const clap_plugin;
-    if !plugin.is_null() {
-        let wrapper = unsafe {
-            &*((*plugin)
-                .plugin_data
-                .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-        };
-        stats.cache.store(
-            f64::from(wrapper.configuration_handle().unwrap().visible().0.normalized[1]).to_bits(),
-            Ordering::Relaxed,
-        );
-    }
+    stats.rescans.fetch_add(1, Ordering::Relaxed);
+    stats.rescan_flags.store(flags, Ordering::Relaxed);
 }
 unsafe extern "C" fn clear(_: *const clap_host, _: u32, _: u32) {}
 static PARAMS: clap_host_params =
@@ -92,7 +83,6 @@ static GUI: clap_host_gui = clap_host_gui {
 #[derive(Clone, Copy)]
 enum Input {
     Param(clap_event_param_value),
-    Mod(clap_event_param_mod),
     Note(clap_event_note),
     Tuning(clap_event_note_expression),
     Transport(clap_event_transport),
@@ -101,7 +91,6 @@ impl Input {
     fn header(&self) -> &clap_event_header {
         match self {
             Self::Param(e) => &e.header,
-            Self::Mod(e) => &e.header,
             Self::Note(e) => &e.header,
             Self::Tuning(e) => &e.header,
             Self::Transport(e) => &e.header,
@@ -128,11 +117,9 @@ unsafe extern "C" fn input_get(
 }
 #[derive(Default)]
 struct Sink {
-    values: Vec<(u32, f64)>,
     reject: bool,
     reject_kind: Option<u16>,
     attempts: Vec<(u16, u32, u32, bool)>,
-    host: usize,
 }
 unsafe extern "C" fn output_push(
     output: *const clap_output_events,
@@ -147,31 +134,10 @@ unsafe extern "C" fn output_push(
         },
         _ => 0,
     };
-    let reject_end = header.type_ == CLAP_EVENT_PARAM_GESTURE_END
-        && sink.host != 0
-        && unsafe { &*(sink.host as *const Host) }.reject_one_end.swap(false, Ordering::AcqRel);
-    let accepted = !sink.reject && sink.reject_kind != Some(header.type_) && !reject_end;
+    let accepted = !sink.reject && sink.reject_kind != Some(header.type_);
     assert!(sink.attempts.len() < sink.attempts.capacity());
     sink.attempts.push((header.type_, header.time, id, accepted));
-    if !accepted {
-        return false;
-    }
-    if header.type_ == CLAP_EVENT_PARAM_VALUE {
-        let event = unsafe { &*event.cast::<clap_event_param_value>() };
-        if sink.host != 0 {
-            let host = unsafe { &*(sink.host as *const Host) };
-            if host.pause_value.swap(false, Ordering::AcqRel) {
-                host.value_entered.store(true, Ordering::Release);
-                while !host.resume_value.load(Ordering::Acquire) {
-                    std::thread::yield_now();
-                }
-            }
-            host.cache.store(event.value.to_bits(), Ordering::Relaxed);
-        }
-        assert!(sink.values.len() < sink.values.capacity());
-        sink.values.push((event.param_id, event.value));
-    }
-    true
+    accepted
 }
 struct Device {
     plugin: *const clap_plugin,
@@ -203,7 +169,6 @@ impl Device {
         let plugin = unsafe {
             ((*factory).create_plugin.unwrap())(factory, &*host, c"com.yan-h.harmonigraph".as_ptr())
         };
-        stats.plugin.store(plugin as usize, Ordering::Relaxed);
         assert!(!plugin.is_null());
         assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
         let device = Self {
@@ -224,8 +189,16 @@ impl Device {
     fn wrapper(&self) -> &nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph> {
         unsafe { &*((*self.plugin).plugin_data.cast()) }
     }
-    fn mailbox(&self) -> std::sync::Arc<ConfigurationMailbox> {
-        self.wrapper().configuration_handle().unwrap()
+    /// Run the host's main-thread callback, and count the times the project
+    /// has been marked modified since the fixture began.
+    fn service(&self) -> usize {
+        unsafe {
+            ((*self.plugin).on_main_thread.unwrap())(self.plugin);
+        }
+        self.stats.dirty.load(Ordering::Relaxed)
+    }
+    fn settings(&self) -> std::sync::Arc<Settings> {
+        self.wrapper().test_inspect_plugin(|plugin| plugin.params.settings.clone())
     }
     fn activate(&mut self) {
         assert!(unsafe { ((*self.plugin).activate.unwrap())(self.plugin, 48000.0, 1, 64) });
@@ -274,9 +247,9 @@ impl Device {
                 return info.id;
             }
         }
-        panic!("missing tuning parameter");
+        panic!("missing parameter");
     }
-    fn param(&self, key: ParamKey, cents: f32, time: u32) -> Input {
+    fn param(&self, key: ParamKey, plain: f32, time: u32) -> Input {
         let values = crate::HarmonigraphParams::default();
         Input::Param(clap_event_param_value {
             header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, time),
@@ -286,15 +259,8 @@ impl Device {
             port_index: -1,
             channel: -1,
             key: -1,
-            value: f64::from(values.param_for(key).preview_normalized(cents)),
+            value: f64::from(values.param_for(key).preview_normalized(plain)),
         })
-    }
-    fn get(&self, key: ParamKey) -> f64 {
-        let mut value = -1.0;
-        assert!(unsafe {
-            (self.params().get_value.unwrap())(self.plugin, self.id(key), &mut value)
-        });
-        value
     }
     fn load(&self, state: PluginState, gui: bool) {
         if gui {
@@ -336,16 +302,7 @@ impl Device {
         events: Vec<Input>,
         reject: bool,
     ) -> (clap_process_status, Sink) {
-        self.run_reject_kind(steady, events, reject, None)
-    }
-    fn run_reject_kind(
-        &self,
-        steady: i64,
-        events: Vec<Input>,
-        reject: bool,
-        reject_kind: Option<u16>,
-    ) -> (clap_process_status, Sink) {
-        self.run_transport(steady, events, reject, reject_kind, None)
+        self.run_transport(steady, events, reject, None, None)
     }
     fn run_transport(
         &self,
@@ -360,13 +317,7 @@ impl Device {
             size: Some(input_size),
             get: Some(input_get),
         };
-        let mut sink = Sink {
-            values: Vec::with_capacity(128),
-            reject,
-            reject_kind,
-            attempts: Vec::with_capacity(1024),
-            host: (&*self.stats as *const Host) as usize,
-        };
+        let mut sink = Sink { reject, reject_kind, attempts: Vec::with_capacity(1024) };
         let output = clap_output_events {
             ctx: (&mut sink as *mut Sink).cast(),
             try_push: Some(output_push),
@@ -407,26 +358,6 @@ impl Device {
         let status = unsafe { ((*self.plugin).process.unwrap())(self.plugin, &process) };
         (status, sink)
     }
-    fn flush(&self, events: Vec<Input>) {
-        let input = clap_input_events {
-            ctx: (&events as *const Vec<Input>).cast_mut().cast(),
-            size: Some(input_size),
-            get: Some(input_get),
-        };
-        let mut sink = Sink {
-            values: Vec::with_capacity(128),
-            reject: false,
-            attempts: Vec::with_capacity(1024),
-            ..Default::default()
-        };
-        let output = clap_output_events {
-            ctx: (&mut sink as *mut Sink).cast(),
-            try_push: Some(output_push),
-        };
-        unsafe {
-            (self.params().flush.unwrap())(self.plugin, &input, &output);
-        }
-    }
 }
 impl Drop for Device {
     fn drop(&mut self) {
@@ -458,20 +389,27 @@ unsafe extern "C" fn write(stream: *const clap_ostream, input: *const c_void, si
     });
     size as i64
 }
+/// A saved state whose musical settings hold `fifth` and no links.
 fn restored(device: &Device, fifth: f32) -> PluginState {
     let mut state = device.wrapper().get_state_object();
-    state.params.insert(ParamKey::Three.id().into(), ParamValue::F32(fifth));
-    state.fields.insert(
-        MUSICAL_SETTINGS.into(),
-        serde_json::to_string(&MusicalSettings {
-            meantone: false,
-            marvel: false,
-            learning: false,
-            ..Default::default()
-        })
-        .unwrap(),
-    );
+    let mut settings =
+        MusicalSettings { meantone: false, marvel: false, learning: false, ..Default::default() };
+    settings.axes[1] = microcents(fifth);
+    state.fields.insert(MUSICAL_SETTINGS.into(), serde_json::to_string(&settings).unwrap());
     state
+}
+/// The musical settings a saved state holds.
+/// What the editor shows, with the raw axes a save stores.
+struct Shown {
+    raw: Tuning,
+    view: ConfigurationView,
+}
+fn shown(settings: &Settings) -> Shown {
+    let (raw, view) = settings.current();
+    Shown { raw, view }
+}
+fn saved(state: &PluginState) -> MusicalSettings {
+    serde_json::from_str(&state.fields[MUSICAL_SETTINGS]).unwrap()
 }
 fn plain(state: &PluginState, key: ParamKey) -> f32 {
     match state.params[key.id()] {
@@ -486,201 +424,62 @@ fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adopt
     for gui in [false, true] {
         let mut device = Device::new();
         device.activate();
-        let mailbox = device.mailbox();
+        let settings = device.settings();
         device.load(restored(&device, 690.0), gui);
-        let first = mailbox.visible().0.applied_id;
-        let ui = mailbox
-            .submit(packet(ConfigEdit::axis(1, harmonigraph_core::tuning::microcents(695.0))))
-            .unwrap();
+        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
         device.load(restored(&device, 705.0), gui);
-        assert!(first < ui && ui < mailbox.visible().0.applied_id);
-        assert_eq!(plain(&device.save(), ParamKey::Three), 705.0);
-        assert_eq!(plain(&device.wrapper().get_state_object(), ParamKey::Three), 705.0);
-        let expected = crate::HarmonigraphParams::default().three.preview_normalized(705.0);
-        assert_eq!(device.get(ParamKey::Three), f64::from(expected));
-        let sink = device.run(1000, vec![], false);
-        assert!(
-            sink.values.is_empty(),
-            "superseded UI values must not overwrite the newer restore"
-        );
-        assert!(!mailbox.visible().1);
-        assert_eq!(mailbox.visible().0.raw[1], 705.0);
-        let after = mailbox
-            .submit(packet(ConfigEdit::axis(1, harmonigraph_core::tuning::microcents(700.0))))
-            .unwrap();
-        device.run(1064, vec![], true);
-        assert_eq!(
-            mailbox.visible().0.applied_id,
-            after,
-            "host rejection cannot undo local commit"
-        );
-        assert_eq!(mailbox.visible().0.raw[1], 700.0);
-        unsafe {
-            ((*device.plugin).on_main_thread.unwrap())(device.plugin);
-        }
-        assert!(device.stats.dirty.load(Ordering::Relaxed) > 0);
+        let now = shown(&settings);
+        assert!(now.view.pending);
+        assert_eq!(now.raw.three, microcents(705.0), "the newest restore is what shows");
+        assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
+        assert_eq!(saved(&device.wrapper().get_state_object()).axes[1], microcents(705.0));
+        device.run(1000, vec![], false);
+        let adopted = shown(&settings);
+        assert!(!adopted.view.pending);
+        assert_eq!(adopted.raw.three, microcents(705.0), "the queued UI edit came before it");
+        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
+        let marked = device.service();
+        device.run(1064, vec![], false);
+        assert_eq!(shown(&settings).raw.three, microcents(700.0));
+        assert!(device.service() > marked, "an applied UI edit marks the project modified");
     }
 }
 
 #[test]
 fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
     let _scope = crate::test_scope::enter();
-    for fifth in [696.58, *ParamKey::Three.range().start(), *ParamKey::Three.range().end()] {
+    for fifth in [696.58, *TuningAxis::Three.range().start(), *TuningAxis::Three.range().end()] {
         let mut device = Device::new();
         device.activate();
-        let mailbox = device.mailbox();
-        mailbox
-            .submit(packet(ConfigEdit::axis(1, harmonigraph_core::tuning::microcents(fifth))))
-            .unwrap();
+        let settings = device.settings();
+        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(fifth))));
         device.run(0, vec![], false);
-        let linked = view(mailbox.visible().0, false).resolved;
+        let linked = shown(&settings).view.resolved;
         assert!(linked.modes.tempered.syntonic && linked.modes.tempered.septimal_kleisma);
         assert!((linked.tuning.five_cents() - (4.0 * fifth - 2400.0)).abs() < 0.001);
         for comma in harmonigraph_core::Comma::ALL.into_iter().rev() {
-            mailbox.submit(packet(ConfigEdit::temper(comma, false, linked.tuning))).unwrap();
+            assert!(settings.submit(ConfigEdit::temper(comma, false, linked.tuning)));
         }
-        assert!(mailbox.visible().1, "the switches are one pending audio adoption");
+        assert!(shown(&settings).view.pending, "the switches are one pending audio adoption");
         device.run(64, vec![], false);
-        let released = mailbox.visible().0;
-        assert_eq!(view(released, false).resolved.modes.tempered, Tempered::default());
-        for (key, cents) in [
-            (ParamKey::Five, linked.tuning.five_cents()),
-            (ParamKey::Seven, linked.tuning.seven_cents()),
-        ] {
-            assert!(
-                (crate::HarmonigraphParams::default()
-                    .param_for(key)
-                    .preview_plain(device.get(key) as f32)
-                    - cents)
-                    .abs()
-                    < 0.001
-            );
-            assert!((plain(&device.wrapper().get_state_object(), key) - cents).abs() < 0.001);
-        }
-        device.run(
-            128,
-            vec![
-                device.param(ParamKey::Five, released.raw[2], 0),
-                device.param(ParamKey::Seven, released.raw[3], 0),
-            ],
-            false,
-        );
-        assert_eq!(
-            view(mailbox.visible().0, false).resolved.modes.tempered,
-            Tempered::default(),
-            "host echoes are not new entries"
-        );
-        mailbox
-            .submit(packet(ConfigEdit::axis(
-                2,
-                harmonigraph_core::tuning::microcents(released.raw[2]),
-            )))
-            .unwrap();
-        device.run(192, vec![], false);
+        let released = shown(&settings);
+        assert_eq!(released.view.resolved.modes.tempered, Tempered::default());
+        assert_eq!(released.raw.five, linked.tuning.five, "a released link keeps its value");
+        assert_eq!(released.raw.seven, linked.tuning.seven);
+        assert_eq!(saved(&device.save()).axes[2..4], [released.raw.five, released.raw.seven]);
+        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Five, released.raw.five)));
+        device.run(128, vec![], false);
         assert!(
-            view(mailbox.visible().0, false).resolved.modes.tempered.syntonic,
+            shown(&settings).view.resolved.modes.tempered.syntonic,
             "a typed same-value entry recognizes meantone"
         );
-        mailbox.submit(packet(ConfigEdit::axis(2, 390_000_000))).unwrap();
-        device.run(256, vec![], false);
-        let edited = view(mailbox.visible().0, false).resolved;
+        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Five, 390_000_000)));
+        device.run(192, vec![], false);
+        let edited = shown(&settings).view.resolved;
         assert!(!edited.modes.tempered.syntonic);
         assert_eq!(edited.tuning.five_cents(), 390.0);
         assert!(edited.modes.tempered.septimal_kleisma);
     }
-}
-
-#[test]
-fn releasing_an_interval_link_accounts_for_the_hosts_current_modulation() {
-    use harmonigraph_ui::params::ParamBackend;
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    let mailbox = device.mailbox();
-    device.run(
-        0,
-        vec![Input::Mod(clap_event_param_mod {
-            header: header::<clap_event_param_mod>(CLAP_EVENT_PARAM_MOD, 0),
-            param_id: device.id(ParamKey::Seven),
-            cookie: ptr::null_mut(),
-            note_id: -1,
-            port_index: -1,
-            channel: -1,
-            key: -1,
-            amount: 0.01,
-        })],
-        false,
-    );
-    mailbox
-        .submit(packet(ConfigEdit::temper(
-            harmonigraph_core::Comma::SeptimalKleisma,
-            true,
-            view(mailbox.visible().0, false).resolved.tuning,
-        )))
-        .unwrap();
-    device.run(64, vec![], false);
-    let snapshot = mailbox.visible().0;
-    let linked = view(snapshot, false).resolved.tuning;
-    let (context, _) = device.wrapper().test_gui_context("tuning-seven");
-    let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
-    let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
-    let gesture = std::cell::Cell::new([false; ParamKey::ALL.len()]);
-    let backend = crate::PluginParamBackend {
-        params: &params,
-        setter: &setter,
-        configuration: Some((snapshot, false)),
-        gesture: &gesture,
-    };
-    assert_eq!(
-        backend.submit_tuning(ConfigEdit::temper(
-            harmonigraph_core::Comma::SeptimalKleisma,
-            false,
-            linked
-        )),
-        Some(true)
-    );
-    device.run(128, vec![], false);
-    let released = view(mailbox.visible().0, false).resolved;
-    assert!(!released.modes.tempered.septimal_kleisma);
-    assert!((released.tuning.seven_cents() - linked.seven_cents()).abs() < 0.001);
-}
-
-/// Goes with #1756, which retires host automation of the axes.
-#[test]
-fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flush() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.flush(vec![device.param(ParamKey::Three, 690.0, 23)]);
-    let mailbox = device.mailbox();
-    let before = mailbox.visible().0;
-    assert_eq!(before.raw[1], 700.0, "untimed flush has not invented a boundary");
-    device.activate();
-    device.run(500, vec![], false);
-    assert_eq!(mailbox.visible().0.raw[1], 690.0, "an untimed flush applies at the next boundary");
-    let first = mailbox
-        .submit(packet(ConfigEdit::axis(2, harmonigraph_core::tuning::microcents(390.0))))
-        .unwrap();
-    let second = mailbox
-        .submit(packet(ConfigEdit::axis(1, harmonigraph_core::tuning::microcents(700.0))))
-        .unwrap();
-    assert_ne!(first, second);
-    device.run(
-        564,
-        vec![
-            device.param(ParamKey::Five, 390.0, 7),
-            device.param(ParamKey::Seven, 975.0, 7),
-            device.param(ParamKey::Three, 699.0, 31),
-        ],
-        false,
-    );
-    let snapshot = mailbox.visible().0;
-    assert_eq!(snapshot.applied_id, second);
-    assert_eq!(snapshot.raw[1], 699.0, "the last automation wins");
-    assert!(!view(snapshot, false).resolved.modes.tempered.syntonic);
-    device.flush(vec![device.param(ParamKey::Three, 697.0, 44)]);
-    assert_eq!(mailbox.visible().0.raw[1], 699.0, "an untimed flush applies nothing yet");
-    device.run(628, vec![], false);
-    assert_eq!(mailbox.visible().0.raw[1], 697.0);
 }
 
 #[test]
@@ -711,8 +510,8 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
     state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(engine));
     device.load(state, false);
     device.activate();
-    let mailbox = device.mailbox();
-    mailbox.submit(packet(ConfigEdit { learning: Some(true), ..Default::default() })).unwrap();
+    let settings = device.settings();
+    assert!(settings.submit(ConfigEdit { learning: Some(true), ..Default::default() }));
     let mut events = Vec::new();
     for key in [60, 64, 67] {
         events.push(Input::Note(clap_event_note {
@@ -744,25 +543,31 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
     device.run(0, events, false);
     // The Hub tunes its own notes, so its input reaches learning at the
     // boundary after the one it arrived on rather than the same one.
+    let marked = device.service();
     device.run(64, vec![], false);
-    let learned = mailbox.visible().0;
-    let resolved = view(learned, false).resolved;
+    let learned = shown(&settings);
+    let resolved = learned.view.resolved;
     let keyboard = resolved.policy.keyboard;
     assert_eq!(keyboard, harmonigraph_core::tuning::fifth_generated(keyboard[0]));
-    let fifth = harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST);
+    let fifth = microcents(harmonigraph_core::tuning::THREE_JUST);
     assert!((keyboard[0] - fifth).abs() < 1_000);
     // The C offset is learned either way; it is not part of the target.
-    assert!((learned.raw[0] - 10.0).abs() < 0.001, "C offset {}", learned.raw[0]);
+    let c = learned.raw.c_offset;
+    assert!((c - 10_000_000).abs() < 1_000, "C offset {c}");
     // Only active retuning makes the lattice a fixed target.
     if retune && !pass_through {
         assert!(resolved.modes.tempered.syntonic);
-        assert_eq!(learned.raw[1..4], [700.0, 400.0, 1000.0]);
+        let held = [learned.raw.three, learned.raw.five, learned.raw.seven];
+        assert_eq!(held, [700_000_000, 400_000_000, 1_000_000_000]);
     } else {
         assert!(!resolved.modes.tempered.syntonic);
-        assert!((learned.raw[2] - harmonigraph_core::tuning::FIVE_JUST).abs() < 0.001);
+        let third = microcents(harmonigraph_core::tuning::FIVE_JUST);
+        assert!((learned.raw.five - third).abs() < 1_000);
     }
+    assert!(device.service() > marked, "Learn marks the project");
+    assert_eq!(saved(&device.save()).axes, learned.raw.axes(), "a save stores what Learn found");
     device.run(128, vec![], false);
-    assert_eq!(mailbox.visible().0.revision, learned.revision);
+    assert_eq!(shown(&settings).view.resolved.revision, resolved.revision);
     // A cut ends the chord with no delta on any row. Learn must stop hearing
     // it on the next callback, not whenever that source next plays.
     let heard = |device: &Device| {
@@ -780,74 +585,37 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
 }
 
 #[test]
-fn restore_preserves_held_modulation_without_a_new_host_mod_event() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    let mailbox = device.mailbox();
-    let modulation = Input::Mod(clap_event_param_mod {
-        header: header::<clap_event_param_mod>(CLAP_EVENT_PARAM_MOD, 0),
-        param_id: device.id(ParamKey::Three),
-        cookie: ptr::null_mut(),
-        note_id: -1,
-        port_index: -1,
-        channel: -1,
-        key: -1,
-        amount: 0.9,
-    });
-    device.run(0, vec![modulation], false);
-    assert_ne!(mailbox.visible().0.raw[1], mailbox.visible().0.unmodulated[1]);
-    device.load(restored(&device, 690.0), false);
-    let shadow = mailbox.visible().0;
-    device.run(64, vec![], false);
-    assert_eq!(mailbox.visible().0.raw, shadow.raw);
-    assert_eq!(mailbox.visible().0.normalized, shadow.normalized);
-    assert_eq!(mailbox.visible().0.modulation[1], 0.9);
-    assert_ne!(mailbox.visible().0.raw[1], 690.0);
-    assert_eq!(plain(&device.save(), ParamKey::Three), 690.0);
-}
-
-#[test]
 fn a_full_command_queue_keeps_accepted_state() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
-    let mailbox = device.mailbox();
+    let settings = device.settings();
     device.load(restored(&device, 690.0), false);
     device.load(restored(&device, 695.0), false);
-    // A restore no longer owns a prepared setup value until audio adopts it:
-    // the tuning setup persists nothing, so there is no slot to hold.
     for _ in 0..126 {
-        mailbox.submit(packet(ConfigEdit::default())).unwrap();
+        assert!(settings.submit(ConfigEdit::default()));
     }
-    assert_eq!(mailbox.submit(packet(ConfigEdit::default())), Err(SubmitError::Full));
-    assert_eq!(plain(&device.save(), ParamKey::Three), 695.0);
+    assert!(!settings.submit(ConfigEdit::default()));
+    let before = device.save();
+    let mut refused = restored(&device, 700.0);
+    refused.params.insert(ParamKey::CameraDistance.id().into(), ParamValue::F32(20.0));
+    assert!(!device.try_load(refused), "a restore needs a free slot");
+    assert_eq!(settings.take_notice(), Some(RESTORE_REFUSED), "and says so in the Console");
+    let after = device.save();
+    assert_eq!(saved(&after).axes[1], microcents(695.0));
+    assert_eq!(
+        plain(&after, ParamKey::CameraDistance),
+        plain(&before, ParamKey::CameraDistance),
+        "a refused restore installs none of its state"
+    );
     device.activate();
     device.run(0, vec![], false);
-    assert!(
-        device.try_load(restored(&device, 705.0)),
-        "an applied restore is repeatable off audio"
-    );
-    assert_eq!(plain(&device.save(), ParamKey::Three), 705.0);
-    // The assertions deliberately leave accepted commands unfinished. Reset
-    // clears them before the remaining ones drain through real callbacks.
-    let accepted_command = mailbox.accepted_command.load(Ordering::Acquire);
-    unsafe {
-        ((*device.plugin).reset.unwrap())(device.plugin);
-    }
-    for block in 1..=32 {
-        device.run(block * 64, vec![], false);
-        if !mailbox.visible().1 {
-            break;
-        }
-    }
-    assert!(!mailbox.visible().1);
-    assert_eq!(mailbox.visible().0.applied_id, accepted_command);
-    assert_eq!(mailbox.visible().0.raw[1], 705.0);
-    assert_eq!(
-        mailbox.visible().0.status,
-        8,
-        "the deliberately rejected submission remains visible"
-    );
+    assert!(device.try_load(restored(&device, 705.0)), "an applied restore is repeatable");
+    assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
+    device.run(64, vec![], false);
+    let now = shown(&settings);
+    assert!(!now.view.pending);
+    assert_eq!(now.raw.three, microcents(705.0));
+    assert_eq!(now.view.status, 8, "the deliberately rejected submission remains visible");
 }
 
 #[test]
@@ -855,23 +623,23 @@ fn one_owned_input_pool_reaches_2048_in_a_callback_and_refuses_growth_past_it() 
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
-    let events = (0..2048).map(|_| device.param(ParamKey::Three, 690.0, 0)).collect();
+    let events = (0..2048).map(|_| device.param(ParamKey::CameraDistance, 6.0, 0)).collect();
     device.run(0, events, false);
-    assert_eq!(device.mailbox().visible().0.status, 0);
+    assert_eq!(shown(&device.settings()).view.status, 0);
     let (status, _) = device.run_status(
         64,
-        (0..2049).map(|_| device.param(ParamKey::Three, 695.0, 0)).collect(),
+        (0..2049).map(|_| device.param(ParamKey::CameraDistance, 7.0, 0)).collect(),
         false,
     );
     assert_eq!(status, CLAP_PROCESS_ERROR);
-    assert_eq!(device.mailbox().visible().0.status & 2, 2);
+    assert_eq!(shown(&device.settings()).view.status & 2, 2);
     // Exercise the host's recovery boundary after proving capacity
     // exhaustion, so this fixture does not leave an unresolved global owner.
     unsafe {
         ((*device.plugin).reset.unwrap())(device.plugin);
     }
     device.run(128, vec![], false);
-    assert_eq!(device.mailbox().visible().0.status, 0);
+    assert_eq!(shown(&device.settings()).view.status, 0);
 }
 
 #[test]
@@ -880,79 +648,42 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
     for commands in [false, true] {
         let mut device = Device::new();
         if commands {
-            let mailbox = device.mailbox();
+            let settings = device.settings();
             device.load(restored(&device, 690.0), false);
             device.load(restored(&device, 695.0), false);
             for _ in 0..126 {
-                mailbox.submit(packet(ConfigEdit::default())).unwrap();
+                assert!(settings.submit(ConfigEdit::default()));
             }
             device.activate();
             device.run(0, vec![], false);
             device.load(restored(&device, 705.0), false);
-            assert!(mailbox.visible().1, "accepted configuration is still owned by the wrapper");
+            assert!(shown(&settings).view.pending, "an accepted restore is still queued");
         } else {
             device.activate();
             device.run(
                 0,
-                (0..2048).map(|_| device.param(ParamKey::Three, 690.0, 0)).collect(),
+                (0..2048).map(|_| device.param(ParamKey::CameraDistance, 6.0, 0)).collect(),
                 false,
             );
             let (status, _) = device.run_status(
                 64,
-                (0..2049).map(|_| device.param(ParamKey::Three, 695.0, 0)).collect(),
+                (0..2049).map(|_| device.param(ParamKey::CameraDistance, 7.0, 0)).collect(),
                 false,
             );
             assert_eq!(status, CLAP_PROCESS_ERROR);
-            assert_eq!(device.mailbox().visible().0.status & 2, 2);
+            assert_eq!(shown(&device.settings()).view.status & 2, 2);
         }
         drop(device);
     }
 }
 
-#[derive(Default)]
-struct Legacy {
-    params: std::sync::Arc<crate::HarmonigraphParams>,
-}
-impl Plugin for Legacy {
-    const NAME: &'static str = "Legacy opt-out";
-    const VENDOR: &'static str = "test";
-    const URL: &'static str = "";
-    const EMAIL: &'static str = "";
-    const VERSION: &'static str = "1";
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[];
-    type SysExMessage = ();
-    type BackgroundTask = ();
-    fn params(&self) -> std::sync::Arc<dyn Params> {
-        self.params.clone()
-    }
-    fn process(
-        &mut self,
-        _: &mut Buffer,
-        _: &mut AuxiliaryBuffers,
-        _: &mut impl ProcessContext<Self>,
-    ) -> ProcessStatus {
-        ProcessStatus::Normal
-    }
-}
-impl ClapPlugin for Legacy {
-    const CLAP_ID: &'static str = "test.legacy";
-    const CLAP_DESCRIPTION: Option<&'static str> = None;
-    const CLAP_MANUAL_URL: Option<&'static str> = None;
-    const CLAP_SUPPORT_URL: Option<&'static str> = None;
-    const CLAP_FEATURES: &'static [ClapFeature] = &[];
-}
 #[test]
-fn opt_out_wrapper_and_non_clap_plugin_construction_have_no_configuration_owner() {
-    let _scope = crate::test_scope::enter();
-    let device = Device::new();
-    let legacy = unsafe { nice_plug::wrapper::clap::Wrapper::<Legacy>::new(&*device._host) };
-    assert!(legacy.configuration_handle().is_none());
+fn construction_outside_the_clap_wrapper_has_no_configuration_owner() {
     let plugin = crate::Harmonigraph::default();
     assert!(
         plugin.configuration.is_none(),
         "construction outside the CLAP wrapper has no CLAP-only owner or callback work"
     );
-    assert!(plugin.params.configuration.get().is_none());
 }
 
 // The fixture invokes only CLAP's allowed concurrent main/audio entrypoints;
@@ -972,163 +703,220 @@ fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
     {
         let mut device = Device::new();
         device.activate();
-        let mailbox = device.mailbox();
+        let settings = device.settings();
         let mut state = restored(&device, 700.0);
-        state.fields.insert(
-            MUSICAL_SETTINGS.into(),
-            serde_json::to_string(&MusicalSettings {
-                meantone,
-                marvel,
-                learning,
-                ..Default::default()
-            })
-            .unwrap(),
-        );
+        let mut restoring = saved(&state);
+        (restoring.meantone, restoring.marvel, restoring.learning) = (meantone, marvel, learning);
+        state.fields.insert(MUSICAL_SETTINGS.into(), serde_json::to_string(&restoring).unwrap());
         device.load(state, gui);
-        let preview = view(mailbox.visible().0, true).resolved;
+        let preview = shown(&settings).view;
+        assert!(preview.pending);
+        let preview = preview.resolved;
         let restored_modes = TuningModes {
             tempered: Tempered { syntonic: meantone, septimal_kleisma: marvel },
             learning,
         };
         assert_eq!(preview.modes, restored_modes);
         assert_eq!(preview.tuning.three, 700_000_000, "the preview's tuning is the restored one");
-        let saved: MusicalSettings =
-            serde_json::from_str(&device.save().fields[MUSICAL_SETTINGS]).unwrap();
-        assert_eq!((saved.meantone, saved.marvel, saved.learning), (meantone, marvel, learning));
-        assert_eq!(saved.modes(), preview.modes);
-        let saved_gui: MusicalSettings =
-            serde_json::from_str(&device.wrapper().get_state_object().fields[MUSICAL_SETTINGS])
-                .unwrap();
-        assert_eq!(saved_gui.modes(), preview.modes);
+        let saved_host = saved(&device.save());
+        assert_eq!(
+            (saved_host.meantone, saved_host.marvel, saved_host.learning),
+            (meantone, marvel, learning)
+        );
+        assert_eq!(saved_host.reducer().resolved().modes, preview.modes);
+        assert_eq!(
+            saved(&device.wrapper().get_state_object()).reducer().resolved().modes,
+            preview.modes
+        );
         device.run(0, vec![], false);
-        assert_eq!(view(mailbox.visible().0, false).resolved.modes, preview.modes);
+        assert_eq!(shown(&settings).view.resolved.modes, preview.modes);
         // And the reducer the audio thread runs Learn and tempering under
         // holds them too, not only the words that report it.
-        let adopted = device.wrapper().test_inspect_plugin(|plugin| {
-            plugin.configuration.as_ref().unwrap().reducer.resolved().modes
-        });
+        let adopted = device
+            .wrapper()
+            .test_inspect_plugin(|plugin| plugin.configuration.as_ref().unwrap().current().modes);
         assert_eq!(adopted, restored_modes);
     }
 }
 
-/// A saved state that lacks a tuning axis, as an older or partial preset
-/// does, restores that axis at its default rather than refusing the restore.
+/// A project saved while the axes were host parameters (#1756) holds them
+/// there, beside musical settings without axes. It opens at fresh axes with
+/// one Console notice, keeps its links, and saves no tuning parameter back.
 #[test]
-fn a_restore_missing_a_tuning_axis_takes_its_default() {
+fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     let _scope = crate::test_scope::enter();
-    let device = Device::new();
-    let mut state = restored(&device, 690.0);
-    state.params.remove(ParamKey::Seven.id());
-    let edit = prepare(&state).expect("a missing axis is not an invalid one");
-    assert_eq!(edit.values[3], Some(ParamKey::Seven.default_value()));
-    assert_eq!(edit.values[1], Some(690.0));
+    let mut device = Device::new();
+    let settings = device.settings();
+    let mut state = device.wrapper().get_state_object();
+    device.load(state.clone(), false);
+    assert_eq!(settings.take_notice(), None, "a project saved since opens quietly");
+    state.params.insert("tuning-three".into(), ParamValue::F32(696.0));
+    state.params.insert("tuning-tolerance".into(), ParamValue::F32(3.0));
+    state.fields.insert(MUSICAL_SETTINGS.into(), r#"{"meantone":false,"marvel":true}"#.into());
+    device.load(state, false);
+    assert_eq!(settings.take_notice(), Some(LEGACY_AXES));
+    assert_eq!(settings.take_notice(), None, "the notice is given once");
+    device.activate();
+    device.run(0, vec![], false);
+    let opened = shown(&device.settings());
+    assert_eq!(opened.raw.axes(), MusicalSettings::default().axes);
+    let modes = opened.view.resolved.modes.tempered;
+    assert_eq!((modes.syntonic, modes.septimal_kleisma), (false, true));
+    let resaved = device.save();
+    assert!(LEGACY_AXIS_IDS.iter().all(|id| !resaved.params.contains_key(*id)));
+    assert_eq!(saved(&resaved).axes, MusicalSettings::default().axes);
 }
 
 #[test]
 fn a_pending_restore_keeps_fault_and_refusal_status_visible() {
     let _scope = crate::test_scope::enter();
     let device = Device::new();
-    let mailbox = device.mailbox();
+    let settings = device.settings();
     device.load(restored(&device, 690.0), false);
-    let mut applied = mailbox.published.load();
+    let mut applied = settings.published.load();
     applied.status = 2;
-    mailbox.published.publish(applied);
+    settings.published.publish(applied);
     for _ in 0..127 {
-        mailbox.submit(packet(ConfigEdit::default())).unwrap();
+        assert!(settings.submit(ConfigEdit::default()));
     }
-    assert_eq!(mailbox.submit(packet(ConfigEdit::default())), Err(SubmitError::Full));
-    assert_eq!(mailbox.visible().0.status & 10, 10);
-    assert_eq!(mailbox.visible().0.unmodulated[1], 690.0);
+    assert!(!settings.submit(ConfigEdit::default()));
+    let now = shown(&settings);
+    assert_eq!(now.view.status & 10, 10);
+    assert_eq!(now.raw.three, microcents(690.0));
 }
 
+/// A host that saves right after restoring, before it has run the plugin
+/// once, stores the restored record rather than the fresh one.
 #[test]
-fn suspended_gui_restore_requests_main_thread_without_processing() {
+fn a_save_before_any_audio_stores_the_restore() {
     let _scope = crate::test_scope::enter();
     let device = Device::new();
-    let before = device.stats.callbacks.load(Ordering::Relaxed);
-    device.load(restored(&device, 690.0), true);
-    assert!(device.stats.callbacks.load(Ordering::Relaxed) > before);
-    unsafe {
-        ((*device.plugin).on_main_thread.unwrap())(device.plugin);
-    }
-    assert!(device.stats.dirty.load(Ordering::Relaxed) > 0);
+    device.load(restored(&device, 690.0), false);
+    let saved = saved(&device.save());
+    assert_eq!(saved.axes[TuningAxis::Three.index()], microcents(690.0));
+    assert!(!saved.meantone && !saved.marvel, "the restore's links, not the fresh ones");
 }
 
+/// An axis edit changes no host parameter, so the host marks the project
+/// modified without rescanning; a map-document edit rescans the parameter
+/// text, since the Lattice Map's label names its map.
 #[test]
-fn successful_old_notification_after_restore_rescan_retains_another_rescan() {
+fn an_axis_edit_marks_the_project_without_a_rescan() {
+    use clap_sys::ext::params::{CLAP_PARAM_RESCAN_TEXT, CLAP_PARAM_RESCAN_VALUES};
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
-    let mailbox = device.mailbox();
-    mailbox.submit(packet(ConfigEdit::axis(1, 690_000_000))).unwrap();
-    let restore = restored(&device, 705.0);
-    device.stats.pause_value.store(true, Ordering::Release);
-    std::thread::scope(|scope| {
-        let audio = scope.spawn(|| device.run(0, vec![], false).values);
-        while !device.stats.value_entered.load(Ordering::Acquire) {
-            std::thread::yield_now();
-        }
-        device.load(restore, true);
-        unsafe {
-            ((*device.plugin).on_main_thread.unwrap())(device.plugin);
-        }
-        assert!(!mailbox.dirty.load(Ordering::Acquire));
-        device.stats.resume_value.store(true, Ordering::Release);
-        audio.join().unwrap();
-    });
-    assert!(
-        mailbox.dirty.load(Ordering::Acquire),
-        "successful stale output must leave a new rescan obligation"
-    );
-    unsafe {
-        ((*device.plugin).on_main_thread.unwrap())(device.plugin);
-    }
-    assert_eq!(
-        f64::from_bits(device.stats.cache.load(Ordering::Relaxed)),
-        device.get(ParamKey::Three)
-    );
+    let settings = device.settings();
+    device.run(0, vec![], false);
+    let marked = device.service();
+    let rescans = device.stats.rescans.load(Ordering::Relaxed);
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(696.0))));
+    device.run(64, vec![], false);
+    assert!(device.service() > marked, "the edit marks the project modified");
+    assert_eq!(device.stats.rescans.load(Ordering::Relaxed), rescans, "and rescans nothing");
+    settings.maps_changed();
+    device.service();
+    assert_eq!(device.stats.rescans.load(Ordering::Relaxed), rescans + 1);
+    let flags = device.stats.rescan_flags.load(Ordering::Relaxed);
+    assert_eq!(flags & CLAP_PARAM_RESCAN_TEXT, CLAP_PARAM_RESCAN_TEXT);
+    assert_eq!(flags & CLAP_PARAM_RESCAN_VALUES, 0, "the values did not change");
 }
 
+/// The queue keeps arrival order across kinds: an edit queued before a restore
+/// is overwritten by it, and one queued after it lands on the restored record.
 #[test]
-fn rejected_gesture_end_is_retried_before_another_begin() {
+fn a_restore_queued_behind_an_edit_applies_after_it() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
-    let mailbox = device.mailbox();
-    mailbox.submit(packet(ConfigEdit::axis(1, 690_000_000))).unwrap();
-    let (_, rejected) =
-        device.run_reject_kind(0, vec![], false, Some(CLAP_EVENT_PARAM_GESTURE_END));
-    assert!(rejected.attempts.contains(&(
-        CLAP_EVENT_PARAM_GESTURE_END,
-        0,
-        device.id(ParamKey::Three),
-        false
-    )));
-    mailbox.submit(packet(ConfigEdit::axis(1, 695_000_000))).unwrap();
-    let accepted = device.run(64, vec![], false);
-    let kinds: Vec<_> = accepted
-        .attempts
+    let settings = device.settings();
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::COffset, microcents(5.0))));
+    device.load(restored(&device, 690.0), false);
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Seven, microcents(980.0))));
+    device.run(0, vec![], false);
+    let raw = shown(&settings).raw;
+    assert_eq!(raw.three, microcents(690.0), "the restore came after the fifth");
+    assert_eq!(raw.c_offset, 0, "and replaced the origin the edit before it set");
+    assert_eq!(raw.seven, microcents(980.0), "the edit after it lands on the restore");
+}
+
+/// Every word the seqlock carries comes back as itself: distinct values in
+/// every one, negatives in the signed ones, and modes that differ bit by bit.
+#[test]
+fn the_published_record_round_trips_every_word() {
+    let record = Record {
+        applied: u64::MAX - 7,
+        raw: Tuning::from_axes([-1, -200_000_000, 3, 40_000_000, 5]),
+        resolved: ResolvedConfig {
+            revision: (1 << 40) + 9,
+            tuning: Tuning::from_axes([-600_000_000, 11, -12, 13, 14]),
+            modes: TuningModes {
+                tempered: Tempered { syntonic: false, septimal_kleisma: true },
+                learning: true,
+            },
+            policy: PolicyConfig {
+                radius: 2,
+                axes: 3,
+                pitch_flexibility: 37,
+                half_life_ms: 1234,
+                register: 850,
+                tolerance: 1_000_001,
+                silence_ms: 4500,
+                reset_stop: true,
+                reset_loop: false,
+                keyboard: [695_000_007, 380_000_008, 980_000_009],
+            },
+        },
+        status: 16 | 2,
+    };
+    assert_eq!(Published::new(record).load(), record);
+}
+
+/// A take recorded with every axis off its default and a link released
+/// carries those axes in its configuration records, which replay applies
+/// verbatim, and none in its parameter lane.
+#[test]
+fn a_take_carries_released_axes_in_its_configuration_records() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    let settings = device.settings();
+    let edit = ConfigEdit {
+        axes: [
+            Some(microcents(12.0)),
+            Some(microcents(696.0)),
+            None,
+            Some(microcents(975.0)),
+            Some(microcents(3.0)),
+        ],
+        ..Default::default()
+    };
+    assert!(settings.submit(edit));
+    device.run(0, vec![], false);
+    let linked = settings.view().resolved.tuning;
+    assert!(settings.submit(ConfigEdit::temper(harmonigraph_core::Comma::Syntonic, false, linked)));
+    device.run(64, vec![], false);
+    let expected = settings.view().resolved;
+    assert!(!expected.modes.tempered.syntonic);
+    let fresh = Tuning::default().axes();
+    assert!(expected.tuning.axes().iter().zip(fresh).all(|(axis, fresh)| *axis != fresh));
+    capture.arm();
+    device.run(128, vec![], false);
+    let entries = capture.drain_entries();
+    let configs: Vec<_> = entries
         .iter()
-        .filter(|e| e.2 == device.id(ParamKey::Three))
-        .map(|e| e.0)
+        .filter_map(|entry| match entry {
+            harmonigraph_record::Entry::Configuration(config) => Some(*config),
+            _ => None,
+        })
         .collect();
-    assert_eq!(
-        kinds,
-        [
-            CLAP_EVENT_PARAM_GESTURE_END,
-            CLAP_EVENT_PARAM_GESTURE_BEGIN,
-            CLAP_EVENT_PARAM_VALUE,
-            CLAP_EVENT_PARAM_GESTURE_END
-        ]
-    );
-    mailbox.submit(packet(ConfigEdit::axis(1, 697_000_000))).unwrap();
-    let (_, rejected_begin) =
-        device.run_reject_kind(128, vec![], false, Some(CLAP_EVENT_PARAM_GESTURE_BEGIN));
-    assert_eq!(
-        rejected_begin.attempts.iter().filter(|e| e.2 == device.id(ParamKey::Three)).count(),
-        1,
-        "an unaccepted begin creates no gesture or value/end output"
-    );
+    assert_eq!(configs.len(), 1);
+    let replayed = configs[0].resolved();
+    assert_eq!(replayed.tuning, expected.tuning);
+    assert_eq!(replayed.modes, expected.modes);
+    let lane = entries.iter().filter(|e| matches!(e, harmonigraph_record::Entry::Param { .. }));
+    assert_eq!(lane.count(), ParamKey::ALL.len(), "only the camera, once each");
 }
 
 fn note(id: i32, key: i16, time: u32, kind: u16) -> Input {
@@ -1153,43 +941,6 @@ fn id_tuning(id: i32, value: f64) -> Input {
     })
 }
 #[test]
-fn learning_notifications_land_at_the_boundary_and_merge_with_performance() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    // Retune back at its shipped default: with a source retuning, Learn
-    // leaves the lattice axes alone, and the axis write is what is timed here.
-    device.wrapper().test_inspect_plugin(|plugin| {
-        plugin.aggregation.as_ref().unwrap().shared.set_retune(false)
-    });
-    device.activate();
-    let mailbox = device.mailbox();
-    mailbox.submit(packet(ConfigEdit { learning: Some(true), ..Default::default() })).unwrap();
-    device.run(
-        1000,
-        vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON), note(20, 67, 31, CLAP_EVENT_NOTE_ON)],
-        false,
-    );
-    // The evidence is the Hub's own delayed row, so the inference lands at the
-    // next boundary rather than this one.
-    let sink = device.run(1064, vec![], false);
-    let fifth: Vec<_> = sink
-        .attempts
-        .iter()
-        .filter(|e| e.0 == CLAP_EVENT_PARAM_VALUE && e.2 == device.id(ParamKey::Three))
-        .collect();
-    assert_eq!(fifth.len(), 1);
-    // The boundary is which callback, not which offset. Inside it the value is
-    // floored at the last thing already on the wire -- the note this block
-    // emitted at 31 -- because the wrapper's own output follows the plugin's
-    // rather than interleaving with it by time.
-    assert_eq!(fifth[0].1, 31, "learning reads the whole block and lands at its boundary");
-    assert!(
-        sink.attempts.windows(2).all(|events| events[0].1 <= events[1].1),
-        "configuration and performance outputs must share chronological order"
-    );
-    device.finish_notes(1128, &[(10, 60), (20, 67)]);
-}
-#[test]
 fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
@@ -1199,8 +950,8 @@ fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
         plugin.aggregation.as_ref().unwrap().shared.set_retune(false)
     });
     device.activate();
-    let mailbox = device.mailbox();
-    mailbox.submit(packet(ConfigEdit { learning: Some(true), ..Default::default() })).unwrap();
+    let settings = device.settings();
+    assert!(settings.submit(ConfigEdit { learning: Some(true), ..Default::default() }));
     device.run(
         0,
         vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON), note(20, 67, 0, CLAP_EVENT_NOTE_ON)],
@@ -1210,11 +961,11 @@ fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
     // does with the interval that is left.
     device.run(64, vec![id_tuning(10, 1.0)], false);
     device.run(128, vec![], false);
-    mailbox.submit(packet(ConfigEdit::axis(1, 690_000_000))).unwrap();
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000)));
     device.run(192, vec![], false);
     assert_eq!(
-        mailbox.visible().0.raw[1],
-        690.0,
+        shown(&settings).raw.three,
+        690_000_000,
         "only C moved: the remaining interval supplies no fifth evidence"
     );
     let mut release = match note(10, -1, 0, CLAP_EVENT_NOTE_OFF) {
@@ -1224,12 +975,12 @@ fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
     release.channel = -1;
     release.port_index = -1;
     device.run(256, vec![Input::Note(release)], false);
-    mailbox.submit(packet(ConfigEdit::axis(2, 390_000_000))).unwrap();
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Five, 390_000_000)));
     device.run(320, vec![id_tuning(20, 5.0), note(30, 64, 0, CLAP_EVENT_NOTE_ON)], false);
     device.run(384, vec![], false);
     assert_eq!(
-        mailbox.visible().0.raw[2],
-        400.0,
+        shown(&settings).raw.five,
+        400_000_000,
         "ID20 survived the ID10 release and now supplies C beside E"
     );
     device.finish_notes(448, &[(20, 67), (30, 64)]);
@@ -2187,8 +1938,12 @@ fn configuration_observed_disarmed_does_not_become_later_armed_automation() {
     let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = recorded_device();
     device.activate();
-    let events = (0..9).map(|i| device.param(ParamKey::Three, 690.0 + i as f32, 8)).collect();
-    device.run(0, events, false);
+    for i in 0..9 {
+        assert!(device
+            .settings()
+            .submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0 + i as f32))));
+    }
+    device.run(0, vec![], false);
     capture.arm();
     device.run(64, vec![], false);
     let records = capture.drain_entries();
@@ -2218,7 +1973,7 @@ fn stop_during_parked_callback_cannot_close_its_later_playing_segment() {
     let mut parked = transport(0.0, 0);
     parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
     let mut events = vec![note(9, 48, 0, CLAP_EVENT_NOTE_ON), Input::Transport(transport(0.0, 32))];
-    events.extend((0..9).map(|i| device.param(ParamKey::Three, 690.0 + i as f32, 40)));
+    events.extend((0..9).map(|i| device.param(ParamKey::CameraDistance, 6.0 + 0.1 * i as f32, 40)));
     events.push(note(10, 60, 40, CLAP_EVENT_NOTE_ON));
     capture.pause_boundary(true);
     std::thread::scope(|scope| {
@@ -2293,8 +2048,8 @@ fn queued_policy_edits_preserve_disjoint_fields_from_the_same_observation() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
-    let mailbox = device.mailbox();
-    let observed = view(mailbox.visible().0, false).resolved.policy;
+    let settings = device.settings();
+    let observed = shown(&settings).view.resolved.policy;
     let first = PolicyConfig {
         radius: 5,
         reset_stop: true,
@@ -2313,16 +2068,14 @@ fn queued_policy_edits_preserve_disjoint_fields_from_the_same_observation() {
         ..observed
     };
     for policy in [first, second] {
-        mailbox
-            .submit(packet(ConfigEdit {
-                policy: Some(PolicyEdit::changed(observed, policy)),
-                ..Default::default()
-            }))
-            .unwrap();
+        assert!(settings.submit(ConfigEdit {
+            policy: Some(PolicyEdit::changed(observed, policy)),
+            ..Default::default()
+        }));
     }
     device.run(0, vec![], false);
     assert_eq!(
-        view(mailbox.visible().0, false).resolved.policy,
+        shown(&settings).view.resolved.policy,
         PolicyConfig {
             radius: first.radius,
             reset_stop: first.reset_stop,
@@ -2339,8 +2092,8 @@ fn keyboard_derivation_uses_the_adopted_fifth_in_one_transaction() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
-    let mailbox = device.mailbox();
-    let observed = view(mailbox.visible().0, false).resolved.policy;
+    let settings = device.settings();
+    let observed = shown(&settings).view.resolved.policy;
     let changed = PolicyConfig {
         pitch_flexibility: 37,
         keyboard: [695_000_000, observed.keyboard[1], observed.keyboard[2]],
@@ -2350,22 +2103,20 @@ fn keyboard_derivation_uses_the_adopted_fifth_in_one_transaction() {
         PolicyEdit::changed(observed, changed),
         PolicyEdit::changed(observed, observed).derive_keyboard(),
     ] {
-        mailbox.submit(packet(ConfigEdit { policy: Some(policy), ..Default::default() })).unwrap();
+        assert!(settings.submit(ConfigEdit { policy: Some(policy), ..Default::default() }));
     }
     device.run(0, vec![], false);
-    let adopted = view(mailbox.visible().0, false).resolved;
+    let adopted = shown(&settings).view.resolved;
     assert_eq!(adopted.policy.keyboard, harmonigraph_core::tuning::fifth_generated(695_000_000));
     assert_eq!(adopted.policy.pitch_flexibility, 37);
 
     let changed = PolicyConfig { keyboard: [697_000_000, 0, 0], ..adopted.policy };
-    mailbox
-        .submit(packet(ConfigEdit {
-            policy: Some(PolicyEdit::changed(adopted.policy, changed).derive_keyboard()),
-            ..Default::default()
-        }))
-        .unwrap();
+    assert!(settings.submit(ConfigEdit {
+        policy: Some(PolicyEdit::changed(adopted.policy, changed).derive_keyboard()),
+        ..Default::default()
+    }));
     device.run(64, vec![], false);
-    let derived = view(mailbox.visible().0, false).resolved;
+    let derived = shown(&settings).view.resolved;
     assert_eq!(derived.policy.keyboard, harmonigraph_core::tuning::fifth_generated(697_000_000));
     assert_eq!(derived.policy.pitch_flexibility, 37);
     assert_eq!(derived.revision, adopted.revision + 1);
@@ -2391,13 +2142,13 @@ fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
             .unwrap(),
     );
     device.load(state, true);
-    let mailbox = device.mailbox();
-    assert_eq!(view(mailbox.visible().0, true).resolved.policy, policy);
+    let settings = device.settings();
+    assert_eq!(shown(&settings).view.resolved.policy, policy);
     let saved: MusicalSettings =
         serde_json::from_str(&device.save().fields[MUSICAL_SETTINGS]).unwrap();
     assert_eq!(PolicyConfig::from(saved.adaptive), policy);
     device.run(0, vec![], false);
-    assert_eq!(view(mailbox.visible().0, false).resolved.policy, policy);
+    assert_eq!(shown(&settings).view.resolved.policy, policy);
     let defaults: MusicalSettings = serde_json::from_str("{\"adaptive\":{}}").unwrap();
     assert_eq!(PolicyConfig::from(defaults.adaptive), PolicyConfig::default());
     let old: MusicalSettings =
@@ -2505,10 +2256,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(playback.engine, TuningEngine::LatticeMap);
         assert_eq!(playback.selected, 1);
         assert_eq!(playback.map, Some(map));
-        assert_eq!(
-            plugin.configuration.as_ref().unwrap().reducer.resolved().tuning.three,
-            696_500_000
-        );
+        assert_eq!(plugin.configuration.as_ref().unwrap().current().tuning.three, 696_500_000);
     });
     let (context, _) = device.wrapper().test_gui_context("lattice-map");
     let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
@@ -2518,17 +2266,17 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     device.wrapper().test_inspect_plugin(|plugin| {
         assert!(!crate::lattice_maps::view(&plugin.params).pending);
         let edit = |action| crate::lattice_maps::edit(&plugin.params, &setter, action);
-        let mailbox = plugin.params.configuration.get().unwrap();
-        mailbox.dirty.store(false, std::sync::atomic::Ordering::Release);
+        let dirty = &plugin.params.settings.modified;
+        dirty.store(false, std::sync::atomic::Ordering::Release);
         edit(MapEdit::EditShape(true));
         edit(MapEdit::Replace(map.node(64)));
         edit(MapEdit::Undo);
         assert!(
-            !mailbox.dirty.load(std::sync::atomic::Ordering::Acquire),
+            !dirty.load(std::sync::atomic::Ordering::Acquire),
             "an edit that changes nothing must not mark the project modified"
         );
         edit(MapEdit::Replace(destination));
-        assert!(mailbox.dirty.load(std::sync::atomic::Ordering::Acquire));
+        assert!(dirty.load(std::sync::atomic::Ordering::Acquire));
         let preview = crate::lattice_maps::view(&plugin.params);
         assert!(preview.editing() && preview.can_undo);
         assert_eq!(preview.playback.map, Some(changed));
@@ -2681,7 +2429,7 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
 
 /// Goes with #1756, which retires host automation of the axes.
 #[test]
-fn every_engine_records_shared_tuning_at_its_actual_sample_boundary() {
+fn every_engine_records_a_tuning_edit_at_the_callback_that_applies_it() {
     let _scope = crate::test_scope::enter();
     // Pass through, Adaptive and Lattice Map.
     for engine in 0..3 {
@@ -2692,16 +2440,9 @@ fn every_engine_records_shared_tuning_at_its_actual_sample_boundary() {
         device.load(state, false);
         device.run(0, vec![], false);
         capture.arm();
-        // Two changes in one block, so the second is dated from a segment that
-        // does not start at the block's own start.
-        device.run(
-            64,
-            vec![
-                device.param(ParamKey::Three, 690.0, 16),
-                device.param(ParamKey::Three, 685.0, 40),
-            ],
-            false,
-        );
+        device.run(64, vec![], false);
+        assert!(device.settings().submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0))));
+        device.run(128, vec![], false);
         let configs: Vec<_> = capture
             .drain_entries()
             .into_iter()
@@ -2710,13 +2451,11 @@ fn every_engine_records_shared_tuning_at_its_actual_sample_boundary() {
                 _ => None,
             })
             .collect();
-        assert_eq!(configs.len(), 3, "engine {engine}");
+        assert_eq!(configs.len(), 2, "engine {engine}");
         assert_eq!(configs[0].axes[1], 696_000_000);
         assert_eq!(configs[1].axes[1], 690_000_000);
-        assert_eq!(configs[2].axes[1], 685_000_000);
         assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
-        assert!((configs[1].t - 80.0 / 48000.0).abs() < 1e-9);
-        assert!((configs[2].t - 104.0 / 48000.0).abs() < 1e-9);
+        assert!((configs[1].t - 128.0 / 48000.0).abs() < 1e-9);
     }
 }
 
@@ -2814,7 +2553,7 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
     let backend = crate::PluginParamBackend {
         params: &params,
         setter: &setter,
-        configuration: None,
+        configuration: params.settings.view(),
         gesture: &gesture,
     };
     let mut events = Vec::new();

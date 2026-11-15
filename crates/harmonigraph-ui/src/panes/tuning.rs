@@ -10,13 +10,12 @@
 //! Everything else in the settings dock is about how what is there gets drawn.
 
 use super::learn_pulse;
-use super::param_bar;
 use super::spectral::roll::note_color;
 use super::{section, subsection};
-use crate::params::{ParamBackend, ParamKey};
+use crate::params::{ConfigurationView, ParamBackend};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
-use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, PolicyEdit};
+use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, PolicyEdit, TuningAxis};
 use harmonigraph_core::tuning;
 use std::collections::BTreeMap;
 
@@ -28,10 +27,10 @@ mod instance_tests;
 #[path = "tuning_map_tests.rs"]
 mod map_tests;
 
-/// Configuration status bit 2: the audio owner refuses every edit and fails a
-/// recording's configuration until the host resets the plugin.
+/// Configuration status bit 2: host input was lost, so a recording refuses its
+/// configuration until the host resets the plugin. Edits still apply.
 pub(crate) const CONFIGURATION_FAULT_NOTICE: &str =
-    "Tuning changes refused: configuration fault. Deactivate and reactivate the plugin in the host to recover.";
+    "Host input was lost: a take recorded now refuses its tuning until the plugin is reset. Deactivate and reactivate the plugin in the host to recover; tuning edits still apply.";
 /// Configuration status bit 1: the held notes cannot be read for Learn.
 pub(crate) const HELD_STATE_INCOMPLETE_NOTICE: &str =
     "Learning unavailable: held state is incomplete. Reset to recover.";
@@ -43,23 +42,23 @@ pub(crate) fn too_many_pitches_notice() -> String {
     )
 }
 
-/// Interval entry always submits a semantic edit, even when its typed value is
-/// unchanged. Linked readouts use the resolved value; their ordinary edit path
-/// recognizes or releases the relationship in the configuration owner.
-fn interval_bar(
+/// One tuning axis, as the configuration owner resolved it. Entry always
+/// submits a semantic edit, even when its typed value is unchanged. Linked
+/// readouts show the derived value; their ordinary edit path recognizes or
+/// releases the relationship in the configuration owner.
+///
+/// The Tolerance is eased toward its low end: it lives in its first
+/// hundredth, a hundredth of a cent being a real setting and forty cents an
+/// absurd one, so a linear bar would spend its whole travel on values nobody
+/// picks.
+fn axis_bar(
     ui: &mut egui::Ui,
     state: &mut PictureState,
     params: &dyn ParamBackend,
-    key: ParamKey,
+    axis: TuningAxis,
 ) {
-    let current = live_tuning(state, params);
-    let mut value = match key {
-        ParamKey::Three => current.three_cents(),
-        ParamKey::Five => current.five_cents(),
-        ParamKey::Seven => current.seven_cents(),
-        _ => unreachable!(),
-    };
-    let linked = comma_deriving(key, state.runtime.tempered);
+    let mut value = state.runtime.tuning.cents(axis);
+    let linked = comma_deriving(axis, state.runtime.tempered);
     let hint = match linked {
         Some(comma) => format!(
             "{}: the {} follows {}. Enter an independent value to change the relationship.",
@@ -67,28 +66,22 @@ fn interval_bar(
             comma.derived_axis_name(),
             comma.derived_from()
         ),
-        None => tuning_hint(key).to_owned(),
+        None => tuning_hint(axis).to_owned(),
     };
-    // The host's own reset, which under a temperament releases the derived
+    let tolerance = axis == TuningAxis::Tolerance;
+    // The bar's own reset, which under a temperament releases the derived
     // axis the way an entered value does.
-    let mut bar = ValueBar::new(&mut value, key.range(), key.label())
-        .decimals(2)
+    let mut bar = ValueBar::new(&mut value, axis.range(), axis_label(axis))
+        .eased(tolerance)
+        .decimals(if tolerance { 3 } else { 2 })
         .unit(1.0, "¢")
-        .default_value(key.default_value())
+        .default_value(axis.default_cents())
         .hint(&hint);
     if linked.is_some() {
         bar = bar.badge("↔");
     }
-    let response = bar.show(ui);
-    if response.drag_started() {
-        params.begin_set(key);
-    }
-    if response.changed() {
-        let index = ParamKey::TUNING.iter().position(|&k| k == key).unwrap();
-        state.runtime.edit_tuning(params, ConfigEdit::axis(index, tuning::microcents(value)));
-    }
-    if response.drag_stopped() {
-        params.end_set(key);
+    if bar.show(ui).changed() {
+        state.runtime.edit_tuning(params, ConfigEdit::axis(axis, tuning::microcents(value)));
     }
 }
 
@@ -104,7 +97,7 @@ fn temperament_switch(
         comma.derived_axis_name(), comma.derived_from(),
     ));
     if response.changed() {
-        let edit = ConfigEdit::temper(comma, on, live_tuning(state, params));
+        let edit = ConfigEdit::temper(comma, on, state.runtime.tuning);
         state.runtime.edit_tuning(params, edit);
     }
 }
@@ -117,7 +110,7 @@ fn interval_row(
     params: &dyn ParamBackend,
     comma: tuning::Comma,
 ) {
-    let key = derived_key(comma);
+    let axis = comma.derived_axis();
     let switch_width = tuning::Comma::ALL
         .into_iter()
         .map(|c| crate::widgets::toggle_switch_width(ui, c.temperament()))
@@ -129,84 +122,61 @@ fn interval_row(
                 egui::vec2(bar_width, theme::row_height(theme::ui_scale(ui.ctx()))),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    interval_bar(ui, state, params, key);
+                    axis_bar(ui, state, params, axis);
                 },
             );
             temperament_switch(ui, state, params, comma);
         });
     } else {
-        interval_bar(ui, state, params, key);
+        axis_bar(ui, state, params, axis);
         button_row(ui, |ui| temperament_switch(ui, state, params, comma));
     }
 }
 
-/// The tuning as the lattice will use it, from the params as they stand right
-/// now: `begin_frame`'s derivation, re-run on live values.
-///
-/// The live read is what keeps a derived bar current with the bar it follows.
-/// `ParamKey::TUNING` draws the fifth before the third and the third before
-/// the seventh, and in a shell whose `set` lands immediately (the standalone)
-/// a drag of the fifth is already in the params by the time the bars below it
-/// draw — reading the frame's snapshot instead would leave every derived
-/// readout a frame behind for the whole gesture.
-fn live_tuning(state: &PictureState, params: &dyn ParamBackend) -> harmonigraph_core::Tuning {
-    if let Some(owned) = params.configuration() {
-        return owned.resolved.tuning;
-    }
-    let mut tuning = crate::params::tuning_from_params(params);
-    for comma in tuning::Comma::ALL {
-        if state.runtime.tempered.has(comma) {
-            tuning.temper(comma);
-        }
-    }
-    tuning
-}
-
-/// The interval whose tuning and inline switch this comma controls.
-fn derived_key(comma: tuning::Comma) -> ParamKey {
-    match comma {
-        tuning::Comma::Syntonic => ParamKey::Five,
-        tuning::Comma::SeptimalKleisma => ParamKey::Seven,
+fn axis_label(axis: TuningAxis) -> &'static str {
+    match axis {
+        TuningAxis::COffset => "C pitch offset",
+        TuningAxis::Three => "Perfect fifth",
+        TuningAxis::Five => "Major third",
+        TuningAxis::Seven => "Harmonic seventh",
+        TuningAxis::Tolerance => "Note match tolerance",
     }
 }
 
-/// Unlinked interval hints. [`interval_bar`] explains the active relationship
+/// Unlinked axis hints. [`axis_bar`] explains the active relationship
 /// instead while an interval is linked.
-fn tuning_hint(key: ParamKey) -> &'static str {
-    match key {
-        ParamKey::COffset => {
+fn tuning_hint(axis: TuningAxis) -> &'static str {
+    match axis {
+        TuningAxis::COffset => {
             "Where C sits, in cents from standard (100¢ is a semitone). Moves \
              every node's pitch together."
         }
-        ParamKey::Three => {
+        TuningAxis::Three => {
             "The fifths axis: one step, in cents. 701.96 is just (3:2), 700 is \
              12-TET."
         }
-        ParamKey::Five => {
+        TuningAxis::Five => {
             "The thirds axis: one step, in cents. 386.31 is just (5:4), 400 is \
              12-TET. Tempering Meantone locks it to the fifth."
         }
-        ParamKey::Seven => {
+        TuningAxis::Seven => {
             "The sevenths axis: one step, in cents. 968.83 is just (7:4), 1000 \
              is 12-TET. Tempering Marvel locks it to the fifth and third."
         }
-        ParamKey::Tolerance => {
+        TuningAxis::Tolerance => {
             "How far off a node's pitch a note may land and still light it, in \
              cents. Also sets the Analyzer's off-lattice band."
         }
-        // Not on this pane.
-        ParamKey::CameraYaw
-        | ParamKey::CameraPitch
-        | ParamKey::CameraDistance
-        | ParamKey::CameraPanX
-        | ParamKey::CameraPanY => "",
     }
 }
 
 /// The comma currently deriving this axis, if any. At most one: each comma
 /// derives a different axis.
-fn comma_deriving(key: ParamKey, tempered: harmonigraph_core::Tempered) -> Option<tuning::Comma> {
-    tuning::Comma::ALL.into_iter().find(|&c| derived_key(c) == key && tempered.has(c))
+fn comma_deriving(
+    axis: TuningAxis,
+    tempered: harmonigraph_core::Tempered,
+) -> Option<tuning::Comma> {
+    tuning::Comma::ALL.into_iter().find(|&c| c.derived_axis() == axis && tempered.has(c))
 }
 
 pub(super) fn tuning_pane(
@@ -216,8 +186,8 @@ pub(super) fn tuning_pane(
     now: f64,
 ) {
     section(ui, "Tuning", |ui| {
-        param_bar(ui, params, ParamKey::COffset, tuning_hint(ParamKey::COffset));
-        interval_bar(ui, state, params, ParamKey::Three);
+        axis_bar(ui, state, params, TuningAxis::COffset);
+        axis_bar(ui, state, params, TuningAxis::Three);
         for comma in tuning::Comma::ALL {
             interval_row(ui, state, params, comma);
         }
@@ -309,36 +279,34 @@ pub(super) fn tuning_pane(
     });
 
     // Faults remain visible even when the tuning controls are folded.
-    let configuration_notice = if state.runtime.configuration_status & 2 != 0 {
-        crate::widgets::label(
-            ui,
-            egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
-        );
-        true
-    } else if state.runtime.configuration_status & 1 != 0 {
-        crate::widgets::label(
-            ui,
-            egui::RichText::new(HELD_STATE_INCOMPLETE_NOTICE).color(theme::armed()),
-        );
-        true
-    } else if state.runtime.configuration_status & 16 != 0 {
-        crate::widgets::label(
-            ui,
-            egui::RichText::new(too_many_pitches_notice()).color(theme::armed()),
-        );
-        true
-    } else if state.runtime.configuration_status & 4 != 0 {
-        crate::widgets::label(ui, "Tuning applied; host notification was rejected");
-        true
-    } else if state.runtime.configuration_status & 8 != 0 {
-        crate::widgets::label(ui, "Tuning change refused: pending command storage is full");
-        true
-    } else {
-        false
-    };
+    let configuration_notice =
+        if state.runtime.configuration_status & ConfigurationView::INPUT_LOST != 0 {
+            crate::widgets::label(
+                ui,
+                egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
+            );
+            true
+        } else if state.runtime.configuration_status & ConfigurationView::LEARN_INCOMPLETE != 0 {
+            crate::widgets::label(
+                ui,
+                egui::RichText::new(HELD_STATE_INCOMPLETE_NOTICE).color(theme::armed()),
+            );
+            true
+        } else if state.runtime.configuration_status & ConfigurationView::TOO_MANY_CLASSES != 0 {
+            crate::widgets::label(
+                ui,
+                egui::RichText::new(too_many_pitches_notice()).color(theme::armed()),
+            );
+            true
+        } else if state.runtime.configuration_status & ConfigurationView::QUEUE_FULL != 0 {
+            crate::widgets::label(ui, "Tuning change refused: pending command storage is full");
+            true
+        } else {
+            false
+        };
 
     section(ui, "Note matching", |ui| {
-        param_bar(ui, params, ParamKey::Tolerance, tuning_hint(ParamKey::Tolerance));
+        axis_bar(ui, state, params, TuningAxis::Tolerance);
     });
 
     use harmonigraph_core::lattice_map::TuningEngine;

@@ -171,8 +171,8 @@ fn loaded(edge: Edge) -> SharedState {
     state
 }
 
-/// The host's side of a draw: its parameters, of which the settings pages read
-/// the tuning axes, and the configuration the adaptive policy bars read.
+/// The host's side of a draw: its camera parameters, and the configuration
+/// the tuning axes and the adaptive policy bars read.
 struct Backend {
     config: params::ConfigurationView,
     host: [f32; params::ParamKey::ALL.len()],
@@ -219,28 +219,20 @@ fn host_defaults() -> [f32; params::ParamKey::ALL.len()] {
     params::ParamKey::ALL.map(|key| key.default_value())
 }
 
-/// A backend whose raw tuning is the five tuning parameters `host` holds.
+/// A backend whose configuration holds the raw tuning `raw`.
 fn backend_with(
     policy: PolicyConfig,
-    host: [f32; params::ParamKey::ALL.len()],
+    raw: harmonigraph_core::Tuning,
     meantone: bool,
     marvel: bool,
 ) -> Backend {
-    use params::ParamKey::{COffset, Five, Seven, Three, Tolerance};
-    let axis = |key| host[key_index(key)];
-    let raw = harmonigraph_core::Tuning::from_cents(
-        axis(COffset),
-        axis(Three),
-        axis(Five),
-        axis(Seven),
-        axis(Tolerance),
-    );
+    let host = host_defaults();
     let mut reducer = ConfigReducer::default();
     let modes = TuningModes {
         tempered: harmonigraph_core::Tempered { syntonic: meantone, septimal_kleisma: marvel },
         learning: false,
     };
-    assert!(reducer.apply(ConfigMutation::Restore { raw, modes, policy }));
+    reducer.apply(ConfigMutation::Restore { raw, modes, policy });
     Backend {
         config: params::ConfigurationView {
             resolved: reducer.resolved(),
@@ -261,7 +253,7 @@ fn backend(edge: Edge, meantone: bool, marvel: bool) -> Backend {
             push(&mut policy, edge == Edge::High);
         }
     }
-    backend_with(policy, host_defaults(), meantone, marvel)
+    backend_with(policy, harmonigraph_core::Tuning::default(), meantone, marvel)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -715,16 +707,18 @@ fn inputs(blob: &str) -> Vec<Input> {
             }),
         });
     }
-    for key in params::ParamKey::TUNING {
+    for axis in harmonigraph_core::configuration::TuningAxis::ALL {
         let blob = blob.to_owned();
         inputs.push(Input {
-            name: format!("host.{}", key.id()),
+            name: format!("tuning.{axis:?}"),
             nudge: Box::new(move |high, scenario| {
-                let mut host = host_defaults();
-                let range = key.range();
-                host[key_index(key)] = if high { *range.end() } else { *range.start() };
+                let mut axes = harmonigraph_core::Tuning::default().axes();
+                let range = axis.range();
+                let edge = if high { *range.end() } else { *range.start() };
+                axes[axis.index()] = harmonigraph_core::tuning::microcents(edge);
+                let raw = harmonigraph_core::Tuning::from_axes(axes);
                 let backend =
-                    backend_with(PolicyConfig::default(), host, scenario.meantone, scenario.marvel);
+                    backend_with(PolicyConfig::default(), raw, scenario.meantone, scenario.marvel);
                 (blob.clone(), backend)
             }),
         });
@@ -737,7 +731,7 @@ fn inputs(blob: &str) -> Vec<Input> {
                 let mut policy = PolicyConfig::default();
                 push(&mut policy, high);
                 let backend =
-                    backend_with(policy, host_defaults(), scenario.meantone, scenario.marvel);
+                    backend_with(policy, Default::default(), scenario.meantone, scenario.marvel);
                 (blob.clone(), backend)
             }),
         });

@@ -13,7 +13,7 @@ use std::{
     ptr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -39,21 +39,15 @@ struct Control {
     tasks_run: AtomicUsize,
     host_callbacks: AtomicUsize,
     plugin: AtomicUsize,
-    host_cache: AtomicU64,
     pause_audio: AtomicBool,
     pause_begin: AtomicBool,
-    pause_apply: AtomicBool,
     audio_entered: AtomicBool,
     audio_resume: AtomicBool,
-    pause_value: AtomicBool,
-    value_entered: AtomicBool,
-    value_resume: AtomicBool,
     observed: Mutex<Observed>,
     final_flush: bool,
     process_error: bool,
     statuses: Vec<ProcessStatus>,
     misuse: bool,
-    apply_limit: AtomicUsize,
     restarts: AtomicUsize,
     latency_changes: AtomicUsize,
 }
@@ -66,7 +60,6 @@ struct Observed {
     callbacks: Vec<perf::Callback>,
     /// The host's answer to each push the fixture made, in push order.
     pushes: Vec<bool>,
-    applies: Vec<i64>,
     legacy: usize,
     finals: usize,
     faults: usize,
@@ -80,15 +73,10 @@ impl Default for Control {
             tasks_run: AtomicUsize::new(0),
             host_callbacks: AtomicUsize::new(0),
             plugin: AtomicUsize::new(0),
-            host_cache: AtomicU64::new(0),
             pause_audio: AtomicBool::new(false),
             pause_begin: AtomicBool::new(false),
-            pause_apply: AtomicBool::new(false),
             audio_entered: AtomicBool::new(false),
             audio_resume: AtomicBool::new(false),
-            pause_value: AtomicBool::new(false),
-            value_entered: AtomicBool::new(false),
-            value_resume: AtomicBool::new(false),
             observed: Mutex::new(Observed {
                 inputs: Vec::with_capacity(8000),
                 configuration: Vec::with_capacity(5000),
@@ -96,7 +84,6 @@ impl Default for Control {
                 summaries: Vec::with_capacity(100),
                 callbacks: Vec::with_capacity(100),
                 pushes: Vec::with_capacity(3000),
-                applies: Vec::with_capacity(5000),
                 tails_before_process: Vec::with_capacity(16),
                 ..Default::default()
             }),
@@ -104,7 +91,6 @@ impl Default for Control {
             process_error: false,
             statuses: vec![],
             misuse: false,
-            apply_limit: AtomicUsize::new(usize::MAX),
             restarts: AtomicUsize::new(0),
             latency_changes: AtomicUsize::new(0),
         }
@@ -115,7 +101,6 @@ struct Fixture<const CONFIG: bool, const PERFORMANCE: bool> {
     control: Arc<Control>,
     callback: usize,
     processed: usize,
-    mailbox: Option<Arc<ConfigurationMailbox>>,
 }
 impl<const C: bool, const P: bool> Default for Fixture<C, P> {
     fn default() -> Self {
@@ -131,7 +116,6 @@ impl<const C: bool, const P: bool> Default for Fixture<C, P> {
                 .clone(),
             callback: 0,
             processed: 0,
-            mailbox: None,
         }
     }
 }
@@ -215,42 +199,9 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::NoteEffect];
     const CLAP_CONFIGURATION: bool = C;
-    const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] = &["axis"];
     const CLAP_PERFORMANCE: bool = P;
-    fn clap_configuration_prepare(
-        state: &nice_plug::plugin::PluginState,
-    ) -> Result<ConfigurationEdit, SubmitError> {
-        let Some(nice_plug::plugin::ParamValue::F32(value)) = state.params.get("axis") else {
-            return Err(SubmitError::Invalid);
-        };
-        let mut edit = ConfigurationEdit::default();
-        edit.values[0] = Some(*value);
-        Ok(edit)
-    }
     fn clap_configuration_fault(&mut self) {
         self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).faults += 1;
-    }
-    fn clap_configuration_install(&mut self, mailbox: Arc<ConfigurationMailbox>) {
-        self.mailbox = Some(mailbox);
-    }
-    fn clap_configuration_apply(
-        &mut self,
-        _: ConfigurationCommand,
-        commit: ConfigurationCommit,
-    ) -> Option<ConfigurationSnapshot> {
-        if self.control.pause_apply.swap(false, Ordering::AcqRel) {
-            self.control.audio_entered.store(true, Ordering::Release);
-            while !self.control.audio_resume.load(Ordering::Acquire) {
-                std::thread::yield_now();
-            }
-        }
-        let remaining = self.control.apply_limit.load(Ordering::Relaxed);
-        if remaining == 0 {
-            return None;
-        }
-        self.control.apply_limit.store(remaining - 1, Ordering::Relaxed);
-        self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).applies.push(commit.sample);
-        Some(ConfigurationSnapshot::default())
     }
     fn clap_configuration_observe(&mut self, input: OwnedInput) {
         self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).configuration.push(input);
@@ -460,20 +411,7 @@ unsafe extern "C" fn host_callback(host: *const clap_host) {
         .host_callbacks
         .fetch_add(1, Ordering::Relaxed);
 }
-unsafe extern "C" fn rescan(host: *const clap_host, _: u32) {
-    use clap_sys::ext::params::*;
-    let control = unsafe { &*((*host).host_data.cast::<Control>()) };
-    let plugin = control.plugin.load(Ordering::Relaxed) as *const clap_plugin;
-    let params = unsafe {
-        &*(((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_PARAMS.as_ptr())
-            .cast::<clap_plugin_params>())
-    };
-    let mut info: clap_param_info = unsafe { std::mem::zeroed() };
-    assert!(unsafe { (params.get_info.unwrap())(plugin, 0, &mut info) });
-    let mut value = 0.0;
-    assert!(unsafe { (params.get_value.unwrap())(plugin, info.id, &mut value) });
-    control.host_cache.store(value.to_bits(), Ordering::Relaxed);
-}
+unsafe extern "C" fn rescan(_: *const clap_host, _: u32) {}
 unsafe extern "C" fn clear(_: *const clap_host, _: u32, _: u32) {}
 static PARAMS: clap_sys::ext::params::clap_host_params = clap_sys::ext::params::clap_host_params {
     rescan: Some(rescan),
@@ -489,7 +427,6 @@ struct Attempt {
     value: Option<InputValue>,
 }
 struct Sink {
-    control: Arc<Control>,
     script: Vec<bool>,
     attempts: Vec<Attempt>,
 }
@@ -500,20 +437,6 @@ unsafe extern "C" fn push(
     let sink = unsafe { &mut *((*list).ctx.cast::<Sink>()) };
     let header = unsafe { &*event };
     let accepted = sink.script.get(sink.attempts.len()).copied().unwrap_or(true);
-    if header.type_ == CLAP_EVENT_PARAM_VALUE {
-        if sink.control.pause_value.swap(false, Ordering::AcqRel) {
-            sink.control.value_entered.store(true, Ordering::Release);
-            while !sink.control.value_resume.load(Ordering::Acquire) {
-                std::thread::yield_now();
-            }
-        }
-        if accepted {
-            sink.control.host_cache.store(
-                unsafe { (*event.cast::<clap_event_param_value>()).value }.to_bits(),
-                Ordering::Relaxed,
-            );
-        }
-    }
     let value = match header.type_ {
         CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE => {
             let e = unsafe { &*event.cast::<clap_event_note>() };
@@ -666,8 +589,8 @@ impl Device {
         Self {
             plugin,
             _host: host,
-            control: control.clone(),
-            sink: Sink { control, script: vec![], attempts: Vec::with_capacity(5000) },
+            control,
+            sink: Sink { script: vec![], attempts: Vec::with_capacity(5000) },
             transport: None,
         }
     }
@@ -766,15 +689,6 @@ impl Device {
         let mut value = 0.0;
         assert!(unsafe { (params.get_value.unwrap())(self.plugin, id, &mut value) });
         value
-    }
-    fn mailbox(&self) -> Arc<ConfigurationMailbox> {
-        unsafe {
-            &*((*self.plugin)
-                .plugin_data
-                .cast::<nice_plug::wrapper::clap::Wrapper<Fixture<true, true>>>())
-        }
-        .configuration_handle()
-        .unwrap()
     }
 }
 impl Drop for Device {
@@ -1026,19 +940,8 @@ fn native_gui_nonperformance_paths_keep_direct_parameter_delivery() {
             ]
         );
         assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).legacy, 0);
-        // Configuration-only keeps its existing configuration snapshot readback;
-        // inspect the generic Param directly to prove the legacy output applies.
-        if configuration {
-            let w = unsafe {
-                &*((*d.plugin)
-                    .plugin_data
-                    .cast::<nice_plug::wrapper::clap::Wrapper<Fixture<true, false>>>())
-            };
-            assert_eq!(w.test_inspect_plugin(|p| p.params.axis.value()), 0.25);
-        } else {
-            let Input::Param(p) = d.param(0) else { unreachable!() };
-            assert_eq!(d.parameter_value(p.param_id), 0.25);
-        }
+        let Input::Param(p) = d.param(0) else { unreachable!() };
+        assert_eq!(d.parameter_value(p.param_id), 0.25);
         drop(gui);
     }
 }
@@ -1117,15 +1020,9 @@ fn owned_input_has_exact_subblocks_transport_and_no_duplicate_consumer() {
 }
 
 #[test]
-fn raw_signed_addresses_and_f64_are_preserved_without_hub_mailbox() {
+fn raw_signed_addresses_and_f64_are_preserved() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut d = Device::new(Control::default(), c"fixture.performance");
-    let wrapper = unsafe {
-        &*((*d.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<Fixture<false, true>>>())
-    };
-    assert!(wrapper.configuration_handle().is_none());
     d.run(
         0,
         8,
@@ -1306,9 +1203,8 @@ fn parameter_output_follows_its_subblock_notes_at_the_subblock_end() {
         value: note(CLAP_EVENT_NOTE_OFF),
     });
     let mut d = Device::new(Control { script, ..Default::default() }, c"fixture.combined");
-    let mut edit = ConfigurationEdit::default();
-    edit.values[0] = Some(0.75);
-    d.mailbox().submit(edit).unwrap();
+    let gui = d.gui::<true, true>();
+    gui(&[0.75]);
     // A transport event at 32 splits the callback into [0,32) and [32,64).
     d.run(0, 64, vec![transport(32, false, 0)], true);
     // Every parameter event lands on its sub-block's last sample, after the
@@ -1358,63 +1254,6 @@ fn allocated_boundary_layouts_fit_declared_budgets() {
         "input={} input_pool={}",
         std::mem::size_of::<Option<OwnedInput>>(),
         INPUT_SCAN * std::mem::size_of::<Option<OwnedInput>>(),
-    );
-}
-
-#[test]
-fn gesture_closing_debt_survives_rejection_before_new_begin() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.combined");
-    let mut edit = ConfigurationEdit::default();
-    edit.values[0] = Some(0.75);
-    d.mailbox().submit(edit).unwrap();
-    d.sink.script = vec![true, true, false];
-    d.run(0, 64, vec![], true);
-    d.mailbox().submit(edit).unwrap();
-    d.run(64, 8, vec![], true);
-    assert_eq!(
-        d.sink.attempts.iter().map(|a| a.kind).collect::<Vec<_>>(),
-        [
-            CLAP_EVENT_PARAM_GESTURE_BEGIN,
-            CLAP_EVENT_PARAM_VALUE,
-            CLAP_EVENT_PARAM_GESTURE_END,
-            CLAP_EVENT_PARAM_GESTURE_END,
-            CLAP_EVENT_PARAM_GESTURE_BEGIN,
-            CLAP_EVENT_PARAM_VALUE,
-            CLAP_EVENT_PARAM_GESTURE_END
-        ]
-    );
-}
-
-#[test]
-fn reused_notification_cells_do_not_overtake_an_open_older_gesture() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.combined");
-    for value in [0.1, 0.2, 0.3, 0.4] {
-        let mut edit = ConfigurationEdit::default();
-        edit.values[0] = Some(value);
-        d.mailbox().submit(edit).unwrap();
-    }
-    // Refuse the value inside the third gesture. There is no output budget left
-    // to cut the drain short, so a host refusal is what leaves a gesture open
-    // across the callback boundary the reused cell has to wait behind.
-    d.sink.script = vec![true, true, true, true, true, true, true, true, false];
-    d.control.apply_limit.store(3, Ordering::Release);
-    d.run(0, 64, vec![], true);
-    assert_eq!(d.sink.attempts.len(), 9);
-    assert_eq!(d.sink.attempts[6].kind, CLAP_EVENT_PARAM_GESTURE_BEGIN);
-    d.control.apply_limit.store(10, Ordering::Release);
-    d.run(64, 8, vec![], true);
-    // The fourth edit reuses a cell an earlier gesture released. Its Begin
-    // waits behind the End the third gesture still owes.
-    assert_eq!(
-        d.sink.attempts[9..].iter().map(|a| a.kind).collect::<Vec<_>>(),
-        [
-            CLAP_EVENT_PARAM_GESTURE_END,
-            CLAP_EVENT_PARAM_GESTURE_BEGIN,
-            CLAP_EVENT_PARAM_VALUE,
-            CLAP_EVENT_PARAM_GESTURE_END
-        ]
     );
 }
 
@@ -1526,185 +1365,4 @@ fn deferred_gui_producer_finishing_after_audio_still_wakes_host() {
         ((*d.plugin).on_main_thread.unwrap())(d.plugin);
     }
     assert_eq!(control.tasks_run.load(Ordering::Relaxed), 1);
-}
-
-#[test]
-fn final_error_drain_requests_rescan_after_racing_restore() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for invalid in [false, true] {
-        let mut d = Device::new(
-            Control { process_error: !invalid, ..Default::default() },
-            c"fixture.combined",
-        );
-        let mut edit = ConfigurationEdit::default();
-        edit.values[0] = Some(0.1);
-        // The edit is applied inside the racing callback itself, so its value
-        // attempt is the one the restore below overtakes. It used to be carried
-        // there by an exhausted output budget instead.
-        d.mailbox().submit(edit).unwrap();
-        d.control.pause_value.store(true, Ordering::Release);
-        let control = d.control.clone();
-        let plugin_address = d.plugin as usize;
-        d = std::thread::scope(|scope| {
-            let audio = scope.spawn(move || {
-                d.run(64, 64, if invalid { vec![on(64)] } else { vec![] }, true);
-                d
-            });
-            while !control.value_entered.load(Ordering::Acquire) {
-                std::thread::yield_now();
-            }
-            let plugin = plugin_address as *const clap_plugin;
-            let wrapper = unsafe {
-                &*((*plugin)
-                    .plugin_data
-                    .cast::<nice_plug::wrapper::clap::Wrapper<Fixture<true, true>>>())
-            };
-            let mut state = wrapper.get_state_object();
-            state.params.insert("axis".to_owned(), nice_plug::plugin::ParamValue::F32(0.9));
-            wrapper.set_state_object_from_gui(state);
-            unsafe {
-                ((*plugin).on_main_thread.unwrap())(plugin);
-            }
-            assert!(
-                (f64::from_bits(control.host_cache.load(Ordering::Relaxed)) - 0.9).abs() < 1e-6
-            );
-            control.host_callbacks.store(0, Ordering::Release);
-            control.value_resume.store(true, Ordering::Release);
-            audio.join().unwrap()
-        });
-        assert!((f64::from_bits(control.host_cache.load(Ordering::Relaxed)) - 0.1).abs() < 1e-6);
-        assert!(control.host_callbacks.load(Ordering::Acquire) > 0);
-        unsafe {
-            ((*d.plugin).on_main_thread.unwrap())(d.plugin);
-        }
-        assert!((f64::from_bits(control.host_cache.load(Ordering::Relaxed)) - 0.9).abs() < 1e-6);
-    }
-}
-
-#[test]
-fn restore_arriving_during_configuration_drain_waits_for_next_callback() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.combined");
-    let plugin_address = d.plugin as usize;
-    let restore = |value| {
-        let plugin = plugin_address as *const clap_plugin;
-        let wrapper = unsafe {
-            &*((*plugin)
-                .plugin_data
-                .cast::<nice_plug::wrapper::clap::Wrapper<Fixture<true, true>>>())
-        };
-        let mut state = wrapper.get_state_object();
-        state.params.insert("axis".to_owned(), nice_plug::plugin::ParamValue::F32(value));
-        wrapper.set_state_object_from_gui(state);
-    };
-    restore(0.25);
-    d.control.pause_apply.store(true, Ordering::Release);
-    let control = d.control.clone();
-    d = std::thread::scope(|scope| {
-        let audio = scope.spawn(move || {
-            d.run(0, 64, vec![], true);
-            d
-        });
-        while !control.audio_entered.load(Ordering::Acquire) {
-            std::thread::yield_now();
-        }
-        // Restore commands have no 16-cell UI notification limit. A producer
-        // replenishing this queue must not extend the current audio callback.
-        restore(0.75);
-        control.audio_resume.store(true, Ordering::Release);
-        audio.join().unwrap()
-    });
-    assert_eq!(d.mailbox().published.load().raw[0], 0.25);
-    assert_eq!(d.mailbox().visible().0.raw[0], 0.75, "accepted restore remains visible");
-    assert_eq!(control.observed.lock().unwrap_or_else(|e| e.into_inner()).applies, [0]);
-    d.run(64, 64, vec![], true);
-    assert_eq!(d.mailbox().published.load().raw[0], 0.75);
-    assert_eq!(control.observed.lock().unwrap_or_else(|e| e.into_inner()).applies, [0, 64]);
-}
-
-#[test]
-fn owned_pool_waits_for_configuration_then_reclaims_the_complete_prefix() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.combined");
-    d.control.apply_limit.store(0, Ordering::Relaxed);
-    let batch = || {
-        (1..INPUT_SCAN).map(|index| {
-            let Input::Note(mut note) = on(0) else { unreachable!() };
-            note.note_id = index as i32;
-            Input::Note(note)
-        })
-    };
-    let mut input = vec![d.param(0)];
-    input.extend(batch());
-    d.run(0, 64, input, true);
-    {
-        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-        assert!(o.configuration.is_empty(), "the first owned parameter must stall configuration");
-        assert!(o.inputs.is_empty(), "performance cannot pass configuration");
-    }
-    assert_eq!(d.run(64, 64, vec![on(0)], true), CLAP_PROCESS_ERROR);
-    d.control.apply_limit.store(usize::MAX, Ordering::Relaxed);
-    let Input::Transport(marker) = transport(0, true, 0) else { unreachable!() };
-    d.transport = Some(marker);
-    // Even the callback transport cannot fit yet. The failed capture must
-    // still let all three consumers finish the retained batch.
-    assert_eq!(d.run(128, 64, vec![], true), CLAP_PROCESS_ERROR);
-    {
-        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-        assert_eq!(o.callbacks[1].input_status, perf::InputStatus::Full);
-        assert_eq!(o.callbacks[2].input_status, perf::InputStatus::Full);
-        assert_eq!(o.configuration, o.inputs);
-        assert_eq!(o.inputs.len(), INPUT_SCAN);
-        for (index, event) in o.inputs.iter().enumerate() {
-            assert_eq!(event.sample, Some(0));
-            assert_eq!(event.event_index, index as u32);
-            if index > 0 {
-                assert!(matches!(event.value, InputValue::Note { note_id, .. } if note_id == index as i32));
-            }
-        }
-    }
-    d.transport = None;
-    // This fills the physical ring again, so an early pop, a lost cursor or
-    // retained acknowledged cells cannot hide behind unused capacity.
-    let mut input = vec![d.param(0)];
-    input.extend(batch());
-    assert_ne!(d.run(192, 64, input, true), CLAP_PROCESS_ERROR);
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(o.inputs.len(), 2 * INPUT_SCAN);
-    assert_eq!(o.configuration, o.inputs);
-    assert!(o.inputs[INPUT_SCAN..].iter().all(|event| event.sample == Some(192)));
-}
-
-#[test]
-fn reset_cancels_faulted_timed_input_and_retains_untimed_flush_once() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.combined");
-    let Input::Param(mut invalid) = d.param(1) else { unreachable!() };
-    invalid.value = f64::NAN;
-    d.run(0, 64, vec![on(0), Input::Param(invalid), on(2)], true);
-    {
-        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-        assert_eq!(o.faults, 1, "fixture reaches the configuration fault after a valid prefix");
-        assert_eq!(o.inputs.len(), 1);
-        assert_eq!(o.configuration, o.inputs);
-    }
-    d.flush(vec![d.param(57)]);
-    unsafe { ((*d.plugin).reset.unwrap())(d.plugin); }
-    assert_ne!(d.run(64, 64, vec![], true), CLAP_PROCESS_ERROR);
-    {
-        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-        assert_eq!(o.configuration, o.inputs);
-        assert_eq!(o.inputs.len(), 2, "only the untimed flush survives cancellation");
-        let event = o.inputs[1];
-        assert!(event.flush);
-        assert_eq!(event.sample, Some(64));
-        assert_eq!(event.offset, 57);
-        assert_eq!(event.enclosing_start, None);
-        assert_eq!(event.enclosing_frames, 0);
-    }
-    assert_ne!(d.run(128, 64, vec![on(0); INPUT_SCAN], true), CLAP_PROCESS_ERROR);
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(o.inputs.len(), INPUT_SCAN + 2);
-    assert_eq!(o.configuration, o.inputs);
-    assert_eq!(o.faults, 1);
 }

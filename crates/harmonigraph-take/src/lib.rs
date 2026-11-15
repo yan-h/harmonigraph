@@ -66,7 +66,7 @@ mod reader;
 pub use configuration::ConfigurationRecord;
 pub mod render;
 
-pub use params::{ParamKey, MAX_TUNING_OFFSET};
+pub use params::ParamKey;
 pub use render::RenderProgress;
 
 use std::io::{BufRead, Write};
