@@ -26,10 +26,10 @@ and every frame reads as paced at the chosen rate.
 
 Per phase, counted in the display's refreshes:
 - missed refreshes: a glass gap longer than the divisor that paced it
-  (a stall) misses each refresh beyond it. An input event restores the chosen
-  rate between frames and the next refresh draws, so a frame the log marks
-  `woken` is held to the link's own gap instead, up to the slowed interval it
-  cut short;
+  (a stall) misses each refresh beyond it. In a log from between #1692 and
+  #1747, an input event restored the chosen rate between frames and the next
+  refresh drew, so a frame that log marks `woken` is held to the link's own
+  gap instead, up to the slowed interval it cut short;
 - jumps: a glass gap of the expected spacing whose link timestamps are
   further apart, so the content stepped further than the glass did;
 - the p99 gap between presents paced at the chosen rate, in ms;
@@ -305,8 +305,9 @@ def median(values):
 
 def full_rate(frames, evs):
     """The rate the link offers frames at while something animates, from the
-    frames it paced then: a still editor's link is slowed to its poll (#1676),
-    so its frames would read as the poll's rate."""
+    frames it paced then: in a log from between #1692 and #1747 a still
+    editor's link was slowed to its poll, so its frames would read as the
+    poll's rate. Since, every link frame is at the chosen rate."""
     busy = [(a, b) for a, b, reasons in timeline(evs, frames[-1]['t'], 'animating') if reasons]
     starts = [a for a, _ in busy]
 
