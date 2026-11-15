@@ -290,8 +290,11 @@ impl FoldedGrid {
     /// uploaded.
     ///
     /// A Clear does not need to be in the test, though the newest slab can be
-    /// the shared silent slab before it and after: columns after a Clear date
-    /// after those before it, so the run after it starts at a later key.
+    /// the shared silent slab before it and after. Columns after a Clear date
+    /// after those before it, so the first slab after it is at the newest
+    /// key before it or later; a held run spans at least two slabs, so it
+    /// starts at least one key before that newest one, and the two first
+    /// keys never match.
     fn accept(&mut self, run: pyramid::Run<'_>, layout: TexLayout) -> TexLayout {
         let first_key = run.first_key;
         let len = run.len();

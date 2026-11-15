@@ -670,7 +670,7 @@ mod tests {
             ("gpu", "40.0 draw · 30.0 3d"),
             ("verts", "5k in 7 prims"),
             ("roll", "13 notes"),
-            // The two caches, in the order the labels name them.
+            // The grid's full uploads, a rate.
             ("spec", "16/s full"),
             // The whole host process, apart from ours.
             ("host mem", "490 MB"),

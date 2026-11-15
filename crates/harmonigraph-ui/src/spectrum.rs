@@ -328,7 +328,7 @@ impl SpectrumAnalysis {
 
     /// The running analyzer's lag: how far behind the newest sample it read
     /// a column is dated. What a shell's tests read to tell which resolution
-    /// it analyzed under; a frame reads [`SpectrumConfig::column_lag`].
+    /// it analyzed under; a frame reads [`SpectrumConfig::live_lag`].
     pub fn lag(&self) -> f64 {
         self.analyzer.window_center_offset()
     }
