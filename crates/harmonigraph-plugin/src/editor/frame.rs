@@ -48,12 +48,6 @@ pub(super) fn frame(
     // different one on X11.
     let mut guard = state.shared.lock();
     let shared = &mut *guard;
-    // A frame after the close (X11 can run one) would stamp the frame clock
-    // the close cleared, and the next open would log the gap as a stall.
-    // `root_ui` draws nothing then either.
-    if shared.ui.closing() {
-        return;
-    }
 
     // The display link's timing for this frame, or `None` for one it did not ask
     // for (the watchdog's, an occlusion repaint).
@@ -120,19 +114,15 @@ pub(super) fn frame(
     // Offered only where the shell can give the editor its own window, and
     // read back after the UI has had the chance to flip it.
     shared.ui.workspace.interaction.own_window = pop_out.offered().then(|| !egui_state.docked());
-    // Through the inbox, which keeps the fallback a re-entered save answers
-    // with in step with the first frame to draw the editor.
-    let ask = state.shared.inbox().frame(&mut shared.ui, |drawn| {
-        harmonigraph_ui::shell::Frame {
-            ui,
-            state: drawn,
-            params: &backend,
-            now,
-            build_tag: crate::BUILD_TAG,
-            window_size: egui::vec2(window_width as f32, window_height as f32),
-        }
-        .draw()
-    });
+    let ask = harmonigraph_ui::shell::Frame {
+        ui,
+        state: &mut shared.ui,
+        params: &backend,
+        now,
+        build_tag: crate::BUILD_TAG,
+        window_size: egui::vec2(window_width as f32, window_height as f32),
+    }
+    .draw();
     #[cfg(all(feature = "frame-log", target_os = "macos"))]
     state.logged.note(&shared.ui);
 
