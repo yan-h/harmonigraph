@@ -377,11 +377,6 @@ fn profile_allocations() {
             bytes as f64 / FRAMES as f64 / 1024.0,
         );
     }
-    let (drops, resets) = state.picture.runtime.spectrum.guard_counts();
-    println!(
-        "spectrogram over {FRAMES} frames: {drops} dropped, {resets} reset; uploads unmeasured \
-         (no GPU acknowledgement)",
-    );
 }
 
 /// Each settings pane on its own, through ONE shared context — a fresh

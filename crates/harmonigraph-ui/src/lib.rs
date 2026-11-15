@@ -379,7 +379,6 @@ pub fn root_ui(
             &state.picture.instruments.lattice_stats,
             state.picture.instruments.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
             state.picture.surfaces.spectrogram.full_uploads(),
-            state.picture.runtime.spectrum.guard_counts(),
         ),
         now,
         Workload {

@@ -12,7 +12,8 @@ doctest = false
 
 [features]
 # A look edit and its undo depth for the plugin's #1740 test (`testing`
-# module). Only the plugin's dev-dependencies enable it.
+# module), and the column count and analysis lag shells' tests read. Only
+# the plugin's and the standalone's dev-dependencies enable it.
 testing = []
 
 [dependencies]
