@@ -992,10 +992,11 @@ fn a_take_re_armed_with_no_callback_between_records_from_its_first_block() {
     assert!(!b.hit_rewind(), "the first take's motion does not end the second");
 }
 
-/// The run changes when the take is armed and when it records again after a
-/// block it did not — and at nothing else, a loop wrap included, since each
-/// change costs a snapshot of every sounding note (#1129). The recorder opens
-/// and closes it itself, from each block's origin.
+/// Every run the recorder opens takes a new serial, since each costs a
+/// snapshot of every sounding note (#1129): at a resume after a block that did
+/// not record, at a new take, and after a host reset closed the last — and at
+/// nothing else, a loop wrap included. The recorder opens and closes it
+/// itself, from each block's origin.
 #[test]
 fn the_recording_run_changes_at_arming_and_a_resume_only() {
     fn block(b: &mut Bench, position: f64, playing: bool) -> Option<u64> {
@@ -1022,6 +1023,10 @@ fn the_recording_run_changes_at_arming_and_a_resume_only() {
     assert!(b.rec.is_armed());
     let rearmed = block(&mut b, BLOCK_SECONDS, true);
     assert!(rearmed.is_some() && rearmed != resumed, "the new take opens its own");
+    // A host reset closes the run mid-take, and playback rolls straight on.
+    b.rec.run_end(2.0 * BLOCK_SECONDS);
+    let restarted = block(&mut b, 2.0 * BLOCK_SECONDS, true);
+    assert!(restarted.is_some() && restarted != rearmed, "the run after a reset is a new one");
 }
 
 /// The GUI's stop bar reaches the audio thread through `Control`, and the
