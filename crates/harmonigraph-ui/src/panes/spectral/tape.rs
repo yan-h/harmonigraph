@@ -220,8 +220,8 @@ fn slab_seconds(level: usize) -> f64 {
 /// This frame lets go of the click that cues the tape: over the song, where a
 /// cue can start. The pane senses drags only, so a drag takes hold on the
 /// press; a press let go of before it travelled far enough to be a drag is a
-/// click. `drag_zoom` reads the same, to take back what the press panned.
-pub(super) fn cues(response: &egui::Response, axes: &Axes, split: f32, view: &TapeView) -> bool {
+/// click.
+fn cues(response: &egui::Response, axes: &Axes, split: f32, view: &TapeView) -> bool {
     response.drag_stopped()
         && response.ctx.input(|i| i.pointer.could_any_button_be_click())
         && view.enabled

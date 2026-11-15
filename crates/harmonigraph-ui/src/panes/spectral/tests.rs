@@ -3382,39 +3382,32 @@ fn tape_mode_rolls_no_note_later_than_the_stretch_shown() {
     assert_eq!(drawn, Some(1), "built a note past the stretch shown");
 }
 
-/// A click to cue that wobbles on its way down is still a click: it cues,
-/// and leaves the pitch range where it was, though the pane, sensing drags
-/// only, panned the pitch while the press was held.
+/// In Tape mode a drag on the tape picture pans nothing, a pitch-leaning one
+/// included, and a press that wobbles on its way down is still the click that
+/// cues; on the spectrum's share a pitch drag pans as in Live mode.
 #[test]
-fn a_cue_click_that_wobbles_leaves_the_pitch_range_where_it_was() {
+fn a_pitch_drag_on_the_tape_leaves_the_pitch_range_where_it_was() {
     let cfg = pinned();
     let axes = Axes::new(WIDE, &cfg);
     let split = spectrum_share(&cfg);
     let at = axes.at(0.5, split + 0.25 * (1.0 - split));
+    let range = |state: &PictureState| {
+        (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi)
+    };
+    let mut state = on_tape();
+    tape_frames(&mut state, Navigation::Docked, drag(at, at + axes.dir_pitch() * 30.0));
+    assert_eq!(range(&state), (cfg.low_midi, cfg.high_midi), "the drag panned the pitch");
     let mut state = on_tape();
     tape_frames(&mut state, Navigation::Docked, drag(at, at + axes.dir_pitch() * 2.0));
     assert!(matches!(state.runtime.tape.request, Some(crate::tape::TapeRequest::Cue(_))));
-    let range = (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi);
-    assert_eq!(range, (cfg.low_midi, cfg.high_midi), "the cue nudged the pitch range");
-    // At the bottom of the axis, where the wobble's pan never moved it: the
-    // click takes back only what moved.
-    let mut state = on_tape();
-    let bottom = harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI;
-    let spectrum = &mut state.appearance.spectrum;
-    (spectrum.low_midi, spectrum.high_midi) = (bottom, bottom + 48.0);
-    tape_frames(&mut state, Navigation::Docked, drag(at, at + axes.dir_pitch() * 2.0));
-    let range = (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi);
-    assert_eq!(range, (bottom, bottom + 48.0), "the cue moved a range its wobble could not");
-    // A drag past a click's reach still pans it, and so does a short one on
-    // the spectrum's share, where a click cues nothing.
-    let mut state = on_tape();
-    tape_frames(&mut state, Navigation::Docked, drag(at, at + axes.dir_pitch() * 30.0));
-    assert!(state.appearance.spectrum.low_midi < cfg.low_midi, "the drag did not pan");
     let on_spectrum = axes.at(0.5, in_spectrum(&cfg));
     let mut state = on_tape();
-    let wobble = drag(on_spectrum, on_spectrum + axes.dir_pitch() * 2.0);
-    tape_frames(&mut state, Navigation::Docked, wobble);
-    assert!(state.appearance.spectrum.low_midi < cfg.low_midi, "the spectrum's pan was undone");
+    tape_frames(
+        &mut state,
+        Navigation::Docked,
+        drag(on_spectrum, on_spectrum + axes.dir_pitch() * 30.0),
+    );
+    assert!(state.appearance.spectrum.low_midi < cfg.low_midi, "the spectrum's drag did not pan");
 }
 
 fn drag(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
