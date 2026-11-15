@@ -55,11 +55,20 @@ impl Look {
             (&mut look.camera, &mut look.view),
             (&appearance.camera, &appearance.view),
         );
-        look.view.atmosphere.stars.star_solo = appearance.view.atmosphere.stars.star_solo;
-        look.spectrum.atmosphere.stars.star_solo = appearance.spectrum.atmosphere.stars.star_solo;
+        keep_solo(&mut look.view.atmosphere.stars, &appearance.view.atmosphere.stars);
+        keep_solo(&mut look.spectrum.atmosphere.stars, &appearance.spectrum.atmosphere.stars);
         appearance.camera = look.camera;
         appearance.view = look.view;
         appearance.spectrum = look.spectrum;
+    }
+}
+
+/// The live Stars solo stays through a look applied over it, unless the look
+/// changes the layer count: the panel clears the solo then, since a flag left
+/// on a layer the count takes away would come back on unseen.
+fn keep_solo(look: &mut harmonigraph_scene::StarSettings, live: &harmonigraph_scene::StarSettings) {
+    if look.star_layers == live.star_layers {
+        look.star_solo = live.star_solo;
     }
 }
 
@@ -770,11 +779,12 @@ mod tests {
         assert_eq!(Look::capture(&moved), Look::capture(&other));
     }
 
-    /// The Stars solo is a viewing aid for one sitting. The slots and their
-    /// histories outlive the window (#1764), so one that travelled in a look
-    /// would come back, in a later window, with the slot stored while it was on.
+    /// The Stars solo is a viewing aid for one sitting and no part of a look.
+    /// The slots and their histories outlive the window (#1764), so one that
+    /// travelled in a look came back, in a later window, with the slot stored
+    /// while it was on.
     #[test]
-    fn a_look_carries_no_star_solo_into_the_next_window() {
+    fn a_look_carries_no_star_solo() {
         let mut state = crate::tests::probe::fresh();
         let soloed = |state: &crate::state::SharedState| {
             let appearance = &state.picture.appearance;
@@ -783,15 +793,28 @@ mod tests {
                 appearance.spectrum.atmosphere.stars.star_solo[0],
             )
         };
+        let plain = Look::capture(&state.picture.appearance);
         state.picture.appearance.view.atmosphere.stars.star_solo[0] = true;
         state.picture.appearance.spectrum.atmosphere.stars.star_solo[0] = true;
+        assert!(Look::capture(&state.picture.appearance) == plain, "a solo is no undo entry");
+        // Slot 0 is stored on the way out and applied on the way back.
         let editor = &mut state.workspace.interaction.appearance_editor;
         editor.switch(1, &mut state.picture.appearance);
-        assert_eq!(soloed(&state), (true, true), "a slot switch leaves the aid as it is");
+        editor.switch(0, &mut state.picture.appearance);
+        assert_eq!(soloed(&state), (true, true), "a stored look applied leaves the aid on");
+        // A new window clears it, and the slot stored while it was on, slot 1,
+        // does not bring it back.
         state.start_window_session();
         let editor = &mut state.workspace.interaction.appearance_editor;
-        editor.switch(0, &mut state.picture.appearance);
+        editor.switch(1, &mut state.picture.appearance);
         assert_eq!(soloed(&state), (false, false));
+        // A look with another layer count clears it, as the panel does.
+        let stars = &mut state.picture.appearance.view.atmosphere.stars;
+        stars.star_solo[0] = true;
+        let mut fewer = Look::capture(&state.picture.appearance);
+        fewer.view.atmosphere.stars.star_layers -= 1;
+        fewer.apply(&mut state.picture.appearance);
+        assert!(!state.picture.appearance.view.atmosphere.stars.star_solo[0]);
     }
 
     #[test]
