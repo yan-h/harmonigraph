@@ -1,6 +1,7 @@
 //! Moving, register-aware adaptive tuning. The sequencer owns voice lifetimes;
-//! this module owns bounded selection and released-pitch memory. No audio call
-//! allocates. Pitch is absolute microcents; displacement is never octave-folded.
+//! this module owns the context they make, bounded selection and
+//! released-pitch memory. No audio call allocates. Pitch is absolute
+//! microcents; displacement is never octave-folded.
 use crate::configuration::{PolicyConfig, ResolvedConfig};
 use crate::{LatticePos, Tempered};
 
@@ -236,6 +237,40 @@ impl Memory {
             }
         }
     }
+}
+
+/// A held voice as the context sees it: its tuned onset pitch, the decision
+/// that assigned it, and the moment its decay counts from (`Memory::attack`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Held {
+    pub pitch: ContextPitch,
+    pub decision: u64,
+    pub struck: i64,
+}
+/// The context one assignment sees, into `out`: every held voice newest
+/// decision first, deduplicated within the repetition tolerance, each decayed
+/// by the age of its attack at the newest held attack — or, with nothing held,
+/// released memory (`Memory::append`). The sequencer and the policy fixtures
+/// both assemble it here, so the fixtures replay production's context.
+pub fn context(
+    held: &mut [Held],
+    memory: &Memory,
+    config: PolicyConfig,
+    per_second: f64,
+    out: &mut Vec<ContextPitch>,
+) {
+    out.clear();
+    held.sort_unstable_by_key(|v| std::cmp::Reverse(v.decision));
+    let newest = held.iter().map(|v| v.struck).max().unwrap_or(0);
+    for voice in held.iter() {
+        if !out.iter().any(|v| v.pitch.abs_diff(voice.pitch.pitch) <= u64::from(config.tolerance)) {
+            out.push(ContextPitch {
+                weight: decay(config, newest - voice.struck, per_second),
+                ..voice.pitch
+            });
+        }
+    }
+    memory.append(out, config, per_second);
 }
 
 /// Fixed-capacity vectors are allocated at construction and never grown by

@@ -1,11 +1,10 @@
-//! Audio-owned effective tuning and the confirmed pitches Learn reads. Session
-//! aggregation, which supplies those pitches every callback, is the Hub in
-//! `tuning`.
+//! Audio-owned effective tuning, and Learn over the held pitch classes the Hub
+//! in `tuning` reads from its rows.
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, PolicyEdit, ResolvedConfig,
     TuningModes,
 };
-use harmonigraph_core::confirmed::{ConfirmedPitches, LearningState};
+use harmonigraph_core::tuning::{Incomplete, LearningState, PitchClass, Unlearnable};
 use harmonigraph_core::{LearnedTuning, Tempered, Tuning};
 use harmonigraph_ui::params::{ConfigurationView, ParamKey};
 use nice_plug::plugin::ParamValue;
@@ -170,12 +169,8 @@ pub struct Owner {
     pub(crate) maps: crate::lattice_maps::AudioMaps,
     /// Every edit reduces here the moment it arrives, in arrival order, so the
     /// reducer's own combined-edit/preset/unlock semantics are untouched.
-    pub(crate) reducer: ConfigReducer,
-    /// Adaptive's callback-boundary configuration. Lattice Map instead uses
-    /// `maps`' timestamped history, including shared tuning at each attack.
-    block: ResolvedConfig,
-    pub(crate) confirmed: ConfirmedPitches,
-    learning: LearningState,
+    reducer: ConfigReducer,
+    learning: LearningState<{ crate::tuning::HELD_VOICES }>,
     learned: Option<LearnedTuning>,
     pub snapshot: ConfigurationSnapshot,
     boundary: ConfigurationBoundary,
@@ -196,10 +191,8 @@ impl Owner {
 
         Self {
             maps: crate::lattice_maps::AudioMaps::new(params),
-            block: reducer.resolved(),
             reducer,
             recording: recording::Recording::default(),
-            confirmed: ConfirmedPitches::default(),
             learning: LearningState::default(),
             learned: None,
             snapshot,
@@ -225,22 +218,26 @@ impl Owner {
         self.recording.block_frames = boundary.frames;
     }
 
-    /// Seed the callback after all queued commands reduce. Adaptive keeps this
-    /// value for the block; Map history records later timestamped changes.
+    /// Seed the callback's history entry after all queued commands reduce.
+    /// Automation the walk reduces later lands in the history at its own sample.
     pub fn adopt(&mut self) {
-        self.block = self.reducer.resolved();
-        self.maps.adopt(self.block);
+        self.maps.adopt(self.reducer.resolved());
     }
 
-    /// The one configuration for assignment groups started in this block. A
-    /// group that spans a boundary keeps the value it was handed here.
-    pub fn block_configuration(&self) -> ResolvedConfig {
-        self.block
+    /// The configuration, engine and map in force at `sample`: the history's
+    /// entry for it, or, where the history no longer reaches it, the live
+    /// state. The Hub assigns from this and a take records it.
+    pub fn in_force(&self, sample: i64) -> crate::lattice_maps::AttackState {
+        self.maps.at(sample).unwrap_or_else(|| self.maps.live(self.current()))
+    }
+
+    /// The configuration every edit reduced so far leaves.
+    pub fn current(&self) -> ResolvedConfig {
+        self.reducer.resolved()
     }
 
     pub fn reset(&mut self, recorder: &mut harmonigraph_record::Recorder) {
         self.maps.reset();
-        self.confirmed.reset();
         self.learning = LearningState::default();
         self.learned = None;
         self.snapshot.status = 0;
@@ -292,25 +289,24 @@ impl Owner {
                 }),
             }),
         };
-        // Reduce in arrival order. The per-block `block` config remains Adaptive's
-        // authority; Map records the same resolved value at the commit sample.
+        // Reduce in arrival order, and record the resolved value at the commit
+        // sample: the history is every engine's configuration. Learn is not
+        // pushed, because it applies at the block's start after the walk has
+        // pushed later samples; the next `adopt` carries it.
         if !self.reducer.apply(mutation) {
             self.fault();
             return None;
         }
         let resolved = self.reducer.resolved();
-        if command.edit.payload[0] != LEARN {
-            self.maps.tuning_changed(commit.sample, resolved);
-        }
         if command.edit.payload[0] == LEARN {
             self.learned = None;
+        } else {
+            self.maps.tuning_changed(commit.sample, resolved);
         }
         if command.id != 0 {
             self.snapshot.applied_id = command.id;
         }
         self.snapshot.revision = resolved.revision;
-        self.snapshot.effective_sample =
-            self.boundary.steady_time.saturating_add(i64::from(self.boundary.frames));
         self.snapshot.payload = payload(resolved);
         self.snapshot.raw = commit.raw;
         self.snapshot.unmodulated = commit.unmodulated;
@@ -340,23 +336,11 @@ impl Owner {
         let end = start + i64::from(self.recording.block_frames);
         recorder.record(self.take_time(), origin);
         if recorder.recording() {
-            // The block's own adopted configuration, and in Lattice Map each
-            // timed shared-tuning change at its own sample. There is no
-            // historical lookup: the value in force IS the value the Hub used
-            // for every group it started there.
-            let effective = |state: crate::lattice_maps::AttackState| {
-                if state.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
-                {
-                    state.config
-                } else {
-                    self.block
-                }
-            };
-            let config = self.maps.at(start).map_or(self.block, effective);
-            self.recording.configuration(recorder, start, config);
+            // What the Hub assigned from, at the segment's start and at each
+            // change inside it.
+            self.recording.configuration(recorder, start, self.in_force(start).config);
             for (sample, state) in self.maps.changes(start, end) {
-                let config = effective(state);
-                self.recording.configuration(recorder, sample, config);
+                self.recording.configuration(recorder, sample, state.config);
             }
         }
         self.recording.registered(end);
@@ -365,17 +349,22 @@ impl Owner {
     /// A Retune-enabled source reserves the lattice axes only while the engine
     /// actually retunes. Pass through learns the axes from unchanged input.
     ///
-    /// Status bit 1 reports this evaluation alone rather than latching. The
-    /// held state is rebuilt every callback, so the bit clears as soon as a
-    /// departure or a Reset's cut makes it complete again.
-    pub fn group_end(&mut self, retuning: bool) -> Option<ConfigurationEdit> {
+    /// `classes` is the Hub's `held_classes`, asked only while Learn is armed.
+    /// Status bits 1 (the rows are incomplete) and 16 (more distinct classes
+    /// than Learn reads) report this evaluation alone rather than latching, so
+    /// each clears as soon as what is held allows Learn again.
+    pub fn group_end(
+        &mut self,
+        retuning: bool,
+        classes: impl FnOnce(&mut [PitchClass; crate::tuning::HELD_VOICES]) -> Result<usize, Incomplete>,
+    ) -> Option<ConfigurationEdit> {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
-        self.snapshot.status &= !1;
+        self.snapshot.status &= !(1 | 16);
         if self.snapshot.status & 2 != 0 || !self.maps.playback.engine.learns() {
             return None;
         }
-        match self.learning.infer(&self.confirmed, self.reducer.resolved().modes.learning) {
+        match self.learning.infer(self.reducer.resolved().modes.learning, classes) {
             Ok(Some(learned)) => {
                 self.learned = Some(learned);
                 let mut payload = [0; PAYLOAD_WORDS];
@@ -388,8 +377,12 @@ impl Owner {
                 }
                 Some(ConfigurationEdit { values, payload })
             }
-            Err(_) => {
+            Err(Unlearnable::Incomplete) => {
                 self.snapshot.status |= 1;
+                None
+            }
+            Err(Unlearnable::TooManyClasses) => {
+                self.snapshot.status |= 16;
                 None
             }
             Ok(None) => None,

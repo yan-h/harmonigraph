@@ -39,17 +39,12 @@ impl Harness {
         }
     }
     fn on(&mut self, id: &str, pitch: i64) -> ContextPitch {
-        let newest = self.held.iter().map(|&(_, _, t)| t).max().unwrap_or(0);
-        let mut context: Vec<_> = self
-            .held
-            .iter()
-            .rev()
-            .map(|&(_, v, t)| ContextPitch {
-                weight: decay(self.config.policy, newest - t, 1000.0),
-                ..v
-            })
+        // Held in the order they were decided, as the sequencer numbers them.
+        let mut held: Vec<_> = (self.held.iter().enumerate())
+            .map(|(i, &(_, pitch, struck))| Held { pitch, decision: i as u64, struck })
             .collect();
-        self.memory.append(&mut context, self.config.policy, 1000.0);
+        let mut context = Vec::new();
+        super::context(&mut held, &self.memory, self.config.policy, 1000.0, &mut context);
         let d = assign_new_note(
             self.config,
             &context,

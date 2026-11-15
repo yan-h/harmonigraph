@@ -1476,7 +1476,7 @@ mod tests {
             actual_onset: 1.0,
             pitch_microcents: i64::from(note) * 100_000_000,
             velocity: 0.8,
-            provenance: crate::confirmed::PitchProvenance::AcceptedOutput,
+            provenance: crate::canonical::PitchProvenance::AcceptedOutput,
             ..Default::default()
         }
     }

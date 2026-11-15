@@ -1,7 +1,8 @@
-//! Block-granular configuration ownership sharing the acknowledged owned input
-//! pool with the independently opted-in performance boundary. Every accepted
-//! edit reduces in arrival order; the plugin decides when a reduced value
-//! becomes effective, which is the next callback boundary.
+//! Configuration ownership sharing the acknowledged owned input pool with the
+//! independently opted-in performance boundary. Every accepted edit reduces in
+//! arrival order at its sample: a queued edit at the callback boundary, host
+//! automation where it arrives. The plugin decides how a reduced value is
+//! applied from there.
 use super::*;
 use clap_sys::ext::params::CLAP_PARAM_RESCAN_TEXT;
 use crate::wrapper::clap::configuration::*;
@@ -261,13 +262,13 @@ impl<P: ClapPlugin> Wrapper<P> {
         if !self.drain_configuration_commands(runtime, &mut plugin, boundary.steady_time) {
             return;
         }
-        // THE configuration boundary, once the captured command prefix has
-        // reduced: one value for every group this block starts.
+        // The block's first configuration, once the captured command prefix
+        // has reduced: what every group sees until automation changes it.
         plugin.clap_configuration_adopt();
         input.storage.bind_untimed(boundary.steady_time);
         // One walk, in input order, with each event's sample-precise timestamp
-        // preserved. Automation reduces where it arrives and becomes effective
-        // at the next boundary, exactly like a queued UI edit.
+        // preserved. Automation reduces where it arrives and is effective from
+        // its own sample.
         while let Some(event) = input.get(0) {
             if let InputValue::Parameter { id, value, modulation } = event.value {
                 if let Some(index) = runtime.hashes.iter().position(|hash| *hash == Some(id)) {
@@ -308,8 +309,8 @@ impl<P: ClapPlugin> Wrapper<P> {
             plugin.clap_configuration_observe(event);
             input.ack_configuration(P::CLAP_PERFORMANCE);
         }
-        // Learning reads the whole block's evidence and lands at the next
-        // boundary with everything else.
+        // Learning reads the rows as the performance begin left them and
+        // lands at the next boundary's adoption.
         if let Some(edit) = plugin.clap_configuration_group_end(boundary.steady_time) {
             self.apply_configuration(
                 runtime,

@@ -84,15 +84,9 @@ fn vs_dot_cut(
 }
 
 /// How much of the picture `at`'s cut takes at `p` (in points), as a share of
-/// the cut's amount: [`surround_ramp`] of the distance past the disc's edge,
-/// nothing from the reach's antialiasing on, which ends half a feather inside
-/// the dot's quad, and held out by the dot's own disc, so a
-/// translucent dot shows the picture behind it uncut, as a roll ribbon does.
-///
-/// By its OWN disc only: unlike the roll, the dots draw no holdout of every
-/// body, so a neighbour's cut still darkens the picture behind a translucent
-/// dot standing inside its reach — two notes a semitone apart on an inner turn,
-/// say. That dot then reads a little darker over the strip than it is.
+/// the cut's amount, before any disc holds it out: [`surround_ramp`] of the
+/// distance past the disc's edge, and nothing from the reach's antialiasing
+/// on, which ends half a feather inside the dot's quad.
 fn dot_cut(at: Dot, p: vec2<f32>) -> f32 {
     let reach = cut_reach();
     if reach <= 0.0 {
@@ -100,15 +94,29 @@ fn dot_cut(at: Dot, p: vec2<f32>) -> f32 {
     }
     let f = max(dot_locals.feather, 1e-6);
     let d = length(p - at.center) - at.radius;
-    let fill = clamp(0.5 - d / f, 0.0, 1.0);
     let end = clamp((reach - d) / f + 0.5, 0.0, 1.0);
     let fade = surround_fade_at(dot_locals.surround, d);
-    return unpack4x8unorm(at.aura).a * fade * end * (1.0 - fill);
+    return unpack4x8unorm(at.aura).a * fade * end;
+}
+
+/// How much of `p` `at`'s disc covers: its coverage, not its opacity, so a
+/// translucent dot holds a cut out as fully as an opaque one.
+fn dot_fill(at: Dot, p: vec2<f32>) -> f32 {
+    let f = max(dot_locals.feather, 1e-6);
+    return clamp(0.5 - (length(p - at.center) - at.radius) / f, 0.0, 1.0);
 }
 
 /// The cut `in`'s dot lands here, its amount included, when it is the
 /// strongest of its candidates', ties to the lowest index; otherwise the
 /// fragment is discarded.
+///
+/// Held out by every dot's disc, its own included, as the roll's ribbons hold
+/// out every cut under every body (#1293): a translucent dot shows the picture
+/// behind it uncut, a neighbour's cut included. The union of the discs'
+/// coverage is the roll's own holdout, each disc leaving `1 - fill` of what the
+/// ones before it left uncovered. Every disc that covers any of this pixel
+/// stands within its own quad of it, so is among the candidates, whose loop
+/// reads it here.
 fn landed(in: DotOut) -> f32 {
     let p = in.position.xy * dot_locals.feather;
     let mine = dots[in.dot];
@@ -124,28 +132,31 @@ fn landed(in: DotOut) -> f32 {
     let grow = cut_reach() + f;
     var strongest = 0.0;
     var winner = in.dot;
+    var uncovered = 1.0;
     for (var n = 0u; n < mine.candidates; n++) {
         let i = candidates[mine.first + n];
         let at = dots[i];
-        // Outside a dot's own quad it cuts nothing here.
+        // Outside a dot's own quad it cuts and covers nothing here.
         if any(abs(p - at.center) > vec2<f32>(at.radius + grow)) {
             continue;
         }
+        uncovered *= 1.0 - dot_fill(at, p);
         let cut = dot_cut(at, p);
         if cut > strongest {
             strongest = cut;
             winner = i;
         }
     }
-    if strongest <= 0.0 || winner != in.dot {
+    let landing = strongest * uncovered;
+    if landing <= 0.0 || winner != in.dot {
         discard;
     }
-    return dot_locals.surround.cut.x * strongest;
+    return dot_locals.surround.cut.x * landing;
 }
 
 /// `in`'s fill where it landed: only a dot that cuts here lands, so the fade
 /// is above 0.
-fn dot_fill(in: DotOut) -> vec3<f32> {
+fn dot_tint(in: DotOut) -> vec3<f32> {
     let at = dots[in.dot];
     let d = length(in.position.xy * dot_locals.feather - at.center) - at.radius;
     let fade = surround_fade_at(dot_locals.surround, d);
@@ -155,12 +166,12 @@ fn dot_fill(in: DotOut) -> vec3<f32> {
 @fragment
 fn fs_dot_surround_gamma(in: DotOut) -> @location(0) vec4<f32> {
     let cut = landed(in);
-    return surround_lands_gamma(dot_fill(in), cut);
+    return surround_lands_gamma(dot_tint(in), cut);
 }
 
 /// The same onto a target that encodes sRGB for itself.
 @fragment
 fn fs_dot_surround_linear(in: DotOut) -> @location(0) vec4<f32> {
     let cut = landed(in);
-    return surround_lands_linear(dot_fill(in), cut);
+    return surround_lands_linear(dot_tint(in), cut);
 }

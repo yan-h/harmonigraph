@@ -63,7 +63,7 @@ const WORKLOADS: [Workload; 2] = [
     Workload { name: "dense 600 s", span_seconds: 600.0, notes: 3000, duration: (0.05, 0.4) },
 ];
 
-fn instances(work: &Workload, points: [f32; 2], reach: f32) -> Vec<RollInstance> {
+fn instances(work: &Workload, points: [f32; 2]) -> Vec<RollInstance> {
     let mut rng = Lcg(0x005e_ed0f_a011);
     let per_second = points[0] / work.span_seconds;
     let semitone = points[1] / SPAN_SEMITONES;
@@ -79,10 +79,9 @@ fn instances(work: &Workload, points: [f32; 2], reach: f32) -> Vec<RollInstance>
             center: [(start + 0.5 * duration) * per_second, points[1] - (key + 0.5) * semitone],
             half_extent: [half_pitch, half_depth],
             shear: 0.0,
-            lead: 0.0,
+            rounding: 0.0,
             lead_fade: 0.0,
-            lead_alpha: 0.0,
-            cap_reach: reach,
+            lead_alpha: 1.0,
             core: [230, 40 + shade / 2, 255 - shade, 255],
             aura: [0, 0, 0, 255],
             span: RollInstance::WHOLE,
@@ -93,8 +92,7 @@ fn instances(work: &Workload, points: [f32; 2], reach: f32) -> Vec<RollInstance>
             tremolo: [0.0; 2],
         };
         if i % 7 == 0 && half_depth > 4.0 {
-            note.lead = 0.4 * half_depth;
-            note.lead_fade = if i % 2 == 0 { 0.0 } else { 0.5 * note.lead };
+            note.lead_fade = if i % 2 == 0 { 0.0 } else { 0.4 * half_depth };
             note.lead_alpha = if i % 3 == 0 { 0.5 } else { 0.0 };
         }
         if i % 11 == 0 {
@@ -146,7 +144,7 @@ fn a_frame_of_the_roll_costs_this_much() {
             rect,
             pane_size: rect.size(),
             instances,
-            clipped_tail: (u32::MAX, rect),
+            clip: RollClip::whole(rect),
             axes: AXES,
             bloom,
             cut,
@@ -188,7 +186,7 @@ fn a_frame_of_the_roll_costs_this_much() {
             continue;
         }
         let reach = cut.reach_points(1.0);
-        let notes = instances(work, points, reach);
+        let notes = instances(work, points);
         let count = notes.len();
         let (median, p10) = time(notes, cut);
         eprintln!(

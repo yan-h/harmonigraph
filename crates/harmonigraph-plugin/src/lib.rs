@@ -1173,15 +1173,15 @@ impl ClapPlugin for Harmonigraph {
         event: nice_plug::wrapper::clap::configuration::OwnedInput,
     ) {
         let owner = self.configuration.as_mut().unwrap();
-        owner.maps.observe(event, owner.reducer.resolved());
+        owner.maps.observe(event, owner.current());
     }
     fn clap_configuration_group_end(
         &mut self,
         _sample: i64,
     ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationEdit> {
-        let retuning = self.aggregation.as_ref().unwrap().retuning();
+        let hub = self.aggregation.as_ref().unwrap();
         let owner = self.configuration.as_mut().unwrap();
-        let result = owner.group_end(retuning);
+        let result = owner.group_end(hub.retuning(), |scratch| hub.held_classes(scratch));
         self.params.configuration.get().unwrap().published.publish(owner.snapshot);
         result
     }

@@ -17,10 +17,10 @@
 // (possibly supersampled) scene size, so the halo's screen width does not
 // change with the render-scale setting.
 //
-// The lattice takes all of it; the piano roll (`crate::roll`) and the spiral's
-// dots (`crate::glow`) take the threshold, the blurs and `fs_bloom_add` over
-// marks they render themselves, so one bloom strength means the same halo in
-// every picture.
+// The lattice takes all of it; the piano roll (`crate::roll`), the spiral's
+// dots included, takes the threshold, the blurs and `fs_bloom_add` over marks
+// it renders itself, so one bloom strength means the same halo in every
+// picture.
 
 @group(0) @binding(0) var scene_tex: texture_2d<f32>;
 @group(0) @binding(1) var scene_samp: sampler;

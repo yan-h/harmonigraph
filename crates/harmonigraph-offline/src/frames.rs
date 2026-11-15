@@ -1289,8 +1289,8 @@ mod tests {
     }
 
     /// A resize holds one size's targets at a time (#1508). Every target keyed
-    /// on a pane's size — the lattice's offscreen set, the roll's, the spiral's
-    /// glow chain and the spectral cloud's — is dropped before its replacement
+    /// on a pane's size — the lattice's offscreen set, the roll's and the
+    /// spectral cloud's — is dropped before its replacement
     /// is built, and so is each spectral pane's shadow atlas, which grows in
     /// place (the lattice's is rebuilt with its offscreen set). A rebuild that built first would hold two of the
     /// target it rebuilds, so no texture's label may ever have had more copies
@@ -1301,11 +1301,10 @@ mod tests {
     /// its old set outweighed what the owners preparing after it had yet to
     /// grow, which hid a doubled shadow atlas.
     ///
-    /// The default look in both panes, plus the spiral's glow, which the
-    /// export never draws (#974) and so is added here as the Spiral tab adds
-    /// it. Each owner's target is checked on the record at both sizes, since a
-    /// target never built would pass this for the wrong reason (#450). Built
-    /// new before old, each owner's rebuild fails this, one at a time.
+    /// The default look in both panes. Each owner's target is checked on the
+    /// record at both sizes, since a target never built would pass this for
+    /// the wrong reason (#450). Built new before old, each owner's rebuild
+    /// fails this, one at a time.
     #[cfg(target_vendor = "apple")]
     #[test]
     fn a_resize_holds_one_sizes_targets_at_a_time() {
@@ -1314,10 +1313,9 @@ mod tests {
 
         // One target from each owner that rebuilds on a pane's size, each
         // of which must be seen rebuilt for the counts below to reach it.
-        const KEYED: [&str; 6] = [
+        const KEYED: [&str; 5] = [
             "lattice_offscreen_color",
             "roll_holdout",
-            "glow_discs",
             "spectral_cloud_source",
             "lattice_shadow_atlas",
             "spectral_shadow_atlas",
@@ -1349,17 +1347,6 @@ mod tests {
                 let input =
                     crate::render::frame_input(screen, now, sheet.renderer.max_texture_side());
                 let output = sheet.context.run_ui(input, |ui| {
-                    let dot = harmonigraph_render::GlowDot {
-                        center: [points.x * 0.5, points.y * 0.5],
-                        radius: 8.0,
-                        color: [255, 200, 120, 255],
-                    };
-                    ui.painter().add(harmonigraph_render::glow_paint_callback(
-                        screen,
-                        vec![dot],
-                        harmonigraph_render::bloom_strength(state.appearance.view.spiral_bloom),
-                        FORMAT,
-                    ));
                     for (surface, (pane, rect)) in layout.resolve(points).into_iter().enumerate() {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                         harmonigraph_ui::draw_pane(&mut child, pane, &mut state, now, surface);

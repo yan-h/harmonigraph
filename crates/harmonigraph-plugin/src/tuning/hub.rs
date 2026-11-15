@@ -13,6 +13,7 @@ use std::sync::Arc;
 use harmonigraph_core::canonical::{NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
+use harmonigraph_core::tuning::{Incomplete, PitchClass};
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
 use nice_plug::wrapper::clap::configuration::OwnedInput;
@@ -22,7 +23,7 @@ use super::event::Event;
 use super::session::{self, HubEnds, Reply};
 use super::state::{Stamp, State};
 use super::tune::Tune;
-use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_SESSION, TUNERS};
+use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_VOICES, TUNERS};
 
 type Owner = crate::configuration::Owner;
 
@@ -144,7 +145,7 @@ impl Default for Sequencer {
             engine: Default::default(),
             engine_revision: 0,
             map: None,
-            context: vec![None; HELD_SESSION].into_boxed_slice(),
+            context: vec![None; policy::MAX_CONTEXT].into_boxed_slice(),
             memory: policy::Memory::default(),
             config: harmonigraph_core::configuration::ConfigReducer::default().resolved().into(),
             scratch: Box::default(),
@@ -198,31 +199,25 @@ impl Sequencer {
             self.reference_source = None;
         }
     }
-    /// The context one assignment sees: every held voice newest first,
-    /// deduplicated within the repetition tolerance, each decayed by the age of
-    /// its attack at the newest held attack — or, with nothing held, released
-    /// memory (`Memory::append`).
+    /// The context one assignment sees (`policy::context`), into `working`.
     fn fill(&mut self, rate: f64) {
-        self.working.clear();
-        let mut voices = [None; HELD_SESSION];
+        let mut held = [policy::Held::default(); policy::MAX_CONTEXT];
         let mut count = 0;
         for voice in self.context.iter().flatten() {
-            voices[count] = Some(*voice);
+            held[count] = policy::Held {
+                pitch: voice.context_pitch(),
+                decision: voice.decision,
+                struck: voice.onset,
+            };
             count += 1;
         }
-        voices[..count].sort_unstable_by_key(|v| std::cmp::Reverse(v.unwrap().decision));
-        let newest = voices[..count].iter().flatten().map(|v| v.onset).max().unwrap_or(0);
-        for voice in voices[..count].iter().flatten() {
-            if !self.working.iter().any(|v| {
-                v.pitch.abs_diff(voice.onset_pitch) <= u64::from(self.config.policy.tolerance)
-            }) {
-                self.working.push(policy::ContextPitch {
-                    weight: policy::decay(self.config.policy, newest - voice.onset, rate),
-                    ..voice.context_pitch()
-                });
-            }
-        }
-        self.memory.append(&mut self.working, self.config.policy, rate);
+        policy::context(
+            &mut held[..count],
+            &self.memory,
+            self.config.policy,
+            rate,
+            &mut self.working,
+        );
     }
     /// Drop a context voice without contributing it to released memory. Two
     /// callers, and neither is a note ending: an onset the scheduled state
@@ -394,18 +389,14 @@ impl Hub {
         // The Tune half runs first, because it is what turns an editor Reset
         // into the epoch bump this callback then adopts.
         self.tune.begin(callback);
+        // Learn reads the rows as this leaves them (`held_classes`), before
+        // this callback's input boundary moves them: a cut or departure
+        // adopted here has already emptied what it ended.
         self.adopt();
-        // Learn consumes one complete snapshot at this callback boundary.
-        // Rebuild from empty so earlier sources cannot collide with obsolete
-        // later-source rows at capacity. Cuts and departures need no delta.
-        owner.confirmed.reset();
-        for (source, row) in self.rows.iter().enumerate() {
-            Self::confirm(row, identity(source as u8), &mut owner.confirmed);
-        }
         self.detect_loop(callback);
         // Adopt even on callbacks with no note input: silence expiry below
         // must use the current policy, not the last onset's configuration.
-        self.sequencer.config = owner.reducer.resolved().into();
+        self.sequencer.config = owner.current().into();
         // Silence expires released memory against the completed input
         // frontier, which is this callback's start: everything before it has
         // been sequenced, and nothing after it has arrived.
@@ -555,8 +546,6 @@ impl Hub {
             return;
         }
         self.batch.sort_unstable_by_key(|record| (record.sample, record.order()));
-        let config = owner.block_configuration();
-        self.sequencer.config = config.into();
         let mut index = 0;
         while index < self.batch.len() {
             let sample = self.batch[index].sample;
@@ -564,53 +553,25 @@ impl Hub {
             while end < self.batch.len() && self.batch[end].sample == sample {
                 end += 1;
             }
-            if let Some(attack) = owner.maps.at(sample) {
-                let timed_config = if attack.playback.engine == TuningEngine::LatticeMap {
-                    attack.config
-                } else {
-                    config
-                };
-                if self.sequencer.engine_revision != attack.engine_revision {
-                    self.sequencer.forget_history();
-                    self.sequencer.context.fill(None);
-                    self.sequencer.engine = attack.playback.engine;
-                    self.sequencer.engine_revision = attack.engine_revision;
-                }
-                self.sequencer.map = attack.playback.map;
-                self.sequencer.follow = attack.playback.follow;
-                self.sequencer.config = timed_config.into();
-                for position in index..end {
-                    self.apply(position, timed_config);
-                }
-            } else {
-                // Outside retained/known configuration, which is routine rather
-                // than exotic: a record the ring holds over carries a sample
-                // from before this callback, and a backward locate clears the
-                // history out from under it.
-                //
-                // Only Lattice Map has per-sample state to be missing, and its
-                // refusal is the point — the map that sample ran under is
-                // exactly what was lost, and guessing at one would retune the
-                // onset to a shape nobody selected. Adaptive decides from the
-                // block configuration, which is still in hand, so the same
-                // refusal would uncorrect the onset and raise a fault for
-                // nothing. `at` is also what would have said which engine that
-                // sample ran under, so the live selection is the only one left
-                // to read; it is restored after the group either way, because
-                // adopting an engine is the `Some` arm's job.
-                let restore = self.sequencer.engine;
-                self.sequencer.engine = owner.maps.playback.engine;
-                if self.sequencer.engine == TuningEngine::LatticeMap {
-                    // Keep controller/release processing and publication truthful.
-                    self.status |= session::POLICY;
-                    self.sequencer.engine = TuningEngine::Off;
-                } else {
-                    self.sequencer.config = config.into();
-                }
-                for position in index..end {
-                    self.apply(position, config);
-                }
-                self.sequencer.engine = restore;
+            // The state in force at the group's own sample, or, where the
+            // history no longer reaches it, the live one. That is routine
+            // rather than exotic: a record the ring holds over carries a sample
+            // from before this callback, and a steady-clock regression clears
+            // the history out from under it (a song-time locate does not).
+            // Every engine then assigns from what it holds now, as #920 asked
+            // of Adaptive, rather than leaving the onset raw.
+            let attack = owner.in_force(sample);
+            if self.sequencer.engine_revision != attack.engine_revision {
+                self.sequencer.forget_history();
+                self.sequencer.context.fill(None);
+                self.sequencer.engine = attack.playback.engine;
+                self.sequencer.engine_revision = attack.engine_revision;
+            }
+            self.sequencer.map = attack.playback.map;
+            self.sequencer.follow = attack.playback.follow;
+            self.sequencer.config = attack.config.into();
+            for position in index..end {
+                self.apply(position, attack.config);
             }
             index = end;
         }
@@ -1108,14 +1069,25 @@ impl Hub {
         }
     }
 
-    /// Learn hears every row, Retune off included: Retune decides what the Hub
-    /// corrects, and an uncorrected note is the player's pitch Learn reads.
-    fn confirm(
-        row: &Row,
-        source: SourceId,
-        confirmed: &mut harmonigraph_core::confirmed::ConfirmedPitches,
-    ) {
-        let _ = row.state.publish_confirmed(source, confirmed);
+    /// What Learn reads, written into `scratch` with its count: the pitch
+    /// class of every voice every row holds, in row order and with repeats,
+    /// its adaptive correction taken back off (`State::learnable`); or
+    /// `Incomplete` while any row has lost an event. `LearningState` sorts and
+    /// deduplicates. Learn hears every row, Retune off included: Retune decides
+    /// what the Hub corrects, and an uncorrected note is the player's pitch
+    /// Learn reads.
+    pub fn held_classes(
+        &self,
+        scratch: &mut [PitchClass; HELD_VOICES],
+    ) -> Result<usize, Incomplete> {
+        let mut count = 0;
+        for row in self.rows.iter() {
+            for pitch in row.state.learnable().ok_or(Incomplete)? {
+                scratch[count] = PitchClass::from_microcents(pitch);
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     fn mapping(&self) -> crate::configuration::Presentation {

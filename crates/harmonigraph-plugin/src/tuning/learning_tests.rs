@@ -1,24 +1,33 @@
-//! Callback snapshots through the exported CLAP factory, including real source
-//! admission, sequencing, departures and the allocation-guarded audio callback.
+//! Learn's reading of the Hub's rows through the exported CLAP factory,
+//! including real source admission, sequencing, departures and resets.
 use super::*;
 use harmonigraph_core::configuration::ConfigEdit;
+use harmonigraph_core::tuning::{Incomplete, PitchClass};
 
-fn snapshot(device: &Device) -> (bool, Vec<(u64, u8)>) {
+/// How many held pitches Learn would read from the Hub's rows now, repeats
+/// included: one per voice every row holds.
+fn heard(device: &Device) -> Result<usize, Incomplete> {
     hub_wrapper(device).test_inspect_plugin(|plugin| {
-        let confirmed = &plugin.configuration.as_ref().unwrap().confirmed;
-        let mut keys: Vec<_> =
-            confirmed.rows().map(|row| (row.key.source.0, row.key.note)).collect();
-        keys.sort_unstable();
-        (confirmed.is_complete(), keys)
+        let mut scratch = [PitchClass::from_microcents(0); HELD_VOICES];
+        plugin.aggregation.as_ref().unwrap().held_classes(&mut scratch)
     })
 }
 
+/// Five sources of 64 held notes are 320 voices, past the 256 the session's
+/// adaptive context holds: Learn hears every one and learns from them, moving
+/// a just fifth to the 12-TET one the keys were played in.
 #[test]
-fn confirmed_snapshot_turnover_at_capacity_and_departure() {
+fn learn_hears_more_held_voices_than_the_adaptive_context_holds() {
     let _scope = crate::test_scope::enter();
     let mut hub = Device::new(false);
     hub.activate();
-    let mut tunes: Vec<_> = (0..5)
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let mailbox = hub_wrapper(&hub).configuration_handle().unwrap();
+    let fifth = || crate::configuration::view(mailbox.visible().0, false).resolved.tuning.three;
+    let learn = ConfigEdit { learning: Some(true), ..Default::default() };
+    mailbox.submit(crate::configuration::packet(learn)).unwrap();
+    // Every Tune pairs before any plays: a pairing is a session cut.
+    let tunes: Vec<_> = (0..5)
         .map(|_| {
             let mut tune = Device::new(true);
             tune.shared().set_retune(false);
@@ -26,37 +35,18 @@ fn confirmed_snapshot_turnover_at_capacity_and_departure() {
             tune
         })
         .collect();
-    for tune in &tunes[1..] {
+    for tune in &tunes {
         tune.run(0, (0..64).map(|key| note(key, 0, key as i16, 0, true)).collect(), None);
     }
     hub.run(0, vec![], None);
-    assert!(snapshot(&hub).1.is_empty(), "input does not republish during flush");
+    let just = harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST);
+    assert_eq!(fifth(), just, "nothing is learned before the rows hold the chord");
     hub.run(64, vec![], None);
-    let (complete, before) = snapshot(&hub);
-    assert!(complete);
-    assert_eq!(before.len(), HELD_SESSION, "fixture fills all 256 confirmed slots");
-    let departed = before.last().unwrap().0;
-    tunes[4].run(128, (0..64).map(|key| note(key, 0, key as i16, 0, false)).collect(), None);
-    tunes[0].run(128, (0..64).map(|key| note(key, 0, key as i16, 1, true)).collect(), None);
-    hub.run(128, vec![], None);
-    assert_eq!(snapshot(&hub), (true, before.clone()), "snapshot lasts for the callback");
-    hub.run(192, vec![], None);
-    let (complete, after) = snapshot(&hub);
-    assert!(complete, "obsolete later-source occupancy must not refuse the earlier source");
-    assert_eq!(after.len(), HELD_SESSION);
-    assert!(after.iter().all(|&(source, _)| source != departed));
-    assert!(after[0].0 < before[0].0, "turnover really moves to an earlier row");
-    assert_eq!(&after[64..], &before[..192]);
-    drop(tunes.remove(0));
-    hub.run(256, vec![], None);
-    // Membership changes cut the whole session, not just the departed row.
-    assert_eq!(snapshot(&hub), (true, vec![]));
-    hub.run(320, vec![note(90, 0, 60, 0, true)], None);
-    hub.run(384, vec![], None);
-    assert_eq!(snapshot(&hub).1.len(), 1);
-    session::session().reset();
-    hub.run(448, vec![], None);
-    assert_eq!(snapshot(&hub), (true, vec![]));
+    let held: usize = (0..=DIRECT).map(|row| inspect_hub(&hub, |hub| hub.test_held(row))).sum();
+    assert_eq!(held, 5 * HELD_PER_SOURCE, "the fixture never held 320 voices");
+    assert_eq!(heard(&hub), Ok(320), "Learn reads every voice of every row");
+    assert_eq!(fifth(), harmonigraph_core::tuning::microcents(700.0), "Learn learned");
+    drop(tunes);
 }
 
 #[test]
@@ -80,7 +70,7 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         good.run(0, [60, 64, 67].map(|key| note(key, 0, key as i16, 0, true)).to_vec(), None);
         hub.run(0, vec![], None);
         hub.run(64, vec![], None);
-        assert_eq!(snapshot(&hub).1.len(), 67);
+        assert_eq!(heard(&hub), Ok(67));
         if overflow {
             // A plain 65th attack is refused by Tune admission. Lose a release
             // copy instead: Tune reserves its freed cell while Hub stays full.
@@ -98,7 +88,7 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         }
         hub.run(192, vec![], None);
         hub.run(256, vec![], None);
-        assert_eq!(snapshot(&hub).1.len(), 3, "only the independent learnable triad remains");
+        assert_eq!(heard(&hub), Err(Incomplete), "a row that lost an event refuses");
         assert!(refused());
         bad.run(320, vec![note(1, 0, 1, 0, false)], None);
         hub.run(320, vec![], None);
@@ -110,11 +100,7 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
             drop(bad);
         }
         hub.run(448, vec![], None);
-        assert_eq!(
-            snapshot(&hub),
-            (true, vec![]),
-            "reset and departure both authoritatively cut state"
-        );
+        assert_eq!(heard(&hub), Ok(0), "reset and departure both authoritatively cut state");
         assert!(!refused(), "the owner recovers with the state, not at a host reset");
         let revision = mailbox.visible().0.revision;
         // A just third, so what Learn derives differs from the 12-TET it heard.
@@ -124,7 +110,7 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         good.run(448, triad, None);
         hub.run(512, vec![], None);
         hub.run(576, vec![], None);
-        assert_eq!(snapshot(&hub).1.len(), 3);
+        assert_eq!(heard(&hub), Ok(3));
         assert_ne!(
             mailbox.visible().0.revision,
             revision,

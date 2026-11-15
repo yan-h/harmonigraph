@@ -641,7 +641,7 @@ mod tests {
                     event,
                     sequence: 1,
                     lifetime: 1,
-                    provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
+                    provenance: harmonigraph_core::canonical::PitchProvenance::AcceptedOutput,
                     pitch_microcents: None,
                 })
                 .unwrap();
@@ -670,7 +670,7 @@ mod tests {
         // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
         // at GUI=12; neither its batch nor a later idle poll is a new clock.
         use harmonigraph_core::canonical::NoteDelta;
-        use harmonigraph_core::confirmed::PitchProvenance;
+        use harmonigraph_core::canonical::PitchProvenance;
         let accepted = NoteDelta {
             assignment: None,
             partial_output: false,

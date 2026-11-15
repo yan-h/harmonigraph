@@ -1,11 +1,12 @@
 //! The backdrop cut round the spiral's sounding-note dots: the roll's own
 //! surround (`crate::surround`), read off each dot's circle.
 //!
-//! The sharp colored dots remain egui shapes. This callback is inserted just
-//! before them: `prepare` uploads the dots, and `paint` draws each one's cut
-//! straight over the picture, the strongest dot's landing wherever two meet
-//! (dot_surround.wgsl), so the discs land on a surround that has already taken
-//! the spectrum strip away beside them.
+//! The sharp colored dots draw through the roll's renderer (`crate::roll`),
+//! with its own cut off. This callback is inserted just before them: `prepare`
+//! uploads the dots, and `paint` draws each one's cut straight over the
+//! picture, the strongest dot's landing wherever two meet and held out by
+//! every dot's disc (dot_surround.wgsl), so the discs land on a surround that
+//! has already taken the spectrum strip away beside them.
 //!
 //! Straight onto the picture, unlike the roll, which draws into targets over
 //! its rect and composites them: those cost the whole rect a frame whatever
@@ -16,8 +17,8 @@
 //! spiral, where the candidates lists cost 0.02 (`timing` below).
 //!
 //! One set of buffers, for the one copy: the Spiral is an editor tab that is
-//! never exported (#974), so only its docked copy draws. Like the halo's chain
-//! in [`crate::glow`], they stand once built, hidden tab included.
+//! never exported (#974), so only its docked copy draws. They stand once
+//! built, hidden tab included.
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
@@ -63,7 +64,7 @@ struct GpuDot {
 }
 
 /// Draw the backdrop cut round `dots`, which stand inside `rect`. The callback
-/// belongs immediately before the colored egui discs.
+/// belongs immediately before the colored discs.
 ///
 /// A cut that draws nothing is this callback's to decline, and a declining
 /// frame allocates nothing here. A frame with no dots need not add it at all:
@@ -610,6 +611,31 @@ mod tests {
             read.iter().all(|&c| (f32::from(c) - left).abs() <= 6.0),
             "between two dots of the crowd read {read:?}, not about {left}",
         );
+    }
+
+    /// A neighbour's cut never darkens the picture behind a translucent dot
+    /// (#1293's rule for the roll's ribbons): every dot's disc holds every cut
+    /// out, at its coverage rather than its opacity.
+    ///
+    /// Two dots 8 points apart, so the black one's cut reaches 4 points into
+    /// the faint one's disc. Read inside that disc, where the black dot's cut
+    /// stands at seven sixteenths without it: stronger than the faint dot's
+    /// own, an eighth, so it is the black dot's cut that the disc holds out.
+    #[test]
+    fn a_neighbours_cut_never_darkens_behind_a_translucent_dot() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let mut resources = CallbackResources::default();
+        let neighbour = SurroundDot { center: [40.0, 32.0], radius: 4.0, aura: [0, 0, 0, 255] };
+        let faint = SurroundDot { aura: [255, 0, 0, 32], ..dot() };
+        let mut draw = |dots| {
+            drawn(&device, &queue, &mut resources, 1.0, egui::Pos2::ZERO, dots, CUT)(31.0, 32.0)
+        };
+        let alone = draw(vec![neighbour]);
+        assert!(alone[0] < 200, "the probe is past the neighbour's cut: {alone:?}");
+        let behind = draw(vec![faint, neighbour]);
+        assert_eq!(behind, [255; 3], "the neighbour's cut darkened the picture behind a dot");
     }
 
     /// Where two dots' cuts meet, the stronger lands alone, with its color:

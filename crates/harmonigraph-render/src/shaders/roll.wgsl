@@ -1,9 +1,8 @@
 // The piano roll's notes: one instanced quad per note segment — a solid
 // rectangle with a flat color, surrounded on every side by a BACKDROP CUT that
-// fades out, both falling out of a signed distance field. A segment may also
-// end in a fade at its LEADING tip (`lead_coverage`), which takes both out
-// together, and carry its own surround cap where the note inside it stops
-// (`cap_coverage`).
+// fades out, both falling out of a signed distance field. A box may instead be
+// a LEAD, a stretch of ribbon carried past where its note stops, whose
+// opacity and tip fade take both out together (`lead_coverage`).
 //
 // TWO LAYERS, drawn as passes over the same instances rather than composited
 // per note: every note's surround, then every note's body (`fs_core_*`), and a
@@ -109,15 +108,14 @@ struct VertexOut {
     /// The center line's pitch drift per point of depth: 0 for a held note,
     /// non-zero for a glide, which shears the box into a parallelogram.
     @location(2) @interpolate(flat) shear: f32,
-    /// Four to a slot, since a stage passes sixteen at most:
-    /// - `x`: how much of the box's LEADING end is a lead rather than the note
-    ///   itself, in points — 0 for the ordinary segment that is all note. See
-    ///   [`lead_coverage`].
-    /// - `y`: how much of that lead is spent fading out at the tip, in points.
-    /// - `z`: how much of the lead is still standing, 0..1.
-    /// - `w`: how far the surround's cap at the NOTE's own leading end reaches,
-    ///   in points. See [`cap_coverage`].
-    @location(4) @interpolate(flat) lead: vec4<f32>,
+    /// How far the box's corners are rounded, in points: 0 for a note, the
+    /// radius for a dot. See [`box_distance`].
+    @location(3) @interpolate(flat) rounding: f32,
+    /// Two to a slot:
+    /// - `x`: how much of the box's leading tip is spent fading out, in
+    ///   points; 0 for a note. See [`lead_coverage`].
+    /// - `y`: how much of a lead is still standing, 0..1; 1 for a note.
+    @location(4) @interpolate(flat) lead: vec2<f32>,
     /// Four depth offsets, ascending, and the ribbon's width at each as a share
     /// of its full `half_extent.x`. See [`taper_at`].
     @location(5) @interpolate(flat) taper_depth: vec4<f32>,
@@ -151,9 +149,10 @@ fn vs_note_cut(
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
-    // Lead, lead fade, lead alpha and cap reach; span then ramp.
-    // Packed, since a vertex takes sixteen at most.
-    @location(4) lead: vec4<f32>,
+    @location(3) rounding: f32,
+    // Lead fade and lead alpha; span then ramp.
+    // Packed several to a slot.
+    @location(4) lead: vec2<f32>,
     @location(8) core: vec4<f32>,
     @location(9) aura: vec4<f32>,
     @location(14) span_ramp: vec4<f32>,
@@ -163,7 +162,7 @@ fn vs_note_cut(
     @location(7) tremolo: vec2<f32>,
 ) -> VertexOut {
     return note_vertex(
-        vertex, center, half_extent, shear, lead, core, aura, span_ramp, fade,
+        vertex, center, half_extent, shear, rounding, lead, core, aura, span_ramp, fade,
         taper_depth, taper, tremolo, cut_reach() + locals.feather,
     );
 }
@@ -180,7 +179,8 @@ fn vs_note_body(
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
-    @location(4) lead: vec4<f32>,
+    @location(3) rounding: f32,
+    @location(4) lead: vec2<f32>,
     @location(8) core: vec4<f32>,
     @location(9) aura: vec4<f32>,
     @location(14) span_ramp: vec4<f32>,
@@ -190,7 +190,7 @@ fn vs_note_body(
     @location(7) tremolo: vec2<f32>,
 ) -> VertexOut {
     return note_vertex(
-        vertex, center, half_extent, shear, lead, core, aura, span_ramp, fade,
+        vertex, center, half_extent, shear, rounding, lead, core, aura, span_ramp, fade,
         taper_depth, taper, tremolo, locals.feather,
     );
 }
@@ -202,7 +202,8 @@ fn note_vertex(
     center: vec2<f32>,
     half_extent: vec2<f32>,
     shear: f32,
-    lead: vec4<f32>,
+    rounding: f32,
+    lead: vec2<f32>,
     core: vec4<f32>,
     aura: vec4<f32>,
     span_ramp: vec4<f32>,
@@ -222,7 +223,7 @@ fn note_vertex(
     // A shortfall in the margin CLIPS ink rather than costing a little fill
     // rate, so each caller passes the exact reach of its own layer.
     //
-    // The distance is Euclidean (see [`box_distance_trimmed`]), so the grown
+    // The distance is Euclidean (see [`box_distance`]), so the grown
     // box is the note's own bounding box — its ribbon's half width plus the
     // center line's drift over the note's half-length — with the same margin
     // on both axes, however steep the glide.
@@ -251,6 +252,7 @@ fn note_vertex(
     out.local = local;
     out.half_extent = half_extent;
     out.shear = shear;
+    out.rounding = rounding;
     out.lead = lead;
     out.taper_depth = taper_depth;
     out.taper = taper;
@@ -324,32 +326,21 @@ fn cut_reach() -> f32 {
 /// edge is equally held at every ribbon width. The amount itself is laid on in
 /// [`fs_note_surround`], one amount for every note, so it changes no note's
 /// rank against another's.
-///
-/// `reach` may still shorten an interior cap when the pane has less room
-/// before its now-line. That bound stays hard — shortening a cap moves its end
-/// instead of dimming the whole profile — while the fade's own shape is the
-/// cut's whatever bound it is cut at.
-fn cut_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
-    if reach <= 0.0 || locals.surround.cut.y <= 0.0 {
+fn cut_coverage(in: VertexOut, d: f32) -> f32 {
+    let reach = cut_reach();
+    if reach <= 0.0 {
         return 0.0;
     }
     return surround_fade_at(locals.surround, d) * inside(in, d, reach);
 }
 
-/// How much of the ribbon survives at this fragment: 1 across the NOTE, and
-/// inside the lead at its leading end, whatever the lead's own fade and opacity
-/// have left there.
+/// How much of the ribbon survives at this fragment: 1 across a NOTE, and
+/// across a lead whatever the lead's own opacity and tip fade have left there.
 ///
-/// The leading end is `-half_extent.y` along the depth axis, always — depth
-/// runs away from whatever the roll is drawn beside, so this names an end of
-/// the pane's own axis and not a screen side, exactly as everything else here
-/// does. `u` counts INWARD from that tip, so `u >= lead` is the note itself.
-///
-/// The note is untouched, and that division is the whole reason `lead` is
-/// carried per instance. A lead on its way out is a translucent extension of a
-/// solid ribbon; taking the opacity across the whole box instead would fade the
-/// note along with the thing hanging off it, which is a note the picture claims
-/// is quieter than it is.
+/// The tip is `-half_extent.y` along the depth axis, always — depth runs away
+/// from whatever the roll is drawn beside, so this names an end of the pane's
+/// own axis and not a screen side, exactly as everything else here does. `u`
+/// counts INWARD from that tip.
 ///
 /// Applied to BOTH layers, which is what makes a fading tip a fading ribbon
 /// rather than a ribbon dissolving inside its own surround: the surround wraps
@@ -363,46 +354,23 @@ fn cut_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
 /// want opposite things: a tip that dissolves has nothing left for a surround to
 /// bound, while a tip that ends square is an edge like any other on the note and
 /// is owed the same surround the flanks get. So a fade of 0 is uniform right out
-/// to the box, and [`inside`] is what ends it — the same square end the ribbon
-/// would have without a lead at all, dimmed by the opacity. (The spectral pane
-/// clips that cap off, its budget past the now-line being the lead itself; a
-/// caller who wants the cap has only to leave it room.)
+/// to the box, and [`inside`] is what ends it, dimmed by the opacity. (The
+/// spectral pane clips that cap off, its budget past the now-line being the
+/// lead itself; a caller who wants the cap has only to leave it room.)
 ///
-/// The fade is floored at one pixel and CAPPED at the lead, [`cut_coverage`]'s
-/// bargain in both directions and for its reasons: a sub-pixel ramp is an
-/// aliased edge, and a fade wider than the thing it is taking out has nothing
-/// past that to take. Capped, a fade dialled past its reach fades the whole
-/// lead from the note's own end outward rather than stepping at it — which is
-/// what this crate's `lead_fade` promises, and what lets the pane's bar clamp
-/// the pair for the bar's sake alone.
+/// The fade is floored at one pixel, [`cut_coverage`]'s bargain for its
+/// reason: a sub-pixel ramp is an aliased edge. The caller keeps it within the
+/// box, so a fade dialled past the lead's length fades it whole.
 ///
-/// The junction at the note's own end is CROSSED over a pixel rather than
-/// stepped, and that is the one place the two coverages meet. They differ by
-/// however much opacity the lead has lost, so at full opacity there is nothing
-/// to cross and at none of it the step would be the ribbon's whole edge — drawn
-/// hard, with no antialiasing of its own, since the box's own edge is a lead
-/// away and [`inside`] is not looking here.
-///
-/// A segment with no lead leaves at the first line, so the ordinary ribbon pays
-/// nothing at all for a lead it does not have.
+/// An ordinary note, a fade of 0 and an alpha of 1, leaves at the first line.
 fn lead_coverage(in: VertexOut) -> f32 {
-    let lead = in.lead.x;
-    let lead_fade = in.lead.y;
-    let lead_alpha = in.lead.z;
-    if (lead <= 0.0) {
-        return 1.0;
+    let lead_fade = in.lead.x;
+    let lead_alpha = in.lead.y;
+    if (lead_fade <= 0.0) {
+        return lead_alpha;
     }
-    let f = max(in.feather, 1e-6);
     let u = in.local.y + in.half_extent.y;
-    // The lead's own coverage: its opacity, taken out over the fade at the tip.
-    var led = lead_alpha;
-    if (lead_fade > 0.0) {
-        led = lead_alpha * clamp(u / max(min(lead_fade, lead), f), 0.0, 1.0);
-    }
-    // ...and the note's, which is solid. 1 inside the note, 0 in the lead, a
-    // pixel wide in between.
-    let note = clamp((u - lead) / f + 0.5, 0.0, 1.0);
-    return mix(led, 1.0, note);
+    return lead_alpha * clamp(u / max(lead_fade, in.feather), 0.0, 1.0);
 }
 
 /// Signed distance from this fragment to the note's own box, in points:
@@ -410,32 +378,26 @@ fn lead_coverage(in: VertexOut) -> f32 {
 /// the nearest point of the box, whichever edge or corner that is. On a glide
 /// that is perpendicular to the long edges, so the rim bands keep their
 /// thickness instead of thinning with its angle.
-fn box_distance(in: VertexOut) -> f32 {
-    return box_distance_trimmed(in, 0.0);
-}
-
-/// The same distance, to the box with its LEADING end pulled in by `trim`
-/// points. `trim` of the lead is the distance to the NOTE inside a box that
-/// carries one; 0 is the box itself.
-///
-/// Pulling one end in shortens the box by `trim` and slides its center half
-/// that far along the note's center LINE — along depth, and `slope` times that
-/// along pitch — so a sheared box keeps its long edges where they were.
 ///
 /// A ribbon whose width holds still along this instance is the parallelogram,
 /// at that width; one whose width moves is [`tapered_distance`]. Both are
 /// exact, so an unmoving note draws exactly as it did before widths moved.
-fn box_distance_trimmed(in: VertexOut, trim: f32) -> f32 {
+///
+/// A box with a `rounding` is the box that much smaller, grown back by it
+/// in every direction: rounded, and a disc where it is the half extent,
+/// which is how the Spiral's dots come out round.
+fn box_distance(in: VertexOut) -> f32 {
     let t = in.taper;
     if (all(t == vec4<f32>(t.x))) {
-        return parallelogram_distance(in, trim, in.half_extent.x * t.x);
+        let r = in.rounding;
+        return parallelogram_distance(in, in.half_extent.x * t.x - r, in.half_extent.y - r) - r;
     }
-    return tapered_distance(in, trim);
+    return tapered_distance(in);
 }
 
-/// [`box_distance_trimmed`] for a ribbon `half_pitch` either side of its
-/// center line all along.
-fn parallelogram_distance(in: VertexOut, trim: f32, half_pitch: f32) -> f32 {
+/// [`box_distance`] for a ribbon `half_pitch` either side of its center line
+/// all along, `half_along` either side of its center along depth.
+fn parallelogram_distance(in: VertexOut, half_pitch: f32, half_along: f32) -> f32 {
     let slope = in.shear;
     // A bent note is a sheared box: its long edges run at `slope`, its ends
     // stay square across the depth axis, `half_extent.x` either side of the
@@ -451,16 +413,13 @@ fn parallelogram_distance(in: VertexOut, trim: f32, half_pitch: f32) -> f32 {
     // thousands — and that segment's surround and antialiasing ramp became a
     // hairline strip through the whole pane.
     //
-    // Square corners, always: a note is a rectangle in the pane's two axes,
-    // and rounding one was a setting until it turned out to be doing nothing a
-    // piano roll wants — on the notes short enough for it to show (a tapped
-    // key), the radius clamps to the note's own half-length and turns it into
-    // a bead. The surround's own corners are round, being a constant distance
-    // from a square one, and that is the shape a note wants wrapped around it.
-    let half_along = in.half_extent.y - 0.5 * trim;
+    // Square corners for a note: a note is a rectangle in the pane's two axes
+    // (`RollInstance::rounding`). The surround's own corners are round, being a
+    // constant distance from a square one, and that is the shape a note wants
+    // wrapped around it.
     // The center line's far end, from the center.
     let end = vec2<f32>(slope * half_along, half_along);
-    var p = in.local - 0.5 * trim * vec2<f32>(slope, 1.0);
+    var p = in.local;
     // The box is point-symmetric: fold onto the far end's half.
     p = select(p, -p, p.y < 0.0);
     // Nearest point on that end, and whether `p` is short of it.
@@ -537,14 +496,14 @@ fn taper_vertex(in: VertexOut, depth: f32, width: f32, lo: f32, hi: f32) -> vec2
     return vec2<f32>(y, in.half_extent.x * share);
 }
 
-/// [`box_distance_trimmed`] for a ribbon whose width moves along the piece:
+/// [`box_distance`] for a ribbon whose width moves along the piece:
 /// the exact distance to the polygon its two flanks bound, straight between
 /// the taper points and square across depth at the box's ends. It is still
 /// the TRUE distance (#1118), so a sliver glide's surround stays within its
 /// reach along pitch here as well.
-fn tapered_distance(in: VertexOut, trim: f32) -> f32 {
+fn tapered_distance(in: VertexOut) -> f32 {
     let slope = in.shear;
-    let lo = -in.half_extent.y + trim;
+    let lo = -in.half_extent.y;
     let hi = in.half_extent.y;
     let p = in.local;
     let d = in.taper_depth;
@@ -569,54 +528,13 @@ fn tapered_distance(in: VertexOut, trim: f32) -> f32 {
     return select(sqrt(near), -sqrt(near), inside);
 }
 
-/// How much of the surround's cap at the NOTE's own leading end is cut here:
-/// the same surround every other edge gets, standing against the end of the
-/// note inside a box that carries a lead.
-///
-/// Without it that end wears no cap at all. It is INTERIOR to the box — the
-/// lead was added to the box's length, not drawn beside it — and
-/// [`cut_strength`]'s mask keeps the surround out of a box's middle, correctly,
-/// since a box has no edge there. So the cap would arrive only when the caller
-/// drops the lead and the box shrinks back to the note.
-///
-/// Drawn in the surround layer, under every body (see the head of this file),
-/// so a lead standing over the cap covers it and a spent one leaves it bare.
-/// The spectral pane gives a cap room only behind a spent lead (`lead.z` of
-/// 0): the box it keeps on a released note while that note's end scrolls
-/// clear of the now-line.
-///
-/// `cap_reach` is the one thing the caller decides, and it is about ROOM rather
-/// than about time — the cap stands in the stretch the lead was drawn over, and
-/// only the caller knows whether its ink is welcome there. Shortened, the cap
-/// grows out of the note's end rather than fading in over it, so it is wholly
-/// on the near side of whatever the caller is protecting at every reach it is
-/// given, and reaching the cut's full reach is the same picture the box's own
-/// surround draws once the lead is dropped.
-///
-/// Unioned with the wrap rather than added to it: the two are one cut off two
-/// shapes that share three of their sides, and along the note's flanks both
-/// are looking at the same ink. Added, that overlap would cut deeper than the
-/// surround does anywhere else.
-fn cap_coverage(in: VertexOut, rim: Rim) -> f32 {
-    // Bounded by the surround the cap is part of, in both directions at once.
-    // The fade itself runs out at the cut's reach, so what a wider cap would
-    // add is the antialiasing ramp's tail past it: a softer end than every
-    // other edge of the note wears. With no cut at all there is no band for
-    // the cap to be part of.
-    let reach = min(in.lead.w, cut_reach());
-    if (in.lead.x <= 0.0 || reach <= 0.0) {
-        return 0.0;
-    }
-    return cut_coverage(in, rim.cap_d, reach) * rim.cap_keep;
-}
-
 /// How much of this fragment any body covers: the union `prepare` drew into
 /// `body_holdout`, and 0 off the roll's rect, where no body is.
 ///
 /// It is coverage and not opacity — a body's fade and color alpha are not in
 /// it — so a translucent body holds a cut out as fully as an opaque one.
-/// A lead counts as far as it still stands ([`lead_coverage`]), so a spent
-/// lead leaves the cap behind it bare, as it always has.
+/// A lead counts as far as it still stands ([`lead_coverage`]), so a fading
+/// lead holds a neighbour's cut out only as far as it is still there.
 ///
 /// The surround takes the larger of this and its own note's fill rather than
 /// the product. The union already holds that fill, so the max is exact where
@@ -662,28 +580,19 @@ struct NoteCut {
 /// as the note takes over its antialiased boundary. The body blends its flat
 /// color over that backdrop in the next pass.
 ///
-/// [`cap_coverage`] is the second shape this layer draws, standing against the
-/// end of the note INSIDE a box that carries a lead — a place the mask above
-/// keeps the wrap out of, correctly, and where an edge nonetheless is. The
-/// note's opacity reading takes the whole of it out, so a faded note leaves no
-/// solid cut behind.
-///
-/// The tint's fade unions the same two shapes, the lead's coverage on the wrap
-/// included: that is what makes them tie where the cut's strengths do, so the
-/// fill has no step along a part-standing lead.
+/// The note's opacity reading takes the whole of it out, so a faded note
+/// leaves no solid cut behind, and a lead's coverage takes out the cut and its
+/// tint's fade alike.
 fn cut_strength(in: VertexOut, rim: Rim) -> NoteCut {
     if !rim.live { return NoteCut(0.0, 0.0); }
-    let wrap = cut_coverage(in, rim.d, cut_reach()) * rim.keep * rim.lead;
-    let cap = cap_coverage(in, rim);
-    let cap_fade = select(0.0, surround_fade_at(locals.surround, rim.cap_d), cap > 0.0);
-    let fade = max(surround_fade_at(locals.surround, rim.d) * rim.lead, cap_fade);
-    return NoteCut(in.aura.a * max(wrap, cap) * along(in, in.fade), fade);
+    let wrap = cut_coverage(in, rim.d) * rim.keep * rim.lead;
+    let fade = surround_fade_at(locals.surround, rim.d) * rim.lead;
+    return NoteCut(in.aura.a * wrap * along(in, in.fade), fade);
 }
 
 /// What the cut reads off a note at this fragment, once: where the ribbon
-/// stands, its distance, and how much of a surround there the
-/// bodies and the lead leave standing — around the box, and around the note's
-/// own end inside a box that carries a lead ([`cap_coverage`]).
+/// stands, its distance, and how much of a surround there the bodies and the
+/// lead leave standing.
 struct Rim {
     /// Whether the ribbon has any width at this depth ([`taper_at`]).
     live: bool,
@@ -693,10 +602,6 @@ struct Rim {
     keep: f32,
     /// [`lead_coverage`].
     lead: f32,
-    /// The distance to the note's own end inside a lead box, and `keep`
-    /// against it; read only where there is a lead.
-    cap_d: f32,
-    cap_keep: f32,
 };
 
 fn rim_of(in: VertexOut) -> Rim {
@@ -707,10 +612,6 @@ fn rim_of(in: VertexOut) -> Rim {
     let held = body_held(in);
     rim.keep = 1.0 - max(inside(in, rim.d, 0.0), held);
     rim.lead = lead_coverage(in);
-    if in.lead.x > 0.0 {
-        rim.cap_d = box_distance_trimmed(in, in.lead.x);
-        rim.cap_keep = 1.0 - max(inside(in, rim.cap_d, 0.0), held);
-    }
     return rim;
 }
 
@@ -725,10 +626,10 @@ fn fs_body_holdout(fragment: VertexOut) -> @location(0) vec4<f32> {
 
 /// Evenly spaced diagonal strokes every six composition points. The marks only
 /// dim RGB: neither the continuous silhouette nor its opacity is patterned.
-/// Keep an untouched rail beside both pitch edges, and leave the lead plain.
+/// Keep an untouched rail beside both pitch edges.
 fn tremolo_tone(in: VertexOut) -> f32 {
     let scale = in.tremolo.y;
-    if scale <= 0.0 || in.local.y < -in.half_extent.y + in.lead.x {
+    if scale <= 0.0 {
         return 1.0;
     }
     let x = (in.local.x - in.shear * in.local.y) / scale;

@@ -360,9 +360,8 @@ pub struct Interaction {
     /// Which of the Analyzer's regions are folded, and the composition they
     /// fold back open to (see [`panes::spectral::collapse::Regions`]).
     ///
-    /// The layout's content rather than a preference: the width a folded
-    /// region gives up is held in `Layout::region_widths`, so the two are
-    /// saved, loaded and reset together.
+    /// The layout's content rather than a preference, so it is saved, loaded
+    /// and reset with the layout.
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     /// User-saved camera angles, applied like the built-in Flat/Isometric
     /// presets (persisted; see Camera in the Lattice page's View section).
@@ -785,8 +784,8 @@ pub(crate) struct UiPersist {
     /// the floor — [`SharedState::install_document`] refuses it entirely.
     pub(crate) version: u32,
     pub(crate) layout: workspace::Layout,
-    /// See [`Interaction::analyzer_regions`]: the half of a folded region
-    /// that `layout` does not hold.
+    /// Which Analyzer regions are folded, saved beside the layout (see
+    /// [`Interaction::analyzer_regions`]).
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,

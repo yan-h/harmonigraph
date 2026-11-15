@@ -13,21 +13,12 @@ pub(crate) struct Regions {
     /// Last fully open composition. Temporary expansion into a folded region
     /// never changes this snapshot or the appearance dial.
     geometry: Option<Geometry>,
-    #[serde(skip)]
-    pub request: Option<Request>,
-    #[serde(skip)]
-    landing: Option<[bool; 2]>,
+    /// Re-take the spectrum hold from `geometry` on the next fully open frame:
+    /// set by a load and by a new window, which lay the Analyzer out afresh.
+    /// An unfold needs none, since a fold no longer changes the pane's size and
+    /// the hold keeps the spectrum's points.
     #[serde(skip)]
     restore: bool,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct Request {
-    pub collapsed: [bool; 2],
-    pub region: usize,
-    /// `Some` closes a region, removing this width in the Right arrangement;
-    /// `None` reopens it using the fold controller's recorded deduction.
-    pub width: Option<f32>,
 }
 
 #[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
@@ -59,20 +50,6 @@ impl Regions {
     /// frame, as a load does: a new window lays the Analyzer out afresh.
     pub fn relayout(&mut self) {
         self.restore = true;
-    }
-
-    /// Visibility lands with the resize, never on the click's old geometry.
-    pub fn begin_frame(&mut self) {
-        if let Some(collapsed) = self.landing.take() {
-            self.collapsed = collapsed;
-            self.restore = !collapsed.iter().any(|&c| c);
-        }
-    }
-
-    pub fn land(&mut self) {
-        if let Some(request) = self.request.take() {
-            self.landing = Some(request.collapsed);
-        }
     }
 
     /// The docked Analyzer: in Tape mode, the audition's controls along the
@@ -215,13 +192,11 @@ impl Regions {
                 continue;
             }
             let direction = axes.dir_depth() * if (index == 0) == closed { 1.0 } else { -1.0 };
-            if control(ui, band, direction, closed, vertical, name, index) && self.request.is_none()
-            {
-                let mut collapsed = self.collapsed;
-                collapsed[index] = !closed;
-                let width = if vertical { 0.0 } else { (drawn_depths[index] - rail).max(0.0) };
-                self.request =
-                    Some(Request { collapsed, region: index, width: (!closed).then_some(width) });
+            // Toggled at the click: this frame has drawn the old geometry
+            // already, and the next draws the new one.
+            if control(ui, band, direction, closed, vertical, name, index) {
+                self.collapsed[index] = !closed;
+                ui.ctx().request_repaint();
             }
         }
     }
@@ -239,8 +214,8 @@ fn extend(rect: &mut Rect, delta: Vec2) {
 /// than a floating widget over the picture.
 ///
 /// The cell is a rail's width, not a row's, so the visible button lands on the
-/// spot its rail's Expand button takes when the region stays put, rather than
-/// a few points off it.
+/// spot its rail's Expand button takes once the region folds (a fold never
+/// moves the pane's edges), rather than a few points off it.
 fn control_rect(axes: &Axes, index: usize, size: f32) -> Rect {
     let inset = size * 0.5;
     let pitch = 1.0 - inset / axes.pitch_len();
