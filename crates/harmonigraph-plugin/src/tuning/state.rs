@@ -2,9 +2,11 @@
 //!
 //! There is one provenance here. The Hub derives this from its own sequenced
 //! input at input plus that source's D, which is what the Tune will emit, so
-//! the display and the take show a schedule rather than a confirmation. What
-//! that costs is written down: a note the host refuses is drawn anyway, and
-//! nothing in the protocol can tell.
+//! the display and the take show a schedule rather than a confirmation. The
+//! one thing the Tune reports back about emission is a miss, an onset that
+//! left without its correction, which the Hub then draws raw
+//! ([`State::sounded_raw`]). What the rest costs is written down: a note the
+//! host refuses is drawn anyway, and nothing in the protocol can tell.
 use harmonigraph_core::canonical::{NoteDelta, SourceBaseline, VoiceBaseline, HELD_PER_SOURCE};
 use harmonigraph_core::{LatticePos, NoteEvent, NoteEventKind, SourceId};
 
@@ -79,9 +81,11 @@ impl State {
         count
     }
 
-    /// Freeze this onset's adaptive choice onto its voice. The emitted pitch
-    /// includes the correction because the Tune states it as a per-note tuning
-    /// expression at the same sample as the note.
+    /// Freeze this onset's adaptive choice onto its voice. The pitch drawn
+    /// includes the correction, which the Tune states as a per-note tuning
+    /// expression at the note's own sample when the reply reaches it in time;
+    /// when it does not, the note sounds raw and
+    /// [`sounded_raw`](Self::sounded_raw) takes the correction back off.
     pub fn assign(
         &mut self,
         lifetime: u64,
@@ -151,6 +155,23 @@ impl State {
             pitch_microcents: Some(voice.pitch_microcents),
             assignment: VoiceBaseline::metadata(voice),
         })
+    }
+
+    /// The onset `lifetime` sounded without its correction, which came back
+    /// too late: the voice draws from here on at the raw pitch it sounds at,
+    /// stated as the `Tuning` delta [`retuned`](Self::retuned) builds. The
+    /// correction comes back off the pitch rather than the pitch being
+    /// rebuilt, since channel moves are folded into it as they come. Nothing
+    /// when the voice is no longer held, or had no correction to withdraw.
+    pub fn sounded_raw(&mut self, lifetime: u64, stamp: Stamp) -> Option<NoteDelta> {
+        let voice = self.voices.iter_mut().flatten().find(|v| v.lifetime == lifetime)?;
+        let correction = std::mem::take(&mut voice.frozen_offset_microcents);
+        if correction == 0 {
+            return None;
+        }
+        voice.pitch_microcents -= correction;
+        voice.onset_pitch_microcents -= correction;
+        self.retuned(lifetime, stamp)
     }
 
     /// Apply one sequenced input at the time it is scheduled to sound. A

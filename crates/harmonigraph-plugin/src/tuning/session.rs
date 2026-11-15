@@ -18,7 +18,9 @@ use super::{event::Event, CAPTURE_RING, REPLY_RING, TUNERS};
 /// callback's input itself. `DROPPED` costs the input
 /// when a local store refuses it, and only its correction when the Hub refuses
 /// its assignment or the output refuses the tuning event after its note: either
-/// way the note still sounds uncorrected.
+/// way the note still sounds uncorrected. A miss record lost, to a full copy
+/// ring or past one Hub pass's worth, costs only the drawing: that note stays
+/// drawn corrected.
 pub const NO_HUB: u32 = 1 << 0;
 /// A second Harmonigraph in the process. Both show it; the first one loaded
 /// keeps the session, because there is no pairing choice to offer.
@@ -39,7 +41,9 @@ pub const PUBLICATION: u32 = 1 << 6;
 /// A bounded store was full and an event was dropped outright: the delay line,
 /// the held set, or a value the wrapper refused. A local store's refusal costs
 /// the input; the Hub's, or the output's after the note, costs only the
-/// correction while the Tune still emits the note raw.
+/// correction while the Tune still emits the note raw. A miss record lost to
+/// a full copy ring, or past the misses one Hub pass holds, leaves its note
+/// drawn corrected.
 pub const DROPPED: u32 = 1 << 7;
 
 pub fn status_text(status: u32) -> String {
@@ -61,18 +65,29 @@ pub fn status_text(status: u32) -> String {
     format!("Tuning status: {}", named.join(", "))
 }
 
-/// One copied input record. Everything the Hub needs to order and assign this
-/// input is here; nothing points back into the Tune's storage.
+/// What one copied record says: an input for the Hub to sequence, or that the
+/// onset `serial` names left the Tune without its correction (#1799).
+#[derive(Clone, Copy, Debug)]
+pub enum Copied {
+    Input {
+        /// Participation at arrival, including its edit generation.
+        retune: u64,
+        /// Absolute input sample on the host's steady timeline.
+        sample: i64,
+        event: Event,
+    },
+    Miss,
+}
+
+/// One copied record. Everything the Hub needs to order and assign an input is
+/// here; nothing points back into the Tune's storage.
 #[derive(Clone, Copy, Debug)]
 pub struct Capture {
-    /// Participation at arrival, including its edit generation.
-    pub retune: u64,
     pub epoch: u64,
-    /// The originating Tune's own input sequence. A reply addresses this.
+    /// The originating Tune's own input sequence. A reply addresses this, and
+    /// a miss names the onset it is about by it.
     pub serial: u64,
-    /// Absolute input sample on the host's steady timeline.
-    pub sample: i64,
-    pub event: Event,
+    pub copied: Copied,
 }
 
 /// The whole of what the Hub says back. A correction reaches its onset by

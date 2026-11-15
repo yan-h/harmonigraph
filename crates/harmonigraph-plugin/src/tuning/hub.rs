@@ -20,7 +20,7 @@ use nice_plug::wrapper::clap::configuration::OwnedInput;
 use nice_plug::wrapper::clap::performance as api;
 
 use super::event::Event;
-use super::session::{self, HubEnds, Reply};
+use super::session::{self, Copied, HubEnds, Reply};
 use super::state::{Stamp, State};
 use super::tune::Tune;
 use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_VOICES, TUNERS};
@@ -301,6 +301,9 @@ pub struct Hub {
     epoch: u64,
     rows: Box<[Row]>,
     batch: Vec<Record>,
+    /// Onsets that left their Tune without a correction, `(source, serial)`,
+    /// withdrawn after this callback's batch is applied.
+    missed: Vec<(u8, u64)>,
     pending: Vec<Published>,
     /// The earliest time among deltas lost before reaching either
     /// publication lane.
@@ -331,6 +334,7 @@ impl Hub {
             epoch: 0,
             rows: (0..=TUNERS).map(|_| Row::default()).collect::<Vec<_>>().into_boxed_slice(),
             batch: Vec::with_capacity(BATCH_EVENTS),
+            missed: Vec::with_capacity(BATCH_EVENTS),
             pending: Vec::with_capacity(BATCH_EVENTS),
             pending_loss: None,
             sequencer: Box::default(),
@@ -547,9 +551,6 @@ impl Hub {
             LatticePos::ORIGIN
         });
         self.collect();
-        if self.batch.is_empty() {
-            return;
-        }
         self.batch.sort_unstable_by_key(|record| (record.sample, record.order()));
         let mut index = 0;
         while index < self.batch.len() {
@@ -581,6 +582,41 @@ impl Hub {
             index = end;
         }
         self.batch.clear();
+        self.withdraw_misses();
+    }
+
+    /// Each onset that sounded without the correction this Hub chose for it
+    /// is drawn from here on at the raw pitch it sounds at: the voice loses
+    /// its correction, and a `Tuning` delta states the raw pitch at the row's
+    /// latest scheduled time, as a channel move does (#1151). The usual miss
+    /// is collected in the same pass as its onset, since the Tune's whole
+    /// callback ran before this one, so the note is drawn corrected only up
+    /// to the row's latest scheduled time in the pass. One collected a pass
+    /// later, after a race or a lost reply, stays corrected for up to about a
+    /// delay plus one callback. After the batch, so an onset collected in the
+    /// same pass is held by now; a voice already released, or replaced on its
+    /// key, is left alone.
+    ///
+    /// Never before this callback's start: a snapshot an earlier callback
+    /// published for the row, timed at a later sub-block, covers the voice
+    /// with its correction, and a withdrawal timed before it would sort ahead
+    /// of it on read.
+    fn withdraw_misses(&mut self) {
+        let start = self.callback.map(|callback| self.presentation(callback.steady_time));
+        for position in 0..self.missed.len() {
+            let (source, lifetime) = self.missed[position];
+            let row = &mut self.rows[usize::from(source)];
+            let Some(applied) = row.applied_time else { continue };
+            let time = start.map_or(applied, |start| applied.max(start));
+            let sequence = row.sequence + 1;
+            let stamp = Stamp { source: identity(source), sequence, lifetime, time };
+            if let Some(delta) = row.state.sounded_raw(lifetime, stamp) {
+                row.sequence = sequence;
+                row.applied = sequence;
+                self.hold(source, delta);
+            }
+        }
+        self.missed.clear();
     }
 
     /// Take what each row has copied over. A record from an old epoch belongs
@@ -592,19 +628,23 @@ impl Hub {
         // the Tune's own RING_FULL rather than a record lost without a word.
         while self.batch.len() < BATCH_EVENTS {
             let Some(capture) = self.tune.take_direct() else { break };
-            if capture.epoch == direct_epoch {
-                Self::retain(
+            if capture.epoch != direct_epoch {
+                continue;
+            }
+            match capture.copied {
+                Copied::Input { retune, sample, event } => Self::retain(
                     &mut self.batch,
                     Record {
-                        retune: capture.retune,
+                        retune,
                         source: DIRECT,
-                        sample: capture.sample,
+                        sample,
                         serial: capture.serial,
                         epoch: capture.epoch,
-                        event: capture.event,
+                        event,
                         player: 0.0,
                     },
-                );
+                ),
+                Copied::Miss => Self::miss(&mut self.missed, &mut self.status, DIRECT, capture),
             }
         }
         let epoch = self.epoch;
@@ -623,19 +663,34 @@ impl Hub {
                 if capture.epoch != epoch {
                     continue;
                 }
-                Self::retain(
-                    &mut self.batch,
-                    Record {
-                        retune: capture.retune,
-                        source: slot as u8,
-                        sample: capture.sample,
-                        serial: capture.serial,
-                        epoch: capture.epoch,
-                        event: capture.event,
-                        player: 0.0,
-                    },
-                );
+                match capture.copied {
+                    Copied::Input { retune, sample, event } => Self::retain(
+                        &mut self.batch,
+                        Record {
+                            retune,
+                            source: slot as u8,
+                            sample,
+                            serial: capture.serial,
+                            epoch: capture.epoch,
+                            event,
+                            player: 0.0,
+                        },
+                    ),
+                    Copied::Miss => {
+                        Self::miss(&mut self.missed, &mut self.status, slot as u8, capture)
+                    }
+                }
             }
+        }
+    }
+
+    /// Keep a miss for after the batch. It never ranks as an onset or binds an
+    /// expression; more than one pass's worth is dropped.
+    fn miss(missed: &mut Vec<(u8, u64)>, status: &mut u32, source: u8, capture: session::Capture) {
+        if missed.len() < BATCH_EVENTS {
+            missed.push((source, capture.serial));
+        } else {
+            *status |= session::DROPPED;
         }
     }
 
@@ -962,15 +1017,16 @@ impl Hub {
         }
         if let Some(mut delta) = delta {
             // The voice now carries its frozen choice, so the delta states
-            // the pitch this note will actually sound at rather than its
-            // raw key.
+            // the pitch this note sounds at if its correction reaches the Tune
+            // in time, rather than its raw key. If it does not, the Tune's
+            // miss withdraws the correction (`withdraw_misses`).
             if let Some(voice) = self.rows[index].state.voice(delta.lifetime) {
                 delta.assignment = VoiceBaseline::metadata(voice);
                 if delta.pitch_microcents.is_some() {
                     delta.pitch_microcents = Some(voice.pitch_microcents);
                 }
             }
-            self.hold(record, delta);
+            self.hold(record.source, delta);
         }
         // A channel bend moves every voice held on its channel and has no
         // delta of its own, so each moved voice gets one: its new pitch as a
@@ -986,7 +1042,7 @@ impl Hub {
                 self.rows[index].sequence += 1;
                 let stamp = Stamp { sequence: self.rows[index].sequence, ..stamp };
                 if let Some(delta) = self.rows[index].state.retuned(lifetime, stamp) {
-                    self.hold(record, delta);
+                    self.hold(record.source, delta);
                 }
             }
         }
@@ -995,12 +1051,12 @@ impl Hub {
 
     /// Queue one delta for this callback's publication pass. A full queue
     /// owes an explicit gap and a snapshot: current state cannot replace history.
-    fn hold(&mut self, record: Record, delta: NoteDelta) {
+    fn hold(&mut self, source: u8, delta: NoteDelta) {
         let time = delta.event.time;
-        let row = &mut self.rows[usize::from(record.source)];
+        let row = &mut self.rows[usize::from(source)];
         row.applied_time = Some(row.applied_time.map_or(time, |old| old.max(time)));
         if self.pending.len() < BATCH_EVENTS {
-            self.pending.push(Published { source: record.source, delta });
+            self.pending.push(Published { source, delta });
         } else {
             self.pending_loss = Some(self.pending_loss.map_or(time, |old| old.min(time)));
             row.repair = publication::Lanes::both(true);

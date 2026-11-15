@@ -3,9 +3,10 @@
 //! same code that tunes every other one.
 //!
 //! Nothing here waits. An onset whose correction has not arrived by its own
-//! deadline emits at raw pitch and increments a counter; a late reply is
-//! dropped. That is the whole of the missed-deadline contract, and it is why
-//! this file has no settle, ready or coverage predicate in it.
+//! deadline emits at raw pitch, increments a counter and tells the Hub, which
+//! draws it raw from then on (#1799); a late reply is dropped. That is the
+//! whole of the missed-deadline contract, and it is why this file has no
+//! settle, ready or coverage predicate in it.
 use nice_plug::wrapper::clap::configuration::OwnedInput;
 use nice_plug::wrapper::clap::performance as api;
 use std::sync::atomic::Ordering;
@@ -13,7 +14,7 @@ use std::sync::Arc;
 
 use super::event::Event;
 use super::queue::Queue;
-use super::session::{self, Attached, Capture, Reply};
+use super::session::{self, Attached, Capture, Copied, Reply};
 use super::{
     setup, CAPTURE_RING, CUT_EVENTS, EMIT_PER_CALLBACK, HELD_PER_SOURCE, PENDING_EVENTS, REPLY_RING,
 };
@@ -362,8 +363,12 @@ impl Tune {
         let position = self.line.position(self.line.len() - 1).unwrap();
         let asking = self.asking();
         let retune = self.shared.retuning();
-        let copied =
-            asking && self.copy(Capture { retune, epoch: self.epoch, serial, sample, event });
+        let copied = asking
+            && self.copy(Capture {
+                epoch: self.epoch,
+                serial,
+                copied: Copied::Input { retune, sample, event },
+            });
         if asking && !copied {
             self.status |= session::RING_FULL;
             self.dropped += 1;
@@ -415,13 +420,16 @@ impl Tune {
     }
 
     fn copy(&mut self, capture: Capture) -> bool {
-        let copied = match &mut self.link {
+        let copied = self.send(capture);
+        self.captured += u64::from(copied);
+        copied
+    }
+    fn send(&mut self, capture: Capture) -> bool {
+        match &mut self.link {
             Link::Detached => false,
             Link::Row(attached) => attached.ends.captures.push(capture).is_ok(),
             Link::Direct { out, .. } => out.push(capture).is_ok(),
-        };
-        self.captured += u64::from(copied);
-        copied
+        }
     }
 
     /// A reply reaches the onset with its serial or it reaches nothing. A
@@ -518,6 +526,15 @@ impl Tune {
             // callback, and one note must not count as two misses.
             if pending.awaiting && pending.correction.is_none() {
                 self.misses += 1;
+                // The Hub drew this note with the correction it chose, so it
+                // is told the note sounded raw. A full ring loses that word
+                // like any copy, and the note stays drawn corrected.
+                let miss =
+                    Capture { epoch: self.epoch, serial: pending.serial, copied: Copied::Miss };
+                if !self.send(miss) {
+                    self.status |= session::DROPPED;
+                    self.dropped += 1;
+                }
             }
             self.line.pop();
         }
