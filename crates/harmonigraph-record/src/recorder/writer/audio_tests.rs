@@ -99,9 +99,11 @@ impl Worker {
 
     fn assert_failed(&self, cause: &str) {
         let control = self.control.as_ref().unwrap();
-        wait_for("failure on the status line", || control.status().contains(cause));
+        // A Stop seals on the pass after the one that polled it.
+        wait_for("failure on the status line, no Stop pending", || {
+            control.status().contains(cause) && !self.fence.finishing.load(Ordering::Acquire)
+        });
         assert!(self.fence.failed.load(Ordering::Acquire));
-        assert!(!self.fence.finishing.load(Ordering::Acquire));
         assert!(!self.recorder.as_ref().unwrap().wants_audio());
         let message = control.status();
         assert!(

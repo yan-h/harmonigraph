@@ -103,13 +103,9 @@ impl Recording {
     /// its run, so it closes here. For a host that stops calling the audio
     /// thread after a Stop.
     pub fn close_stopped(&mut self, recorder: &mut Recorder) {
-        let intent = recorder.capture_recording_intent();
-        if intent.is_armed() {
+        if recorder.capture_recording_intent().is_armed() {
             return;
         }
-        // The lifecycle observes the disarm here, so the next take's arm is an
-        // edge however soon it comes.
-        recorder.is_armed_at(intent);
         if self.registered_through != i64::MIN {
             self.end_run(recorder, self.registered_through);
         }

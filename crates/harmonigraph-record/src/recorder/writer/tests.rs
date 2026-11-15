@@ -973,6 +973,25 @@ fn an_invalid_publication_into_an_armed_take_fails_the_recording() {
     assert!(b.rec.fence.failed.load(Ordering::Acquire), "a hole in a take fails it");
 }
 
+/// A Stop and a new Start with no callback between them still make an arming
+/// edge: the second take records from its own first block, rather than
+/// inheriting the first's history and ending at its own first rewind.
+#[test]
+fn a_take_re_armed_with_no_callback_between_records_from_its_first_block() {
+    let mut b = Bench::new();
+    b.arm();
+    b.end_at_rewind();
+    assert!(b.rec.observe_transport(5.0, true, BLOCK_SECONDS).is_some());
+    assert!(b.rec.observe_transport(5.0 + BLOCK_SECONDS, true, BLOCK_SECONDS).is_some());
+    // Stop, then Start, before any callback observes the disarm.
+    b.rec.fence.disarm();
+    b.rec.fence.arm(b.rec.fence.epoch() + 1);
+    assert!(b.rec.is_armed());
+    // Rewound and played: the second take's first block.
+    assert_eq!(b.rec.observe_transport(0.0, true, BLOCK_SECONDS), Some(0.0));
+    assert!(!b.hit_rewind(), "the first take's motion does not end the second");
+}
+
 /// The run changes when the take is armed and when it records again after a
 /// block it did not — and at nothing else, a loop wrap included, since each
 /// change costs a snapshot of every sounding note (#1129).

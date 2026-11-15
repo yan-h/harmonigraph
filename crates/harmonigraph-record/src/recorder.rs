@@ -237,6 +237,8 @@ pub struct Recorder {
     /// how the Hub learns that. Per lane, because the other lane lost nothing
     /// and its consumer is still holding a set that is correct.
     outage: publication::Lanes<bool>,
+    /// The epoch of the take last seen armed.
+    armed_epoch: u64,
     producer: rtrb::Producer<Entry>,
     /// Interleaved input samples, recorded beside every take's notes.
     audio: rtrb::Producer<f32>,
@@ -294,6 +296,7 @@ impl Recorder {
             publication,
             display,
             outage: publication::Lanes::default(),
+            armed_epoch: 0,
             producer,
             audio,
             dropped: Arc::default(),
@@ -416,7 +419,14 @@ impl Recorder {
 
     /// Use the arm/disarm intent captured at the enclosing callback boundary,
     /// so a concurrent stop cannot cut off that callback's remaining audio.
+    ///
+    /// A new epoch armed is an arming edge even if no callback saw the
+    /// previous take disarmed: a Stop and a Start between two callbacks.
     pub fn is_armed_at(&mut self, intent: RecordIntent) -> bool {
+        if intent.is_armed() && intent.epoch() != self.armed_epoch {
+            self.update_armed(false);
+            self.armed_epoch = intent.epoch();
+        }
         self.update_armed(intent.is_armed())
     }
 
