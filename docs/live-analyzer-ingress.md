@@ -31,12 +31,11 @@ Previously measured history remains available.
 One input worker drains this consumer, open window or shut (#1559):
 it takes the notes and the audio under the editor's lock,
 runs the FFTs with the lock free,
-and hands the columns to the store under it again.
-`LiveInput` owns the analysis and moves it out with the audio it takes (#1758);
-the hand-over carries the analysis's lag,
-which the frame reads until the next one,
-and the history's Clear count at take,
-so a Clear during the FFTs keeps their columns out.
+and hands the columns to the spectrum under it again.
+`LiveInput` owns the analysis and moves it out with the audio it takes (#1758).
+A frame reads the analysis lag from the settings rather than from the hand-over,
+and a Clear pressed during the FFTs empties the history before their columns join it,
+at most one step's worth from just before the press (#1784).
 Opening or closing the editor introduces no source epoch and moves no drain.
 Offline seeking remains a separate access mechanism.
 
@@ -56,7 +55,7 @@ and on a source rewind by re-anchoring the newest sample at the shown time or la
 Its shown time never rewinds,
 so mapped dates only advance and audio does not pin a separate permanent offset that could drift away from notes.
 So new columns never land at or before the retained history tail.
-`SpectrumStore::take` asserts that order (a `debug_assert!`):
+`SlabPyramid::push` asserts that order (a `debug_assert!`, with no release guard, #1784):
 the heatmap's slab pyramid writes each slab once, and no plugin path breaks the order.
 Timestamps are neither clamped nor rewritten.
 No feeder dates its columns by when they arrive (#1758):

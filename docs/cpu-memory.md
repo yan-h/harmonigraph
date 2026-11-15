@@ -33,7 +33,7 @@ the total is checked against Bitwig's overlay below.
 
 | owner | MiB | what scales it | when | freed |
 |---|---:|---|---|---|
-| Spectrogram history (`SlabPyramid`) | 29.4 | 7,417 slabs × 3,844 B, each in a 4 KB block, and sixteen levels' f64 sums | grows with audio, editor open or not | never |
+| Spectrogram history (`SlabPyramid`) | 29.4 | 7,398 slabs × 3,844 B, each in a 4 KB block, and sixteen levels' f64 sums | grows with audio, editor open or not | never |
 | Recorder event ring (`harmonigraph_record`, `TAKE_RING_CAPACITY`) | 5.5 | 65,536 × 88 B | plugin construction | never |
 | Recorder audio ring (`AUDIO_RING_CAPACITY` there) | 4.0 | 2²⁰ × `f32` | plugin construction | never |
 | Recorder publication lanes, take and display | 2.1 | 2 × (4,096 items + 20 baselines) | plugin construction | never |
@@ -50,10 +50,10 @@ and the overlay's 80 (75–85) leaves about 7–17 for the editor.
 The editor's "the rest" is what that leaves after its measured rows, and is not measured by itself.
 
 **The history is the largest owner.** Since #1758 it is a slab pyramid, one level per rung of the heatmap's slab ladder, each slab a byte per bucket.
-Each level keeps 1,032 slabs or 610 s and three slabs, whichever is fewer:
-1,032 at the six finest levels (16 to 512 ms), then 599, 301, 152, 78, 41, 22, 13, 8, 6 and 5,
-7,417 slabs in all.
-macOS rounds each 3,844-byte slab up to 4,096 bytes, so a full pyramid holds 30.4 MB resident, and 0.5 MB of sums beside it (computed from the retention, and held under 31 MB by `the_full_retention_stays_under_31_mb`; not yet measured in a host).
+Each level keeps 1,032 slabs or 600 s (the longest History duration) and three slabs, whichever is fewer:
+1,032 at the six finest levels (16 to 512 ms), then 589, 296, 150, 77, 40, 22, 13, 8, 6 and 5,
+7,398 slabs in all.
+macOS rounds each 3,844-byte slab up to 4,096 bytes, so a full pyramid holds 30.3 MB resident, and 0.5 MB of sums beside it (computed from the retention, and held under 31 MB by `the_full_retention_stays_under_31_mb`; not yet measured in a host).
 It fills only while audio arrives, and a run of silence shares one slab.
 
 Before #1758 the history was 7,336 boxed columns of 3,828 bfloat16 bins, 60 MB resident for 53.6 MiB requested,
@@ -110,8 +110,8 @@ So the steady growth reported in #1511 is the history filling, and it stops at t
 
 ## Ranked by size
 
-1. **Spectrogram history, 29.4 MiB (30.9 MB resident) since #1758; 53.6 MiB before it.**
-   Its reach is a product decision (`HISTORY_MAX_SECONDS`, the roll's 600 s span plus headroom),
+1. **Spectrogram history, 29.4 MiB (30.8 MB resident) since #1758; 53.6 MiB before it.**
+   Its reach is a product decision (`HISTORY_MAX_SECONDS`, the roll's 600 s span),
    and the six finest levels' 1,032-slab rings, 25.4 MB, are what the widest pane draws at short Spans.
 2. **Recorder rings, 11.7 MiB, held whether or not anything ever records.**
    They are built once in `Default` so arming never touches the audio thread's producer (`harmonigraph_record::channel`).
