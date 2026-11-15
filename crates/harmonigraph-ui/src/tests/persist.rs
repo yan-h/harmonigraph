@@ -190,13 +190,12 @@ fn filled() -> SharedState {
 /// Every enum token a filled document holds, swapped in turn for a variant no
 /// build has, costs the editor door the key that holds it and nothing else
 /// (#1757 Q4): the key opens at its default, the Console opens on a line
-/// naming its path, a save stores the document as it came until a frame has
-/// drawn that, and the rest loads as the same document with that pair cut out
-/// would. The take and export door refuses an appearance naming it whole (Q5).
+/// naming its path, the rest loads as the same document with that pair cut
+/// out would, and a save stores what loaded. The take and export door refuses
+/// an appearance naming it whole (Q5).
 ///
 /// So retiring a variant owes no row here: the sweep reaches every variant a
-/// save writes, the version floor included, which a whole parse never could —
-/// it fails before the version is read.
+/// save writes.
 #[test]
 fn a_document_naming_any_one_unknown_variant_costs_that_key_alone() {
     const UNKNOWN: &str = "NoSuchVariant";
@@ -269,7 +268,11 @@ fn a_document_naming_any_one_unknown_variant_costs_that_key_alone() {
             restored.install_document(&swapped),
             "{path}: an unknown variant sank the document"
         );
-        assert_eq!(restored.save_answer().as_ref(), swapped, "{path}: the loss is not held");
+        assert_eq!(
+            restored.save_answer().as_ref(),
+            restored.save_persist(),
+            "{path}: a save does not store what loaded",
+        );
         assert!(!collapsed(&restored, panes::Tab::Console), "{path}: the loss is hidden");
         let said = restored.picture.runtime.console.lines().find(|line| line.contains(UNKNOWN));
         assert!(
@@ -862,11 +865,11 @@ fn a_refused_blob_says_why() {
         .any(|line| line.contains("appearance version 0 is unsupported")));
 }
 
-/// What a save stores follows what the last install made of its document
-/// (#1757): one installed whole is saved live, a refused one is held verbatim
-/// until a frame shows why (`shell.rs`'s frame tests), and the empty one —
-/// what an editor never opened saves — puts the fresh settings back and saves
-/// empty again, with nothing on the Console.
+/// A save stores the settings the editor holds (#1757): one installed whole
+/// saves back as it came, a refused one leaves the settings, and so the save,
+/// as they were, and the empty one — what an editor never opened saves — puts
+/// the fresh settings back and saves empty again until a window opens, with
+/// nothing on the Console.
 #[test]
 fn an_install_decides_what_a_save_stores() {
     let saved = dialled().save_persist();
@@ -874,15 +877,15 @@ fn an_install_decides_what_a_save_stores() {
     assert_eq!(state.save_answer().as_ref(), "", "a fresh editor saves nothing");
 
     assert!(state.install_document(&saved));
-    assert_eq!(state.save_source(), &SaveSource::Live);
     assert_eq!(state.save_answer().as_ref(), saved, "a whole install did not save back as it came");
 
     assert!(!state.install_document("not a blob"));
-    assert_eq!(state.save_answer().as_ref(), "not a blob", "a refused document was not held");
+    set_console_collapsed(&mut state, true);
+    assert_eq!(state.save_answer().as_ref(), saved, "a refusal moved more than the Console");
 
     let lines = state.picture.runtime.console.lines().count();
     assert!(state.install_document(""));
-    assert_eq!(state.save_source(), &SaveSource::Untouched);
+    assert_eq!(state.save_answer().as_ref(), "", "the empty document saves something");
     assert_eq!(
         state.save_persist(),
         fresh().save_persist(),

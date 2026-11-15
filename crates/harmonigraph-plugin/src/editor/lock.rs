@@ -24,8 +24,6 @@ use std::time::Duration;
 
 use parking_lot::{Mutex, MutexGuard};
 
-use harmonigraph_ui::{SaveSource, SharedState};
-
 use super::shared::EditorShared;
 
 /// The editor state behind a lock that delivers host restores by construction.
@@ -52,13 +50,9 @@ impl EditorLock {
         self.state.try_lock_for(wait).map(|guard| self.delivered(guard))
     }
 
-    pub(crate) fn inbox(&self) -> &Inbox {
-        &self.inbox
-    }
-
     /// Install the newest restore waiting, if any. The parse runs here, under
-    /// the editor lock, rather than in the restore: its outcome decides what a
-    /// save stores, which lives under this lock too.
+    /// the editor lock, rather than in the restore, under the producer lock:
+    /// its Console lines and the settings it installs are this lock's state.
     fn delivered<'a>(
         &self,
         mut guard: MutexGuard<'a, EditorShared>,
@@ -88,13 +82,6 @@ impl EditorLock {
         end_gestures(gestures);
         shared.forget_frames();
     }
-
-    /// The state as it stands, any restore still waiting left waiting: what a
-    /// protocol test compares against its oracle between events.
-    #[cfg(test)]
-    pub(crate) fn undelivered(&self) -> MutexGuard<'_, EditorShared> {
-        self.state.lock()
-    }
 }
 
 /// The state half of a window's build: the lock (which delivers a waiting
@@ -116,10 +103,9 @@ struct Mail {
     /// The newest restore no lock holder has installed yet.
     pending: Option<Arc<str>>,
     /// What a save that cannot take the editor lock returns: the newest of
-    /// the last restore, close, successful save, or the first frame to draw
-    /// the editor since it was fresh. Never read back into the state. It
-    /// exists because the editor lock is not reentrant, and a host may save
-    /// from a callback the editor makes under it.
+    /// the last restore, close or successful save. Never read back into the
+    /// state. It exists because the editor lock is not reentrant, and a host
+    /// may save from a callback the editor makes under it.
     fallback: Arc<str>,
 }
 
@@ -141,43 +127,9 @@ impl Inbox {
     }
 
     /// Keep `answer`, which a holder of the editor lock just computed, as the
-    /// fallback — unless a restore has arrived since that holder's delivery:
-    /// the restore is newer, and the fallback must not predate it.
-    ///
-    /// A restore, a save and a close all arrive on the host's main thread, so
-    /// none lands inside another's hold. A frame need not: on X11 it runs on
-    /// the editor's own thread, so a restore can land inside the hold of the
-    /// first frame to draw the editor, between its delivery and the settle
-    /// [`frame`](Self::frame) makes. The guard is what keeps the fallback that
-    /// restore's then; no test reaches it.
+    /// fallback. A restore, a save and a close all arrive on the host's main
+    /// thread, so none lands inside another's hold.
     pub(crate) fn settle(&self, answer: Arc<str>) {
-        let mut mail = self.0.lock();
-        if mail.pending.is_none() {
-            mail.fallback = answer;
-        }
-    }
-
-    /// One frame of the editor, `draw`, over the state held under the lock.
-    ///
-    /// A fresh state saves `""`, and so does the fallback until something
-    /// replaces it. Once a frame has drawn the editor the save answers the
-    /// live settings, so the first such frame settles them as the fallback:
-    /// otherwise a host save re-entered from a later frame's parameter
-    /// callback would answer `""`, which a host may keep as an undo snapshot,
-    /// and restoring `""` is the fresh look (#1757 Q3).
-    pub(crate) fn frame<R>(
-        &self,
-        ui: &mut SharedState,
-        draw: impl FnOnce(&mut SharedState) -> R,
-    ) -> R {
-        let untouched = *ui.save_source() == SaveSource::Untouched;
-        let drawn = draw(ui);
-        if untouched && *ui.save_source() != SaveSource::Untouched {
-            self.settle(ui.save_answer());
-        }
-        drawn
+        self.0.lock().fallback = answer;
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -69,7 +69,7 @@ pub use spectrum::{
 };
 pub use state::{
     CameraPreset, Console, EditorPrefs, ExportAction, FrameRate, Interaction, PictureState,
-    SaveSource, SharedState, SurfaceState, TakeState,
+    SharedState, SurfaceState, TakeState,
 };
 pub use text::use_renderer_font_texture;
 pub use video::{
@@ -261,11 +261,6 @@ pub fn root_ui(
     now: f64,
     build_tag: &str,
 ) {
-    // A frame the closing window still runs (on X11, one can follow the
-    // close) draws nothing: the session it would draw has ended.
-    if state.closing() {
-        return;
-    }
     // Loading frames still receive notes and automation from the shell.
     begin_frame(&mut state.picture, params, now);
     // The skin before anything paints, the loading screen included: every
@@ -276,11 +271,6 @@ pub fn root_ui(
     if startup::draw(ui, state) {
         return;
     }
-    // Past the loading screen, the editor is on screen: a save stores what it
-    // shows from here, a refusal's Console line included. Whatever the frame
-    // goes on to draw, since even one with no area can edit saved settings
-    // (the Tab toggle below, the look's undo, the camera).
-    state.seen();
     if state.picture.runtime.tracker.history_missing() {
         ui.colored_label(
             theme::armed(),

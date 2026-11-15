@@ -1592,21 +1592,30 @@ mod tests {
         assert_eq!(saved(&plugin), blob);
     }
 
-    /// A document this build refuses is saved as it came, window shut, so
-    /// nothing in it is lost before the editor has shown why.
-    #[test]
-    fn a_refused_restore_is_saved_as_it_came() {
-        let plugin = Harmonigraph::default();
-        restore(&plugin, "not a blob");
-        assert_eq!(saved(&plugin), "not a blob");
-    }
-
     /// An editor never opened saves nothing, so its project keeps following
-    /// the fresh look of whichever build loads it (#1757 Q2).
+    /// the fresh look of whichever build loads it (#1757 Q2); once a window
+    /// has opened, a save stores the settings it showed.
     #[test]
     fn an_editor_never_opened_saves_nothing() {
         let plugin = Harmonigraph::default();
         assert_eq!(saved(&plugin), "");
+        editor::open_window_session(&plugin.editor_shared, &egui::Context::default());
+        let shown = plugin.editor_shared.lock().ui.save_persist();
+        assert_eq!(saved(&plugin), shown, "an opened editor saved nothing");
+    }
+
+    /// A restore into an open window (a preset load, a host undo) reaches the
+    /// editor at the next hold of its lock, as one into a shut window does
+    /// (#1329; #324's test has the shut one).
+    #[test]
+    fn a_restore_into_an_open_window_is_installed() {
+        let plugin = Harmonigraph::default();
+        editor::open_window_session(&plugin.editor_shared, &egui::Context::default());
+        plugin.params.editor_state.set_open(true);
+        turn_live_yaw(&plugin, 2.0);
+        restore_yaw(&plugin, 0.5);
+        assert_eq!(live_yaw(&plugin), 0.5, "the open window kept what the restore replaced");
+        plugin.params.editor_state.set_open(false);
     }
 
     /// An empty restore is what such a project carries, so it puts the fresh
@@ -1626,8 +1635,8 @@ mod tests {
 
     /// A save that cannot take the editor lock — one the host makes from a
     /// callback the editor makes under it — returns at once rather than hang
-    /// the host (#296), with the newest of the last restore, close,
-    /// successful save or first frame to draw the editor (#1301).
+    /// the host (#296), with the newest of the last restore, close or
+    /// successful save (#1301).
     #[test]
     fn a_save_that_cannot_take_the_editor_lock_returns_the_fallback() {
         let plugin = Harmonigraph::default();
