@@ -206,7 +206,7 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 
 **Cases drawing a missed note raw goes without** (#1799), each with its cost when it occurs:
 
-- The usual miss, the Tune's whole callback run before the Hub's, reaches the Hub in the same pass as its onset: the note is drawn corrected only up to the row's latest scheduled time in that pass, nothing for a lone note and at most about one buffer when the row had later events in that pass.
+- The usual miss, the Tune's whole callback run before the Hub's, reaches the Hub in the same pass as its onset: the note is drawn corrected only up to the row's latest scheduled time in that pass, nothing for a lone note and at most about the delay plus one buffer when the row had later events in that pass.
 - A miss that reaches the Hub a pass after its onset, which only a race between the callbacks or a lost reply produces: the note is drawn corrected for up to about D plus one Hub callback.
 - A missed note released in the same pass as its miss is read stays drawn corrected for its whole life.
 - A miss record lost to a full copy ring leaves that note drawn corrected, with the dropped-event notice.

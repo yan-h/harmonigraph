@@ -234,7 +234,7 @@ An onset that reached its own emission time with no correction sounds at its raw
 The count clears at every cut but a transport Stop, which is when it gets read: Reset all voices, and any Tune's reactivation, attach or detach, clears every Tune's count.
 The Tune also sends the Hub a miss record for that onset on its copy ring, and the Hub draws the note, on the lattice and in the take, at the raw pitch it sounds at from then on (#1799).
 A miss usually means the Tune's whole callback ran before the Hub's, so the Hub collects the onset and its miss in one pass:
-the note is drawn corrected only up to the row's latest scheduled time in that pass, nothing for a lone note and at most about one buffer when the row had later events.
+the note is drawn corrected only up to the row's latest scheduled time in that pass, nothing for a lone note and at most about D plus one buffer when the row had later events.
 Only a race or a lost reply puts the miss in a later pass, and that note stays drawn corrected for up to about D plus one Hub callback.
 
 Two states are *not* a missed deadline, and the status names them rather than counting them as evidence that the delay is too small:
