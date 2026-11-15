@@ -150,6 +150,18 @@ Neither gets a handler or a repair of its own.
 The per-type `sanitize` repairs stay for the one thing the next section asks of them:
 the value on screen is the value the file holds.
 
+**Cases the tape goes without** (PR #1789), each with its cost when it occurs:
+
+- Over 4,096 marks in one step: the rest are lost with a Console line, and a lost release holds its note to the pass's end on playback.
+- A very dense pass: a chase replays it from its start, about 4.6 ms under the editor lock for 30 minutes of MPE pressure, once per cue or seam.
+- A host block with no song position: a waiting cue still starts, and the transport step reads the position before the gap.
+- Marks landing in committed audio: each such step rebuilds Tape mode's spans under the lock and its roll off it.
+- A stalled input worker: a cue reads Playing and holds `KeepAlive` until the next click, Stop or play.
+- A whole-tape re-analysis: what is on screen fills in song order, about 15 s per 5 minutes of song.
+- A cue at a speed other than 1× within about 180 ms after a gap: the audio before the gap may smear into its first milliseconds.
+- A tempo change between passes: under a second of bar ticks past a short pass's end lands at its tempo.
+- A song position past about 2.3 hours: zoomed fully out, the tape's heatmap draws more slabs than a live window holds.
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
