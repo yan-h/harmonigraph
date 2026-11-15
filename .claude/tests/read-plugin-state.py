@@ -150,7 +150,8 @@ class StateExtraction(unittest.TestCase):
         # before #1795 is ignored on load and must not read as the live value.
         self.assertIn('musical-settings: {"axes":[0,1955000,0,0,0]}', out)
         self.assertIn('tuning-instance: {"delay":2}', out)
-        self.assertRegex(out, r"tuning-three: 7 +\(retired by #1795")
+        self.assertRegex(out, r"tuning-three: 7 +\(not a parameter of this build")
+        self.assertRegex(out, r"camera-yaw: 0\.4\n")
 
     def test_distinct_compressed_instances_share_a_prefix(self):
         states = [state("first"), state("second")]

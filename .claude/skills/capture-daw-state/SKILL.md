@@ -27,7 +27,7 @@ which is why such a project can show fresh params next to a stale or missing `ui
 The tuning axes, their links, Learn and the adaptive policy are not params (#1795):
 the plugin saves them in its `musical-settings` field, the axes in microcents in `TuningAxis::index` order,
 and the script prints that field as saved under `--- settings ---`.
-A `tuning-*` param in a project saved before then is labelled retired, since the plugin ignores it on load.
+A param the current build does not declare, such as a `tuning-*` one in a project saved before then, is labelled so, since the plugin ignores it on load.
 
 ## Where the projects live
 

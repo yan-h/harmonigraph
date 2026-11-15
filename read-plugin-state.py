@@ -68,22 +68,20 @@ EDITOR_PARAMS = {"camera-yaw", "tuning-engine"}
 # crates/harmonigraph-plugin/src/configuration.rs, `tuning/setup.rs`).
 SETTINGS_FIELDS = ("musical-settings", "tuning-instance")
 
-# Host parameters a current build no longer declares, with the PR that retired
-# each and where the setting lives now. A project saved before then still
-# carries their values; the plugin ignores them on load, so they are labelled
-# rather than shown as live.
-RETIRED_PARAMS = {
-    "pitch-class-fade": "#1744, ignored on load; the look's view.fade_time holds it",
-    "darkest-pitch": "#1744, ignored on load; the look's view.darkest_pitch holds it",
-    "brightest-pitch": "#1744, ignored on load; the look's view.brightest_pitch holds it",
-    **{
-        f"tuning-{axis}": "#1795, ignored on load; the musical-settings field holds it"
-        for axis in ("c-offset", "three", "five", "seven", "tolerance")
-    },
-    "tuning_delay": "#1801, ignored on load; the tuning-instance field's delay holds it",
-}
-
+PARAM_SOURCE = pathlib.Path(__file__).resolve().parent / "crates/harmonigraph-plugin/src/lib.rs"
 VIEW_SOURCE = pathlib.Path(__file__).resolve().parent / "crates/harmonigraph-scene/src/view/mod.rs"
+
+
+def declared_params() -> "set[str]":
+    """The host parameters the plugin declares now (`#[id = ".."]`; an enum's
+    variant ids ride along, harmlessly). A project saved by an earlier build
+    keeps the value of one since retired, which the plugin ignores on load, so
+    it is labelled rather than shown as live. Read from the source, as
+    `view_fields` is: a list kept here missed the ids #1795 and #1801 retired."""
+    ids = set(re.findall(r'#\[id = "([^"]+)"\]', PARAM_SOURCE.read_text()))
+    if not ids:
+        sys.exit(f"No parameter ids found in {PARAM_SOURCE}.")
+    return ids
 
 
 def view_fields() -> "set[str]":
@@ -317,14 +315,14 @@ def main() -> None:
                     print(f"    {name}: {value},")
         return
 
+    declared = declared_params()
     for n, st in enumerate(states, 1):
         ui = st.get("fields", {}).get("ui-state")
         if len(states) > 1:
             print(f"\n=== instance {n} ===")
         print("\n--- params (host-automatable; always current) ---")
         for k, v in sorted(st.get("params", {}).items()):
-            retired = RETIRED_PARAMS.get(k)
-            note = f"  (retired by {retired})" if retired else ""
+            note = "" if k in declared else "  (not a parameter of this build; ignored on load)"
             print(f"  {k}: {list(v.values())[0]}{note}")
         settings = [(k, st["fields"][k]) for k in SETTINGS_FIELDS if k in st.get("fields", {})]
         if settings:
