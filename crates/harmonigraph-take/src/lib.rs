@@ -85,8 +85,9 @@ use serde::{Deserialize, Serialize};
 /// the audio thread and wrote one file per pass; version 7 routed each record
 /// by where its input arrived and held every pass in one file; version 8 places
 /// each record by when it sounds, in one take with one WAV (#1760); version 9
-/// drops the clock id and input sample from every timing (#1778). There are no
-/// compatibility shims.
+/// drops the clock id and input sample from every timing (#1778), and every
+/// voice a snapshot restates names its press by a lifetime (#1771). There are
+/// no compatibility shims.
 pub const FORMAT_VERSION: u32 = 9;
 
 /// Conventional file extension. Not enforced anywhere.
@@ -974,6 +975,7 @@ mod tests {
         use harmonigraph_core::{NoteEvent, SourceId};
         let row = VoiceBaseline {
             note: 60,
+            lifetime: 1,
             velocity: 0.8,
             pitch_microcents: 6_000_000_000,
             ..Default::default()
@@ -1050,6 +1052,7 @@ mod tests {
         use harmonigraph_core::{NoteEvent, SourceId};
         let row = VoiceBaseline {
             note: 60,
+            lifetime: 1,
             velocity: 0.8,
             pitch_microcents: 6_000_000_000,
             ..Default::default()

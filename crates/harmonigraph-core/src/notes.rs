@@ -692,7 +692,8 @@ impl NoteTracker {
         self.handle_canonical_mapped(event, 0.0)
     }
 
-    /// Map drawing times while retaining the source's immutable onset identity.
+    /// Map drawing times by `offset`; a voice keeps the lifetime it was struck
+    /// with.
     pub fn handle_canonical_mapped(
         &mut self,
         event: CanonicalEvent<'_>,
@@ -704,7 +705,6 @@ impl NoteTracker {
         match event {
             CanonicalEvent::Note(mut delta) => {
                 delta.validate()?;
-                let original_onset = delta.event.time;
                 delta.event.time += offset;
                 delta.validate()?;
                 if !self.canonical.note(delta.event.source, delta.sequence)? {
@@ -733,11 +733,7 @@ impl NoteTracker {
                         let pitch = (pitch as f64 / 100_000_000.0) as f32;
                         self.roll.bend(key, delta.event.time, pitch);
                     }
-                    self.roll.set_identity(
-                        key,
-                        (delta.lifetime != 0).then_some(delta.lifetime),
-                        original_onset,
-                    );
+                    self.roll.set_lifetime(key, (delta.lifetime != 0).then_some(delta.lifetime));
                 }
             }
             CanonicalEvent::Baseline(frame) => return self.replace_source_mapped(frame, offset),
@@ -1088,19 +1084,16 @@ mod tests {
     #[test]
     fn a_released_voice_is_drawn_and_remembered_on_its_visibility_at_the_release() {
         let env = Envelope::default();
-        let row = VoiceBaseline {
-            note: 60,
-            velocity: 0.8,
-            pitch_microcents: 6_000_000_000,
-            ..Default::default()
-        };
+        // A press the baseline names by its lifetime.
+        let row = VoiceBaseline { actual_onset: 0.0, ..published_voice(60, 61) };
 
         // Hidden at the release. The source's Show goes off while the
         // note is still down — its baseline still lists the note, so the
         // voice stays HELD and merely drops off the screen.
         let mut tracker = NoteTracker::new();
-        tracker.handle_event(on(0.0, 60));
-        let hide = SourceBaseline::new(SourceId::DIRECT, 1, 1.0, 0, false, &[row]).unwrap();
+        let struck = SourceBaseline::new(SourceId::DIRECT, 1, 0.0, 0, true, &[row]).unwrap();
+        tracker.replace_source(&struck).unwrap();
+        let hide = SourceBaseline::new(SourceId::DIRECT, 2, 1.0, 0, false, &[row]).unwrap();
         tracker.replace_source(&hide).unwrap();
         assert_eq!(tracker.voices().count(), 0, "a held voice cuts the instant its source hides");
         tracker.handle_event(off(2.0, 60));
@@ -1108,7 +1101,7 @@ mod tests {
         // The source rejoins with two thirds of the fade still to run. The
         // fixture has to actually reach a release, or every assertion below
         // passes on a voice that was dropped at the hide.
-        let rejoin = SourceBaseline::new(SourceId::DIRECT, 2, 2.3, 0, true, &[]).unwrap();
+        let rejoin = SourceBaseline::new(SourceId::DIRECT, 3, 2.3, 0, true, &[]).unwrap();
         tracker.replace_source(&rejoin).unwrap();
         assert_eq!(tracker.roll().notes().count(), 1, "released onto the timeline, not dropped");
         assert_eq!(tracker.voices().count(), 0, "a fade begun hidden is not handed back");

@@ -2209,6 +2209,7 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     let (mut publisher, mut consumer) = channel();
     let voices: [_; 64] = std::array::from_fn(|note| VoiceBaseline {
         note: note as u8,
+        lifetime: note as u64 + 1,
         pitch_microcents: note as i64 * 100_000_000,
         velocity: 0.8,
         ..Default::default()

@@ -697,7 +697,7 @@ mod tests {
         };
         producer.note(accepted).unwrap();
         let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
-        producer.note(event.into()).unwrap();
+        producer.note(NoteDelta { event, lifetime: 62, ..accepted }).unwrap();
         shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 21.0);
         assert_eq!(
             shared
@@ -716,10 +716,13 @@ mod tests {
             SourceId::DIRECT,
             1,
             3.0,
-            0,
+            1,
             true,
             &[VoiceBaseline {
                 note: 72,
+                lifetime: 62,
+                provenance: PitchProvenance::AcceptedOutput,
+                onset: accepted.timing,
                 actual_onset: 2.0,
                 input_onset: 2.0,
                 velocity: 0.8,
@@ -741,7 +744,7 @@ mod tests {
             .find(|n| n.source == SourceId::DIRECT)
             .unwrap();
         assert_eq!(note.start, 12.0);
-        assert!(note.history_complete, "baseline retains the matching observed lifetime");
+        assert!(note.history_complete, "the baseline continues the press its lifetime names");
         assert_eq!(
             shared
                 .ui

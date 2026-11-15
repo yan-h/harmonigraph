@@ -411,6 +411,7 @@ mod tests {
         let voices: Vec<_> = (0..64)
             .map(|note| VoiceBaseline {
                 note,
+                lifetime: u64::from(note) + 1,
                 velocity: 0.8,
                 pitch_microcents: i64::from(note) * 100_000_000,
                 expressions: Expressions { pressure: 0.25, gain: 0.5, timbre: 0.75 },
