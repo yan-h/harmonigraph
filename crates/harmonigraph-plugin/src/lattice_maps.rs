@@ -84,7 +84,7 @@ pub fn offset(params: &crate::HarmonigraphParams) -> LatticePos {
 }
 
 /// Which map is selected, and where it stands: the selection the lattice
-/// marks, which the tape samples beside the tuning (#1719). It is what the
+/// marks, which the tape samples beside its notes (#1719). It is what the
 /// parameters ask for, which the audio thread adopts at its next attack, so
 /// it reproduces what the live lattice showed. The selection rather than the
 /// shape: a map edited since a recording marks its notes under the edit.

@@ -2,8 +2,8 @@
 //! folds into ([`SlabPyramid`](crate::spectrogram::SlabPyramid)), and the GPU's copy of the run a surface reads
 //! out of it, which the fragment shader reads.
 //!
-//! The grid travels as DATA rather than as a picture — `capacity` slots of one
-//! slab's stored dB bytes each — so a pitch zoom, a resize, a Level drag or a
+//! The grid travels as DATA rather than as a picture — [`RING_SLOTS`](crate::spectrogram::RING_SLOTS) slots of
+//! one slab's stored dB bytes each — so a pitch zoom, a resize, a Level drag or a
 //! palette change normally moves only uniforms. What a frame owes the
 //! GPU is an immutable snapshot of the slabs it draws. The renderer owns
 //! upload history; the read that turns those bytes into pixels lives in
@@ -30,7 +30,7 @@ use harmonigraph_scene::Gradient;
 /// Most time slabs a live window is ever cut into, whatever the pane's size —
 /// and so, with the window, the FINEST slab any given moment can be drawn into.
 /// It also sizes the slab pyramid: each of the finest levels keeps a ring this
-/// wide (and its headroom), 30 MB across the pyramid.
+/// wide (and its headroom, [`RING_SLOTS`]), 30 MB across the pyramid.
 ///
 /// Raising this is not free: each of those rings grows with it. What the larger one buys is the SHORT
 /// spans, which is where a halving still lands somewhere the data can tell
@@ -43,6 +43,18 @@ use harmonigraph_scene::Gradient;
 /// finest rung of its ladder that fits a window inside this many slabs, so the
 /// image holds between half of them and all of them.
 pub(crate) const LIVE_SLAB_CAP: f32 = 1024.0;
+
+/// Slabs the GPU's copy of a surface's run holds, whatever the pane's size:
+/// the widest window [`LIVE_SLAB_CAP`] cuts, and eight more.
+///
+/// One size for every surface, so a pane resize or a rung change never
+/// reallocates the buffer or moves the slot a key lands in (`key mod
+/// RING_SLOTS`). It costs 4.2 MB of GPU buffer per drawn surface. Eight is
+/// headroom over the run's breathing: it reaches from one slab before the
+/// slab the window's far edge is in to the newest column's slab, and both
+/// ends are floored onto the slab grid. No pyramid level keeps more than
+/// this many slabs, so a run read out of one always fits.
+pub(crate) const RING_SLOTS: usize = LIVE_SLAB_CAP as usize + 8;
 /// The live grid's finest rung, in analysis intervals — see [`live_slab`].
 ///
 /// TWO, not one: the column grid and the slab grid share a period on the ladder
@@ -114,9 +126,9 @@ const RUNG_HOLD: f64 = 0.05;
 ///
 /// The hold is on the way DOWN only, and the asymmetry is what keeps it safe
 /// rather than being a preference. A held rung is always the COARSER one, so
-/// the run it cuts is shorter than the one the pane sized its ring for; hold a
-/// FINER rung past its boundary and the run outgrows `capacity`, which is two
-/// keys in one slot. Stepping UP happens at the boundary, and stepping back
+/// the run it cuts is shorter than the pane has pixels for; hold a FINER rung
+/// past its boundary and the window needs more slabs than the pane has
+/// pixels, or than [`LIVE_SLAB_CAP`] allows. Stepping UP happens at the boundary, and stepping back
 /// down waits for the window to fall [`RUNG_HOLD`] below it.
 ///
 /// The rung below `b` takes over at `target_cols * b / 2`, which is what the
@@ -130,22 +142,6 @@ fn held_slab(window: f64, target_cols: usize, held: Option<f64>) -> f64 {
         _ => fresh,
     }
 }
-
-/// A run of empty slabs this short is a seam in the sample stream rather than a
-/// stall in the analyzer, and holds the previous column instead of reading as
-/// silence.
-///
-/// It used to absorb frame jitter, which was the common case: the FFT fired on
-/// frame boundaries, so one long frame left a slab with nothing in it. Columns
-/// now land on a sample grid finer than the narrowest live slab
-/// (see `SpectrumAnalysis::feed_source`), so an ordinary stream cannot skip
-/// one at all. What is left for this to cover is a real gap in the samples — a
-/// host dropout, the pane being switched on, a feeder restarting its run.
-/// A stall, by contrast — a sample-rate change empties the ring, and a longer
-/// frame leaves it unfilled for the extra samples, up to 341 ms at 48 kHz on
-/// Precise — is many slabs wide and genuinely was silence as far as the
-/// analyzer is concerned.
-const JITTER_SLABS: i64 = 1;
 
 /// Where the visible slabs sit in absolute time — everything the mesh's slab
 /// coordinate needs.
@@ -278,36 +274,33 @@ pub(crate) struct FoldedGrid {
 }
 
 struct FoldedRun {
-    generation: u32,
     first_key: i64,
-    capacity: usize,
     run: Arc<[SpectrogramSlab]>,
     layout: TexLayout,
 }
 
 impl FoldedGrid {
     /// Hold `run` and where it sits in time — or keep what is already held,
-    /// when it is the same run: of the same history (the pyramid's
-    /// generation), the same level and first key, as long, and ending in the
-    /// same slab allocation. The generation is in it because the newest
-    /// slab's allocation is not unique: it is the shared silent slab while
-    /// that slab has seen only silence, before a reset and after it alike.
-    /// That is the whole test of whether
-    /// the snapshot is current, made before any run is built: a slab already
-    /// handed out is never written in place (see the pyramid's `finish`), and
-    /// the only slab that changes is the newest, so a still frame allocates
-    /// no run and hands the renderer the pointer it already uploaded.
+    /// when it is the same run: of the same level and first key, as long,
+    /// and ending in the same slab allocation. That is the whole test of
+    /// whether the snapshot is current, made before any run is built: a slab
+    /// already handed out is never written in place (see the pyramid's
+    /// `finish`), and the only slab that changes is the newest, so a still
+    /// frame allocates no run and hands the renderer the pointer it already
+    /// uploaded.
     ///
-    /// The held run keeps its ring capacity, which is what keeps a pane resize
-    /// that moves no slab from reallocating and re-uploading the GPU's copy.
-    /// It still fits: it was sized for this same run.
-    fn accept(&mut self, run: pyramid::Run<'_>, capacity: usize, layout: TexLayout) -> TexLayout {
-        let (generation, first_key) = (run.generation, run.first_key);
+    /// A Clear does not need to be in the test, though the newest slab can be
+    /// the shared silent slab before it and after. Columns after a Clear date
+    /// after those before it, so the first slab after it is at the newest
+    /// key before it or later; a held run spans at least two slabs, so it
+    /// starts at least one key before that newest one, and the two first
+    /// keys never match.
+    fn accept(&mut self, run: pyramid::Run<'_>, layout: TexLayout) -> TexLayout {
+        let first_key = run.first_key;
         let len = run.len();
         let last = run.slabs.clone().next_back();
         if let Some(held) = self.run.as_ref().filter(|held| {
-            held.generation == generation
-                && held.layout.bucket.to_bits() == layout.bucket.to_bits()
+            held.layout.bucket.to_bits() == layout.bucket.to_bits()
                 && held.first_key == first_key
                 && held.run.len() == len
                 && held.run.last().zip(last).is_some_and(|(a, b)| Arc::ptr_eq(a, b))
@@ -315,15 +308,14 @@ impl FoldedGrid {
             return held.layout;
         }
         let run: Arc<[SpectrogramSlab]> = run.slabs.cloned().collect();
-        debug_assert!(run.len() <= capacity);
-        self.run = Some(FoldedRun { generation, first_key, capacity, run, layout });
+        self.run = Some(FoldedRun { first_key, run, layout });
         layout
     }
 
     fn grid(&self) -> Option<SpectrogramGrid> {
         let held = self.run.as_ref()?;
         Some(SpectrogramGrid {
-            capacity: held.capacity as u32,
+            capacity: RING_SLOTS as u32,
             bins: SPECTRUM_BINS as u32,
             first_key: held.first_key,
             run: held.run.clone(),
@@ -400,14 +392,6 @@ pub(crate) struct Plan {
     pub(crate) rows: usize,
     /// The pyramid level read, the rung of [`live_slab`]'s ladder.
     pub(crate) level: usize,
-    /// Slabs the GPU's copy holds.
-    ///
-    /// Sized off the PANE rather than off the window, which is what holds it
-    /// still under a SPAN drag: the widest run a window can have at this slab
-    /// width is `target_cols` of them, whatever the Span is doing inside that
-    /// rung. What holds it still under a PANE drag is [`ring_slots`] — the
-    /// pane's own pixel count moves every frame of one.
-    capacity: usize,
     /// The window's far edge, in absolute time.
     from: f64,
 }
@@ -431,7 +415,7 @@ impl Plan {
         let depth_px = (view.depth_len * view.ppp).round();
         let target_cols = depth_px.clamp(2.0, LIVE_SLAB_CAP) as usize;
         let bucket = held_slab(view.window, target_cols, held.map(pyramid::width));
-        Plan { rows, level: pyramid::level_of(bucket), capacity: ring_slots(target_cols), from }
+        Plan { rows, level: pyramid::level_of(bucket), from }
     }
 
     /// The slab width read.
@@ -541,9 +525,8 @@ pub(crate) fn run_for(
     // slabs.
     let t_origin = (run.first_key as f64 + 0.5) * bucket - 0.5 * bucket;
     let tex_span = w as f64 * bucket;
-    let capacity = ring_capacity(plan.capacity, w);
     let layout = TexLayout { bucket, t_origin, tex_span };
-    Some(surfaces.at(surface).folded.accept(run, capacity, layout))
+    Some(surfaces.at(surface).folded.accept(run, layout))
 }
 
 /// The shade table `cfg` draws a heatmap through, shared with the surface's
@@ -585,12 +568,12 @@ impl Default for PowerMean {
 }
 
 impl PowerMean {
-    /// Add a column's power, `power` summed over `count` analyses.
-    pub(crate) fn add(&mut self, power: &[f32], count: u64) {
+    /// Add one column's power.
+    pub(crate) fn add(&mut self, power: &[f32]) {
         for (sum, &fresh) in self.sum.iter_mut().zip(power) {
             *sum += f64::from(fresh);
         }
-        self.count += count;
+        self.count += 1;
     }
 
     pub(crate) fn write(&self, out: &mut [BucketDb]) {
@@ -647,65 +630,6 @@ pub(crate) fn slab_drawn(layout: &TexLayout, t: f64) -> f32 {
     slab_at(layout, t.min(hold_time(layout)))
 }
 
-/// Slabs the GPU's copy holds: what the [`Plan`] sized off the pane, floored by
-/// the run it is actually being asked to show.
-///
-/// Sized off the PANE, not off the window and not off how much history has
-/// arrived: a capacity that tracked either would change as they moved, and
-/// every change reallocates the buffer and re-uploads every slab — rebuilding
-/// the very thing the delta saves. At a fixed slab width the pane's own column
-/// count is the widest run any Span can produce, so this holds still across a
-/// whole Span drag and only moves when the pane does.
-///
-/// The run does not sit still at `window / bucket` slabs. It reaches from one
-/// slab before the slab the window's far edge is in to the newest column's
-/// slab (which lags the now-line by half an analysis window), and both ends
-/// are floored onto the slab grid, so it breathes by a slab or two as the
-/// window scrolls. The headroom covers that breathing: when
-/// this was `(window / bucket).ceil() + 2`, a long Span — where a slab is WIDER
-/// than the analyzer's lag, so the run reaches the far end instead of stopping
-/// short of it — flipped between two capacities seventeen times a second, and
-/// each flip cost a full reallocation and a re-upload of every slab.
-fn ring_capacity(planned: usize, visible: usize) -> usize {
-    // The max is the correctness floor: the run must fit, or two of its keys
-    // share a slot and one of them draws the other's slab. It never binds — a
-    // window at this slab width is at most `target_cols` slabs and the run
-    // overruns it by three, against the headroom's eight — and that it never binds
-    // is what `no_cache_layer_falls_back_as_the_window_scrolls` holds it to.
-    planned.max(visible + 2)
-}
-
-/// Slabs of headroom [`ring_capacity`] holds past the rung [`ring_slots`] rounds
-/// the pane's own column count up to, which is at least `target_cols` — so it
-/// holds still across a Span drag and across most of a pane one. Four covers
-/// the breathing described there (a column's spacing at the far edge is at most
-/// one slab, plus a floor at each end); the rest is margin, and
-/// `ring_capacity`'s body leans on the whole eight.
-const RING_HEADROOM: usize = 8;
-
-/// Slots to give the ring for a pane asking for `target_cols` slabs: the count
-/// rounded UP to a power of two, plus the headroom.
-///
-/// A ladder for the same reason [`live_slab`] is one, against the other drag.
-/// The slot a key lands in is `key mod capacity`, so every change of capacity
-/// moves the whole mapping — the buffer is reallocated and every slab in it
-/// re-sent ([`FoldedGrid::accept`], and `SpectrogramCallback::prepare` behind it).
-/// Taken straight off the pane, that is a fresh megabytes-sized buffer and a
-/// whole-ring upload on EVERY FRAME of a pane resize, since a horizontal drag
-/// moves the depth axis by a pixel or more per frame. On the ladder a drag
-/// crosses ten of them end to end.
-///
-/// Rounding up rather than down is what keeps the run inside the ring: it is at
-/// most `target_cols + 2` slabs (see [`ring_capacity`]), and the headroom sits
-/// past a power of two that is already at least `target_cols`.
-///
-/// The slack costs nothing the ring was not already sized for. `target_cols` is
-/// capped at [`LIVE_SLAB_CAP`], itself a power of two, so the widest ring this
-/// can ask for is the one the widest pane already asks for.
-fn ring_slots(target_cols: usize) -> usize {
-    target_cols.next_power_of_two() + RING_HEADROOM
-}
-
 /// The level the heatmap's pixels actually go through, for the crate's own
 /// tests — the bridge `quantizing_a_bucket_does_not_move_its_colour` holds the
 /// curve against. It is the color mapping, not the analyzer's height mapping.
@@ -721,9 +645,9 @@ pub(crate) fn bin_level_for_test(cfg: &SpectrumConfig, bucket: BucketDb, midi: f
 }
 
 mod pyramid;
+pub(crate) use pyramid::SlabPyramid;
 #[cfg(test)]
-pub(crate) use pyramid::{width, FAIL_AT_LEVEL, LEVELS};
-pub(crate) use pyramid::{Admit, SlabPyramid};
+pub(crate) use pyramid::{width, LEVELS};
 
 #[cfg(test)]
 mod oracle;

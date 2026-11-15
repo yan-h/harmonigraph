@@ -14,7 +14,7 @@ use std::sync::Arc;
 use harmonigraph_core::spectrum::SPECTRUM_BINS;
 use harmonigraph_render::SpectrogramSlab;
 
-use super::{live_slab, ring_slots, PowerMean, JITTER_SLABS, LIVE_SLAB_CAP};
+use super::{live_slab, PowerMean, RING_SLOTS};
 use crate::spectrum::SpectrumBuckets;
 
 /// Seconds one slab of `level` spans: the ladder's floor rung, doubled
@@ -43,57 +43,13 @@ pub(crate) fn level_of(bucket: f64) -> usize {
     (0..LEVELS).find(|&level| width(level) >= bucket).unwrap_or(LEVELS - 1)
 }
 
-/// Slabs `level` keeps: the widest ring a surface reads at it, or the
-/// history's reach and three more, whichever is fewer. Three, so the far
-/// edge one slab past a full window still lands on a slab the ring holds.
+/// Slabs `level` keeps: a surface's ring, or the history's reach and three
+/// more, whichever is fewer. Three, so the far edge one slab past a full
+/// window still lands on a slab the ring holds. Never more than the ring, so
+/// any run a surface reads out of a level fits the ring it is drawn into.
 fn retention(level: usize) -> usize {
     let reach = (crate::AudioSpectrum::HISTORY_MAX_SECONDS / width(level)).ceil() as usize + 3;
-    ring_slots(LIVE_SLAB_CAP as usize).min(reach)
-}
-
-/// What the guard at the pyramid's one entry makes of a column dated `time`
-/// against the newest it has folded. See [`admit`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Admit {
-    /// Newer than the newest: fold it.
-    Fold,
-    /// At or up to [`RESET_BEHIND`] before the newest, or undated: drop it,
-    /// counted. No shipped feeder does this (see [`admit`]).
-    Drop,
-    /// Further back than that: the fold cannot trust its own state, so the
-    /// history resets and the column starts it again, counted.
-    Reset,
-}
-
-/// How far behind the newest folded column a column may be dated before the
-/// history resets rather than dropping it.
-///
-/// Above the largest step back a correct analyzer change could make —
-/// Precise's whole lag, about 188 ms — and below what reads as a hang: the
-/// decisive case is a column dated an hour ahead, after which every correct
-/// column is behind it, and dropping them would draw no new sound for an hour.
-pub(crate) const RESET_BEHIND: f64 = 1.0;
-
-/// The guard's verdict on a column dated `time` against `newest`, the newest
-/// folded (negative infinity while the pyramid is empty). Only a strictly
-/// newer column folds, so a NaN or infinite date is dropped.
-///
-/// No correct feeder dates backward: a resolution switch waits at least three
-/// times its lag growth, the plugin's clock offset and presentation seconds
-/// only grow, an input switch starts a later epoch, a Tape audition is dated
-/// on the presentation clock, and offline builds a fresh state per render
-/// with its frames ascending. So a drop or a reset is a bug elsewhere, which
-/// the overlay counts and `SpectrumStore::take` asserts against.
-pub(crate) fn admit(newest: f64, time: f64) -> Admit {
-    if !time.is_finite() {
-        Admit::Drop
-    } else if time > newest {
-        Admit::Fold
-    } else if time >= newest - RESET_BEHIND {
-        Admit::Drop
-    } else {
-        Admit::Reset
-    }
+    RING_SLOTS.min(reach)
 }
 
 /// One rung's store: a ring of slabs keyed `floor(t / width)`, the newest
@@ -132,33 +88,23 @@ impl Level {
 
     /// Fold one sanitized column, `zero` if every bucket of it is +0 or -0.
     fn fold(&mut self, time: f64, power: &SpectrumBuckets, zero: bool, silence: &SpectrogramSlab) {
-        #[cfg(test)]
-        if FAIL_AT_LEVEL.get().is_some_and(|level| width(level) == self.width) {
-            panic!("a fault injected into the {} s level's fold", self.width);
-        }
         let key = (time / self.width).floor() as i64;
         match self.newest_key() {
-            // [`SlabPyramid::push`] folds only a column newer than the
-            // newest, so a key is never behind the open slab's.
+            // Every feeder dates its columns forward (see
+            // [`SlabPyramid::push`]), so a key is never behind the open slab's.
             Some(open) if key <= open => {}
             Some(open) => {
                 self.finish();
-                let empty = key - open - 1;
                 let start = (open + 1).max(key - self.keep as i64 + 1);
                 if start > open + 1 {
                     // Everything held is older than the ring keeps.
                     self.slabs.clear();
                     self.first_key = start;
                 }
+                // A slab no column landed in draws as silence, however
+                // short the gap (#1784 S1).
                 for _ in start..key {
-                    // A gap this short is a seam in the sample stream rather
-                    // than silence (see `JITTER_SLABS`): hold the previous
-                    // slab, which is final, by sharing it.
-                    let held = match self.slabs.back() {
-                        Some(previous) if empty <= JITTER_SLABS => previous.clone(),
-                        _ => silence.clone(),
-                    };
-                    self.slabs.push_back(held);
+                    self.slabs.push_back(silence.clone());
                 }
                 self.open(silence);
             }
@@ -174,7 +120,7 @@ impl Level {
             self.mean.count += 1;
             self.dirty |= !self.silent;
         } else {
-            self.mean.add(power, 1);
+            self.mean.add(power);
             self.silent = false;
             self.dirty = true;
         }
@@ -216,10 +162,8 @@ impl Level {
     }
 }
 
-/// The run a surface draws: `len` slabs from `first_key` to the newest, of
-/// the pyramid's `generation`.
+/// The run a surface draws: `len` slabs from `first_key` to the newest.
 pub(crate) struct Run<'a> {
-    pub(crate) generation: u32,
     pub(crate) first_key: i64,
     pub(crate) slabs: std::collections::vec_deque::Iter<'a, SpectrogramSlab>,
 }
@@ -230,16 +174,14 @@ impl Run<'_> {
     }
 }
 
-/// Every level, and the guard's newest date.
+/// Every level, and the newest column's date.
 pub(crate) struct SlabPyramid {
     levels: Vec<Level>,
     /// The newest column folded, negative infinity while empty.
     newest: f64,
-    /// How many times the pyramid has been emptied — a Clear, the guard's
-    /// reset or a crash in the fold — and so which history a slab belongs
-    /// to: what the heatmap's colour memory and a surface's held run are
-    /// keyed on, since the newest slab's allocation does not tell two
-    /// histories apart when it is the shared silent slab.
+    /// How many times Clear display history has emptied the pyramid, and so
+    /// which history a slab belongs to: what the heatmap's colour memory is
+    /// keyed on.
     generation: u32,
     /// The one silent slab every gap and every silent open slab shares. The
     /// pyramid's own handle keeps its count of owners at two or more, so a
@@ -262,14 +204,6 @@ impl Default for SlabPyramid {
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    /// The level whose fold panics, for the test of what a crash in the fold
-    /// does to the history.
-    pub(crate) static FAIL_AT_LEVEL: std::cell::Cell<Option<usize>> =
-        const { std::cell::Cell::new(None) };
-}
-
 impl SlabPyramid {
     /// The newest column folded, `None` while empty.
     pub(crate) fn newest(&self) -> Option<f64> {
@@ -281,20 +215,28 @@ impl SlabPyramid {
         self.generation
     }
 
-    /// The pyramid's one entry: the guard's verdict on a column dated `time`
-    /// ([`admit`]), and unless it drops the column, the column folded into
-    /// every level — after emptying them, on a reset. The caller counts the
-    /// verdict.
+    /// The pyramid's one entry: a column dated `time`, folded into every
+    /// level.
+    ///
+    /// Every feeder dates a run from its stated frame zero
+    /// ([`SpectrumAnalysis::feed_source`](crate::SpectrumAnalysis::feed_source)),
+    /// so a run's columns step forward by whole hops, and a new run starts
+    /// after the old one: the plugin's clock offset only grows, an input
+    /// switch or a Tape audition is dated on its presentation clock, and a
+    /// restarted analyzer's first column waits for a full frame; the offline renderer's
+    /// one run is its soundtrack; and the standalone synth, after a stall,
+    /// starts a new run past the last. So the order is asserted in debug
+    /// builds and not guarded in release, where a column dated at or before
+    /// the newest would average into each level's open slab (#1784 S2).
     ///
     /// Its power is sanitized first: a non-finite bucket folds as 0, and a
     /// negative one as 0 too, as the curve takes them.
-    pub(crate) fn push(&mut self, time: f64, power: &SpectrumBuckets) -> Admit {
-        let verdict = admit(self.newest, time);
-        match verdict {
-            Admit::Drop => return verdict,
-            Admit::Reset => self.clear(),
-            Admit::Fold => {}
-        }
+    pub(crate) fn push(&mut self, time: f64, power: &SpectrumBuckets) {
+        debug_assert!(
+            time > self.newest,
+            "history dates must strictly increase: {time} after {}",
+            self.newest
+        );
         let mut zero = true;
         for (out, &p) in self.scratch.iter_mut().zip(power) {
             *out = if p.is_finite() { p.max(0.0) } else { 0.0 };
@@ -304,7 +246,6 @@ impl SlabPyramid {
         for level in &mut self.levels {
             level.fold(time, &self.scratch, zero, &self.silence);
         }
-        verdict
     }
 
     /// Empty every level, and move the generation on.
@@ -335,7 +276,7 @@ impl SlabPyramid {
             return None;
         }
         let at = (first - level.first_key) as usize;
-        Some(Run { generation: self.generation, first_key: first, slabs: level.slabs.range(at..) })
+        Some(Run { first_key: first, slabs: level.slabs.range(at..) })
     }
 
     /// Bytes the pyramid holds in its slabs and sums, counting each slab once

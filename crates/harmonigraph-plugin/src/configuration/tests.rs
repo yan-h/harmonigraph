@@ -1330,6 +1330,57 @@ fn a_take_resumed_from_a_pause_opens_with_the_note_struck_during_it() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A note played into the plugin's own input just before the take is armed
+/// sounds inside the take's first run, whose opening snapshot restates it: the
+/// Hub's direct row gave it a lifetime when it was struck, so the snapshot
+/// continues the note the take recorded rather than opening a second one
+/// beside it (#1771).
+#[test]
+fn a_direct_note_restated_by_a_snapshot_stays_one_note_with_its_history() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-config-direct-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let block = 64.0 / 48000.0;
+    // Struck in a block no take owns; it sounds a delay later, once one does.
+    let struck = vec![note(10, 60, 10, CLAP_EVENT_NOTE_ON)];
+    device.run_transport(0, struck, false, None, Some(transport(0.0, 0)));
+    capture.arm();
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+    for (raw, blocks) in [(64, 1.0), (128, 2.0)] {
+        device.run_transport(raw, vec![], false, None, Some(transport(blocks * block, 0)));
+    }
+    let released = vec![note(10, 60, 0, CLAP_EVENT_NOTE_OFF)];
+    device.run_transport(192, released, false, None, Some(transport(3.0 * block, 0)));
+    for (raw, blocks) in [(256, 4.0), (320, 5.0)] {
+        device.run_transport(raw, vec![], false, None, Some(transport(blocks * block, 0)));
+    }
+    device.finish_notes(384, &[]);
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    assert!(records_an_on(&take, 60), "the onset sounds where the take records");
+    let restated = take.events.iter().any(|record| {
+        matches!(record, harmonigraph_take::CanonicalRecord::Baseline(frame)
+            if frame.voices.iter().any(|voice| voice.note == 60))
+    });
+    assert!(restated, "and the run's opening snapshot restates it");
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for record in &take.events {
+        record.apply(&mut tracker).unwrap();
+    }
+    let notes: Vec<_> = tracker.roll().notes().filter(|n| n.note == 60).collect();
+    assert_eq!(notes.len(), 1, "one press, one note: {:?}", take.events);
+    assert!(notes[0].history_complete, "continued with its history");
+    assert!(notes[0].end.is_some(), "through the release it recorded");
+    drop(writer);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A take paused and resumed reads whole, every note drawn and on its
 /// soundtrack (#1760; on take v6 each case was refused or lost a note).
 ///
@@ -2209,6 +2260,7 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     let (mut publisher, mut consumer) = channel();
     let voices: [_; 64] = std::array::from_fn(|note| VoiceBaseline {
         note: note as u8,
+        lifetime: note as u64 + 1,
         pitch_microcents: note as i64 * 100_000_000,
         velocity: 0.8,
         ..Default::default()

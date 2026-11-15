@@ -53,8 +53,6 @@ pub(crate) struct Spectrum {
     cleared: bool,
     /// When the levels were last rebuilt.
     settled: Option<Instant>,
-    /// The song seconds the Analyzer shows, analyzed first.
-    pub(crate) window: Option<(f64, f64)>,
 }
 
 impl Spectrum {
@@ -105,25 +103,14 @@ impl Spectrum {
         self.pending.len()
     }
 
-    /// The next column to analyze: the first waiting in the shown window,
-    /// else the first waiting at all.
-    fn next(&self) -> Option<i64> {
-        let shown = self.window.and_then(|(from, to)| {
-            let first = (from / COLUMN_SECONDS).floor() as i64;
-            let last = (to / COLUMN_SECONDS).ceil() as i64;
-            self.pending.range(first..=last).next().copied()
-        });
-        shown.or_else(|| self.pending.first().copied())
-    }
-
-    /// Analyze waiting columns until `budget` has passed, at least one.
+    /// Analyze waiting columns until `budget` has passed, at least one, in
+    /// song order.
     pub(crate) fn analyze(&mut self, store: Option<&Store>, budget: Duration) {
         let (Some(store), Some(_)) = (store, self.pending.first()) else { return };
         let Some(config) = self.config(store) else { return };
         let started = Instant::now();
         let rate = f64::from(store.rate);
-        while let Some(k) = self.next() {
-            self.pending.remove(&k);
+        while let Some(k) = self.pending.pop_first() {
             let centre = (column_seconds(k) * rate).round() as i64;
             if store.stamp_at(centre).is_none() {
                 if self.tape.slab(0, k).is_some() {

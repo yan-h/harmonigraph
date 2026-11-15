@@ -2239,9 +2239,8 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
 /// closing and reopening.
 ///
 /// The plugin builds a brand-new egui `Context` for every window it opens, so a
-/// fold kept in egui memory springs open again with the window — the same class
-/// of trap as the stale `TextureHandle`
-/// (`PictureState::release_context_resources`). The folds live in `UiPersist`
+/// fold kept in egui memory springs open again with the window (see
+/// `shell::Opening`). The folds live in `UiPersist`
 /// instead, and this holds the whole path: a REAL click on a section header in
 /// the dock, `save_persist`, then a fresh `Context` and `install_document`. Both
 /// halves are load-bearing — writing the field by hand would pass with the

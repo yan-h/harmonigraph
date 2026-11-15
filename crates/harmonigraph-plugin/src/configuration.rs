@@ -234,11 +234,8 @@ impl Owner {
 
     /// The one configuration for assignment groups started in this block. A
     /// group that spans a boundary keeps the value it was handed here.
-    pub fn block_configuration(
-        &self,
-        clock: harmonigraph_core::canonical::ClockId,
-    ) -> Option<ResolvedConfig> {
-        (clock == self.recording.clock).then_some(self.block)
+    pub fn block_configuration(&self) -> ResolvedConfig {
+        self.block
     }
 
     pub fn reset(&mut self, recorder: &mut harmonigraph_record::Recorder) {
@@ -341,8 +338,8 @@ impl Owner {
         }
         let start = self.recording.block_start;
         let end = start + i64::from(self.recording.block_frames);
-        self.recording.record(recorder, origin);
-        if self.recording.recording() {
+        recorder.record(self.take_time(), origin);
+        if recorder.recording() {
             // The block's own adopted configuration, and in Lattice Map each
             // timed shared-tuning change at its own sample. There is no
             // historical lookup: the value in force IS the value the Hub used

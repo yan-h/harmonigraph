@@ -296,6 +296,9 @@ pub(super) struct Shooter {
     /// app's own pane paints, so a lattice over a pane cleared to something
     /// else is a frame standing on a colour the app never shows.
     pub(super) clear: wgpu::Color,
+    /// egui's font texture as a shell publishes it before every frame: the
+    /// stand-in sheet (`text::tests::atlas`) on the GPU.
+    pub(super) font: wgpu::Texture,
 }
 
 impl Shooter {
@@ -306,7 +309,9 @@ impl Shooter {
         let (device, queue) =
             pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter)))
                 .expect("headless device");
+        let font = crate::text::tests::font_texture(&device, &queue, &crate::text::tests::atlas());
         Some(Shooter {
+            font,
             instance,
             device,
             queue,
@@ -361,6 +366,7 @@ impl Shooter {
         let mut cb =
             LatticeCallback::from_scene(scene, labels, vec_size, self.format, self.pane, None);
         modify(&mut cb);
+        self.resources.insert(self.font.clone());
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let bufs =
             cb.prepare(&self.device, &self.queue, &screen, &mut encoder, &mut self.resources);
@@ -1011,7 +1017,6 @@ pub(super) fn names(runs: Vec<(u32, Vec<GlyphInstance>)>) -> LatticeLabels {
             .map(|(node, glyphs)| Label { node: *node, glyphs: glyphs.len() as u32 })
             .collect(),
         glyphs: runs.into_iter().flat_map(|(_, glyphs)| glyphs).collect(),
-        atlas: Some(crate::text::tests::atlas()),
         marks: Some(crate::text::tests::mark_sheet()),
         // The UI hands every lattice label the two-axis reconstruction its
         // orbiting camera needs. A name fixture using the default `Across`

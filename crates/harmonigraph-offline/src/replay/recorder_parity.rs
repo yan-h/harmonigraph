@@ -65,7 +65,7 @@ fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
     assert!(recorder.is_armed());
     let path = parity_path("unsequenced");
     let mut writer = testing::FileWriter::new(&capture, path.clone());
-    recorder.run(0.0, 0.0);
+    recorder.record(0.0, Some(0.0));
     let live_events = [
         NoteEvent::on(ORIGIN + 0.125, SourceId::DIRECT, 0, 60, 0.8),
         NoteEvent {
@@ -147,20 +147,13 @@ fn accepted_exact(
     lifetime: u64,
     pitch_microcents: Option<i64>,
 ) -> harmonigraph_core::canonical::NoteDelta {
-    use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta};
+    use harmonigraph_core::canonical::NoteDelta;
     use harmonigraph_core::confirmed::PitchProvenance;
     NoteDelta {
         event,
         sequence,
         lifetime,
         provenance: PitchProvenance::AcceptedOutput,
-        timing: Some(EventTiming {
-            clock: ClockId { runtime_session: 7, epoch: 3 },
-            input: (event.time * 48_000.0) as i64 - 32,
-            planned: None,
-            sample: (event.time * 48_000.0) as i64,
-            sample_rate: 48_000.0,
-        }),
         pitch_microcents,
         assignment: None,
         partial_output: false,
@@ -169,7 +162,7 @@ fn accepted_exact(
 
 #[test]
 fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
-    use harmonigraph_core::canonical::{ClockId, EventTiming, SourceBaseline, VoiceBaseline};
+    use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
     use harmonigraph_core::confirmed::PitchProvenance;
     use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, SourceId};
     use harmonigraph_record::publication::Lane;
@@ -185,7 +178,7 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     let mut writer = testing::FileWriter::new(&capture, path.clone());
     let configuration = harmonigraph_core::configuration::ConfigReducer::default().resolved();
     // One run whose presentation ORIGIN is song zero.
-    recorder.run(ORIGIN, 0.0);
+    recorder.record(ORIGIN, Some(0.0));
     recorder.configuration(ORIGIN, configuration);
 
     recorder
@@ -216,15 +209,7 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     let row = VoiceBaseline {
         note: 60,
         lifetime: LIFETIME,
-        input_onset: ORIGIN + 0.125,
         actual_onset: ORIGIN + 0.125,
-        onset: Some(EventTiming {
-            clock: ClockId { runtime_session: 7, epoch: 3 },
-            input: ((ORIGIN + 0.125) * 48_000.0) as i64 - 32,
-            planned: None,
-            sample: ((ORIGIN + 0.125) * 48_000.0) as i64,
-            sample_rate: 48_000.0,
-        }),
         pitch_microcents: 6_037_500_000,
         onset_pitch_microcents: 6_000_000_000,
         velocity: 0.8,

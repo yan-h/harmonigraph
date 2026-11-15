@@ -343,8 +343,8 @@ mod tests {
     fn held(note: u8, onset: f64, pitch: i64) -> VoiceBaseline {
         VoiceBaseline {
             note,
+            lifetime: u64::from(note) + 1,
             actual_onset: onset,
-            input_onset: onset,
             velocity: 0.8,
             pitch_microcents: pitch,
             ..Default::default()

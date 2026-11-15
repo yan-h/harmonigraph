@@ -4,17 +4,9 @@ use std::ops::RangeInclusive;
 
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
-use super::bar::{
-    bar_radius, bar_width, elided_name, grip_radius, paint_thumbs, track_fill, with_gestures,
-    BAR_TEXT_PAD, HANDLE_INSET,
-};
-use super::mesh::gradient_strip;
+use super::bar::{bar_radius, bar_width, elided_name, track_fill, with_gestures, BAR_TEXT_PAD};
 use super::text_at;
 use crate::theme;
-
-/// Segments a [`ValueBar::swatch`] track is drawn in: enough that a hue
-/// circle reads as a smooth turn at any column width the pane opens at.
-const SWATCH_SEGMENTS: usize = 72;
 
 /// How many segments a [`ValueBar::curve`] preview is drawn in.
 ///
@@ -112,9 +104,6 @@ pub struct ValueBar<'a> {
     /// A picture of what the value MEANS, drawn across the track (see
     /// [`ValueBar::curve`]).
     curve: Option<fn(f32, f32) -> f32>,
-    /// The colour each value makes, painted across the track in place of
-    /// the fill (see [`ValueBar::swatch`]).
-    swatch: Option<&'a dyn Fn(f32) -> Color32>,
 }
 
 impl<'a> ValueBar<'a> {
@@ -137,7 +126,6 @@ impl<'a> ValueBar<'a> {
             unit_scale: 1.0,
             unit_suffix: "",
             curve: None,
-            swatch: None,
         }
     }
 
@@ -297,30 +285,6 @@ impl<'a> ValueBar<'a> {
         self
     }
 
-    /// Paint the track as the colour each value along it makes, and mark
-    /// the value with a handle rather than a fill: for a bar whose number
-    /// names a COLOUR, where a fill in the accent would say nothing about
-    /// which one. The name and readout are drawn in the well colour, as a
-    /// [`SpectrumBar`](super::gradient::SpectrumBar) writes its name on its hue
-    /// track: it reads on a mid-lightness colour where the theme's light text
-    /// does not.
-    pub fn swatch(mut self, colour_of: &'a dyn Fn(f32) -> Color32) -> Self {
-        self.swatch = Some(colour_of);
-        self
-    }
-
-    /// The span a pointer sets the value along: the whole row, or for a
-    /// [`ValueBar::swatch`] the row less half a handle at each end, so both
-    /// limits are places the handle can stand rather than edges it merges
-    /// into.
-    fn travel(&self, rect: egui::Rect, scale: f32) -> egui::Rect {
-        if self.swatch.is_some() {
-            rect.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0))
-        } else {
-            rect
-        }
-    }
-
     fn min(&self) -> f32 {
         *self.range.start()
     }
@@ -457,8 +421,7 @@ impl<'a> ValueBar<'a> {
         // carefully tuned parameter, and it can't fight the double-click.
         if response.dragged() {
             if let Some(pointer) = response.interact_pointer_pos() {
-                let travel = self.travel(rect, scale);
-                let t = (pointer.x - travel.left()) / travel.width().max(1.0);
+                let t = (pointer.x - rect.left()) / rect.width().max(1.0);
                 let new_value = self.snapped(self.value_at(t));
                 if new_value != *self.value {
                     *self.value = new_value;
@@ -479,31 +442,22 @@ impl<'a> ValueBar<'a> {
         painter.rect_filled(rect, radius, theme::well());
 
         let t = self.to_t(*self.value);
-        let travel = self.travel(rect, scale);
-        if let Some(colour_of) = self.swatch {
-            let corner = f32::from(bar_radius(scale));
-            gradient_strip(painter, rect, SWATCH_SEGMENTS, (corner, corner), |p| {
-                let x = rect.left() + rect.width() * p;
-                colour_of(self.value_at((x - travel.left()) / travel.width().max(1.0)))
-            });
-        } else {
-            let fill_color = self.color.map_or_else(
-                || track_fill(&response),
-                |color| {
-                    let strength = if response.dragged() {
-                        0.7
-                    } else if response.hovered() {
-                        0.6
-                    } else {
-                        0.5
-                    };
-                    theme::well().lerp_to_gamma(color, strength)
-                },
-            );
-            let fill = filled_part(rect, rect.left() + rect.width() * t, bar_radius(scale));
-            if !fill.is_empty() {
-                painter.add(egui::Shape::convex_polygon(fill, fill_color, egui::Stroke::NONE));
-            }
+        let fill_color = self.color.map_or_else(
+            || track_fill(&response),
+            |color| {
+                let strength = if response.dragged() {
+                    0.7
+                } else if response.hovered() {
+                    0.6
+                } else {
+                    0.5
+                };
+                theme::well().lerp_to_gamma(color, strength)
+            },
+        );
+        let fill = filled_part(rect, rect.left() + rect.width() * t, bar_radius(scale));
+        if !fill.is_empty() {
+            painter.add(egui::Shape::convex_polygon(fill, fill_color, egui::Stroke::NONE));
         }
 
         if let Some(slot) = self.overlay_slot.as_deref_mut() {
@@ -535,17 +489,14 @@ impl<'a> ValueBar<'a> {
             painter.add(egui::Shape::line(points, egui::Stroke::new(CURVE_WIDTH, curve_color())));
         }
 
-        let (text_color, value_color) = match self.swatch {
-            Some(_) => (theme::well(), theme::well()),
-            None => (theme::text(), theme::text()),
-        };
+        let text_color = theme::text();
         // The value is laid out first and the name takes what is left, elided.
         // The number is what the bar is FOR — a name that runs over it, or out
         // past the pane edge, costs the reading the control exists to give.
         // Values in monospace: digits align and don't wiggle as they
         // change.
         let mono = TextStyle::Monospace.resolve(ui.style());
-        let value = painter.layout_no_wrap(self.shown(*self.value), mono.clone(), value_color);
+        let value = painter.layout_no_wrap(self.shown(*self.value), mono.clone(), text_color);
         // Room kept clear for the readout, measured from the widest one the
         // bar's RANGE can produce rather than from the number currently in it.
         // Taking it from the current number makes the name re-elide the moment
@@ -582,23 +533,8 @@ impl<'a> ValueBar<'a> {
         let centered = |galley: &egui::Galley, x: f32| text_at(rect, galley, x);
         let label_pos = centered(&label, rect.left() + text_pad);
         let value_pos = centered(&value, rect.right() - text_pad - value.size().x);
-        painter.galley(label_pos, label.clone(), text_color);
-        painter.galley(value_pos, value.clone(), value_color);
-        // Over the text, as every handle in the panel is: it is the part
-        // being operated, and the text under it is knocked out rather than
-        // hidden (see `paint_thumbs`). Lit at rest as well as in hand, because
-        // the track under it is colour rather than the well an unlit grip is
-        // made to stand off.
-        if self.swatch.is_some() {
-            paint_thumbs(
-                painter,
-                rect,
-                scale,
-                grip_radius(scale),
-                [(travel.left() + travel.width() * t, true)],
-                &[(label_pos, label), (value_pos, value)],
-            );
-        }
+        painter.galley(label_pos, label, text_color);
+        painter.galley(value_pos, value, text_color);
 
         let hint = self.hint.unwrap_or(self.label);
         with_gestures(response, Some(hint), self.default.is_some(), true)
@@ -1191,57 +1127,6 @@ mod tests {
             }
             bar.show(ui);
         })
-    }
-
-    /// A swatch bar's track IS the colours its values make, end to end, and
-    /// the grip stands on the colour of the value it holds: the bar reads as a
-    /// picker only if what is under the grip is what the dial is set to. No
-    /// accent fill, which would cover the colours it is there to show.
-    #[test]
-    fn a_swatch_track_runs_the_values_colours_with_the_grip_on_its_own() {
-        use crate::widgets::mesh::{band_columns, bands};
-        use crate::widgets::probe::grips;
-        let red = |v: f32| Color32::from_rgb((v * 255.0).round() as u8, 0, 0);
-        let mut value = 0.3;
-        let shapes = shapes(240.0, |ui| {
-            ValueBar::new(&mut value, 0.0..=1.0, "Red").swatch(&red).show(ui);
-        });
-        let [track] = bands(&shapes).try_into().expect("one swatch band");
-        let columns = band_columns(&track);
-        let (first, last) = (columns[0].2, columns[columns.len() - 1].2);
-        assert_eq!((first, last), (red(0.0), red(1.0)), "the track spans the whole range");
-        assert!(filled_polys(&shapes).is_empty(), "a swatch bar drew an accent fill");
-        let [(grip, _)] = grips(&shapes).try_into().expect("one grip");
-        let under = columns
-            .iter()
-            .min_by(|a, b| {
-                (a.0.x - grip.center().x).abs().total_cmp(&(b.0.x - grip.center().x).abs())
-            })
-            .unwrap()
-            .2;
-        assert!(
-            (i32::from(under.r()) - i32::from(red(0.3).r())).abs() <= 4,
-            "the grip stands on {under:?}, not on the colour of 0.3",
-        );
-    }
-
-    /// A swatch bar's grip over its name knocks the letters out in the page
-    /// colour, as every other handle in the panel does, rather than covering
-    /// them. Near the bottom of the range, so the grip lands on the name.
-    #[test]
-    fn a_swatch_grip_knocks_out_the_name_it_stands_on() {
-        use crate::widgets::probe::knockouts;
-        let red = |v: f32| Color32::from_rgb((v * 255.0).round() as u8, 0, 0);
-        let mut value = 0.05;
-        let shapes = painted(240.0, |ui| {
-            ValueBar::new(&mut value, 0.0..=1.0, "Redness").swatch(&red).show(ui);
-        });
-        let knocked = knockouts(&shapes);
-        let want = Some(theme::panel());
-        assert!(
-            knocked.iter().any(|(_, _, text, colour)| text == "Redness" && *colour == want),
-            "no knockout of the name under the grip: {knocked:?}",
-        );
     }
 
     /// A straight line, which is what a preview of nothing in particular looks

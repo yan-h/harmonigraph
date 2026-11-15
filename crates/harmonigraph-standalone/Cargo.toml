@@ -19,3 +19,7 @@ midir = { workspace = true }
 # PNG encode for the LATTICE_SCREENSHOT self-capture hook (already in the
 # tree transitively; png-only keeps the build slim).
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+# The count of columns the history took, for the stall test.
+harmonigraph-ui = { workspace = true, features = ["testing"] }

@@ -54,11 +54,10 @@ and runs the FFTs with it free.
 A frame still holds the mutex for the whole UI build.
 Teardown still joins the existing background drainer and consumes its final owned publication payloads.
 
-Raw spectral history now expires after the existing 610-second retention window even when input has stopped.
-Previously that trim waited for another sample batch.
+Spectral history is a slab pyramid with no age trim (#1770):
+each level drops its oldest slab only as a newer column arrives, keeping 600 seconds and three slabs, or a surface's ring of 1,032, whichever is fewer.
+With input stopped it stays, and scrolls out of the window as time passes.
 The visible window is at most 600 seconds, including Fit video export.
-This does not promise that every cache allocation releases its capacity;
-expiry can invalidate an existing aggregate key when its retained prefix changes.
 Saved appearance/editor documents and their versions are unchanged.
 
 ## Fold sharing and keys
