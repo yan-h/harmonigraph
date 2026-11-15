@@ -1282,7 +1282,6 @@ struct PaneBuffers {
     /// write whole, so it is rebuilt taller whenever a frame lights more nodes
     /// than it has rows for, and nothing is lost.
     ink_strip: Option<InkStrip>,
-    ink_kernel: lattice_node_glow::InkKernel,
     material_tile: Option<lattice_material::Tile>,
     /// How far the glow material has drifted, the stars travelled and the
     /// glow's texture and breathing run, held here rather than with the
@@ -1718,7 +1717,6 @@ impl LatticeResources {
                 glyph_bind_group: None,
                 glyph_sheet_keys: (u64::MAX, u64::MAX),
                 ink_strip: None,
-                ink_kernel: Default::default(),
                 material_tile: None,
                 material_travel: Default::default(),
                 offscreen: None,
