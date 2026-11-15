@@ -161,6 +161,7 @@ see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 ## Controls
 
 The Tuning pane exposes the keyboard tuning, pitch flexibility, neighborhood radius, allowed axes, half-life, register weight per octave, same-note tolerance, silence timeout and transport reset choices.
+They and the five tuning axes are plugin settings saved in musical settings, not host parameters (#1756); the `tuning-*` host parameter ids an older project holds are not read.
 Defaults are the baseline profile most policy fixtures replay.
 The precision profile used by the paired intentional-E examples is obtained by setting Pitch flexibility to 50 cents.
 

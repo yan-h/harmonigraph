@@ -59,7 +59,7 @@ pub trait ClapPlugin: Plugin {
     /// an edit arriving mid-block waits for the next one.
     fn clap_configuration_begin(&mut self, boundary: configuration::ConfigurationBoundary) {}
     /// Actual wrapper sub-block boundaries, including in-callback transport cuts.
-    /// These are NOT configuration boundaries; `adopt` is the only one.
+    /// These are NOT configuration boundaries; `begin` is the only one.
     fn clap_configuration_segment(&mut self, start: u32, frames: u32) {}
     fn clap_configuration_observe(&mut self, event: configuration::OwnedInput) {}
     /// The walk has observed every input of the callback.

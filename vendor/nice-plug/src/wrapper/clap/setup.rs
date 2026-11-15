@@ -4,8 +4,10 @@
 use nice_plug_core::plugin::PluginState;
 
 pub trait Prepared: Send {
-    /// Off-thread commit of a previously reserved complete value. This cannot
-    /// fail or require an audio callback; Drop before commit abandons preparation.
+    /// Off-audio commit of a prepared complete value, after the ordinary
+    /// fields restored. It needs no audio callback and reports nothing back:
+    /// whatever prepare could refuse, it refused. Drop before commit abandons
+    /// preparation.
     fn commit(self: Box<Self>);
 }
 

@@ -246,7 +246,7 @@ pub struct Recorder {
     /// Last value written per parameter, so only changes are recorded.
     /// Reset to NaN on arm so the take's first block writes a full set — a
     /// take that inherited "no change since last time" would replay with the
-    /// default fade, colors and camera.
+    /// default camera.
     last_params: [f32; ParamKey::ALL.len()],
     lifecycle: State,
     /// Independent position/duration and bar observations, including rejected scrubs.

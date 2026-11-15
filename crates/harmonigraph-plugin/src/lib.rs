@@ -646,7 +646,9 @@ impl Plugin for Harmonigraph {
         // the map index, so the value loaded is the value shown. Any of them
         // absent takes its default so a previous preset cannot leak in: every
         // state the plugin saves carries all of them, so only an older or
-        // hand-made one omits any.
+        // hand-made one omits any. The retired `tuning-*` ids of a project
+        // saved before #1756 need nothing here: nice-plug drops an id it does
+        // not know, and the musical settings' restore says so.
         use nice_plug::plugin::ParamValue;
         for id in lattice_maps::HOST_LANE_IDS {
             let value = match state.params.get(id) {

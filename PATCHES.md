@@ -39,7 +39,7 @@ The output side allocates nothing: `Output` is a borrow of the host's `clap_outp
 Keeping the list sorted is the caller's contract rather than the wrapper's:
 both halves raise a per-callback high-water mark, the plugin never reads it, and the wrapper puts its own parameter output at it so that traffic follows the plugin's rather than interleaving with it by time.
 `PARAMETER_OUTPUT_ATTEMPTS` bounds that half at 512 pushes per callback; the plugin bounds its own.
-Prepared nonautomatable setup validates and reserves capacity before parameter/state mutation, then adopts at the enclosing input boundary.
+A prepared setup validates before the parameters and fields restore, and commits after; what it commits the plugin adopts at its next input boundary.
 A setup's `service` reports what it changed as `Serviced`: a modified project is marked dirty, and changed parameter values or text are rescanned, each only when reported, so a setting kept outside the parameter list marks the project without a rescan, and a parameter whose label names one (the Lattice Map's label names its map) rescans its text.
 Main-thread registration, setup service and joined lifecycle hooks keep registry locking and endpoint reclamation outside audio callbacks.
 Joined wrapper destruction runs `clap_main_destroy`, which transfers recording ownership;
