@@ -768,6 +768,15 @@ fn a_hand_over_says_when_sound_comes_back() {
     assert!(!spectrum.give(clears, [delivered(100.0 + 2.0 * step, 1.0)], &cfg), "sound going on");
     let back = 100.0 + 2.0 * step + AudioSpectrum::HOLD_SECONDS + step;
     assert!(spectrum.give(clears, [delivered(back, 1.0)], &cfg), "sound after a still stretch");
+
+    // A column just over the floor under a slow attack: the raw column is
+    // heard, which the heatmap scrolls, while the smoothed curve stays under.
+    let slow = SpectrumConfig { attack: 1.0, ..SpectrumConfig::default() };
+    let mut spectrum = AudioSpectrum::default();
+    let clears = spectrum.clears();
+    let faint = 2.0 * harmonigraph_core::spectrogram::POWER_FLOOR;
+    assert!(spectrum.give(clears, [delivered(100.0, faint)], &slow), "heard by the heatmap alone");
+    assert_eq!(spectrum.last_audible().curve, None, "the fixture's curve was heard too");
 }
 
 /// A column further back than a second resets the history and starts it
