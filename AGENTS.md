@@ -180,6 +180,12 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 - A project saved with an Analyzer region folded before region folds kept their space: it reopens with the Analyzer at its folded width, and unfolding gives the width back to nothing; a divider drag does.
 - A section fold clicked on a frame whose pass egui repeats: it draws the new fold in the old window for that one frame.
 
+**Cases the tuning settings go without** (PR #1795), each with its cost when it occurs:
+
+- More than 128 editor edits queued while the Hub runs no audio: the rest are refused with the Tuning pane's notice and a Console line, and a restore then is refused whole with a Console line.
+- A save between an editor edit and the Hub's next callback stores the configuration before the edit, one host block of it.
+- After lost input, edits keep applying until the host resets; the fault notice stays and the take refuses its configuration.
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
