@@ -6,7 +6,7 @@ use std::cell::RefCell;
 // Geometry and interaction probes use instant fades; timing has its own probe.
 fn fresh_picture() -> PictureState {
     let mut state = crate::tests::probe::fresh_picture();
-    state.runtime.frame_params.fade_time = 0.0;
+    state.appearance.view.fade_time = 0.0;
     state
 }
 
@@ -566,8 +566,8 @@ fn voice_dots_follow_the_current_pitch_palette() {
     let pitches = [36.0, 60.0, 84.0];
     let size = egui::vec2(160.0, 40.0);
     for (low, high) in [(24.0, 96.0), (48.0, 72.0)] {
-        state.runtime.frame_params.darkest_pitch = low;
-        state.runtime.frame_params.brightest_pitch = high;
+        state.appearance.view.darkest_pitch = low;
+        state.appearance.view.brightest_pitch = high;
         let output = events_into(
             &ctx,
             size,
@@ -598,8 +598,8 @@ fn voice_dots_follow_the_current_pitch_palette() {
 #[test]
 fn source_dots_carry_the_lattice_envelope_through_bends_releases_and_retriggers() {
     let mut state = crate::tests::probe::fresh_picture();
-    state.runtime.frame_params.fade_time = 1.0;
-    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    state.appearance.view.fade_time = 1.0;
+    let env = state.appearance.view.envelope();
     let mut dots = SourceDots::default();
     let mut voices = [TuningVoice { key: 60, pitch: 60.0 }, TuningVoice { key: 188, pitch: 60.0 }];
     assert!(dots.step(&voices, 0.0, &env));

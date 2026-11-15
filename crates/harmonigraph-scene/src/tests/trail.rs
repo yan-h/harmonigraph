@@ -21,7 +21,7 @@ fn play_and_forget(tracker: &mut NoteTracker, note: u8, on: f64, off: f64) {
 /// of the others.
 fn trail_view(on: bool) -> ViewConfig {
     let note_names = if on { NoteNames::Past } else { NoteNames::Played };
-    ViewConfig { note_names, ..ViewConfig::default() }
+    ViewConfig { note_names, fade_time: 0.0, ..ViewConfig::default() }
 }
 
 #[test]
@@ -36,8 +36,8 @@ fn nothing_is_remembered_under_any_mode_but_past() {
     // rather than off a memory, so `trail` stays a record of where the music
     // has actually been.
     for names in [NoteNames::Played, NoteNames::All] {
-        let view = ViewConfig { note_names: names, ..ViewConfig::default() };
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 10.0);
+        let view = ViewConfig { note_names: names, fade_time: 0.0, ..ViewConfig::default() };
+        let scene = scene_of(&tracker, &Tuning::default(), &view, 10.0);
         assert!(scene.nodes.iter().all(|n| n.trail == 0.0), "{names:?} marked a node");
     }
 }
@@ -47,16 +47,15 @@ fn a_visited_node_is_marked_and_an_unvisited_one_is_not() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
     let view = trail_view(true);
-    let frame = plain_frame();
     let tuning = Tuning::default();
 
     // The mark holds indefinitely: the point is a whole piece's territory,
     // not a rolling window, so nothing ages out however long the piece runs.
     for now in [5.0, 600.0, 100_000.0] {
-        let scene = scene_of(&tracker, &tuning, &view, &frame, now);
+        let scene = scene_of(&tracker, &tuning, &view, now);
         assert_eq!(origin_node(&scene).trail, 1.0, "at t={now}");
     }
-    let scene = scene_of(&tracker, &tuning, &view, &frame, 5.0);
+    let scene = scene_of(&tracker, &tuning, &view, 5.0);
     let elsewhere = scene.nodes.iter().find(|n| n.lattice_pos == LatticePos::new(0, 1, 0)).unwrap();
     assert_eq!(elsewhere.trail, 0.0);
 }
@@ -74,21 +73,19 @@ fn a_memory_touches_no_field_but_trail() {
     // silent hand on the disc's own channel.
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let frame = plain_frame();
     let tuning = Tuning::default();
-    let view = ViewConfig { min_sevens: -1, max_sevens: 1, ..ViewConfig::default() };
+    let view =
+        ViewConfig { min_sevens: -1, max_sevens: 1, fade_time: 0.0, ..ViewConfig::default() };
     let bare = scene_of(
         &tracker,
         &tuning,
         &ViewConfig { note_names: NoteNames::Played, ..view.clone() },
-        &frame,
         10.0,
     );
     let marked = scene_of(
         &tracker,
         &tuning,
         &ViewConfig { note_names: NoteNames::Past, ..view.clone() },
-        &frame,
         10.0,
     );
     assert!(marked.nodes.iter().any(|n| n.trail > 0.0), "nothing was remembered at all");
@@ -115,12 +112,12 @@ fn a_memory_touches_no_field_but_trail() {
 fn a_remembered_position_loses_its_marker_to_its_own_name() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let view = ViewConfig { min_sevens: -1, max_sevens: 1, ..ViewConfig::default() };
+    let view =
+        ViewConfig { min_sevens: -1, max_sevens: 1, fade_time: 0.0, ..ViewConfig::default() };
     let scene = scene_of(
         &tracker,
         &Tuning::default(),
         &ViewConfig { note_names: NoteNames::Past, ..view.clone() },
-        &plain_frame(),
         10.0,
     );
     let remembered: Vec<&NodeInstance> = scene.nodes.iter().filter(|n| n.trail > 0.0).collect();
@@ -149,7 +146,6 @@ fn an_off_sheet_node_stays_blank_even_after_it_is_played() {
     // of the same pitch class carries the memory instead.
     let view = ViewConfig { min_sevens: -1, max_sevens: 1, ..trail_view(true) };
     let tuning = Tuning::default();
-    let frame = plain_frame();
     let off_sheet = LatticePos::new(0, 0, 1);
     let node_at = |scene: &Scene, pos: LatticePos| {
         *scene.nodes.iter().find(|n| n.lattice_pos == pos).unwrap()
@@ -162,7 +158,7 @@ fn an_off_sheet_node_stays_blank_even_after_it_is_played() {
     tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 70));
     tracker.prune(5.0, &Envelope::default());
 
-    let scene = scene_of(&tracker, &tuning, &view, &frame, 10.0);
+    let scene = scene_of(&tracker, &tuning, &view, 10.0);
     // The off-sheet node is where the note was, but it draws nothing.
     let off = node_at(&scene, off_sheet);
     assert!(!off.on_home && off.trail == 0.0 && !off.is_visible(), "off-sheet stays blank");
@@ -184,10 +180,9 @@ fn clearing_the_history_wipes_every_mark() {
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
     play_and_forget(&mut tracker, 64, 2.0, 3.0);
     let view = trail_view(true);
-    let frame = plain_frame();
     let tuning = Tuning::default();
-    assert!(scene_of(&tracker, &tuning, &view, &frame, 6.0).nodes.iter().any(|n| n.trail > 0.0));
+    assert!(scene_of(&tracker, &tuning, &view, 6.0).nodes.iter().any(|n| n.trail > 0.0));
 
     tracker.clear_history();
-    assert!(scene_of(&tracker, &tuning, &view, &frame, 6.0).nodes.iter().all(|n| n.trail == 0.0));
+    assert!(scene_of(&tracker, &tuning, &view, 6.0).nodes.iter().all(|n| n.trail == 0.0));
 }

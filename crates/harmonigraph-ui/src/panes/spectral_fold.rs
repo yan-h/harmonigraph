@@ -406,8 +406,8 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, now: f64) {
     // The note envelope, the same one every layer of a node runs on: the ring
     // is one of those layers, so it arrives and leaves on the Fade rather than
     // on a duration of its own. Assembled through `ViewConfig::envelope`, which
-    // is the one place the Fade param and the Fade curve are put back together.
-    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    // is the one place the Fade time and the Fade curve are put together.
+    let env = state.appearance.view.envelope();
     state.runtime.ring_fade.advance(&harmonigraph_scene::RingGate::new(&scene.spectral), &env, now);
     // What the drawn ring is still moving on: the display it reads, its own
     // levels and its wedges' fade.
@@ -1063,7 +1063,7 @@ mod tests {
     #[test]
     fn either_reading_draws_beside_the_keys_rather_than_instead_of_them() {
         let mut state = ringing();
-        state.runtime.frame_params.fade_time = 0.0;
+        state.appearance.view.fade_time = 0.0;
         state.appearance.spectrum.attack = 0.0;
         state.appearance.spectrum.release = 0.0;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
@@ -1346,8 +1346,8 @@ mod tests {
         for pitch in [36.0f32, 60.0, 72.5, 96.0] {
             let node = harmonigraph_scene::pitch_lut_color(
                 pitch,
-                state.runtime.frame_params.darkest_pitch,
-                state.runtime.frame_params.brightest_pitch,
+                state.appearance.view.darkest_pitch,
+                state.appearance.view.brightest_pitch,
                 state.appearance.view.pitch_gradient,
             );
             assert_eq!(
@@ -1458,7 +1458,7 @@ mod tests {
         let mut state = ringing();
         // A straight line of a stated length, so half way in is half way
         // along; the fresh curve is not, and this is not the test for it.
-        state.runtime.frame_params.fade_time = 1.0;
+        state.appearance.view.fade_time = 1.0;
         state.appearance.view.fade_shape = 0.0;
         state.appearance.spectrum.attack = 0.0;
         state.appearance.spectrum.release = 0.0;
@@ -1706,7 +1706,7 @@ mod tests {
             state.appearance.view.spectral_ring_gate = 128.0 / 255.0;
             state.appearance.view.spectral_ring_hysteresis = 26.0 / 255.0;
             state.appearance.view.fade_shape = 0.0;
-            state.runtime.frame_params.fade_time = 1.0;
+            state.appearance.view.fade_time = 1.0;
             let cfg = state.appearance.spectrum;
             // The next scheduled hop must see a FULL configured window.
             let frames = window.frame(48_000.0).div_ceil(384) * 384;

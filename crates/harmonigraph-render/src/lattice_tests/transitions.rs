@@ -128,24 +128,23 @@ fn each_arrival_casts_a_measurable_shadow() {
 #[test]
 fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
-    use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
+    use harmonigraph_scene::{Camera, ViewConfig};
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
     let view = ViewConfig {
         note_animation: NoteAnimationConfig { radial_start: 1.0, ..Default::default() },
+        fade_time: 1.0,
         ..Default::default()
     };
-    let frame = FrameParams { fade_time: 1.0, ..Default::default() };
     for now in [1.1, 1.5, 1.9, 2.1] {
-        tracker.prune(now, &view.envelope(&frame));
+        tracker.prune(now, &view.envelope());
         let mut scene = animated_snapshot(
             &tracker,
             &Tuning::default(),
             &view,
             &view.reach(),
-            &frame,
             Camera::default(),
             None,
             now,

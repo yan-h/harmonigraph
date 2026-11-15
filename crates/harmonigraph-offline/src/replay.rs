@@ -671,9 +671,9 @@ mod tests {
     #[test]
     fn parameter_automation_is_applied_in_time_order() {
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
-        let id = ParamKey::Fade.id().to_string();
+        let id = ParamKey::CameraYaw.id().to_string();
         // Two values a bar can actually reach, so what the test replays is a
-        // lane that could have been recorded (`ParamKey::Fade.range()`).
+        // lane that could have been recorded (`ParamKey::CameraYaw.range()`).
         let mut replay = Replay::new(take_with(
             vec![],
             vec![
@@ -682,10 +682,10 @@ mod tests {
             ],
         ));
         replay.advance_to(&mut state.runtime, 0.5);
-        assert_eq!(replay.params.get(ParamKey::Fade), 0.25);
+        assert_eq!(replay.params.get(ParamKey::CameraYaw), 0.25);
         assert!(!replay.is_spent(), "a change is still to come");
         replay.advance_to(&mut state.runtime, 1.0);
-        assert_eq!(replay.params.get(ParamKey::Fade), 0.75);
+        assert_eq!(replay.params.get(ParamKey::CameraYaw), 0.75);
     }
 
     #[test]
@@ -697,7 +697,7 @@ mod tests {
         ));
         replay.advance_to(&mut state.runtime, 1.0);
         assert!(replay.is_spent());
-        assert_eq!(replay.params.get(ParamKey::Fade), ParamKey::Fade.default_value());
+        assert_eq!(replay.params.get(ParamKey::CameraYaw), ParamKey::CameraYaw.default_value());
     }
 
     #[test]

@@ -1200,7 +1200,7 @@ fn note_instances_with_floor(
 /// picture, or reading across them is a translation.
 pub(crate) fn note_color(state: &PictureState, pitch: f32, alpha: f32) -> Color32 {
     let (darkest, brightest) =
-        (state.runtime.frame_params.darkest_pitch, state.runtime.frame_params.brightest_pitch);
+        (state.appearance.view.darkest_pitch, state.appearance.view.brightest_pitch);
     scene_color(
         pitch_lut_color(pitch, darkest, brightest, state.appearance.view.pitch_gradient),
         alpha,
@@ -1213,7 +1213,7 @@ pub(crate) fn note_color(state: &PictureState, pitch: f32, alpha: f32) -> Color3
 /// `strength` (0..1) in alpha — the shape [`RollInstance::aura`] takes.
 pub(crate) fn note_fill(state: &PictureState, pitch: f32, strength: f32) -> [u8; 4] {
     let (darkest, brightest) =
-        (state.runtime.frame_params.darkest_pitch, state.runtime.frame_params.brightest_pitch);
+        (state.appearance.view.darkest_pitch, state.appearance.view.brightest_pitch);
     let c = harmonigraph_scene::pitch_glow_color(
         pitch,
         darkest,

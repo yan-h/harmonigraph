@@ -223,7 +223,7 @@ fn the_halos_mark_colour_is_its_slots() {
         return;
     };
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
-    use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
+    use harmonigraph_scene::{Camera, ViewConfig};
     let mut tracker = NoteTracker::new();
     for note in [60u8, 64, 67] {
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
@@ -234,15 +234,14 @@ fn the_halos_mark_colour_is_its_slots() {
         min_sevens: 0,
         max_sevens: 0,
         glow_reach: 0.8,
+        fade_time: 0.0,
         ..ViewConfig::default()
     };
-    let frame = FrameParams { fade_time: 0.0, ..FrameParams::default() };
     let mut scene = animated_snapshot(
         &tracker,
         &Tuning::default(),
         &view,
         &view.reach(),
-        &frame,
         Camera::default(),
         None,
         0.5,

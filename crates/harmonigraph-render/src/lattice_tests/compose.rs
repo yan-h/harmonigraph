@@ -193,7 +193,7 @@ fn a_thin_lines_light_reaches_the_half_whatever_the_scene_to_half_ratio() {
 /// stands on top of the home sheet in front of it.
 #[test]
 fn sheets_draw_back_to_front_along_the_sevens_axis() {
-    use harmonigraph_scene::{Camera, FrameParams, Projection, ViewConfig};
+    use harmonigraph_scene::{Camera, Projection, ViewConfig};
 
     let view = ViewConfig {
         extent_threes: 1,
@@ -208,7 +208,6 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
             &harmonigraph_core::Tuning::default(),
             &view,
             &view.reach(),
-            &FrameParams::default(),
             // Orbited, deliberately: this is the case a plain depth sort
             // gets wrong, because two nodes on one sheet then sit at
             // different depths and the sheets interleave.

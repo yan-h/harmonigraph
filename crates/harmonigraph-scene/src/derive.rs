@@ -6,7 +6,7 @@ use crate::camera::Camera;
 use crate::color::pitch_ramp_lut;
 use crate::octaves::octave_layout;
 use crate::trail::TrailField;
-use crate::view::{DrawnWindow, FrameParams, ViewConfig};
+use crate::view::{DrawnWindow, ViewConfig};
 use crate::{
     lattice_to_world, NodeInstance, PlusInstance, Scene, SpectralPaint, NODE_RADIUS_FACTOR,
     PLUS_WIDTH_PER_LABEL_SCALE,
@@ -30,11 +30,10 @@ pub fn derive_scene(
     tuning: &Tuning,
     view: &ViewConfig,
     window: &DrawnWindow,
-    frame: &FrameParams,
     camera: Camera,
     hovered: Option<LatticePos>,
 ) -> Scene {
-    derive_scene_with_extra(tracker, tuning, view, window, &[], frame, camera, hovered, Vec::new())
+    derive_scene_with_extra(tracker, tuning, view, window, &[], camera, hovered, Vec::new())
 }
 
 /// The order a scene's nodes are laid out in, which `NodeMotion` searches its
@@ -58,7 +57,6 @@ pub fn derive_scene_with_extra(
     view: &ViewConfig,
     window: &DrawnWindow,
     extra: &[LatticePos],
-    frame: &FrameParams,
     camera: Camera,
     hovered: Option<LatticePos>,
     mut nodes: Vec<NodeInstance>,
@@ -156,8 +154,6 @@ pub fn derive_scene_with_extra(
         background: crate::skin::picture_color(),
         pitch_lut: pitch_ramp_lut(view.pitch_gradient),
         pitch_lut_spacing: crate::LutSpacing::of(view.pitch_gradient),
-        darkest_pitch: frame.darkest_pitch,
-        brightest_pitch: frame.brightest_pitch,
         // The shader divides each marker's world radius by this fixed unit
         // to recover the arm its bar was dialled at.
         marker_unit: marker_world(1.0),

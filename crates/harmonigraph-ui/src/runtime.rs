@@ -4,7 +4,6 @@
 use crate::params::{self, ParamBackend};
 use crate::{AudioSpectrum, Console};
 use harmonigraph_core::{NoteTracker, PitchClass, Tuning};
-use harmonigraph_scene::FrameParams;
 
 /// Synchronous input, analysis and history, independent of any viewport.
 pub struct VisualRuntime {
@@ -18,10 +17,6 @@ pub struct VisualRuntime {
     /// Snapshot of the tuning parameters, refreshed each frame in
     /// [`root_ui`](crate::root_ui) so core/scene code never touches the param system.
     pub tuning: Tuning,
-    /// Per-frame mirrors of the appearance parameters, refreshed alongside
-    /// `tuning` (the param system owns the real values; these are never
-    /// persisted).
-    pub frame_params: FrameParams,
     /// While true, tuning params continuously re-learn from the held notes
     /// (v1's learn mode). Runtime-only; never persisted.
     pub learn_active: bool,
@@ -71,7 +66,6 @@ impl Default for VisualRuntime {
             console: Console::default(),
             tracker: NoteTracker::new(),
             tuning: Tuning::default(),
-            frame_params: FrameParams::default(),
             learn_active: false,
             tempered: harmonigraph_core::configuration::TuningModes::default().tempered,
             config_reducer: Default::default(),
@@ -90,13 +84,11 @@ impl Default for VisualRuntime {
 }
 impl VisualRuntime {
     /// Advance bounded display histories on the caller's clock, whether or not
-    /// any surface is drawn. The latest observed parameters own the envelope;
-    /// drawing observes them before advancing, closed draining retains them.
-    /// The spectrogram's history is not among them: each rung of its pyramid
+    /// any surface is drawn, on the look's note envelope. The spectrogram's history is not among them: each rung of its pyramid
     /// is bounded by the ring it keeps, and a stopped stream scrolls out of
     /// the window without being trimmed.
     pub fn advance_time(&mut self, now: f64, appearance: &crate::AppearanceDocument) {
-        self.tracker.prune(now, &appearance.view.envelope(&self.frame_params));
+        self.tracker.prune(now, &appearance.view.envelope());
     }
 
     /// The synchronous reducer's last complete value, for standalone recording.
@@ -104,9 +96,9 @@ impl VisualRuntime {
         self.replayed_configuration.unwrap_or_else(|| self.config_reducer.resolved())
     }
 
-    /// Observe current parameters before pruning, so a longer fade takes effect
-    /// in the same frame. Closed schedulers retain the last observed mirrors and
-    /// call `advance_time` directly; observing is independent of drawing too.
+    /// Observe the current musical configuration, then advance. Closed
+    /// schedulers call `advance_time` directly; observing is independent of
+    /// drawing too.
     pub fn advance(
         &mut self,
         appearance: &crate::AppearanceDocument,
@@ -114,11 +106,6 @@ impl VisualRuntime {
         now: f64,
     ) {
         self.observe_configuration(params);
-        self.frame_params = FrameParams {
-            fade_time: params.get(params::ParamKey::Fade),
-            darkest_pitch: params.get(params::ParamKey::DarkestPitch),
-            brightest_pitch: params.get(params::ParamKey::BrightestPitch),
-        };
         self.advance_time(now, appearance);
     }
 

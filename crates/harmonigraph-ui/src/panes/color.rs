@@ -7,17 +7,12 @@
 mod intensity;
 
 use super::section;
-use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{BendPlot, GradientPreview, RangeBar, SpectrumBar, SpreadBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::ViewConfig;
 
 /// MIDI and audio colors, followed by how a note's playing draws it.
-pub(super) fn color_pane(
-    ui: &mut egui::Ui,
-    appearance: &mut AppearanceDocument,
-    params: &dyn ParamBackend,
-) {
+pub(super) fn color_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     section(ui, "MIDI note colors", |ui| {
         // The gradient above the range because it is the coarser of the two: it
         // says what the colors ARE, the range says which pitches they are spread
@@ -25,20 +20,23 @@ pub(super) fn color_pane(
         // change here repaints the octave glyphs, the melody and bass marks and
         // the piano roll together.
         spectrum_group(ui, &mut appearance.view);
-        super::param_range_bar(
-            ui,
-            params,
-            (ParamKey::DarkestPitch, ParamKey::BrightestPitch),
-            0.0..=120.0,
-            crate::COLOR_RANGE_MIN_SPAN,
-            (
-                "Pitch color range",
-                "Pitches assigned the first and last gradient colors. \
-                 Pitches outside this range keep the nearest end color. \
-                 Drag an end to resize, or the middle to shift both.",
-            ),
-            super::pitch_readout,
-        );
+        let view = &mut appearance.view;
+        let fresh = super::fresh_view();
+        RangeBar::new(
+            &mut view.darkest_pitch,
+            &mut view.brightest_pitch,
+            0.0..=harmonigraph_scene::PITCH_COLOR_MAX,
+            "Pitch color range",
+        )
+        .min_span(harmonigraph_scene::COLOR_RANGE_MIN_SPAN)
+        .default_value((fresh.darkest_pitch, fresh.brightest_pitch))
+        .display(super::pitch_readout)
+        .hint(
+            "Pitches assigned the first and last gradient colors. \
+             Pitches outside this range keep the nearest end color. \
+             Drag an end to resize, or the middle to shift both.",
+        )
+        .show(ui);
     });
     super::hinted_section(ui, "Audio level colors", LEVEL_COLORS_HINT, |ui| {
         spectrogram_gradient_group(ui, &mut appearance.spectrum);
