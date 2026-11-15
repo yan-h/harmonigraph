@@ -20,7 +20,7 @@ fn home_sheet_nodes_are_flagged_for_the_blank_ring() {
         center_sevens: 2,
         ..ViewConfig::default()
     };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     for n in &scene.nodes {
         assert_eq!(n.on_home, n.lattice_pos.sevens == 2, "{:?}", n.lattice_pos);
     }
@@ -43,7 +43,7 @@ fn the_marker_field_is_the_home_sheet_and_only_it() {
     let home_count = |scene: &Scene| scene.nodes.iter().filter(|n| n.on_home).count();
 
     // Idle: a marker at every home position, and no mark anywhere off it.
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     assert_eq!(scene.pluses.len(), home_count(&scene));
     assert!(scene.pluses.iter().all(|d| d.pos.z.abs() < 1e-5), "{:?}", scene.pluses);
 
@@ -52,7 +52,7 @@ fn the_marker_field_is_the_home_sheet_and_only_it() {
     // (0,0,2) only, and the field under it is untouched.
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 68, 1.0));
-    let played = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
+    let played = scene_of(&tracker, &Tuning::default(), &view, 0.0);
     assert!(
         played.nodes.iter().any(|n| !n.on_home && n.presence_with_opacity > 0.0),
         "the off-sheet note has to be lit for this to mean anything",
@@ -66,22 +66,22 @@ fn the_mark_depth_reaches_the_scene_and_is_clamped() {
     // One thickness drives BOTH rings, so it lives on the scene rather
     // than per node; 0 is the off state, as it is for every layer's width.
     let view = ViewConfig { mark_thickness: 0.15, ..ViewConfig::default() };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     assert_eq!(scene.view.mark_thickness, 0.15);
 
     let off = ViewConfig { mark_thickness: 0.0, ..ViewConfig::default() };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &off, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &off, 0.0);
     assert_eq!(scene.view.mark_thickness, 0.0, "0 passes through as the off state");
 
     let wild = ViewConfig { mark_thickness: 9.0, ..ViewConfig::default() };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, 0.0);
     assert!(scene.view.mark_thickness <= 0.3, "got {}", scene.view.mark_thickness);
 }
 
 #[test]
 fn the_gap_reaches_both_axes_and_is_clamped() {
     let stack = |view: &ViewConfig| {
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, 0.0);
         (scene.outer_inner, scene.outer_outer, scene.rings_outer, scene.mark_inner)
     };
     // A stack with room to widen without refusing its band.
@@ -101,13 +101,13 @@ fn the_gap_reaches_both_axes_and_is_clamped() {
         "the radial gap did not restack the rings: the band's inner edge is still at {}",
         stack(&sound).0,
     );
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &spaced, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &spaced, 0.0);
     assert_eq!(scene.octave_gap, 0.12, "the shared gap did not reach the sector cut");
 
     // A hand-edited value above the bar cannot erase more of a sector than the
     // shared ceiling permits.
     let wild = ViewConfig { ring_gap: 5.0, ..sound };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, 0.0);
     assert_eq!(scene.octave_gap, GAP_MAX);
 }
 
@@ -123,7 +123,7 @@ fn a_wild_radial_gap_is_clamped_and_the_stack_stops_at_the_ring_that_fits() {
         ring_inner: RING_INNER_MAX,
         ..ViewConfig::default()
     };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, 0.0);
     // What the refused slot comes out AS, which is the whole of how a layer
     // says it is not drawn: the empty pair. An inside-out pair (the slot's own
     // inner edge twice) or one clipped back to the quad edge are both things
@@ -227,7 +227,7 @@ fn the_rings_stack_outward_from_where_the_stack_starts() {
         ring_gap: 0.05,
         ..ViewConfig::default()
     };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     // middle 0..0.2 | audio 0.2..0.3 | gap | band 0.35..0.50. To a tolerance,
     // the radii being sums: 0.2 + 0.1 + 0.05 is not 0.35 in binary.
     let close =
@@ -244,7 +244,7 @@ fn the_rings_stack_outward_from_where_the_stack_starts() {
     // slides in to the stack's start — no layer left to stand off, so no gap
     // spent standing off one.
     let view = ViewConfig { spectral_ring_width: 0.0, ..view };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     assert!(
         close((scene.outer_inner, scene.outer_outer), (0.2, 0.35)),
         "the band did not slide in to the stack's start: {}..{}",
@@ -255,7 +255,7 @@ fn the_rings_stack_outward_from_where_the_stack_starts() {
     // The band off: an empty pair, which is what says the layer is not drawn,
     // and the marks fall back to standing off the ring that IS the outermost.
     let view = ViewConfig { spectral_ring_width: 0.1, band_width: 0.0, ..view };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, 0.0));
     assert!((scene.rings_outer - 0.3).abs() < 1e-5, "the marks kept the band's slot");
 
@@ -264,7 +264,7 @@ fn the_rings_stack_outward_from_where_the_stack_starts() {
     // own: the innermost ring reaches the centre and its sectors close into pie
     // wedges.
     let view = ViewConfig { ring_inner: 0.0, band_width: 0.15, ..view };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     assert!(
         close((scene.outer_inner, scene.outer_outer), (0.15, 0.3)),
         "a stack seated on the centre put the band at {}..{}",
@@ -314,7 +314,7 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
     assert!(rings.audio.1 > rings.audio.0, "the audio ring lost a slot that fits");
     assert_eq!(rings.band, (0.0, 0.0), "the band was squeezed into {:?}", rings.band);
     assert_eq!(rings.outer, rings.audio.1, "the marks stand off the ring that IS outermost");
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, 0.0));
 
     // Every pair the stack hands out, at every ring width the bar reaches: the
@@ -378,7 +378,7 @@ fn a_hand_edited_size_reaches_the_scene_as_the_sanitized_setting() {
     // The radial use is read as the stand-off it BOUGHT, that being the only
     // form it reaches the scene in — the scene carries no field for it.
     let stack = |view: &ViewConfig| {
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, 0.0);
         [
             scene.outer_inner,
             scene.outer_outer,
@@ -493,7 +493,7 @@ fn the_ring_geometry_is_sanitized_into_the_scene() {
         band_width: 0.9,
         ..ViewConfig::default()
     };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     // The audio ring reaches the center and takes its whole clamped width; the
     // band's slot starts a gap past that and ends outside the quad, so the
     // layer is off.
@@ -503,7 +503,7 @@ fn the_ring_geometry_is_sanitized_into_the_scene() {
     // The audio ring off and the gap closed: the band takes the centre itself,
     // at exactly its bar's clamped width.
     let view = ViewConfig { spectral_ring_width: 0.0, band_width: 0.9, ring_gap: 0.0, ..view };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, RING_WIDTH_MAX));
 }
 
@@ -514,7 +514,7 @@ fn off_sheet_nodes_shrink_away_from_the_home_sheet_both_ways() {
     // is the ground the music is read against and stays full size.
     let view =
         ViewConfig { min_sevens: -2, max_sevens: 2, sevens_size: 0.5, ..ViewConfig::default() };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     assert_eq!(node_at(&scene, LatticePos::new(0, 0, 0)).scale, 1.0);
     for sevens in [-1, 1] {
         assert_eq!(node_at(&scene, LatticePos::new(0, 0, sevens)).scale, 0.5);
@@ -536,7 +536,7 @@ fn sevens_size_never_enlarges_and_never_vanishes() {
             sevens_size: size,
             ..ViewConfig::default()
         };
-        scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0)
+        scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0)
     };
     let huge = scene_with(4.0);
     assert_eq!(node_at(&huge, LatticePos::new(0, 0, 4)).scale, 1.0, "clamped to no growth");
@@ -552,13 +552,7 @@ fn the_scene_carries_the_ground_the_pane_stands_on() {
     // The ground the lattice pane paints is the skin's picture ground; the
     // scene carries the same colour so that a shell composing its panes
     // differently has one number saying what the picture is composited over.
-    let scene = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &ViewConfig::default(),
-        &plain_frame(),
-        0.0,
-    );
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &ViewConfig::default(), 0.0);
     let [r, g, b] = crate::skin::PICTURE;
     assert_eq!(scene.background, crate::skin::ground_color((r, g, b)));
     assert_eq!(scene.background.w, 1.0, "opaque, or it would not cover");

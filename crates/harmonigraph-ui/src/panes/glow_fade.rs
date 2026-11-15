@@ -325,7 +325,6 @@ mod tests {
             &state.runtime.tuning,
             &state.appearance.view,
             &state.appearance.view.reach(),
-            &state.runtime.frame_params,
             state.appearance.camera,
             None,
         );
@@ -334,7 +333,7 @@ mod tests {
             &state.runtime.tracker,
             &state.runtime.tuning,
             &state.appearance.view,
-            &state.appearance.view.envelope(&state.runtime.frame_params),
+            &state.appearance.view.envelope(),
             &harmonigraph_scene::RingFade::default(),
             now,
         );
@@ -354,7 +353,7 @@ mod tests {
         state.appearance.view.glow_reach = 0.8;
         state.appearance.view.glow_attack = attack;
         state.appearance.view.glow_release = release;
-        state.runtime.frame_params.fade_time = 0.0;
+        state.appearance.view.fade_time = 0.0;
         state
     }
 

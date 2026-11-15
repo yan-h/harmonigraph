@@ -57,8 +57,8 @@ pub use config::{
     TILT_STEPS,
 };
 pub(crate) use config::{
-    COLOR_RANGE_MIN_SPAN, LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN,
-    ROLL_LEAD_MAX, ROLL_LEAD_RELEASE_MAX, ROLL_SECONDS_MAX, ROLL_SECONDS_MIN,
+    LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN, ROLL_LEAD_MAX,
+    ROLL_LEAD_RELEASE_MAX, ROLL_SECONDS_MAX, ROLL_SECONDS_MIN,
 };
 // The Video settings sit at the crate root like the analyzer's above, which is
 // where the panes, both shells and the offline renderer name them. They are

@@ -170,7 +170,7 @@ fn drawable(c: glam::Vec4) -> bool {
 /// The ring ground and resting marker colours, each resolved from its own bar.
 /// Sweep one bar at a time while the other stays at a distinct drawable grey.
 fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>) {
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, 0.0);
     let lines: Vec<Vec4> = scene.pluses.iter().map(|d| d.color).collect();
     assert!(
         scene.pluses.iter().any(|d| d.strength > 0.0),
@@ -654,8 +654,8 @@ fn octaves_fade_independently() {
     tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 72)); // ...and released
 
     // Half a fade after key-up, once both octaves had time to arrive.
-    let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
-    let scene = scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 2.5);
+    let view = ViewConfig { fade_time: 1.0, ..ViewConfig::default() };
+    let scene = scene_of(&tracker, &Tuning::default(), &view, 2.5);
     let origin = origin_node(&scene);
     assert_eq!(origin.presence_with_opacity, 1.0, "node stays lit by the held C4");
     assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0, "held octave at full");
@@ -681,21 +681,20 @@ fn one_fade_time_carries_every_layer_of_the_node() {
     // (`Voice::release_level`), and a chord released mid-arrival would read
     // half-way down for the opposite reason.
     for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, note));
+        tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, note));
     }
-    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
-    let view = plain_view();
-    tracker.prune(3.0, &view.envelope(&frame));
+    let view = ViewConfig { fade_time: 1.0, ..plain_view() };
+    tracker.prune(1.5, &view.envelope());
     let tuning = Tuning::default();
-    let mut scene = scene_of(&tracker, &tuning, &view, &frame, 3.0);
+    let mut scene = scene_of(&tracker, &tuning, &view, 1.5);
     NodeMotion::default().step(
         &mut scene,
         &tracker,
         &tuning,
         &view,
-        &view.envelope(&frame),
+        &view.envelope(),
         &RingFade::default(),
-        3.0,
+        1.5,
     );
 
     let half = |what: &str, v: f32| {
@@ -725,19 +724,18 @@ fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
         for note in [60, 62, 64, 65, 67] {
             tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
-        let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
-        let view = ViewConfig { mark_delay, ..plain_view() };
+        let view = ViewConfig { mark_delay, fade_time: 1.0, ..plain_view() };
         let tuning = Tuning::default();
         let mut motion = NodeMotion::default();
         let mut ringing = Vec::new();
         let mut sample = |tracker: &NoteTracker, now| {
-            let mut scene = scene_of(tracker, &tuning, &view, &frame, now);
+            let mut scene = scene_of(tracker, &tuning, &view, now);
             motion.step(
                 &mut scene,
                 tracker,
                 &tuning,
                 &view,
-                &view.envelope(&frame),
+                &view.envelope(),
                 &RingFade::default(),
                 now,
             );
@@ -786,7 +784,7 @@ fn window_center_pans_which_nodes_display() {
 
     // The center node renders at the world origin.
     let tracker = NoteTracker::new();
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&tracker, &Tuning::default(), &view, 0.0);
     let center_node =
         scene.nodes.iter().find(|n| n.lattice_pos == LatticePos::new(5, 0, 0)).unwrap();
     assert_eq!(center_node.world_pos, Vec3::ZERO);
@@ -806,7 +804,7 @@ fn every_channel_draws_the_same_node() {
     let drawn = |channel: u8| {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, channel, 60, 1.0));
-        let scene = scene_of(&tracker, &Tuning::default(), &plain_view(), &plain_frame(), 0.0);
+        let scene = scene_of(&tracker, &Tuning::default(), &plain_view(), 0.0);
         format!("{:?}", origin_node(&scene))
     };
     let lit = drawn(0);
@@ -826,7 +824,8 @@ fn held_note_lights_matching_nodes() {
 
     // Sampled past the view's attack: every layer of a node eases in, so at
     // the note-on instant itself the whole thing is still at zero.
-    let scene = scene_of(&tracker, &tuning, &ViewConfig::default(), &plain_frame(), 0.5);
+    let view = ViewConfig { fade_time: 0.0, ..ViewConfig::default() };
+    let scene = scene_of(&tracker, &tuning, &view, 0.5);
     let origin = origin_node(&scene);
     assert_eq!(origin.presence_with_opacity, 1.0);
     assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0);
@@ -839,7 +838,12 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
     // does, so the note is still there to see and only its exact octave is
     // given up. Dropping it instead would make a node go dark for notes that
     // are audibly sounding on it.
-    let view = ViewConfig { octave_count: 5, octave_center: 60.0, ..ViewConfig::default() };
+    let view = ViewConfig {
+        fade_time: 0.0,
+        octave_count: 5,
+        octave_center: 60.0,
+        ..ViewConfig::default()
+    };
     // Five octaves with middle C at the top, so a C node draws five
     // indicators: middle C's octave and two either side. MIDI 36..95 — every
     // note from C1 to B5 in the DAW's numbering — has one of its own, and only
@@ -847,7 +851,7 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
     let lit = |note: u8| {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.5);
+        let scene = scene_of(&tracker, &Tuning::default(), &view, 0.5);
         let octaves = origin_node(&scene).octaves;
         let slots: Vec<usize> = (0..OCTAVE_SLOTS).filter(|&s| octaves[s] > 0.0).collect();
         assert_eq!(slots.len(), 1, "one octave sounds, got slots {slots:?}");
@@ -863,11 +867,15 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
     assert_eq!(lit(24), MIDDLE_C_SLOT - 2, "an octave under the bottom folds into it");
     // The widest span reaches those octaves for real, so the fold is the
     // setting talking and not a ceiling in the packing.
-    let wide =
-        ViewConfig { octave_count: crate::MAX_SPAN, octave_center: 60.0, ..ViewConfig::default() };
+    let wide = ViewConfig {
+        fade_time: 0.0,
+        octave_count: crate::MAX_SPAN,
+        octave_center: 60.0,
+        ..ViewConfig::default()
+    };
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 96, 1.0));
-    let scene = scene_of(&tracker, &Tuning::default(), &wide, &plain_frame(), 0.5);
+    let scene = scene_of(&tracker, &Tuning::default(), &wide, 0.5);
     assert_eq!(
         origin_node(&scene).octaves[MIDDLE_C_SLOT + 3],
         1.0,
@@ -889,8 +897,13 @@ fn a_ring_reaching_under_the_packing_folds_onto_a_slot_it_has() {
     // below the node's own numbering: `matches` wraps, so a node at 1195¢ is
     // lit by a played 0¢, and the lowest MIDI C on it comes out as slot -1.
     let tuning = Tuning::from_cents(-5.0, 700.0, 400.0, 1000.0, 5.0);
-    let view = ViewConfig { octave_count: 5, octave_center: 12.0, ..ViewConfig::default() };
-    let scene = scene_of(&held(0), &tuning, &view, &plain_frame(), 0.5);
+    let view = ViewConfig {
+        fade_time: 0.0,
+        octave_count: 5,
+        octave_center: 12.0,
+        ..ViewConfig::default()
+    };
+    let scene = scene_of(&held(0), &tuning, &view, 0.5);
     let node_cents = tuning.pitch_class(LatticePos::ORIGIN).to_cents();
     assert!(node_cents > 1190.0, "the origin must sit just under the wrap, got {node_cents}");
     assert_eq!(
@@ -971,17 +984,20 @@ fn a_degenerate_color_range_lands_where_the_shader_lands() {
 }
 
 #[test]
-fn an_inverted_color_range_still_derives_a_scene() {
-    // Every color in the picture runs the gradient math, and Darkest above
-    // Brightest is one drag of a host's parameter list away (raise Darkest
-    // before lowering Brightest and it is the state in between). Deriving
-    // must not panic there.
-    let frame =
-        FrameParams { darkest_pitch: 110.0, brightest_pitch: 108.0, ..FrameParams::default() };
-    let view = ViewConfig::default();
-    let scene = scene_of(&held(60), &Tuning::default(), &view, &frame, 0.0);
+fn an_inverted_color_range_derives_the_range_its_bar_can_show() {
+    // Every color in the picture runs the gradient math, and a hand-edited
+    // look can hold Darkest above Brightest, which no drag of the bar makes.
+    // The scene draws the pair the bar would read out: an octave apart at
+    // least, the high end above the low.
+    let view = ViewConfig { darkest_pitch: 70.0, brightest_pitch: 60.0, ..plain_view() };
+    let scene = scene_of(&held(60), &Tuning::default(), &view, 0.0);
     let origin = origin_node(&scene);
     assert!(origin.melody_color.is_finite(), "a mark color must be a color");
+    assert_eq!(
+        (scene.view.darkest_pitch, scene.view.brightest_pitch),
+        (70.0, 70.0 + COLOR_RANGE_MIN_SPAN),
+        "the low end stands and the high end is held an octave above it",
+    );
 }
 
 /// The octave indicator lit by a note stands for the pitch that note has ON
@@ -1004,9 +1020,9 @@ fn an_inverted_color_range_still_derives_a_scene() {
 fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     // 12-TET, the origin 0.4c flat, matched within the default 0.5c tolerance.
     let tuning = Tuning::from_cents(-0.4, 700.0, 400.0, 1000.0, 0.5);
-    let view = ViewConfig::default();
+    let view = ViewConfig { fade_time: 0.0, ..ViewConfig::default() };
     let tracker = held(60);
-    let mut scene = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.5);
+    let mut scene = scene_of(&tracker, &tuning, &view, 0.5);
     let origin = origin_node(&scene);
 
     let node_cents = tuning.pitch_class(LatticePos::ORIGIN).to_cents();
@@ -1031,7 +1047,7 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
         &tracker,
         &tuning,
         &view,
-        &view.envelope(&plain_frame()),
+        &view.envelope(),
         &RingFade::default(),
         0.5,
     );
@@ -1039,12 +1055,11 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     let marked: Vec<usize> =
         (0..OCTAVE_SLOTS).filter(|&s| origin.melody_slots >> s & 1 == 1).collect();
     assert_eq!(marked, lit, "the melody mark names the octave that sounds");
-    let frame = FrameParams::default();
     // The gradient the scene was built with — `view`'s, which is not
     // `Gradient::default()`: that is the gradient type's own default,
     // and a fresh view is free to open elsewhere.
     let want =
-        pitch_lut_color(drawn, frame.darkest_pitch, frame.brightest_pitch, view.pitch_gradient);
+        pitch_lut_color(drawn, view.darkest_pitch, view.brightest_pitch, view.pitch_gradient);
     assert!(
         (origin.melody_color - want).length() < 1e-5,
         "the ring is coloured for a slot the indicator is not drawn at",
@@ -1100,7 +1115,7 @@ fn the_fresh_node_fits_its_stack_inside_the_quad() {
 fn a_scene_derived_without_an_analyzer_carries_no_audio() {
     for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
         let view = ViewConfig { spectral_reading: reading, ..plain_view() };
-        let scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+        let scene = scene_of(&sounding(), &Tuning::just(), &view, 0.5);
         assert!(
             !scene.spectral.ring_draws(),
             "a derived scene drew a {reading:?} ring with no analyzer behind it",
@@ -1122,10 +1137,10 @@ fn a_scene_derived_without_an_analyzer_carries_no_audio() {
 /// readings two pictures again rather than two fillings of one ring.
 #[test]
 fn the_reading_leaves_the_midi_picture_alone() {
-    let midi = scene_of(&sounding(), &Tuning::just(), &plain_view(), &plain_frame(), 0.5);
+    let midi = scene_of(&sounding(), &Tuning::just(), &plain_view(), 0.5);
     for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
         let view = ViewConfig { spectral_reading: reading, ..plain_view() };
-        let scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+        let scene = scene_of(&sounding(), &Tuning::just(), &view, 0.5);
         assert_eq!(scene.nodes.len(), midi.nodes.len(), "{reading:?} changed how many nodes draw");
         for (now, was) in scene.nodes.iter().zip(&midi.nodes) {
             let at = was.lattice_pos;
@@ -1149,14 +1164,8 @@ fn the_reading_leaves_the_midi_picture_alone() {
 /// [`RingFade::advance`]), so every claim below is about the gate and not about
 /// how fast a ring follows it. `a_rings_coming_and_going_runs_on_the_fade` is
 /// the other half, and it drives two.
-fn animate_measured(
-    scene: &mut Scene,
-    tracker: &NoteTracker,
-    view: &ViewConfig,
-    frame: &FrameParams,
-    now: f64,
-) {
-    let env = view.envelope(frame);
+fn animate_measured(scene: &mut Scene, tracker: &NoteTracker, view: &ViewConfig, now: f64) {
+    let env = view.envelope();
     let mut fade = RingFade::default();
     if scene.spectral.ring_draws() {
         fade.advance(&RingGate::new(&scene.spectral), &env, now);
@@ -1172,7 +1181,7 @@ fn gated_scene(gate: f32, pitch: f32) -> Scene {
 /// about what the KEYS have to say about a ring.
 fn gated_scene_of(tracker: &NoteTracker, gate: f32, pitch: f32) -> Scene {
     let view = ViewConfig { spectral_ring_width: 0.1, spectral_ring_gate: gate, ..plain_view() };
-    let mut scene = scene_of(tracker, &Tuning::just(), &view, &plain_frame(), 0.5);
+    let mut scene = scene_of(tracker, &Tuning::just(), &view, 0.5);
     let mut paint = SpectralPaint::new(&view, Gradient::default());
     for (bucket, level) in paint.levels.iter_mut().enumerate() {
         if ((bucket_pitch(bucket) - pitch) * 100.0).abs() <= 10.0 {
@@ -1180,7 +1189,7 @@ fn gated_scene_of(tracker: &NoteTracker, gate: f32, pitch: f32) -> Scene {
         }
     }
     scene.spectral = paint;
-    animate_measured(&mut scene, tracker, &view, &plain_frame(), 0.5);
+    animate_measured(&mut scene, tracker, &view, 0.5);
     scene
 }
 
@@ -1256,9 +1265,9 @@ fn a_node_the_keys_have_lit_rings_whatever_the_gate_says() {
         spectral_ring_gate: SPECTRAL_GATE_MAX,
         ..plain_view()
     };
-    let mut scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+    let mut scene = scene_of(&sounding(), &Tuning::just(), &view, 0.5);
     scene.spectral = SpectralPaint::new(&view, Gradient::default());
-    animate_measured(&mut scene, &sounding(), &view, &plain_frame(), 0.5);
+    animate_measured(&mut scene, &sounding(), &view, 0.5);
     let (mut lit, mut idle) = (0, 0);
     for node in &scene.nodes {
         if node.presence_with_opacity > 0.0 {
@@ -1297,16 +1306,16 @@ fn a_played_nodes_ring_leaves_on_the_notes_own_fade() {
     let view = ViewConfig {
         spectral_ring_width: 0.1,
         spectral_ring_gate: SPECTRAL_GATE_MAX,
+        // A fade to sample along, where the shared fixture's is 0 — and an
+        // arrival of the same length with it, which the note has had by the
+        // time it is released.
+        fade_time: 1.0,
         ..plain_view()
     };
-    // A fade to sample along, where the shared fixture's is 0 — and an arrival
-    // of the same length with it, which the note has had by the time it is
-    // released.
-    let frame = FrameParams { fade_time: 1.0, ..plain_frame() };
     let ring_at = |now: f64| {
-        let mut scene = scene_of(&tracker, &Tuning::just(), &view, &frame, now);
+        let mut scene = scene_of(&tracker, &Tuning::just(), &view, now);
         scene.spectral = SpectralPaint::new(&view, Gradient::default());
-        animate_measured(&mut scene, &tracker, &view, &frame, now);
+        animate_measured(&mut scene, &tracker, &view, now);
         let node = origin_node(&scene);
         (node.presence_with_opacity, node.audio_ring)
     };
@@ -1330,10 +1339,10 @@ fn a_played_nodes_ring_leaves_on_the_notes_own_fade() {
 #[test]
 fn a_ring_dialled_off_is_gated_by_nothing() {
     let view = ViewConfig { spectral_ring_width: 0.0, spectral_ring_gate: 1.0, ..plain_view() };
-    let mut scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+    let mut scene = scene_of(&sounding(), &Tuning::just(), &view, 0.5);
     scene.spectral = SpectralPaint::new(&view, Gradient::default());
     assert!(!scene.spectral.ring_draws(), "the fixture's ring drew with no width");
-    animate_measured(&mut scene, &sounding(), &view, &plain_frame(), 0.5);
+    animate_measured(&mut scene, &sounding(), &view, 0.5);
     assert!(
         scene.nodes.iter().all(|n| n.audio_ring == 1.0),
         "a gate answered on a lattice with no ring to answer about",

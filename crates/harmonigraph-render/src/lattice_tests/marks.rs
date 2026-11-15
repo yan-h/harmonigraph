@@ -596,7 +596,7 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         return;
     };
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
-    use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
+    use harmonigraph_scene::{Camera, ViewConfig};
 
     const SIZE: [u32; 2] = [256, 256];
 
@@ -610,6 +610,11 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         extent_fives: 2,
         min_sevens: 0,
         max_sevens: 0,
+        // No envelope: every layer of a node eases in from its note-on over
+        // the Fade, so under a real one t=0 is the instant nothing is drawn
+        // yet and any later sample is a fraction. What is compared below is a
+        // lit node against a lit node.
+        fade_time: 0.0,
         ..ViewConfig::default()
     };
     let scene_for = |marks: bool| {
@@ -617,22 +622,8 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
             mark_thickness: if marks { base.mark_thickness } else { 0.0 },
             ..base.clone()
         };
-        let frame = FrameParams { fade_time: 0.0, ..FrameParams::default() };
         let tuning = Tuning::default();
-        animated_snapshot(
-            &tracker,
-            &tuning,
-            &view,
-            &base.reach(),
-            // No envelope: every layer of a node eases in from its note-on
-            // over the Fade, so under a real one t=0 is the instant nothing
-            // is drawn yet and any later sample is a fraction. What is
-            // compared below is a lit node against a lit node.
-            &frame,
-            Camera::default(),
-            None,
-            0.5,
-        )
+        animated_snapshot(&tracker, &tuning, &view, &base.reach(), Camera::default(), None, 0.5)
     };
 
     // The composed derivation and motion passes must supply the masks.

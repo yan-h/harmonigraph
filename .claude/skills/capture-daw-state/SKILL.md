@@ -21,7 +21,7 @@ Camera movement belongs to the five `camera-*` host parameters;
 the camera snapshot in `ui-state` can lag automation while the editor is closed, so the script overlays the saved host parameters in every output, as the live editor does.
 A project saved with the window open by a build from before #1301 holds the values of the last window close instead, and nothing warns;
 if the numbers look stale, ask Yan to save it again from a current build.
-Host-automatable params (tuning, fade, color range, camera movement) were never affected,
+Host-automatable params (tuning, camera movement) were never affected,
 which is why such a project can show fresh params next to a stale or missing `ui-state`.
 
 ## Where the projects live

@@ -822,7 +822,7 @@ fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
     // One envelope for the whole pane, as every other caller takes it: it is a
     // property of the view and the frame, and rebuilding it per voice would
     // read as if it could vary between them.
-    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    let env = state.appearance.view.envelope();
     let intensity = state.appearance.view.intensity.sanitized();
     voices
         .into_iter()

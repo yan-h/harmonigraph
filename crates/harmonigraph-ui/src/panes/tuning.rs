@@ -187,12 +187,8 @@ fn tuning_hint(key: ParamKey) -> &'static str {
             "How far off a node's pitch a note may land and still light it, in \
              cents. Also sets the Analyzer's off-lattice band."
         }
-        // Not on this pane: Fade is a node setting and the two pitch ends are
-        // the Mappings page's Pitch color range.
-        ParamKey::Fade
-        | ParamKey::DarkestPitch
-        | ParamKey::BrightestPitch
-        | ParamKey::CameraYaw
+        // Not on this pane.
+        ParamKey::CameraYaw
         | ParamKey::CameraPitch
         | ParamKey::CameraDistance
         | ParamKey::CameraPanX
@@ -710,7 +706,7 @@ fn instance_controls(
         .unwrap_or_default();
     sources.retain(|id, _| instances.iter().any(|row| row.id == *id));
     let now = ui.input(|input| input.time);
-    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    let env = state.appearance.view.envelope();
     for row in instances {
         if sources.entry(row.id).or_default().step(&row.voices, now, &env) {
             ui.ctx().request_repaint();

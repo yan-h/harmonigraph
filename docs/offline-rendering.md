@@ -399,7 +399,7 @@ Internal pixel fixtures and scratch look prototypes still compose a single pane 
 ## What is and isn't captured
 
 **Captured:** every note event with its own sub-frame timestamp (so a 60 fps render is not quantized to 60 fps —
-envelopes start where they actually started), per-note tuning and MPE bends, the thirteen parameters a take records over time (tuning, Fade, the pitch color range and the camera), and the view/camera/spectrum settings.
+envelopes start where they actually started), per-note tuning and MPE bends, the ten parameters a take records over time (tuning and the camera), and the view/camera/spectrum settings, Note fade and the Pitch color range among them, as they stood when the take was armed.
 
 **Captured alongside the notes:** the selected analysis input as 32-bit float, aligned to them.
 

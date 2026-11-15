@@ -17,8 +17,8 @@ editor shows it, open window or not (`UiState` in
 crates/harmonigraph-plugin/src/editor/persist.rs). Builds before issue #1301
 wrote it only when the editor window CLOSED, so a project such a build saved
 with the window open holds whatever was there before: open it in a current
-build, save, and re-run. (Host-automatable params — tuning, fade, color
-range — were never affected; those live in the param system.) Camera movement
+build, save, and re-run. (Host-automatable params — tuning — were never
+affected; those live in the param system.) Camera movement
 now also belongs to host params. The camera in the UI blob can lag automation
 while the window is closed; all outputs below overlay those saved host values.
 

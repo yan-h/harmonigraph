@@ -518,8 +518,8 @@ impl LatticeCallback {
             uniforms: Uniforms {
                 ink_kernel: Default::default(),
                 composite: CompositeParams {
-                    darkest_pitch: scene.darkest_pitch,
-                    brightest_pitch: scene.brightest_pitch,
+                    darkest_pitch: scene.view.darkest_pitch,
+                    brightest_pitch: scene.view.brightest_pitch,
                     render_scale,
                     bloom_strength: bloom_strength(scene.view.note_bloom),
                     background: Float4(scene.background.to_array()),

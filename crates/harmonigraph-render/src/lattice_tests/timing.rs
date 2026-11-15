@@ -45,8 +45,8 @@ const FRAMES: usize = 120;
 // at the camera actually rendered, through the same window as the live pane.
 fn the_live_view() -> Scene {
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
-    use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
-    let mut view = ViewConfig { center_threes: 1, ..Default::default() };
+    use harmonigraph_scene::{Camera, ViewConfig};
+    let mut view = ViewConfig { center_threes: 1, fade_time: 0.0, ..Default::default() };
     for style in view.shadow.groups_mut() {
         style.width = 0.196_915_06;
         style.depth = 1.0;
@@ -61,7 +61,6 @@ fn the_live_view() -> Scene {
         &Tuning::default(),
         &view,
         &view.scrolled(&camera, 1.0),
-        &FrameParams { fade_time: 0.0, ..Default::default() },
         camera,
         None,
         1.0,
@@ -143,7 +142,7 @@ fn a_frame_of_audio_rings_costs_this_much() {
 #[ignore = "manual atmosphere performance audit"]
 fn atmosphere_costs_by_polyphony() {
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
-    use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
+    use harmonigraph_scene::{Camera, ViewConfig};
     for count in [1u8, 6, 12, 24] {
         if std::env::var("PROBE_NOTES").ok().is_some_and(|v| v != count.to_string()) {
             continue;
@@ -152,7 +151,7 @@ fn atmosphere_costs_by_polyphony() {
         for note in 48..48 + count {
             tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8));
         }
-        let view = ViewConfig::default();
+        let view = ViewConfig { fade_time: 0.0, ..ViewConfig::default() };
         eprintln!(
             "audit settings: render scale {}, glow reach {}, strength {}, atmosphere {:?}",
             view.render_scale, view.glow_reach, view.glow_strength, view.atmosphere
@@ -180,7 +179,6 @@ fn atmosphere_costs_by_polyphony() {
                 &Tuning::default(),
                 &view,
                 &view.scrolled(&Camera::default(), 1.0),
-                &FrameParams { fade_time: 0.0, ..Default::default() },
                 Camera::default(),
                 None,
                 1.0,
@@ -243,12 +241,12 @@ fn atmosphere_costs_by_polyphony() {
 #[ignore = "a probe: prints animation timing and asserts nothing"]
 fn animation_costs_by_pose_and_density() {
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
-    use harmonigraph_scene::{Camera, FrameParams, NoteAnimationConfig, ViewConfig};
+    use harmonigraph_scene::{Camera, NoteAnimationConfig, ViewConfig};
     let mut tracker = NoteTracker::new();
     for note in 48..72 {
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8));
     }
-    let view = ViewConfig::default();
+    let view = ViewConfig { fade_time: 0.0, ..ViewConfig::default() };
     for dense in [false, true] {
         for (name, config) in [
             ("At rest", NoteAnimationConfig::default()),
@@ -260,7 +258,6 @@ fn animation_costs_by_pose_and_density() {
                 &Tuning::default(),
                 &view,
                 &view.scrolled(&Camera::default(), 1.0),
-                &FrameParams { fade_time: 0.0, ..Default::default() },
                 Camera::default(),
                 None,
                 1.0,

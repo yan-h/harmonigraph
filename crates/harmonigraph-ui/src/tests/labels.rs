@@ -659,7 +659,7 @@ fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egu
     // real Fade is the one instant the note has not lit yet, and a label
     // follows what its node is doing. This suite is about where a label is
     // DRAWN, not when it appears.
-    state.picture.runtime.frame_params.fade_time = 0.0;
+    state.picture.appearance.view.fade_time = 0.0;
     // Middle C: the origin node, which the camera looks straight at.
     state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
         0.0,
@@ -913,7 +913,7 @@ fn the_cents_readout_sits_right_under_the_note_name() {
     state.picture.appearance.view.show_cents = true;
     // Derived at time 0, so the note has to be lit without waiting on the
     // Fade's arrival — this is about where the readout SITS.
-    state.picture.runtime.frame_params.fade_time = 0.0;
+    state.picture.appearance.view.fade_time = 0.0;
     // Middle C: the origin node, which the default camera looks straight at.
     state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
         0.0,
@@ -999,7 +999,7 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
     let mut state = fresh();
     // Derived at time 0, so the notes have to be lit without waiting on the
     // Fade's arrival — this is about which name lands on which node.
-    state.picture.runtime.frame_params.fade_time = 0.0;
+    state.picture.appearance.view.fade_time = 0.0;
     // Two notes a third apart, so there are two names to tell apart and two
     // nodes to confuse them between.
     for note in [60, 64] {
@@ -1102,7 +1102,7 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
 #[test]
 fn a_names_drawn_marks_go_into_its_own_nodes_run() {
     let mut state = fresh();
-    state.picture.runtime.frame_params.fade_time = 0.0;
+    state.picture.appearance.view.fade_time = 0.0;
     state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
         0.0,
         harmonigraph_core::SourceId::DIRECT,
@@ -1149,7 +1149,7 @@ fn a_names_drawn_marks_go_into_its_own_nodes_run() {
 #[test]
 fn lattice_names_reconstruct_both_axes_the_camera_moves() {
     let mut state = fresh();
-    state.picture.runtime.frame_params.fade_time = 0.0;
+    state.picture.appearance.view.fade_time = 0.0;
     state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
         0.0,
         harmonigraph_core::SourceId::DIRECT,

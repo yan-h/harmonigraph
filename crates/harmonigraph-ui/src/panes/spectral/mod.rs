@@ -485,7 +485,7 @@ pub(crate) fn spectral_pane(
         // One envelope for the whole roll, as every other caller takes it: it
         // is a property of the view and the frame, and rebuilding it per voice
         // would read as if it could vary between them.
-        let env = state.appearance.view.envelope(&state.runtime.frame_params);
+        let env = state.appearance.view.envelope();
         for voice in voices {
             let strength = voice.activation(now, &env);
             if strength <= 0.0 || !scale.contains(voice.pitch) {

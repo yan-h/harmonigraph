@@ -249,17 +249,6 @@ pub struct HarmonigraphParams {
     pub seven: FloatParam,
     #[id = "tuning-tolerance"]
     pub tolerance: FloatParam,
-    /// Keeps the pre-merge id: this used to be the pitch class's own fade,
-    /// and it now drives every layer, at both ends of the note. Reusing the
-    /// id means projects automating it keep their value instead of snapping
-    /// back to the default. (The retired "octave-fade" id is simply ignored
-    /// on load.)
-    #[id = "pitch-class-fade"]
-    pub fade: FloatParam,
-    #[id = "darkest-pitch"]
-    pub darkest_pitch: FloatParam,
-    #[id = "brightest-pitch"]
-    pub brightest_pitch: FloatParam,
     #[id = "camera-yaw"]
     pub camera_yaw: FloatParam,
     #[id = "camera-pitch"]
@@ -386,9 +375,6 @@ impl Default for HarmonigraphParams {
             five: param_for_key(ParamKey::Five),
             seven: param_for_key(ParamKey::Seven),
             tolerance: param_for_key(ParamKey::Tolerance),
-            fade: param_for_key(ParamKey::Fade),
-            darkest_pitch: param_for_key(ParamKey::DarkestPitch),
-            brightest_pitch: param_for_key(ParamKey::BrightestPitch),
             camera_yaw: param_for_key(ParamKey::CameraYaw),
             camera_pitch: param_for_key(ParamKey::CameraPitch),
             camera_distance: param_for_key(ParamKey::CameraDistance),
@@ -406,9 +392,6 @@ impl HarmonigraphParams {
             ParamKey::Five => &self.five,
             ParamKey::Seven => &self.seven,
             ParamKey::Tolerance => &self.tolerance,
-            ParamKey::Fade => &self.fade,
-            ParamKey::DarkestPitch => &self.darkest_pitch,
-            ParamKey::BrightestPitch => &self.brightest_pitch,
             ParamKey::CameraYaw => &self.camera_yaw,
             ParamKey::CameraPitch => &self.camera_pitch,
             ParamKey::CameraDistance => &self.camera_distance,

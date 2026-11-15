@@ -233,13 +233,11 @@ impl Viewer<'_> {
                 }
             }
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
-            Tab::LatticeSettings => {
-                lattice_settings_pane(ui, self.state, self.interaction, self.params)
-            }
+            Tab::LatticeSettings => lattice_settings_pane(ui, self.state, self.interaction),
             Tab::AnalyzerSettings => {
                 analyzer_settings_pane(ui, self.state, self.interaction, self.params)
             }
-            Tab::Mappings => color_pane(ui, &mut self.state.appearance, self.params),
+            Tab::Mappings => color_pane(ui, &mut self.state.appearance),
             Tab::System => system_pane(ui, &mut self.state.appearance, self.interaction),
             Tab::Console => console_pane(ui, &mut self.state.runtime),
             Tab::Spectral => {
@@ -368,47 +366,6 @@ pub(super) fn param_bar(
     }
     if response.drag_stopped() {
         params.end_set(key);
-    }
-    response
-}
-
-/// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
-/// range whose ends are both automatable params (the Mappings page's Pitch color range).
-/// `label` names the bar, `hint` says what it sets on its hover, and
-/// `display` formats each end's readout.
-///
-/// Both params are bracketed for the whole drag and written every changed
-/// frame, so a drag on either handle records as one gesture on each. A
-/// double-click reset to the params' defaults arrives as `changed` with no
-/// drag, and goes through the same `set` without a gesture — matching
-/// [`param_bar`]'s one-shot path.
-pub(super) fn param_range_bar(
-    ui: &mut egui::Ui,
-    params: &dyn ParamBackend,
-    (low_key, high_key): (ParamKey, ParamKey),
-    range: std::ops::RangeInclusive<f32>,
-    min_span: f32,
-    (label, hint): (&str, &str),
-    display: fn(f32) -> String,
-) -> egui::Response {
-    let (mut low, mut high) = (params.get(low_key), params.get(high_key));
-    let response = RangeBar::new(&mut low, &mut high, range, label)
-        .min_span(min_span)
-        .default_value((low_key.default_value(), high_key.default_value()))
-        .display(display)
-        .hint(hint)
-        .show(ui);
-    if response.drag_started() {
-        params.begin_set(low_key);
-        params.begin_set(high_key);
-    }
-    if response.changed() {
-        params.set(low_key, low);
-        params.set(high_key, high);
-    }
-    if response.drag_stopped() {
-        params.end_set(low_key);
-        params.end_set(high_key);
     }
     response
 }
