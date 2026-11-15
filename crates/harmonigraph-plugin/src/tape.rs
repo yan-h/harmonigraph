@@ -5,7 +5,7 @@
 //! - **Capture** reuses the analyzer's ring. While the transport rolls, each
 //!   block's descriptor carries its song position, and the input worker
 //!   appends those blocks to the [`store`] ([`worker`]), and places the notes
-//!   the display showed and the tuning it drew with beside them, by pass
+//!   the display showed and the lattice map selected beside them, by pass
 //!   ([`notes`]).
 //! - **Audition** starts from a click in the Analyzer's Tape mode. Bitwig's own playhead
 //!   cannot start it: a click in the arranger while stopped does not change
@@ -19,9 +19,9 @@
 //! - **The spectrogram** Tape mode draws is analyzed from the store itself
 //!   ([`spectrum`]), so it shows what an audition would play.
 //! - **The notes** follow the audition into the display: the lattice and the
-//!   live roll show what the tape plays, drawn under the tuning it was
-//!   recorded with, and Tape mode's roll shows the recording's notes along the
-//!   song ([`notes`]).
+//!   live roll show what the tape plays under the live tuning, the lattice
+//!   marking the map selected where it was recorded, and Tape mode's roll
+//!   shows the recording's notes along the song ([`notes`]).
 //!
 //! The tape never records itself: it records only rolling blocks, and sounds
 //! only while stopped. Nothing here is saved with the project.

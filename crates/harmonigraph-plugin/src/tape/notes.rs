@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 
 use harmonigraph_core::notes::{Expression, NoteEvent, NoteEventKind, NoteTracker};
-use harmonigraph_core::{Expressions, NoteRoll, Tuning, VoiceKey};
+use harmonigraph_core::{Expressions, NoteRoll, VoiceKey};
 use harmonigraph_ui::tape::Audition;
 
 use super::store::Store;
@@ -141,25 +141,17 @@ impl Recorder {
     }
 }
 
-/// What the display drew with, sampled once a step: what an audition draws
-/// its spot with in place of the live values.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Drawn {
-    /// The tuning axes, the one part of the tuning that decides where a
-    /// pitch lies; `None` until the configuration has been published.
-    pub tuning: Option<Tuning>,
-    /// The lattice map selected, which the lattice marks.
-    pub map: MapSelection,
-}
-
-/// One pass's notes and what they were drawn with, by song frame.
+/// One pass's notes and the lattice map selected as they played, by song
+/// frame.
 #[derive(Default)]
 pub(crate) struct PassNotes {
     /// Sorted by frame; marks at one frame in the order they happened. Opens
     /// with the voices already held when the pass started.
     pub events: Vec<(i64, Mark)>,
-    /// What the display drew with from each frame on, sorted.
-    pub drawn: Vec<(i64, Drawn)>,
+    /// The map selected from each frame on, sampled once a step, sorted:
+    /// what an audition marks in place of the live selection, which tuning
+    /// automation moves over the song.
+    pub maps: Vec<(i64, MapSelection)>,
 }
 
 impl PassNotes {
@@ -168,20 +160,16 @@ impl PassNotes {
         self.events.insert(at, (frame, mark));
     }
 
-    /// What `frame` was drawn with: the last change at or before it, else
-    /// the first, which the pass's opening moments were drawn with too. A
-    /// pass that opened before the configuration was published takes the
-    /// first tuning axes it recorded for those moments, in the same way.
-    pub(crate) fn drawn_at(&self, frame: i64) -> Option<Drawn> {
-        let after = self.drawn.partition_point(|(f, _)| *f <= frame);
-        let drawn = self.drawn.get(after.saturating_sub(1)).map(|(_, drawn)| *drawn)?;
-        let first = || self.drawn.iter().find_map(|(_, drawn)| drawn.tuning);
-        Some(Drawn { tuning: drawn.tuning.or_else(first), ..drawn })
+    /// The map selected at `frame`: the last change at or before it, else
+    /// the first, which the pass's opening moments were marked with too.
+    pub(crate) fn map_at(&self, frame: i64) -> Option<MapSelection> {
+        let after = self.maps.partition_point(|(f, _)| *f <= frame);
+        self.maps.get(after.saturating_sub(1)).map(|(_, map)| *map)
     }
 
     pub(crate) fn bytes(&self) -> usize {
         self.events.len() * std::mem::size_of::<(i64, Mark)>()
-            + self.drawn.len() * std::mem::size_of::<(i64, Drawn)>()
+            + self.maps.len() * std::mem::size_of::<(i64, MapSelection)>()
     }
 }
 
@@ -281,9 +269,11 @@ pub(crate) struct Player {
     sounding: BTreeMap<VoiceKey, Sounding>,
     /// The audition the notes belong to, for Tape mode.
     pub audition: Option<Audition>,
-    /// What the spot heard last was drawn with, while an audition is cued or
-    /// sounds.
-    pub drawn: Option<Drawn>,
+    /// The map selected where the spot heard last was recorded, set by each
+    /// block that carries the tape's audio and cleared by one with none. A
+    /// new cue keeps the last spot's, or none, until its audio arrives, a few
+    /// tens of milliseconds.
+    pub map: Option<MapSelection>,
 }
 
 /// One block's events into the tracker, on the display clock.
@@ -375,7 +365,7 @@ impl Player {
                 audition.until = Some(time);
             }
         }
-        self.drawn = None;
+        self.map = None;
         if rolling {
             self.audition = None;
         }
@@ -449,7 +439,7 @@ impl Player {
                     }
                 }
             });
-            self.drawn = notes.drawn_at(until - 1);
+            self.map = notes.map_at(until - 1);
             frame = until;
         }
         self.cue = Some(cue);
@@ -466,12 +456,12 @@ pub(crate) struct Book {
 
 impl Book {
     /// Open pass `pass` at song frame `frame` with the voices held now.
-    pub(crate) fn open(&mut self, pass: u64, frame: i64, drawn: Drawn) {
+    pub(crate) fn open(&mut self, pass: u64, frame: i64, map: MapSelection) {
         let notes = self.passes.entry(pass).or_default();
         for (key, sounding) in &self.held {
             notes.place(frame, Mark::On { key: *key, sounding: *sounding });
         }
-        notes.drawn.push((frame, drawn));
+        notes.maps.push((frame, map));
     }
 
     pub(crate) fn bytes(&self) -> usize {
@@ -503,16 +493,10 @@ mod tests {
         Mark::Off { key: key(1, note) }
     }
 
-    /// Tuning axes told apart by their origin.
-    /// Drawn with tuning `n` and map slot `n`.
-    fn drawn(n: i32) -> Drawn {
+    /// Map slot `n` selected.
+    fn map(n: usize) -> MapSelection {
         let engine = harmonigraph_core::lattice_map::TuningEngine::LatticeMap;
-        let position = harmonigraph_core::LatticePos::ORIGIN;
-        Drawn { tuning: Some(tuning(n)), map: MapSelection { engine, slot: n as usize, position } }
-    }
-
-    fn tuning(origin: i32) -> Tuning {
-        Tuning { c_offset: origin, ..Tuning::default() }
+        MapSelection { engine, slot: n, position: harmonigraph_core::LatticePos::ORIGIN }
     }
 
     fn chunk(start: i64, end: i64, pass: u64) -> Chunk {
@@ -532,11 +516,11 @@ mod tests {
         for (frame, mark) in [(500, on(60)), (1200, on(64)), (1400, off(64)), (2500, off(60))] {
             first.place(frame, mark);
         }
-        first.drawn.push((0, drawn(1)));
+        first.maps.push((0, map(1)));
         let mut second = PassNotes::default();
         second.place(1100, on(72));
         second.place(1300, off(72));
-        second.drawn.push((1000, drawn(2)));
+        second.maps.push((1000, map(2)));
         (store, BTreeMap::from([(1, first), (2, second)]))
     }
 
@@ -616,14 +600,14 @@ mod tests {
         let heard = Heard { cue: 1, seconds: 2.0, frames: 100, speed: 1.0 };
         player.heard(&mut tracker, &store, &passes, heard, 50.0);
         assert_eq!(tape_voices(&tracker), [(60, 50.0)]);
-        assert_eq!(player.drawn, Some(drawn(1)));
+        assert_eq!(player.map, Some(map(1)));
 
         // A new cue at 1.2 s: the old voices stop, pass 2's 72 is held there
         // and ends at 1.3 s, and from 1.5 s pass 1's 60 sounds.
         let heard = Heard { cue: 3, seconds: 1.2, frames: 200, speed: 1.0 };
         player.heard(&mut tracker, &store, &passes, heard, 60.0);
         assert_eq!(tape_voices(&tracker), [], "the 72 ended and the seam is not reached");
-        assert_eq!(player.drawn, Some(drawn(2)));
+        assert_eq!(player.map, Some(map(2)));
         let heard = Heard { cue: 3, seconds: 1.4, frames: 200, speed: 1.0 };
         player.heard(&mut tracker, &store, &passes, heard, 60.2);
         assert_eq!(tape_voices(&tracker), [(60, 60.3)]);
@@ -635,7 +619,7 @@ mod tests {
         // A block with no tape ends it.
         player.silent(&mut tracker, 61.0, false);
         assert_eq!(tape_voices(&tracker), []);
-        assert_eq!(player.drawn, None);
+        assert_eq!(player.map, None);
         assert_eq!(player.audition.and_then(|a| a.until), Some(61.0));
     }
 

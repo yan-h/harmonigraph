@@ -12,15 +12,16 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
-use harmonigraph_core::{NoteRoll, Tuning};
+use harmonigraph_core::NoteRoll;
 
 use harmonigraph_record::transport;
 use harmonigraph_ui::tape::{Meter, Speed, TapeRequest, TapeSpan, TapeView};
 use harmonigraph_ui::SpectrumConfig;
 
 use crate::audio_ingress::{Block, TapePlay};
+use crate::lattice_maps::MapSelection;
 
-use super::notes::{Book, Drawn, Mark, Player, NOTES};
+use super::notes::{Book, Mark, Player, NOTES};
 use super::spectrum::{Spectrum, STEP_BUDGET};
 use super::store::{Chunk, Rendered, Stamp, Store};
 use super::stretch::Stretched;
@@ -115,7 +116,7 @@ pub(crate) struct Worker {
     /// Console lines for the step's second hold.
     pub(crate) logs: Vec<String>,
     evicted_reported: bool,
-    /// Where the tuning is read from.
+    /// Where the lattice map selection is read from.
     params: Arc<crate::HarmonigraphParams>,
     /// The notes the live drain recorded, swapped out each step.
     pub(crate) inbox: Vec<(f64, Mark)>,
@@ -130,10 +131,10 @@ pub(crate) struct Worker {
     /// The last passes opened, the same way: a mark dated before one's start
     /// and drained after it opened is what it opened without.
     opened: VecDeque<(u64, f64, i64)>,
-    /// The song frame the last rolling block reached, for a tuning change.
+    /// The song frame the last rolling block reached, for a change of map.
     last_song: Option<i64>,
-    /// What the display drew with when last sampled.
-    drawn: Option<Drawn>,
+    /// The map selected when last sampled.
+    map: Option<MapSelection>,
     notes_dropped_reported: bool,
     book: Book,
     player: Player,
@@ -184,7 +185,7 @@ impl Worker {
             opening: VecDeque::new(),
             opened: VecDeque::with_capacity(OPENED),
             last_song: None,
-            drawn: None,
+            map: None,
             notes_dropped_reported: false,
             book: Book::default(),
             player: Player::default(),
@@ -310,19 +311,11 @@ impl Worker {
         self.close_chunk();
     }
 
-    /// The tuning the live display draws with now: the configuration the
-    /// audio thread published. `None` until the CLAP configuration extension
-    /// has been installed.
-    fn current_tuning(&self) -> Option<Tuning> {
-        let mailbox = self.params.configuration.get()?;
-        Some(crate::configuration::view(mailbox.published.load(), false).resolved.tuning)
-    }
-
     /// Open pass `pass` with the voices held now, and keep it a while for a
     /// mark that turns out to be older than its start.
-    fn open(&mut self, (pass, start, frame): (u64, f64, i64), drawn: Drawn) {
-        self.book.open(pass, frame, drawn);
-        self.drawn = Some(drawn);
+    fn open(&mut self, (pass, start, frame): (u64, f64, i64), map: MapSelection) {
+        self.book.open(pass, frame, map);
+        self.map = Some(map);
         if self.opened.len() == OPENED {
             self.opened.pop_front();
         }
@@ -331,11 +324,10 @@ impl Worker {
 
     /// After a step's blocks: place the notes the live drain handed over at
     /// the song frames they sound at, open the passes that started with the
-    /// voices held then, and record the tuning where it changed.
+    /// voices held then, and record the lattice map selected where it
+    /// changed.
     pub(crate) fn settle(&mut self) {
-        // Until the configuration is published, the axes last seen.
-        let tuning = self.current_tuning().or(self.drawn.and_then(|d| d.tuning));
-        let drawn = Drawn { tuning, map: crate::lattice_maps::selection(&self.params) };
+        let map = crate::lattice_maps::selection(&self.params);
         // A full inbox is one the drain stopped recording into.
         let mut dropped = self.inbox.len() >= NOTES;
         self.pending.extend(self.inbox.drain(..));
@@ -359,7 +351,7 @@ impl Worker {
             }
             while self.opening.front().is_some_and(|&(_, start, _)| start <= time) {
                 let opening = self.opening.pop_front().expect("a pass to open");
-                self.open(opening, drawn);
+                self.open(opening, map);
             }
             mark.apply(&mut self.book.held);
             // Older than a pass that has already opened: that pass opened
@@ -396,21 +388,21 @@ impl Worker {
         }
         self.pending = waiting;
         while let Some(opening) = self.opening.pop_front() {
-            self.open(opening, drawn);
+            self.open(opening, map);
         }
-        if self.drawn != Some(drawn) {
+        if self.map != Some(map) {
             if let (Some(frame), Some(pass)) = (self.last_song, self.pass) {
                 if let Some(notes) = self.book.passes.get_mut(&pass.id) {
-                    notes.drawn.push((frame, drawn));
+                    notes.maps.push((frame, map));
                 }
             }
-            self.drawn = Some(drawn);
+            self.map = Some(map);
         }
     }
 
     /// Play the recorded notes of the stretch each block carried into the
     /// display's tracker, on the display clock, and say where the audition
-    /// is and what tuning it was recorded under.
+    /// is and which lattice map was selected where it was recorded.
     pub(crate) fn feed(
         &mut self,
         taken: &crate::editor::input::Taken,
@@ -429,10 +421,8 @@ impl Worker {
             }
         }
         runtime.tape.audition = self.player.audition;
-        let drawn = self.player.drawn;
-        runtime.tape.tuning = drawn.and_then(|drawn| drawn.tuning);
         runtime.tape.map =
-            drawn.map(|drawn| crate::lattice_maps::recorded(&self.params, drawn.map));
+            self.player.map.map(|map| crate::lattice_maps::recorded(&self.params, map));
     }
 
     /// Commit the chunk being recorded, and set its meter over the stretch it

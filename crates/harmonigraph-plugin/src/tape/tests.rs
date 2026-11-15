@@ -459,7 +459,7 @@ fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
 }
 
 /// A pass opens with the lattice map selected then and records a change of
-/// selection where it happens, as it does the tuning.
+/// selection where it happens.
 #[test]
 fn a_pass_records_the_map_selection_where_it_changes() {
     use nice_plug::params::InternalParamMut;
@@ -478,7 +478,7 @@ fn a_pass_records_the_map_selection_where_it_changes() {
         worker.settle();
     }
     let slots: Vec<(i64, usize)> =
-        worker.passes()[&1].drawn.iter().map(|(f, d)| (*f, d.map.slot)).collect();
+        worker.passes()[&1].maps.iter().map(|(f, m)| (*f, m.slot)).collect();
     assert_eq!(slots, [(0, 2), (199, 3)]);
 }
 

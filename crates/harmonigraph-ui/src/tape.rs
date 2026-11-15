@@ -163,14 +163,13 @@ pub struct TapeView {
     /// that reached the picture until the next one starts or the transport
     /// rolls: what places the notes played over it.
     pub audition: Option<Audition>,
-    /// The tuning axes the spot sounding now was recorded under, while an
-    /// audition is cued or plays: the picture draws with them in place of the
-    /// host's, so a note lands where it was heard (see
-    /// `VisualRuntime::observe_configuration`).
-    pub tuning: Option<harmonigraph_core::Tuning>,
-    /// The lattice map selected where the spot sounding now was recorded,
-    /// while an audition is cued or plays: the lattice marks its nodes, where
-    /// the recorded notes were assigned.
+    /// The lattice map selected where the spot heard last was recorded, which
+    /// tuning automation moves over the song: the lattice marks its nodes,
+    /// where the recorded notes were assigned. Set by each block of an
+    /// audition's audio, so a new cue marks the last spot's, or the live map,
+    /// until its first block arrives, a few tens of milliseconds; cleared
+    /// when the audition ends. The tuning axes, which nothing automates
+    /// (#1756), stay the host's.
     pub map: Option<RecordedMap>,
     /// What was played along the song, in song seconds: each stretch's notes
     /// from the recording whose audio won there, so the roll shows what an
