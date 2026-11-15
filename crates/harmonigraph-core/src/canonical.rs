@@ -5,20 +5,11 @@ use crate::configuration::ResolvedConfig;
 use crate::confirmed::{ConfirmedPitch, PitchProvenance, HELD_PER_SOURCE};
 use crate::{Expressions, LatticePos, NoteEvent, NoteEventKind, SourceId, Time, VoiceKey};
 
-/// Clock provenance only, never authorization for replayed data.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ClockId {
-    pub runtime_session: u64,
-    pub epoch: u64,
-}
-
 /// Exact sample provenance survives presentation-clock mapping and take routing.
 /// `sample` is actual accepted output for AcceptedOutput, observed input otherwise.
 /// Aggregation has no assignment and leaves `planned` absent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EventTiming {
-    pub clock: ClockId,
-    pub input: i64,
     pub planned: Option<i64>,
     pub sample: i64,
     pub sample_rate: f64,
@@ -461,13 +452,7 @@ mod tests {
             lifetime: u64::from(note) + 1,
             input_onset: 0.0,
             actual_onset: 1.0,
-            onset: Some(EventTiming {
-                clock: ClockId::default(),
-                input: 0,
-                planned: None,
-                sample: 48000,
-                sample_rate: 48000.0,
-            }),
+            onset: Some(EventTiming { planned: None, sample: 48000, sample_rate: 48000.0 }),
             pitch_microcents: i64::from(note) * 100_000_000,
             velocity: 0.8,
             provenance: PitchProvenance::AcceptedOutput,
@@ -521,8 +506,6 @@ mod tests {
             lifetime: 61,
             provenance: PitchProvenance::AcceptedOutput,
             timing: Some(EventTiming {
-                clock: ClockId::default(),
-                input: (event.time * 48000.0) as i64,
                 planned: None,
                 sample: (event.time * 48000.0) as i64,
                 sample_rate: 48000.0,

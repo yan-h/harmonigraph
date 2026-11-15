@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use harmonigraph_core::canonical::{
-    CanonicalEvent, ClockId, EventTiming, GapReason, NoteDelta, PublicationGap, SourceBaseline,
+    CanonicalEvent, EventTiming, GapReason, NoteDelta, PublicationGap, SourceBaseline,
     VoiceBaseline,
 };
 use harmonigraph_core::confirmed::PitchProvenance;
@@ -318,13 +318,7 @@ impl Run<'_> {
     }
 
     fn timing() -> EventTiming {
-        EventTiming {
-            clock: ClockId::default(),
-            input: 0,
-            planned: None,
-            sample: 48_000,
-            sample_rate: 48_000.0,
-        }
+        EventTiming { planned: None, sample: 48_000, sample_rate: 48_000.0 }
     }
 
     /// One published delta, mapped onto the clock by the current offset.

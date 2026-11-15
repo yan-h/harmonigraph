@@ -10,34 +10,18 @@ use crate::{ConfigurationRecord, NoteRecord};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TimingRecord {
-    pub runtime_session: u64,
-    pub clock_epoch: u64,
-    pub input: i64,
     pub planned: Option<i64>,
     pub sample: i64,
     pub sample_rate: f64,
 }
 impl From<EventTiming> for TimingRecord {
     fn from(t: EventTiming) -> Self {
-        Self {
-            runtime_session: t.clock.runtime_session,
-            clock_epoch: t.clock.epoch,
-            input: t.input,
-            planned: t.planned,
-            sample: t.sample,
-            sample_rate: t.sample_rate,
-        }
+        Self { planned: t.planned, sample: t.sample, sample_rate: t.sample_rate }
     }
 }
 impl From<TimingRecord> for EventTiming {
     fn from(t: TimingRecord) -> Self {
-        Self {
-            clock: ClockId { runtime_session: t.runtime_session, epoch: t.clock_epoch },
-            input: t.input,
-            planned: t.planned,
-            sample: t.sample,
-            sample_rate: t.sample_rate,
-        }
+        Self { planned: t.planned, sample: t.sample, sample_rate: t.sample_rate }
     }
 }
 

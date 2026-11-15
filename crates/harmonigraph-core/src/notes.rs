@@ -1482,8 +1482,6 @@ mod tests {
             lifetime,
             actual_onset: 1.0,
             onset: Some(crate::canonical::EventTiming {
-                clock: crate::canonical::ClockId::default(),
-                input: 0,
                 planned: None,
                 sample: 48_000,
                 sample_rate: 48_000.0,

@@ -234,11 +234,8 @@ impl Owner {
 
     /// The one configuration for assignment groups started in this block. A
     /// group that spans a boundary keeps the value it was handed here.
-    pub fn block_configuration(
-        &self,
-        clock: harmonigraph_core::canonical::ClockId,
-    ) -> Option<ResolvedConfig> {
-        (clock == self.recording.clock).then_some(self.block)
+    pub fn block_configuration(&self) -> ResolvedConfig {
+        self.block
     }
 
     pub fn reset(&mut self, recorder: &mut harmonigraph_record::Recorder) {

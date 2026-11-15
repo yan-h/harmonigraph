@@ -1167,7 +1167,6 @@ mod tests {
                 ..Default::default()
             },
             timing: Some(TimingRecord {
-                input: 12_000,
                 sample: 12_000,
                 sample_rate: 48_000.0,
                 ..Default::default()

@@ -2,7 +2,6 @@
 //! each sits in the take's audio, and the configuration in force. Every record
 //! is timed where it sounds, and the take's reader places it by that time
 //! (#1760).
-use harmonigraph_core::canonical::ClockId;
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_record::{configuration::RecordIntent, Recorder};
 
@@ -26,7 +25,6 @@ impl Presentation {
 }
 
 pub(crate) struct Recording {
-    pub clock: ClockId,
     pub presentation: Presentation,
     registered_through: i64,
     /// The intent captured at this callback's boundary.
@@ -43,7 +41,6 @@ pub(crate) struct Recording {
 impl Default for Recording {
     fn default() -> Self {
         Self {
-            clock: ClockId::default(),
             presentation: Presentation::default(),
             registered_through: i64::MIN,
             captured_intent: RecordIntent::default(),
@@ -115,12 +112,7 @@ impl Recording {
     /// again on the new clock.
     pub fn reset(&mut self, recorder: &mut Recorder) {
         self.end_run(recorder, self.registered_through);
-        let Some(epoch) = self.clock.epoch.checked_add(1) else {
-            recorder.fail_configuration();
-            return;
-        };
-        let clock = ClockId { epoch, ..self.clock };
-        *self = Self { clock, ..Self::default() };
+        *self = Self::default();
     }
 }
 

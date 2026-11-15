@@ -10,7 +10,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta, VoiceBaseline};
+use harmonigraph_core::canonical::{EventTiming, NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
 use harmonigraph_core::{policy, LatticePos, SourceId};
@@ -309,7 +309,6 @@ pub struct Hub {
     rate: f64,
     callback: Option<api::Callback>,
     anchor: Option<(i64, f64)>,
-    clock: ClockId,
     /// Host seconds against elapsed samples, for loop and seek detection.
     seconds: Option<f64>,
     /// The last recording run every row was told to open with a take-lane
@@ -344,7 +343,6 @@ impl Hub {
             rate: 0.0,
             callback: None,
             anchor: None,
-            clock: ClockId::default(),
             seconds: None,
             opened: None,
             status: 0,
@@ -388,12 +386,6 @@ impl Hub {
 
     pub fn begin(&mut self, callback: api::Callback, owner: &mut Owner, presentation: f64) {
         self.callback = Some(callback);
-        // One clock for the life of this Harmonigraph, which a host reset cuts
-        // (`Recording::reset`): what this callback sequences, it publishes.
-        if owner.recording.clock.runtime_session == 0 {
-            owner.recording.clock.runtime_session = self.id;
-        }
-        self.clock = owner.recording.clock;
         if self.anchor.is_none() {
             self.anchor = Some((callback.steady_time, presentation));
         }
@@ -563,16 +555,7 @@ impl Hub {
             return;
         }
         self.batch.sort_unstable_by_key(|record| (record.sample, record.order()));
-        let Some(config) = owner.block_configuration(self.clock) else {
-            // No configuration to assign against, so this batch is discarded
-            // rather than held: every onset in it sounds uncorrected and the
-            // Tunes that sent them count the misses. The one thing that must
-            // not happen is that it goes unsaid, which is what the fault bit
-            // is for — an evaluation that never ran is a refused one.
-            self.status |= session::POLICY;
-            self.batch.clear();
-            return;
-        };
+        let config = owner.block_configuration();
         self.sequencer.config = config.into();
         let mut index = 0;
         while index < self.batch.len() {
@@ -1012,13 +995,8 @@ impl Hub {
         let index = usize::from(record.source);
         let identity = identity(record.source);
         let time = self.presentation(scheduled);
-        let timing = EventTiming {
-            clock: self.clock,
-            input: record.sample,
-            planned: Some(scheduled),
-            sample: scheduled,
-            sample_rate: self.rate,
-        };
+        let timing =
+            EventTiming { planned: Some(scheduled), sample: scheduled, sample_rate: self.rate };
         self.rows[index].sequence += 1;
         let stamp = Stamp {
             source: identity,
