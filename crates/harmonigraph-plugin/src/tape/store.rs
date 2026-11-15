@@ -36,9 +36,9 @@ pub(crate) const SONG_START_SECONDS: f64 = 0.05;
 /// again, and the newer recording wins.
 const SAME_RUN_UP_SECONDS: f64 = 0.05;
 
-/// No memory setting yet (#1719): one generous cap, about 29 minutes of song
-/// in stereo at 48 kHz with its spectrogram, dropping the oldest-recorded
-/// chunks first.
+/// One generous cap on the audio and its spectrogram, about 29 minutes of
+/// song in stereo at 48 kHz, dropping the oldest-recorded chunks first. The
+/// notes beside them are not counted.
 pub(crate) const CAP_BYTES: usize = 1 << 30;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
