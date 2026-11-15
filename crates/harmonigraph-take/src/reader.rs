@@ -138,8 +138,9 @@ pub(crate) fn assemble(
 /// what it covers.
 ///
 /// `end` is the song time the take's last run ended at, when the file says it
-/// did. Whatever is still held there is released at it, as a session reset
-/// releases it: a release that sounded after the last block that recorded,
+/// did. If a shown source still holds a note there, everything held is
+/// released at it, as a session reset releases it: a release that sounded
+/// after the last block that recorded,
 /// as a host's do when the transport stops, was dropped, and without this a
 /// Tail would draw its note held to the last frame (#1803). A take with
 /// nothing held at its end gains no record, so its length is unchanged.

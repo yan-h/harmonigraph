@@ -113,6 +113,9 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
         }
         assert!(result.status.success(), "{name}: {stderr}");
         assert!(stderr.contains(&format!("done: {frames} frames")), "{name}: {stderr}");
+        // Without `--end` the render covers the take, however close to its
+        // end the last record sounds.
+        assert!(extra.contains(&"--end") || !stderr.contains("still to come"), "{name}: {stderr}");
         let probe = Command::new("ffprobe")
             .args([
                 "-v",

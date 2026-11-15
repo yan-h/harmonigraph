@@ -514,7 +514,10 @@ fn export(args: Args) -> Result<(), String> {
         (Err(error), Ok(())) | (Ok(_), Err(error)) => return Err(error),
     };
 
-    if !replay.is_spent() {
+    // Only an `--end` cuts a take short. The default end is past every
+    // record, and one in its last frame's interval, or at the end itself as
+    // the reader's release of held notes is, is never delivered.
+    if args.end.is_some() && !replay.is_spent() {
         eprintln!(
             "note: stopped at {end:.2}s with events still to come — \
              raise --end (or drop it to render the whole take)"

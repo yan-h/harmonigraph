@@ -120,7 +120,10 @@ fn a_lost_publication_is_a_gap_on_the_file() {
     let take = harmonigraph_take::Take::read(writer.finished.as_ref().unwrap()).unwrap();
     let incomplete = take.incomplete.unwrap();
     assert_eq!((incomplete.first_publication, incomplete.last_publication), (4096, 4096));
-    assert_eq!(take.notes().count(), publication::PUBLICATION_RING - 1);
+    // Every onset published reached the file. The release that was lost left
+    // the key held at the take's end, where the reader releases it (#1803).
+    let onsets = take.notes().filter(|n| matches!(n.kind, harmonigraph_take::NoteKind::On { .. }));
+    assert_eq!(onsets.count(), publication::PUBLICATION_RING - 1);
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
 
