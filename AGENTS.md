@@ -154,12 +154,16 @@ the value on screen is the value the file holds.
 
 - More marks than one step holds (4,096): the rest are lost with a Console line, a lost release holds its note to the pass's end on playback, and a retrigger split at the cap can lose either half.
 - A very dense pass: a chase replays it from its start, about 4.6 ms under the editor lock for 30 minutes of MPE pressure, once per cue or seam.
-- A host block with no song position: a waiting cue still starts, and the transport step reads the position before the gap.
+- A host block with no song position: a waiting cue still starts, the transport step reads the position before the gap, and play from there after an audition can print a false `LEAK?` line.
+- A fresh cue: the lattice marks the last spot's map, or the live one, until its first block of audio arrives, a few tens of milliseconds.
+- A song position past about 2.3 hours: zoomed fully out, the tape's heatmap draws more slabs than a live window holds.
+
+Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
+
 - A stalled input worker: a cue reads Playing and holds `KeepAlive` until the next click, Stop or play.
 - A whole-tape re-analysis: what is on screen fills in song order, about 15 s per 5 minutes of song.
 - A cue at a speed other than 1× within about 180 ms after a gap: the audio before the gap may smear into its first milliseconds.
 - A tempo change between passes: under a second of bar ticks past a short pass's end lands at its tempo.
-- A song position past about 2.3 hours: zoomed fully out, the tape's heatmap draws more slabs than a live window holds.
 
 ## Backwards compatibility is not a constraint
 
