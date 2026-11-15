@@ -160,7 +160,8 @@ impl Compiled {
     }
 }
 
-/// The roll's, the Spiral's halo and dot cut, the names' and the
+/// The roll's (the Spiral's dots and their halo too), the Spiral's dot cut,
+/// the names' and the
 /// spectrogram's programs, cloud included. Built here, off the window thread,
 /// rather than by the frame that first draws each — the first note, a reopen
 /// with notes on the roll — which measured 14-27 ms of the host's main thread
@@ -171,7 +172,6 @@ impl Compiled {
 #[cfg(not(feature = "hot-reload"))]
 pub(super) struct PanePipelines {
     roll: crate::roll::RollPipelines,
-    glow: crate::glow::GlowPipelines,
     dots: crate::dot_surround::Pipelines,
     text: crate::text::TextPipelines,
     spectrogram: crate::spectrogram::SpectrogramPipelines,
@@ -190,15 +190,13 @@ impl PanePipelines {
         progress(Stage::Interface);
         let roll = crate::roll::RollPipelines::new(device, format);
         progress(Stage::Interface);
-        let glow = crate::glow::GlowPipelines::new(device, format);
-        progress(Stage::Interface);
         let dots = crate::dot_surround::Pipelines::new(device, format);
         progress(Stage::Interface);
         let text = crate::text::TextPipelines::new(device, format);
         progress(Stage::Interface);
         let spectrogram = crate::spectrogram::SpectrogramPipelines::new(device, format);
         progress(Stage::Interface);
-        Self { roll, glow, dots, text, spectrogram: spectrogram.with_cloud(device) }
+        Self { roll, dots, text, spectrogram: spectrogram.with_cloud(device) }
     }
 
     /// Give each pane these programs, unless it already holds its own.
@@ -209,7 +207,6 @@ impl PanePipelines {
         resources: &mut CallbackResources,
     ) {
         crate::roll::RollResources::adopt(&self.roll, resources);
-        crate::glow::GlowResources::adopt(&self.glow, resources);
         crate::dot_surround::Resources::adopt(&self.dots, resources);
         crate::text::TextResources::adopt(&self.text, device, queue, resources);
         crate::spectrogram::SpectrogramResources::adopt(&self.spectrogram, resources);
@@ -308,7 +305,7 @@ mod tests {
     /// After loading, the frame that first draws a note on the roll with its
     /// cut and bloom, a lit Spiral mark with its cut, a name, and a clouded
     /// spectrogram compiles no pipeline (#1670, R1). The same frame on a
-    /// renderer that skipped loading compiles all six, which is what says the
+    /// renderer that skipped loading compiles all five, which is what says the
     /// frame reaches every build rather than declining one.
     #[test]
     fn the_first_drawing_frame_after_loading_builds_no_pipeline() {
@@ -345,24 +342,13 @@ mod tests {
                     full,
                     full.size(),
                     vec![crate::roll::tests::centered_note()],
-                    1,
-                    full,
+                    crate::RollClip::whole(full),
                     crate::RollAxes { pitch_dir: [1.0, 0.0], depth_dir: [0.0, 1.0] },
                     1.0,
                     cut,
                     FORMAT,
                     0,
                     1.0,
-                ),
-                crate::glow_paint_callback(
-                    full,
-                    vec![crate::GlowDot {
-                        center: [128.0, 128.0],
-                        radius: 12.0,
-                        color: [200, 120, 60, 255],
-                    }],
-                    1.0,
-                    FORMAT,
                 ),
                 crate::dot_surround_paint_callback(
                     full,
@@ -388,7 +374,7 @@ mod tests {
                 crate::spectrogram::tests::cloud_paint_callback(),
             ]
         };
-        let every = ["cloud", "dot surround", "glow", "roll", "spectrogram", "text"];
+        let every = ["cloud", "dot surround", "roll", "spectrogram", "text"];
 
         let mut unprepared = egui_wgpu::Renderer::new(&device, FORMAT, Default::default());
         take_builds();

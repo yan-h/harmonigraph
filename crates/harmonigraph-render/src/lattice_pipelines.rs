@@ -433,10 +433,10 @@ fn create_glow_over_pipeline(
 /// color, and alpha accumulated so the pass composites the same way over a
 /// transparent framebuffer.
 ///
-/// The three callbacks that draw their own geometry take it — the roll's
-/// notes, the glyphs of [`crate::text`], and the halo of [`crate::glow`]. On a
-/// halo that is what makes it pure LIGHT: it carries zero alpha, so the color
-/// term adds and the alpha term leaves the destination's own alone.
+/// The callbacks that draw their own geometry take it — the roll's notes and
+/// the Spiral's dots, and the glyphs of [`crate::text`]. On the roll's halo
+/// that is what makes it pure LIGHT: it carries zero alpha, so the color term
+/// adds and the alpha term leaves the destination's own alone.
 ///
 /// One definition rather than one per callback, because them agreeing is what
 /// makes them composite identically — the roll's notes over the spectrogram,

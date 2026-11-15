@@ -1469,6 +1469,8 @@ mod tests {
         state.appearance.spectrum.low_midi = -240.0;
         state.appearance.spectrum.high_midi = 360.0;
         state.appearance.spectrum.roll_thickness = 0.0;
+        // No lead, so the held note is its history alone and draws no tongue.
+        state.appearance.spectrum.roll_lead = 0.0;
         state.appearance.spectrum.show_roll = true;
         state.appearance.spectrum.show_spectrogram = false;
         state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(

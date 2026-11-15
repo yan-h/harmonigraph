@@ -1,4 +1,5 @@
-//! The bloom post-process shared by the lattice, the roll and the spiral's glow.
+//! The bloom post-process shared by the lattice and the roll, the Spiral's dots
+//! included.
 
 use super::*;
 
@@ -27,7 +28,7 @@ pub(crate) fn bloom_sizes(screen: [u32; 2]) -> ([u32; 2], [u32; 2]) {
 ///
 /// One chain, every picture. The lattice feeds it the scene without its
 /// labels; the piano roll feeds it the notes rendered again offscreen
-/// (`crate::roll`); the spiral's dots feed it through `crate::glow`. That they
+/// (`crate::roll`), the spiral's dots among them. That they
 /// are the same four steps in the same order over the same fractions is the
 /// whole of what makes one bloom strength mean one halo, and it is a claim a
 /// second copy cannot keep: the step that matters
@@ -75,8 +76,8 @@ pub(super) enum BloomSource {
 /// The four pipelines [`BloomChain::run`] steps through, in that order.
 ///
 /// Held by each caller rather than by the chain: they are built per target
-/// format (the lattice's offscreen texture, the roll's half floats, the glow's
-/// surface format), at the loading stage where each pane's own pipelines are.
+/// format (the lattice's offscreen texture, the roll's half floats), at the
+/// loading stage where each pane's own pipelines are.
 #[derive(Clone)]
 pub(super) struct BloomPipelines {
     bright: wgpu::RenderPipeline,

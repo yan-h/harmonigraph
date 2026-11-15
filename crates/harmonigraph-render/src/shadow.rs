@@ -236,10 +236,10 @@ impl ShadowBox {
     /// leave free (`Instance` in lattice.wgsl, `GpuInstance::LAYOUT`) — the
     /// second instance-step buffer the node draw and the cell draw both bind.
     ///
-    /// Scattered rather than consecutive because a vertex attribute's location
-    /// has to be under sixteen and a node's rows already reach fifteen; which
-    /// four are free is what picks them. Together the two fill all sixteen, so
-    /// a node attribute added now has to share a slot with one already there.
+    /// Scattered rather than consecutive because they take the four locations
+    /// under sixteen a node's rows leave free. Sixteen is no ceiling: the
+    /// device takes the adapter's own limits, 31 locations on Metal
+    /// (`device_limits`), so a node attribute added now can take one above.
     pub(crate) const BESIDE_NODES: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
@@ -273,10 +273,9 @@ pub(crate) struct Packed {
 /// One caster's shadow, as the scene pass reads it: the quad to draw over, the
 /// cell to sample, and what to spend what it holds as.
 ///
-/// In a STORAGE BUFFER rather than beside the instance. A node's own rows reach
-/// location 15 and leave five free, and a caster is four of them; the cell is
-/// read by a node, a marker and a name alike, so one array they all index is
-/// also one place the shape is written down. Indexed by the caster's own index
+/// In a STORAGE BUFFER rather than beside the instance: the cell is read by a
+/// node, a marker and a name alike, so one array they all index is also one
+/// place the shape is written down. Indexed by the caster's own index
 /// — the order `pack_into` was handed — so nothing carries a second copy.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]

@@ -65,7 +65,7 @@ pub mod startup;
 /// helpers and [`BloomChain`]; the lattice's offscreen target
 /// are beside the point for a flat ribbon.
 mod roll;
-pub use roll::{roll_paint_callback, RollAxes, RollInstance, DEFAULT_RIBBON_SEMITONES};
+pub use roll::{roll_paint_callback, RollAxes, RollClip, RollInstance, DEFAULT_RIBBON_SEMITONES};
 
 /// The backdrop cut round a note, shared by the roll's ribbons and the
 /// Spiral's dots.
@@ -88,9 +88,6 @@ pub use spectrogram::{
 #[cfg(test)]
 mod dial_nudges;
 mod dot_surround;
-/// A halo alone, over marks a pane drew for itself — the third caller of
-/// [`BloomChain`], and the one that draws no picture of its own.
-mod glow;
 mod lattice_material;
 mod lattice_node_glow;
 mod lattice_stars;
@@ -98,7 +95,6 @@ mod material_cells;
 mod stars;
 mod travel;
 pub use dot_surround::{dot_surround_paint_callback, SurroundDot};
-pub use glow::{glow_paint_callback, GlowDot};
 use lattice_node_glow::create_glow_pipelines;
 
 /// Label text, for the same reason the roll has its own callback: what a
@@ -1256,9 +1252,8 @@ struct PaneBuffers {
     /// group naming it at group 3.
     ///
     /// A storage buffer rather than more rows beside the instances, for the
-    /// reason [`shadow::ShadowCaster`] gives: a node's instance rows and the box
-    /// beside them leave one of the sixteen attribute locations, where a caster
-    /// is four vec4s. Rebuilt with the buffer, which is the one thing the
+    /// reason [`shadow::ShadowCaster`] gives: one array that a node, a marker
+    /// and a name all index. Rebuilt with the buffer, which is the one thing the
     /// atlas's own bind groups must not be — hence a group of its own
     /// (`shadow::caster_layout`).
     caster_buffer: wgpu::Buffer,
