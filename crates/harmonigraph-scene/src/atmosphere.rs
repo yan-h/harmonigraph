@@ -1002,7 +1002,7 @@ impl AtmosphereSettings {
     }
 }
 
-/// How the lattice light breathes: `Breathing amount` and `Breathing speed`.
+/// How the lattice light breathes: `Breathing depth` and `Breathing speed`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Breathing {
     pub amount: f32,

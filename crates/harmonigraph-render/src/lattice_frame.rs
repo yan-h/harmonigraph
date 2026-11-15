@@ -187,8 +187,9 @@ impl LatticeCallback {
         // light is over — exactly 0, again rather than nearly, so a shipped
         // instance is always one with something to draw.
         //
-        // What it ships FOR is the light's own passes alone, which draw every
-        // instance (`fs_ink_strip`, `vs_glow_splat`). A node
+        // What it ships FOR is the light's own passes alone: its row of the
+        // light table, which the reading pass lays into the strip
+        // (`fs_ink_strip`), and the halo's splat (`vs_glow_splat`). A node
         // with no INK left — its Fade run out while its light still releases —
         // paints nothing in the scene pass and fills its cell with nothing, so
         // its shadow, its scene draw and its occlusion of what stands behind it

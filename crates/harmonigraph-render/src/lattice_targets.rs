@@ -21,7 +21,7 @@ pub(super) struct Offscreen {
     /// Node and label RGB, spared ordinary node shadows and summed at composite.
     pub(super) ink_view: wgpu::TextureView,
     /// The independent label-free scene and its filtered halo.
-    /// Present only while bloom is on; toggling it never replaces glow history.
+    /// Present only while bloom is on.
     pub(super) bloom: Option<LatticeBloom>,
     /// The node glow's own target, present only while the view asks for one.
     pub(super) glow: Option<GlowTarget>,

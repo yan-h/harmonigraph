@@ -790,9 +790,8 @@ fn a_nodes_light_has_no_ripple_the_ink_does_not() {
 
 /// The light of a node ADDED to a pane mid-session is that node's own.
 ///
-/// The behavioural half of [`the_ink_strip_has_a_row_for_every_node`], and the
-/// half that says the rows are the right way round: a strip that grew but was
-/// read at the wrong offset would still be one row per node.
+/// What says the light table's rows are the right way round: a strip that grew
+/// but was read at the wrong offset would still be one row per node.
 ///
 /// Two nodes lit in colours no mixture of the other's could be mistaken for —
 /// [`two_colour_node`]'s two flat ramps, the band's red and the mark strip's
