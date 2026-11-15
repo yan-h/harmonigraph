@@ -650,13 +650,6 @@ mod tests {
                     sequence: 1,
                     lifetime: 1,
                     provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
-                    timing: Some(harmonigraph_core::canonical::EventTiming {
-                        clock: Default::default(),
-                        input: 0,
-                        planned: None,
-                        sample: 0,
-                        sample_rate: 48000.0,
-                    }),
                     pitch_microcents: None,
                 })
                 .unwrap();
@@ -684,7 +677,7 @@ mod tests {
         producer.observe_clock(11.0);
         // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
         // at GUI=12; neither its batch nor a later idle poll is a new clock.
-        use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta};
+        use harmonigraph_core::canonical::NoteDelta;
         use harmonigraph_core::confirmed::PitchProvenance;
         let accepted = NoteDelta {
             assignment: None,
@@ -693,18 +686,11 @@ mod tests {
             sequence: 1,
             lifetime: 61,
             provenance: PitchProvenance::AcceptedOutput,
-            timing: Some(EventTiming {
-                clock: ClockId::default(),
-                input: 96000,
-                planned: None,
-                sample: 96000,
-                sample_rate: 48000.0,
-            }),
             pitch_microcents: None,
         };
         producer.note(accepted).unwrap();
         let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
-        producer.note(event.into()).unwrap();
+        producer.note(NoteDelta { event, lifetime: 62, ..accepted }).unwrap();
         shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 21.0);
         assert_eq!(
             shared
@@ -723,12 +709,13 @@ mod tests {
             SourceId::DIRECT,
             1,
             3.0,
-            0,
+            1,
             true,
             &[VoiceBaseline {
                 note: 72,
+                lifetime: 62,
+                provenance: PitchProvenance::AcceptedOutput,
                 actual_onset: 2.0,
-                input_onset: 2.0,
                 velocity: 0.8,
                 pitch_microcents: 7_200_000_000,
                 ..Default::default()
@@ -748,7 +735,7 @@ mod tests {
             .find(|n| n.source == SourceId::DIRECT)
             .unwrap();
         assert_eq!(note.start, 12.0);
-        assert!(note.history_complete, "baseline retains the matching observed lifetime");
+        assert!(note.history_complete, "the baseline continues the press its lifetime names");
         assert_eq!(
             shared
                 .ui
@@ -794,8 +781,6 @@ mod tests {
                 note: 72,
                 lifetime: 61,
                 actual_onset: 2.0,
-                input_onset: 2.0,
-                onset: accepted.timing,
                 velocity: 0.8,
                 pitch_microcents: 7_200_000_000,
                 provenance: PitchProvenance::AcceptedOutput,

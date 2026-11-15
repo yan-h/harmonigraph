@@ -856,8 +856,8 @@ impl Plugin for Harmonigraph {
         self.tape.reset();
         // Reset only observed direct input. The session owner must publish
         // its own explicit source/session controls after lifecycle validation.
-        // Presentation time stays continuous when exact raw clock provenance
-        // starts a new epoch, including queued history before this reset.
+        // Presentation time stays continuous across the reset, so history
+        // queued before it keeps its place.
         self.take.publish_clock(self.presentation_seconds);
         let _ = self.take.publish_note(
             CoreNoteEvent::source_reset(self.presentation_seconds, SourceId::DIRECT).into(),
@@ -954,7 +954,7 @@ impl Plugin for Harmonigraph {
         }
         // A block that records, after the run it belongs to: parameters are
         // timed on the take's own clock and placed by that run.
-        let recorded = self.configuration.as_ref().filter(|owner| owner.recording.recording());
+        let recorded = self.configuration.as_ref().filter(|_| self.take.recording());
         if let Some(at) = recorded.map(|owner| owner.take_time()) {
             self.take.params(at, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
 

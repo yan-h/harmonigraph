@@ -1,7 +1,7 @@
 use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
 use harmonigraph_core::{NoteEvent, SourceId};
 
-use crate::canonical::{BaselineRecord, DeltaRecord, GapRecord, ProvenanceRecord, TimingRecord};
+use crate::canonical::{BaselineRecord, DeltaRecord, GapRecord, ProvenanceRecord};
 use crate::*;
 
 const RATE: f64 = 48_000.0;
@@ -35,14 +35,6 @@ fn delta(sequence: u64, key: u8, on: bool, input: i64) -> Record {
     delta.sequence = sequence;
     delta.lifetime = u64::from(key);
     delta.provenance = ProvenanceRecord::AcceptedOutput;
-    delta.timing = Some(TimingRecord {
-        runtime_session: 1,
-        input,
-        planned: Some(input + DELAY),
-        sample: input + DELAY,
-        sample_rate: RATE,
-        ..Default::default()
-    });
     Record::Canonical(CanonicalRecord::Delta(delta))
 }
 
@@ -54,15 +46,7 @@ fn struck(note: u8, input: i64) -> VoiceBaseline {
         pitch_microcents: i64::from(note) * 100_000_000,
         lifetime: u64::from(note),
         provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
-        input_onset: presentation(input),
         actual_onset: presentation(input + DELAY),
-        onset: Some(harmonigraph_core::canonical::EventTiming {
-            clock: harmonigraph_core::canonical::ClockId { runtime_session: 1, epoch: 0 },
-            input,
-            planned: None,
-            sample: input + DELAY,
-            sample_rate: RATE,
-        }),
         ..Default::default()
     }
 }
