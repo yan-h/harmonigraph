@@ -438,10 +438,9 @@ pub(super) fn draw_rolls(
     //
     // A held note is the one thing drawn on both sides, its history and its
     // tongue meeting at the line. The two scissors share that edge, so each
-    // pixel is drawn by one of them, and the pixel the line passes through is
-    // left a seam: under the now-line, which is always drawn while there is a
-    // spectrum to lead into, opaque and two points wide, after the roll and its
-    // bloom (`spectral_pane`).
+    // pixel is drawn by one of them, and each box runs a seam past the line
+    // under the other's scissor (`seam_px` in `source_instances`), so the
+    // pixel the line passes through is drawn whole by whichever owns it.
     //
     // The lead is in POINTS and the axis in fractions, so it converts through
     // the axis' own length. Floored at the pane's near edge, which costs
@@ -599,6 +598,11 @@ fn source_instances(
     // pixel, in points at this display's density, the same figure it takes as
     // `feather`. Ink reaches half of it past whatever it edges.
     let feather_px = 1.0 / ppp.max(1e-3);
+    // How far a held note's history and its tongue each run past the now-line,
+    // under the other's scissor (`draw_rolls`): a whole feather, so the pixel
+    // the shared scissor edge passes through is covered whole by whichever of
+    // the two draws it. Half a feather would just do, at the last bit.
+    let seam_px = feather_px;
 
     // Cull to the visible window BEFORE sorting: the roll can remember
     // thousands of notes while only a handful are on screen, and sorting the
@@ -706,20 +710,23 @@ fn source_instances(
         // into the roll beside it and never reaches past the line, so nothing
         // about the history waits on the lead or the lead on the history.
         let standing = lead_alpha(note, now, cfg.roll_lead_release);
+        let mut tongue = None;
         if standing > 0.0 && lead_px > 0.0 {
             let pitch = note.end_pitch();
             let t = scale.t_of(pitch);
             let ink_pitch = quad.pitch(half_pitch * widest, 0.0, 0.0) / axes.pitch_len().max(1e-3);
             if t + ink_pitch >= 0.0 && t - ink_pitch <= 1.0 {
-                let half = 0.5 * lead_px;
-                let center = axes.at(t, split) - axes.dir_depth() * half;
+                // From the lead's tip to a seam past the line, so it meets its
+                // history with no pixel between them.
+                let half = 0.5 * (lead_px + seam_px);
+                let center = axes.at(t, split) + axes.dir_depth() * (0.5 * (seam_px - lead_px));
                 // The lead reads the note as it stands at its leading end.
                 let (_, last) = note.expressions()[note.expressions().len() - 1];
                 let look = Look::of(&intensity, note.velocity, last).floored(width_floor);
                 if look.width > 0.0 {
                     let grow = look.grow();
                     let (fade, taper) = read_through(look, grow);
-                    tongues.push(RollInstance {
+                    tongue = Some(RollInstance {
                         center: [center.x, center.y],
                         half_extent: [half_pitch * grow, half],
                         shear: 0.0,
@@ -741,6 +748,7 @@ fn source_instances(
                 }
             }
         }
+        tongues.extend(tongue);
         for ((t0, p0), (t1, p1)) in ribbon.segments(now) {
             // A segment wholly before the region is DROPPED, and the test has
             // to be made on its own end rather than on the clamped one — a
@@ -797,9 +805,14 @@ fn source_instances(
             //
             // Readable repeats have a real cut between their drawn bodies.
             // Dense repeats share a continuous body, textured below.
-            let center = axes.at((a0 + a1) * 0.5, (d0 + d1) * 0.5);
             let depth_px = (d1 - d0) * axes.depth_len();
-            let half_depth = depth_px.abs() * 0.5;
+            // The stretch that reaches the line under a tongue runs a seam past
+            // it, under the tongue's scissor (see `seam_px`). It is flat, being
+            // a note's last, so the shift along depth keeps its centre line.
+            let seam = if tongue.is_some() && t1 >= now { seam_px } else { 0.0 };
+            let center =
+                axes.at((a0 + a1) * 0.5, (d0 + d1) * 0.5) - axes.dir_depth() * (0.5 * seam);
+            let half_depth = depth_px.abs() * 0.5 + 0.5 * seam;
             // Genuine bend segments keep their real times. Only the separate
             // onset padding is flat, so no shear invents unsounded pitches.
             let slope =
@@ -840,9 +853,10 @@ fn source_instances(
                 tremolo: [0.0; 2],
             };
             // Where a moment of this segment lands along its box, as the
-            // shader's depth offset from the center.
+            // shader's depth offset from the center, which the seam moved.
             let centre = (d0 + d1) * 0.5;
-            let offset = |at: f64| (time.depth_of_unclamped(at) - centre) * axes.depth_len();
+            let offset =
+                |at: f64| (time.depth_of_unclamped(at) - centre) * axes.depth_len() + 0.5 * seam;
             let points = intensity_points(&ribbon, &intensity, t0, t1, width_floor);
             if points.iter().all(|(_, look)| look.width == 0.0) {
                 continue;
@@ -2473,7 +2487,7 @@ mod tests {
     /// A SOUNDING note carries its ribbon past the now-line and into the
     /// spectrum, by exactly the share of the analyzer it is set to, in every
     /// orientation: a tongue of its own, standing from the line, while the
-    /// note's history stops on the line.
+    /// note's history stops on the line, the two overlapping by a seam.
     ///
     /// The lead is the whole point of the setting rather than a decoration on
     /// it: a sounding note's peak is on the other side of that line, and a
@@ -2528,14 +2542,24 @@ mod tests {
                          {orientation:?} at a split of {split}, not the {want} \
                          that {reach} of the analyzer comes to",
                     );
+                    // Each runs a feather past the line, under the other's
+                    // scissor, so the pixel the line passes through is whole.
                     let note = one(&history);
                     let ends = past_the_line(note, &axes, split);
+                    let seam = 1.0 / PPP;
                     assert!(
-                        ends.abs() < 1e-2 && (note.lead_fade, note.lead_alpha) == (0.0, 1.0),
-                        "the sounding note's history ends {ends} points past the line, \
-                         carrying a lead of ({}, {})",
+                        (ends - seam).abs() < 1e-2
+                            && (note.lead_fade, note.lead_alpha) == (0.0, 1.0),
+                        "the sounding note's history ends {ends} points past the line, not \
+                         {seam}, carrying a lead of ({}, {})",
                         note.lead_fade,
                         note.lead_alpha,
+                    );
+                    let tongue = one(&tongues);
+                    let back = 2.0 * tongue.half_extent[1] - over;
+                    assert!(
+                        (back - seam).abs() < 1e-2,
+                        "the tongue runs {back} points back past the line, not {seam}",
                     );
                 }
             }

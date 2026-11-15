@@ -454,6 +454,77 @@ fn a_hairline_ribbons_cut_is_as_strong_as_a_wide_ones() {
     assert!(near(thin, wide), "the hairline's surround {thin:?} is not the wide one's {wide:?}");
 }
 
+/// A held note cut in two at a shared scissor edge, each half running a
+/// feather past it under the other's scissor, draws exactly the note it was
+/// cut from, its halo included: no seam where the edge passes through a
+/// pixel and no light blended twice where the two overlap, at a fractional
+/// density and below one pixel a point, with nothing drawn over the join.
+///
+/// The spectral pane's held note is that pair, its history and its tongue
+/// meeting at the now-line (`panes::spectral::roll`'s `seam_px`). Boxes that
+/// meet exactly at the edge leave the pixel it passes through part-covered by
+/// whichever of them draws it.
+#[test]
+fn a_note_cut_at_a_shared_scissor_edge_has_no_seam() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    for ppp in [0.5625f32, 1.5] {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(256.0 / ppp));
+        // The join a third of a pixel into the pixel it passes through.
+        let join = (60.0 + 1.0 / 3.0) / ppp;
+        let (tip, end, seam) = (20.0 / ppp, 140.0 / ppp, 1.0 / ppp);
+        // Bright enough to bloom, and translucent, where light blended twice
+        // shows most.
+        let span = |from: f32, to: f32| RollInstance {
+            center: [64.0 / ppp, 0.5 * (from + to)],
+            half_extent: [24.0 / ppp, 0.5 * (to - from)],
+            core: [255, 200, 240, 255],
+            fade: [0.5; 2],
+            ..centered_note()
+        };
+        let frame = |instances, clip| {
+            let cb = RollCallback {
+                rect,
+                pane_size: rect.size(),
+                clip,
+                point_scale: 1.0,
+                bloom: 1.5,
+                ..callback(instances, HARNESS_CUT)
+            };
+            let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: ppp };
+            let mut resources = CallbackResources::default();
+            prepare_frame(&device, &queue, &mut resources, &screen, &cb);
+            let texture = render_to_texture(&device, &queue, SIZE, FORMAT, bg_color(), |pass| {
+                cb.paint(
+                    egui::PaintCallbackInfo {
+                        viewport: rect,
+                        clip_rect: rect,
+                        pixels_per_point: ppp,
+                        screen_size_px: SIZE,
+                    },
+                    pass,
+                    &resources,
+                );
+            });
+            readback(&device, &queue, &texture, SIZE)
+        };
+        let whole = frame(vec![span(tip, end)], RollClip::whole(rect));
+        let clip = RollClip {
+            head: egui::Rect::from_min_max(egui::pos2(0.0, join), rect.max),
+            tail_start: 1,
+            tail: egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, join)),
+        };
+        let cut = frame(vec![span(join - seam, end), span(tip, join + seam)], clip);
+        for y in 50..70 {
+            for x in 0..SIZE[0] {
+                let (got, want) = (pixel(&cut, x, y), pixel(&whole, x, y));
+                assert!(near(got, want), "at {ppp} px/pt ({x}, {y}) reads {got:?}, not {want:?}");
+            }
+        }
+    }
+}
+
 /// A roll whose rect stands off the surface's corner, as the docked pane's
 /// does beside the lattice, darkens the same pixels as one at the corner:
 /// the holdout and the surround's targets are over the roll's rect alone,

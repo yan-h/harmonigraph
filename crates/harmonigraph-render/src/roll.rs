@@ -478,6 +478,27 @@ struct TextureClip {
     tail: Option<[u32; 4]>,
 }
 
+impl TextureClip {
+    /// The same regions in a texture `to` texels across over the roll's
+    /// `from` device pixels. Each edge rounds on its own, so two regions
+    /// sharing an edge still share it.
+    fn scaled(self, from: [u32; 2], to: [u32; 2]) -> Self {
+        let scale = |[left, top, width, height]: [u32; 4]| {
+            let at = |v: u32, axis: usize| {
+                ((v as f32 * to[axis] as f32 / from[axis].max(1) as f32).round() as u32)
+                    .min(to[axis])
+            };
+            let [l, t, r, b] = [at(left, 0), at(top, 1), at(left + width, 0), at(top + height, 1)];
+            (r > l && b > t).then_some([l, t, r - l, b - t])
+        };
+        TextureClip {
+            tail_start: self.tail_start,
+            head: self.head.and_then(scale),
+            tail: self.tail.and_then(scale),
+        }
+    }
+}
+
 /// Every instance into a texture over the roll's rect, each only inside the
 /// region `clip` gives it.
 fn draw_clipped(pass: &mut wgpu::RenderPass<'_>, count: u32, clip: TextureClip) {
@@ -1084,6 +1105,26 @@ impl CallbackTrait for RollCallback {
                 create_vertex_buffer::<RollInstance>(device, "roll_notes", pane.capacity);
         }
         pane.count = self.instances.len() as u32;
+        // Each instance holds out, cuts and blooms only where `paint` lets it
+        // draw: its region as a scissor in the roll's own device pixels, and in
+        // a target `shrink` of that size.
+        let scissor = |region: egui::Rect| {
+            let clip = egui::epaint::ViewportInPixels::from_points(
+                &region.intersect(self.rect),
+                ppp,
+                screen_descriptor.size_in_pixels,
+            );
+            let left = (clip.left_px - viewport.left_px).max(0) as u32;
+            let top = (clip.top_px - viewport.top_px).max(0) as u32;
+            let width = (clip.width_px.max(0) as u32).min(roll_size[0].saturating_sub(left));
+            let height = (clip.height_px.max(0) as u32).min(roll_size[1].saturating_sub(top));
+            (width > 0 && height > 0).then_some([left, top, width, height])
+        };
+        let clip = TextureClip {
+            tail_start: self.clip.tail_start.min(pane.count as usize) as u32,
+            head: scissor(self.clip.head),
+            tail: scissor(self.clip.tail),
+        };
         if !self.instances.is_empty() {
             queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
         }
@@ -1129,10 +1170,19 @@ impl CallbackTrait for RollCallback {
                 // The BODIES alone. The surround stands behind them rather
                 // than being light they give off, and it is dark at its
                 // default, which blooms to nothing anyway.
+                //
+                // Each clipped as the sharp layer is, at this target's own
+                // size, so two instances meeting under one scissor edge (a
+                // held note's history and its tongue, each running a seam past
+                // it) do not blend twice where they overlap.
                 pass.set_pipeline(light_pipeline);
                 pass.set_bind_group(0, &bloom.notes_bind_group, &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                pass.draw(0..4, 0..pane.count);
+                draw_clipped(
+                    &mut pass,
+                    pane.count,
+                    clip.scaled(roll_size, bloom_notes_size(roll_size)),
+                );
             }
             bloom.bloom.run(egui_encoder, chain_pipelines, "roll", None);
         }
@@ -1148,25 +1198,6 @@ impl CallbackTrait for RollCallback {
                 RollHoldout::new(device, layout, holdout_layout, surround_composite, roll_size)
             });
             queue.write_buffer(&holdout.notes_uniform, 0, bytemuck::bytes_of(&roll_uniforms));
-            // Each instance holds out, and cuts, only where `paint` lets it
-            // draw.
-            let scissor = |region: egui::Rect| {
-                let clip = egui::epaint::ViewportInPixels::from_points(
-                    &region.intersect(self.rect),
-                    ppp,
-                    screen_descriptor.size_in_pixels,
-                );
-                let left = (clip.left_px - viewport.left_px).max(0) as u32;
-                let top = (clip.top_px - viewport.top_px).max(0) as u32;
-                let width = (clip.width_px.max(0) as u32).min(roll_size[0].saturating_sub(left));
-                let height = (clip.height_px.max(0) as u32).min(roll_size[1].saturating_sub(top));
-                (width > 0 && height > 0).then_some([left, top, width, height])
-            };
-            let clip = TextureClip {
-                tail_start: self.clip.tail_start.min(pane.count as usize) as u32,
-                head: scissor(self.clip.head),
-                tail: scissor(self.clip.tail),
-            };
             let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("roll_holdout"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
