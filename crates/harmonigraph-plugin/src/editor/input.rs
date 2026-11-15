@@ -128,7 +128,6 @@ impl LiveInput {
         let Some(offset) = self.clock.offset else { return };
         let tracker = &mut runtime.tracker;
         let (recorder, tape) = (&mut self.recorder, &mut self.tape_notes);
-        recorder.catch_up(tracker, tape);
         self.consumer.drain(|event| {
             let result = tracker.handle_canonical_mapped(event, offset);
             debug_assert!(result.is_ok(), "validated canonical publication");
