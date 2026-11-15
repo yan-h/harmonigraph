@@ -3211,7 +3211,11 @@ fn on_tape() -> PictureState {
 }
 
 /// One frame of each event list through the pane in [`WIDE`].
-fn tape_frames(state: &mut PictureState, navigation: Navigation, frames: Vec<Vec<egui::Event>>) {
+fn tape_frames(
+    state: &mut PictureState,
+    navigation: Navigation,
+    frames: Vec<Vec<egui::Event>>,
+) -> egui::Context {
     let ctx = themed();
     for events in frames {
         let input = egui::RawInput {
@@ -3224,6 +3228,7 @@ fn tape_frames(state: &mut PictureState, navigation: Navigation, frames: Vec<Vec
             spectral_pane(&mut child, state, 100.0, 0, 1.0, navigation);
         });
     }
+    ctx
 }
 
 fn press(at: egui::Pos2, pressed: bool) -> egui::Event {
@@ -3329,9 +3334,9 @@ fn a_click_in_tape_mode_cues_the_song_under_it_with_the_start_at_the_far_edge() 
 
     // The Video preview draws the live picture, whatever the editor shows.
     let mut state = on_tape();
-    tape_frames(&mut state, Navigation::Preview, click());
+    let ctx = tape_frames(&mut state, Navigation::Preview, click());
     assert_eq!(state.runtime.tape.request, None);
-    assert_eq!(state.runtime.tape.window, None);
+    assert_eq!(tape::kept_window(&ctx, 0), None);
 }
 
 #[test]
@@ -3342,8 +3347,8 @@ fn a_depth_drag_in_tape_mode_moves_neither_the_song_nor_the_span_nor_the_pitch()
     let at = axes.at(0.5, split + 0.5 * (1.0 - split));
     let to = at + axes.dir_depth() * 40.0;
     let mut state = on_tape();
-    tape_frames(&mut state, Navigation::Docked, drag(at, to));
-    assert_eq!(state.runtime.tape.window, Some((0.0, 42.0)), "the song moved");
+    let ctx = tape_frames(&mut state, Navigation::Docked, drag(at, to));
+    assert_eq!(tape::kept_window(&ctx, 0), Some((0.0, 42.0)), "the song moved");
     assert_eq!(state.appearance.spectrum.roll_seconds, cfg.roll_seconds, "the Span moved");
     let range = (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi);
     assert_eq!(range, (cfg.low_midi, cfg.high_midi), "the pitch range moved");
@@ -3369,7 +3374,7 @@ fn tape_mode_rolls_no_note_later_than_the_stretch_shown() {
     state.runtime.tape.notes = std::sync::Arc::new(recorded);
     // The box's late end pulled in to 8 s.
     overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(8.0)));
-    let (from, to) = shown(&state);
+    let (from, to) = shown(&ctx);
     assert!(from == 0.0 && (to - 8.0).abs() < 0.3, "the fixture shows {from}..{to}");
     super::roll::take_roll_draw_probe();
     overview_frames(&ctx, &mut state, vec![vec![]]);
@@ -3449,8 +3454,8 @@ fn on_overview(seconds: f64) -> egui::Pos2 {
     tape::overview_axes(STRIP, &pinned()).at(0.5, ((42.0 - seconds) / 42.0) as f32)
 }
 
-fn shown(state: &PictureState) -> (f64, f64) {
-    state.runtime.tape.window.expect("Tape mode reports its window")
+fn shown(ctx: &egui::Context) -> (f64, f64) {
+    tape::kept_window(ctx, 0).expect("Tape mode keeps its window")
 }
 
 #[test]
@@ -3459,25 +3464,25 @@ fn the_overview_box_moves_the_stretch_shown_and_its_ends_resize_it() {
     let mut state = on_tape();
     // The box's late end, from the recording's end to its middle.
     overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(21.0)));
-    let (from, to) = shown(&state);
+    let (from, to) = shown(&ctx);
     assert!(from == 0.0 && (to - 21.0).abs() < 0.3, "resized to {from}..{to}");
     // The box itself, 10 s later.
     overview_frames(&ctx, &mut state, drag(on_overview(10.0), on_overview(20.0)));
-    let (from, to) = shown(&state);
+    let (from, to) = shown(&ctx);
     assert!((from - 10.0).abs() < 0.3 && (to - from - 21.0).abs() < 0.3, "moved to {from}..{to}");
     // Its early end, 5 s later.
     overview_frames(&ctx, &mut state, drag(on_overview(10.2), on_overview(15.0)));
-    let (from, to) = shown(&state);
+    let (from, to) = shown(&ctx);
     assert!((from - 15.0).abs() < 0.3 && (to - 31.0).abs() < 0.3, "resized to {from}..{to}");
     // Past the strip's late end, where the box stops at the end of the strip.
     let later = (on_overview(41.0) - on_overview(1.0)).normalized();
     let past = on_overview(41.0) + later * 200.0;
     overview_frames(&ctx, &mut state, drag(on_overview(20.0), past));
-    let (_, to) = shown(&state);
+    let (_, to) = shown(&ctx);
     assert!((to - 42.0).abs() < 1e-6, "the box ran off the strip to {to}");
     // And back past the song's start, where it stops.
     overview_frames(&ctx, &mut state, drag(on_overview(20.0), on_overview(0.0)));
-    assert_eq!(shown(&state).0, 0.0);
+    assert_eq!(shown(&ctx).0, 0.0);
     assert_eq!(state.runtime.tape.request, None, "a drag on the overview is not a cue");
 }
 
@@ -3489,7 +3494,7 @@ fn a_sideways_scroll_in_tape_mode_stops_at_the_end_of_the_strip() {
     let mut state = on_tape();
     // The box's late end pulled in to the middle, so there is room to pan.
     overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(21.0)));
-    let (_, width) = shown(&state);
+    let (_, width) = shown(&ctx);
     let cfg = pinned();
     let axes = Axes::new(WIDE, &cfg);
     let split = spectrum_share(&cfg);
@@ -3503,7 +3508,7 @@ fn a_sideways_scroll_in_tape_mode_stops_at_the_end_of_the_strip() {
     };
     let frames = (0..30).map(|_| vec![egui::Event::PointerMoved(at), wheel.clone()]).collect();
     overview_frames(&ctx, &mut state, frames);
-    let (from, to) = shown(&state);
+    let (from, to) = shown(&ctx);
     assert!((to - 42.0).abs() < 1e-6 && (to - from - width).abs() < 1e-6, "{from}..{to}");
 }
 
@@ -3515,7 +3520,7 @@ fn a_click_on_the_overview_brings_the_box_there_and_a_double_click_shows_it_all(
     let click =
         |at: egui::Pos2| vec![egui::Event::PointerMoved(at), press(at, true), press(at, false)];
     overview_frames(&ctx, &mut state, vec![click(on_overview(30.0))]);
-    let (from, to) = shown(&state);
+    let (from, to) = shown(&ctx);
     assert!((from - 19.5).abs() < 0.3 && (to - from - 21.0).abs() < 0.3, "{from}..{to}");
     // Near the end, it stops at the strip's end. Each click a second after
     // the last, or egui counts them as one double-click.
@@ -3526,13 +3531,13 @@ fn a_click_on_the_overview_brings_the_box_there_and_a_double_click_shows_it_all(
     };
     overview_frames(&ctx, &mut state, apart(on_overview(5.0)));
     overview_frames(&ctx, &mut state, apart(on_overview(38.0)));
-    assert_eq!(shown(&state), (21.0, 42.0));
+    assert_eq!(shown(&ctx), (21.0, 42.0));
     // A second of frames first, or egui counts the click above as the first
     // of three.
     let mut frames = vec![vec![]; 60];
     frames.extend([click(on_overview(10.0)), click(on_overview(10.0))]);
     overview_frames(&ctx, &mut state, frames);
-    assert_eq!(shown(&state), (0.0, 42.0));
+    assert_eq!(shown(&ctx), (0.0, 42.0));
 }
 
 #[test]

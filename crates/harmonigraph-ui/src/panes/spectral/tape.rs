@@ -195,11 +195,15 @@ pub(super) fn window(ui: &egui::Ui, view: &TapeView, surface: usize) -> Window {
     held.filter(|w| w.zoomed).map_or(fit, |w| Window { end: fit.end, ..w }.moved(0.0))
 }
 
-/// Keep the stretch shown for the next frame, and tell the worker which
-/// columns to analyze first.
-pub(super) fn keep_window(ui: &egui::Ui, surface: usize, window: Window, view: &mut TapeView) {
+/// Keep the stretch shown for the next frame.
+pub(super) fn keep_window(ui: &egui::Ui, surface: usize, window: Window) {
     ui.data_mut(|d| d.insert_temp(window_id(surface), window));
-    view.window = Some((window.from, window.to));
+}
+
+/// The stretch shown on `surface` by the last frame drawn in Tape mode.
+#[cfg(test)]
+pub(super) fn kept_window(ctx: &egui::Context, surface: usize) -> Option<(f64, f64)> {
+    ctx.data(|d| d.get_temp::<Window>(window_id(surface))).map(|w| (w.from, w.to))
 }
 
 /// The tape's own GPU grid, apart from the live heatmap's, so that switching

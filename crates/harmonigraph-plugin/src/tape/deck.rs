@@ -259,8 +259,7 @@ impl Deck {
     /// Mix whatever has been assembled for the current cue into `planes`;
     /// how many frames of tape were added, from the block's first.
     fn mix(&mut self, planes: &mut [&mut [f32]], frames: usize) -> usize {
-        let active =
-            matches!(self.play, Play::Cued | Play::Playing | Play::Fading { .. });
+        let active = matches!(self.play, Play::Cued | Play::Playing | Play::Fading { .. });
         let mut at = 0;
         while at < frames || !active {
             if self.piece.is_none() {

@@ -202,11 +202,8 @@ pub struct TapeView {
     /// The Analyzer draws the tape rather than the live picture. Never saved:
     /// the tape is not, so a reopened project would open on an empty picture.
     /// Set only by the Analyzer's Tape tab, which clears it for any other
-    /// tab: the plugin analyzes the tape while it is set.
+    /// tab.
     pub showing: bool,
-    /// The song seconds the Analyzer shows while [`showing`](Self::showing),
-    /// which the worker analyzes first.
-    pub window: Option<(f64, f64)>,
 }
 
 impl TapeView {

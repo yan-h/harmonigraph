@@ -508,7 +508,6 @@ impl Worker {
         }
         self.speed = view.speed;
         self.spectrum.configure(settings, self.store.as_ref());
-        self.spectrum.window = view.window.filter(|_| view.showing);
         self.spectrum.sync(&mut view.spectrogram);
         let shared = &self.shared;
         let seconds = |bits: &std::sync::atomic::AtomicU64| {
