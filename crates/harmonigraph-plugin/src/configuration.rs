@@ -74,10 +74,8 @@ impl MusicalSettings {
 
 /// What the audio owner last applied, as the editor and a save read it: the
 /// id of the last edit it took, the reducer's raw axes and resolved
-/// configuration, and its status bits (1: Learn heard an incomplete row,
-/// 2: host input was lost and the take refuses its configuration until a
-/// host reset, 16: Learn heard more distinct classes than it reads). The
-/// editor adds 8 when its last submission found the queue full.
+/// configuration, and its status bits, named on [`ConfigurationView`]. The
+/// editor adds `QUEUE_FULL` when its last submission found the queue full.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Record {
     pub applied: u64,
@@ -108,14 +106,22 @@ impl Published {
         let bits = u64::from(modes.tempered.syntonic)
             | u64::from(modes.tempered.septimal_kleisma) << 1
             | u64::from(modes.learning) << 2;
-        let words = [record.applied, record.resolved.revision, bits, u64::from(record.status)]
-            .into_iter()
-            .chain(
-                (record.raw.axes().into_iter())
-                    .chain(record.resolved.tuning.axes())
-                    .chain(record.resolved.policy.words())
-                    .map(|word| word as u32 as u64),
-            );
+        // Typed to the words left after the header and the two tunings, so a
+        // policy that grew is a type error here rather than a word `zip`
+        // drops.
+        let policy: [i32; WORDS - 14] = record.resolved.policy.words();
+        let mut words = [0u64; WORDS];
+        words[..4].copy_from_slice(&[
+            record.applied,
+            record.resolved.revision,
+            bits,
+            u64::from(record.status),
+        ]);
+        let signed =
+            record.raw.axes().into_iter().chain(record.resolved.tuning.axes()).chain(policy);
+        for (cell, word) in words[4..].iter_mut().zip(signed) {
+            *cell = word as u32 as u64;
+        }
         for (cell, word) in self.words.iter().zip(words) {
             cell.store(word, Ordering::SeqCst);
         }
@@ -244,7 +250,8 @@ impl Settings {
     fn current(&self) -> (Tuning, ConfigurationView) {
         let mut producer = self.producer.lock();
         let applied = self.published.load();
-        let status = applied.status | if self.rejected.load(Ordering::Acquire) { 8 } else { 0 };
+        let status = applied.status
+            | if self.rejected.load(Ordering::Acquire) { ConfigurationView::QUEUE_FULL } else { 0 };
         if let Some((id, settings)) = producer.shadow {
             if applied.applied < id {
                 let reducer = settings.reducer();
@@ -481,7 +488,7 @@ impl Owner {
     }
     /// Host input was lost: a take refuses its configuration until a reset.
     pub fn fault(&mut self) {
-        self.status |= 2;
+        self.status |= ConfigurationView::INPUT_LOST;
         self.publish();
     }
     pub fn segment(&mut self, start: u32, frames: u32) {
@@ -499,7 +506,7 @@ impl Owner {
     }
 
     pub fn record(&mut self, recorder: &mut harmonigraph_record::Recorder, origin: Option<f64>) {
-        if self.status & 2 != 0 && recorder.recording_epoch() != 0 {
+        if self.status & ConfigurationView::INPUT_LOST != 0 && recorder.recording_epoch() != 0 {
             recorder.fail_configuration();
         }
         let start = self.recording.block_start;
@@ -521,9 +528,9 @@ impl Owner {
     /// through learns the axes from unchanged input.
     ///
     /// `classes` is the Hub's `held_classes`, asked only while Learn is armed.
-    /// Status bits 1 (the rows are incomplete) and 16 (more distinct classes
-    /// than Learn reads) report this evaluation alone rather than latching, so
-    /// each clears as soon as what is held allows Learn again.
+    /// `LEARN_INCOMPLETE` and `TOO_MANY_CLASSES` report this evaluation alone
+    /// rather than latching, so each clears as soon as what is held allows
+    /// Learn again.
     ///
     /// Learn applies at the block's start after the walk has pushed later
     /// samples, so it is not pushed into the history: the next `begin`
@@ -535,15 +542,17 @@ impl Owner {
     ) {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
-        self.status &= !(1 | 16);
+        self.status &= !(ConfigurationView::LEARN_INCOMPLETE | ConfigurationView::TOO_MANY_CLASSES);
         if self.maps.playback.engine.learns() {
             match self.learning.infer(self.reducer.resolved().modes.learning, classes) {
                 Ok(Some(learned)) => {
                     self.reducer.apply(ConfigMutation::LearnResolved { learned, retuning });
                     self.edited = true;
                 }
-                Err(Unlearnable::Incomplete) => self.status |= 1,
-                Err(Unlearnable::TooManyClasses) => self.status |= 16,
+                Err(Unlearnable::Incomplete) => self.status |= ConfigurationView::LEARN_INCOMPLETE,
+                Err(Unlearnable::TooManyClasses) => {
+                    self.status |= ConfigurationView::TOO_MANY_CLASSES
+                }
                 Ok(None) => {}
             }
         }

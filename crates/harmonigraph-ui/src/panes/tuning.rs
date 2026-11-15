@@ -12,7 +12,7 @@
 use super::learn_pulse;
 use super::spectral::roll::note_color;
 use super::{section, subsection};
-use crate::params::ParamBackend;
+use crate::params::{ConfigurationView, ParamBackend};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
 use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, PolicyEdit, TuningAxis};
@@ -110,7 +110,7 @@ fn interval_row(
     params: &dyn ParamBackend,
     comma: tuning::Comma,
 ) {
-    let axis = derived_axis(comma);
+    let axis = comma.derived_axis();
     let switch_width = tuning::Comma::ALL
         .into_iter()
         .map(|c| crate::widgets::toggle_switch_width(ui, c.temperament()))
@@ -130,14 +130,6 @@ fn interval_row(
     } else {
         axis_bar(ui, state, params, axis);
         button_row(ui, |ui| temperament_switch(ui, state, params, comma));
-    }
-}
-
-/// The interval whose tuning and inline switch this comma controls.
-fn derived_axis(comma: tuning::Comma) -> TuningAxis {
-    match comma {
-        tuning::Comma::Syntonic => TuningAxis::Five,
-        tuning::Comma::SeptimalKleisma => TuningAxis::Seven,
     }
 }
 
@@ -184,7 +176,7 @@ fn comma_deriving(
     axis: TuningAxis,
     tempered: harmonigraph_core::Tempered,
 ) -> Option<tuning::Comma> {
-    tuning::Comma::ALL.into_iter().find(|&c| derived_axis(c) == axis && tempered.has(c))
+    tuning::Comma::ALL.into_iter().find(|&c| c.derived_axis() == axis && tempered.has(c))
 }
 
 pub(super) fn tuning_pane(
@@ -287,30 +279,31 @@ pub(super) fn tuning_pane(
     });
 
     // Faults remain visible even when the tuning controls are folded.
-    let configuration_notice = if state.runtime.configuration_status & 2 != 0 {
-        crate::widgets::label(
-            ui,
-            egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
-        );
-        true
-    } else if state.runtime.configuration_status & 1 != 0 {
-        crate::widgets::label(
-            ui,
-            egui::RichText::new(HELD_STATE_INCOMPLETE_NOTICE).color(theme::armed()),
-        );
-        true
-    } else if state.runtime.configuration_status & 16 != 0 {
-        crate::widgets::label(
-            ui,
-            egui::RichText::new(too_many_pitches_notice()).color(theme::armed()),
-        );
-        true
-    } else if state.runtime.configuration_status & 8 != 0 {
-        crate::widgets::label(ui, "Tuning change refused: pending command storage is full");
-        true
-    } else {
-        false
-    };
+    let configuration_notice =
+        if state.runtime.configuration_status & ConfigurationView::INPUT_LOST != 0 {
+            crate::widgets::label(
+                ui,
+                egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
+            );
+            true
+        } else if state.runtime.configuration_status & ConfigurationView::LEARN_INCOMPLETE != 0 {
+            crate::widgets::label(
+                ui,
+                egui::RichText::new(HELD_STATE_INCOMPLETE_NOTICE).color(theme::armed()),
+            );
+            true
+        } else if state.runtime.configuration_status & ConfigurationView::TOO_MANY_CLASSES != 0 {
+            crate::widgets::label(
+                ui,
+                egui::RichText::new(too_many_pitches_notice()).color(theme::armed()),
+            );
+            true
+        } else if state.runtime.configuration_status & ConfigurationView::QUEUE_FULL != 0 {
+            crate::widgets::label(ui, "Tuning change refused: pending command storage is full");
+            true
+        } else {
+            false
+        };
 
     section(ui, "Note matching", |ui| {
         axis_bar(ui, state, params, TuningAxis::Tolerance);

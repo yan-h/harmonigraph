@@ -128,6 +128,18 @@ pub enum InstanceEdit {
 #[derive(Clone, Copy, Debug)]
 pub struct ConfigurationView {
     pub resolved: harmonigraph_core::configuration::ResolvedConfig,
+    /// The bits below.
     pub status: u32,
     pub pending: bool,
+}
+
+impl ConfigurationView {
+    /// Learn heard a row that lost an event; it clears when the rows do.
+    pub const LEARN_INCOMPLETE: u32 = 1;
+    /// Host input was lost: a take refuses its configuration until a reset.
+    pub const INPUT_LOST: u32 = 2;
+    /// The editor's last edit found the queue full.
+    pub const QUEUE_FULL: u32 = 8;
+    /// Learn heard more distinct classes than it reads.
+    pub const TOO_MANY_CLASSES: u32 = 16;
 }

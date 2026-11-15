@@ -300,13 +300,20 @@ impl ConfigEdit {
         let mut edit = Self::default();
         edit.tempered[comma.index()] = Some(on);
         if !on {
-            let axis = match comma {
-                Comma::Syntonic => TuningAxis::Five,
-                Comma::SeptimalKleisma => TuningAxis::Seven,
-            };
+            let axis = comma.derived_axis();
             edit.axes[axis.index()] = Some(current.axes()[axis.index()]);
         }
         edit
+    }
+}
+
+impl Comma {
+    /// The interval this comma derives from its generators while tempered.
+    pub fn derived_axis(self) -> TuningAxis {
+        match self {
+            Comma::Syntonic => TuningAxis::Five,
+            Comma::SeptimalKleisma => TuningAxis::Seven,
+        }
     }
 }
 
