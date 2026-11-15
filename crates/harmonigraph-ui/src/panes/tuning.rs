@@ -15,7 +15,7 @@ use super::{section, subsection};
 use crate::params::{ConfigurationView, ParamBackend};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
-use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, PolicyEdit, TuningAxis};
+use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, TuningAxis};
 use harmonigraph_core::tuning;
 use std::collections::BTreeMap;
 
@@ -31,9 +31,6 @@ mod map_tests;
 /// configuration until the host resets the plugin. Edits still apply.
 pub(crate) const CONFIGURATION_FAULT_NOTICE: &str =
     "Host input was lost: a take recorded now refuses its tuning until the plugin is reset. Deactivate and reactivate the plugin in the host to recover; tuning edits still apply.";
-/// Configuration status bit 1: the held notes cannot be read for Learn.
-pub(crate) const HELD_STATE_INCOMPLETE_NOTICE: &str =
-    "Learning unavailable: held state is incomplete. Reset to recover.";
 /// Configuration status bit 16: more distinct pitches are held than Learn reads.
 pub(crate) fn too_many_pitches_notice() -> String {
     format!(
@@ -286,12 +283,6 @@ pub(super) fn tuning_pane(
                 egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
             );
             true
-        } else if state.runtime.configuration_status & ConfigurationView::LEARN_INCOMPLETE != 0 {
-            crate::widgets::label(
-                ui,
-                egui::RichText::new(HELD_STATE_INCOMPLETE_NOTICE).color(theme::armed()),
-            );
-            true
         } else if state.runtime.configuration_status & ConfigurationView::TOO_MANY_CLASSES != 0 {
             crate::widgets::label(
                 ui,
@@ -339,11 +330,9 @@ pub(super) fn tuning_pane(
 }
 
 /// How the player's controller renders each prime. Learn fills it from the
-/// fifth it hears; it is an adaptive policy setting, so edits travel as one.
-fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
-    let mut p = state.runtime.adaptive_policy;
-    let before = p;
-    let mut derive_keyboard = false;
+/// fifth it hears; it is an adaptive policy setting, edited in the policy the
+/// Adaptive section sends. "Derive from fifth" derives from the fifth shown.
+fn keyboard_controls(ui: &mut egui::Ui, p: &mut PolicyConfig) {
     super::block(ui, "Keyboard", |ui| {
         let fresh = PolicyConfig::default().keyboard;
         for ((value, fresh), label) in
@@ -367,7 +356,7 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             ))
             .clicked()
         {
-            derive_keyboard = true;
+            p.keyboard = tuning::fifth_generated(p.keyboard[0]);
         }
     })
     .response
@@ -377,15 +366,6 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
          pitch cost outweighs harmonic benefit. Learn sets the keyboard from the \
          fifth it hears.",
     );
-    let mut policy = PolicyEdit::changed(before, p);
-    if derive_keyboard {
-        policy = policy.derive_keyboard();
-    }
-    if !policy.is_empty() {
-        state
-            .runtime
-            .edit_tuning(params, ConfigEdit { policy: Some(policy), ..Default::default() });
-    }
 }
 
 fn fifths(steps: i32) -> String {
@@ -395,8 +375,7 @@ fn fifths(steps: i32) -> String {
 }
 
 /// The policy's own rows first and its two blocks after them, so no row
-/// reads as the end of a block. Keyboard edits travel on their own, and each
-/// edit carries only the fields it changed, so the two compose in one frame.
+/// reads as the end of a block. Any change sends the whole policy shown.
 fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     section(ui, "Adaptive tuning", |ui| {
         let mut p = state.runtime.adaptive_policy;
@@ -427,17 +406,14 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 },
             );
         });
-        keyboard_controls(ui, state, params);
+        keyboard_controls(ui, &mut p);
         super::block(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, true))
             .response
             .on_hover_text(
                 "New notes follow the moving context; sounding notes keep their correction.",
             );
         if p != before {
-            state.runtime.edit_tuning(
-                params,
-                ConfigEdit { policy: Some(PolicyEdit::changed(before, p)), ..Default::default() },
-            );
+            state.runtime.edit_tuning(params, ConfigEdit { policy: Some(p), ..Default::default() });
         }
     });
 }
@@ -492,10 +468,7 @@ fn follow_controls(
     let before = p;
     context_controls(ui, &mut p, &PolicyConfig::default(), false);
     if p != before {
-        state.runtime.edit_tuning(
-            params,
-            ConfigEdit { policy: Some(PolicyEdit::changed(before, p)), ..Default::default() },
-        );
+        state.runtime.edit_tuning(params, ConfigEdit { policy: Some(p), ..Default::default() });
     }
 }
 
@@ -644,10 +617,11 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], sta
 }
 
 /// What a source's Retune and Show boxes answer a hover with, the bulk
-/// boxes included: off, Retune passes notes through without influencing
-/// adaptive tuning, and Show only ever affects the picture.
-const RETUNE_HINT: &str = "Tune new notes with the selected engine. Off, notes pass through without influencing adaptive tuning.";
-const SHOW_HINT: &str = "Show this instance's output notes. Only affects the picture.";
+/// boxes included: off, Retune passes notes through uncorrected and still
+/// heard by Learn (a Tune's still through its delay), and Show changes
+/// nothing heard.
+const RETUNE_HINT: &str = "Tune new notes with the selected engine. Off, notes pass through uncorrected, without influencing adaptive tuning, and Learn still hears them; a Tune's untuned notes still pass through its tuning delay.";
+const SHOW_HINT: &str = "Show this instance's output notes on the lattice, in takes and in exports. Changes nothing you hear.";
 
 fn instance_controls(
     ui: &mut egui::Ui,
@@ -835,7 +809,9 @@ fn instance_controls(
                         ui.data_mut(|data| data.remove::<u32>(id));
                     }
                 } else {
-                    delay_text.on_hover_text("Harmonigraph's own input needs one buffer.");
+                    delay_text.on_hover_text(
+                        "Harmonigraph's own input is corrected in the callback it arrives in.",
+                    );
                 }
             });
         });
@@ -857,7 +833,7 @@ fn instance_controls(
                 .button("Apply to all tuners")
                 .on_hover_text(
                     "Each tuner reports its own latency; Source details overrides one. \
-                     Harmonigraph's own input stays at one buffer.",
+                     Harmonigraph's own input has no delay.",
                 )
                 .clicked()
             {
@@ -880,8 +856,8 @@ fn instance_controls(
 }
 
 /// A tuner's delay in whole buffers, from one to `max`. A double-click puts
-/// it back on one buffer, the fresh value of every tuner's `Tuning Delay`
-/// param (`harmonigraph-plugin`'s `TuneParams`). The caller commits the edit:
+/// it back on one buffer, the fresh value of every tuner's saved Tuning delay
+/// (`harmonigraph-plugin`'s `InstanceSettings`). The caller commits the edit:
 /// the delay is the tuner's configuration, not the look, so nothing here
 /// reaches the appearance's undo.
 fn delay_bar(ui: &mut egui::Ui, delay: &mut u32, max: u32, label: &str) -> egui::Response {

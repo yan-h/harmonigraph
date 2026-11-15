@@ -228,6 +228,8 @@ struct Sink {
     reject_kind: Option<u16>,
     reject_attempt: Option<usize>,
     callback_nanos: u128,
+    /// What the callback returned to the host.
+    status: clap_process_status,
     /// Every kind of event the host took, note or parameter. The chronological
     /// floor is the plugin's contract now, and this is what holds it to that:
     /// both `time` expressions in `Tune::schedule` clamp differently, so a
@@ -310,8 +312,6 @@ fn parameter(id: &str, value: f64, time: u32) -> Input {
         value,
     })
 }
-/// The one parameter the Tune exports.
-const DELAY_PARAM: u32 = 0;
 struct Device {
     plugin: *const clap_plugin,
     _host: Box<clap_host>,
@@ -428,43 +428,13 @@ impl Device {
     fn latency(&self) -> u32 {
         latency_of(self.plugin)
     }
-    fn param_id(&self, index: u32) -> u32 {
+    fn tune_wrapper(&self) -> &nice_plug::wrapper::clap::Wrapper<plugin::HarmonigraphTune> {
         assert!(self.tuner);
-        let mut info = unsafe { std::mem::zeroed() };
-        assert!(unsafe { self.params().get_info.unwrap()(self.plugin, index, &mut info) });
-        info.id
-    }
-    /// Automation for the Tune's parameter at `index`, carrying the value a
-    /// host sends: a stepped parameter's CLAP value is its step index, so
-    /// Participating is 0 or 1 and the tuning delay's 1x buffer is a zero.
-    fn param_event(&self, index: u32, value: f64, time: u32) -> Input {
-        Input::Param(clap_event_param_value {
-            header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, time),
-            param_id: self.param_id(index),
-            cookie: ptr::null_mut(),
-            note_id: -1,
-            port_index: -1,
-            channel: -1,
-            key: -1,
-            value,
-        })
-    }
-    /// What the host reads back for that parameter, in the same units.
-    fn param_value(&self, index: u32) -> f64 {
-        let mut value = 0.0;
-        assert!(unsafe {
-            self.params().get_value.unwrap()(self.plugin, self.param_id(index), &mut value)
-        });
-        value
+        unsafe { &*((*self.plugin).plugin_data.cast()) }
     }
     fn shared(&self) -> std::sync::Arc<setup::Shared> {
         if self.tuner {
-            let wrapper = unsafe {
-                &*((*self.plugin)
-                    .plugin_data
-                    .cast::<nice_plug::wrapper::clap::Wrapper<plugin::HarmonigraphTune>>())
-            };
-            wrapper.test_inspect_plugin(|plugin| plugin.shared.clone())
+            self.tune_wrapper().test_inspect_plugin(|plugin| plugin.shared.clone())
         } else {
             let wrapper = unsafe {
                 &*((*self.plugin)
@@ -534,6 +504,7 @@ impl Device {
             reject_kind,
             reject_attempt,
             callback_nanos: 0,
+            status: CLAP_PROCESS_ERROR,
             accepted_time: 0,
         };
         let output =
@@ -569,6 +540,7 @@ impl Device {
         let started = std::time::Instant::now();
         let status = unsafe { (*self.plugin).process.unwrap()(self.plugin, &process) };
         sink.callback_nanos = started.elapsed().as_nanos();
+        sink.status = status;
         assert_eq!(
             status == CLAP_PROCESS_ERROR,
             expect_error,
@@ -848,8 +820,7 @@ fn initial_expression_order_and_identity_match_in_both_production_routes() {
                 hub.run(0, vec![], None);
                 tune.run(512, vec![], None).values
             } else {
-                hub.run(0, input, None);
-                hub.run(512, vec![], None).values
+                hub.run(0, input, None).values
             };
             let published: Vec<_> = capture
                 .display_events()
@@ -970,6 +941,56 @@ fn a_full_copy_ring_costs_a_correction_rather_than_a_note() {
     assert_ne!(pair.status() & session::RING_FULL, 0);
 }
 
+/// The missed-correction count is advice about the delay, read when playing
+/// stops, so a transport Stop keeps it while its cut clears the fault bits.
+/// Reset all voices and a reactivation clear it, a Reset landing right behind
+/// the Stop included.
+#[test]
+fn missed_corrections_survive_a_stop_and_clear_at_reset_or_reactivation() {
+    let _scope = crate::test_scope::enter();
+    let edge = |pair: &mut Pair, playing: bool| {
+        let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+        if !playing {
+            value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        }
+        pair.tune.run(pair.raw, vec![Input::Transport(value)], None);
+        pair.hub.run(pair.raw, vec![Input::Transport(value)], None);
+        pair.raw += 512;
+    };
+    for clear in ["Reset", "reactivation", "Reset behind the Stop"] {
+        let mut pair = Pair::new();
+        edge(&mut pair, true);
+        // A full copy ring: the note sounds raw, a miss, beside RING_FULL.
+        let mut input: Vec<_> = (0..CAPTURE_RING).map(|_| raw_midi([0xb0, 20, 0], 0)).collect();
+        input.push(note(1, 0, 60, 0, true));
+        pair.step(input);
+        for _ in 0..3 {
+            pair.idle();
+        }
+        assert_eq!((pair.misses(), pair.status() & session::RING_FULL), (1, session::RING_FULL));
+        edge(&mut pair, false);
+        if clear == "Reset behind the Stop" {
+            // The Hub takes the Reset before the Tune adopts the Stop.
+            session::session().request_reset();
+            pair.hub.run(pair.raw, vec![], None);
+            pair.raw += 512;
+        } else {
+            for _ in 0..2 {
+                pair.idle();
+            }
+            assert_eq!((pair.misses(), pair.status()), (1, 0), "Stop keeps the count alone");
+            match clear {
+                "Reset" => session::session().request_reset(),
+                _ => pair.tune.reactivate_format(48000.0, 512),
+            }
+        }
+        for _ in 0..2 {
+            pair.idle();
+        }
+        assert_eq!(pair.misses(), 0, "{clear}");
+    }
+}
+
 /// A reply reaches the onset with its serial or it reaches nothing. After a
 /// cut the epoch has moved, so an answer minted before it is discarded rather
 /// than attached to whatever now holds that serial.
@@ -981,8 +1002,7 @@ fn a_reply_from_before_the_cut_is_discarded_rather_than_attached() {
     pair.tune.run(pair.raw, vec![note(1, 0, 60, 0, true)], None);
     pair.hub.run(pair.raw, vec![], None);
     pair.raw += 512;
-    pair.tune.shared().request_reset();
-    pair.tune.main();
+    pair.tune.host_reset();
     let output = pair.idle();
     assert!(
         tuning_of(&output).is_none(),
@@ -995,22 +1015,34 @@ fn a_reply_from_before_the_cut_is_discarded_rather_than_attached() {
 }
 
 /// #787, retargeted. The Apply that used to park a row behind ten wait
-/// reasons is now one epoch bump: it cuts what is sounding, and the very next
-/// phrase is corrected again. Audio resuming is the whole assertion.
+/// reasons is now one epoch bump: it cuts what is sounding, forgets the
+/// history, and the very next phrase is corrected again.
 #[test]
 fn reset_cuts_and_audio_resumes_within_two_callbacks() {
     let _scope = crate::test_scope::enter();
     let mut pair = Pair::new();
+    pair.step(vec![note(2, 0, 67, 0, true)]);
+    pair.step(vec![note(2, 0, 67, 0, false)]);
     pair.step(vec![note(1, 0, 60, 0, true)]);
     let sounding = pair.idle();
     assert!(tuning_of(&sounding).is_some(), "the fixture reaches the Reset with a note held");
-    pair.tune.shared().request_reset();
-    pair.tune.main();
-    // The cut owes a Note-Off for the voice it just ended.
-    let cut = pair.idle();
+    assert!(
+        inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0,
+        "and with a released one remembered"
+    );
+    session::session().request_reset();
+    // The Hub takes the cut in its next callback; the Tune adopts it in the
+    // one after, and owes a Note-Off for the voice it ended.
+    let mut cut = pair.idle();
+    cut.extend(pair.idle());
     assert!(
         cut.iter().any(|(_, event)| event.release()),
         "the cut releases what it forgot it was holding: {cut:?}"
+    );
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| hub.test_memory()),
+        0,
+        "and the history is forgotten, the voice the cut released included"
     );
     for step in 0..2 {
         pair.step(vec![note(10 + step, 0, 64, 0, true)]);
@@ -1036,8 +1068,7 @@ fn the_cut_releases_every_held_voice_and_neutralises_the_pedals() {
         2,
         "the fixture reaches the cut with two voices and a pedal down: {sounding:?}"
     );
-    pair.tune.shared().request_reset();
-    pair.tune.main();
+    pair.tune.host_reset();
     let cut = pair.idle();
     assert_eq!(
         cut.iter().filter(|(_, event)| event.release()).count(),
@@ -1114,6 +1145,50 @@ fn a_tune_run_after_the_hub_has_its_last_notes_in_a_stopped_take() {
         .notes()
         .any(|n| n.note == 60 && matches!(n.kind, harmonigraph_take::NoteKind::On { .. }));
     assert!(struck, "the Tune's last note before the run's end is in the take");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Lowering a Tune's delay while a take records leaves the snapshot after its
+/// cut timed at the old delay and the deltas after it at the new one, so
+/// sorted by time they come before the snapshot that should follow them. The
+/// reader refuses that take rather than export it out of order.
+#[test]
+fn lowering_a_tunes_delay_while_recording_makes_a_take_the_reader_refuses() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    let mut tune = Device::new(true);
+    tune.shared().request_delay(4);
+    hub.activate();
+    tune.activate();
+    let dir = std::env::temp_dir().join(format!("harmonigraph-delay-down-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    capture.arm();
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
+    let mut position = 1.0;
+    let mut cycle = |hub: &Device, tune: &Device, raw: i64, played: Vec<Input>| {
+        tune.run_format(raw, played, None, None, 512);
+        hub.run_callback(raw, vec![], (None, None), (512, false), Some(timeline(position, true)));
+        position += 512.0 / 48_000.0;
+    };
+    // Sounds at 512 + 4 x 512, where the snapshot after the cut is timed.
+    cycle(&hub, &tune, 512, vec![note(1, 0, 60, 0, true)]);
+    tune.shared().request_delay(1);
+    tune.reactivate_format(48000.0, 512);
+    // Sounds at 1024 + 512, before that snapshot.
+    cycle(&hub, &tune, 1024, vec![note(2, 0, 64, 0, true)]);
+    for raw in [1536, 2048, 2560, 3072] {
+        cycle(&hub, &tune, raw, vec![]);
+    }
+    capture.stop();
+    writer.stop();
+    cycle(&hub, &tune, 3584, vec![]);
+    writer.drain(&mut capture);
+    let sealed = writer.finished.clone().expect("the stopped take seals");
+    let read = harmonigraph_take::Take::read(&sealed);
+    assert!(
+        matches!(read, Err(harmonigraph_take::ReadError::OutOfOrder(_))),
+        "the take must be refused for its order: {read:?}"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -1221,22 +1296,35 @@ fn a_second_hub_is_a_fault_status_and_never_a_silence() {
     assert_ne!(first.shared().status() & session::SECOND_HUB, 0);
 }
 
-/// The delay is `multiplier x advertised maximum frames`, resolved at
-/// activation and reported to the host as latency before any Hub exists.
+/// A Tune's notes wait on the Hub's callbacks for their corrections, and a
+/// Tune may be added while Harmonigraph's track is quiet, so the Hub asks the
+/// host to keep calling it with no Tune paired and nothing sounding.
 #[test]
-fn the_delay_is_reported_as_latency_from_the_saved_multiplier_alone() {
+fn the_hub_asks_to_be_kept_running_with_nothing_paired_or_sounding() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    assert_eq!(hub.run(0, vec![], None).status, CLAP_PROCESS_CONTINUE);
+}
+
+/// The delay is `multiplier x advertised maximum frames`, resolved at
+/// activation and reported to the host as latency before any Hub exists. The
+/// multiplier is a saved setting, so a project reopens at the one it saved.
+#[test]
+fn the_delay_is_saved_and_reported_as_latency_before_any_hub_exists() {
     let _scope = crate::test_scope::enter();
     let mut tune = Device::new(true);
     assert_eq!(tune.latency(), 0, "no activation has advertised a format yet");
     tune.activate_format(48000.0, 256);
     assert_eq!(tune.latency(), 256);
-    // A stepped parameter's CLAP value is its step index, so 3 is 4x buffer.
-    tune.run(0, vec![tune.param_event(DELAY_PARAM, 3.0, 0)], None);
+    tune.shared().request_delay(4);
     tune.reactivate_format(48000.0, 256);
     assert_eq!(tune.latency(), 4 * 256, "the new multiplier is adopted at the reactivation");
-    // The round trip is through a normalized f32, so this is the step index
-    // rather than an exact double.
-    assert_eq!(tune.param_value(DELAY_PARAM).round(), 3.0, "and the host reads back what it set");
+    let saved = tune.tune_wrapper().get_state_object();
+    let mut reopened = Device::new(true);
+    reopened.tune_wrapper().set_state_object_from_gui(saved);
+    reopened.activate_format(48000.0, 256);
+    assert_eq!(reopened.latency(), 4 * 256, "a reopened project reports the saved delay");
 }
 
 /// A host format change is a cut: the notes standing in the line were
@@ -1290,174 +1378,6 @@ fn a_host_reset_on_one_tune_cuts_it_out_of_the_hubs_context() {
     assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0);
     pair.step(vec![note(2, 0, 62, 0, true)]);
     assert!(tuning_of(&pair.idle()).is_some(), "and the session plays on");
-}
-
-/// The Reset classification is "has one happened since I adopted", not "is the
-/// newest bump a Reset". A Reset and an attach landing between two Hub
-/// callbacks is still a Reset, and the memory it was pressed to clear must not
-/// ride out on the attach's epoch.
-#[test]
-fn a_reset_with_an_attach_behind_it_still_clears_released_memory() {
-    let _scope = crate::test_scope::enter();
-    let mut pair = Pair::new();
-    pair.step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 1, true)]);
-    pair.idle();
-    pair.step(vec![note(1, 0, 60, 0, false), note(2, 0, 64, 1, false)]);
-    for _ in 0..2 {
-        pair.idle();
-    }
-    // Nothing is held any more, so the Hub's retained context is exactly the
-    // released memory a Reset is meant to clear.
-    let remembered = inspect_hub(&pair.hub, |hub| hub.test_next_context());
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0, "no voice is still held");
-    assert!(
-        !remembered.context.is_empty(),
-        "the fixture reaches the Reset with released memory to clear: {remembered:?}"
-    );
-    // The Reset and the attach land in the same window: the Tune turns the
-    // request into the session's Reset on its callback, a second Tune joins,
-    // and only then does the Hub get a callback to adopt any of it.
-    pair.tune.shared().request_reset();
-    pair.tune.main();
-    pair.tune.run(pair.raw, vec![], None);
-    let mut joining = Device::new(true);
-    joining.activate();
-    pair.hub.run(pair.raw, vec![], None);
-    pair.raw += 512;
-    let after = inspect_hub(&pair.hub, |hub| hub.test_next_context());
-    assert!(
-        after.context.is_empty(),
-        "the attach behind the Reset did not reclassify it: {after:?}"
-    );
-    drop(joining);
-}
-
-/// Each producer owns a real exported Tune on its callback thread. The barrier
-/// suspends Session::reset after its cut, before its memory-reset publication.
-/// Retain the barrier here so its last Arc is never freed in an audio callback.
-struct ResetProducer {
-    gate: std::sync::Arc<std::sync::Barrier>,
-    start: Option<std::sync::mpsc::SyncSender<i64>>,
-    done: std::sync::mpsc::Receiver<()>,
-    thread: Option<std::thread::JoinHandle<()>>,
-    paused: bool,
-}
-impl ResetProducer {
-    fn new() -> Self {
-        let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
-        let pause = gate.clone();
-        let (start, receive) = std::sync::mpsc::sync_channel(0);
-        let (completed, done) = std::sync::mpsc::sync_channel(0);
-        let thread = std::thread::spawn(move || {
-            let mut tune = Device::new(true);
-            tune.activate();
-            completed.send(()).unwrap();
-            let Ok(raw) = receive.recv() else { return };
-            tune.shared().request_reset();
-            session::test_pause_reset(pause);
-            tune.run(raw, vec![], None);
-            completed.send(()).unwrap();
-            // Keep membership stable until the fixture has observed completion.
-            let _ = receive.recv();
-        });
-        done.recv().unwrap();
-        Self { gate, start: Some(start), done, thread: Some(thread), paused: false }
-    }
-    fn pause(&mut self, raw: i64) {
-        self.start.as_ref().unwrap().send(raw).unwrap();
-        self.gate.wait();
-        self.paused = true;
-    }
-    fn finish(&mut self) {
-        self.gate.wait();
-        self.paused = false;
-        self.done.recv().unwrap();
-    }
-}
-impl Drop for ResetProducer {
-    fn drop(&mut self) {
-        if self.paused {
-            self.gate.wait();
-            let _ = self.done.recv();
-        }
-        self.start.take();
-        let result = self.thread.take().unwrap().join();
-        if !std::thread::panicking() {
-            result.unwrap();
-        }
-    }
-}
-
-/// #1713. The pause runs inside the callback's allocation guard, and on macOS
-/// a std `Barrier`'s lock is boxed by whichever wait reaches it first. The
-/// fixture above only gets there first when its callback thread outruns
-/// `pause`, which aborted the whole binary in CI; a one-party barrier makes
-/// the hook's own wait the first every time.
-#[test]
-fn the_reset_pause_may_allocate_inside_the_callback_guard() {
-    let _scope = crate::test_scope::enter();
-    session::test_pause_reset(std::sync::Arc::new(std::sync::Barrier::new(1)));
-    nice_assert_no_alloc::assert_no_alloc(|| session::session().reset());
-}
-
-fn seed_released_memory(pair: &mut Pair) {
-    pair.step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 1, true)]);
-    pair.idle();
-    pair.step(vec![note(1, 0, 60, 0, false), note(2, 0, 64, 1, false)]);
-    pair.idle();
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0);
-    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0);
-}
-
-#[test]
-fn a_reset_completed_after_hub_adoption_still_clears_released_memory() {
-    let _scope = crate::test_scope::enter();
-    let mut pair = Pair::new();
-    let mut producer = ResetProducer::new();
-    seed_released_memory(&mut pair);
-    producer.pause(pair.raw);
-    let cut_epoch = session::session().epoch();
-    pair.idle();
-    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0, "cut alone retains memory");
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_epoch()), cut_epoch);
-    producer.finish();
-    assert_eq!(session::session().epoch(), cut_epoch, "completion adds no second voice cut");
-    pair.idle();
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_memory()), 0);
-    // This completion is consumed once: subsequent ordinary membership cuts
-    // retain newly released memory, rather than reapplying the old Reset.
-    seed_released_memory(&mut pair);
-    drop(producer);
-    pair.idle();
-    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0);
-}
-
-#[test]
-fn reset_producers_completing_out_of_order_each_clear_released_memory() {
-    let _scope = crate::test_scope::enter();
-    let mut pair = Pair::new();
-    let mut older = ResetProducer::new();
-    let mut newer = ResetProducer::new();
-    seed_released_memory(&mut pair);
-    older.pause(pair.raw);
-    newer.pause(pair.raw);
-    pair.idle();
-    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0);
-    newer.finish();
-    pair.idle();
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_memory()), 0);
-    seed_released_memory(&mut pair);
-    let cut_epoch = session::session().epoch();
-    older.finish();
-    assert_eq!(session::session().epoch(), cut_epoch);
-    pair.idle();
-    assert_eq!(
-        inspect_hub(&pair.hub, |hub| hub.test_memory()),
-        0,
-        "the older producer completing last cannot regress or hide the reset reason"
-    );
-    drop(older);
-    drop(newer);
 }
 
 /// The two publication lanes stay independent, and the display shows what the
@@ -1574,8 +1494,7 @@ fn an_onset_past_the_held_ceiling_is_refused_before_copy_and_output() {
         .expect("the fixture must exercise a nonzero frozen correction");
     pair.step(vec![expression(id, 0.25, 0)]);
     assert!((tuning_of(&pair.idle()).unwrap() - (0.25 + correction)).abs() < 1e-9);
-    pair.tune.shared().request_reset();
-    pair.tune.main();
+    pair.tune.host_reset();
     let cut = pair.idle();
     let ended: Vec<_> = cut
         .iter()
@@ -1724,7 +1643,7 @@ fn a_full_local_line_refuses_onset_and_release_before_copying() {
     hub.activate();
     let mut tune = Device::new(true);
     tune.activate();
-    tune.run(0, vec![tune.param_event(DELAY_PARAM, 15.0, 0)], None);
+    tune.shared().request_delay(16);
     tune.reactivate_format(48000.0, 512);
     assert_eq!(tune.latency(), 16 * 512);
     let mut pair = Pair { hub, tune, raw: 512 };
@@ -1783,9 +1702,11 @@ fn missing_steady_time_rejects_the_callback_before_note_admission() {
 }
 
 /// #1195. A source that published and then left still answers for itself
-/// after a stream-wide display gap, so the missing-history banner clears.
-/// The Tune plays and releases a note, then is removed; the Hub's own note
-/// floods the display lane past its ring while nothing drains it.
+/// after a stream-wide display gap, with its row's empty snapshot, so a
+/// display that missed its last release stops drawing that note. The Tune
+/// plays a note; the Hub's own note floods the display lane past its ring
+/// while nothing drains it; the Tune releases its note into that full lane
+/// and is removed.
 #[test]
 fn a_departed_source_answers_after_a_display_gap() {
     use harmonigraph_core::{canonical::CanonicalEvent, NoteTracker, SourceId};
@@ -1795,18 +1716,16 @@ fn a_departed_source_answers_after_a_display_gap() {
     let mut tune = Some(Device::new(true));
     tune.as_mut().unwrap().activate();
     let mut raw = 0;
-    let mut step = |hub: &mut Device, tune: &Option<Device>, input: Vec<Input>| {
+    let step = |hub: &mut Device, tune: &Option<Device>, raw: &mut i64, input: Vec<Input>| {
         if let Some(tune) = tune {
-            tune.run(raw, input, None);
+            tune.run(*raw, input, None);
         }
-        hub.run(raw, vec![], None);
-        raw += 512;
+        hub.run(*raw, vec![], None);
+        *raw += 512;
     };
     let mut display = NoteTracker::new();
-    step(&mut hub, &tune, vec![note(7, 0, 57, 0, true)]);
-    step(&mut hub, &tune, vec![]);
-    step(&mut hub, &tune, vec![note(7, 0, 57, 0, false)]);
-    step(&mut hub, &tune, vec![]);
+    step(&mut hub, &tune, &mut raw, vec![note(7, 0, 57, 0, true)]);
+    step(&mut hub, &tune, &mut raw, vec![]);
     let mut heard = None;
     capture.display_into(&mut display, |event, _| {
         if let CanonicalEvent::Note(delta) = event {
@@ -1815,12 +1734,13 @@ fn a_departed_source_answers_after_a_display_gap() {
     });
     let departed = heard.expect("the Tune's note reached the display");
     assert_ne!(departed, SourceId::DIRECT);
-    tune = None;
-    step(&mut hub, &tune, vec![]);
-    capture.display_into(&mut display, |_, _| {});
+    let held =
+        |display: &NoteTracker| display.held_voices().filter(|v| v.source == departed).count();
+    assert_eq!(held(&display), 1, "the display holds the Tune's note");
 
     // The Hub's own note, and more distinct tunings of it than the display
     // ring holds, with nothing draining it.
+    step(&mut hub, &tune, &mut raw, vec![]);
     hub.run(raw, vec![note(1, 0, 60, 0, true)], None);
     raw += 512;
     for block in 0..8 {
@@ -1828,6 +1748,10 @@ fn a_departed_source_answers_after_a_display_gap() {
         hub.run(raw, bends.collect(), None);
         raw += 512;
     }
+    // The release goes into the full lane, and the Tune leaves.
+    step(&mut hub, &tune, &mut raw, vec![note(7, 0, 57, 0, false)]);
+    step(&mut hub, &tune, &mut raw, vec![]);
+    tune = None;
     let mut gaps = 0;
     let mut answered = false;
     for _ in 0..4 {
@@ -1844,7 +1768,12 @@ fn a_departed_source_answers_after_a_display_gap() {
     }
     assert!(gaps > 0, "the fixture must overflow the display lane");
     assert!(answered, "the departed source must answer for itself after the last gap");
-    assert!(!display.history_missing(), "every source the display heard from has recovered");
+    assert_eq!(
+        held(&display),
+        0,
+        "and the display no longer draws the note it lost the release of"
+    );
+    drop(tune);
 }
 
 /// #1151. A MIDI channel bend moves every voice held on its channel and has
@@ -1921,8 +1850,184 @@ fn channel_bend_fanout_overflow_is_not_silent() {
     hub.run(2048, vec![], None);
     assert_eq!(notes, 2048, "fixture must exhaust the pending queue");
     assert!(gaps > 0, "lost bend history must be explicit");
+    // The last bend sounds at its own sample: Harmonigraph's own input has no
+    // delay, and the repair's block starts 32 samples before it.
     assert!(
-        repaired_at >= (1024.0 + 512.0 + 32.0) / 48000.0,
+        repaired_at >= (1024.0 + 32.0) / 48000.0,
         "repair must not place the last bend at an earlier retained delta's time"
     );
+}
+
+/// One block on a Tune and the Hub, both told the transport at `at` blocks,
+/// playing or parked. A Tune at 1x sounds what it is given one block later.
+fn take_block(hub: &Device, tune: &Device, raw: i64, played: Vec<Input>, at: f64, playing: bool) {
+    let position = timeline(at * 512.0 / 48_000.0, playing);
+    tune.run_callback(raw, played, (None, None), (512, false), Some(position));
+    hub.run_callback(raw, vec![], (None, None), (512, false), Some(position));
+}
+
+/// The notes a take draws for `key`, replayed as the renderer does.
+fn drawn(take: &harmonigraph_take::Take, key: u8) -> Vec<(f64, Option<f64>)> {
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for record in &take.events {
+        record.apply(&mut tracker).unwrap();
+    }
+    tracker.roll().notes().filter(|n| n.note == key).map(|n| (n.start, n.end)).collect()
+}
+
+/// #1760 on a Tune's row, where a record sounds a block after it is played: a
+/// paused take reads whole, every note drawn and on its soundtrack. The first
+/// two bend in the last block a take records, so the bend sounds in the pause
+/// and is dropped: `parked-at-start` parks at the last played block's own
+/// position, and `input-in-parked-block` plays into the first parked block,
+/// which still records. `release-in-parked-block` releases there, sounding in
+/// the pause: the release is dropped with it, and the resume's snapshot, which
+/// no longer lists the note, ends it. A note whose release was not recorded
+/// draws without an end.
+#[test]
+fn a_paused_take_reads_whole_with_a_tunes_records_sounding_in_the_pause() {
+    let on = |id, key, t| note(id, 0, key, t, true);
+    let off = |id, key, t| note(id, 0, key, t, false);
+    // (raw sample, events, transport position in blocks, playing)
+    type Step = (i64, Vec<Input>, f64, bool);
+    let park = |raw: i64, at: f64| -> Step { (raw, vec![], at, false) };
+    let play = |raw: i64, events: Vec<Input>, at: f64| -> Step { (raw, events, at, true) };
+    // Per key: the notes drawn, and whether each drew its release.
+    type Drawn = &'static [(u8, usize, bool)];
+    let cases: [(&str, Vec<Step>, Drawn); 3] = [
+        (
+            "parked-at-start",
+            vec![
+                play(0, vec![on(10, 60, 80)], 0.0),
+                play(512, vec![expression(10, 0.5, 480)], 1.0),
+                park(1024, 1.0),
+                park(1536, 1.0),
+                play(2048, vec![], 2.0),
+                play(2560, vec![], 3.0),
+                play(3072, vec![off(10, 60, 0)], 4.0),
+            ],
+            &[(60, 1, false)],
+        ),
+        (
+            "input-in-parked-block",
+            vec![
+                play(0, vec![on(10, 60, 80)], 0.0),
+                play(512, vec![], 1.0),
+                (1024, vec![expression(10, 0.5, 480)], 2.0, false),
+                park(1536, 2.0),
+                park(2048, 2.0),
+                play(2560, vec![], 2.0),
+                play(3072, vec![], 3.0),
+                play(3584, vec![off(10, 60, 0)], 4.0),
+            ],
+            &[(60, 1, false)],
+        ),
+        (
+            "release-in-parked-block",
+            vec![
+                play(0, vec![on(10, 60, 80)], 0.0),
+                play(512, vec![], 1.0),
+                (1024, vec![off(10, 60, 480)], 2.0, false),
+                park(1536, 2.0),
+                park(2048, 2.0),
+                play(2560, vec![on(12, 64, 16)], 2.0),
+                play(3072, vec![off(12, 64, 16)], 3.0),
+                play(3584, vec![], 4.0),
+            ],
+            &[(60, 1, false), (64, 1, true)],
+        ),
+    ];
+    for (name, steps, expected) in cases {
+        let _scope = crate::test_scope::enter();
+        let (mut hub, mut capture) = Device::recorded_hub();
+        let mut tune = Device::new(true);
+        hub.activate();
+        tune.activate();
+        capture.arm();
+        let dir = std::env::temp_dir()
+            .join(format!("harmonigraph-tune-paused-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.take");
+        let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+        let (mut raw, mut at) = (0, 0.0);
+        for (block, events, position, playing) in steps {
+            take_block(&hub, &tune, block, events, position, playing);
+            (raw, at) = (block, position);
+        }
+        // Parked from here: the last record sounds and is published, and the
+        // run ends.
+        for _ in 0..4 {
+            raw += 512;
+            take_block(&hub, &tune, raw, vec![], at, false);
+        }
+        writer.drain(&mut capture);
+        assert!(!writer.failed(), "{name}");
+        let take = harmonigraph_take::Take::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(take.incomplete.is_none(), "{name}: nothing was lost");
+        let soundtrack = take.audio_start.unwrap();
+        for &(key, count, released) in expected {
+            let notes = drawn(&take, key);
+            assert_eq!(notes.len(), count, "{name}: key {key}: {notes:?}");
+            assert!(
+                notes.iter().all(|&(start, end)| end.is_some() == released && start >= soundtrack),
+                "{name}: key {key} on the soundtrack from {soundtrack}: {notes:?}"
+            );
+        }
+        drop(writer);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// #1771 on a Tune's row: a note struck just before the take is armed sounds a
+/// block later, inside the take's first run, whose opening snapshot restates
+/// it. The Hub gave it a lifetime when it was struck, so the snapshot continues
+/// the note the take recorded rather than opening a second one beside it.
+#[test]
+fn a_tune_note_restated_by_a_snapshot_stays_one_note_with_its_history() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    let mut tune = Device::new(true);
+    hub.activate();
+    tune.activate();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-tune-restated-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.take");
+    // Struck in a block no take owns; it sounds a block later, once one does.
+    take_block(&hub, &tune, 0, vec![note(10, 0, 60, 80, true)], 0.0, true);
+    capture.arm();
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+    take_block(&hub, &tune, 512, vec![], 1.0, true);
+    take_block(&hub, &tune, 1024, vec![], 2.0, true);
+    take_block(&hub, &tune, 1536, vec![note(10, 0, 60, 0, false)], 3.0, true);
+    for (raw, at) in [(2048, 4.0), (2560, 5.0)] {
+        take_block(&hub, &tune, raw, vec![], at, true);
+    }
+    for raw in [3072, 3584] {
+        take_block(&hub, &tune, raw, vec![], 5.0, false);
+    }
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let onset = take.events.iter().any(|record| {
+        matches!(record.note(), Some(n) if n.note == 60
+            && matches!(n.kind, harmonigraph_take::NoteKind::On { .. }))
+    });
+    assert!(onset, "the onset sounds where the take records");
+    let restated = take.events.iter().any(|record| {
+        matches!(record, CanonicalRecord::Baseline(frame)
+            if frame.voices.iter().any(|voice| voice.note == 60))
+    });
+    assert!(restated, "and the run's opening snapshot restates it");
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for record in &take.events {
+        record.apply(&mut tracker).unwrap();
+    }
+    let notes: Vec<_> = tracker.roll().notes().filter(|n| n.note == 60).collect();
+    assert_eq!(notes.len(), 1, "one press, one note: {:?}", take.events);
+    assert!(notes[0].history_complete, "continued with its history");
+    assert!(notes[0].end.is_some(), "through the release it recorded");
+    drop(writer);
+    std::fs::remove_dir_all(dir).unwrap();
 }

@@ -30,13 +30,13 @@ pub fn snapshots() -> Vec<TuningInstance> {
         .filter_map(|(id, weak)| {
             let shared = weak.upgrade()?;
             let active = shared.active_multiplier.load(Ordering::Acquire);
-            let requested = shared.requested_multiplier.load(Ordering::Acquire).max(1);
+            let requested = setup::clamp_delay(shared.requested_multiplier.load(Ordering::Acquire));
             let (rate, frames) = shared.format();
             let input = shared.last_input.load(Ordering::Relaxed);
             let output = shared.last_output.load(Ordering::Relaxed);
             let name = shared.name.lock().unwrap().clone();
             let misses = shared.misses.load(Ordering::Relaxed);
-            let status = if active == 0 {
+            let status = if frames == 0 {
                 "Waiting for host activation".to_owned()
             } else if misses != 0 {
                 format!(
@@ -68,9 +68,13 @@ pub fn snapshots() -> Vec<TuningInstance> {
                 notes_in: shared.notes_in.load(Ordering::Relaxed),
                 notes_out: shared.notes_out.load(Ordering::Relaxed),
                 misses,
-                delay: requested,
-                max_delay: if shared.is_hub() { 1 } else { DELAY_MULTIPLIER_MAX as u32 },
-                delay_text: setup::delay_text(requested, active, frames, rate),
+                delay: if shared.is_hub() { 0 } else { requested },
+                max_delay: if shared.is_hub() { 0 } else { DELAY_MULTIPLIER_MAX as u32 },
+                delay_text: if shared.is_hub() {
+                    "No tuning delay".to_owned()
+                } else {
+                    setup::delay_text(requested, active, frames, rate)
+                },
                 status,
                 last_pitch: (input != i64::MIN && output != i64::MIN)
                     .then_some((input as f64 / 1_000_000.0, output as f64 / 1_000_000.0)),
@@ -81,7 +85,13 @@ pub fn snapshots() -> Vec<TuningInstance> {
     instances
 }
 
+/// An edit to the instance `id`, or for Reset all voices, which belongs to the
+/// session rather than to any row, to the session.
 pub fn edit(id: u64, edit: InstanceEdit) {
+    if let InstanceEdit::Reset = edit {
+        super::session::session().request_reset();
+        return;
+    }
     let shared = registry()
         .lock()
         .unwrap()
@@ -94,7 +104,7 @@ pub fn edit(id: u64, edit: InstanceEdit) {
             InstanceEdit::Show(value) => shared.set_show(value),
             InstanceEdit::Name(value) => shared.set_name(value),
             InstanceEdit::Delay(value) => shared.request_delay(value),
-            InstanceEdit::Reset => shared.request_reset(),
+            InstanceEdit::Reset => unreachable!("handled above"),
         }
     }
 }

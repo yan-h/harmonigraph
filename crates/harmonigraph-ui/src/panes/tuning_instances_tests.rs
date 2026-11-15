@@ -71,7 +71,7 @@ fn apply_to_all_tuners_applies_the_first_tuners_current_delay() {
     params.0.borrow_mut()[1].delay = 4;
     click("Apply to all tuners");
     let delays: Vec<_> = params.0.borrow().iter().map(|row| row.delay).collect();
-    assert_eq!(delays, [1, 4, 4], "the hub keeps its one buffer; the tuners take the first's");
+    assert_eq!(delays, [0, 4, 4], "the hub keeps no delay; the tuners take the first's");
 }
 
 /// The delay is a value bar: a double-click puts it back on one buffer, a
@@ -122,7 +122,7 @@ fn a_double_click_resets_the_delay_to_one_buffer() {
     clicks("Buffers", 2);
     clicks("Apply to all tuners", 1);
     let delays: Vec<_> = params.0.borrow().iter().map(|row| row.delay).collect();
-    assert_eq!(delays, [1, 1, 1]);
+    assert_eq!(delays, [0, 1, 1]);
 }
 
 #[test]

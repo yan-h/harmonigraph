@@ -13,7 +13,7 @@ use std::sync::Arc;
 use harmonigraph_core::canonical::{NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
-use harmonigraph_core::tuning::{Incomplete, PitchClass};
+use harmonigraph_core::tuning::PitchClass;
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
 use nice_plug::wrapper::clap::configuration::OwnedInput;
@@ -30,6 +30,14 @@ type Owner = crate::configuration::Owner;
 /// `CLAP_TRANSPORT_HAS_SECONDS_TIMELINE`, which the wrapper hands over as a
 /// bare flag word rather than as a clap-sys type.
 const HAS_SECONDS: u32 = 1 << 2;
+
+/// One observation of the host's seconds timeline: where the song was, at
+/// which steady sample.
+#[derive(Clone, Copy)]
+struct Seconds {
+    song: f64,
+    sample: i64,
+}
 
 /// The identity one row's notes carry downstream. The Hub's own track keeps
 /// the reserved DIRECT id every consumer already knows it by; a Tune row is
@@ -82,7 +90,6 @@ struct Assigned {
     decision: u64,
     player: f64,
     channel_pitch: i64,
-    configuration: ResolvedConfig,
 }
 
 /// One scheduled delta, held from the input boundary, where the replies have
@@ -281,19 +288,17 @@ struct Row {
     applied_time: Option<f64>,
     delay: i64,
     repair: publication::Lanes<bool>,
-    baseline_id: publication::Lanes<u64>,
 }
 
 pub struct Hub {
     pub shared: Arc<setup::Shared>,
-    /// The Hub's own track. It is a Tune, so its notes are delayed by D and it
-    /// is sequenced as a seventeenth source rather than observed as a special
-    /// case. Its ring is a direct call.
+    /// The Hub's own track. It is a Tune, at zero delay, so it is sequenced as
+    /// a seventeenth source rather than observed as a special case. Its ring
+    /// is a direct call.
     pub tune: Tune,
     id: u64,
     ends: Option<Box<[Option<HubEnds>; TUNERS]>>,
     epoch: u64,
-    reset_generation: u64,
     rows: Box<[Row]>,
     batch: Vec<Record>,
     pending: Vec<Published>,
@@ -304,18 +309,13 @@ pub struct Hub {
     rate: f64,
     callback: Option<api::Callback>,
     anchor: Option<(i64, f64)>,
-    /// Host seconds against elapsed samples, for loop and seek detection.
-    seconds: Option<f64>,
+    /// The last observation of the host's seconds timeline, for loop and
+    /// seek detection.
+    seconds: Option<Seconds>,
     /// The last recording run every row was told to open with a take-lane
     /// snapshot. See [`Hub::publish`].
     opened: Option<u64>,
     status: u32,
-    /// Which row the next collection starts from.
-    rotation: usize,
-    // Instance-owned: first access to a dropping thread-local can allocate
-    // destructor storage inside an allocation-guarded test callback.
-    #[cfg(test)]
-    after_snapshot: Option<Box<dyn FnOnce() + Send>>,
     decisions: u64,
     published: u64,
 }
@@ -329,7 +329,6 @@ impl Hub {
             id: 0,
             ends: None,
             epoch: 0,
-            reset_generation: 0,
             rows: (0..=TUNERS).map(|_| Row::default()).collect::<Vec<_>>().into_boxed_slice(),
             batch: Vec::with_capacity(BATCH_EVENTS),
             pending: Vec::with_capacity(BATCH_EVENTS),
@@ -341,9 +340,6 @@ impl Hub {
             seconds: None,
             opened: None,
             status: 0,
-            rotation: 0,
-            #[cfg(test)]
-            after_snapshot: None,
             decisions: 0,
             published: 0,
         })
@@ -371,11 +367,10 @@ impl Hub {
         self.rate = rate;
         self.anchor = None;
         self.seconds = None;
-        // The Hub's own delay is the same knob every Tune has, at 1x: its
-        // input is already at the Hub, so one buffer is all its own round trip
-        // can need.
-        self.tune.activate(rate, frames, 1);
-        self.shared.active_multiplier.store(1, Ordering::Release);
+        // No delay at all: the Hub's own input is already at the Hub, and its
+        // correction is queued at the input boundary before any sub-block of
+        // the same callback is scheduled, so the round trip needs none.
+        self.tune.activate(rate, frames, 0);
         self.shared.publish_format(rate, frames);
     }
 
@@ -386,16 +381,27 @@ impl Hub {
         }
         // A run states where it opens on the clock every delta is timed on.
         owner.recording.presentation = self.mapping();
-        // The Tune half runs first, because it is what turns an editor Reset
-        // into the epoch bump this callback then adopts.
+        // Reset all voices is the Hub's own: a cut, which this callback's own
+        // row and every Tune adopt like any other, plus forgetting the history
+        // once the cut has released its voices into it.
+        let forget = session::session().take_reset();
+        if forget {
+            session::session().cut();
+        }
         self.tune.begin(callback);
         // Learn reads the rows as this leaves them (`held_classes`), before
         // this callback's input boundary moves them: a cut or departure
         // adopted here has already emptied what it ended.
         self.adopt();
+        if forget {
+            self.sequencer.forget_history();
+        }
         self.detect_loop(callback);
-        // Adopt even on callbacks with no note input: silence expiry below
-        // must use the current policy, not the last onset's configuration.
+        // Adopt even on callbacks with no note input, so silence expiry below
+        // uses the policy rather than the last onset's configuration. It is
+        // the policy the previous callback left: the wrapper reduces this
+        // callback's queued editor edits after `begin`, so an edit governs
+        // expiry from the callback after it arrives.
         self.sequencer.config = owner.current().into();
         // Silence expires released memory against the completed input
         // frontier, which is this callback's start: everything before it has
@@ -403,13 +409,10 @@ impl Hub {
         self.sequencer.expire(callback.steady_time, self.rate);
     }
 
-    /// Epoch changes end voices; Reset completions independently clear memory.
+    /// An epoch change ends every voice.
     fn adopt(&mut self) {
         let session = session::session();
         let sample = self.callback.map_or(0, |callback| callback.steady_time);
-        // Read completion BEFORE the epoch: observing a Reset must also see
-        // its preceding cut, so voices are released before memory is cleared.
-        let reset_generation = session.reset_generation();
         let epoch = session.epoch();
         if epoch != self.epoch {
             for source in 0..=TUNERS {
@@ -428,12 +431,6 @@ impl Hub {
             self.pending_loss = None;
             self.status = 0;
             self.epoch = epoch;
-        }
-        // A Reset may complete after we adopted its epoch. Check its own
-        // generation every callback, including when membership has not changed.
-        if reset_generation != self.reset_generation {
-            self.sequencer.forget_history();
-            self.reset_generation = reset_generation;
         }
         for slot in 0..TUNERS {
             let row = session.row(slot as u8);
@@ -479,9 +476,13 @@ impl Hub {
         self.status = status;
     }
 
-    /// A greater-than-two-millisecond discontinuity between the host's seconds
-    /// timeline and elapsed sample time is a loop or a seek. What it does then
-    /// is the `reset_loop` control's business, at the next attack.
+    /// A loop or a seek is a song position that neither held still nor
+    /// advanced with the samples since the last observation, by more than two
+    /// milliseconds either way. That one rule covers a playing transport, a
+    /// stopped one a host holds still, a stop that returns to where play began,
+    /// and an export that reports not playing while its position climbs. What
+    /// a jump does then is the `reset_loop` control's business, at the next
+    /// attack.
     fn detect_loop(&mut self, callback: api::Callback) {
         let Some(transport) = callback.transport else {
             return;
@@ -499,11 +500,15 @@ impl Hub {
         let (Some(sample), true) = (sample, self.rate > 0.0 && flags & HAS_SECONDS != 0) else {
             return;
         };
-        let offset = song_pos_seconds as f64 / 2_147_483_648.0 - sample as f64 / self.rate;
-        if self.seconds.is_some_and(|previous| (offset - previous).abs() > 0.002) {
-            self.sequencer.loop_pending = true;
+        let song = song_pos_seconds as f64 / 2_147_483_648.0;
+        if let Some(previous) = self.seconds {
+            let moved = song - previous.song;
+            let elapsed = (sample - previous.sample) as f64 / self.rate;
+            if moved.abs().min((moved - elapsed).abs()) > 0.002 {
+                self.sequencer.loop_pending = true;
+            }
         }
-        self.seconds = Some(offset);
+        self.seconds = Some(Seconds { song, sample });
     }
 
     pub fn input(&mut self, input: OwnedInput) {
@@ -603,23 +608,13 @@ impl Hub {
             }
         }
         let epoch = self.epoch;
-        // Start one row further along each callback. A batch that fills always
-        // fills from the front, so a fixed order would make the same row wait
-        // every time rather than each of them waiting in turn.
-        let rotation = self.rotation;
-        self.rotation = (self.rotation + 1) % TUNERS;
         let Some(ends) = self.ends.as_mut() else { return };
-        for offset in 0..TUNERS {
-            let slot = (rotation + offset) % TUNERS;
-            let Some(end) = ends[slot].as_mut() else { continue };
+        for (slot, end) in ends.iter_mut().enumerate() {
+            let Some(end) = end.as_mut() else { continue };
             // Discarded epochs do not fill the batch. Bound visits by what is
             // here now so another instance cannot keep this drain running by
             // replenishing rejected captures. New arrivals wait one callback.
             let available = end.captures.slots();
-            #[cfg(test)]
-            if let Some(hook) = self.after_snapshot.take() {
-                hook();
-            }
             for _ in 0..available {
                 if self.batch.len() == BATCH_EVENTS {
                     break;
@@ -673,7 +668,6 @@ impl Hub {
             // Refuse before assignment mutates policy or sends a reply: this
             // locally admitted voice still sounds raw and is tracked by Tune.
             if self.rows[source].state.onset_cell(channel, key).is_none() {
-                self.rows[source].state.complete = false;
                 self.status |= session::DROPPED;
                 return;
             }
@@ -770,7 +764,6 @@ impl Hub {
                 decision: 0,
                 player,
                 channel_pitch,
-                configuration: config,
             });
         }
         let incoming = self.arriving(record, channel, key);
@@ -805,14 +798,7 @@ impl Hub {
                     self.status |= session::POLICY;
                 }
             }
-            return Some(Assigned {
-                correction,
-                node,
-                decision,
-                player,
-                channel_pitch,
-                configuration: config,
-            });
+            return Some(Assigned { correction, node, decision, player, channel_pitch });
         }
         self.sequencer.take_loop();
         self.sequencer.fill(self.rate);
@@ -864,7 +850,7 @@ impl Hub {
         if !self.sequencer.hold(voice) {
             self.status |= session::POLICY;
         }
-        Some(Assigned { correction, node, decision, player, channel_pitch, configuration: config })
+        Some(Assigned { correction, node, decision, player, channel_pitch })
     }
 
     /// What actually arrived, key number and every tuning the source already
@@ -970,32 +956,21 @@ impl Hub {
                 assigned.correction,
                 assigned.node,
                 assigned.decision,
-                assigned.configuration,
                 assigned.player,
                 assigned.channel_pitch,
             );
         }
-        match delta {
-            Some(mut delta) => {
-                // The voice now carries its frozen choice, so the delta states
-                // the pitch this note will actually sound at rather than its
-                // raw key.
-                if let Some(voice) = self.rows[index].state.voice(delta.lifetime) {
-                    delta.assignment = VoiceBaseline::metadata(voice);
-                    if delta.pitch_microcents.is_some() {
-                        delta.pitch_microcents = Some(voice.pitch_microcents);
-                    }
+        if let Some(mut delta) = delta {
+            // The voice now carries its frozen choice, so the delta states
+            // the pitch this note will actually sound at rather than its
+            // raw key.
+            if let Some(voice) = self.rows[index].state.voice(delta.lifetime) {
+                delta.assignment = VoiceBaseline::metadata(voice);
+                if delta.pitch_microcents.is_some() {
+                    delta.pitch_microcents = Some(voice.pitch_microcents);
                 }
-                self.hold(record, delta);
             }
-            // Defensive cleanup if an onset cannot be retained. Admission
-            // above normally refuses it before assignment; policy must not
-            // keep a lifetime that the scheduled state cannot address.
-            None if event.attack().is_some() => {
-                self.sequencer.forget_voice(record.source, record.serial);
-                self.status |= session::DROPPED;
-            }
-            None => {}
+            self.hold(record, delta);
         }
         // A channel bend moves every voice held on its channel and has no
         // delta of its own, so each moved voice gets one: its new pitch as a
@@ -1071,23 +1046,19 @@ impl Hub {
 
     /// What Learn reads, written into `scratch` with its count: the pitch
     /// class of every voice every row holds, in row order and with repeats,
-    /// its adaptive correction taken back off (`State::learnable`); or
-    /// `Incomplete` while any row has lost an event. `LearningState` sorts and
-    /// deduplicates. Learn hears every row, Retune off included: Retune decides
-    /// what the Hub corrects, and an uncorrected note is the player's pitch
-    /// Learn reads.
-    pub fn held_classes(
-        &self,
-        scratch: &mut [PitchClass; HELD_VOICES],
-    ) -> Result<usize, Incomplete> {
+    /// its adaptive correction taken back off (`State::learnable`).
+    /// `LearningState` sorts and deduplicates. Learn hears every row, Retune
+    /// off included: Retune decides what the Hub corrects, and an uncorrected
+    /// note is the player's pitch Learn reads.
+    pub fn held_classes(&self, scratch: &mut [PitchClass; HELD_VOICES]) -> usize {
         let mut count = 0;
         for row in self.rows.iter() {
-            for pitch in row.state.learnable().ok_or(Incomplete)? {
+            for pitch in row.state.learnable() {
                 scratch[count] = PitchClass::from_microcents(pitch);
                 count += 1;
             }
         }
-        Ok(count)
+        count
     }
 
     fn mapping(&self) -> crate::configuration::Presentation {
@@ -1141,9 +1112,10 @@ impl Hub {
         }
         for index in 0..=TUNERS {
             // A row whose Tune has left still pays what it owes, with the empty
-            // snapshot its cleared state makes: a consumer that doubted it
-            // after a gap hears it holds nothing, where silence would leave it
-            // in doubt for the life of the instance (#1195). A row that never
+            // snapshot its cleared state makes: a consumer that missed its last
+            // releases in a gap hears it holds nothing, where silence would
+            // leave those notes drawn for the life of the instance (#1195). A
+            // row that never
             // published has nothing to answer for, and a consumer that never
             // heard of it must not start now.
             let departed = !self.rows[index].live;
@@ -1154,33 +1126,29 @@ impl Hub {
             // FOLLOW all of them. On the lane: the cut is `applied`, which
             // counts every delta this row has scheduled, and both callers have
             // flushed every one of those before asking, since the display and
-            // the take both refuse history at or below a cut they have adopted
-            // (#1127).
+            // the take both hold that no history falls at or below a cut they
+            // have adopted, checked in debug builds (#1127).
             //
             // And in time, which is what a take is sorted by on read: a delta
-            // the cut covers that sorts after its snapshot is refused as late
-            // history, and the whole file with it. Those deltas sound up to D
+            // the cut covers that sorted after its snapshot would replay after
+            // the snapshot that already restated it. Those deltas sound up to D
             // after this callback, so the frame is timed at the latest of them
             // rather than at the block's start, which also leaves no voice
             // whose onset lies after the frame that claims it is sounding.
             let at = self.rows[index].applied_time.map_or(time, |applied| applied.max(time));
             let identity = identity(index as u8);
-            // One lane at a time, on its own free cells and its own next
-            // identity. A display ring nobody is draining must not hold this
-            // frame back from a healthy take.
+            // One lane at a time, on its own free cells. A display ring nobody
+            // is draining must not hold this frame back from a healthy take.
             for lane in publication::Lane::ALL {
                 if !self.rows[index].repair[lane] || recorder.publication_free()[lane] < 2 {
                     continue;
                 }
-                let Some(id) = self.rows[index].baseline_id[lane].checked_add(1) else { continue };
                 let applied = self.rows[index].applied;
-                let Some(mut frame) = self.rows[index].state.baseline(identity, id, applied, at)
-                else {
+                let Some(mut frame) = self.rows[index].state.baseline(identity, applied, at) else {
                     continue;
                 };
                 frame.shown = self.rows[index].show;
                 if recorder.publish_baseline(lane, &frame).is_ok() {
-                    self.rows[index].baseline_id[lane] = id;
                     self.rows[index].repair[lane] = false;
                 }
             }
@@ -1193,14 +1161,6 @@ impl Hub {
     pub fn retuning(&self) -> bool {
         self.rows.iter().any(|row| row.live && row.retune & 1 != 0)
     }
-    /// The configuration owner refused an evaluation. Here it is a status bit
-    /// that silences nothing and holds until the cut like the Hub's other
-    /// faults. The owner's own fault bit, which refuses every tuning edit,
-    /// holds until a host reset.
-    pub fn configuration_exhausted(&mut self) {
-        self.status |= session::POLICY;
-    }
-
     pub fn end(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
         // A callback no sub-block reached still publishes what it sequenced.
         self.flush(recorder);
@@ -1233,13 +1193,6 @@ impl Hub {
         self.shared.request_main();
     }
 
-    /// Called only at a joined Hub lifecycle boundary, for a host that stops
-    /// calling the audio thread after a Stop: the stopped take's run closes
-    /// here, so the writer can seal it.
-    pub fn finish_stopped_recording(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
-        owner.recording.close_stopped(recorder);
-    }
-
     /// The one authority on what is sounding. There is no second copy to
     /// agree with it any more, which is most of why this file is short.
     #[cfg(test)]
@@ -1251,10 +1204,6 @@ impl Hub {
             .copied()
     }
     #[cfg(test)]
-    pub fn test_epoch(&self) -> u64 {
-        self.epoch
-    }
-    #[cfg(test)]
     pub fn test_held(&self, source: u8) -> usize {
         self.rows[usize::from(source)].state.voices().count()
     }
@@ -1263,7 +1212,7 @@ impl Hub {
         self.sequencer.context.iter().flatten().count()
     }
     /// Observe retained musical state after the callback, including any silence
-    /// expiry. The retired display mailbox observed it before expiry instead.
+    /// expiry.
     #[cfg(test)]
     pub fn test_next_context(&self) -> TestContext {
         let mut observed = Sequencer {
@@ -1293,75 +1242,3 @@ pub struct TestContext {
 }
 
 const _: () = assert!(std::mem::size_of::<Record>() <= 96);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tuning::{CAPTURE_RING, REPLY_RING};
-
-    fn capture(epoch: u64, serial: u64) -> session::Capture {
-        session::Capture {
-            retune: 1,
-            epoch,
-            serial,
-            sample: serial as i64,
-            event: Event::Midi { port: 0, data: [0xb0, 7, 1], flags: 0 },
-        }
-    }
-
-    fn row() -> (rtrb::Producer<session::Capture>, HubEnds) {
-        let (tx, captures) = rtrb::RingBuffer::new(CAPTURE_RING);
-        let (replies, _) = rtrb::RingBuffer::new(REPLY_RING);
-        (tx, HubEnds { captures, replies })
-    }
-
-    #[test]
-    fn discarded_epochs_cannot_extend_a_rows_drain_with_new_arrivals() {
-        let mut hub = Hub::new();
-        hub.epoch = 1;
-        let mut ends = Box::new(std::array::from_fn(|_| None));
-        let (mut tx, end) = row();
-        for serial in 0..3 {
-            tx.push(capture(2, serial)).unwrap();
-        }
-        ends[0] = Some(end);
-        let (mut peer, end) = row();
-        peer.push(capture(1, 10)).unwrap();
-        ends[1] = Some(end);
-        hub.ends = Some(ends);
-        // Inject through the real producer after the first row's availability
-        // snapshot. An unbounded discard loop would consume this fourth entry.
-        hub.after_snapshot = Some(Box::new(move || tx.push(capture(1, 20)).unwrap()));
-        hub.collect();
-        assert_eq!(hub.batch.len(), 1);
-        assert_eq!((hub.batch[0].source, hub.batch[0].serial), (1, 10));
-        assert_eq!(hub.ends.as_ref().unwrap()[0].as_ref().unwrap().captures.slots(), 1);
-        hub.batch.clear();
-        hub.collect();
-        assert_eq!(hub.batch.len(), 1);
-        assert_eq!((hub.batch[0].source, hub.batch[0].serial), (0, 20));
-    }
-
-    #[test]
-    fn accepted_batch_limit_leaves_valid_backlog_for_rotated_collection() {
-        let mut hub = Hub::new();
-        hub.epoch = 1;
-        let mut ends = Box::new(std::array::from_fn(|_| None));
-        for slot in 0..3 {
-            let (mut tx, end) = row();
-            for serial in 0..CAPTURE_RING {
-                tx.push(capture(1, serial as u64)).unwrap();
-            }
-            ends[slot] = Some(end);
-        }
-        hub.ends = Some(ends);
-        hub.collect();
-        assert_eq!(hub.batch.len(), BATCH_EVENTS);
-        assert!(hub.batch.iter().all(|r| r.source < 2));
-        hub.batch.clear();
-        hub.collect();
-        assert_eq!(hub.batch.len(), 3 * CAPTURE_RING - BATCH_EVENTS);
-        assert!(hub.batch.iter().all(|r| r.source == 2));
-        assert!(hub.ends.as_ref().unwrap().iter().flatten().all(|end| end.captures.slots() == 0));
-    }
-}

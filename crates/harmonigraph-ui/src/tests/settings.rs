@@ -1334,30 +1334,18 @@ fn without_an_engine_selector_the_tuning_pane_shows_no_adaptive_controls() {
     assert!(text_y(&shapes, "ADAPTIVE TUNING").is_some(), "the heading this looks for");
 }
 
-/// A configuration fault latches until the host resets the plugin, so its
-/// notice must not offer the pane's Reset, which leaves it set. Incomplete held
-/// state does clear on that Reset, and keeps the notice that says so. With
-/// both bits up, the fault wins: the Reset would clear the other and not it.
+/// A configuration fault latches until the host resets the plugin, and its
+/// notice says so; more pitches than Learn reads has its own notice.
 #[test]
 fn a_configuration_fault_asks_for_a_host_reset() {
-    use panes::tuning::{
-        CONFIGURATION_FAULT_NOTICE as FAULT, HELD_STATE_INCOMPLETE_NOTICE as HELD,
-    };
-    let notices = |status| {
-        let mut state = fresh();
-        state.picture.runtime.configuration_status = status;
-        let shapes = tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT).shapes;
-        [FAULT, HELD].map(|notice| text_y(&shapes, notice).is_some())
-    };
-    assert_eq!(notices(0), [false, false]);
-    assert_eq!(notices(1), [false, true], "incomplete held state");
-    assert_eq!(notices(2), [true, false], "configuration fault");
-    assert_eq!(notices(3), [true, false], "fault and incomplete held state");
+    use panes::tuning::CONFIGURATION_FAULT_NOTICE as FAULT;
     let shapes = |status| {
         let mut state = fresh();
         state.picture.runtime.configuration_status = status;
         tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT).shapes
     };
+    assert!(text_y(&shapes(0), FAULT).is_none());
+    assert!(text_y(&shapes(2), FAULT).is_some(), "configuration fault");
     let too_many = &panes::tuning::too_many_pitches_notice();
     assert!(text_y(&shapes(16), too_many).is_some(), "more pitches than Learn reads");
     assert!(text_y(&shapes(0), too_many).is_none());

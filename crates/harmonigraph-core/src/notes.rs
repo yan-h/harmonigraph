@@ -5,8 +5,6 @@
 //! harness generates them from a mock source. Either way, the GUI thread
 //! owns a [`NoteTracker`] and feeds every event into it.
 
-use std::collections::BTreeSet;
-
 #[cfg(test)]
 use crate::canonical::VoiceBaseline;
 use crate::canonical::{CanonicalEvent, CanonicalOrder, InvalidCanonical, SourceBaseline};
@@ -612,70 +610,6 @@ pub struct NoteTracker {
     roll: NoteRoll,
     history: NoteHistory,
     canonical: CanonicalOrder,
-    certainty: Certainty,
-}
-
-/// Whose published state is currently in doubt.
-///
-/// One field rather than a flag beside two sets, which is what it was: a
-/// `bool` for "everything", a set of sources a gap had closed, and a set of
-/// sources that had republished since. The three were one predicate — the two
-/// sets were kept disjoint by hand at five sites, and which of them the
-/// predicate READ depended on the flag, so the other was dead weight that
-/// still had to be written in step.
-///
-/// Said as one type it is a default and its exceptions, and a stream-wide gap
-/// is simply which side of that default the exceptions sit on.
-enum Certainty {
-    /// Every source is certain but these, each closed by its own gap.
-    AllBut(BTreeSet<SourceId>),
-    /// No source is certain but these, each republished since a stream-wide
-    /// gap. Sources this tracker has never heard from are in doubt too, which
-    /// is why this cannot be a set of the uncertain ones.
-    NoneBut(BTreeSet<SourceId>),
-}
-
-impl Default for Certainty {
-    fn default() -> Self {
-        Self::AllBut(BTreeSet::new())
-    }
-}
-
-impl Certainty {
-    fn certain(&self, source: SourceId) -> bool {
-        match self {
-            Self::AllBut(doubted) => !doubted.contains(&source),
-            Self::NoneBut(restored) => restored.contains(&source),
-        }
-    }
-
-    /// A gap. `None` scopes it to the whole canonical stream, which puts every
-    /// source in doubt — including the ones no gap has named.
-    fn doubt(&mut self, source: Option<SourceId>) {
-        match (source, &mut *self) {
-            (Some(source), Self::AllBut(doubted)) => {
-                doubted.insert(source);
-            }
-            (Some(source), Self::NoneBut(restored)) => {
-                restored.remove(&source);
-            }
-            (None, _) => *self = Self::NoneBut(BTreeSet::new()),
-        }
-    }
-
-    /// One source's complete baseline or reset, which is the only thing that
-    /// answers for its completeness (see
-    /// [`NoteTracker::source_current_certain`]).
-    fn restore(&mut self, source: SourceId) {
-        match self {
-            Self::AllBut(doubted) => {
-                doubted.remove(&source);
-            }
-            Self::NoneBut(restored) => {
-                restored.insert(source);
-            }
-        }
-    }
 }
 
 impl NoteTracker {
@@ -683,12 +617,9 @@ impl NoteTracker {
         Self::default()
     }
 
-    /// Consume one canonical item. False identifies a duplicate, not a new
-    /// musical event. This non-RT consumer cannot acknowledge source journals.
-    pub fn handle_canonical(
-        &mut self,
-        event: CanonicalEvent<'_>,
-    ) -> Result<bool, InvalidCanonical> {
+    /// Consume one canonical item. This non-RT consumer cannot acknowledge
+    /// source journals.
+    pub fn handle_canonical(&mut self, event: CanonicalEvent<'_>) -> Result<(), InvalidCanonical> {
         self.handle_canonical_mapped(event, 0.0)
     }
 
@@ -698,7 +629,7 @@ impl NoteTracker {
         &mut self,
         event: CanonicalEvent<'_>,
         offset: Time,
-    ) -> Result<bool, InvalidCanonical> {
+    ) -> Result<(), InvalidCanonical> {
         if !offset.is_finite() {
             return Err(InvalidCanonical);
         }
@@ -707,13 +638,9 @@ impl NoteTracker {
                 delta.validate()?;
                 delta.event.time += offset;
                 delta.validate()?;
-                if !self.canonical.note(delta.event.source, delta.sequence)? {
-                    return Ok(false);
-                }
+                let ordered = self.canonical.note(delta.event.source, delta.sequence);
+                debug_assert!(ordered, "a delta out of its source's order: {delta:?}");
                 let key = delta.event.key();
-                if matches!(delta.event.kind, NoteEventKind::Off) && delta.lifetime != 0 {
-                    self.roll.observed_release(key, delta.lifetime, delta.event.time);
-                }
                 if !matches!(
                     delta.event.kind,
                     NoteEventKind::On { .. }
@@ -725,7 +652,7 @@ impl NoteTracker {
                         .held_on(key)
                         .is_some_and(|note| note.lifetime != Some(delta.lifetime))
                 {
-                    return Ok(true);
+                    return Ok(());
                 }
                 self.handle_event(delta.display_event());
                 if matches!(delta.event.kind, NoteEventKind::On { .. }) {
@@ -737,22 +664,18 @@ impl NoteTracker {
                 }
             }
             CanonicalEvent::Baseline(frame) => return self.replace_source_mapped(frame, offset),
-            CanonicalEvent::Gap(mut gap) => {
-                gap.validate()?;
-                gap.time += offset;
-                gap.through += offset;
-                gap.validate()?;
-                self.certainty.doubt(gap.source);
-                self.roll.gap(gap.source, gap.time);
-            }
+            // A gap changes nothing drawn: the next baseline alone corrects
+            // the held set, and a take reports the gap in its export warning
+            // (#1798 F1).
+            CanonicalEvent::Gap(gap) => gap.validate()?,
         }
-        Ok(true)
+        Ok(())
     }
 
     /// Validate the entire held set before mutation. Matching lifetimes keep
     /// their onset and bend history. Missing observations
     /// are closed as history gaps, never fictional downstream releases.
-    pub fn replace_source(&mut self, frame: &SourceBaseline) -> Result<bool, InvalidCanonical> {
+    pub fn replace_source(&mut self, frame: &SourceBaseline) -> Result<(), InvalidCanonical> {
         self.replace_source_mapped(frame, 0.0)
     }
 
@@ -760,44 +683,16 @@ impl NoteTracker {
         &mut self,
         frame: &SourceBaseline,
         offset: Time,
-    ) -> Result<bool, InvalidCanonical> {
+    ) -> Result<(), InvalidCanonical> {
         frame.validate()?;
         let mut mapped = *frame;
         mapped.translate(offset);
         mapped.validate()?;
-        if !self.canonical.baseline(frame.source, frame.id, frame.output_cut)? {
-            return Ok(false);
-        }
+        let ordered = self.canonical.baseline(frame.source, frame.output_cut);
+        debug_assert!(ordered, "a snapshot cut below a delta it should cover: {frame:?}");
         self.roll.set_shown(frame.source, frame.shown);
         self.roll.replace_source(frame.source, frame.voices(), mapped.time, offset);
-        self.certainty.restore(frame.source);
-        Ok(true)
-    }
-
-    /// New note deltas establish individual lifetimes, never completeness of
-    /// a source after reporting loss. Only its complete baseline/reset does.
-    pub fn source_current_certain(&self, source: SourceId) -> bool {
-        self.certainty.certain(source)
-    }
-
-    /// Whether some source's current notes may be incomplete RIGHT NOW: a gap
-    /// put it in doubt and neither its own complete baseline nor a reset has
-    /// answered for it since. This is what the missing-history banner shows,
-    /// so it clears as the sources recover rather than latching (#1195).
-    ///
-    /// After a stream-wide gap that means every source this tracker has heard
-    /// from, and — until the first of them answers — the stream as a whole,
-    /// since what the gap lost may have been a source's first word. A source
-    /// that stopped publishing before the gap answers only if its publisher
-    /// still speaks for it; the Hub does, with the empty snapshot of a
-    /// departed Tune's row.
-    pub fn history_missing(&self) -> bool {
-        match &self.certainty {
-            Certainty::AllBut(doubted) => !doubted.is_empty(),
-            Certainty::NoneBut(restored) => {
-                restored.is_empty() || self.canonical.sources().any(|s| !restored.contains(&s))
-            }
-        }
+        Ok(())
     }
 
     pub fn handle_event(&mut self, event: NoteEvent) {
@@ -883,17 +778,6 @@ impl NoteTracker {
     /// two that can disagree (#905). The visible cost is that hiding a source
     /// does not cut its already-fading notes: they finish the fade they were
     /// drawing.
-    ///
-    /// One case looks like an exception to that and is really the two halves
-    /// changing hands. A baseline that arrives with Show off and still
-    /// lists a note a publication gap had released withdraws that release
-    /// ([`replace_source`](Self::replace_source)) — so the voice is no longer
-    /// a fading one whose fade is protected, it is a HELD one, and the held
-    /// rule cuts it in that instant along with everything else the source is
-    /// holding. It leaves no trail mark either, which is the same answer read
-    /// through [`prune`](Self::prune): the source says the note never stopped,
-    /// and a note that never stopped is neither drawn as departing nor
-    /// remembered as departed.
     pub fn voices(&self) -> impl Iterator<Item = Voice> + '_ {
         self.roll.voices()
     }
@@ -917,14 +801,12 @@ impl NoteTracker {
     /// Every published source's notes off. The tape's stay: its player
     /// alone ends them, and ends them itself when the plugin resets.
     pub fn session_notes_off(&mut self, now: Time) {
-        self.certainty = Certainty::default();
         self.roll.published_off(now);
     }
 
     /// A source leaving/resetting cannot release another source's held set.
     /// Keep the same release fade as a session reset.
     pub fn source_notes_off(&mut self, source: SourceId, now: Time) {
-        self.certainty.restore(source);
         self.roll.source_off(source, now);
     }
 }
@@ -1091,9 +973,9 @@ mod tests {
         // note is still down — its baseline still lists the note, so the
         // voice stays HELD and merely drops off the screen.
         let mut tracker = NoteTracker::new();
-        let struck = SourceBaseline::new(SourceId::DIRECT, 1, 0.0, 0, true, &[row]).unwrap();
+        let struck = SourceBaseline::new(SourceId::DIRECT, 0.0, 0, true, &[row]).unwrap();
         tracker.replace_source(&struck).unwrap();
-        let hide = SourceBaseline::new(SourceId::DIRECT, 2, 1.0, 0, false, &[row]).unwrap();
+        let hide = SourceBaseline::new(SourceId::DIRECT, 1.0, 0, false, &[row]).unwrap();
         tracker.replace_source(&hide).unwrap();
         assert_eq!(tracker.voices().count(), 0, "a held voice cuts the instant its source hides");
         tracker.handle_event(off(2.0, 60));
@@ -1101,7 +983,7 @@ mod tests {
         // The source rejoins with two thirds of the fade still to run. The
         // fixture has to actually reach a release, or every assertion below
         // passes on a voice that was dropped at the hide.
-        let rejoin = SourceBaseline::new(SourceId::DIRECT, 3, 2.3, 0, true, &[]).unwrap();
+        let rejoin = SourceBaseline::new(SourceId::DIRECT, 2.3, 0, true, &[]).unwrap();
         tracker.replace_source(&rejoin).unwrap();
         assert_eq!(tracker.roll().notes().count(), 1, "released onto the timeline, not dropped");
         assert_eq!(tracker.voices().count(), 0, "a fade begun hidden is not handed back");
@@ -1112,7 +994,7 @@ mod tests {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
         tracker.handle_event(off(2.0, 60));
-        let hide = SourceBaseline::new(SourceId::DIRECT, 1, 2.3, 0, false, &[]).unwrap();
+        let hide = SourceBaseline::new(SourceId::DIRECT, 2.3, 0, false, &[]).unwrap();
         tracker.replace_source(&hide).unwrap();
         assert_eq!(tracker.voices().count(), 1, "a fade begun visible finishes on screen");
         assert!(tracker.voices().next().unwrap().activation(2.3, &env) > 0.0, "and is still lit");
@@ -1476,7 +1358,6 @@ mod tests {
             actual_onset: 1.0,
             pitch_microcents: i64::from(note) * 100_000_000,
             velocity: 0.8,
-            provenance: crate::canonical::PitchProvenance::AcceptedOutput,
             ..Default::default()
         }
     }
@@ -1493,252 +1374,46 @@ mod tests {
         })
     }
 
-    /// A publication outage removes uncertain held voices through the usual
-    /// release path, preserving their fade and eventual trail entry.
+    /// A publication gap changes nothing drawn: what was held stays held, and
+    /// the source's next baseline alone corrects the held set, ending a note it
+    /// omits and keeping the one it lists (#1798 F1).
     #[test]
-    fn a_publication_gap_releases_its_voices_rather_than_dropping_them() {
-        let (a, b) = (SourceId(1), SourceId(2));
+    fn a_publication_gap_leaves_the_held_set_to_the_next_baseline() {
+        let source = SourceId(1);
+        let (kept, lost) = (published_voice(60, 61), published_voice(64, 62));
+        let baseline = |time, rows: &[VoiceBaseline]| {
+            SourceBaseline::new(source, time, 0, true, rows).unwrap()
+        };
         let mut tracker = NoteTracker::new();
-        tracker.handle_event(NoteEvent::on(0.0, a, 0, 60, 0.8));
-        tracker.handle_event(NoteEvent::on(0.0, b, 0, 55, 0.8));
-
-        assert_eq!(tracker.handle_canonical(gap(1.0, Some(a))), Ok(true));
-        assert_eq!(tracker.held_count(), 1, "a gap still clears the lost source's held state");
-        let lost = tracker.voices().find(|v| v.source == a).unwrap();
-        assert_eq!(lost.state, VoiceState::Released { at: 1.0 }, "it fades rather than popping");
-
-        // The whole-stream gap takes every source at once, through the same
-        // sequence — it is the arm a full publication lane actually takes.
-        assert_eq!(tracker.handle_canonical(gap(2.0, None)), Ok(true));
-        assert_eq!(tracker.held_count(), 0);
-        assert_eq!(
-            tracker.voices().find(|v| v.source == b).unwrap().state,
-            VoiceState::Released { at: 2.0 }
-        );
-
-        // And the fade ends in the trail, where a pitch that was drawn right up
-        // to the gap belongs.
-        tracker.prune(4.0, &Envelope::default());
-        assert_eq!(tracker.voices().count(), 0);
-        let visited: Vec<_> = tracker.history().visits().map(|visit| visit.pitch).collect();
-        assert_eq!(visited, vec![55.0, 60.0]);
+        tracker.replace_source(&baseline(1.0, &[kept, lost])).unwrap();
+        for gap in [gap(2.0, Some(source)), gap(2.5, None)] {
+            assert_eq!(tracker.handle_canonical(gap), Ok(()));
+        }
+        assert_eq!(tracker.held_count(), 2, "a gap releases nothing");
+        tracker.replace_source(&baseline(3.0, &[kept])).unwrap();
+        let held: Vec<_> = tracker.held_voices().map(|v| (v.note, v.on_time)).collect();
+        assert_eq!(held, [(60, kept.actual_onset)], "the baseline ends the note it omits");
+        assert_eq!(tracker.roll().notes().count(), 2, "and keeps the one it lists as one note");
     }
 
     /// A baseline states a voice's expressions along with its pitch: a note it
-    /// opens starts at them, and a note it resumes after an outage takes the
-    /// value it came back with as a step, rather than snapping to neutral.
+    /// opens starts at them, and a note it restates takes the value it states
+    /// as a step, rather than snapping to neutral.
     #[test]
     fn a_baseline_carries_its_voices_expressions() {
         let source = SourceId(1);
         let mut row = published_voice(60, 61);
         row.expressions.pressure = 0.5;
         let mut tracker = NoteTracker::new();
-        let baseline = |id, time, row| SourceBaseline::new(source, id, time, 0, true, &[row]);
-        assert_eq!(tracker.replace_source(&baseline(1, 2.0, row).unwrap()), Ok(true));
-        assert_eq!(tracker.handle_canonical(gap(3.0, None)), Ok(true));
+        let baseline = |time, row| SourceBaseline::new(source, time, 0, true, &[row]);
+        assert_eq!(tracker.replace_source(&baseline(2.0, row).unwrap()), Ok(()));
         row.expressions.pressure = 0.8;
-        assert_eq!(tracker.replace_source(&baseline(2, 3.2, row).unwrap()), Ok(true));
+        assert_eq!(tracker.replace_source(&baseline(3.2, row).unwrap()), Ok(()));
 
         assert_eq!(tracker.held_voices().next().unwrap().expressions.pressure, 0.8);
         let note = tracker.roll().notes().next().unwrap();
         let points: Vec<_> = note.expressions().iter().map(|(t, e)| (*t, e.pressure)).collect();
         assert_eq!(points, vec![(2.0, 0.5), (3.2, 0.5), (3.2, 0.8)]);
-    }
-
-    /// The other half of the outage above: publication comes BACK, and the
-    /// repair baseline says the note never stopped (#936).
-    ///
-    /// The gap has to guess — what it cannot see may have ended — and it
-    /// guesses the way the picture can recover from, releasing the voice into
-    /// a fade. The baseline that follows is the source stating what it is
-    /// sounding NOW, same lifetime, same onset, and that overrules the guess:
-    /// the note is held again, resumed out of its fade rather than
-    /// re-attacked. What must not survive that is the fade, which would
-    /// otherwise draw the note a second time and then, at the end of a fade it
-    /// is not having, hand a still-sounding pitch to the trail —
-    /// [`NoteHistory`] marking a node the music has not left yet.
-    ///
-    /// The lifetime is what makes this fixture reach the resume at all: a
-    /// voice from a bare note-on carries none, so a baseline would attach a
-    /// fresh voice beside it instead of resuming this one, and every
-    /// assertion below would pass on the wrong shape.
-    ///
-    /// The repair arrives with the note still FADING, which is the case
-    /// production actually takes — `tuning::Hub::flush` republishes within a
-    /// callback or two of the outage. A prune landing in between instead is
-    /// the known gap `NoteRoll::replace_source` documents, deliberately not covered.
-    #[test]
-    fn a_resuming_baseline_takes_back_the_release_the_gap_handed_out() {
-        let env = Envelope::default();
-        let source = SourceId(1);
-        let row = published_voice(60, 61);
-        let mut tracker = NoteTracker::new();
-        assert_eq!(
-            tracker.replace_source(&SourceBaseline::new(source, 1, 2.0, 0, true, &[row]).unwrap()),
-            Ok(true)
-        );
-        assert_eq!(
-            tracker.held_voices().next().map(|voice| voice.lifetime),
-            Some(Some(61)),
-            "a published voice carries the lifetime the resume matches on"
-        );
-
-        assert_eq!(tracker.handle_canonical(gap(3.0, None)), Ok(true));
-        let fading = tracker.voices().filter(|v| v.state == VoiceState::Released { at: 3.0 });
-        assert_eq!(fading.count(), 1, "the outage released it into a drawn fade, not dropped it");
-
-        // The repair: `tuning::Hub` republishes every live row's baseline once
-        // an outage sets its `repair` flag, and those rows keep the lifetime
-        // and onset they attacked with.
-        assert_eq!(
-            tracker.replace_source(&SourceBaseline::new(source, 2, 3.2, 0, true, &[row]).unwrap()),
-            Ok(true)
-        );
-        assert_eq!(tracker.held_count(), 1, "the note is sounding again");
-        assert_eq!(tracker.voices().count(), 1, "one note, drawn once");
-        assert_eq!(tracker.roll().notes().count(), 1, "and one note in the roll to match");
-
-        tracker.prune(4.5, &env);
-        assert_eq!(tracker.held_count(), 1, "still down a fade-length later");
-        assert!(tracker.history().is_empty(), "so the trail has nowhere to mark yet");
-
-        // And it still arrives in the trail on the release it really has.
-        tracker.source_notes_off(source, 5.0);
-        tracker.prune(6.5, &env);
-        let visits: Vec<_> = tracker.history().visits().map(|v| (v.pitch, v.last_off)).collect();
-        assert_eq!(visits, [(60.0, 5.0)], "picked up where its own fade let go");
-    }
-
-    /// The one case where withdrawing a release also takes a note off the
-    /// screen, written down because it reads like a contradiction of the
-    /// `voices` contract and is not one.
-    ///
-    /// A repair baseline can arrive with Show off — the source recovered
-    /// and is hidden. It still lists the note, so the release is withdrawn and
-    /// the voice goes back to being HELD, and the held half of `voices` cuts a
-    /// hidden source's voices in the instant they hide. So a fade that was on
-    /// screen stops, which `voices` otherwise promises not to do. The promise
-    /// is about a note that is DEPARTING, and this one turned out not to be.
-    #[test]
-    fn a_hiding_repair_baseline_cuts_the_fade_it_withdraws() {
-        let instant = Envelope { attack_time: 0.0, fade_time: 0.0, shape: 0.0 };
-        let source = SourceId(1);
-        let row = published_voice(60, 61);
-        let mut tracker = NoteTracker::new();
-        tracker
-            .replace_source(&SourceBaseline::new(source, 1, 2.0, 0, true, &[row]).unwrap())
-            .unwrap();
-        tracker.handle_canonical(gap(3.0, None)).unwrap();
-        assert_eq!(tracker.voices().count(), 1, "fading on screen, and visible at its release");
-
-        tracker
-            .replace_source(&SourceBaseline::new(source, 2, 3.1, 0, false, &[row]).unwrap())
-            .unwrap();
-        assert_eq!(tracker.voices().count(), 0, "cut, because it is held again and hidden");
-        assert_eq!(tracker.held_voices().count(), 1, "held is where it went — not dropped");
-        assert_eq!(tracker.held_count(), 0, "just not counted while its source is hidden");
-        tracker.prune(9.0, &instant);
-        assert!(tracker.history().is_empty(), "a note that never stopped leaves no trail mark");
-    }
-
-    /// A baseline's own retirements cannot evict the note it resumes. With the
-    /// finished notes at the cap and the gap-closed note at their front, the
-    /// held note the baseline omits is filed first (rule 5); capped there, it
-    /// would push out the very note the next row resumes, which would then
-    /// open afresh and lose its line from before the gap.
-    #[test]
-    fn a_baseline_resumes_a_note_at_the_front_of_a_full_past() {
-        let source = SourceId(1);
-        let (a, b, c) = (published_voice(60, 61), published_voice(64, 62), published_voice(67, 63));
-        let baseline = |id, time, rows: &[VoiceBaseline]| {
-            SourceBaseline::new(source, id, time, 0, true, rows).unwrap()
-        };
-        let mut tracker = NoteTracker::new();
-        tracker.replace_source(&baseline(1, 2.0, &[a, b])).unwrap();
-        tracker.handle_canonical(gap(3.0, None)).unwrap();
-        // Released after the gap, so A and B sit at the front of the past.
-        for i in 0..NoteRoll::MAX_NOTES - 2 {
-            let t = 4.0 + i as Time * 0.005;
-            tracker.handle_event(on(t, 72));
-            tracker.handle_event(off(t + 0.001, 72));
-        }
-        tracker.prune(30.0, &Envelope::default());
-        assert_eq!(tracker.voices().count(), 0, "every fade has ended");
-        assert_eq!(tracker.roll().len(), NoteRoll::MAX_NOTES, "the past is exactly full");
-
-        tracker.replace_source(&baseline(3, 32.0, &[c])).unwrap();
-        tracker.replace_source(&baseline(4, 33.0, &[a])).unwrap();
-        let resumed = tracker.roll().notes().find(|n| n.note == 60 && n.is_live()).unwrap();
-        assert_eq!(
-            resumed.segments(34.0).collect::<Vec<_>>(),
-            [((2.0, 60.0), (3.0, 60.0)), ((33.0, 60.0), (34.0, 60.0))],
-            "resumed with its line from before the gap"
-        );
-    }
-
-    /// Certainty is a DEFAULT and its exceptions, and the stream-wide gap is
-    /// what makes that shape necessary rather than tidy: it puts sources this
-    /// tracker has never heard from in doubt, so no set of the uncertain ones
-    /// could carry it. Nothing but a source's own complete baseline or reset
-    /// answers for it afterwards.
-    #[test]
-    fn a_stream_wide_gap_doubts_even_the_sources_it_never_named() {
-        let (a, b) = (SourceId(1), SourceId(2));
-        let mut tracker = NoteTracker::new();
-        assert!(tracker.source_current_certain(a), "nothing lost, nothing in doubt");
-
-        tracker.handle_canonical(gap(1.0, Some(a))).unwrap();
-        assert!(!tracker.source_current_certain(a));
-        assert!(tracker.source_current_certain(b), "one source's gap is not another's");
-        tracker.source_notes_off(a, 2.0);
-        assert!(tracker.source_current_certain(a), "its own reset answers for it");
-
-        tracker.handle_canonical(gap(3.0, None)).unwrap();
-        for source in [a, b, SourceId(9)] {
-            assert!(!tracker.source_current_certain(source), "{source:?} outlived a stream gap");
-        }
-        tracker.source_notes_off(b, 4.0);
-        assert!(tracker.source_current_certain(b));
-        assert!(!tracker.source_current_certain(a), "b speaking for itself is not a speaking");
-        // A gap inside that doubt still lands on the source it names, and on
-        // no other.
-        tracker.handle_canonical(gap(5.0, Some(b))).unwrap();
-        assert!(!tracker.source_current_certain(b));
-
-        // A transport reset is the whole session speaking for itself.
-        tracker.session_notes_off(6.0);
-        assert!(tracker.source_current_certain(a) && tracker.source_current_certain(b));
-    }
-
-    /// The banner's condition means "right now": it holds while a source the
-    /// tracker has heard from is in doubt, and clears once each one's complete
-    /// baseline has answered for it. Two sources, so the half-recovered state
-    /// in between is reached rather than skipped, and a one-source gap first,
-    /// because after a stream-wide one certainty never returns to the shape
-    /// that one reaches.
-    #[test]
-    fn missing_history_clears_once_every_heard_source_recovers() {
-        let (a, b) = (SourceId(1), SourceId(2));
-        let mut tracker = NoteTracker::new();
-        // A complete baseline: what each source's recovery publishes, and here
-        // also how each is first heard from.
-        let baseline =
-            |source, id, time| SourceBaseline::new(source, id, time, 0, true, &[]).unwrap();
-        tracker.replace_source(&baseline(a, 1, 0.5)).unwrap();
-        tracker.replace_source(&baseline(b, 1, 0.5)).unwrap();
-        assert!(!tracker.history_missing(), "nothing lost yet");
-
-        tracker.handle_canonical(gap(1.0, Some(a))).unwrap();
-        assert!(tracker.history_missing(), "a gap naming one source");
-        assert!(tracker.replace_source(&baseline(a, 2, 2.0)).unwrap());
-        assert!(!tracker.history_missing(), "clears on that source's own recovery");
-
-        tracker.handle_canonical(gap(3.0, None)).unwrap();
-        assert!(tracker.history_missing(), "a stream-wide gap doubts both");
-        assert!(tracker.replace_source(&baseline(a, 3, 4.0)).unwrap());
-        assert!(tracker.history_missing(), "b has not answered for itself");
-        assert!(tracker.replace_source(&baseline(b, 2, 5.0)).unwrap());
-        assert!(!tracker.history_missing(), "both recovered, so the banner clears");
     }
 
     #[test]
@@ -1774,10 +1449,10 @@ mod tests {
         assert!(!tracker.hides(SourceId(4).on_tape()), "another source's tape notes still show");
     }
 
-    /// A stream-wide gap or a session reset ends what was published, not what
-    /// the tape plays: its player still counts those voices as sounding.
+    /// A session reset ends what was published, not what the tape plays: its
+    /// player still counts those voices as sounding.
     #[test]
-    fn a_gap_or_a_session_reset_leaves_the_tapes_voices_to_its_player() {
+    fn a_session_reset_leaves_the_tapes_voices_to_its_player() {
         let live = SourceId(1);
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent::on(0.0, live, 0, 60, 0.8));
@@ -1789,10 +1464,6 @@ mod tests {
             tracker.roll().notes().filter(live).map(|n| n.note).collect::<Vec<_>>()
         };
 
-        assert_eq!(tracker.handle_canonical(gap(1.0, None)), Ok(true));
-        assert_eq!((held(&tracker), sounding(&tracker)), (vec![64], vec![64]));
-
-        tracker.handle_event(NoteEvent::on(2.0, live, 0, 60, 0.8));
         tracker.session_notes_off(3.0);
         assert_eq!((held(&tracker), sounding(&tracker)), (vec![64], vec![64]));
     }

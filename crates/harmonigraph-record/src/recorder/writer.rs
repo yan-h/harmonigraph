@@ -155,8 +155,6 @@ pub fn channel() -> (Recorder, Control) {
 #[derive(Default)]
 struct Pump {
     open: Option<Recording>,
-    /// Non-RT deduplication only. These cuts authorize no musical reclamation.
-    order: harmonigraph_core::canonical::CanonicalOrder,
     /// A Stop arrived and the take it stops is not sealed yet.
     pending_stop: bool,
     /// No further command can arrive.
@@ -189,7 +187,6 @@ impl Pump {
             fence.fail();
             return;
         }
-        self.order = Default::default();
         self.open = Recording::create(header, path, spec, status);
         #[cfg(feature = "test-support")]
         if let Some(audio) = self.open.as_mut().and_then(|o| o.audio.as_mut()) {
@@ -279,26 +276,8 @@ impl Pump {
         items: usize,
         fence: &RecordFence,
     ) -> usize {
-        use harmonigraph_core::canonical::CanonicalEvent;
-        let (order, open) = (&mut self.order, &mut self.open);
+        let open = &mut self.open;
         publications.drain_up_to(items, |event| {
-            let accepted = match event {
-                CanonicalEvent::Note(delta) => order.note(delta.event.source, delta.sequence),
-                CanonicalEvent::Baseline(frame) => {
-                    order.baseline(frame.source, frame.id, frame.output_cut)
-                }
-                CanonicalEvent::Gap(_) => Ok(true),
-            };
-            match accepted {
-                Ok(false) => return true,
-                Err(_) => {
-                    if open.is_some() {
-                        fence.fail();
-                    }
-                    return true;
-                }
-                Ok(true) => {}
-            }
             // A gap is NOT a failure (#712): the reader warns if it overlaps
             // a run.
             let record = harmonigraph_take::CanonicalRecord::from_event(event);

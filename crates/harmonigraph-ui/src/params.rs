@@ -134,8 +134,6 @@ pub struct ConfigurationView {
 }
 
 impl ConfigurationView {
-    /// Learn heard a row that lost an event; it clears when the rows do.
-    pub const LEARN_INCOMPLETE: u32 = 1;
     /// Host input was lost: a take refuses its configuration until a reset.
     pub const INPUT_LOST: u32 = 2;
     /// The editor's last edit found the queue full.

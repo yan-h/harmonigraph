@@ -30,8 +30,6 @@ pub(crate) struct BlockOut {
     /// The block's song position, for the analyzer ring's descriptor, while
     /// the transport rolls; `None` otherwise.
     pub song: Option<f64>,
-    /// The tape is cued or sounding, so the host must keep calling.
-    pub sounding: bool,
     /// What the tape did in this block, for the analyzer ring's descriptor.
     pub play: TapePlay,
 }
@@ -194,7 +192,7 @@ impl Deck {
             // nothing to say where a cue would play from.
             self.end(Reason::NoPosition);
             self.publish(None, false);
-            return BlockOut { song: None, sounding: false, play: TapePlay::Idle };
+            return BlockOut { song: None, play: TapePlay::Idle };
         };
         let rolling = transport::step(self.last, position, block.playing).rolling();
         self.watch_for_leak(position, rolling);
@@ -241,7 +239,7 @@ impl Deck {
         } else {
             TapePlay::Idle
         };
-        BlockOut { song: rolling.then_some(position), sounding: self.sounding(), play }
+        BlockOut { song: rolling.then_some(position), play }
     }
 
     /// What Tape mode draws: the transport, and where the audition is.

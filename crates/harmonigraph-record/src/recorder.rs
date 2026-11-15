@@ -361,11 +361,8 @@ impl Recorder {
         publication::Lanes { take, display }
     }
 
-    /// One lane at a time, because a snapshot carries an identity and each
-    /// lane's consumer deduplicates on it. Publishing the same `id` to both
-    /// and advancing the cursor only when both accepted left the lane that DID
-    /// accept rejecting the retry as a duplicate, with the source's voices
-    /// missing for good (#712).
+    /// One lane at a time, so a display ring nobody drains cannot hold a
+    /// snapshot back from the take, or the take's from the display (#712).
     pub fn publish_baseline(
         &mut self,
         lane: publication::Lane,

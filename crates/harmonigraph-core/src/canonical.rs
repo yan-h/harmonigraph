@@ -1,17 +1,10 @@
 //! The canonical display/take boundary: observed direct input, accepted output,
 //! complete source replacement and explicit missing history, as the Hub
 //! schedules them from its own sequenced rows.
-use crate::configuration::ResolvedConfig;
 use crate::{Expressions, LatticePos, NoteEvent, NoteEventKind, SourceId, Time, VoiceKey};
 
 /// Held voices one source's baseline can carry.
 pub const HELD_PER_SOURCE: usize = 64;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PitchProvenance {
-    ObservedDirect,
-    AcceptedOutput,
-}
 
 /// What the tuner decided about one attack. It also named the configuration
 /// revision the decision was taken under, for reconstructing historical
@@ -35,43 +28,28 @@ pub struct NoteDelta {
     /// output has a nonzero source-monotonic sequence and lifetime.
     pub sequence: u64,
     pub lifetime: u64,
-    pub provenance: PitchProvenance,
     /// Exact current accepted pitch, when this delta establishes one. The f32
     /// in NoteEvent remains the presentation adapter, never pitch authority.
     pub pitch_microcents: Option<i64>,
     /// Attack selection and current player expression, separate from accepted
     /// pitch. The complete configuration is in the take configuration timeline.
     pub assignment: Option<AssignmentMetadata>,
-    /// This physical onset was accepted, but its required initial tuning was
-    /// rejected. Its intended correction is not an accepted pitch fact.
-    pub partial_output: bool,
 }
 
 impl From<NoteEvent> for NoteDelta {
     fn from(event: NoteEvent) -> Self {
-        Self {
-            event,
-            sequence: 0,
-            lifetime: 0,
-            provenance: PitchProvenance::ObservedDirect,
-            pitch_microcents: None,
-            assignment: None,
-            partial_output: false,
-        }
+        Self { event, sequence: 0, lifetime: 0, pitch_microcents: None, assignment: None }
     }
 }
 
 impl NoteDelta {
     pub fn validate(&self) -> Result<(), InvalidCanonical> {
+        // An unsequenced delta is a direct observation; a sequenced one is
+        // what a source played, and names its press.
         if !self.event.has_valid_payload()
-            || (self.provenance == PitchProvenance::ObservedDirect
-                && self.event.source != SourceId::DIRECT)
-            || (self.provenance == PitchProvenance::AcceptedOutput
-                && (self.sequence == 0 || self.lifetime == 0))
+            || (self.sequence == 0 && self.event.source != SourceId::DIRECT)
+            || (self.sequence != 0 && self.lifetime == 0)
             || self.assignment.is_some_and(|a| a.decision == 0 || !a.player_tuning.is_finite())
-            || (self.partial_output
-                && (self.provenance != PitchProvenance::AcceptedOutput
-                    || !matches!(self.event.kind, NoteEventKind::On { .. })))
         {
             return Err(InvalidCanonical);
         }
@@ -89,8 +67,8 @@ impl NoteDelta {
     }
 }
 
-/// Saved factual state, not a new emitted attack. Musical provenance is optional
-/// for observed DIRECT and intentionally unretuned output.
+/// Saved factual state, not a new emitted attack. A decision is optional: an
+/// observed DIRECT voice and an unretuned one carry none.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VoiceBaseline {
     pub channel: u8,
@@ -110,13 +88,11 @@ pub struct VoiceBaseline {
     /// Where the voice's expressions stand now, so a note resumed from a
     /// baseline does not snap back to [`Expressions::NEUTRAL`].
     pub expressions: Expressions,
-    pub provenance: PitchProvenance,
-    pub assignment: Option<ResolvedConfig>,
+    /// The tuner's decision for the attack, zero for none. With
+    /// `attack_node` and `frozen_offset_microcents` it is what a person reads
+    /// when a render comes out wrong.
     pub decision: u64,
     pub attack_node: Option<LatticePos>,
-    /// An accepted onset with unestablished intended tuning remains factual.
-    pub partial_output: bool,
-    pub release_pending: bool,
 }
 
 impl Default for VoiceBaseline {
@@ -134,12 +110,8 @@ impl Default for VoiceBaseline {
             frozen_offset_microcents: 0,
             velocity: 0.0,
             expressions: Expressions::NEUTRAL,
-            provenance: PitchProvenance::ObservedDirect,
-            assignment: None,
             decision: 0,
             attack_node: None,
-            partial_output: false,
-            release_pending: false,
         }
     }
 }
@@ -153,7 +125,7 @@ impl VoiceBaseline {
     }
 
     pub fn metadata(&self) -> Option<AssignmentMetadata> {
-        self.assignment.filter(|_| self.decision != 0).map(|_| AssignmentMetadata {
+        (self.decision != 0).then_some(AssignmentMetadata {
             decision: self.decision,
             node: self.attack_node,
             correction_microcents: self.frozen_offset_microcents,
@@ -173,9 +145,15 @@ impl VoiceBaseline {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InvalidCanonical;
 
-/// Ordering and deduplication for one non-RT publication stream. Callers
-/// validate payloads first. These counters own no musical state and authorize
-/// no journal reclamation; gaps, resets and file boundaries do not clear them.
+/// The order one publication stream keeps: each source's deltas rise, a
+/// snapshot's cut covers every delta of its source already seen, and no later
+/// delta falls at or below it. Nothing republishes
+/// (`harmonigraph_record::publication`), so the live display, which applies
+/// records in publication order, checks it in debug builds alone (#1798). A
+/// take is read in time order, which a Tune whose delay was lowered while it
+/// recorded does break (its snapshot after the cut is timed at the old delay,
+/// its next deltas at the new), so the take reader refuses such a take. It
+/// owns no musical state.
 #[derive(Default)]
 pub struct CanonicalOrder {
     sources: std::collections::BTreeMap<SourceId, CanonicalCursor>,
@@ -184,53 +162,29 @@ pub struct CanonicalOrder {
 #[derive(Default)]
 struct CanonicalCursor {
     output: u64,
-    baseline: u64,
     state_cut: u64,
 }
 
 impl CanonicalOrder {
-    /// False identifies an already consumed delta. Unsequenced observations
-    /// neither advance ordering nor establish membership in this stream.
-    pub fn note(&mut self, source: SourceId, sequence: u64) -> Result<bool, InvalidCanonical> {
+    /// Whether this delta keeps the order. An unsequenced observation is not
+    /// part of it.
+    pub fn note(&mut self, source: SourceId, sequence: u64) -> bool {
         if sequence == 0 {
-            return Ok(true);
+            return true;
         }
         let cursor = self.sources.entry(source).or_default();
-        if sequence <= cursor.output {
-            return Ok(false);
-        }
-        // Available history must precede its baseline. A baseline is not
-        // permission to silently discard history we have never consumed.
-        if sequence <= cursor.state_cut {
-            return Err(InvalidCanonical);
-        }
-        cursor.output = sequence;
-        Ok(true)
+        let ordered = sequence > cursor.output && sequence > cursor.state_cut;
+        cursor.output = cursor.output.max(sequence);
+        ordered
     }
 
-    /// False identifies an already consumed baseline. Its cut records state
-    /// coverage, not consumed output, and may retreat as long as it still
-    /// covers all output this consumer has seen.
-    pub fn baseline(
-        &mut self,
-        source: SourceId,
-        id: u64,
-        output_cut: u64,
-    ) -> Result<bool, InvalidCanonical> {
+    /// Whether this snapshot's cut covers every delta of its source already
+    /// seen.
+    pub fn baseline(&mut self, source: SourceId, output_cut: u64) -> bool {
         let cursor = self.sources.entry(source).or_default();
-        if id <= cursor.baseline {
-            return Ok(false);
-        }
-        if cursor.output > output_cut {
-            return Err(InvalidCanonical);
-        }
-        cursor.baseline = id;
+        let ordered = cursor.output <= output_cut;
         cursor.state_cut = output_cut;
-        Ok(true)
-    }
-
-    pub(crate) fn sources(&self) -> impl Iterator<Item = SourceId> + '_ {
-        self.sources.keys().copied()
+        ordered
     }
 }
 
@@ -246,7 +200,6 @@ impl CanonicalOrder {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SourceBaseline {
     pub source: SourceId,
-    pub id: u64,
     pub time: Time,
     pub output_cut: u64,
     /// The source's Show switch. False hides its notes without releasing
@@ -261,7 +214,6 @@ impl SourceBaseline {
     // together; no partially initialized baseline is publicly constructible.
     pub fn new(
         source: SourceId,
-        id: u64,
         time: Time,
         output_cut: u64,
         shown: bool,
@@ -272,7 +224,6 @@ impl SourceBaseline {
         }
         let mut result = Self {
             source,
-            id,
             time,
             output_cut,
             shown,
@@ -289,7 +240,7 @@ impl SourceBaseline {
     }
 
     pub fn validate(&self) -> Result<(), InvalidCanonical> {
-        if self.id == 0 || !self.time.is_finite() || self.count > HELD_PER_SOURCE {
+        if !self.time.is_finite() || self.count > HELD_PER_SOURCE {
             return Err(InvalidCanonical);
         }
         for (i, voice) in self.voices().iter().enumerate() {
@@ -304,8 +255,6 @@ impl SourceBaseline {
                 || !(0.0..=1.0).contains(&voice.velocity)
                 || !voice.expressions.valid()
                 || voice.lifetime == 0
-                || (voice.provenance == PitchProvenance::ObservedDirect
-                    && self.source != SourceId::DIRECT)
                 || self.voices()[..i].iter().any(|old| {
                     old.key(self.source) == voice.key(self.source) || old.lifetime == voice.lifetime
                 })
@@ -316,8 +265,8 @@ impl SourceBaseline {
         Ok(())
     }
 
-    /// Map all presentation times with the SAME translation. Exact sample
-    /// provenance and assignment values are deliberately unchanged.
+    /// Map all presentation times with the SAME translation. Pitches and
+    /// decisions are deliberately unchanged.
     pub fn translate(&mut self, offset: f64) {
         self.time += offset;
         for voice in &mut self.voices[..self.count] {
@@ -387,26 +336,22 @@ mod tests {
     use super::*;
     use crate::NoteTracker;
 
+    /// The order consumers check in debug builds: each source's deltas rise,
+    /// and a snapshot's cut covers the deltas already seen and stays below the
+    /// next. An unsequenced observation is outside it.
     #[test]
-    fn ordering_distinguishes_duplicates_from_history_missing_before_a_cut() {
+    fn the_canonical_order_is_rising_deltas_and_covering_cuts() {
         let mut order = CanonicalOrder::default();
         let source = SourceId(1);
-        assert_eq!(order.note(SourceId(3), 0), Ok(true));
-        assert_eq!(order.sources().count(), 0);
-        assert_eq!(order.note(source, 5), Ok(true));
-        assert_eq!(order.baseline(source, 1, 8), Ok(true));
-        assert_eq!(order.note(source, 5), Ok(false));
-        assert_eq!(order.note(source, 6), Err(InvalidCanonical));
-        assert_eq!(order.baseline(source, 1, 0), Ok(false));
-        assert_eq!(order.baseline(source, 2, 4), Err(InvalidCanonical));
-        // A newer baseline can retreat to a cut that still covers consumed
-        // output. The rejected baseline above must not consume its ID.
-        assert_eq!(order.baseline(source, 2, 6), Ok(true));
-        assert_eq!(order.note(source, 7), Ok(true));
-        assert_eq!(order.note(SourceId(2), 1), Ok(true));
-        assert_eq!(order.baseline(SourceId(2), 1, 4), Ok(true));
-        assert_eq!(order.note(SourceId(2), 2), Err(InvalidCanonical));
-        assert_eq!(order.sources().collect::<Vec<_>>(), [source, SourceId(2)]);
+        assert!(order.note(SourceId(3), 0));
+        assert!(order.note(source, 5));
+        assert!(order.baseline(source, 8));
+        assert!(!order.note(source, 5), "a repeated delta");
+        assert!(!order.note(source, 6), "a delta the cut already covers");
+        assert!(!order.baseline(source, 4), "a cut below a delta seen");
+        assert!(order.baseline(source, 6));
+        assert!(order.note(source, 7));
+        assert!(order.note(SourceId(2), 1), "each source keeps its own order");
     }
 
     fn voice(note: u8) -> VoiceBaseline {
@@ -416,13 +361,12 @@ mod tests {
             actual_onset: 1.0,
             pitch_microcents: i64::from(note) * 100_000_000,
             velocity: 0.8,
-            provenance: PitchProvenance::AcceptedOutput,
             ..Default::default()
         }
     }
 
     fn frame(voices: &[VoiceBaseline]) -> Result<SourceBaseline, InvalidCanonical> {
-        SourceBaseline::new(SourceId(1), 1, 2.0, 64, true, voices)
+        SourceBaseline::new(SourceId(1), 2.0, 64, true, voices)
     }
 
     #[test]
@@ -431,9 +375,8 @@ mod tests {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent::on(0.0, SourceId(2), 0, 0, 0.6));
         let baseline = frame(&voices).unwrap();
-        assert_eq!(tracker.replace_source(&baseline), Ok(true));
+        assert_eq!(tracker.replace_source(&baseline), Ok(()));
         assert_eq!(tracker.held_count(), 65);
-        assert_eq!(tracker.replace_source(&baseline), Ok(false));
         let mut invalid = voices.clone();
         invalid.push(voice(64));
         assert_eq!(frame(&invalid), Err(InvalidCanonical));
@@ -441,7 +384,6 @@ mod tests {
         invalid[63] = invalid[0];
         assert_eq!(frame(&invalid), Err(InvalidCanonical));
         let mut malformed = baseline;
-        malformed.id = 2;
         malformed.voices[63].actual_onset = f64::NAN;
         assert_eq!(tracker.replace_source(&malformed), Err(InvalidCanonical));
         assert_eq!(tracker.held_count(), 65);
@@ -459,15 +401,7 @@ mod tests {
     }
 
     fn delta(event: NoteEvent, sequence: u64) -> NoteDelta {
-        NoteDelta {
-            assignment: None,
-            partial_output: false,
-            event,
-            sequence,
-            lifetime: 61,
-            provenance: PitchProvenance::AcceptedOutput,
-            pitch_microcents: None,
-        }
+        NoteDelta { assignment: None, event, sequence, lifetime: 61, pitch_microcents: None }
     }
 
     /// Every clause of the publication boundary refuses on its own: a delta,
@@ -482,23 +416,17 @@ mod tests {
                 correction_microcents: 0,
                 player_tuning: 0.0,
             }),
-            partial_output: true,
             ..delta(NoteEvent::on(1.0, SourceId(1), 0, 60, 0.8), 1)
         };
         assert_eq!(good.validate(), Ok(()));
         let kind = |kind| NoteEvent { kind, ..good.event };
         let decision = Some(AssignmentMetadata { decision: 0, ..good.assignment.unwrap() });
-        let direct = PitchProvenance::ObservedDirect;
         for (what, bad) in [
             ("note", NoteDelta { event: NoteEvent { note: 128, ..good.event }, ..good }),
             ("velocity", NoteDelta { event: kind(NoteEventKind::On { velocity: 1.5 }), ..good }),
-            (
-                "direct from a source",
-                NoteDelta { provenance: direct, partial_output: false, ..good },
-            ),
+            ("unsequenced from a source", NoteDelta { sequence: 0, ..good }),
             ("output lifetime", NoteDelta { lifetime: 0, ..good }),
             ("decision", NoteDelta { assignment: decision, ..good }),
-            ("partial off", NoteDelta { event: kind(NoteEventKind::Off), ..good }),
         ] {
             assert_eq!(bad.validate(), Err(InvalidCanonical), "{what}");
         }
@@ -524,18 +452,15 @@ mod tests {
         let row = VoiceBaseline { actual_onset: 2.0, ..voice(60) };
         assert!(frame(&[row, voice(64)]).is_ok());
         // A direct voice names its press by a lifetime like any other.
-        let observed = VoiceBaseline { provenance: direct, ..row };
-        let direct_frame =
-            |voice| SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 64, true, &[voice]);
-        assert!(direct_frame(observed).is_ok());
+        let direct_frame = |voice| SourceBaseline::new(SourceId::DIRECT, 2.0, 64, true, &[voice]);
+        assert!(direct_frame(row).is_ok());
         assert_eq!(
-            direct_frame(VoiceBaseline { lifetime: 0, ..observed }).err(),
+            direct_frame(VoiceBaseline { lifetime: 0, ..row }).err(),
             Some(InvalidCanonical)
         );
         for (what, bad) in [
             ("note", VoiceBaseline { note: 128, ..row }),
             ("onset after the frame", VoiceBaseline { actual_onset: 3.0, ..row }),
-            ("direct from a source", VoiceBaseline { provenance: direct, ..row }),
             ("same key", VoiceBaseline { lifetime: 99, ..row }),
             ("same lifetime", VoiceBaseline { note: 64, ..row }),
         ] {
@@ -543,9 +468,6 @@ mod tests {
             let beside = if what.starts_with("same") { row } else { voice(64) };
             assert_eq!(frame(&[beside, bad]).err(), Some(InvalidCanonical), "{what}");
         }
-        let mut envelope = frame(&[row]).unwrap();
-        envelope.id = 0;
-        assert_eq!(envelope.validate(), Err(InvalidCanonical), "id");
     }
 
     /// A baseline row is the same voice by its lifetime. A row naming another
@@ -558,45 +480,14 @@ mod tests {
             let mut tracker = NoteTracker::new();
             let on = NoteEvent::on(1.0, source, 0, 60, 0.8);
             tracker.handle_canonical(CanonicalEvent::Note(delta(on, 1))).unwrap();
-            let baseline = SourceBaseline::new(source, 1, 2.0, 64, true, &[row]).unwrap();
+            let baseline = SourceBaseline::new(source, 2.0, 64, true, &[row]).unwrap();
             tracker.replace_source(&baseline).unwrap();
             assert_eq!(tracker.roll().notes().count(), notes, "{row:?}");
         }
     }
 
     #[test]
-    fn a_recovered_release_keeps_history_ordered_for_activity_and_trimming() {
-        let source = SourceId(1);
-        let mut tracker = NoteTracker::new();
-        tracker
-            .handle_canonical(CanonicalEvent::Note(delta(
-                NoteEvent::on(0.0, source, 0, 60, 0.8),
-                1,
-            )))
-            .unwrap();
-        tracker
-            .handle_canonical(CanonicalEvent::Gap(PublicationGap {
-                source: Some(source),
-                time: 1.0,
-                through: 1.0,
-                first: 2,
-                last: 2,
-                reason: GapReason::PublicationFull,
-            }))
-            .unwrap();
-        tracker.handle_event(NoteEvent::on(1.5, SourceId::DIRECT, 0, 64, 0.8));
-        tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 64));
-        tracker
-            .handle_canonical(CanonicalEvent::Note(delta(NoteEvent::off(3.0, source, 0, 60), 3)))
-            .unwrap();
-        assert_eq!(tracker.roll().latest_activity(4.0), Some(3.0));
-        tracker.prune(crate::NoteRoll::MAX_AGE + 2.5, &crate::Envelope::default());
-        let notes: Vec<_> = tracker.roll().notes().map(|note| note.note).collect();
-        assert_eq!(notes, [60], "the expired neighbor is not hidden behind the recovered off");
-    }
-
-    #[test]
-    fn empty_baseline_keeps_completed_history_and_duplicates_do_not_replay() {
+    fn empty_baseline_keeps_completed_history() {
         let mut tracker = NoteTracker::new();
         let source = SourceId(1);
         let events = [
@@ -614,13 +505,10 @@ mod tests {
             delta(NoteEvent::off(1.0, source, 0, 60), 3),
         ];
         for event in events {
-            assert_eq!(tracker.handle_canonical(CanonicalEvent::Note(event)), Ok(true));
+            assert_eq!(tracker.handle_canonical(CanonicalEvent::Note(event)), Ok(()));
         }
         let baseline = frame(&[]).unwrap();
         tracker.replace_source(&baseline).unwrap();
-        for event in events {
-            assert_eq!(tracker.handle_canonical(CanonicalEvent::Note(event)), Ok(false));
-        }
         let note = tracker.roll().notes().next().unwrap();
         assert_eq!((note.start, note.end, note.settled_pitch()), (0.0, Some(1.0), 60.25));
         assert_eq!(tracker.roll().notes().count(), 1);
@@ -661,7 +549,6 @@ mod tests {
         assert!(note.history_complete);
         assert_eq!(tracker.roll().notes().count(), 1);
         let mut off = frame(&[row]).unwrap();
-        off.id = 2;
         off.shown = false;
         tracker.replace_source(&off).unwrap();
         assert_eq!(tracker.held_count(), 0);
@@ -680,9 +567,8 @@ mod tests {
         tuning.pitch_microcents = Some(6_050_000_000);
         tracker.handle_canonical(CanonicalEvent::Note(tuning)).unwrap();
         assert_eq!(tracker.held_count(), 0, "Off output remains factual but hidden");
-        let mut rejoin = SourceBaseline::new(
+        let rejoin = SourceBaseline::new(
             source,
-            3,
             2.2,
             65,
             true,
@@ -695,12 +581,13 @@ mod tests {
         assert_eq!((note.start, note.settled_pitch(), note.end_pitch()), (1.0, 60.25, 60.5));
         assert_eq!(note.lifetime, Some(61));
         assert!(note.history_complete);
-        rejoin.id += 1;
         tracker.replace_source(&rejoin).unwrap();
         assert_eq!(tracker.roll().notes().count(), 1);
     }
+    /// A baseline that restates a note at a new pitch breaks its line there, and
+    /// a full bend buffer's fold keeps that break through a later bend.
     #[test]
-    fn a_full_bend_buffer_preserves_the_gap_after_a_later_expression() {
+    fn a_full_bend_buffer_preserves_a_baselines_break_after_a_later_expression() {
         let source = SourceId(1);
         let mut tracker = NoteTracker::new();
         tracker
@@ -724,18 +611,8 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(tracker.roll().notes().next().unwrap().segments(0.7).count(), 64);
-        tracker
-            .handle_canonical(CanonicalEvent::Gap(PublicationGap {
-                source: Some(source),
-                time: 1.0,
-                through: 1.9,
-                first: 65,
-                last: 66,
-                reason: GapReason::PublicationFull,
-            }))
-            .unwrap();
-        let row = VoiceBaseline { actual_onset: 0.0, pitch_microcents: 6_063_000_000, ..voice(60) };
-        let frame = SourceBaseline::new(source, 1, 2.0, 66, true, &[row]).unwrap();
+        let row = VoiceBaseline { actual_onset: 0.0, pitch_microcents: 6_070_000_000, ..voice(60) };
+        let frame = SourceBaseline::new(source, 2.0, 66, true, &[row]).unwrap();
         tracker.replace_source(&frame).unwrap();
         tracker
             .handle_canonical(CanonicalEvent::Note(delta(
@@ -751,8 +628,10 @@ mod tests {
             .unwrap();
         let segments: Vec<_> = tracker.roll().notes().next().unwrap().segments(3.1).collect();
         assert!(
-            segments.iter().all(|((start, _), (end, _))| *end <= 1.0 || *start >= 2.0),
-            "fold crossed missing interval: {segments:?}"
+            segments.iter().all(|((start, p0), (end, p1))| *end < 2.0
+                || *start >= 2.0
+                || (*end == 2.0 && p0 == p1)),
+            "fold crossed the baseline's break: {segments:?}"
         );
         assert!(segments.iter().any(|((start, _), (end, _))| *start == 2.0 && *end == 3.0));
         assert!(segments.len() <= 64);

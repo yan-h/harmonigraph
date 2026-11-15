@@ -5,9 +5,7 @@
 //! the display and the take show a schedule rather than a confirmation. What
 //! that costs is written down: a note the host refuses is drawn anyway, and
 //! nothing in the protocol can tell.
-use harmonigraph_core::canonical::{
-    NoteDelta, PitchProvenance, SourceBaseline, VoiceBaseline, HELD_PER_SOURCE,
-};
+use harmonigraph_core::canonical::{NoteDelta, SourceBaseline, VoiceBaseline, HELD_PER_SOURCE};
 use harmonigraph_core::{LatticePos, NoteEvent, NoteEventKind, SourceId};
 
 use super::event::Event;
@@ -23,9 +21,6 @@ pub struct State {
     /// channel that has voices on it. A bend on an empty channel changes only
     /// the pitch later attacks start from, and moves nothing to publish.
     pub moved_channel: Option<u8>,
-    /// False once a bounded store refused a voice. A source with an incomplete
-    /// state publishes no baseline, because a partial one is worse than none.
-    pub complete: bool,
 }
 
 impl Default for State {
@@ -34,7 +29,6 @@ impl Default for State {
             voices: [None; HELD_PER_SOURCE],
             pitch: [Default::default(); 16],
             moved_channel: None,
-            complete: true,
         }
     }
 }
@@ -73,7 +67,6 @@ impl State {
     pub fn clear(&mut self) {
         self.voices = [None; HELD_PER_SOURCE];
         self.pitch = [Default::default(); 16];
-        self.complete = true;
     }
     /// Every voice a channel termination ends, so the caller can turn one
     /// controller into the note-offs the instrument is about to perform.
@@ -89,14 +82,12 @@ impl State {
     /// Freeze this onset's adaptive choice onto its voice. The emitted pitch
     /// includes the correction because the Tune states it as a per-note tuning
     /// expression at the same sample as the note.
-    #[allow(clippy::too_many_arguments)]
     pub fn assign(
         &mut self,
         lifetime: u64,
         correction: i64,
         node: Option<LatticePos>,
         decision: u64,
-        configuration: harmonigraph_core::configuration::ResolvedConfig,
         player: f64,
         channel_pitch: i64,
     ) {
@@ -111,7 +102,6 @@ impl State {
             + (player * 100_000_000.0).round() as i64;
         voice.pitch_microcents = voice.onset_pitch_microcents;
         if decision != 0 {
-            voice.assignment = Some(configuration);
             voice.decision = decision;
             voice.attack_node = node;
         }
@@ -125,33 +115,19 @@ impl State {
     /// fixed point for that row — it would infer the axes it had
     /// already chosen and never move. The old design got away with it only
     /// because the Hub's own track was the one thing it did not retune.
-    ///
-    /// A source whose state has lost an event has nothing to learn from rather
-    /// than an empty list.
-    pub fn learnable(&self) -> Option<impl Iterator<Item = i64> + '_> {
-        self.complete.then(|| {
-            self.voices()
-                .map(|voice| voice.pitch_microcents.saturating_sub(voice.frozen_offset_microcents))
-        })
+    pub fn learnable(&self) -> impl Iterator<Item = i64> + '_ {
+        self.voices()
+            .map(|voice| voice.pitch_microcents.saturating_sub(voice.frozen_offset_microcents))
     }
 
-    pub fn baseline(
-        &self,
-        source: SourceId,
-        id: u64,
-        cut: u64,
-        time: f64,
-    ) -> Option<SourceBaseline> {
-        if !self.complete {
-            return None;
-        }
+    pub fn baseline(&self, source: SourceId, cut: u64, time: f64) -> Option<SourceBaseline> {
         let mut voices = [VoiceBaseline::default(); HELD_PER_SOURCE];
         let mut count = 0;
         for voice in self.voices() {
             voices[count] = *voice;
             count += 1;
         }
-        SourceBaseline::new(source, id, time, cut, true, &voices[..count]).ok()
+        SourceBaseline::new(source, time, cut, true, &voices[..count]).ok()
     }
 
     /// The delta that states a held voice's pitch after a channel move: a
@@ -172,10 +148,8 @@ impl State {
             },
             sequence: stamp.sequence,
             lifetime,
-            provenance: PitchProvenance::AcceptedOutput,
             pitch_microcents: Some(voice.pitch_microcents),
             assignment: VoiceBaseline::metadata(voice),
-            partial_output: false,
         })
     }
 
@@ -186,9 +160,10 @@ impl State {
         self.moved_channel = None;
         let mut result = None;
         if let Some((id, channel, note, velocity)) = event.attack() {
-            let index = self.onset_cell(channel, note);
-            let Some(index) = index else {
-                self.complete = false;
+            // The Hub refuses an onset its row has no cell for before it gets
+            // here (`Hub::apply`).
+            let Some(index) = self.onset_cell(channel, note) else {
+                debug_assert!(false, "an onset reached a full row");
                 return None;
             };
             let pitch =
@@ -202,7 +177,6 @@ impl State {
                 velocity,
                 pitch_microcents: pitch,
                 onset_pitch_microcents: pitch,
-                provenance: PitchProvenance::AcceptedOutput,
                 ..VoiceBaseline::default()
             });
             result =
@@ -230,10 +204,9 @@ impl State {
                 let pitch = (f64::from(voice.note) + value) * 100_000_000.0
                     + self.pitch[usize::from(voice.channel)].microcents() as f64
                     + voice.frozen_offset_microcents as f64;
-                if !value.is_finite() || !pitch.is_finite() || !in_range(pitch) {
-                    self.complete = false;
-                    return None;
-                }
+                // A Tune admits only a finite value (`Event::emittable`), and
+                // CLAP bounds a tuning expression to 120 semitones.
+                debug_assert!(in_range(pitch), "a tuning expression no host sends: {value}");
                 voice.player_tuning = value;
                 voice.pitch_microcents = pitch.round() as i64;
                 result = Some((
@@ -279,10 +252,8 @@ impl State {
             event: NoteEvent { source: stamp.source, time: stamp.time, channel, note, kind },
             sequence: stamp.sequence,
             lifetime,
-            provenance: PitchProvenance::AcceptedOutput,
             pitch_microcents,
             assignment: self.voice(lifetime).and_then(VoiceBaseline::metadata),
-            partial_output: false,
         })
     }
 }

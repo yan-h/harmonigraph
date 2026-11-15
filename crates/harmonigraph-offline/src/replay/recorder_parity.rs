@@ -148,21 +148,11 @@ fn accepted_exact(
     pitch_microcents: Option<i64>,
 ) -> harmonigraph_core::canonical::NoteDelta {
     use harmonigraph_core::canonical::NoteDelta;
-    use harmonigraph_core::canonical::PitchProvenance;
-    NoteDelta {
-        event,
-        sequence,
-        lifetime,
-        provenance: PitchProvenance::AcceptedOutput,
-        pitch_microcents,
-        assignment: None,
-        partial_output: false,
-    }
+    NoteDelta { event, sequence, lifetime, pitch_microcents, assignment: None }
 }
 
 #[test]
 fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
-    use harmonigraph_core::canonical::PitchProvenance;
     use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
     use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, SourceId};
     use harmonigraph_record::publication::Lane;
@@ -213,10 +203,9 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         pitch_microcents: 6_037_500_000,
         onset_pitch_microcents: 6_000_000_000,
         velocity: 0.8,
-        provenance: PitchProvenance::AcceptedOutput,
         ..Default::default()
     };
-    let repaired = SourceBaseline::new(source, 1, ORIGIN + 0.5, 2, true, &[row]).unwrap();
+    let repaired = SourceBaseline::new(source, ORIGIN + 0.5, 2, true, &[row]).unwrap();
     recorder.publish_baseline(Lane::Take, &repaired).unwrap();
     recorder.publish_baseline(Lane::Display, &repaired).unwrap();
     recorder
@@ -227,7 +216,7 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
             None,
         ))
         .expect_both();
-    let empty = SourceBaseline::new(source, 2, ORIGIN + 0.75, 3, true, &[]).unwrap();
+    let empty = SourceBaseline::new(source, ORIGIN + 0.75, 3, true, &[]).unwrap();
     recorder.publish_baseline(Lane::Take, &empty).unwrap();
     recorder.publish_baseline(Lane::Display, &empty).unwrap();
 
@@ -259,8 +248,8 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         roll_snapshot(&state.runtime.tracker, 1.0, 0.0)
     );
     let actual = roll_snapshot(&state.runtime.tracker, 1.0, 0.0);
-    // A later baseline repairs final pitch even if disk decoding loses exact
-    // tuning. The pre-gap trajectory must retain it, and must not bridge loss.
+    // The gap draws nothing: the note is held through it as one line, and the
+    // later baseline restates the pitch it holds (#1798 F1).
     assert_eq!(
         actual,
         [RollSnapshot {
@@ -271,21 +260,14 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
             start: 0.125,
             end: Some(0.625),
             observed_until: None,
-            history_complete: false,
+            history_complete: true,
             end_pitch: 60.375,
-            segments: vec![
-                ((0.125, 60.0), (0.25, 60.375)),
-                ((0.25, 60.375), (0.375, 60.375)),
-                ((0.5, 60.375), (0.625, 60.375)),
-            ],
+            segments: vec![((0.125, 60.0), (0.25, 60.375)), ((0.25, 60.375), (0.625, 60.375))],
         }]
     );
-    // The gap is the break in the trajectory above; what is left to say is
-    // that the empty baseline after it answered for the source on both lanes.
+    // Nothing is left sounding on either lane.
     for tracker in [&direct, &state.runtime.tracker] {
         assert_eq!(tracker.held_count(), 0);
-        assert!(tracker.source_current_certain(source));
-        assert!(!tracker.history_missing(), "the recovered source leaves nothing missing");
     }
 
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();

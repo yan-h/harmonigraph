@@ -746,11 +746,9 @@ impl Plugin for Harmonigraph {
 
     fn reset(&mut self) {
         if let Some(owner) = self.configuration.as_mut() {
-            if let Some(hub) = &mut self.aggregation {
-                // Stop may arrive after activation but before start_processing
-                // resets this owner. Close its run before forgetting routes.
-                hub.finish_stopped_recording(owner, &mut self.take);
-            }
+            // Stop may arrive after activation but before start_processing
+            // resets this owner. Close its run before forgetting routes.
+            owner.recording.close_stopped(&mut self.take);
             owner.reset(&mut self.take);
             if let Some(hub) = &mut self.aggregation {
                 hub.stop();
@@ -881,13 +879,11 @@ impl Plugin for Harmonigraph {
         self.samples_processed += block_samples as u64;
         self.presentation_seconds += block_samples as f64 / self.sample_rate;
         self.take.publish_clock(self.presentation_seconds);
-        // `Normal` lets a host stop calling once the input is quiet, which
-        // would freeze an audition mid-phrase (#1719).
-        if tape.sounding {
-            ProcessStatus::KeepAlive
-        } else {
-            ProcessStatus::Normal
-        }
+        // Always, as every Tune does: `Normal` lets a host stop calling once
+        // the input is quiet, which would freeze an audition mid-phrase
+        // (#1719) and leave every Tune's notes uncorrected, including a Tune
+        // added while this track was already asleep.
+        ProcessStatus::KeepAlive
     }
 }
 
@@ -895,10 +891,7 @@ impl ClapPlugin for Harmonigraph {
     const CLAP_PERFORMANCE: bool = true;
     fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
         Some(Arc::new(configuration::HubSetup {
-            instance: tuning::setup::Adapter(
-                self.aggregation.as_ref().unwrap().shared.clone(),
-                None,
-            ),
+            instance: tuning::setup::Adapter(self.aggregation.as_ref().unwrap().shared.clone()),
             settings: self.params.settings.clone(),
         }))
     }
@@ -917,11 +910,10 @@ impl ClapPlugin for Harmonigraph {
             .activate(f64::from(config.sample_rate), config.max_buffer_size);
         true
     }
+    /// For a host that stops calling the audio thread after a Stop: the
+    /// stopped take's run closes here, so the writer can seal it.
     fn clap_main_inactive(&mut self) {
-        self.aggregation
-            .as_mut()
-            .unwrap()
-            .finish_stopped_recording(self.configuration.as_mut().unwrap(), &mut self.take);
+        self.configuration.as_mut().unwrap().recording.close_stopped(&mut self.take);
     }
     /// Destruction gives the rings back. A take still recording fails, which
     /// the recorder's own drop decides: a Tune learns the Hub is gone from the
@@ -1013,14 +1005,8 @@ impl ClapPlugin for Harmonigraph {
         &mut self,
         boundary: nice_plug::wrapper::clap::configuration::ConfigurationBoundary,
     ) {
-        let owner = self.configuration.as_mut().unwrap();
-        owner.maps.seed(
-            self.params.tuning_engine.value(),
-            self.params.map.unmodulated_plain_value(),
-            lattice_maps::offsets(&self.params),
-            self.params.map_follow.unmodulated_plain_value(),
-        );
-        owner.begin(boundary, &self.take);
+        let seed = lattice_maps::Seed::read(&self.params);
+        self.configuration.as_mut().unwrap().begin(boundary, seed, &self.take);
     }
     fn clap_configuration_segment(&mut self, start: u32, frames: u32) {
         self.configuration.as_mut().unwrap().segment(start, frames);
@@ -1042,7 +1028,6 @@ impl ClapPlugin for Harmonigraph {
     }
     fn clap_configuration_fault(&mut self) {
         self.configuration.as_mut().unwrap().fault();
-        self.aggregation.as_mut().unwrap().configuration_exhausted();
     }
 
     const CLAP_ID: &'static str = "com.yan-h.harmonigraph";
@@ -1710,7 +1695,7 @@ mod tests {
             let mut aux = AuxiliaryBuffers { inputs: &mut inputs, outputs: &mut outputs };
             assert!(matches!(
                 plugin.process(&mut main, &mut aux, &mut EmptyProcessContext::new()),
-                ProcessStatus::Normal,
+                ProcessStatus::KeepAlive,
             ));
         }
 
@@ -1934,7 +1919,7 @@ mod tests {
         playing: bool,
         left: &mut [f32],
         right: &mut [f32],
-    ) -> ProcessStatus {
+    ) {
         let mut context = EmptyProcessContext::new();
         context.transport.pos_seconds = Some(position);
         context.transport.playing = playing;
@@ -1942,7 +1927,10 @@ mod tests {
         let mut inputs: [Buffer; 0] = [];
         let mut outputs = [];
         let mut aux = AuxiliaryBuffers { inputs: &mut inputs, outputs: &mut outputs };
-        plugin.process(&mut main, &mut aux, &mut context)
+        assert!(matches!(
+            plugin.process(&mut main, &mut aux, &mut context),
+            ProcessStatus::KeepAlive
+        ));
     }
 
     /// Click in Tape mode, and wait until the input worker has passed the
@@ -1990,8 +1978,8 @@ mod tests {
                     ask(&plugin, harmonigraph_ui::tape::TapeRequest::Cue(position + 100.0));
                 }
                 let (mut left, mut right) = (input.clone(), input.clone());
-                let status = tape_block(&mut plugin, at, playing, &mut left, &mut right);
-                cued |= matches!(status, ProcessStatus::KeepAlive);
+                tape_block(&mut plugin, at, playing, &mut left, &mut right);
+                cued |= plugin.tape.sounding();
                 let bits = |v: &[f32]| v.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
                 assert_eq!(bits(&left), bits(&input), "asked {asked}, block at {at}");
                 assert_eq!(bits(&right), bits(&input), "asked {asked}, block at {at}");
@@ -2023,15 +2011,13 @@ mod tests {
         for (i, at) in song_blocks(&plugin, 0.0, 1.0, 512).into_iter().enumerate() {
             let mut left: Vec<f32> = (0..512).map(|f| song(i * 512 + f, 0)).collect();
             let mut right: Vec<f32> = (0..512).map(|f| song(i * 512 + f, 1)).collect();
-            assert!(matches!(
-                tape_block(&mut plugin, at, true, &mut left, &mut right),
-                ProcessStatus::Normal
-            ));
+            tape_block(&mut plugin, at, true, &mut left, &mut right);
+            assert!(!plugin.tape.sounding());
         }
         let silence = |plugin: &mut Harmonigraph, at: f64| {
             let (mut left, mut right) = (vec![0.0; 512], vec![0.0; 512]);
-            let status = tape_block(plugin, at, false, &mut left, &mut right);
-            (status, left, right)
+            tape_block(plugin, at, false, &mut left, &mut right);
+            (left, right)
         };
         for _ in 0..40 {
             silence(&mut plugin, 0.0);
@@ -2054,8 +2040,8 @@ mod tests {
             // would starve it whenever a busy runner held the worker back.
             let rounds = plugin._input_worker.completed_rounds();
             assert!(a_round_after(&plugin, rounds), "the worker never ran a round");
-            let (status, left, right) = silence(&mut plugin, parked);
-            assert!(matches!(status, ProcessStatus::KeepAlive), "the tape is cued or sounding");
+            let (left, right) = silence(&mut plugin, parked);
+            assert!(plugin.tape.sounding(), "the tape is cued or sounding");
             let start = if heard.is_empty() {
                 left.iter().position(|&s| s != 0.0).unwrap_or(left.len())
             } else {
@@ -2097,8 +2083,8 @@ mod tests {
 
         let input: Vec<f32> = (0..512).map(|f| f as f32).collect();
         let (mut left, mut right) = (input.clone(), input.clone());
-        let status = tape_block(&mut plugin, parked, true, &mut left, &mut right);
-        assert!(matches!(status, ProcessStatus::Normal));
+        tape_block(&mut plugin, parked, true, &mut left, &mut right);
+        assert!(!plugin.tape.sounding());
         assert_eq!((left, right), (input.clone(), input));
     }
 }

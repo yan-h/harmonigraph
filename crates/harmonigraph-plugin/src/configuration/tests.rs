@@ -12,7 +12,7 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::*;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
-use harmonigraph_core::configuration::{PolicyEdit, TuningAxis};
+use harmonigraph_core::configuration::TuningAxis;
 use harmonigraph_core::tuning::microcents;
 use harmonigraph_core::SourceId;
 use harmonigraph_ui::params::ParamKey;
@@ -483,7 +483,7 @@ fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
 }
 
 #[test]
-fn real_same_sample_initial_tuning_is_in_learning_before_any_gui_drain() {
+fn a_same_sample_initial_tuning_reaches_learning() {
     learn_the_played_third(true, false);
 }
 
@@ -574,11 +574,11 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
         device.wrapper().test_inspect_plugin(|plugin| {
             let mut scratch = [harmonigraph_core::tuning::PitchClass::from_microcents(0);
                 crate::tuning::HELD_VOICES];
-            plugin.aggregation.as_ref().unwrap().held_classes(&mut scratch).unwrap()
+            plugin.aggregation.as_ref().unwrap().held_classes(&mut scratch)
         })
     };
     assert_eq!(heard(&device), 3);
-    crate::tuning::session::session().reset();
+    crate::tuning::session::session().cut();
     device.run(192, vec![], false);
     assert_eq!(heard(&device), 0);
     device.finish_notes(256, &[(60, 60), (64, 64), (67, 67)]);
@@ -692,10 +692,10 @@ unsafe impl Sync for Device {}
 
 /// The restored modes are the saved ones, read back as themselves: two
 /// patterns that differ in every bit and neither of which is the default, so a
-/// preview, a save or an adoption that dropped, swapped or defaulted one
+/// readback, a save or an adoption that dropped, swapped or defaulted one
 /// cannot agree with the others by accident.
 #[test]
-fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
+fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
     let _scope = crate::test_scope::enter();
     for (gui, (meantone, marvel, learning)) in [false, true]
         .into_iter()
@@ -709,27 +709,27 @@ fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
         (restoring.meantone, restoring.marvel, restoring.learning) = (meantone, marvel, learning);
         state.fields.insert(MUSICAL_SETTINGS.into(), serde_json::to_string(&restoring).unwrap());
         device.load(state, gui);
-        let preview = shown(&settings).view;
-        assert!(preview.pending);
-        let preview = preview.resolved;
+        let readback = shown(&settings).view;
+        assert!(readback.pending);
+        let readback = readback.resolved;
         let restored_modes = TuningModes {
             tempered: Tempered { syntonic: meantone, septimal_kleisma: marvel },
             learning,
         };
-        assert_eq!(preview.modes, restored_modes);
-        assert_eq!(preview.tuning.three, 700_000_000, "the preview's tuning is the restored one");
+        assert_eq!(readback.modes, restored_modes);
+        assert_eq!(readback.tuning.three, 700_000_000, "the readback's tuning is the restored one");
         let saved_host = saved(&device.save());
         assert_eq!(
             (saved_host.meantone, saved_host.marvel, saved_host.learning),
             (meantone, marvel, learning)
         );
-        assert_eq!(saved_host.reducer().resolved().modes, preview.modes);
+        assert_eq!(saved_host.reducer().resolved().modes, readback.modes);
         assert_eq!(
             saved(&device.wrapper().get_state_object()).reducer().resolved().modes,
-            preview.modes
+            readback.modes
         );
         device.run(0, vec![], false);
-        assert_eq!(shown(&settings).view.resolved.modes, preview.modes);
+        assert_eq!(shown(&settings).view.resolved.modes, readback.modes);
         // And the reducer the audio thread runs Learn and tempering under
         // holds them too, not only the words that report it.
         let adopted = device
@@ -820,6 +820,24 @@ fn an_axis_edit_marks_the_project_without_a_rescan() {
     let flags = device.stats.rescan_flags.load(Ordering::Relaxed);
     assert_eq!(flags & CLAP_PARAM_RESCAN_TEXT, CLAP_PARAM_RESCAN_TEXT);
     assert_eq!(flags & CLAP_PARAM_RESCAN_VALUES, 0, "the values did not change");
+}
+
+/// Opening a project, and Reset all voices, change nothing the project saves,
+/// so neither has the host mark it modified: the musical settings and the
+/// instance's own Retune, Show and name alike.
+#[test]
+fn a_restore_and_a_reset_leave_the_project_unmodified() {
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    device.run(1000, vec![], false);
+    let before = device.service();
+    device.load(restored(&device, 700.0), false);
+    device.run(1064, vec![], false);
+    assert_eq!(device.service(), before, "a restore is not an edit");
+    crate::tuning::instances::edit(0, harmonigraph_ui::params::InstanceEdit::Reset);
+    device.run(1128, vec![], false);
+    assert_eq!(device.service(), before, "Reset all voices saves nothing");
 }
 
 /// The queue keeps arrival order across kinds: an edit queued before a restore
@@ -1079,89 +1097,19 @@ fn a_take_resumed_from_a_pause_opens_with_the_note_struck_during_it() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A note played into the plugin's own input just before the take is armed
-/// sounds inside the take's first run, whose opening snapshot restates it: the
-/// Hub's direct row gave it a lifetime when it was struck, so the snapshot
-/// continues the note the take recorded rather than opening a second one
-/// beside it (#1771).
-#[test]
-fn a_direct_note_restated_by_a_snapshot_stays_one_note_with_its_history() {
-    let _scope = crate::test_scope::enter();
-    let (mut device, mut capture) = recorded_device();
-    device.activate();
-    let dir =
-        std::env::temp_dir().join(format!("harmonigraph-config-direct-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("record.take");
-    let block = 64.0 / 48000.0;
-    // Struck in a block no take owns; it sounds a delay later, once one does.
-    let struck = vec![note(10, 60, 10, CLAP_EVENT_NOTE_ON)];
-    device.run_transport(0, struck, false, None, Some(transport(0.0, 0)));
-    capture.arm();
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
-    for (raw, blocks) in [(64, 1.0), (128, 2.0)] {
-        device.run_transport(raw, vec![], false, None, Some(transport(blocks * block, 0)));
-    }
-    let released = vec![note(10, 60, 0, CLAP_EVENT_NOTE_OFF)];
-    device.run_transport(192, released, false, None, Some(transport(3.0 * block, 0)));
-    for (raw, blocks) in [(256, 4.0), (320, 5.0)] {
-        device.run_transport(raw, vec![], false, None, Some(transport(blocks * block, 0)));
-    }
-    device.finish_notes(384, &[]);
-    writer.drain(&mut capture);
-    assert!(!writer.failed());
-    let take = harmonigraph_take::Take::read(&path).unwrap();
-    assert!(records_an_on(&take, 60), "the onset sounds where the take records");
-    let restated = take.events.iter().any(|record| {
-        matches!(record, harmonigraph_take::CanonicalRecord::Baseline(frame)
-            if frame.voices.iter().any(|voice| voice.note == 60))
-    });
-    assert!(restated, "and the run's opening snapshot restates it");
-    let mut tracker = harmonigraph_core::NoteTracker::new();
-    for record in &take.events {
-        record.apply(&mut tracker).unwrap();
-    }
-    let notes: Vec<_> = tracker.roll().notes().filter(|n| n.note == 60).collect();
-    assert_eq!(notes.len(), 1, "one press, one note: {:?}", take.events);
-    assert!(notes[0].history_complete, "continued with its history");
-    assert!(notes[0].end.is_some(), "through the release it recorded");
-    drop(writer);
-    drop(device);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
 /// A take paused and resumed reads whole, every note drawn and on its
 /// soundtrack (#1760; on take v6 each case was refused or lost a note).
-///
-/// The first two put a bend in the last D of a recorded block, so it sounds
-/// in the pause and is dropped: `parked-at-start` parks at the last played
-/// block's own position, and `input-in-parked-block` plays into the first
-/// parked block, which still records. `release-in-parked-block` releases in
-/// that block, sounding in the pause: the release is dropped with it, and the
-/// resume's snapshot, which no longer lists the note, is what ends it — the
-/// accepted cost of placing a record where it sounds. `behind-retrigger`
-/// resumes inside playback's jitter behind the stop, which dropped a note
-/// silently (N1), and `snapback` plays its first block where it was parked,
-/// then snaps back before any forward motion under a one-file trigger, so its
-/// notes follow the audio rather than the host (D4).
-///
-/// A note whose release was not recorded draws without an end.
+/// `behind-retrigger` resumes inside playback's jitter behind the stop, which
+/// dropped a note silently (N1), and `snapback` plays its first block where it
+/// was parked, then snaps back before any forward motion under a one-file
+/// trigger, so its notes follow the audio rather than the host (D4). The cases
+/// whose record sounds in the pause need a delay, so they play on a Tune's row
+/// (`tuning::tests::a_paused_take_reads_whole_with_a_tunes_records_sounding_in_the_pause`).
 #[test]
 fn a_paused_take_reads_whole_with_every_note_drawn() {
     let block = 64.0 / 48000.0;
     let on = |id, key, t| note(id, key, t, CLAP_EVENT_NOTE_ON);
     let off = |id, key, t| note(id, key, t, CLAP_EVENT_NOTE_OFF);
-    let bend = |id: i32, t: u32| {
-        Input::Tuning(clap_event_note_expression {
-            header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, t),
-            expression_id: CLAP_NOTE_EXPRESSION_TUNING,
-            note_id: id,
-            port_index: -1,
-            channel: -1,
-            key: -1,
-            value: 0.5,
-        })
-    };
     // (raw sample, events, transport position in blocks, playing)
     type Step = (i64, Vec<Input>, f64, bool);
     // Per key: the notes drawn, and whether each drew its release.
@@ -1182,51 +1130,7 @@ fn a_paused_take_reads_whole_with_every_note_drawn() {
         }))
         .collect();
     // (name, one-file trigger, steps, notes drawn)
-    let cases: [(&str, bool, Vec<Step>, Drawn); 5] = [
-        (
-            "parked-at-start",
-            false,
-            vec![
-                play(0, vec![on(10, 60, 10)], 0.0),
-                play(64, vec![bend(10, 60)], 1.0),
-                park(128, 1.0),
-                park(192, 1.0),
-                play(256, vec![], 2.0),
-                play(320, vec![], 3.0),
-                play(384, vec![off(10, 60, 0)], 4.0),
-            ],
-            &[(60, 1, false)],
-        ),
-        (
-            "input-in-parked-block",
-            false,
-            vec![
-                play(0, vec![on(10, 60, 10)], 0.0),
-                play(64, vec![], 1.0),
-                (128, vec![bend(10, 60)], 2.0, false),
-                park(192, 2.0),
-                park(256, 2.0),
-                play(320, vec![], 2.0),
-                play(384, vec![], 3.0),
-                play(448, vec![off(10, 60, 0)], 4.0),
-            ],
-            &[(60, 1, false)],
-        ),
-        (
-            "release-in-parked-block",
-            false,
-            vec![
-                play(0, vec![on(10, 60, 10)], 0.0),
-                play(64, vec![], 1.0),
-                (128, vec![off(10, 60, 60)], 2.0, false),
-                park(192, 2.0),
-                park(256, 2.0),
-                play(320, vec![on(12, 64, 2)], 2.0),
-                play(384, vec![off(12, 64, 2)], 3.0),
-                play(448, vec![], 4.0),
-            ],
-            &[(60, 1, false), (64, 1, true)],
-        ),
+    let cases: [(&str, bool, Vec<Step>, Drawn); 2] = [
         (
             "behind-retrigger",
             false,
@@ -1588,12 +1492,13 @@ fn a_short_stopped_export_finishes_with_or_without_midi() {
         assert_eq!(encoded.matches("Run((").count(), 1, "only one run states the WAV alignment");
         let wav = std::fs::read(paths[0].with_extension("wav")).unwrap();
         assert_eq!(wav.len(), 44 + 64 * 2 * 4, "exactly one callback, no scrub or restore audio");
-        // The note sounds a delay after its input, past the one callback the
-        // take recorded, so it is not drawn: a record goes where it sounds.
-        let delta = |e: &&harmonigraph_take::CanonicalRecord| {
-            matches!(e, harmonigraph_take::CanonicalRecord::Delta(_))
-        };
-        assert!(!take.events.iter().any(|e| delta(&e)), "{:?}", take.events);
+        // Harmonigraph's own input sounds in the callback it is played in,
+        // the one the take recorded, so its onset is the take's one delta.
+        let deltas = take
+            .events
+            .iter()
+            .filter(|e| matches!(e, harmonigraph_take::CanonicalRecord::Delta(_)));
+        assert_eq!(deltas.count(), usize::from(with_note), "{:?}", take.events);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
@@ -1934,7 +1839,7 @@ fn a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take(
 }
 
 #[test]
-fn configuration_observed_disarmed_does_not_become_later_armed_automation() {
+fn a_configuration_applied_before_arming_records_once_as_the_takes_initial_value() {
     let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = recorded_device();
     device.activate();
@@ -2018,7 +1923,7 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
         velocity: 0.8,
         ..Default::default()
     });
-    let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 1.0, 0, true, &voices).unwrap();
+    let baseline = SourceBaseline::new(SourceId::DIRECT, 1.0, 0, true, &voices).unwrap();
     let start = std::time::Instant::now();
     nice_assert_no_alloc::assert_no_alloc(|| {
         for _ in 0..SNAPSHOT_SLOTS {
@@ -2044,86 +1949,7 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
 }
 
 #[test]
-fn queued_policy_edits_preserve_disjoint_fields_from_the_same_observation() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    let settings = device.settings();
-    let observed = shown(&settings).view.resolved.policy;
-    let first = PolicyConfig {
-        radius: 5,
-        reset_stop: true,
-        pitch_flexibility: 37,
-        half_life_ms: 1200,
-        keyboard: [695_000_000, observed.keyboard[1], observed.keyboard[2]],
-        ..observed
-    };
-    let second = PolicyConfig {
-        axes: 3,
-        reset_loop: true,
-        register: 850,
-        tolerance: 1_000_000,
-        silence_ms: 4500,
-        keyboard: [observed.keyboard[0], 380_000_000, 980_000_000],
-        ..observed
-    };
-    for policy in [first, second] {
-        assert!(settings.submit(ConfigEdit {
-            policy: Some(PolicyEdit::changed(observed, policy)),
-            ..Default::default()
-        }));
-    }
-    device.run(0, vec![], false);
-    assert_eq!(
-        shown(&settings).view.resolved.policy,
-        PolicyConfig {
-            radius: first.radius,
-            reset_stop: first.reset_stop,
-            pitch_flexibility: first.pitch_flexibility,
-            half_life_ms: first.half_life_ms,
-            keyboard: [first.keyboard[0], second.keyboard[1], second.keyboard[2]],
-            ..second
-        }
-    );
-}
-
-#[test]
-fn keyboard_derivation_uses_the_adopted_fifth_in_one_transaction() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    let settings = device.settings();
-    let observed = shown(&settings).view.resolved.policy;
-    let changed = PolicyConfig {
-        pitch_flexibility: 37,
-        keyboard: [695_000_000, observed.keyboard[1], observed.keyboard[2]],
-        ..observed
-    };
-    for policy in [
-        PolicyEdit::changed(observed, changed),
-        PolicyEdit::changed(observed, observed).derive_keyboard(),
-    ] {
-        assert!(settings.submit(ConfigEdit { policy: Some(policy), ..Default::default() }));
-    }
-    device.run(0, vec![], false);
-    let adopted = shown(&settings).view.resolved;
-    assert_eq!(adopted.policy.keyboard, harmonigraph_core::tuning::fifth_generated(695_000_000));
-    assert_eq!(adopted.policy.pitch_flexibility, 37);
-
-    let changed = PolicyConfig { keyboard: [697_000_000, 0, 0], ..adopted.policy };
-    assert!(settings.submit(ConfigEdit {
-        policy: Some(PolicyEdit::changed(adopted.policy, changed).derive_keyboard()),
-        ..Default::default()
-    }));
-    device.run(64, vec![], false);
-    let derived = shown(&settings).view.resolved;
-    assert_eq!(derived.policy.keyboard, harmonigraph_core::tuning::fifth_generated(697_000_000));
-    assert_eq!(derived.policy.pitch_flexibility, 37);
-    assert_eq!(derived.revision, adopted.revision + 1);
-}
-
-#[test]
-fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
+fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
@@ -2427,7 +2253,6 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
     }
 }
 
-/// Goes with #1756, which retires host automation of the axes.
 #[test]
 fn every_engine_records_a_tuning_edit_at_the_callback_that_applies_it() {
     let _scope = crate::test_scope::enter();

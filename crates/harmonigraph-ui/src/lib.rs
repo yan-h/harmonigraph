@@ -268,12 +268,6 @@ pub fn root_ui(
     if startup::draw(ui, state) {
         return;
     }
-    if state.picture.runtime.tracker.history_missing() {
-        ui.colored_label(
-            theme::armed(),
-            "Some note history is missing. Current notes may be incomplete until their source recovers.",
-        );
-    }
     if let Some(stranded) = end_stranded_drag(ui.ctx()) {
         state.picture.runtime.console.log(stranded);
     }

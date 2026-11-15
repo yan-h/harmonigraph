@@ -102,8 +102,8 @@ fn run_of(
 /// transport stopped at `parked`: the next block cues the tape.
 fn cue(deck: &mut Deck, worker: &mut Worker, parked: f64, position: f64) {
     worker.request(TapeRequest::Cue(position));
-    let (audio, out) = run(deck, parked, false, true);
-    assert!(out.sounding, "a request cues the tape on the next block");
+    let (audio, _) = run(deck, parked, false, true);
+    assert!(deck.sounding(), "a request cues the tape on the next block");
     assert!(audio[0].iter().all(|&s| s == 0.0), "nothing assembled yet");
 }
 
@@ -123,23 +123,21 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
         let (audio, out) = run(&mut deck, song as f64 / RATE, true, true);
         assert_eq!(
             out,
-            BlockOut {
-                song: Some(song as f64 / RATE),
-                sounding: false,
-                play: crate::audio_ingress::TapePlay::Idle,
-            }
+            BlockOut { song: Some(song as f64 / RATE), play: crate::audio_ingress::TapePlay::Idle }
         );
+        assert!(!deck.sounding());
         assert!(audio[0].iter().all(|&s| s == 0.0));
     }
     let parked = 2.9;
     for _ in 0..5 {
-        assert!(!run(&mut deck, parked, false, true).1.sounding, "a stop never starts the tape");
+        run(&mut deck, parked, false, true);
+        assert!(!deck.sounding(), "a stop never starts the tape");
     }
 
     cue(&mut deck, &mut worker, parked, 1.0);
     worker.play();
     let (audio, out) = run(&mut deck, parked, false, true);
-    assert!(out.sounding && out.song.is_none());
+    assert!(deck.sounding() && out.song.is_none());
     let crate::audio_ingress::TapePlay::Heard(heard) = out.play else {
         panic!("{:?}", out.play);
     };
@@ -161,8 +159,8 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
 
     // The transport starts from the parked playhead: a cut, with not one
     // sample of tape in playback's first block.
-    let (audio, out) = run(&mut deck, parked, true, true);
-    assert!(!out.sounding);
+    let (audio, _) = run(&mut deck, parked, true, true);
+    assert!(!deck.sounding());
     assert!(audio.iter().flatten().all(|&s| s == 0.0));
     let lines = events(&mut worker);
     assert!(
@@ -181,9 +179,9 @@ fn audition_ends_at_the_edge_of_what_is_recorded_and_where_nothing_is() {
     let mut heard = 0;
     for _ in 0..10 {
         worker.play();
-        let (audio, out) = run(&mut deck, 5.0, false, true);
+        let (audio, _) = run(&mut deck, 5.0, false, true);
         heard += audio[0].iter().filter(|&&s| s != 0.0).count();
-        if !out.sounding {
+        if !deck.sounding() {
             break;
         }
     }
@@ -194,8 +192,8 @@ fn audition_ends_at_the_edge_of_what_is_recorded_and_where_nothing_is() {
 
     cue(&mut deck, &mut worker, 5.0, 7.0);
     worker.play();
-    let (audio, out) = run(&mut deck, 5.0, false, true);
-    assert!(!out.sounding && audio[0].iter().all(|&s| s == 0.0));
+    let (audio, _) = run(&mut deck, 5.0, false, true);
+    assert!(!deck.sounding() && audio[0].iter().all(|&s| s == 0.0));
     let lines = events(&mut worker);
     assert!(
         lines.iter().any(|l| l.contains("audition from 7.000 s (nothing recorded there)")),
@@ -219,14 +217,15 @@ fn a_cue_asked_during_an_export_is_dropped() {
         }
         worker.play();
         let (audio, out) = run(&mut deck, position, false, true);
-        assert!(!out.sounding && audio.iter().flatten().all(|&s| s == 0.0));
+        assert!(!deck.sounding() && audio.iter().flatten().all(|&s| s == 0.0));
         // Every block after the first rolls, so the tape records the export.
         assert_eq!(out.song.is_some(), block > 0);
         position += FRAMES as f64 / RATE;
     }
     for _ in 0..5 {
         worker.play();
-        assert!(!run(&mut deck, position, false, true).1.sounding);
+        run(&mut deck, position, false, true);
+        assert!(!deck.sounding());
     }
     let lines = events(&mut worker);
     assert!(!lines.iter().any(|l| l.contains("audition")), "{lines:?}");
@@ -251,8 +250,8 @@ fn leaving_main_and_stop_fade_out_and_a_reset_cuts_at_once() {
     worker.play();
     run(&mut deck, 0.0, false, true);
     worker.play();
-    let (audio, out) = run(&mut deck, 0.0, false, false);
-    assert!(!out.sounding);
+    let (audio, _) = run(&mut deck, 0.0, false, false);
+    assert!(!deck.sounding());
     assert_faded(&audio);
 
     cue(&mut deck, &mut worker, 0.0, 1.5);
@@ -260,8 +259,8 @@ fn leaving_main_and_stop_fade_out_and_a_reset_cuts_at_once() {
     run(&mut deck, 0.0, false, true);
     worker.request(TapeRequest::Stop);
     worker.play();
-    let (audio, out) = run(&mut deck, 0.0, false, true);
-    assert!(!out.sounding);
+    let (audio, _) = run(&mut deck, 0.0, false, true);
+    assert!(!deck.sounding());
     assert_faded(&audio);
 
     cue(&mut deck, &mut worker, 0.0, 2.0);
@@ -271,8 +270,8 @@ fn leaving_main_and_stop_fade_out_and_a_reset_cuts_at_once() {
     worker.request(TapeRequest::Cue(0.5));
     deck.reset();
     assert!(!deck.sounding());
-    let (audio, out) = run(&mut deck, 0.0, false, true);
-    assert!(!out.sounding, "a request from before the reset is dropped");
+    let (audio, _) = run(&mut deck, 0.0, false, true);
+    assert!(!deck.sounding(), "a request from before the reset is dropped");
     assert!(audio.iter().flatten().all(|&s| s == 0.0), "stale pieces are skipped after a reset");
     let lines = events(&mut worker);
     assert!(lines.iter().any(|l| l.contains("by the analysis input leaving Main")), "{lines:?}");
@@ -307,7 +306,8 @@ fn mixing_and_observing_never_allocate() {
     worker.request(TapeRequest::Cue(1.0));
     block(&mut deck, 2.9, false);
     worker.play();
-    assert!(block(&mut deck, 2.9, false).sounding);
+    block(&mut deck, 2.9, false);
+    assert!(deck.sounding());
     // A cue mid-audition fades and cues again, then rolling cuts and a reset.
     worker.request(TapeRequest::Cue(1.5));
     block(&mut deck, 2.9, false);
@@ -406,8 +406,8 @@ fn a_cue_during_an_audition_plays_the_new_spot_from_its_first_frame() {
     // Another cue fades the first; the next block cues the second.
     worker.request(TapeRequest::Cue(2.0));
     run(&mut deck, 0.0, false, true);
-    let (_, out) = run(&mut deck, 0.0, false, true);
-    assert!(out.sounding);
+    run(&mut deck, 0.0, false, true);
+    assert!(deck.sounding());
     worker.play();
     let (audio, _) = run(&mut deck, 0.0, false, true);
     let fade = (FADE_SECONDS * RATE).ceil() as usize;
@@ -439,7 +439,7 @@ fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     view.speed = Speed::Half;
     worker.exchange(&mut view, &SpectrumConfig::default(), true);
     let (_, out) = run(&mut deck, 0.0, false, true);
-    assert!(out.sounding && out.play == crate::audio_ingress::TapePlay::Waiting);
+    assert!(deck.sounding() && out.play == crate::audio_ingress::TapePlay::Waiting);
     worker.play();
     let heard = |out: BlockOut| match out.play {
         crate::audio_ingress::TapePlay::Heard(h) => (h.cue, h.seconds, h.frames, h.speed),
@@ -458,8 +458,8 @@ fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     // The block the slowed cue fades out in, and ends in, is still that cue's.
     let (faded, _, _, _) = heard(run(&mut deck, 0.0, false, true).1);
     assert_eq!(faded, slowed, "a cue ending in a block reports its own serial");
-    let (_, out) = run(&mut deck, 0.0, false, true);
-    assert!(out.sounding);
+    run(&mut deck, 0.0, false, true);
+    assert!(deck.sounding());
     worker.play();
     let (cue, seconds, frames, speed) = heard(run(&mut deck, 0.0, false, true).1);
     assert!((seconds - 1.1).abs() < 1e-9 && frames == FRAMES && speed == 2.0, "{seconds}");

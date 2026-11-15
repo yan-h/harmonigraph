@@ -6,7 +6,7 @@
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
 };
-use harmonigraph_core::tuning::{Incomplete, LearningState, PitchClass, Unlearnable};
+use harmonigraph_core::tuning::{LearningState, PitchClass, TooManyClasses};
 use harmonigraph_core::{Tempered, Tuning};
 use harmonigraph_ui::params::ConfigurationView;
 use nice_plug::plugin::PluginState;
@@ -84,7 +84,7 @@ pub(crate) struct Record {
     pub status: u32,
 }
 
-const WORDS: usize = 24;
+const WORDS: usize = 14 + PolicyConfig::WORDS;
 
 /// One writer, the audio owner, and readers off audio that retry. Every word
 /// is atomic, so a torn read is retried rather than undefined.
@@ -408,7 +408,6 @@ pub struct Owner {
     status: u32,
     /// A UI or Learn edit applied this callback.
     edited: bool,
-    boundary: ConfigurationBoundary,
     pub(crate) recording: recording::Recording,
 }
 impl Owner {
@@ -426,13 +425,6 @@ impl Owner {
             applied: 0,
             status: 0,
             edited: false,
-            boundary: ConfigurationBoundary {
-                steady_time: 0,
-                frames: 0,
-                sample_rate: 44100.0,
-                transport_seconds: None,
-                playing: false,
-            },
         }
     }
     fn publish(&self) {
@@ -451,9 +443,9 @@ impl Owner {
     pub fn begin(
         &mut self,
         boundary: ConfigurationBoundary,
+        seed: crate::lattice_maps::Seed,
         recorder: &harmonigraph_record::Recorder,
     ) {
-        self.boundary = boundary;
         self.maps.begin(boundary);
         self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
@@ -464,7 +456,7 @@ impl Owner {
             self.applied = command.id;
             self.edited |= matches!(command.mutation, ConfigMutation::Edit(_));
         }
-        self.maps.adopt(self.reducer.resolved());
+        self.maps.adopt(self.reducer.resolved(), seed);
     }
 
     /// The configuration, engine and map in force at `sample`: the history's
@@ -492,7 +484,7 @@ impl Owner {
         self.publish();
     }
     pub fn segment(&mut self, start: u32, frames: u32) {
-        self.recording.block_start = self.boundary.steady_time + i64::from(start);
+        self.recording.block_start = self.maps.boundary.steady_time + i64::from(start);
         self.recording.block_frames = frames;
     }
     pub fn recording_intent(&self) -> harmonigraph_record::configuration::RecordIntent {
@@ -528,9 +520,8 @@ impl Owner {
     /// through learns the axes from unchanged input.
     ///
     /// `classes` is the Hub's `held_classes`, asked only while Learn is armed.
-    /// `LEARN_INCOMPLETE` and `TOO_MANY_CLASSES` report this evaluation alone
-    /// rather than latching, so each clears as soon as what is held allows
-    /// Learn again.
+    /// `TOO_MANY_CLASSES` reports this evaluation alone rather than latching,
+    /// so it clears as soon as what is held allows Learn again.
     ///
     /// Learn applies at the block's start after the walk has pushed later
     /// samples, so it is not pushed into the history: the next `begin`
@@ -538,21 +529,18 @@ impl Owner {
     pub fn group_end(
         &mut self,
         retuning: bool,
-        classes: impl FnOnce(&mut [PitchClass; crate::tuning::HELD_VOICES]) -> Result<usize, Incomplete>,
+        classes: impl FnOnce(&mut [PitchClass; crate::tuning::HELD_VOICES]) -> usize,
     ) {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
-        self.status &= !(ConfigurationView::LEARN_INCOMPLETE | ConfigurationView::TOO_MANY_CLASSES);
+        self.status &= !ConfigurationView::TOO_MANY_CLASSES;
         if self.maps.playback.engine.learns() {
             match self.learning.infer(self.reducer.resolved().modes.learning, classes) {
                 Ok(Some(learned)) => {
                     self.reducer.apply(ConfigMutation::LearnResolved { learned, retuning });
                     self.edited = true;
                 }
-                Err(Unlearnable::Incomplete) => self.status |= ConfigurationView::LEARN_INCOMPLETE,
-                Err(Unlearnable::TooManyClasses) => {
-                    self.status |= ConfigurationView::TOO_MANY_CLASSES
-                }
+                Err(TooManyClasses) => self.status |= ConfigurationView::TOO_MANY_CLASSES,
                 Ok(None) => {}
             }
         }

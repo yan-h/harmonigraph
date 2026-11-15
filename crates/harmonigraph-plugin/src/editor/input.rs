@@ -641,11 +641,9 @@ mod tests {
             producer
                 .note(harmonigraph_core::canonical::NoteDelta {
                     assignment: None,
-                    partial_output: false,
                     event,
                     sequence: 1,
                     lifetime: 1,
-                    provenance: harmonigraph_core::canonical::PitchProvenance::AcceptedOutput,
                     pitch_microcents: None,
                 })
                 .unwrap();
@@ -674,14 +672,11 @@ mod tests {
         // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
         // at GUI=12; neither its batch nor a later idle poll is a new clock.
         use harmonigraph_core::canonical::NoteDelta;
-        use harmonigraph_core::canonical::PitchProvenance;
         let accepted = NoteDelta {
             assignment: None,
-            partial_output: false,
             event: NoteEvent::on(2.0, SourceId(3), 0, 72, 0.8),
             sequence: 1,
             lifetime: 61,
-            provenance: PitchProvenance::AcceptedOutput,
             pitch_microcents: None,
         };
         producer.note(accepted).unwrap();
@@ -703,14 +698,12 @@ mod tests {
         use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
         let baseline = SourceBaseline::new(
             SourceId::DIRECT,
-            1,
             3.0,
             1,
             true,
             &[VoiceBaseline {
                 note: 72,
                 lifetime: 62,
-                provenance: PitchProvenance::AcceptedOutput,
                 actual_onset: 2.0,
                 velocity: 0.8,
                 pitch_microcents: 7_200_000_000,
@@ -756,20 +749,10 @@ mod tests {
                 .count(),
             1
         );
-        use harmonigraph_core::canonical::{GapReason, PublicationGap};
-        producer
-            .gap(PublicationGap {
-                source: Some(SourceId(3)),
-                time: 2.5,
-                through: 3.0,
-                first: 2,
-                last: 3,
-                reason: GapReason::PublicationFull,
-            })
-            .unwrap();
-        let resumed = SourceBaseline::new(
+        // A baseline restating source 3's note at a new pitch, which breaks
+        // its line at the baseline's own time.
+        let restated = SourceBaseline::new(
             SourceId(3),
-            1,
             3.5,
             3,
             true,
@@ -778,13 +761,12 @@ mod tests {
                 lifetime: 61,
                 actual_onset: 2.0,
                 velocity: 0.8,
-                pitch_microcents: 7_200_000_000,
-                provenance: PitchProvenance::AcceptedOutput,
+                pitch_microcents: 7_225_000_000,
                 ..Default::default()
             }],
         )
         .unwrap();
-        producer.baseline(&resumed).unwrap();
+        producer.baseline(&restated).unwrap();
         shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 22.3);
         let voice =
             shared.ui.picture.runtime.tracker.voices().find(|v| v.source == SourceId(3)).unwrap();
@@ -800,13 +782,13 @@ mod tests {
         assert_eq!(
             (voice.on_time, note.start),
             (12.0, 12.0),
-            "accepted lifetime resumes its already-mapped onset after gap"
+            "an accepted lifetime keeps its already-mapped onset"
         );
         // The baseline's own time, audio 3.5, is mapped onto the GUI clock too:
-        // the row resumes there.
+        // the restated pitch starts there.
         assert!(
             note.segments(22.3).any(|((start, _), _)| (start - 13.5).abs() < 1e-9),
-            "the resuming baseline lands at GUI 13.5"
+            "the restating baseline lands at GUI 13.5"
         );
     }
 }

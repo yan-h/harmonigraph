@@ -306,6 +306,26 @@ struct Entry {
 }
 const HISTORY: usize = 8192;
 
+/// The host parameters a callback's map state starts from, read at its
+/// configuration boundary.
+#[derive(Clone, Copy)]
+pub struct Seed {
+    pub engine: i32,
+    pub map: i32,
+    pub offsets: MapOffsets,
+    pub follow: i32,
+}
+impl Seed {
+    pub fn read(params: &crate::HarmonigraphParams) -> Self {
+        Self {
+            engine: params.tuning_engine.value(),
+            map: params.map.unmodulated_plain_value(),
+            offsets: offsets(params),
+            follow: params.map_follow.unmodulated_plain_value(),
+        }
+    }
+}
+
 pub struct AudioMaps {
     document: Arc<RwLock<MapDocument>>,
     published: Arc<Mutex<MapPlayback>>,
@@ -318,10 +338,6 @@ pub struct AudioMaps {
     history: VecDeque<Entry>,
     pub boundary: ConfigurationBoundary,
     engine_revision: u64,
-    seed_mode: i32,
-    seed_map: i32,
-    seed_offset: MapOffsets,
-    seed_follow: i32,
     offsets: MapOffsets,
 }
 impl AudioMaps {
@@ -342,18 +358,8 @@ impl AudioMaps {
                 playing: false,
             },
             engine_revision: 0,
-            seed_mode: params.tuning_engine.value(),
-            seed_map: 0,
-            seed_offset: MapOffsets::default(),
-            seed_follow: 0,
             offsets: MapOffsets::default(),
         }
-    }
-    pub fn seed(&mut self, mode: i32, map: i32, offset: MapOffsets, follow: i32) {
-        self.seed_mode = mode;
-        self.seed_map = map;
-        self.seed_offset = offset;
-        self.seed_follow = follow;
     }
     /// The Hub's follow offset, for the editor to draw the map where it sounds.
     pub fn publish_followed(&self, offset: LatticePos) {
@@ -365,7 +371,7 @@ impl AudioMaps {
         }
         self.boundary = boundary;
     }
-    pub fn adopt(&mut self, config: ResolvedConfig) {
+    pub fn adopt(&mut self, config: ResolvedConfig, seed: Seed) {
         // Copies only fixed geometry, never names or heap storage, on audio —
         // and only when the document is a state this bank was not built from.
         //
@@ -387,11 +393,11 @@ impl AudioMaps {
                 self.bank_revision = Some(revision);
             }
         }
-        self.set_engine(TuningEngine::from_index(self.seed_mode));
-        self.playback.selected = map_slot(self.seed_map);
-        self.offsets = self.seed_offset;
+        self.set_engine(TuningEngine::from_index(seed.engine));
+        self.playback.selected = map_slot(seed.map);
+        self.offsets = seed.offsets;
         self.playback.offset = self.offsets.total();
-        self.set_follow(Follow::from_index(self.seed_follow));
+        self.set_follow(Follow::from_index(seed.follow));
         self.resolve();
         self.push(self.boundary.steady_time, config);
     }
@@ -554,34 +560,34 @@ mod tests {
         let mut second = LatticeMap::default();
         assert!(second.replace(LatticePos::new(4, 0, 0)), "slot 1 must differ from the default");
         let mut maps = AudioMaps::new(&params);
-        maps.adopt(config);
+        maps.adopt(config, Seed::read(&params));
         assert_eq!(maps.bank[0], Some(LatticeMap::default()));
         assert_eq!(maps.bank[1], None);
 
         assert_eq!(params.maps.write().capture(second, "Passage".into()), Some(1));
-        maps.adopt(config);
+        maps.adopt(config, Seed::read(&params));
         assert_eq!(maps.bank[1], Some(second), "the fixture never reached a second slot");
         assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));
 
         let revision = maps.bank_revision;
-        maps.adopt(config);
+        maps.adopt(config, Seed::read(&params));
         assert_eq!(maps.bank_revision, revision);
         assert_eq!(maps.bank[1], Some(second));
 
         params.maps.write().rename(1, "Renamed".into());
-        maps.adopt(config);
+        maps.adopt(config, Seed::read(&params));
         assert_ne!(maps.bank_revision, revision);
         assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));
         let revision = maps.bank_revision;
         params.maps.write().move_by(1, MapMove::Earlier);
-        maps.adopt(config);
+        maps.adopt(config, Seed::read(&params));
         assert_ne!(maps.bank_revision, revision);
         assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));
         assert_eq!(maps.bank[0], Some(LatticeMap::default()));
         assert_eq!(maps.bank[1], Some(second));
 
         params.maps.write().delete(0);
-        maps.adopt(config);
+        maps.adopt(config, Seed::read(&params));
         assert_eq!(maps.bank[0], None, "a delete must reach the audio thread's bank");
         assert_eq!(maps.bank[1], Some(second));
     }

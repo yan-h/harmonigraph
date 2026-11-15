@@ -132,13 +132,11 @@ fn central_edits_include_harmonigraph_and_use_each_tuners_host_latency() {
     }
     assert!(instances::snapshots().iter().all(|row| !row.retune && !row.show));
     let output = pair.hub.run_format(pair.raw, vec![note(1, 0, 60, 0, true)], None, None, 512);
-    assert!(output.values.is_empty());
     pair.raw += 512;
-    let output = pair.hub.run_format(pair.raw, vec![], None, None, 512);
     assert_eq!(
         output.values.len(),
         1,
-        "Harmonigraph's own input passes through without correction"
+        "Harmonigraph's own input passes through without correction or delay"
     );
     assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0);
 
@@ -146,7 +144,7 @@ fn central_edits_include_harmonigraph_and_use_each_tuners_host_latency() {
     instances::edit(tuner.id, InstanceEdit::Name("Bass".to_owned()));
     instances::edit(tuner.id, InstanceEdit::Delay(3));
     pair.tune.main();
-    assert_eq!(pair.tune.param_value(DELAY_PARAM).round(), 2.0);
+    assert_eq!(instances::snapshots()[1].delay, 3);
     assert_eq!(pair.tune.latency(), 512, "the host still reads the running activation");
     assert!(instances::snapshots()[1].delay_text.contains("waiting for host reactivation"));
     pair.tune.reactivate_format(48000.0, 512);
@@ -161,7 +159,7 @@ fn central_edits_include_harmonigraph_and_use_each_tuners_host_latency() {
 fn instance_settings_restore_independently_and_default_missing_fields() {
     use nice_plug::wrapper::clap::setup::Setup;
     let shared = setup::Shared::source();
-    let adapter = setup::Adapter(shared.clone(), None);
+    let adapter = setup::Adapter(shared.clone());
     let mut state = nice_plug::plugin::PluginState {
         version: String::new(),
         params: Default::default(),
@@ -170,9 +168,10 @@ fn instance_settings_restore_independently_and_default_missing_fields() {
     shared.set_retune(false);
     shared.set_show(true);
     shared.set_name("Reference".to_owned());
+    shared.request_delay(4);
     adapter.save(&mut state);
     let restored = setup::Shared::hub();
-    setup::Adapter(restored.clone(), None).prepare(&state).unwrap().commit();
+    setup::Adapter(restored.clone()).prepare(&state).unwrap().commit();
     assert_eq!(restored.retuning() & 1, 0);
     assert!(restored.show.load(Ordering::Acquire));
     assert_eq!(*restored.name.lock().unwrap(), "Reference");
@@ -181,11 +180,16 @@ fn instance_settings_restore_independently_and_default_missing_fields() {
     assert_eq!(shared.retuning() & 1, 1, "a missing field falls back to its default");
     assert!(!shared.show.load(Ordering::Acquire));
     assert!(shared.name.lock().unwrap().is_empty());
+    assert_eq!(
+        shared.requested_multiplier.load(Ordering::Acquire),
+        1,
+        "1x, with a line in the macOS log"
+    );
 
     // Only an instance with nothing saved at all starts by role.
     restored.set_retune(true);
     state.fields.clear();
-    setup::Adapter(restored.clone(), None).prepare(&state).unwrap().commit();
+    setup::Adapter(restored.clone()).prepare(&state).unwrap().commit();
     assert_eq!(restored.retuning() & 1, 0, "the Hub's own input starts with Retune off");
 }
 

@@ -67,8 +67,6 @@ pub struct Tune {
     /// Registration id, minted once per instance. Zero before registration.
     id: u64,
     link: Link,
-    /// The Reset generation this Tune has already turned into a session cut.
-    setup: u64,
     /// The epoch this Tune runs under. A different session epoch is the cut.
     epoch: u64,
     serial: u64,
@@ -117,7 +115,6 @@ impl Tune {
             shared,
             id: 0,
             link,
-            setup: 0,
             epoch: 0,
             serial: 0,
             delay: 0,
@@ -179,7 +176,7 @@ impl Tune {
         // The bump is what makes this the session's cut rather than only this
         // Tune's. The Note-Offs it stages go to the host, so without it the
         // Hub would still be holding every voice this just ended.
-        self.take_cut(session::session().cut());
+        self.take_cut(session::session().cut(), false);
         self.claim();
         self.publish_delay();
     }
@@ -214,16 +211,9 @@ impl Tune {
     /// and lifecycle in full; there is no third thing to agree with them.
     fn adopt(&mut self) {
         let session = session::session();
-        // The editor's Reset bumps the
-        // session epoch, so every paired track cuts, not just this one.
-        let setup = self.shared.reset_generation();
-        if setup != self.setup {
-            self.setup = setup;
-            session.reset();
-        }
         let epoch = session.epoch();
         if epoch != self.epoch {
-            self.take_cut(epoch);
+            self.take_cut(epoch, session.stopped_at(epoch));
         }
         let mut status = 0;
         if session.hub() == 0 {
@@ -249,25 +239,27 @@ impl Tune {
     /// The cut. Note-Off every held voice, neutralise the pedals, forget the
     /// line, adopt the new epoch. Nothing waits on anyone, and a fault never
     /// reaches here — a fault is a status, not a cut.
-    fn take_cut(&mut self, epoch: u64) {
+    ///
+    /// A cut that is a transport Stop's, with no other cut after it, keeps the
+    /// missed-correction count: its advice is about the delay setting rather
+    /// than the stretch of playing the cut ends, and Stop is when it gets read.
+    /// Every other cut clears it: Reset all voices, and any Tune's
+    /// reactivation, attach or detach, not only this one's.
+    fn take_cut(&mut self, epoch: u64, stop: bool) {
         // The queue is sized for one cut's worth: every held voice, and every
-        // pedal that is down. It can still overflow, because a cut whose
-        // Note-Offs did not all reach the wire leaves them queued and a second
-        // cut over voices played in between arrives on top of them. What must
-        // not happen is that a Note-Off goes missing in silence, so what did
-        // not fit is carried past the status reset below and reported.
-        let mut lost = 0;
+        // pedal that is down. Only a second cut stacked on one whose Note-Offs
+        // the host has not yet taken can overflow it, and what does not fit is
+        // dropped.
         for cell in self.held.iter_mut() {
             if let Some(voice) = cell.take() {
-                let off = Event::note_off(voice.id, voice.channel, voice.key, false);
-                lost += u64::from(self.cut.push(off).is_err());
+                let _ = self.cut.push(Event::note_off(voice.id, voice.channel, voice.key, false));
             }
         }
         for channel in 0..16u8 {
             for (bit, cc) in PEDALS.iter().enumerate() {
                 if self.pedals[usize::from(channel)] & (1 << bit) != 0 {
                     let neutral = Event::Midi { port: 0, data: [0xb0 | channel, *cc, 0], flags: 0 };
-                    lost += u64::from(self.cut.push(neutral).is_err());
+                    let _ = self.cut.push(neutral);
                 }
             }
             self.pedals[usize::from(channel)] = 0;
@@ -277,17 +269,13 @@ impl Tune {
         // in. Carrying one past the cut that ended that context would report a
         // full ring against notes that were never in it.
         self.status = 0;
-        self.misses = 0;
+        if !stop {
+            self.misses = 0;
+        }
         self.epoch = epoch;
         if let Link::Direct { out, back } = &mut self.link {
             out.clear();
             back.clear();
-        }
-        // After the reset, because a Note-Off this cut could not queue is owed
-        // by the context the cut starts rather than by the one it ended.
-        if lost != 0 {
-            self.dropped += lost;
-            self.status |= session::DROPPED;
         }
     }
 
@@ -297,7 +285,7 @@ impl Tune {
     /// owe is the cut every other trigger takes, announced so the Hub lets go
     /// of the voices this ends.
     pub fn stop(&mut self) {
-        self.take_cut(session::session().cut());
+        self.take_cut(session::session().cut(), false);
         // The host may stop callbacks here, so end() cannot publish this count.
         self.shared.held.store(0, Ordering::Relaxed);
         self.publish_voices();
@@ -308,13 +296,7 @@ impl Tune {
         self.cursor = 0;
         self.emitted = 0;
         self.claim();
-        if let Link::Row(attached) = &self.link {
-            session::session().row(attached.slot).capture_epoch.store(u64::MAX, Ordering::SeqCst);
-        }
         self.adopt();
-        if let Link::Row(attached) = &self.link {
-            session::session().row(attached.slot).capture_epoch.store(self.epoch, Ordering::SeqCst);
-        }
         if callback.steady_time < 0 {
             self.status |= session::CLOCK;
         }
@@ -343,7 +325,7 @@ impl Tune {
                     Link::Direct { .. } => session::session().stop(),
                     _ => self.epoch,
                 };
-                self.take_cut(epoch);
+                self.take_cut(epoch, true);
             }
             self.playing = playing;
             return;
@@ -375,11 +357,8 @@ impl Tune {
         }
         let pending =
             Pending { due, serial, event, awaiting: false, correction: None, player: 0.0 };
-        if self.line.push(pending).is_err() {
-            self.status |= session::DROPPED;
-            self.dropped += 1;
-            return;
-        }
+        let pushed = self.line.push(pending);
+        debug_assert!(pushed.is_ok(), "the line's length was checked above");
         let position = self.line.position(self.line.len() - 1).unwrap();
         let asking = self.asking();
         let retune = self.shared.retuning();
@@ -583,11 +562,9 @@ impl Tune {
         tuning: Option<Event>,
         correction: i64,
     ) -> bool {
-        if !event.emittable() {
-            self.dropped += 1;
-            self.status |= session::DROPPED;
-            return true;
-        }
+        // Input admission checked every event the line holds, and the cut
+        // builds only Note-Offs and pedal controllers.
+        debug_assert!(event.emittable());
         // A refused note is the host's whole answer: nothing left, nothing is
         // tracked, and `schedule` keeps the line entry for a later callback.
         if !output.push(event.input(), time) {
@@ -602,7 +579,9 @@ impl Tune {
         // sound it twice.
         let mut accepted_tuning = None;
         if let Some(tuning) = tuning {
-            if tuning.emittable() && output.push(tuning.input(), time) {
+            // The player's finite tuning plus an integer correction.
+            debug_assert!(tuning.emittable());
+            if output.push(tuning.input(), time) {
                 self.emitted += 1;
                 accepted_tuning = Some(tuning);
             } else {
@@ -708,9 +687,6 @@ impl Tune {
 
     /// Finish this callback and report whether its diagnostics were published.
     pub fn end(&mut self) -> bool {
-        if let Link::Row(attached) = &self.link {
-            session::session().row(attached.slot).capture_epoch.store(0, Ordering::SeqCst);
-        }
         if let Some(callback) = self.callback.take() {
             self.shared.held.store(self.held() as u64, Ordering::Relaxed);
             self.publish_voices();

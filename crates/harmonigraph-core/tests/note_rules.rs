@@ -2,14 +2,13 @@
 //! random note sequences driven through the public API (#1759).
 //!
 //! A press is drawn twice: as a voice, on the lattice, the Spiral and the note
-//! band, and as a roll note, on the Roll's timeline. Six cases set the two
-//! apart, each checked where its operation runs:
+//! band, and as a roll note, on the Roll's timeline. Five cases set the two
+//! apart, numbered as `NoteRoll`'s rules, each checked where its operation
+//! runs, and a publication gap, which the third was, changes nothing:
 //!
 //! 1. an off at or before its onset is a voice that pulses and no roll note;
 //! 2. a retrigger without an off ends the old note with no fade, and drops it
 //!    when the retrigger lands at or before its onset;
-//! 3. a gap releases what it lost into a fade, and a baseline listing the note
-//!    takes it back, from the fade or from the past;
 //! 4. a note hidden at its release is never drawn leaving nor remembered;
 //! 5. a held note a baseline omits leaves with no fade and no trail mark;
 //! 6. a baseline listing a note that has ended withdraws its fade and opens a
@@ -25,7 +24,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use harmonigraph_core::canonical::PitchProvenance;
 use harmonigraph_core::canonical::{
     CanonicalEvent, GapReason, NoteDelta, PublicationGap, SourceBaseline, VoiceBaseline,
 };
@@ -162,7 +160,6 @@ struct Run<'a> {
     clock: Time,
     offset: Time,
     sequence: BTreeMap<SourceId, u64>,
-    baselines: BTreeMap<SourceId, u64>,
     lifetimes: u64,
     played: Vec<Played>,
     /// Notes Clear took off the roll while they sounded or faded, by key and
@@ -324,13 +321,12 @@ impl Run<'_> {
             event: NoteEvent { time: event.time - self.offset, ..event },
             sequence: *sequence,
             lifetime,
-            provenance: PitchProvenance::AcceptedOutput,
             pitch_microcents: pitch,
             ..NoteDelta::from(event)
         };
         let accepted =
             self.tracker.handle_canonical_mapped(CanonicalEvent::Note(delta), self.offset);
-        assert_eq!(accepted, Ok(true));
+        assert_eq!(accepted, Ok(()));
     }
 
     fn published_on(&mut self, before: &Snap) {
@@ -348,8 +344,8 @@ impl Run<'_> {
         self.after_on(before, key, self.clock);
     }
 
-    /// An off for the held note, before, at or after its onset, or for a note
-    /// a gap let go of: a factual off recovered after the gap.
+    /// An off for the held note, before, at or after its onset, or a stale one
+    /// for a note no longer held, which changes nothing.
     fn published_off(&mut self, before: &Snap) {
         let source = self.rng.pick(&[A, B]);
         let key = self.key(source);
@@ -372,24 +368,11 @@ impl Run<'_> {
         if held.is_some_and(|v| v.lifetime == Some(lifetime)) {
             return self.after_off(before, key, at);
         }
-        // Not the held note's: only a note a gap closed hears it, and only on
-        // the roll. Its fade keeps the time the gap gave it.
+        // Not the held note's: it changes nothing.
         let after = snap(&self.tracker);
         assert_eq!(identity(&after.held), identity(&before.held));
-        assert_eq!(
-            tail(&after.released),
-            tail(&before.released),
-            "a recovered off restarts no fade"
-        );
-        let mut expected = rows(&before.roll);
-        let recovered =
-            |r: &Row| r.0 == key && r.4 == Some(lifetime) && r.2.is_none() && r.3.is_some();
-        if let Some(index) = expected.iter().rposition(recovered) {
-            self.hit("rule 3: a factual off recovered after a gap");
-            expected[index].2 = Some(at.max(expected[index].1));
-            expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        }
-        assert_eq!(rows(&after.roll), expected, "a recovered off for {lifetime}");
+        assert_eq!(tail(&after.released), tail(&before.released), "a stale off starts no fade");
+        assert_eq!(rows(&after.roll), rows(&before.roll), "a stale off for {lifetime}");
     }
 
     /// A tuning or an expression on a held note.
@@ -420,8 +403,7 @@ impl Run<'_> {
         assert_eq!(rows(&after.roll), rows(&before.roll));
     }
 
-    /// A gap over one published source or the whole stream: it releases what
-    /// it lost into a fade (rule 3), but not what the tape plays.
+    /// A gap over one published source or the whole stream changes nothing.
     fn gap(&mut self, before: &Snap) {
         let scope = self.rng.pick(&[Some(A), Some(B), None]);
         let at = self.clock;
@@ -434,9 +416,14 @@ impl Run<'_> {
             reason: GapReason::PublicationFull,
         };
         let accepted = self.tracker.handle_canonical_mapped(CanonicalEvent::Gap(gap), self.offset);
-        assert_eq!(accepted, Ok(true));
-        let lost = |key: VoiceKey| !key.source.is_tape() && scope.is_none_or(|s| key.source == s);
-        self.after_release(before, at, lost, "a gap");
+        assert_eq!(accepted, Ok(()));
+        let after = snap(&self.tracker);
+        if !before.held.is_empty() {
+            self.hit("a gap changes nothing");
+        }
+        assert_eq!(identity(&after.held), identity(&before.held), "a gap keeps what is held");
+        assert_eq!(tail(&after.released), tail(&before.released), "a gap starts no fade");
+        assert_eq!(rows(&after.roll), rows(&before.roll), "a gap leaves the roll");
     }
 
     /// A session reset, which leaves the tape's notes to its player, or one
@@ -461,7 +448,6 @@ impl Run<'_> {
         why: &'static str,
     ) {
         let after = snap(&self.tracker);
-        let gap = why == "a gap";
         let mut tail_expected = tail(&before.released);
         let mut expected = rows(&before.roll);
         for voice in &before.held {
@@ -471,29 +457,18 @@ impl Run<'_> {
                 if key.source.is_tape() && why == "a session reset" {
                     self.hit("a tape note held through a session reset");
                 }
-                if key.source.is_tape() && gap {
-                    self.hit("a tape note held through a gap");
-                }
                 continue;
             }
             assert!(after.held(key).is_none(), "{why} let {key:?} go");
             if self.tracker.hides(key.source) {
                 self.hit("rule 4: hidden at its release");
             } else {
-                if gap {
-                    self.hit("rule 3: a gap releases into a fade");
-                }
                 tail_expected.push((key, voice.on_time, at, voice.lifetime));
             }
             if let Some(index) =
                 row_live(before, key).and_then(|live| expected.iter().position(|r| *r == live))
             {
-                let closed = at.max(voice.on_time);
-                if gap {
-                    expected[index].3 = Some(closed);
-                } else {
-                    expected[index].2 = Some(closed);
-                }
+                expected[index].2 = Some(at.max(voice.on_time));
             }
         }
         tail_expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -574,18 +549,15 @@ impl Run<'_> {
                     pressure: self.rng.pick(&[0.0, 0.5]),
                     ..Expressions::NEUTRAL
                 },
-                provenance: PitchProvenance::AcceptedOutput,
                 ..VoiceBaseline::default()
             })
             .collect();
-        let id = self.baselines.entry(source).or_default();
-        *id += 1;
         let cut = self.sequence.get(&source).copied().unwrap_or(0);
-        let frame = SourceBaseline::new(source, *id, time, cut, shown, &rows_in).unwrap();
+        let frame = SourceBaseline::new(source, time, cut, shown, &rows_in).unwrap();
         let was_shown = !self.tracker.hides(source);
         let accepted =
             self.tracker.handle_canonical_mapped(CanonicalEvent::Baseline(&frame), self.offset);
-        assert_eq!(accepted, Ok(true));
+        assert_eq!(accepted, Ok(()));
         self.after_baseline(before, source, (was_shown, shown), at, &rows_in);
     }
 
@@ -630,7 +602,7 @@ impl Run<'_> {
             let was_held = before.held.iter().find(|v| v.lifetime == Some(row.lifetime));
             let was_released = before.released.iter().find(|v| v.lifetime == Some(row.lifetime));
             let played = self.played.iter().find(|p| p.lifetime == row.lifetime).copied().unwrap();
-            // The note's row, the one a gap left open first: a fresh note a
+            // The note's row, one a baseline omitted first: a fresh note a
             // baseline opened can share its onset with the one that ended.
             let on_roll = |start: Time| {
                 let at = |n: &&RollNote| n.lifetime == Some(row.lifetime) && n.start == start;
@@ -655,9 +627,6 @@ impl Run<'_> {
                     assert_eq!(voice.on_time, fresh, "a revived note starts afresh");
                 } else if !was_shown {
                     // Its row was hidden, so which rule it takes cannot be read.
-                } else if note.is_some_and(|n| n.end.is_none()) {
-                    self.hit("rule 3: resumed from the tail");
-                    assert_eq!(voice.on_time, gone.on_time, "a resumed note keeps its onset");
                 } else if off <= gone.on_time && note.is_none() {
                     self.hit("rule 6: a listed pulse is dropped");
                     assert_eq!(voice.on_time, fresh, "a listed pulse opens a fresh note");
@@ -672,13 +641,8 @@ impl Run<'_> {
                 assert_eq!(voice.on_time, fresh, "a revived note starts afresh");
             } else if !was_shown {
                 // As above.
-            } else if let Some(note) = on_roll(played.start) {
-                if note.end.is_none() && note.observed_until.is_some() {
-                    self.hit("rule 3: resumed from past");
-                    assert_eq!(voice.on_time, note.start, "a resumed note keeps its onset");
-                } else {
-                    assert_eq!(voice.on_time, fresh);
-                }
+            } else if on_roll(played.start).is_some() {
+                assert_eq!(voice.on_time, fresh, "a listed finished note opens a fresh one");
             }
             self.cleared.remove(&(key, voice.on_time.to_bits()));
             if let Some(p) = self.played.iter_mut().find(|p| p.lifetime == row.lifetime) {
@@ -704,7 +668,7 @@ fn row_live(before: &Snap, key: VoiceKey) -> Option<Row> {
 }
 
 #[test]
-fn every_press_follows_the_six_rules() {
+fn every_press_follows_the_rules() {
     let mut hits = BTreeMap::new();
     for seed in 1..=SEEDS {
         let mut run = Run {
@@ -713,7 +677,6 @@ fn every_press_follows_the_six_rules() {
             clock: 1.0,
             offset: 0.0,
             sequence: BTreeMap::new(),
-            baselines: BTreeMap::new(),
             lifetimes: 0,
             played: Vec::new(),
             cleared: BTreeSet::new(),
@@ -727,10 +690,7 @@ fn every_press_follows_the_six_rules() {
         "rule 1: an off at its onset pulses",
         "rule 2: a retrigger ends its note",
         "rule 2: a retrigger at its onset drops it",
-        "rule 3: a gap releases into a fade",
-        "rule 3: resumed from the tail",
-        "rule 3: resumed from past",
-        "rule 3: a factual off recovered after a gap",
+        "a gap changes nothing",
         "rule 4: hidden at its release",
         "rule 4: a hidden pulse is dropped",
         "rule 5: an omitted held note leaves without a fade",
@@ -739,7 +699,6 @@ fn every_press_follows_the_six_rules() {
         "revival from held",
         "revival from the tail",
         "revival from past",
-        "a tape note held through a gap",
         "a tape note held through a session reset",
         "a tape note hidden with its source",
         "a finished fade lands in the trail",

@@ -202,17 +202,17 @@ mod tests {
         NoteRecord { source: 0, t, channel: 0, note, kind: NoteKind::Off }
     }
 
-    /// #712: the same clear-and-refresh has to stop a release the outage
-    /// swallowed from leaving a held visual for the rest of the render. The
-    /// snapshot after the gap says the key is not sounding, and the note is
-    /// drawn to the gap rather than to the end of the take.
+    /// #712: a release the outage swallowed must not leave a held visual for
+    /// the rest of the render. The gap itself changes nothing; the snapshot
+    /// after it says the key is not sounding, and the note is drawn to that
+    /// snapshot rather than to the end of the take (#1798 F1).
     #[test]
     fn a_release_lost_to_an_outage_does_not_stay_held_for_the_rest_of_a_replay() {
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::{NoteEvent, SourceId};
         use harmonigraph_take::{CanonicalRecord, Record};
         let source = SourceId::DIRECT;
-        let silent = SourceBaseline::new(source, 1, 3.0, 0, true, &[]).unwrap();
+        let silent = SourceBaseline::new(source, 3.0, 0, true, &[]).unwrap();
         let mut text = opened();
         for record in [
             CanonicalRecord::from_event(CanonicalEvent::Note(
@@ -242,10 +242,10 @@ mod tests {
         }
         assert_eq!(state.runtime.tracker.held_count(), 0, "no key is left sounding");
         let note = state.runtime.tracker.roll().notes().next().unwrap();
-        assert_eq!((note.start, note.end, note.observed_until), (1.0, None, Some(2.0)));
+        assert_eq!((note.start, note.end, note.observed_until), (1.0, None, Some(3.0)));
         assert!(
-            note.segments(10.0).all(|segment| segment.1 .0 <= 2.0),
-            "nothing is drawn past the last time the note was actually observed"
+            note.segments(10.0).all(|segment| segment.1 .0 <= 3.0),
+            "nothing is drawn past the snapshot that stopped observing it"
         );
         assert_eq!(
             state.runtime.tracker.roll().notes().count(),
@@ -255,70 +255,13 @@ mod tests {
     }
 
     #[test]
-    fn accepted_off_after_gap_is_retained_without_a_held_baseline() {
-        use harmonigraph_core::canonical::*;
-        use harmonigraph_core::{NoteEvent, SourceId};
-        use harmonigraph_take::CanonicalRecord;
-        let source = SourceId(1);
-        let delta = |event: NoteEvent, sequence| {
-            CanonicalRecord::from_event(CanonicalEvent::Note(NoteDelta {
-                partial_output: false,
-                event,
-                sequence,
-                lifetime: 61,
-                provenance: PitchProvenance::AcceptedOutput,
-                pitch_microcents: None,
-                assignment: None,
-            }))
-        };
-        let empty = SourceBaseline::new(source, 1, 5.0, 4, true, &[]).unwrap();
-        let text = one_run([
-            delta(NoteEvent::on(1.0, source, 0, 60, 0.8), 1),
-            CanonicalRecord::from_event(CanonicalEvent::Gap(PublicationGap {
-                source: Some(source),
-                time: 2.0,
-                through: 3.0,
-                first: 2,
-                last: 3,
-                reason: GapReason::PublicationFull,
-            })),
-            delta(NoteEvent::off(4.0, source, 0, 60), 4),
-            CanonicalRecord::from_event(CanonicalEvent::Baseline(&empty)),
-        ]);
-        let take = Take::parse(std::io::Cursor::new(text)).unwrap();
-        for cadence in [0.001, 1.0 / 24.0, 1.0 / 60.0] {
-            let mut replay = Replay::new(take.clone());
-            let mut state = PictureState::new(TextureFormat::Bgra8Unorm);
-            let mut now = 0.0;
-            while now < 4.5 {
-                replay.advance_to(&mut state.runtime, now);
-                now += cadence;
-            }
-            assert!(
-                !state.runtime.tracker.source_current_certain(source),
-                "actual Off does not repair source completeness"
-            );
-            replay.advance_to(&mut state.runtime, 5.0);
-            for roll in [state.runtime.tracker.roll(), &roll_from_all_events(replay.take())] {
-                let note = roll.notes().next().unwrap();
-                assert_eq!(
-                    (note.start, note.end, note.observed_until),
-                    (1.0, Some(4.0), Some(2.0))
-                );
-                assert!(note.segments(5.0).all(|segment| segment.1 .0 <= 2.0));
-                assert_eq!(roll.notes().count(), 1);
-            }
-        }
-    }
-
-    #[test]
     fn visibility_boundaries_keep_pitch_history_independent_of_prune_cadence() {
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::{NoteEvent, SourceId};
         use harmonigraph_take::{CanonicalRecord, Record};
         let source = SourceId::DIRECT;
-        let off = SourceBaseline::new(source, 1, 0.03, 0, false, &[]).unwrap();
-        let rejoin = SourceBaseline::new(source, 2, 0.08, 0, true, &[]).unwrap();
+        let off = SourceBaseline::new(source, 0.03, 0, false, &[]).unwrap();
+        let rejoin = SourceBaseline::new(source, 0.08, 0, true, &[]).unwrap();
         let mut text = opened();
         for record in [
             CanonicalRecord::from_event(CanonicalEvent::Note(
@@ -364,30 +307,26 @@ mod tests {
         let source = SourceId(1);
         let delta = |event: NoteEvent, sequence| {
             CanonicalRecord::from_event(CanonicalEvent::Note(NoteDelta {
-                partial_output: false,
                 event,
                 sequence,
                 lifetime: 61,
-                provenance: PitchProvenance::AcceptedOutput,
                 pitch_microcents: None,
                 assignment: None,
             }))
         };
         let first = delta(NoteEvent::on(0.01, source, 0, 60, 0.8), 1);
-        let empty = SourceBaseline::new(source, 1, 0.08, 3, true, &[]).unwrap();
+        let empty = SourceBaseline::new(source, 0.08, 3, true, &[]).unwrap();
         let row = VoiceBaseline {
             note: 60,
             lifetime: 61,
             actual_onset: 0.1,
             pitch_microcents: 6_025_000_000,
             velocity: 0.8,
-            provenance: PitchProvenance::AcceptedOutput,
             ..Default::default()
         };
-        let held = SourceBaseline::new(source, 2, 0.15, 5, true, &[row]).unwrap();
-        let recovered = SourceBaseline::new(source, 3, 0.3, 8, true, &[row]).unwrap();
+        let held = SourceBaseline::new(source, 0.15, 5, true, &[row]).unwrap();
+        let recovered = SourceBaseline::new(source, 0.3, 8, true, &[row]).unwrap();
         let events = [
-            first.clone(),
             first,
             delta(
                 NoteEvent {
@@ -458,18 +397,15 @@ mod tests {
             assert_eq!(snapshot, roll_snapshot(&roll_from_all_events(replay.take())));
             assert_eq!(snapshot.len(), 2);
             assert_eq!((snapshot[0].2, snapshot[0].3, snapshot[0].6), (0.01, Some(0.07), 60.25));
+            // The gap draws no break: the snapshots restate the pitch the note
+            // holds, so one line runs from the onset to the off (#1798 F1).
             assert_eq!(
                 (snapshot[1].2, snapshot[1].3, snapshot[1].4, snapshot[1].5),
-                (0.1, Some(0.4), None, false)
+                (0.1, Some(0.4), None, true)
             );
-            assert!(snapshot[1].7.iter().any(|segment| segment.0 .0 == 0.3));
-            assert!(
-                !snapshot[1].7.iter().any(|segment| segment.0 .0 < 0.3 && segment.1 .0 > 0.2),
-                "one recovered lifetime preserves the gap without a duplicate cache identity"
-            );
-            assert!(
-                !state.runtime.tracker.history_missing(),
-                "the recovered baseline answers for the gap"
+            assert_eq!(
+                snapshot[1].7,
+                [((0.1, 60.0), (0.11, 60.25)), ((0.11, 60.25), (0.4, 60.25))]
             );
             if let Some(ref expected) = expected {
                 assert_eq!(&snapshot, expected);

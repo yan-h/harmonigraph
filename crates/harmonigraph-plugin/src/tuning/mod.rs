@@ -28,7 +28,7 @@ pub const DIRECT: u8 = TUNERS as u8;
 pub use harmonigraph_core::canonical::HELD_PER_SOURCE;
 /// Every voice every row can hold at once, which is every pitch Learn hears.
 pub const HELD_VOICES: usize = (TUNERS + 1) * HELD_PER_SOURCE;
-/// Steps on the Tuning delay parameter. Sixteen still reaches the 512 samples
+/// Steps on the Tuning delay setting. Sixteen still reaches the 512 samples
 /// this delay used to be fixed at even from a 32-frame callback.
 pub const DELAY_MULTIPLIER_MAX: i32 = 16;
 /// Events one Tune may hold in its delay line. One input takes one cell,
@@ -41,8 +41,8 @@ pub const REPLY_RING: usize = 1024;
 /// Records the Hub orders in one pass across every source.
 pub const BATCH_EVENTS: usize = 2048;
 /// Note-offs and pedal neutralisations one cut may owe: every held voice, plus
-/// sustain, sostenuto and legato on each of sixteen channels. A cut does not
-/// recentre the bend, because a Tune does not track one.
+/// sustain, sostenuto and legato on each of sixteen channels. A Tune tracks
+/// each channel's bend, but the cut does not recentre it.
 pub const CUT_EVENTS: usize = HELD_PER_SOURCE + 16 * 3;
 /// Events one Tune puts on the wire in one enclosing callback. The delay line
 /// and the cut bound the backlog but not the burst: a stretch of blind or

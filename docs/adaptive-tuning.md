@@ -79,7 +79,7 @@ A later implementation should not broaden a row merely because its rejected bran
 | State authority | **What the Hub scheduled** — input plus that source's D, derived from its own sequenced input | Actual emitted output, reported back by each Tune and reconciled against the plan | One authority cannot disagree with itself. The reconciliation was two provenances, an output ring, a journal and a dual-provenance reducer, to establish a fact the Hub had already computed | A real downstream pitch-feedback mechanism exists and is worth integrating |
 | Pitch output | CLAP per-note tuning expression for the adaptive correction, composed with live player expression; MIDI channel bend remains MIDI | MTS-ESP, MPE or VST3 note output | Matches sample-timed per-voice assignments and the actual host while adding no external tuning service; Bitwig converts a note effect's per-note pitch to MPE or VST3 note expression downstream, so the instrument's own format is not restricted | A required instrument cannot consume it |
 | Session transport | An in-process session under a documented Bitwig hosting mode, with **exactly one Hub per process** and no pairing choice | A saved pairing UUID with auto-join, ambiguity handling and a popup to resolve it | One Hub is the only case that has ever existed here. Pairing became one atomic load of one slot, which deleted the offer/return/lease handoff and every way it could stall | Two Harmonigraphs in one process become a configuration worth supporting rather than a fault to report |
-| Hub ownership | Full Harmonigraph, normally on Master. **It is a Tune plus the policy**: it delays its own notes by D and is sequenced as a seventeenth source | A headless conductor, or an elected Tune peer; and separately, a direct observation path for the Hub's own MIDI that skipped the delay | Reuses the existing configuration, display, take and combined-audio location without another authority. Making its own track ordinary deletes `direct.rs` and the DIRECT half of every predicate that used to have one | The Hub cannot stay active in the supported graph, or a project needs tuning without a full Harmonigraph |
+| Hub ownership | Full Harmonigraph, normally on Master. **It is a Tune plus the policy**: its own notes run through a Tune, at zero delay, and are sequenced as a seventeenth source | A headless conductor, or an elected Tune peer; and separately, a direct observation path for the Hub's own MIDI that skipped the delay | Reuses the existing configuration, display, take and combined-audio location without another authority. Making its own track ordinary deletes `direct.rs` and the DIRECT half of every predicate that used to have one | The Hub cannot stay active in the supported graph, or a project needs tuning without a full Harmonigraph |
 | Missed assignment deadline | **Attempt to emit on time, uncorrected, and count the miss.** A late reply is discarded | Keep that one attack pending and take its valid late assignment | Waiting for one note is what every stall in the #712 tree grew out of: per-note pending states, linked work cells, two late-playback rules and atomic same-key replacement all exist to make waiting safe. A raw note and a counter cost one note's tuning; waiting cost the whole track | A musical requirement makes a late correct pitch better than an on-time raw one — which is the judgment this reverses, so it needs new evidence rather than a preference |
 | Participation UI | Central per-instance and global Retune/Show controls in Harmonigraph, mirrored locally in each Tune | Host bypass as the only control, or one switch coupling retuning and visibility | A source can pass through and remain visible without influencing adaptive tuning | A new per-source musical role is needed |
 | Player pitch | Preserve the player's MIDI bend and per-note pitch expression, and add one frozen adaptive correction on top | Center the bend and replace the expression | Player gestures remain expressive, and policy v3 can score their absolute onset pitch without changing its frozen adaptive choice later | A required gesture cannot be represented by this composition |
@@ -95,13 +95,13 @@ a design whose rejected branch was implemented first knows exactly what it cost.
 
 | Decision | Chosen design | Built, then removed | Why this won | Reopen only when |
 |---|---|---|---|---|
-| The delay | A per-Tune **Tuning delay** parameter: 1 to 16 multiples of the host's advertised maximum callback size, resolved at activation, fixed for that activation and reported as latency | One fixed session-wide delay of 512 samples | A sample count is either short at one buffer size or needless latency at another; a multiple of the host's own callback is the quantity the round trip actually has to fit inside, and 16× reaches the old 512 even from a 32-frame callback | Automatic latency adaptation is requested — it explicitly is not, today |
+| The delay | A per-Tune **Tuning delay** setting: 1 to 16 multiples of the host's advertised maximum callback size, resolved at activation, fixed for that activation and reported as latency | One fixed session-wide delay of 512 samples | A sample count is either short at one buffer size or needless latency at another; a multiple of the host's own callback is the quantity the round trip actually has to fit inside, and 16× reaches the old 512 even from a 32-frame callback | Automatic latency adaptation is requested — it explicitly is not, today |
 | Tune→Hub transport | Self-contained copied records through bounded preallocated queues; the Hub owns what it receives and Tune owns its pending state | A shared `CaptureArena` with `unsafe impl Sync`, `Token`/`Key`/`Permissions`, a split between original and local storage, and a storage-retirement handshake | Each record is fixed-size and its storage preallocated, so copying costs no allocation and no extra delay — and it deletes an entire ownership protocol whose only purpose was avoiding the copy | Copying is measured to cost callback budget the assignment cannot afford |
 | Same-sample ordering | Merge the per-source streams by sample; within one sample apply every release and controller from every source, then assign onsets in key, channel, source order | A 15-phase incremental topological sort over a 1,280-vertex adjacency bitset, built by an O(n²) pairwise scan and budgeted across callbacks | Across sources the dependency graph is empty by construction, and within one source the host already delivers events in dependency order, which copying preserves. There was nothing for a graph to discover | A dependency exists that this order does not already respect |
 | Configuration granularity | One sample-indexed configuration history for every engine, the one [#890](https://github.com/yan-h/harmonigraph/pull/890) built for Lattice Map: an attack is assigned, and a take segmented, by the configuration in force at its own input sample ([#1749](https://github.com/yan-h/harmonigraph/issues/1749)) | A 128-marker `ConfigTimeline` with a `ControlBudget`, and a pass-routing `Recording` of 2,178 segments (~198 KB live on the audio thread); then, beside the history, a per-callback `block` configuration that Adaptive and Pass through assigned and recorded from | The history already answered the sample-exact question for every engine and the Hub discarded the answer unless the engine was Lattice Map, so a second granularity was one more rule to hold and a block-size dependence near automation, for no saving | A take's configuration records under dense axis modulation, one per event rather than one per block, are measured to cost more than a pass can afford |
 | Divergence and faults | No retrospective reassignment, and no reassignment at all: a correction fault is a status bit and the admitted note sounds raw | An 8-phase recovery transaction (Prepare→Inventory→Preserve→Status→Rebuild→Replay→Resume) with its own protocol messages, ~20 `recovering()` branches and three duplicated ordinary/replay code pairs | Its documented outcome when it fired was a note sounding 467 ms late. The latch that replaced it then produced silence instead, which is the failure Yan actually heard, so #786 removed that half too | A measured ordinary case needs a recovered phrase rather than a raw one |
 | Controller context for a late note | A late note meets the receiver's current controller state; shared channel controls keep their own input-plus-delay schedule | A channel-wave mechanism replaying 130 folded controller registers plus raw prelude history into the receiver ahead of a younger onset | Different articulation during a late note is accepted; reconstructing the controller context a note "should have" met is a replay, and replay is the thing this design excludes | A measured ordinary case is musically wrong because of it |
-| Publication loss | The lane reports its own loss into a reserved cell; the display clears stale state and refreshes from a current snapshot; an incomplete take exports with a warning | Per-source baselines with generation handles, an `UnsafeCell` bank behind a busy state machine, cross-thread resync requests and per-source repair cursors | A snapshot restores what is sounding now, which is the whole of what a display needs after a gap; the repair protocol was reconstructing history the display had already drawn | Reconstructing lost history becomes worth its own protocol |
+| Publication loss | The lane reports its own loss into a reserved cell; the next snapshot corrects the display's held set; an incomplete take exports with a warning | Per-source baselines with generation handles, an `UnsafeCell` bank behind a busy state machine, cross-thread resync requests and per-source repair cursors | A snapshot restores what is sounding now, which is the whole of what a display needs after a gap; the repair protocol was reconstructing history the display had already drawn | Reconstructing lost history becomes worth its own protocol |
 | Membership and allocation | Sixteen rows and their ring pairs are built once **with the process-wide session**, and a side claims its own half at activation. Attach and detach bump the epoch, which is the cut for every row | Per-pairing allocation through an offer/return handshake, with `Slots`/`Reservation` and a lease each side had to agree on | The rings are ~1.5 MB for the whole process rather than per instance, and pairing became one atomic load — which is the only version of pairing that cannot stall, because there is nothing in it to wait for | Per-instance ring memory becomes a measured problem |
 | The missed deadline | At input plus D, a Tune attempts to emit whatever came back and counts an onset that has no correction | Per-note `Pending`/`Staging`/`Wait` states, linked work cells in `work.rs`, two late-playback rules, and the atomic same-key replacement that made retriggering a late note safe | Nothing waits for a correction, so none of it has anything to guard. #787 is the worked example: one barrier behind another, where fixing the settle predicate still did not restore audio | A late correct pitch is shown to beat an on-time raw one |
 | What the display and take show | The Hub's own schedule, from its own sequenced input | An output-report ring per Tune, `Outcome`/`OutputDelta`, a local journal, a plan manifest, `debt.rs`, a dual-provenance `State` reducer, and nice-plug's per-event acceptance feedback | All of it established a fact the Hub had already computed. What it bought was detecting a host refusal, which is now an undetected residual — see case 2 below | A host refusal is observed happening, rather than reasoned about |
@@ -174,7 +174,8 @@ into the display and the take through the existing two publication lanes.
 Tunes run no assignment policy and hold no copy of the Hub's state.
 
 The Hub's own MIDI takes exactly that path.
-It embeds a Tune whose ring is a direct call, so its track is delayed by D, assigned by the same policy and published through the same row as any other.
+It embeds a Tune whose ring is a direct call, so its track is assigned by the same policy and published through the same row as any other.
+That Tune runs at zero delay: its correction is queued at the input boundary before any sub-block of the same callback is scheduled, so the round trip needs none.
 There is no second observation path to keep in step with the first.
 
 Work is bounded per callback and runs to completion inside it.
@@ -182,7 +183,7 @@ No callback waits for another instance, takes a contended lock, allocates, frees
 Offline rendering runs the same sample-timed state machine and cannot depend on a worker keeping up.
 ## The delay
 
-The **Tuning delay** parameter is a stepped integer, 1 to 16, defaulting to 1. One step is the host's advertised **maximum** callback size at activation —
+The **Tuning delay** setting is a stepped integer, 1 to 16, defaulting to 1. One step is the host's advertised **maximum** callback size at activation —
 not its minimum, not the current callback length, not an observed typical size —
 so
 
@@ -191,10 +192,11 @@ D_samples = multiplier × advertised_max_frames
 ```
 
 and that number is fixed for the whole activation.
-Each Tune persists its own multiplier as an ordinary plugin parameter and reports the resulting latency from it at activation, before any Hub pairing exists.
+Each Tune saves its own multiplier with its state, not as a host parameter, and reports the resulting latency from it at activation, before any Hub pairing exists.
+A change needs the host to reactivate the Tune, so it could not usefully be automated (#1798 H4).
 The Hub's **Tuning → Tuning sources → Tuning delay** controls offer **Apply to all tuners** as a convenience.
 Per-instance overrides live in **Source details**, and each Tune that changes requests its own reactivation.
-The Hub's own input uses a fixed one-buffer delay.
+The Hub's own input has no delay.
 
 The editor shows the multiplier, the sample count and the milliseconds together —
 `2x buffer - 128 samples / 2.67 ms` —
@@ -229,7 +231,7 @@ The measured Bitwig spike ran at D = 2,048 and did not search for a minimum, so 
 
 An onset that reached its own emission time with no correction sounds at its raw pitch, and the Tune counts it:
 `3 notes sounded uncorrected - raise the delay and play again`.
-The count clears at every cut.
+The count clears at every cut but a transport Stop, which is when it gets read: Reset all voices, and any Tune's reactivation, attach or detach, clears every Tune's count.
 
 Two states are *not* a missed deadline, and the status names them rather than counting them as evidence that the delay is too small:
 no Harmonigraph in the process, and no free row.
@@ -384,7 +386,7 @@ Nothing waits on anyone, and no second party has to agree that it happened.
 
 | Trigger | How it reaches everyone |
 |---|---|
-| **Reset all voices** in Harmonigraph's Tuning pane | Bumps the session epoch and marks it a Reset. Every Tune cuts on its next callback; the Hub clears its context and its released memory |
+| **Reset all voices** in Harmonigraph's Tuning pane | The Hub's own: it bumps the session epoch at its next callback and forgets its released memory once the cut has ended every voice. Every Tune cuts on its next callback |
 | Transport Stop | The falling edge of the host's playing flag. Every row sees the same edge in the same callback, so exactly one of them announces it — the Hub's own — and the rest end their own voices and adopt that epoch. It is marked a Stop; released memory then follows the **Reset context on stop** control |
 | The audio engine stopping, or a host reset | The same cut, from `clap_plugin.reset` and `stop_processing`. Marked as neither a Reset nor a Stop, so released memory survives it |
 | A Tune attaching or detaching | Bumps the epoch, so every paired track cuts. This is what buys the absence of a hot-plug reconciliation protocol |
@@ -548,9 +550,10 @@ musical candidate selection and separate Lattice Map assignment dots remain.
 
 ## Capacities and memory
 
-These are selected ceilings sized for 16 tracks and 100+ simultaneous notes, not measured throughput.
+These are selected ceilings, not measured throughput.
+They hold 16 Tune rows of 64 voices each, far past the load the stakes record in `AGENTS.md` names: a chord of about six tones and a handful of held notes.
 Audio transport and policy-selection storage is preallocated.
-Every ceiling has an explicit failure.
+Every ceiling has an explicit failure but the cut's queue, which drops a Note-Off two stacked cuts cannot fit, with no notice (#1798 H5).
 A full local delay line or held set refuses the incoming event;
 copy, reply or policy exhaustion can leave an admitted onset uncorrected.
 Shrinking a buffer does not make its overflow path unreachable.
@@ -562,11 +565,11 @@ Shrinking a buffer does not make its overflow path unreachable.
 | `PENDING_EVENTS` | 8,192 | Retained events in one Tune's delay line, including unrelated MIDI |
 | `CAPTURE_RING` / `REPLY_RING` | 1,024 / 1,024 | The two rings per row. A full capture ring costs that note its correction |
 | `BATCH_EVENTS` | 2,048 | Records one ordering pass holds across every source, and deltas one callback may publish |
-| `CUT_EVENTS` | 112 | Note-offs and pedal neutralizations one cut may owe: every held voice, plus sustain, sostenuto and legato on each of sixteen channels. What does not fit is reported as a dropped event |
+| `CUT_EVENTS` | 112 | Note-offs and pedal neutralizations one cut may owe: every held voice, plus sustain, sostenuto and legato on each of sixteen channels. What does not fit is dropped with no notice |
 | `MAX_CONTEXT` / `MAX_MEMORY` / `MAX_CANDIDATES` | 256 / 24 / 4,096 | Held voices the Hub's context holds across every source, released contributions and the complete local candidate union |
 | `PUBLICATION_RING` / `SNAPSHOT_SLOTS` / `GAP_RESERVE` | 4,096 / 20 / 1 | Publication items, snapshot frames, and the one cell an outage may always spend |
 | `EMIT_PER_CALLBACK` | 512 | Accepted output-event budget, checked between queued inputs. A note and its tuning expression complete together, even when the pair crosses the budget |
-| `DELAY_MULTIPLIER_MAX` | 16 | Steps on the Tuning delay parameter |
+| `DELAY_MULTIPLIER_MAX` | 16 | Steps on the Tuning delay setting |
 
 The rings now belong to the **process** rather than to an instance.
 Sixteen capture rings and sixteen reply rings are about 1.5 MB, allocated once when the first instance registers, and that is what pays for pairing being an atomic load instead of a handoff.
@@ -588,17 +591,16 @@ a refused event may be retried later while the display and take retain its sched
 This was never a measurement of resulting acoustic pitch either;
 a receiving instrument may ignore, smooth or modulate the expression.
 
-One provenance reaches the take now rather than two.
-`PitchProvenance` keeps both variants because `ObservedDirect` is still live production code, the default provenance for a plain direct-source `NoteEvent` (`NoteDelta::from`, `canonical.rs`), not a compat shim kept for an old take;
-every adaptive-tuning record this build writes carries `AcceptedOutput`.
+One provenance reaches the take now rather than two, so records carry none (#1798):
+an unsequenced delta is a direct observation, and a sequenced one is what a source played and names its press by a lifetime.
 Learning is the one consumer that reads something else:
 it is given the **player's** pitch, with the adaptive correction taken back off.
 Every row is tuned now, the Hub's own included, so feeding Learn what was emitted would make it a fixed point that infers the axes it has already chosen.
 The old design avoided that only because the Hub's own track was the one thing it did not retune.
-Learn also reads one callback later than it used to, because the Hub's own input is delayed by D like everyone else's;
+Learn also reads one callback later than it used to, because it reads the Hub's own input through the Hub's rows like everyone else's;
 the configuration walk that runs it happens before the performance input for that callback is delivered.
-It reads the Hub's rows themselves (`Hub::held_classes`), as the Hub's callback start leaves them,
-and refuses only while a row has lost an event, since that row's held notes are then unknown (#1751).
+It reads the Hub's rows themselves (`Hub::held_classes`), as the Hub's callback start leaves them.
+A row that lost a release copy to a full ring and then filled its 64 voices reads its stuck voices, as the lattice draws them, until the next cut (#1798 H5).
 
 Publication is two independent lanes, one for the display and one for the take, and the rule that keeps them independent is stated as a type:
 **no capacity, outcome or cursor on the publication path is a value derived from both lanes.** A full display ring must not hold back a snapshot the take needs, and a take-lane gap must not blank the display.
@@ -608,13 +610,13 @@ There is no acknowledgement, generation or resync protocol between the ends —
 one FIFO of items and one FIFO of snapshot frames.
 Loss is reported, never repaired:
 the lane that lost a report pushes a gap into a cell reserved for exactly that, so an outage stays readable even if audio never calls again.
-The consumer then clears that source's stale held state and refreshes from a current snapshot.
+The consumer changes nothing at the gap: the snapshot that follows corrects its held set, ending what it omits (#1798 F1).
 A snapshot restores **what is sounding now**;
 it does not reconstruct missing attacks, releases or trajectories, and the test that pins it asserts no note-on appears among the refresh records.
-A gap clears every source, so one lost report owes every source a snapshot.
+One lost report owes every source a snapshot.
 
-Takes are format v6;
-v1–v5 are refused whole with a version error rather than half-read.
+Takes are format v9;
+v1–v8 are refused whole with a version error rather than half-read (`FORMAT_VERSION` in `harmonigraph-take` says what each version changed).
 Every record carries a container-level `#[serde(default)]` and none denies unknown fields, which is what makes dropping a field safe without touching the format version —
 and is why a take written today is refused by a pre-prune build rather than misread by one.
 Renaming a field is not safe that way, because each side reads the other's key as absent:
@@ -627,7 +629,7 @@ Replay uses recorded output pitches and never reruns adaptive selection.
 **A take that parsed is rendered;
 a take that did not parse is refused.** Missing note history is a warning, not a refusal:
 the renderer prints it on stderr before anything the command line can complain about, and the Video pane's export row carries it onto the render it succeeded on.
-Surviving data is drawn with its gaps;
+Surviving data is drawn as it was recorded: a note held through a gap draws as one line, and a release the gap lost ends at the snapshot after it;
 nothing invents missing notes or durations.
 The warning's lifetime is the recording rather than the file, so a hole that outlived the pass it happened in still marks the pass that exports.
 Conservatively marking an unaffected take is an accepted residual;
@@ -790,7 +792,7 @@ Tune's output delay does not give the Hub more processing time either way.
 
 **Closed, recorded here because the record was wrong about them more than once.** [#672](https://github.com/yan-h/harmonigraph/issues/672) was fixed through #669 → #709 and closed on 2026-09-07;
 it was twice described as waiting on later work.
-[#703](https://github.com/yan-h/harmonigraph/issues/703), reactivation staying pending after a host format change, was fixed while building the delay parameter.
+[#703](https://github.com/yan-h/harmonigraph/issues/703), reactivation staying pending after a host format change, was fixed while building the delay parameter that preceded the saved setting.
 [#748](https://github.com/yan-h/harmonigraph/issues/748)'s reply-latency measurement was closed when stage 8 removed the mechanism it measured.
 [#787](https://github.com/yan-h/harmonigraph/pull/787) reproduced the Apply stall and diagnosed it without fixing it, on purpose:
 its test is retargeted here as "Reset cuts and audio resumes within two callbacks".
@@ -819,4 +821,4 @@ The code seams:
 - [`harmonigraph-core/src/notes.rs`](../crates/harmonigraph-core/src/notes.rs) and [`roll.rs`](../crates/harmonigraph-core/src/roll.rs) — source-aware tracking and live history, off the audio thread;
 - [`harmonigraph-plugin/src/configuration.rs`](../crates/harmonigraph-plugin/src/configuration.rs) — effective CLAP tuning on audio, including editor-independent learning;
 - [`harmonigraph-record/src/publication.rs`](../crates/harmonigraph-record/src/publication.rs) — the two independent lanes;
-- [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) — take format, source and reset scope, actual sample and pitch provenance.
+- [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) — take format, source and reset scope.

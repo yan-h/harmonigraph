@@ -3,7 +3,7 @@
 //! The Hub's schedule is the authority for display, take and future context;
 //! these fixtures also check the tuning expressions actually emitted to hosts.
 use super::*;
-use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, PolicyEdit};
+use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig};
 use harmonigraph_core::{canonical::VoiceBaseline, LatticePos, Tuning};
 
 pub(super) fn configure(hub: &Device, tuning: Tuning) {
@@ -25,7 +25,7 @@ pub(super) fn configure(hub: &Device, tuning: Tuning) {
 }
 
 fn configure_policy(hub: &Device, policy: PolicyConfig) {
-    submit(hub, ConfigEdit { policy: Some(PolicyEdit::all(policy)), ..Default::default() });
+    submit(hub, ConfigEdit { policy: Some(policy), ..Default::default() });
 }
 
 /// A transport carrying the host's seconds timeline at `seconds`.
@@ -33,6 +33,17 @@ fn position(seconds: i64) -> Input {
     let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
     value.flags |= CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
     value.song_pos_seconds = seconds * (1i64 << 31);
+    Input::Transport(value)
+}
+
+/// A transport at `seconds` on the host's seconds timeline, playing or not.
+fn at(seconds: f64, playing: bool) -> Input {
+    let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+    value.flags |= CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
+    if !playing {
+        value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+    }
+    value.song_pos_seconds = (seconds * 2_147_483_648.0) as i64;
     Input::Transport(value)
 }
 
@@ -179,7 +190,6 @@ fn production_musical_dfa_permutations_include_each_predecessor() {
             assert_eq!(output[i][0].0, 0);
             let voice = phrase.voice(i, keys[i] as u8, 0);
             assert_eq!(voice.attack_node, Some(positions[i]));
-            assert_eq!(voice.assignment.unwrap().policy, harmonigraph_core::policy::CONFIG);
             pitches[i] = voice.pitch_microcents;
             decisions[i] = voice.decision;
         }
@@ -372,7 +382,7 @@ fn production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correcti
     let correction = onset.frozen_offset_microcents;
     let input_pitch = 5_750_000_000;
     let expected = harmonigraph_core::policy::assign_new_note(
-        onset.assignment.unwrap().into(),
+        settings(&phrase.hub).view().resolved.into(),
         &[],
         &Default::default(),
         harmonigraph_core::policy::OrderedOnset { pitch: input_pitch },
@@ -537,8 +547,8 @@ fn production_silence_and_stop_reset_settings_clear_only_the_musical_memory() {
 }
 
 /// A reduced policy edit must govern expiry at the next Hub begin even when
-/// no source sends a note. Observe after expiry, rather than the old outline
-/// mailbox's pre-expiry snapshot, so one callback of stale policy fails.
+/// no source sends a note. Observe after expiry, so one callback of stale
+/// policy fails.
 #[test]
 fn silence_policy_edits_apply_before_expiry_without_note_input() {
     let _scope = crate::test_scope::enter();
@@ -626,11 +636,11 @@ fn production_repeating_the_note_struck_last_weighs_as_holding_it() {
     assert_eq!(context(true), context(false));
 }
 
-/// The journey the old eight-bit coordinate and 2,147-cent correction limits
-/// used to stop. Nothing here is about the transport; it is the one musical
-/// case that proves the representation is still wide enough.
+/// A journey of 303 major thirds, past an eight-bit coordinate and a
+/// 2,147-cent correction. Nothing here is about the transport; it is the one
+/// musical case that proves the representation is wide enough.
 #[test]
-fn production_moving_major_thirds_cross_old_coordinate_and_correction_limits() {
+fn production_moving_major_thirds_travel_hundreds_of_nodes_from_the_origin() {
     let _scope = crate::test_scope::enter();
     let mut phrase = Phrase::new();
     // A chord every ten callbacks, 116 ms. Released memory fades by time
@@ -728,6 +738,63 @@ fn production_a_loop_clears_released_memory_once_before_the_next_attack() {
         } else {
             assert_ne!(after, Some(LatticePos::ORIGIN), "without the control it keeps travelling");
         }
+        phrase.release_all();
+    }
+}
+
+/// A seek is a song position that neither held still nor advanced with the
+/// samples. Each case plays moving thirds, moves the transport, and then an
+/// attack: a seek clears the history before it, anything else keeps it. Each
+/// callback here is 11.6 ms, past the 2 ms either way the rule allows.
+#[test]
+fn a_seek_is_a_position_that_neither_held_still_nor_advanced_with_the_samples() {
+    let _scope = crate::test_scope::enter();
+    let step = 512.0 / 44100.0;
+    // (case, transport moves as seconds and playing, whether it is a seek)
+    type Case = (&'static str, Vec<(f64, bool)>, bool);
+    let cases: [Case; 4] = [
+        ("parked still", vec![(5.0, false); 3], false),
+        ("parked, then moved", vec![(5.0, false), (5.0, false), (1.0, false)], true),
+        (
+            "stopped back where play began",
+            vec![(5.0, true), (5.0 + step, true), (4.0, false)],
+            true,
+        ),
+        (
+            "stopped, its position climbing",
+            vec![(5.0, false), (5.0 + step, false), (5.0 + 2.0 * step, false)],
+            false,
+        ),
+    ];
+    for (case, moves, seek) in cases {
+        let mut phrase = Phrase::new();
+        let policy = PolicyConfig {
+            reset_loop: true,
+            reset_stop: false,
+            half_life_ms: 50,
+            ..Default::default()
+        };
+        configure_policy(&phrase.hub, policy);
+        phrase.idle();
+        // Moving thirds, so a kept memory is told apart from a cleared one.
+        for root in [48, 52, 56] {
+            let chord = vec![
+                note(1, 0, root, 0, true),
+                note(2, 0, root + 4, 1, true),
+                note(3, 0, root + 7, 2, true),
+            ];
+            phrase.step([chord, vec![], vec![]], [0, 1, 2]);
+            phrase.idle();
+            phrase.release_all();
+        }
+        for (seconds, playing) in moves {
+            phrase.transport_all(|| at(seconds, playing));
+        }
+        let chord = vec![note(1, 0, 48, 0, true), note(2, 0, 52, 1, true), note(3, 0, 55, 2, true)];
+        phrase.step([chord, vec![], vec![]], [0, 1, 2]);
+        phrase.idle();
+        let after = phrase.voice(0, 48, 0).attack_node;
+        assert_eq!(after == Some(LatticePos::ORIGIN), seek, "{case}: {after:?}");
         phrase.release_all();
     }
 }
@@ -885,12 +952,11 @@ fn production_musical_nonjust_axes_select_locally_and_preserve_attack_expression
 }
 
 /// The other half of the lane contract. A lane that refuses a snapshot must
-/// not hold back the lane that would take it, and must not spend the identity
-/// it refused: a retry under an id the other lane has already seen is dropped
-/// as a duplicate, silently. The fixture stops draining the display and keeps
-/// draining the take, so the refusal is on the display and the take is whole.
+/// not hold back the lane that would take it. The fixture stops draining the
+/// display and keeps draining the take, so the refusal is on the display and
+/// the take is whole.
 #[test]
-fn a_snapshot_one_lane_refused_does_not_freeze_the_other_lanes_identity() {
+fn a_snapshot_one_lane_refused_still_reaches_the_other_lane() {
     use harmonigraph_take::CanonicalRecord;
     let _scope = crate::test_scope::enter();
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
@@ -907,7 +973,7 @@ fn a_snapshot_one_lane_refused_does_not_freeze_the_other_lanes_identity() {
     // the end while the writer keeps up.
     const RESETS: usize = 30;
     for _ in 0..RESETS {
-        phrase.hub.shared().request_reset();
+        session::session().request_reset();
         phrase.hub.main();
         for _ in 0..4 {
             phrase.idle();
@@ -915,33 +981,24 @@ fn a_snapshot_one_lane_refused_does_not_freeze_the_other_lanes_identity() {
         }
     }
     writer.drain(&mut capture);
-    let of_source = |records: &[CanonicalRecord], source: u64| -> Vec<u64> {
+    let of_source = |records: &[CanonicalRecord], source: u64| {
         records
             .iter()
-            .filter_map(|record| match record {
-                CanonicalRecord::Baseline(frame) => frame.baseline().ok(),
-                _ => None,
-            })
-            .filter(|frame| frame.source.0 == source)
-            .map(|frame| frame.id)
-            .collect()
+            .filter(|record| matches!(record, CanonicalRecord::Baseline(f) if f.source == source))
+            .count()
     };
     let take = harmonigraph_take::Take::read(&path).unwrap();
     let written = of_source(&take.events, 1);
     let displayed = of_source(&capture.display_events(), 1);
     assert!(
-        displayed.len() < RESETS,
+        displayed < RESETS,
         "the fixture must actually reach a refusal on the display: {} of {RESETS}",
-        displayed.len()
+        displayed
     );
     assert!(
-        written.len() >= RESETS,
+        written >= RESETS,
         "every refresh the row owed reached the take: {} of {RESETS}",
-        written.len()
-    );
-    assert!(
-        written.windows(2).all(|pair| pair[1] > pair[0]),
-        "each one under a fresh identity, so none is deduplicated away"
+        written
     );
     phrase.release_all();
     drop(writer);

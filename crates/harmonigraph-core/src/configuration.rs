@@ -60,11 +60,13 @@ impl PolicyConfig {
         self.keyboard = self.keyboard.map(|v| v.clamp(0, 1_200_000_000));
         self
     }
-    /// Fixed configuration mailbox representation, shared by edits and snapshots.
-    /// The reset flags take bits 26 and 27 of the second word.
-    pub fn words(self) -> [i32; 10] {
+    /// Words [`Self::words`] takes.
+    pub const WORDS: usize = 9;
+    /// The policy as the settings seqlock carries it, one word per field but
+    /// the first, which packs the radius, the axes and the two reset flags
+    /// (bits 26 and 27).
+    pub fn words(self) -> [i32; Self::WORDS] {
         [
-            3,
             i32::from(self.radius)
                 | i32::from(self.axes) << 8
                 | i32::from(self.reset_stop) << 26
@@ -79,126 +81,20 @@ impl PolicyConfig {
             self.keyboard[2],
         ]
     }
-    pub fn from_words(w: [i32; 10]) -> Self {
+    pub fn from_words(w: [i32; Self::WORDS]) -> Self {
         Self {
-            radius: w[1] as u8,
-            axes: (w[1] >> 8) as u8,
-            reset_stop: w[1] & (1 << 26) != 0,
-            reset_loop: w[1] & (1 << 27) != 0,
-            pitch_flexibility: w[2].clamp(1, 100) as u16,
-            half_life_ms: w[3] as u16,
-            register: w[4] as u16,
-            tolerance: w[5].max(0) as u32,
-            silence_ms: w[6].max(0) as u32,
-            keyboard: [w[7], w[8], w[9]],
+            radius: w[0] as u8,
+            axes: (w[0] >> 8) as u8,
+            reset_stop: w[0] & (1 << 26) != 0,
+            reset_loop: w[0] & (1 << 27) != 0,
+            pitch_flexibility: w[1].clamp(1, 100) as u16,
+            half_life_ms: w[2] as u16,
+            register: w[3] as u16,
+            tolerance: w[4].max(0) as u32,
+            silence_ms: w[5].max(0) as u32,
+            keyboard: [w[6], w[7], w[8]],
         }
         .sanitize()
-    }
-}
-
-/// Intent from a possibly stale display. Only selected fields replace the
-/// owner's values; snapshots and restores still carry a complete policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PolicyEdit {
-    values: PolicyConfig,
-    mask: u16,
-}
-
-impl PolicyEdit {
-    const ALL: u16 = (1 << 12) - 1;
-    const DERIVE_KEYBOARD: u16 = 1 << 12;
-
-    pub fn changed(before: PolicyConfig, after: PolicyConfig) -> Self {
-        let values = after.sanitize();
-        let changed = [
-            before.radius != values.radius,
-            before.axes != values.axes,
-            before.pitch_flexibility != values.pitch_flexibility,
-            before.half_life_ms != values.half_life_ms,
-            before.register != values.register,
-            before.tolerance != values.tolerance,
-            before.silence_ms != values.silence_ms,
-            before.reset_stop != values.reset_stop,
-            before.reset_loop != values.reset_loop,
-            before.keyboard[0] != values.keyboard[0],
-            before.keyboard[1] != values.keyboard[1],
-            before.keyboard[2] != values.keyboard[2],
-        ];
-        let mask = changed
-            .into_iter()
-            .enumerate()
-            .fold(0, |mask, (i, changed)| mask | (u16::from(changed) << i));
-        Self { values, mask }
-    }
-
-    /// Complete synchronous adoption, not an edit from an observed UI value.
-    pub fn all(values: PolicyConfig) -> Self {
-        Self { values, mask: Self::ALL }
-    }
-
-    /// Derive from the owner's fifth after applying this transaction's fields.
-    /// An explicit click remains an action even if the display looks derived.
-    pub fn derive_keyboard(mut self) -> Self {
-        self.mask |= Self::DERIVE_KEYBOARD;
-        self
-    }
-
-    pub fn is_empty(self) -> bool {
-        self.mask == 0
-    }
-
-    /// The mask occupies an otherwise unused word in the existing mailbox.
-    pub fn words(self) -> (i32, [i32; 10]) {
-        (i32::from(self.mask), self.values.sanitize().words())
-    }
-
-    pub fn from_words(mask: i32, values: [i32; 10]) -> Self {
-        Self {
-            values: PolicyConfig::from_words(values),
-            mask: mask as u16 & (Self::ALL | Self::DERIVE_KEYBOARD),
-        }
-    }
-
-    pub fn apply_to(self, current: &mut PolicyConfig) {
-        if self.is_empty() {
-            return;
-        }
-        if self.mask & 1 != 0 {
-            current.radius = self.values.radius;
-        }
-        if self.mask & (1 << 1) != 0 {
-            current.axes = self.values.axes;
-        }
-        if self.mask & (1 << 2) != 0 {
-            current.pitch_flexibility = self.values.pitch_flexibility;
-        }
-        if self.mask & (1 << 3) != 0 {
-            current.half_life_ms = self.values.half_life_ms;
-        }
-        if self.mask & (1 << 4) != 0 {
-            current.register = self.values.register;
-        }
-        if self.mask & (1 << 5) != 0 {
-            current.tolerance = self.values.tolerance;
-        }
-        if self.mask & (1 << 6) != 0 {
-            current.silence_ms = self.values.silence_ms;
-        }
-        if self.mask & (1 << 7) != 0 {
-            current.reset_stop = self.values.reset_stop;
-        }
-        if self.mask & (1 << 8) != 0 {
-            current.reset_loop = self.values.reset_loop;
-        }
-        for i in 0..3 {
-            if self.mask & (1 << (9 + i)) != 0 {
-                current.keyboard[i] = self.values.keyboard[i];
-            }
-        }
-        *current = current.sanitize();
-        if self.mask & Self::DERIVE_KEYBOARD != 0 {
-            current.keyboard = crate::tuning::fifth_generated(current.keyboard[0]);
-        }
     }
 }
 
@@ -283,7 +179,8 @@ pub struct ConfigEdit {
     pub axes: [Option<i32>; 5],
     pub tempered: [Option<bool>; Comma::COUNT],
     pub learning: Option<bool>,
-    pub policy: Option<PolicyEdit>,
+    /// The whole adaptive policy, as the editor shows it.
+    pub policy: Option<PolicyConfig>,
 }
 
 impl ConfigEdit {
@@ -393,7 +290,7 @@ impl ConfigReducer {
             }
             ConfigMutation::Edit(edit) => {
                 if let Some(policy) = edit.policy {
-                    policy.apply_to(&mut self.resolved.policy);
+                    self.resolved.policy = policy.sanitize();
                 }
                 let mut axes = self.raw.axes();
                 for axis in TuningAxis::ALL {
@@ -497,25 +394,6 @@ const _: () = assert!(std::mem::align_of::<ResolvedConfig>() <= 8);
 mod tests {
     use super::*;
     use crate::tuning::{microcents, FIVE_JUST, THREE_JUST};
-
-    #[test]
-    fn a_stale_policy_edit_preserves_the_keyboard_learned_since_observation() {
-        let mut reducer = ConfigReducer::default();
-        let observed = reducer.resolved().policy;
-        let edit =
-            PolicyEdit::changed(observed, PolicyConfig { pitch_flexibility: 37, ..observed });
-        reducer.apply(ConfigMutation::LearnResolved {
-            learned: LearnedTuning { three: Some(696.578), ..Default::default() },
-            retuning: true,
-        });
-        let learned = reducer.resolved();
-        assert_ne!(learned.policy.keyboard, observed.keyboard);
-        reducer
-            .apply(ConfigMutation::Edit(ConfigEdit { policy: Some(edit), ..Default::default() }));
-        assert_eq!(reducer.resolved().policy.keyboard, learned.policy.keyboard);
-        assert_eq!(reducer.resolved().policy.pitch_flexibility, 37);
-        assert_eq!(reducer.resolved().revision, learned.revision + 1);
-    }
 
     fn enter(reducer: &mut ConfigReducer, index: usize, cents: f32) {
         let edit = ConfigEdit::axis(TuningAxis::ALL[index], microcents(cents));

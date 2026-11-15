@@ -114,9 +114,6 @@ pub(crate) fn assemble(
                         None => run.start + run.offset - voice.actual_onset,
                     };
                     voice.actual_onset += shift;
-                    if let Some(assignment) = &mut voice.assignment {
-                        assignment.t = voice.actual_onset;
-                    }
                 }
                 events.push((CanonicalRecord::Baseline(frame), line));
             }
@@ -126,7 +123,9 @@ pub(crate) fn assemble(
     finish(take, events)
 }
 
-/// Sort by time, and refuse what no stable sort can make a valid history.
+/// Sort by time, and refuse what no stable sort can make a valid history: a
+/// take whose records break their source's order (`CanonicalOrder`), as one
+/// does when a Tune's delay is lowered while it records.
 ///
 /// Stable, so simultaneous events keep the order they were played in
 /// (note-off before the note-on that replaces it, and so on). Within a source
@@ -135,9 +134,11 @@ pub(crate) fn assemble(
 /// what it covers.
 fn finish(mut take: Take, mut events: Vec<(CanonicalRecord, usize)>) -> Result<Take, ReadError> {
     events.sort_by(|(a, _), (b, _)| a.time().total_cmp(&b.time()));
-    let mut validation = harmonigraph_core::canonical::CanonicalOrder::default();
+    let mut order = harmonigraph_core::canonical::CanonicalOrder::default();
     for (record, line) in events {
-        record.check_order(&mut validation).map_err(|_| ReadError::InvalidCanonical(line))?;
+        if !record.ordered(&mut order) {
+            return Err(ReadError::OutOfOrder(line));
+        }
         take.events.push(record);
     }
     take.params.sort_by(|a, b| a.t.total_cmp(&b.t));

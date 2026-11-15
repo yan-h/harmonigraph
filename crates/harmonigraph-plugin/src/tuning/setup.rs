@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use super::session;
 
 /// The Tuning delay setting, as multiplier, samples and milliseconds together.
-/// `active` is what this activation adopted and `requested` what the parameter
+/// `active` is what this activation adopted and `requested` what the setting
 /// now says; they differ exactly while a latency change waits for the host to
 /// reactivate, which is the only moment the two numbers are worth showing.
 pub fn delay_text(requested: u32, active: u32, frames: u32, rate: f64) -> String {
@@ -70,24 +70,23 @@ pub struct Shared {
     pub notes_out: AtomicU64,
     pub last_input: AtomicI64,
     pub last_output: AtomicI64,
+    /// The saved Tuning delay, in buffers. A Tune adopts it at activation and
+    /// reports the latency it implies; the Hub's own input has no delay.
     pub requested_multiplier: AtomicU32,
-    pending_multiplier: AtomicU32,
     pub(super) diagnostics: super::diagnostics::Shared,
-    /// The Reset counter the editor bumps
-    /// and the audio owner turns into one cut for the session.
-    reset: AtomicU64,
     wake: OnceLock<Arc<dyn Fn() + Send + Sync>>,
     dirty: AtomicBool,
     pub status: AtomicU32,
     /// The multiplier this activation adopted; zero until the first one. The
-    /// parameter holds what is requested, so the pair is what the display
+    /// setting holds what is requested, so the pair is what the display
     /// compares while a latency change waits for the host.
     pub active_multiplier: AtomicU32,
     /// The host format this activation advertised, for the delay display. Zero
     /// frames means no activation has been seen yet.
     pub active_frames: AtomicU32,
     active_rate: AtomicU64,
-    /// Onsets this instance emitted without a correction, since its last cut.
+    /// Onsets this instance emitted without a correction, since the last cut
+    /// that was not a transport Stop's.
     pub misses: AtomicU64,
     hub: bool,
 }
@@ -114,9 +113,7 @@ impl Shared {
             last_input: AtomicI64::new(i64::MIN),
             last_output: AtomicI64::new(i64::MIN),
             requested_multiplier: AtomicU32::new(1),
-            pending_multiplier: AtomicU32::new(0),
             diagnostics: super::diagnostics::Shared::new(hub),
-            reset: AtomicU64::new(0),
             wake: OnceLock::new(),
             dirty: AtomicBool::new(false),
             status: AtomicU32::new(0),
@@ -138,10 +135,13 @@ impl Shared {
         self.dirty.store(true, Ordering::Release);
         self.request_main();
     }
-    pub fn set_retune(&self, value: bool) {
+    fn store_retune(&self, value: bool) {
         let _ = self.retune.try_update(Ordering::AcqRel, Ordering::Acquire, |old| {
             ((old & 1 != 0) != value).then_some(((old & !1) + 2) | u64::from(value))
         });
+    }
+    pub fn set_retune(&self, value: bool) {
+        self.store_retune(value);
         self.publish_controls();
         self.changed();
     }
@@ -173,16 +173,20 @@ impl Shared {
             format!("Tune {}", self.instance_id.load(Ordering::Acquire))
         }
     }
-    pub fn set_name(&self, value: String) {
+    fn store_name(&self, value: String) {
         *self.name.lock().unwrap() = value.chars().take(80).collect();
+    }
+    pub fn set_name(&self, value: String) {
+        self.store_name(value);
         self.changed();
     }
+    /// A saved setting, so the project is marked modified. The latency it
+    /// implies is reported from the Tune's own process callback, which is what
+    /// asks the host to reactivate it.
     pub fn request_delay(&self, value: u32) {
         if !self.hub {
-            let value = value.clamp(1, super::DELAY_MULTIPLIER_MAX as u32);
-            self.requested_multiplier.store(value, Ordering::Release);
-            self.pending_multiplier.store(value, Ordering::Release);
-            self.request_main();
+            self.requested_multiplier.store(clamp_delay(value), Ordering::Release);
+            self.changed();
         }
     }
     /// Sample rate and maximum callback size, as this activation advertised.
@@ -195,18 +199,6 @@ impl Shared {
     pub fn is_hub(&self) -> bool {
         self.hub
     }
-    /// The editor's Reset. Clear the musical context and re-pair, which the
-    /// audio owner performs as one cut across every row.
-    pub fn request_reset(&self) {
-        self.reset.fetch_add(1, Ordering::AcqRel);
-        self.dirty.store(true, Ordering::Release);
-        self.request_main();
-    }
-    /// The generation an audio owner compares against its own. A change is a
-    /// Reset; there is no acknowledgement and nothing to wait for.
-    pub fn reset_generation(&self) -> u64 {
-        self.reset.load(Ordering::Acquire)
-    }
     pub fn status(&self) -> u32 {
         self.status.load(Ordering::Acquire)
     }
@@ -215,16 +207,14 @@ impl Shared {
             wake();
         }
     }
-    fn pending_delay(&self) -> Option<u32> {
-        let requested = self.pending_multiplier.swap(0, Ordering::AcqRel);
-        (requested != 0).then_some(requested)
-    }
 }
 
-/// Arc adapter, so the wrapper's main-thread service reaches this instance. A
-/// Tune also hands over its delay parameter so a central timing edit is saved
-/// and reported to that instance's own host.
-pub struct Adapter(pub Arc<Shared>, pub Option<Arc<super::plugin::TuneParams>>);
+pub(super) fn clamp_delay(value: u32) -> u32 {
+    value.clamp(1, super::DELAY_MULTIPLIER_MAX as u32)
+}
+
+/// Arc adapter, so the wrapper's main-thread service reaches this instance.
+pub struct Adapter(pub Arc<Shared>);
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -232,18 +222,30 @@ struct InstanceSettings {
     retune: bool,
     show: bool,
     name: String,
+    /// A Tune's Tuning delay, in buffers. The Hub's own input has none, and
+    /// saves none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delay: Option<u32>,
 }
 impl Default for InstanceSettings {
     fn default() -> Self {
-        Self { retune: true, show: true, name: String::new() }
+        Self { retune: true, show: true, name: String::new(), delay: None }
     }
 }
 struct Restore(Arc<Shared>, InstanceSettings);
 impl Prepared for Restore {
+    /// What the project holds, stored without the edit setters' `changed()`:
+    /// opening a project is not a change to it.
     fn commit(self: Box<Self>) {
-        self.0.set_retune(self.1.retune);
-        self.0.set_show(self.1.show);
-        self.0.set_name(self.1.name);
+        let Self(shared, settings) = *self;
+        shared.store_retune(settings.retune);
+        shared.show.store(settings.show, Ordering::Release);
+        shared.store_name(settings.name);
+        if !shared.hub {
+            let delay = clamp_delay(settings.delay.unwrap_or(1));
+            shared.requested_multiplier.store(delay, Ordering::Release);
+        }
+        shared.publish_controls();
     }
 }
 
@@ -253,10 +255,18 @@ impl Setup for Adapter {
     }
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
         let settings = match state.fields.get("tuning-instance") {
-            Some(json) => serde_json::from_str(json).map_err(|error| {
-                nice_plug::nice_error!("Tuning instance settings refused: {error}");
-                "invalid tuning instance settings"
-            })?,
+            Some(json) => {
+                let settings: InstanceSettings = serde_json::from_str(json).map_err(|error| {
+                    nice_plug::nice_error!("Tuning instance settings refused: {error}");
+                    "invalid tuning instance settings"
+                })?;
+                if !self.0.is_hub() && settings.delay.is_none() {
+                    nice_plug::nice_warn!(
+                        "This Tune's settings hold no Tuning delay; it opens at 1x"
+                    );
+                }
+                settings
+            }
             // Nothing saved: the Hub's own input starts with Retune off, a Tune on.
             None => InstanceSettings { retune: !self.0.is_hub(), ..Default::default() },
         };
@@ -267,6 +277,7 @@ impl Setup for Adapter {
             retune: self.0.retuning() & 1 != 0,
             show: self.0.show.load(Ordering::Acquire),
             name: self.0.name.lock().unwrap().clone(),
+            delay: (!self.0.is_hub()).then(|| self.0.requested_multiplier.load(Ordering::Acquire)),
         };
         state
             .fields
@@ -277,41 +288,7 @@ impl Setup for Adapter {
     }
     fn service(&self) -> Serviced {
         self.0.diagnostics.log(&self.0);
-        let adopted = self.adopt_requested_delay();
-        if let Some(params) = &self.1 {
-            self.0
-                .requested_multiplier
-                .store(params.delay.value().max(1) as u32, Ordering::Release);
-        }
-        let dirty = self.0.dirty.swap(false, Ordering::AcqRel);
-        Serviced { modified: dirty || adopted, values: adopted, text: false }
-    }
-}
-
-impl Adapter {
-    /// Take a Hub's "apply to all" request, if there is one. Writing the
-    /// parameter here and reporting it as a value change and a modified
-    /// project is exactly what the host needs to hear, so the value the
-    /// project saves is the value on screen. The latency that follows is
-    /// reported from this Tune's own process callback, which is what asks the
-    /// host to reactivate it.
-    fn adopt_requested_delay(&self) -> bool {
-        let Some(params) = &self.1 else { return false };
-        let Some(requested) = self.0.pending_delay() else { return false };
-        let plain = (requested as i32).clamp(1, super::DELAY_MULTIPLIER_MAX);
-        if plain == params.delay.value() {
-            return false;
-        }
-        // SAFETY: the pointer is into `params`, which this adapter keeps alive
-        // for as long as the plugin instance, and the write is the same atomic
-        // store the wrapper makes for a host parameter event.
-        use nice_plug::prelude::Param;
-        unsafe {
-            params
-                .delay
-                .as_ptr()
-                ._internal_set_normalized_value(Param::preview_normalized(&params.delay, plain));
-        }
-        true
+        let modified = self.0.dirty.swap(false, Ordering::AcqRel);
+        Serviced { modified, values: false, text: false }
     }
 }
