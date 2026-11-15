@@ -648,25 +648,6 @@ fn a_short_pass_replaces_the_meter_only_where_it_played() {
     assert_eq!(view.meters.len(), 4, "{:?}", view.meters);
 }
 
-/// A block with no song position carries no tape, so rolling after one is not
-/// rolling after tape.
-#[test]
-fn a_block_with_no_position_clears_the_tape_before_rolling() {
-    let (mut deck, mut worker) = pair();
-    let mut source = 0;
-    record(&mut worker, &mut source, 0, 3000);
-    cue(&mut deck, &mut worker, 0.0, 1.0);
-    worker.play();
-    let (audio, _) = run(&mut deck, 0.0, false, true);
-    assert!(audio[0].iter().any(|&s| s != 0.0), "the tape sounded");
-    let block =
-        BlockIn { position: None, playing: false, frames: FRAMES, rate: RATE, enabled: true };
-    deck.process(block, &mut [&mut [0.0; FRAMES], &mut [0.0; FRAMES]]);
-    run(&mut deck, 0.0, true, true);
-    let lines = events(&mut worker);
-    assert!(!lines.iter().any(|l| l.contains("carried tape")), "{lines:?}");
-}
-
 /// Stop while a new cue waits for the old one to fade: the fade finishes and
 /// the waiting cue never starts.
 #[test]

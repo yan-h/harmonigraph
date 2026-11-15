@@ -202,9 +202,6 @@ impl Deck {
             // No song position, no tape: nothing to key a recording on, and
             // nothing to say where a cue would play from.
             self.end(Reason::NoPosition);
-            self.pending = None;
-            self.last = None;
-            self.mixed = false;
             self.publish(None, false);
             return BlockOut { song: None, sounding: false, play: TapePlay::Idle };
         };
