@@ -45,3 +45,12 @@
 - Takes recorded before take v7, the 2026-11-04 one included, are not converted: they render only with a renderer from before the cut (`c423bf44`). #1760 Q3
 - Behaviour holds only at the end: the reader and the cut to v7 are one PR. #1760 Q4
 - A failed take warns on every pass, an earlier whole one included: the `PassClosed` record that kept a pass closed before the failure whole is dropped, with the proof that wrote it. Gaps still mark only the passes their inputs touch. #1766
+
+## 2026-11-14 (take v8, F3′ simplified; tracked in #1760 and #1761)
+
+Yan approved a search's three relaxations; each supersedes part of the entry above.
+
+- R1: a record is placed by when it sounds, not where its input arrived. It supersedes step 1′'s input-placement rule and the routing in #1760 Q1. A note or release within about one delay of a pause or the take's end is drawn where it sounds, or dropped when no audio was recorded there.
+- R2: the writer decides when a take is closed, behind one frontier the audio thread publishes each callback, rather than a proof on the audio thread. A flood of more than one batch in the callback that stops a take can lose its tail without a warning. A plugin destroyed mid-take fails the take.
+- R3: a take is one WAV with no passes. It supersedes `--pass N`: a looped take renders all its loops as one video, and `--start` picks out the last. #1766's failure-marks-every-pass rule becomes the plain rule that a failure marks the take.
+- Takes v7 and older stop loading, with no converter.

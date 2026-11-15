@@ -39,7 +39,7 @@ cargo build --release -p harmonigraph-offline
 
 ## Saved appearance
 
-Takes use format v7 and carry a version-1 appearance document captured when recording is armed.
+Takes use format v8 and carry a version-1 appearance document captured when recording is armed.
 It contains camera, view, spectrum and the whole video configuration;
 dock layout, selected editor page, the Spiral's framing and other workspace settings stay in the editor save.
 Automatic export uses that recorded appearance, including the captured Aspect and Output size.
@@ -68,11 +68,8 @@ It replaces the recorded document completely;
 `--size` and other explicit output flags retain their precedence.
 
 Editor saves below version 7 are refused whole and a fresh instance opens at defaults, with a console message.
-Take formats v1–v6 are refused with a version error and must be recorded again.
-A v7 take holding a `PassClosed(n)` line,
-which every take from the #1765 build (`3527f4bf`) that split into passes holds,
-is refused at that line since #1766 dropped the record;
-`grep -v '^PassClosed(' old.take > new.take` repairs it.
+Take formats v1–v7 are refused with a version error and must be recorded again;
+there is no converter.
 An unreadable or unsupported selected appearance document refuses the export with an error on stderr.
 A valid replacement overrides the recorded document completely.
 A missing recorded appearance or missing settings groups use their normal defaults.
@@ -129,7 +126,7 @@ so arming part-way into a song still lines the sound up with the picture, in bot
 
 Three things to know:
 
-- **Nothing is recorded until the transport rolls.** A pass starts at the *transport position*,
+- **Nothing is recorded until the transport rolls.** A take starts at the *transport position*,
 and the notes after that follow the audio recorded with them,
 so notes and audio line up automatically —
 no offset to work out, across a pause too.
@@ -177,7 +174,7 @@ A larger forward/back scrub before playback contributes nothing and leaves the t
 
 And the take ends where the host puts the playhead BACK, not merely where the transport goes quiet.
 Bitwig restores it the moment an export finishes, which lands in the plugin as one backward block;
-a take still armed at that point goes on to record whatever plays next into a fresh pass, and it is the last pass that renders.
+a take still armed at that point goes on to record whatever plays next after the export it holds.
 That is how an 82-second export came out as a 63 KB video of a 0.1-second fragment.
 Under *Transport stop* and *Loop end* a stopped backward step after accepted forward progress ends the take instead,
 including a restore after just one accepted callback.
@@ -188,16 +185,9 @@ Playing hosts retain a 50 ms backward jitter allowance for loop detection.
 A forward jump more than 50 ms beyond the recorded audio's expected end also breaks continuity,
 including a seek made while stopped before playback resumes.
 Under *Manually* or *At bar*,
-the next recorded block starts a new pass with its own WAV:
-`take-….wav` for the first, then `take-…-2.wav` and on.
-Every pass stays in the one take file.
-The latest recorded pass renders,
-including a pass containing audio without MIDI;
-`--pass N` renders an earlier one.
-A take that failed warns on every pass it holds,
-an earlier whole pass included:
-its failure names no pass (#1766).
-A gap in the note history warns only on the passes it touched.
+the take records on, the next block continuing its one WAV:
+a looped take renders all its loops, one after another, as one video;
+to render only the last, give `--start`.
 Under *Transport stop* or *Loop end*,
 the take finishes before the jump and the automatic render's export row says “take ended before a forward transport seek”.
 You can immediately record another take.
@@ -232,7 +222,7 @@ it does not need to draw every video frame to preserve those proportions.
 | Manually | you switch Record take off — predictable, and it works however the transport behaves |
 | Transport stop | the transport stops after something was recorded, goes backwards, or seeks forward beyond the recorded audio — whichever is first; recording disarms at the same moment |
 | Loop end | one arranger-loop pass, ending when the loop wraps or a forward seek breaks audio continuity. With looping off and no seek, it waits for a disarm |
-| At bar | the transport plays through the bar set beside it, ending there. A rewind or forward seek splits rather than ends, so the latest recorded pass renders |
+| At bar | the transport plays through the bar set beside it, ending there. A rewind or forward seek records on rather than ends |
 
 *Transport stop* is what makes **exporting audio produce a video with nothing further to click**:
 arm Record take, export, and both files land together.
@@ -314,17 +304,17 @@ The flags worth knowing (`--help` lists them all):
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |
-| `--pass` | which pass of the take to render; the last by default |
 | `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note, the appearance's **Tail** by default |
 | `--encoder` | `x264` or `hardware` — the appearance's **Encoder**, Hardware fresh; `--crf` applies to x264 only |
 | `--appearance` | use a different look than the one in the take |
 
 ### Where the video starts
 
-Take times are **song positions**: a pass starts at the host's transport position, and runs on with its own audio,
+Take times are **song positions**: a take starts at the host's transport position, and runs on with its own audio,
 so time zero is the song's start, not the record button's.
-After a pause the notes follow the audio rather than the playhead,
-so a `--start` or `--end` read off the DAW's timeline drifts by any parked block the take recorded.
+After a pause, a loop wrap or a seek the notes follow the audio rather than the playhead,
+so a `--start` or `--end` read off the DAW's timeline drifts by any parked block the take recorded,
+and past a loop wrap or seek it is the audio's own position.
 Play a passage from a minute into the arrangement and its first note lands at 60-odd seconds —
 so a render from zero opens with a minute of empty lattice, however little silence you heard before playing.
 
@@ -390,14 +380,13 @@ macOS plays AV1 natively only on M3 and later.
 
 ## Recorded audio
 
-The renderer uses the WAV the rendered pass names on its `Run` records, beside the `.take` file, for both spectrum analysis and the soundtrack.
-A looped take has one WAV per pass (`take-….wav`, `take-…-2.wav` and on);
-keep them all beside the `.take` file when moving a take.
+The renderer uses the WAV the take's header names, beside the `.take` file, for both spectrum analysis and the soundtrack;
+keep it beside the `.take` file when moving a take.
 If the named WAV is missing, the renderer warns and exports without audio or spectrum.
 Separate-WAV replacement is no longer supported;
 `-a` and `--audio` are rejected as unknown options.
 
-The pass's first `Run` gives its WAV's first sample a song time, so sound and picture align without an offset to work out.
+The take's first `Run` gives its WAV's first sample a song time, so sound and picture align without an offset to work out.
 A take with no `Run` starts at zero; manual alignment overrides are no longer supported.
 
 ## Layouts
