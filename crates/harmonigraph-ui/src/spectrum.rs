@@ -576,16 +576,33 @@ impl AudioSpectrum {
     /// but do not join the history, which the Clear was asked to empty of
     /// everything before it. A reset by the guard is not a Clear: the columns
     /// after it still join the history it started again.
+    ///
+    /// Whether it brought sound back to a spectrum that had gone still: a
+    /// column heard more than [`HOLD_SECONDS`](Self::HOLD_SECONDS) after the
+    /// one heard before it on the same reading, or the first. By then every
+    /// picture of it had stopped moving (the curve a hold after its last
+    /// heard column, the heatmap later still), so a still window has to be
+    /// asked to draw it. Sound that goes on asks nothing more: a picture
+    /// that shows it keeps the window drawing, and one that does not has
+    /// nothing new to draw.
     pub fn give(
         &mut self,
         clears: u32,
         deliveries: impl IntoIterator<Item = Delivery>,
         config: &SpectrumConfig,
-    ) {
+    ) -> bool {
         let keep = clears == self.clears();
+        let before = self.store.last_audible;
         for delivery in deliveries {
             self.store.apply(delivery, config, keep);
         }
+        let after = self.store.last_audible;
+        let resumed = |was: Option<f64>, heard: Option<f64>| match (was, heard) {
+            (_, None) => false,
+            (None, Some(_)) => true,
+            (Some(was), Some(heard)) => heard > was + Self::HOLD_SECONDS,
+        };
+        resumed(before.curve, after.curve) || resumed(before.column, after.column)
     }
 
     /// Keep one delivery as it is made: an inline shell's

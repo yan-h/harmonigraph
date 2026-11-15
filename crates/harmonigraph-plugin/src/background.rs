@@ -251,22 +251,36 @@ thread_local! {
 /// view in the first hold, and plays the notes of the tape the blocks just
 /// taken carried into the tracker there, on their audio's clock; its console
 /// lines wait for the second.
+///
+/// **A still window is asked to draw what a step started**
+/// ([`EguiState::request_pass`]): voices in a tracker that had none, played
+/// or from the tape, and sound after a still stretch. A still window runs no
+/// pass until something asks, so without this the first note after silence
+/// was drawn at its next idle poll, up to about 56 ms at 144 Hz. Only the
+/// start asks: once voices sound or a picture shows the sound moving, the
+/// window draws every refresh until they stop. What else a step changes (the
+/// tape's view, a Console line) is drawn at the idle poll.
 fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::Worker) {
-    let taken = {
+    let (taken, sounded) = {
         let mut guard = shared.lock();
         let shared = &mut *guard;
         let now = shared.input.now();
         let open = editor_state.is_open();
         let settings = &shared.ui.picture.appearance.spectrum;
         tape.exchange(&mut shared.ui.picture.runtime.tape, settings, open);
+        let silent = shared.ui.picture.runtime.tracker.voices().next().is_none();
         let taken =
             shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
         std::mem::swap(&mut shared.input.tape_notes, &mut tape.inbox);
         if let Some(taken) = &taken {
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
-        taken
+        (taken, silent && shared.ui.picture.runtime.tracker.voices().next().is_some())
     };
+    // Asked once the lock is let go, so the pass it runs does not wait on it.
+    if sounded {
+        editor_state.request_pass();
+    }
     if let Some(taken) = &taken {
         for (block, samples) in taken.blocks() {
             tape.capture(block, samples);
@@ -288,9 +302,8 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
     }
     let mut guard = shared.lock();
     let shared = &mut *guard;
-    if let Some(taken) = taken {
-        shared.input.give(&mut shared.ui.picture.runtime, taken);
-    }
+    let resumed =
+        taken.is_some_and(|taken| shared.input.give(&mut shared.ui.picture.runtime, taken));
     for line in tape.logs.drain(..) {
         shared.ui.picture.runtime.console.log(line);
     }
@@ -305,6 +318,10 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
         // noticed and no video was ever rendered. See
         // `EditorShared::poll_take_end`.
         shared.poll_take_end();
+    }
+    drop(guard);
+    if resumed {
+        editor_state.request_pass();
     }
 }
 
@@ -656,6 +673,29 @@ mod tests {
         h.step();
         assert!(h.columns() > 0, "the worker left the audio to a frame");
         assert_eq!(h.voices(), 1, "the worker left the notes to a frame");
+    }
+
+    /// A step that starts something in a still picture asks the open window
+    /// to draw it on its next frame: the first note into a silent tracker,
+    /// and the first sound after silence. One that adds to what already
+    /// sounds asks nothing more, since that picture draws every refresh.
+    #[test]
+    fn a_step_asks_the_window_to_draw_what_it_starts() {
+        let mut h = harness();
+        h.editor_state.set_open(true);
+        let asked = |h: &Harness| h.editor_state.pass_request.take();
+        h.push_note(1.0, 60);
+        h.step();
+        assert!(asked(&h), "the first note waited for the idle poll");
+        h.push_note(1.5, 64);
+        h.step();
+        assert!(!asked(&h), "a note beside a sounding one");
+        h.push_audio(20_000);
+        h.step();
+        assert!(asked(&h), "the first sound waited for the idle poll");
+        h.push_audio(20_000);
+        h.step();
+        assert!(!asked(&h), "sound that goes on");
     }
 
     /// A take ends itself with the window SHUT, which is the state a Bitwig

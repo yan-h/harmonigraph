@@ -753,6 +753,23 @@ fn the_guard_drops_a_column_at_or_just_before_the_newest() {
     assert_eq!(spectrum.pyramid().open_count(0), 1, "a dropped column was folded");
 }
 
+/// A hand-over says when it brings sound back to a still spectrum, which is
+/// when the plugin's input worker asks a still window to draw: the first
+/// column heard, and one heard more than a hold after the last; never
+/// silence, nor sound that goes on.
+#[test]
+fn a_hand_over_says_when_sound_comes_back() {
+    let cfg = SpectrumConfig::default();
+    let mut spectrum = AudioSpectrum::default();
+    let clears = spectrum.clears();
+    let step = AudioSpectrum::FFT_INTERVAL;
+    assert!(!spectrum.give(clears, [delivered(100.0, 0.0)], &cfg), "silence");
+    assert!(spectrum.give(clears, [delivered(100.0 + step, 1.0)], &cfg), "the first sound");
+    assert!(!spectrum.give(clears, [delivered(100.0 + 2.0 * step, 1.0)], &cfg), "sound going on");
+    let back = 100.0 + 2.0 * step + AudioSpectrum::HOLD_SECONDS + step;
+    assert!(spectrum.give(clears, [delivered(back, 1.0)], &cfg), "sound after a still stretch");
+}
+
 /// A column further back than a second resets the history and starts it
 /// again, counted, and so does a correct column after one dated an hour
 /// ahead, which would otherwise have every correct column dropped for an
