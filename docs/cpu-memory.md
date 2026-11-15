@@ -33,13 +33,13 @@ the total is checked against Bitwig's overlay below.
 
 | owner | MiB | what scales it | when | freed |
 |---|---:|---|---|---|
-| Spectrogram history (`SpectrumHistory`) | 53.6 | 7,336 columns × 7,656 B at the 610 s cap | grows with audio, editor open or not | never |
+| Spectrogram history (`SlabPyramid`) | 29.4 | 7,417 slabs × 3,844 B, each in a 4 KB block, and sixteen levels' f64 sums | grows with audio, editor open or not | never |
 | Recorder event ring (`harmonigraph_record`, `TAKE_RING_CAPACITY`) | 5.5 | 65,536 × 88 B | plugin construction | never |
 | Recorder audio ring (`AUDIO_RING_CAPACITY` there) | 4.0 | 2²⁰ × `f32` | plugin construction | never |
 | Recorder publication lanes, take and display | 2.1 | 2 × (4,096 items + 20 baselines) | plugin construction | never |
 | Tuning hub (`tuning::hub::Hub`) | 1.7 | per-row voice state, one `Tune`'s 8,192-entry delay line | plugin construction | never |
 | Spectrum ingress (`audio_ingress`) | 1.2 | 131,072-sample ring, its drain scratch, 4,096 block descriptors | plugin construction | never |
-| Spectrogram slab grid, per visible spectrogram (`SlabGrid`) | 4.1 | up to 1,032 slabs of 3,828 B, each in a 4 KB block | first drawn | never; it lives in `SharedState` |
+| Spectrogram run, per visible spectrogram (`FoldedGrid`) | under 0.1 | a pointer per slab of the pyramid it reads, and the open slab's copy | first drawn | never; it lives in `SharedState` |
 | egui font atlas and context | 2 | glyphs drawn | editor open | with the window |
 | Other editor state: mark atlas, lattice node buffers, egui-wgpu staging | the rest, ~5 | window size, visible nodes | editor open | partly |
 | Each Harmonigraph Tune instance | 0.6 | its 8,192-entry delay line | its construction | never |
@@ -49,13 +49,16 @@ History plus construction is 68.5 MiB,
 and the overlay's 80 (75–85) leaves about 7–17 for the editor.
 The editor's "the rest" is what that leaves after its measured rows, and is not measured by itself.
 
-**The history is three quarters of it.** It is 7,336 boxed columns of 3,828 bfloat16 bins.
-macOS rounds each 7,656-byte request up to 8,192 bytes, so it holds 60 MB resident for 53.6 MiB requested.
-The tiers reach (`SpectrumHistory`):
-2,048 columns at 8 ms, then 1,024 at each doubling, so 16 s, 33 s, 66 s, 131 s, 262 s, 524 s,
-and 168 columns of the last tier to reach 610 s.
-It fills only while audio arrives, at 125 columns a second at first and slower as the tiers merge,
-and reaches the cap at 610 s.
+**The history is the largest owner.** Since #1758 it is a slab pyramid, one level per rung of the heatmap's slab ladder, each slab a byte per bucket.
+Each level keeps 1,032 slabs or 610 s and three slabs, whichever is fewer:
+1,032 at the six finest levels (16 to 512 ms), then 599, 301, 152, 78, 41, 22, 13, 8, 6 and 5,
+7,417 slabs in all.
+macOS rounds each 3,844-byte slab up to 4,096 bytes, so a full pyramid holds 30.4 MB resident, and 0.5 MB of sums beside it (computed from the retention, and held under 31 MB by `the_full_retention_stays_under_31_mb`; not yet measured in a host).
+It fills only while audio arrives, and a run of silence shares one slab.
+
+Before #1758 the history was 7,336 boxed columns of 3,828 bfloat16 bins, 60 MB resident for 53.6 MiB requested,
+and each drawn surface folded a 4.1 MiB grid of its own out of it.
+The rest of this page measured that store.
 
 ## Growth
 
@@ -107,16 +110,14 @@ So the steady growth reported in #1511 is the history filling, and it stops at t
 
 ## Ranked by size
 
-1. **Spectrogram history, 53.6 MiB (60 MB resident).**
-   Its reach is a product decision (`HISTORY_MAX_SECONDS`, the roll's 600 s span plus headroom);
-   the last two tiers hold 262–610 s for 8.7 MiB, so halving the reach saves a sixth.
-   Storing each tier's columns in one contiguous ring instead of one box per column would drop the 7% malloc rounding (about 4 MB) and 7,336 allocations.
-   Halving the bytes per bin again is the only large lever, and it undoes what #1505 chose bfloat16 for.
+1. **Spectrogram history, 29.4 MiB (30.9 MB resident) since #1758; 53.6 MiB before it.**
+   Its reach is a product decision (`HISTORY_MAX_SECONDS`, the roll's 600 s span plus headroom),
+   and the six finest levels' 1,032-slab rings, 25.4 MB, are what the widest pane draws at short Spans.
 2. **Recorder rings, 11.7 MiB, held whether or not anything ever records.**
    They are built once in `Default` so arming never touches the audio thread's producer (`harmonigraph_record::channel`).
    Making them lazy would need a hand-off of a new producer to the audio thread;
    11.7 MiB does not obviously pay for that.
-3. **Editor state, about 10 MiB**, 4.1 of it a visible spectrogram's slab grid, the rest depending on window size and how many nodes are drawn;
+3. **Editor state, about 6 MiB** since #1758, which took a visible spectrogram's 4.1 MiB slab grid out of it, the rest depending on window size and how many nodes are drawn;
    the lattice node buffers grow toward the node cap and are kept at their largest (`LatticeFrames`).
 4. **Everything else is under 2 MiB each.**
 

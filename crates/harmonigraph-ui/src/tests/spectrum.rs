@@ -16,7 +16,8 @@ fn display_recovers_after_nonfinite_audio() {
     let n = config.window.frame(48_000.0);
     let mut poisoned = vec![0.0; n + 384];
     poisoned[n / 2] = f32::NAN;
-    spectrum.push_samples(&poisoned, 1, 48_000.0, 1.0, &config);
+    let mut feed = crate::spectrum::TestFeed::default();
+    let poisoned_columns = feed.feed(&mut spectrum, &poisoned, 1, 48_000.0, 1.0, &config);
     assert!(spectrum.display(1.0).unwrap().iter().all(|p| p.is_finite()));
 
     // Replace the entire FFT window and leave time for a complete clean hop.
@@ -25,13 +26,25 @@ fn display_recovers_after_nonfinite_audio() {
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
         .collect();
     let now = 1.0 + clean.len() as f64 / 48_000.0;
-    let columns = spectrum.push_samples(&clean, 1, 48_000.0, now, &config);
+    let columns = feed.feed(&mut spectrum, &clean, 1, 48_000.0, now, &config);
     let last = columns.last().expect("clean input emitted columns");
     assert!(last.power().iter().all(|p| p.is_finite()));
     assert!(last.power().iter().any(|p| *p > 0.01), "latest FFT measures the clean tone");
     let shown = spectrum.display(now).expect("clean input is flowing");
     assert!(shown.iter().all(|p| p.is_finite()));
     assert!(shown.iter().any(|p| *p > 0.01), "the curve recovers, not just the history");
+
+    // And the history: both batches share the coarsest level's open slab,
+    // which the poisoned window's columns did not poison.
+    assert!(!poisoned_columns.is_empty(), "the poisoned window made no column");
+    let coarsest = crate::spectrogram::LEVELS - 1;
+    let pyramid = spectrum.pyramid();
+    let both = (poisoned_columns.len() + columns.len()) as u64;
+    assert_eq!(pyramid.open_count(coarsest), both, "the two batches' columns share the slab");
+    let (_, slabs) = pyramid.level(coarsest);
+    let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
+        * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as usize;
+    assert!(slabs.last().unwrap()[a4] > 0, "the open slab lost the clean tone to the NaN");
 }
 
 #[test]
@@ -49,7 +62,7 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
         let sine: Vec<f32> = (0..window.frame(48_000.0) + 1000)
             .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
             .collect();
-        spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
+        crate::spectrum::heard_at(&mut spectrum, &sine, 1, 48_000.0, 1.0, &config);
         let levels = spectrum.display(1.0).expect("audio is flowing");
         let peak = levels
             .iter()
@@ -99,7 +112,7 @@ fn a_chord_fills_most_of_the_analyzers_height() {
         })
         .collect();
     let mut spectrum = AudioSpectrum::default();
-    spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
+    crate::spectrum::heard_at(&mut spectrum, &samples, 1, sr, 1.0, &cfg);
     let levels = spectrum.display(1.0).expect("audio is flowing");
 
     // The drawn height of the tallest bucket, through the same mapping the
@@ -150,10 +163,12 @@ fn a_bucket_rises_on_the_attack_and_falls_on_the_release() {
     let run = |attack: f32, release: f32| {
         let cfg = SpectrumConfig { attack, release, ..SpectrumConfig::default() };
         let mut spectrum = AudioSpectrum::default();
-        spectrum.push_samples(&tone, 1, sr, 1.0, &cfg);
+        let mut feed = crate::spectrum::TestFeed::default();
+        feed.feed(&mut spectrum, &tone, 1, sr, 1.0, &cfg);
         let lit = spectrum.display(1.0).expect("audio is flowing")[a4];
-        spectrum.push_samples(&silence, 1, sr, 2.0, &cfg);
-        let left = spectrum.display(2.0).expect("audio is still flowing")[a4];
+        let later = 1.0 + silence.len() as f64 / f64::from(sr);
+        feed.feed(&mut spectrum, &silence, 1, sr, later, &cfg);
+        let left = spectrum.display(later).expect("audio is still flowing")[a4];
         (lit, left)
     };
     let (quick_lit, slow_left) = run(0.010, 1.0);
@@ -169,44 +184,6 @@ fn a_bucket_rises_on_the_attack_and_falls_on_the_release() {
         "a 1 s Release left {slow_left:e} where a 10 ms Release left {quick_left:e}; \
          the falling bucket is not on the Release",
     );
-}
-
-#[test]
-fn spectrogram_history_stays_bounded() {
-    let bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
-
-    // Retention is span-INDEPENDENT: it must NOT track the current window, or
-    // shrinking the span pops history that widening it again can never recover
-    // (the "reducing then increasing span erases history" bug). Everything
-    // within HISTORY_MAX_SECONDS is kept no matter what the span is doing.
-    let mut spec = AudioSpectrum::default();
-    for i in 0..300 {
-        spec.push_history(i as f64, &bins);
-    }
-    assert_eq!(spec.history().front().unwrap().time, 0.0, "no column within the cap is dropped");
-    assert_eq!(spec.history().back().unwrap().time, 299.0, "newest kept");
-
-    // The retention never exceeds the hard age cap — the ceiling on how far
-    // back the heatmap can read.
-    let mut spec = AudioSpectrum::default();
-    for i in 0..800 {
-        spec.push_history(i as f64, &bins);
-    }
-    let cutoff = 799.0 - AudioSpectrum::HISTORY_MAX_SECONDS;
-    assert!(spec.history().front().unwrap().time >= cutoff, "capped at HISTORY_MAX_SECONDS");
-
-    // Memory holds when the dates barely advance, so the age trim never fires —
-    // the store's own tier caps are the backstop.
-    let mut spec = AudioSpectrum::default();
-    for i in 0..(SpectrumHistory::MAX_COLUMNS + 50) {
-        spec.push_history(i as f64 * 1e-6, &bins);
-    }
-    assert!(spec.history().len() <= SpectrumHistory::MAX_COLUMNS, "column count capped");
-
-    let epoch = spec.history_epoch();
-    spec.clear_history();
-    assert!(spec.history().is_empty());
-    assert_ne!(spec.history_epoch(), epoch, "a clear must reach the colour memory's key");
 }
 
 /// The live path stamps its columns the same way the offline one does, and
@@ -228,7 +205,7 @@ fn a_live_column_is_stamped_at_the_centre_of_its_window() {
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
         .collect();
     let now = 5.0;
-    spectrum.push_samples(&sine, 1, 48_000.0, now, &config);
+    crate::spectrum::heard_at(&mut spectrum, &sine, 1, 48_000.0, now, &config);
     spectrum.display(now).expect("audio is flowing");
 
     // Where the window's weight is centred: about a third of the Fast frame
@@ -310,7 +287,7 @@ fn stereo_analysis_preserves_an_antiphase_partial() {
 
     // Live: one batch, dated so the newest frame sits at the end of the second.
     let mut spectrum = AudioSpectrum::default();
-    let live = spectrum.push_samples(&samples, 2, sr, span, &cfg);
+    let live = crate::spectrum::heard_at(&mut spectrum, &samples, 2, sr, span, &cfg);
 
     assert!(live.len() > 50, "only {} live columns for a second of audio", live.len());
     let bucket_of = |hz: f32| {
@@ -332,55 +309,6 @@ fn stereo_analysis_preserves_an_antiphase_partial() {
         loudest(bucket_of(a4)),
         loudest(bucket_of(e5)),
     );
-}
-
-/// The store has to be sized for the retention policy above it: every second
-/// inside `HISTORY_MAX_SECONDS` must have columns to draw, or a long span shows
-/// a heatmap that stops partway and bare roll beyond it (which is exactly what
-/// a fixed-rate ring does — 160 MB buys 3.5 minutes of a 10 minute span).
-/// Raising the cap means adding a tier; this is what says so.
-#[test]
-fn spectrum_history_reaches_the_retention_cap() {
-    let reach = SpectrumHistory::reach(AudioSpectrum::FFT_INTERVAL);
-    assert!(
-        reach >= AudioSpectrum::HISTORY_MAX_SECONDS,
-        "history reaches {reach:.0} s, retention asks for {:.0} s — add a tier",
-        AudioSpectrum::HISTORY_MAX_SECONDS,
-    );
-}
-
-/// The bargain the tiers are struck on: a column of age `a` is only ever drawn
-/// when the window is at least `a` long, and a window is cut into at most
-/// `LIVE_SLAB_CAP` slabs — so nothing needs storing finer than `a / cap`. Every
-/// tier must stay on the right side of that, or its columns land more than a
-/// slab apart and the heatmap grows stripes of false silence between them.
-///
-/// This is the test to look at if the tier sizes, the FFT rate, or the slab cap
-/// ever move: they are three legs of one stool.
-///
-/// The display now picks its slab off the same power-of-two ladder the tiers
-/// merge on (`live_slab`), so the two round to the same rung rather than merely
-/// bounding each other — but the bargain is what makes that ladder the right
-/// one, so it is still worth stating against the real function.
-#[test]
-fn stored_columns_stay_finer_than_the_slabs_they_are_drawn_into() {
-    use crate::spectrogram::{live_slab, LIVE_SLAB_CAP};
-    let mut age = 0.0f64; // youngest age the tier holds
-    let mut spacing = AudioSpectrum::FFT_INTERVAL;
-    for tier in 0..SpectrumHistory::TIERS {
-        // The finest slab any window that reaches this tier's youngest columns
-        // can use — the tightest the tier is ever asked to be.
-        let finest = live_slab(age, LIVE_SLAB_CAP as usize);
-        assert!(
-            spacing <= finest,
-            "tier {tier} stores {spacing:.3} s apart but can be drawn into \
-             {finest:.3} s slabs (from age {age:.1} s)",
-        );
-        let columns =
-            if tier == 0 { SpectrumHistory::FINE_COLUMNS } else { SpectrumHistory::COARSE_COLUMNS };
-        age += columns as f64 * spacing;
-        spacing *= 2.0;
-    }
 }
 
 /// The heatmap's color level is independent of the curve's height level. A
@@ -574,7 +502,14 @@ fn runtime_advances_histories_without_a_surface() {
     let samples: Vec<_> = (0..appearance.spectrum.window.frame(48_000.0) * 2)
         .map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5)
         .collect();
-    runtime.spectrum.push_samples(&samples, 1, 48_000.0, 1.0, &appearance.spectrum);
+    crate::spectrum::heard_at(
+        &mut runtime.spectrum,
+        &samples,
+        1,
+        48_000.0,
+        1.0,
+        &appearance.spectrum,
+    );
     runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 0.8));
     runtime.tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
     runtime.tracker.handle_event(NoteEvent::on(0.5, SourceId::DIRECT, 0, 64, 0.8));
@@ -586,7 +521,10 @@ fn runtime_advances_histories_without_a_surface() {
     runtime.advance_time(10.0, &appearance);
     assert_eq!(runtime.spectrum.columns_taken(), columns, "advancement must not repeat analysis");
     runtime.advance_time(1.0 + AudioSpectrum::HISTORY_MAX_SECONDS + 1.0, &appearance);
-    assert!(runtime.spectrum.newest_column().is_none(), "silent history also ages without drawing");
+    assert!(
+        runtime.spectrum.newest_column().is_some(),
+        "the history is bounded by its rings, not trimmed by the clock",
+    );
     assert_eq!(runtime.tracker.held_count(), 1, "a held note survives age pruning");
 }
 
@@ -601,7 +539,14 @@ fn fold_is_shared_by_real_dock_preview_and_discarded_passes() {
     let samples: Vec<_> = (0..cfg.window.frame(48_000.0) * 2)
         .map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5)
         .collect();
-    state.picture.runtime.spectrum.push_samples(&samples, 1, 48_000.0, 1.0, &cfg);
+    crate::spectrum::heard_at(
+        &mut state.picture.runtime.spectrum,
+        &samples,
+        1,
+        48_000.0,
+        1.0,
+        &cfg,
+    );
     assert!(state.picture.runtime.spectrum.columns_taken() > 2);
     let ctx = super::probe::themed();
     let mut passes = 0;
@@ -641,7 +586,8 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
             .map(|i| (std::f32::consts::TAU * frequency * i as f32 / 48_000.0).sin() * 0.5)
             .collect::<Vec<_>>()
     };
-    spectrum.push_samples(&tone(440.0), 1, 48_000.0, 1.0, &cfg);
+    let mut feed = crate::spectrum::TestFeed::default();
+    feed.feed(&mut spectrum, &tone(440.0), 1, 48_000.0, 1.0, &cfg);
     let first = spectrum.folded(1.0, 2.0).unwrap().to_vec();
     assert!(first.iter().any(|v| *v > 0.0), "the fixture must contain measured energy");
     assert_eq!(spectrum.folded(1.0, 2.0).unwrap().as_slice(), first);
@@ -652,7 +598,7 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
     // revision can tell the memo it is stale.
     let batch = AudioSpectrum::FFT_INTERVAL * 48_000.0 * 3.0;
     let short: Vec<f32> = tone(660.0)[..batch as usize].to_vec();
-    spectrum.push_samples(&short, 1, 48_000.0, 1.0 + batch / 48_000.0, &cfg);
+    feed.feed(&mut spectrum, &short, 1, 48_000.0, 1.0 + batch / 48_000.0, &cfg);
     let next = spectrum.folded(1.0, 50.0).unwrap().to_vec();
     assert_ne!(next, wide, "same-time audio must invalidate the measured grid");
     assert_eq!(spectrum.store.fold_measurements, 3);
@@ -764,7 +710,7 @@ fn a_setting_listens_as_long_at_every_sample_rate() {
         .map(|i| 0.5 * (std::f64::consts::TAU * 25.0 * i as f64 / f64::from(sr)).sin() as f32)
         .collect();
     let mut spectrum = AudioSpectrum::default();
-    let columns = spectrum.push_samples(&sine, 1, sr, 1.0, &config);
+    let columns = crate::spectrum::heard_at(&mut spectrum, &sine, 1, sr, 1.0, &config);
     let power = columns.last().expect("the frame filled").power();
     let peak = (0..power.len()).max_by(|&a, &b| power[a].total_cmp(&power[b])).unwrap();
     let midi = harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI
@@ -774,4 +720,154 @@ fn a_setting_listens_as_long_at_every_sample_rate() {
         power[peak] > 0.0 && off.abs() < 0.5,
         "a 25 Hz tone at 96 kHz peaks {off:+.2} semitones off"
     );
+}
+
+/// A column of `power` in every bucket at `time`, as the analysis hands one
+/// over.
+fn delivered(time: f64, power: f32) -> Delivery {
+    Delivery::Column(Box::new(crate::spectrum::AnalyzedColumn {
+        time,
+        power: [power; harmonigraph_core::spectrum::SPECTRUM_BINS],
+        step: AudioSpectrum::FFT_INTERVAL,
+    }))
+}
+
+/// A column at or up to a second before the newest is dropped and counted:
+/// it folds into no slab, moves the newest date nowhere, and stamps no
+/// heard column — which is what tells a drop from a fold here, since the
+/// column before it was silent.
+#[test]
+fn the_guard_drops_a_column_at_or_just_before_the_newest() {
+    let cfg = SpectrumConfig::default();
+    let mut spectrum = AudioSpectrum::default();
+    let clears = spectrum.clears();
+    spectrum.give(clears, [delivered(100.0, 0.0)], &cfg);
+    assert_eq!(spectrum.last_audible().column, None, "the fixture's first column is silent");
+    crate::spectrum::expecting_backward_dates(|| {
+        let backward = [100.0, 100.0 - 0.13, 100.0 - 0.99, f64::NAN];
+        spectrum.give(clears, backward.map(|time| delivered(time, 1.0)), &cfg);
+    });
+    assert_eq!(spectrum.guard_counts(), (4, 0));
+    assert_eq!(spectrum.newest_column(), Some(100.0));
+    assert_eq!(spectrum.last_audible().column, None, "a dropped column was heard");
+    assert_eq!(spectrum.pyramid().open_count(0), 1, "a dropped column was folded");
+}
+
+/// A column further back than a second resets the history and starts it
+/// again, counted, and so does a correct column after one dated an hour
+/// ahead, which would otherwise have every correct column dropped for an
+/// hour. A reset is not a Clear: the rest of the hand-over it happened in
+/// still joins the history it started, where a Clear between two
+/// hand-overs keeps the second out.
+#[test]
+fn the_guard_resets_on_a_long_step_back_and_keeps_the_rest_of_the_batch() {
+    let cfg = SpectrumConfig::default();
+    let mut spectrum = AudioSpectrum::default();
+    let clears = spectrum.clears();
+    spectrum.give(clears, [delivered(100.0, 1.0)], &cfg);
+    let epoch = spectrum.history_epoch();
+    crate::spectrum::expecting_backward_dates(|| {
+        spectrum.give(clears, [delivered(100.0 - 1.01, 1.0)], &cfg);
+    });
+    assert_eq!(spectrum.guard_counts(), (0, 1));
+    assert_eq!(spectrum.newest_column(), Some(100.0 - 1.01), "the reset dropped its column");
+    assert_ne!(spectrum.history_epoch(), epoch, "the colour memory missed the reset");
+
+    let ahead = 100.0 + 3600.0;
+    let batch = [ahead, 101.0, 101.008, 101.016].map(|time| delivered(time, 1.0));
+    crate::spectrum::expecting_backward_dates(|| spectrum.give(clears, batch, &cfg));
+    assert_eq!(spectrum.guard_counts(), (0, 2));
+    assert_eq!(spectrum.newest_column(), Some(101.016), "the batch after the reset was lost");
+    assert_eq!(spectrum.pyramid().open_count(crate::spectrogram::LEVELS - 1), 3);
+
+    // A Clear between two hand-overs of audio taken before it.
+    spectrum.give(clears, [delivered(101.024, 1.0)], &cfg);
+    spectrum.clear_history();
+    spectrum.give(clears, [delivered(101.032, 1.0)], &cfg);
+    assert_eq!(spectrum.newest_column(), None, "a hand-over taken before the Clear joined it");
+}
+
+/// A crash inside the fold leaves the levels part-folded, which a history
+/// written once would draw for as long as a level keeps a slab, so it resets
+/// the history; a crash anywhere else costs it nothing. Either way the next
+/// column folds.
+#[test]
+fn a_crash_in_the_fold_resets_the_history_and_one_outside_it_does_not() {
+    let bins = [0.5; harmonigraph_core::spectrum::SPECTRUM_BINS];
+    let mut spectrum = AudioSpectrum::default();
+    spectrum.push_history(1.0, &bins);
+    let epoch = spectrum.history_epoch();
+
+    let outside = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        spectrum.push_history(1.008, &bins);
+        panic!("a fault after the fold");
+    }));
+    assert!(outside.is_err());
+    assert_eq!(spectrum.newest_column(), Some(1.008), "a crash outside the fold cost history");
+    assert_eq!((spectrum.history_epoch(), spectrum.guard_counts()), (epoch, (0, 0)));
+
+    crate::spectrogram::FAIL_AT_LEVEL.set(Some(7));
+    let inside = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        spectrum.push_history(1.016, &bins);
+    }));
+    crate::spectrogram::FAIL_AT_LEVEL.set(None);
+    assert!(inside.is_err(), "the fault was not injected");
+    assert_eq!(spectrum.newest_column(), None, "a part-folded history survived the crash");
+    assert_ne!(spectrum.history_epoch(), epoch, "the colour memory missed the reset");
+    assert_eq!(spectrum.guard_counts(), (0, 1));
+
+    spectrum.push_history(1.024, &bins);
+    assert_eq!(spectrum.newest_column(), Some(1.024));
+}
+
+/// The costs the slab pyramid adds, for the numbers #1758 quotes: a column
+/// folded into all sixteen levels, a silent one on the fast path, and the
+/// hold of the editor lock a mono catch-up takes, 371 columns given at
+/// once. Printed, not asserted; run in release with `--ignored
+/// --nocapture`.
+#[test]
+#[ignore]
+fn the_folds_timings() {
+    use std::time::Instant;
+    const BINS: usize = harmonigraph_core::spectrum::SPECTRUM_BINS;
+    let cfg = SpectrumConfig::default();
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut power = || {
+        let mut power = [0.0f32; BINS];
+        for p in power.iter_mut() {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            *p = 10f32.powf(-11.0 + 10.0 * (seed >> 40) as f32 / (1u64 << 24) as f32);
+        }
+        power
+    };
+    let per_column = |columns: &[[f32; BINS]]| {
+        let mut pyramid = crate::spectrogram::SlabPyramid::default();
+        let start = Instant::now();
+        for (k, power) in columns.iter().enumerate() {
+            pyramid.push(90.0 + k as f64 * AudioSpectrum::FFT_INTERVAL, power);
+        }
+        start.elapsed().as_secs_f64() / columns.len() as f64 * 1e6
+    };
+    let loud: Vec<_> = (0..4000).map(|_| power()).collect();
+    let silent = vec![[0.0f32; BINS]; 4000];
+    println!("a column through all sixteen levels: {:.2} us", per_column(&loud));
+    println!("a silent column, fast path: {:.3} us", per_column(&silent));
+
+    let mut spectrum = AudioSpectrum::default();
+    let clears = spectrum.clears();
+    let deliveries: Vec<_> = (0..371)
+        .map(|k| {
+            Delivery::Column(Box::new(crate::spectrum::AnalyzedColumn {
+                time: 90.0 + k as f64 * AudioSpectrum::FFT_INTERVAL,
+                power: power(),
+                step: AudioSpectrum::FFT_INTERVAL,
+            }))
+        })
+        .collect();
+    let start = Instant::now();
+    spectrum.give(clears, deliveries, &cfg);
+    let hold = start.elapsed().as_secs_f64() * 1e3;
+    println!("the hold of a 371-column catch-up given at once: {hold:.3} ms");
 }

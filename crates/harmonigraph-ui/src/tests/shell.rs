@@ -215,6 +215,7 @@ fn a_released_note_keeps_repainting_through_its_staggered_departure() {
 fn stream(
     ctx: &egui::Context,
     state: &mut SharedState,
+    feed: &mut crate::spectrum::TestFeed,
     t: &mut f64,
     seconds: f64,
     tone: bool,
@@ -236,7 +237,7 @@ fn stream(
                 })
                 .collect();
         *t += 0.01;
-        state.picture.runtime.spectrum.push_samples(&block, 1, RATE, *t, &cfg);
+        feed.feed(&mut state.picture.runtime.spectrum, &block, 1, RATE, *t, &cfg);
         draw_panes(ctx, state, *t, panes);
         animated.push((*t, Animating::of(state).audible));
     }
@@ -268,17 +269,19 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     assert!(atmosphere.effects().cloud, "the cloud and its colour memory are drawn");
     let memory = 6.234 * f64::from(atmosphere.color_pickup.max(atmosphere.color_release));
     let mut t = 0.0;
+    let mut feed = crate::spectrum::TestFeed::default();
     let panes = [Pane::Spectral];
 
-    let before = stream(&ctx, &mut state, &mut t, 2.0, false, &panes);
+    let before = stream(&ctx, &mut state, &mut feed, &mut t, 2.0, false, &panes);
     assert!(before.iter().all(|&(_, on)| !on), "silence with nothing heard animated");
-    let playing = stream(&ctx, &mut state, &mut t, 1.0, true, &panes);
+    let playing = stream(&ctx, &mut state, &mut feed, &mut t, 1.0, true, &panes);
     assert!(playing[20..].iter().all(|&(_, on)| on), "audible audio idled");
-    let slab = state.picture.surfaces.spectrogram.at(0).held_bucket.expect("the heatmap drew");
+    let level = state.picture.surfaces.spectrogram.at(0).held_level.expect("the heatmap drew");
+    let slab = crate::spectrogram::width(level);
     assert!(slab >= 0.1, "a slab of {slab} s is too narrow to tell from the blocks");
     let reach = span + slab + 1.5 + memory;
     let stopped = t;
-    let after = stream(&ctx, &mut state, &mut t, reach + 3.0, false, &panes);
+    let after = stream(&ctx, &mut state, &mut feed, &mut t, reach + 3.0, false, &panes);
 
     // The curve's release outlasts the tone by seconds; the columns do not.
     let heard = state.picture.runtime.spectrum.last_audible();
@@ -310,18 +313,19 @@ fn a_heatmap_that_stops_being_drawn_holds_nothing_until_it_is_drawn_again() {
     state.picture.appearance.spectrum.roll_seconds = 60.0;
     let panes = [Pane::Spectral];
     let mut t = 0.0;
-    stream(&ctx, &mut state, &mut t, 1.0, true, &panes);
+    let mut feed = crate::spectrum::TestFeed::default();
+    stream(&ctx, &mut state, &mut feed, &mut t, 1.0, true, &panes);
     let stopped = t;
-    let drawn = stream(&ctx, &mut state, &mut t, 0.5, false, &panes);
+    let drawn = stream(&ctx, &mut state, &mut feed, &mut t, 0.5, false, &panes);
     assert!(drawn.iter().all(|&(_, on)| on), "the heatmap never held the sound");
 
-    let hidden = stream(&ctx, &mut state, &mut t, 15.0, false, &[]);
+    let hidden = stream(&ctx, &mut state, &mut feed, &mut t, 15.0, false, &[]);
     assert!(hidden.iter().all(|&(_, on)| !on), "a hidden heatmap held the loop awake");
 
     // Long past the curve, well inside the Span: only the heatmap moves.
     let curve = state.picture.runtime.spectrum.moving_until().expect("a tone was heard");
     assert!(curve < t && t < stopped + 30.0, "the curve holds until {curve}, now {t}");
-    let revealed = stream(&ctx, &mut state, &mut t, 0.1, false, &panes);
+    let revealed = stream(&ctx, &mut state, &mut feed, &mut t, 0.1, false, &panes);
     assert!(revealed.iter().all(|&(_, on)| on), "a heatmap drawn again mid-tail idled");
 }
 
@@ -343,12 +347,13 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
     assert!(state.picture.appearance.view.spectral_ring_draws(), "the ring is drawn");
     let panes = [Pane::Lattice, Pane::Spectral];
     let mut t = 0.0;
-    stream(&ctx, &mut state, &mut t, 1.0, true, &panes);
+    let mut feed = crate::spectrum::TestFeed::default();
+    stream(&ctx, &mut state, &mut feed, &mut t, 1.0, true, &panes);
     let mut ring_outlasted_the_display = false;
     let mut wedges_faded = false;
     let mut still: Option<(f64, (String, Vec<u8>))> = None;
     for _ in 0..200 {
-        stream(&ctx, &mut state, &mut t, 0.1, false, &panes);
+        stream(&ctx, &mut state, &mut feed, &mut t, 0.1, false, &panes);
         let runtime = &state.picture.runtime;
         ring_outlasted_the_display |= !runtime.spectrum.moving(t)
             && (runtime.ring_levels.moving() || runtime.ring_fade.moving());
@@ -382,12 +387,13 @@ fn a_cleared_heatmap_holds_no_sound_for_a_span() {
     state.picture.appearance.spectrum.roll_seconds = 60.0;
     let panes = [Pane::Spectral];
     let mut t = 0.0;
-    stream(&ctx, &mut state, &mut t, 1.0, true, &panes);
+    let mut feed = crate::spectrum::TestFeed::default();
+    stream(&ctx, &mut state, &mut feed, &mut t, 1.0, true, &panes);
     // Once the analysis window has let go of the tone, or the columns after
     // the Clear still hold it and scroll it across as they should.
-    stream(&ctx, &mut state, &mut t, 1.0, false, &panes);
+    stream(&ctx, &mut state, &mut feed, &mut t, 1.0, false, &panes);
     state.picture.runtime.spectrum.clear_history();
-    let after = stream(&ctx, &mut state, &mut t, 10.0, false, &panes);
+    let after = stream(&ctx, &mut state, &mut feed, &mut t, 10.0, false, &panes);
     let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
     let last = after.iter().rev().find(|&&(_, on)| on).expect("the curve settled at once").0;
     assert!(last - heard < 1.0, "a Clear held the full rate {} s past the sound", last - heard);

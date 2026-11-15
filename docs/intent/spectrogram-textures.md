@@ -16,3 +16,9 @@ Yan’s decisions recorded for future drift audits.
 ## 2026-11-10 (maintainability audit, #1677)
 
 - No capability record per spectrogram style: the separate style tests stay, since no further style is expected (#1677 area 7 Q1). Reopen only when a style is added. #1677 R7
+
+## 2026-11-14 (F2′ rework, #1758)
+
+- The heatmap reads one shared slab pyramid, so every surface at a rung draws the same slabs: older history is no longer redrawn on a Span change or a late open, and the Video preview shows the history the dock does (#1758 Q B, yes). A future change to the stored encoding reaches old history only as it scrolls out. Each plugin instance folds its columns while its editor is shut, about 11 µs a column, and under 1 µs a silent one.
+- A history that cannot trust its own fold resets as Clear display history does: a column more than a second behind the newest, or a crash inside the fold (#1758 Q A, yes).
+- The heatmap's far edge is cut one slab past the window rather than at the last column before it, so a pause drawn in a lifted silence colour reaches the edge (#1758 Q C, yes).
