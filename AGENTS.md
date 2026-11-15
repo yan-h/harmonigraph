@@ -204,6 +204,16 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 - A Tuning pane policy edit landing within one block of a keyboard Learn result (Adaptive with Learn armed): the learned keyboard reverts until Learn runs again.
 - Two policy edits to different fields queued before the Hub's next callback: only the second's fields stay, since each carries the whole policy the pane showed; about one block while audio runs, and while the Hub runs no audio the earlier setting snaps back when audio resumes.
 
+**Cases drawing a missed note raw goes without** (#1799), each with its cost when it occurs:
+
+- The usual miss, the Tune's whole callback run before the Hub's, reaches the Hub in the same pass as its onset: the note is drawn corrected only up to the row's latest scheduled time in that pass, nothing for a lone note and at most about one buffer when the row had later events in that pass.
+- A miss that reaches the Hub a pass after its onset, which only a race between the callbacks or a lost reply produces: the note is drawn corrected for up to about D plus one Hub callback.
+- A missed note released in the same pass as its miss is read stays drawn corrected for its whole life.
+- A miss record lost to a full copy ring leaves that note drawn corrected, with the dropped-event notice.
+- The Hub's policy context keeps the pitch it decided for a missed note, which only Adaptive and Follow harmony read.
+- Notes thrown away from a Tune's delay line at a cut (Stop, Reset, a reactivation) were already published, so the lattice and the take draw them from their onset until the cut's snapshot: up to about D of notes nobody heard.
+- The host refusing an onset's tuning expression after accepting its note sends no miss, and the Tune's held voice keeps the correction, so the player's later per-note tuning jumps to the corrected pitch. Bitwig does not refuse output events.
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
