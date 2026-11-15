@@ -17,7 +17,9 @@ pub enum PitchProvenance {
 /// revision the decision was taken under, for reconstructing historical
 /// configuration from a note. Nothing ever read the number: the take's
 /// configuration timeline carries every revision at the sample it applied
-/// from, which is the configuration the attack was assigned under (#1749).
+/// from, which is the configuration the attack was assigned under (#1749) —
+/// except an attack the history no longer reached, a record held over past a
+/// steady-clock regression, which was assigned from the live state (#1792).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AssignmentMetadata {
     pub decision: u64,
