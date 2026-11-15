@@ -328,12 +328,11 @@ impl Prepared for Restore {
         let settings = &self.settings;
         let mut producer = settings.producer.lock();
         let id = producer.next_id;
-        if producer.queue.push(Command { id, mutation: self.value.mutation() }).is_err() {
-            // Only another thread's edit between prepare and here takes the
-            // slot, which macOS never runs.
-            drop(producer);
-            nice_error!("{RESTORE_REFUSED}");
-            *settings.notice.lock() = Some(RESTORE_REFUSED);
+        let queued = producer.queue.push(Command { id, mutation: self.value.mutation() }).is_ok();
+        // Only another thread's edit between prepare and here takes the slot
+        // prepare saw free, and on macOS both run on the main thread (#1631).
+        debug_assert!(queued, "an editor edit took the slot a restore's prepare saw free");
+        if !queued {
             return;
         }
         producer.next_id += 1;
@@ -341,6 +340,8 @@ impl Prepared for Restore {
         drop(producer);
         settings.restored.fetch_add(1, Ordering::AcqRel);
         if self.legacy {
+            // The log keeps it for a project saved before an editor opens.
+            nice_error!("{LEGACY_AXES}");
             *settings.notice.lock() = Some(LEGACY_AXES);
         }
     }
