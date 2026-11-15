@@ -32,7 +32,7 @@ use harmonigraph_render::{SpectrogramGrid, SpectrogramSlab, SpectrogramVertex};
 use super::axes::{Axes, PitchScale, TimeAxis};
 use super::roll::{self, RollDrawOptions, RollSource, Width};
 use super::Navigation;
-use crate::spectrogram::{pane_ppp, pitch_pixels, read_of, PaneView, LIVE_SLAB_CAP};
+use crate::spectrogram::{pane_ppp, pitch_pixels, read_of, PaneView, LIVE_SLAB_CAP, RING_SLOTS};
 use crate::tape::spectrogram::{silent_slab, COLUMN_SECONDS, LEVELS};
 use crate::tape::{Speed, TapeRequest, TapeView};
 use crate::{theme, PictureState};
@@ -323,6 +323,14 @@ fn marks(painter: &egui::Painter, axes: &Axes, view: &TapeView, axis: &SongAxis)
     }
 }
 
+/// Slots in the ring the GPU keeps a run of `slabs` in: the live heatmap's
+/// one size ([`RING_SLOTS`]), which holds any run a region's pixels cut, so a
+/// pan or a zoom never reallocates it. Only the coarsest level's run can be
+/// longer, a song past about 2.3 hours zoomed fully out, and grows by doubling.
+fn ring_slots(slabs: usize) -> u32 {
+    (if slabs <= RING_SLOTS { RING_SLOTS } else { slabs.next_power_of_two() }) as u32
+}
+
 /// The tape's spectrogram over the far region, at the pyramid level whose
 /// slabs come closest to one per device pixel without going under it.
 fn heatmap(
@@ -347,9 +355,7 @@ fn heatmap(
     let tape = &state.runtime.tape.spectrogram;
     let run: Arc<[SpectrogramSlab]> =
         (first..=last).map(|j| tape.slab(level, j).cloned().unwrap_or_else(silent_slab)).collect();
-    // A power of two over the run, so the ring keeps its size while a pan or
-    // a zoom within one level moves the run.
-    let capacity = ((run.len() + 2).next_power_of_two() + 8) as u32;
+    let capacity = ring_slots(run.len());
     // Column k is centred on its own song seconds, so slab j of any level
     // starts half a column before column `j * 2^level`.
     let origin = first as f64 * width - 0.5 * COLUMN_SECONDS;
@@ -794,6 +800,20 @@ fn held(view: &TapeView, at: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A change of ring size reallocates the GPU's grid and re-sends every
+    /// slab in it. A window cuts one slab more or fewer as a pan moves it
+    /// against the slab grid, so no two neighbouring run lengths a region can
+    /// cut may differ in size, or a drag pays that at each slab it crosses.
+    #[test]
+    fn a_pan_never_resizes_the_heatmaps_ring() {
+        // One slab either side of the window, and its two ends rounded outward.
+        let longest = LIVE_SLAB_CAP as usize + 4;
+        for slabs in 3..longest {
+            assert_eq!(ring_slots(slabs), ring_slots(slabs + 1), "{slabs} slabs");
+        }
+        assert!(ring_slots(longest) as usize >= longest);
+    }
 
     #[test]
     fn the_line_says_why_the_tape_is_silent_or_what_is_recorded_where_it_plays() {
