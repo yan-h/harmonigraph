@@ -85,7 +85,13 @@ pub fn snapshots() -> Vec<TuningInstance> {
     instances
 }
 
+/// An edit to the instance `id`, or for Reset all voices, which belongs to the
+/// session rather than to any row, to the session.
 pub fn edit(id: u64, edit: InstanceEdit) {
+    if let InstanceEdit::Reset = edit {
+        super::session::session().request_reset();
+        return;
+    }
     let shared = registry()
         .lock()
         .unwrap()
@@ -98,7 +104,7 @@ pub fn edit(id: u64, edit: InstanceEdit) {
             InstanceEdit::Show(value) => shared.set_show(value),
             InstanceEdit::Name(value) => shared.set_name(value),
             InstanceEdit::Delay(value) => shared.request_delay(value),
-            InstanceEdit::Reset => shared.request_reset(),
+            InstanceEdit::Reset => unreachable!("handled above"),
         }
     }
 }

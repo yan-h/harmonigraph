@@ -971,7 +971,7 @@ fn missed_corrections_survive_a_stop_and_clear_at_reset_or_reactivation() {
         edge(&mut pair, false);
         if clear == "Reset behind the Stop" {
             // The Hub takes the Reset before the Tune adopts the Stop.
-            pair.hub.shared().request_reset();
+            session::session().request_reset();
             pair.hub.run(pair.raw, vec![], None);
             pair.raw += 512;
         } else {
@@ -980,7 +980,7 @@ fn missed_corrections_survive_a_stop_and_clear_at_reset_or_reactivation() {
             }
             assert_eq!((pair.misses(), pair.status()), (1, 0), "Stop keeps the count alone");
             match clear {
-                "Reset" => pair.hub.shared().request_reset(),
+                "Reset" => session::session().request_reset(),
                 _ => pair.tune.reactivate_format(48000.0, 512),
             }
         }
@@ -1030,7 +1030,7 @@ fn reset_cuts_and_audio_resumes_within_two_callbacks() {
         inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0,
         "and with a released one remembered"
     );
-    pair.hub.shared().request_reset();
+    session::session().request_reset();
     // The Hub takes the cut in its next callback; the Tune adopts it in the
     // one after, and owes a Note-Off for the voice it ended.
     let mut cut = pair.idle();

@@ -835,9 +835,7 @@ fn a_restore_and_a_reset_leave_the_project_unmodified() {
     device.load(restored(&device, 700.0), false);
     device.run(1064, vec![], false);
     assert_eq!(device.service(), before, "a restore is not an edit");
-    device
-        .wrapper()
-        .test_inspect_plugin(|plugin| plugin.aggregation.as_ref().unwrap().shared.request_reset());
+    crate::tuning::instances::edit(0, harmonigraph_ui::params::InstanceEdit::Reset);
     device.run(1128, vec![], false);
     assert_eq!(device.service(), before, "Reset all voices saves nothing");
 }

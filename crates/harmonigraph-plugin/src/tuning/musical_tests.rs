@@ -973,7 +973,7 @@ fn a_snapshot_one_lane_refused_still_reaches_the_other_lane() {
     // the end while the writer keeps up.
     const RESETS: usize = 30;
     for _ in 0..RESETS {
-        phrase.hub.shared().request_reset();
+        session::session().request_reset();
         phrase.hub.main();
         for _ in 0..4 {
             phrase.idle();

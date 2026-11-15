@@ -299,8 +299,6 @@ pub struct Hub {
     id: u64,
     ends: Option<Box<[Option<HubEnds>; TUNERS]>>,
     epoch: u64,
-    /// The editor Resets already taken, against `setup::Shared::reset_generation`.
-    reset_generation: u64,
     rows: Box<[Row]>,
     batch: Vec<Record>,
     pending: Vec<Published>,
@@ -331,7 +329,6 @@ impl Hub {
             id: 0,
             ends: None,
             epoch: 0,
-            reset_generation: 0,
             rows: (0..=TUNERS).map(|_| Row::default()).collect::<Vec<_>>().into_boxed_slice(),
             batch: Vec::with_capacity(BATCH_EVENTS),
             pending: Vec::with_capacity(BATCH_EVENTS),
@@ -387,10 +384,8 @@ impl Hub {
         // Reset all voices is the Hub's own: a cut, which this callback's own
         // row and every Tune adopt like any other, plus forgetting the history
         // once the cut has released its voices into it.
-        let reset = self.shared.reset_generation();
-        let forget = reset != self.reset_generation;
+        let forget = session::session().take_reset();
         if forget {
-            self.reset_generation = reset;
             session::session().cut();
         }
         self.tune.begin(callback);

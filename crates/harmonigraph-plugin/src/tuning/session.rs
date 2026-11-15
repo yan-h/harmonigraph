@@ -158,6 +158,8 @@ pub struct Session {
     epoch: AtomicU64,
     /// Only the Hub's own Tune publishes Stop, before that Hub adopts.
     stop_epoch: AtomicU64,
+    /// Reset all voices was asked for and the Hub has not yet taken it.
+    reset: AtomicBool,
     next: AtomicU64,
     rows: [Row; TUNERS],
 }
@@ -172,6 +174,7 @@ pub fn session() -> &'static Session {
         hubs: AtomicUsize::new(0),
         epoch: AtomicU64::new(1),
         stop_epoch: AtomicU64::new(0),
+        reset: AtomicBool::new(false),
         next: AtomicU64::new(0),
         rows: std::array::from_fn(|_| Row::new()),
     })
@@ -198,6 +201,18 @@ impl Session {
     /// it.
     pub fn stopped_at(&self, epoch: u64) -> bool {
         self.stop_epoch.load(Ordering::Acquire) == epoch
+    }
+    /// The editor's Reset all voices. The Hub performs it in its next callback
+    /// as one cut across every row and forgets its history; there is no
+    /// acknowledgement and nothing to wait for. It saves nothing, so the
+    /// project is not marked modified.
+    pub fn request_reset(&self) {
+        self.reset.store(true, Ordering::Release);
+    }
+    /// Whether a Reset was asked for since the last call, which the Hub makes
+    /// once a callback.
+    pub fn take_reset(&self) -> bool {
+        self.reset.swap(false, Ordering::AcqRel)
     }
     pub fn register(&self) -> u64 {
         self.next.fetch_add(1, Ordering::AcqRel) + 1
@@ -294,6 +309,7 @@ impl Session {
         }
         self.hub.store(0, Ordering::Release);
         self.hubs.store(0, Ordering::Release);
+        self.reset.store(false, Ordering::Release);
         self.bump();
     }
 }
