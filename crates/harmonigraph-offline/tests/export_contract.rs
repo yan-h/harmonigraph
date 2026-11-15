@@ -17,19 +17,19 @@ fn take(path: &Path, seconds: f64, trigger: RenderTrigger, tail: Option<f64>) {
     let mut wav = WavWriter::create(path.with_extension("wav"), 48_000.0, 1).unwrap();
     wav.write(&vec![0.0; (seconds * 48_000.0) as usize]).unwrap();
     wav.finish().unwrap();
+    let wav = path.with_extension("wav").file_name().unwrap().to_str().unwrap().to_owned();
     let mut take = Writer::create(
         path,
-        &Header { appearance: Some(appearance.serialize()), ..Default::default() },
+        &Header {
+            appearance: Some(appearance.serialize()),
+            audio_file: Some(wav),
+            ..Default::default()
+        },
     )
     .unwrap();
-    // One run at offset zero, naming the WAV beside the take.
-    take.write(&Record::Run(RunRecord {
-        pass: 1,
-        audio_file: Some(path.with_extension("wav").file_name().unwrap().to_str().unwrap().into()),
-        ..Default::default()
-    }))
-    .unwrap();
-    // Each note played at the input it sounds at, which is its stamp.
+    // One run at offset zero.
+    take.write(&Record::Run(RunRecord::default())).unwrap();
+    // Each note timed where it sounds.
     for (t, kind) in [(0.0, NoteKind::On { velocity: 0.8 }), (0.25, NoteKind::Off)] {
         let input = (t * 48_000.0) as i64;
         let timing =
