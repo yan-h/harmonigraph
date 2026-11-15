@@ -162,7 +162,7 @@ the value on screen is the value the file holds.
 
 Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 
-- A stalled input worker: a cue reads Playing and holds `KeepAlive` until the next click, Stop or play.
+- A stalled input worker: a cue reads Playing until the next click, Stop or play.
 - A whole-tape re-analysis: what is on screen fills in song order, about 15 s per 5 minutes of song.
 - A cue at a speed other than 1× within about 180 ms after a gap: the audio before the gap may smear into its first milliseconds.
 - A tempo change between passes: under a second of bar ticks past a short pass's end lands at its tempo.
@@ -190,6 +190,19 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 **Cases the glow goes without** (PR #1791), each with its cost when it occurs:
 
 - More than `MAX_LIGHTS` (4,096) lit nodes reaching the lattice renderer, which no producer sends: `GlowFade` is the only cap, and the renderer checks it with a `debug_assert` alone. A release build grows the light strip to the next power of two and draws every halo up to the adapter's texture limit (16,384 rows on Apple silicon); past that, which only a window over 16,384 lit nodes could reach, creating the strip fails wgpu's validation.
+
+**Cases the tuning Hub goes without** (PR #1801), each with its cost when it occurs:
+
+- A row that fills to 64 voices after release copies were lost to a full 1,024-entry copy ring: Learn reads the stuck voices, as the lattice draws them, until the next cut; the dropped-event notice still shows.
+- Past 2,048 records in one Hub callback: the same Tune's surplus waits each time rather than the rows taking turns.
+- A second cut stacked on one whose Note-Offs the host has not yet taken, owing over 112 events: the surplus Note-Offs are dropped with no notice, a stuck note.
+- A tuning expression past CLAP's ±120 semitones, which no host sends: a `debug_assert`; a release build stores a saturated pitch.
+- A display lane overflow: no banner, a note that ended during the outage vanishes at the next snapshot without its fade, and an export draws a note held through the gap as one line; the export warning stays.
+- A note a snapshot omitted and a later snapshot lists again, which no producer writes: it opens a second note rather than continuing the first.
+- Lowering a Tune's delay while a take records: the take refuses to export, its records out of order.
+- A miss from a full copy ring, read after a transport Stop: the Stop clears the ring's fault bit but keeps the count, so the Tune says "raise the delay", which is no remedy for a full ring.
+- A Tuning pane policy edit landing within one block of a keyboard Learn result (Adaptive with Learn armed): the learned keyboard reverts until Learn runs again.
+- Two policy edits to different fields queued before the Hub's next callback: only the second's fields stay, since each carries the whole policy the pane showed; about one block while audio runs, and while the Hub runs no audio the earlier setting snaps back when audio resumes.
 
 ## Backwards compatibility is not a constraint
 
