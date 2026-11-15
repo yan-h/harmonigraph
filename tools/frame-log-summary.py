@@ -14,11 +14,15 @@ editor's link; one recorded between the two cannot be told apart, so record
 it again. A log written before the `divisor` column existed is read as all
 Display rate.
 
-A tick row's `divisor` is the pacing of the interval that led to that frame:
-the chosen rate, or a multiple of it while a still editor's link is slowed to
-its poll (#1692). So each glass gap is measured against its own frame's
-divisor, not one per phase: the frame after a first note was paced at the
-chosen rate though the note's own frame was paced at the poll's.
+A tick row's `divisor` is the pacing of the interval that led to that frame.
+In a log recorded between #1692 and #1747 that was the chosen rate, or a
+multiple of it while a still editor's link was slowed to its poll. So each
+glass gap is measured against its own frame's divisor, not one per phase: the
+frame after a first note was paced at the chosen rate though the note's own
+frame was paced at the poll's. Since #1747 the link runs at the chosen rate
+throughout and a still editor's frames return before the UI runs, logged as
+tick rows with nothing submitted; the log has no `chosen` or `woken` column,
+and every frame reads as paced at the chosen rate.
 
 Per phase, counted in the display's refreshes:
 - missed refreshes: a glass gap longer than the divisor that paced it
@@ -45,8 +49,10 @@ submitted after the target anyway) or late GPU.
 (#1670), across every window and every time the editor was opened:
 - still: each stretch where nothing kept the editor animating, so nothing on
   screen could move, and how often it drew, against the rate it draws at when
-  animating. A transport left stopped reaches one once the last sound has
-  scrolled out of the Span, since silence does not count as audible audio;
+  animating, and how many link frames a second drew nothing and what they
+  cost the main thread. A transport left stopped reaches one once the last
+  sound has scrolled out of the Span, since silence does not count as audible
+  audio;
 - first note: the frames in the second and a half after the first note of
   each opening, with any stall and the costliest frames;
 - exports: missed refreshes in each export's first 30 s against the 30 s
@@ -365,6 +371,13 @@ def report_silence(run, evs, t0):
               f"submit to GPU done "
               f"{median((fr['gpu_end'] - fr['submitted']) * 1000 for fr in drawn if fr['gpu_end']):.2f} ms"
               f" (medians)")
+        # A link frame that drew nothing: since #1747 one that ran no UI pass,
+        # before it one whose pass ran and drew nothing.
+        idle = [fr for fr in run
+                if start <= fr['t'] < stop and fr['timestamp'] and not fr['submitted']]
+        print(f"    {len(idle) / (stop - start):.0f} link frames/s drew nothing, costing "
+              f"{sum(fr['tick_ms'] for fr in idle) / (stop - start):.2f} ms/s of main thread "
+              f"(tick {median(fr['tick_ms'] for fr in idle):.3f} ms median)")
         if s['visible_fps'] > full / 2:
             print('    -> draws at full rate with nothing animating: something else asks for frames')
         elif s['visible_fps'] < 30:

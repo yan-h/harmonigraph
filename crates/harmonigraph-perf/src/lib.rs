@@ -631,10 +631,10 @@ pub struct PerfStats {
     /// whether it was animating).
     pub workload: Workload,
     /// Whether every interval the headline rate now shows was paced while
-    /// animating: the frame and the one before it both were. A still editor's
-    /// link is slowed to its poll, so the window a first note lands in holds
-    /// the poll's intervals, and its rate says nothing about the animating
-    /// rate it is judged against.
+    /// animating: the frame and the one before it both were. A still editor
+    /// runs its passes only at its poll, so the window a first note lands in
+    /// holds the poll's intervals, and its rate says nothing about the
+    /// animating rate it is judged against.
     pub shown_animating: bool,
     /// The same, for the window still filling.
     filling_animating: bool,

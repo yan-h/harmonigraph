@@ -376,7 +376,6 @@ mod tests {
                 target_timestamp: media + vsync + refresh,
                 refresh,
                 divisor: 1,
-                woken: 0,
             };
             let wall = shared.input.frame_wall(Some(timing), fired);
             if late_ms / 1000.0 < refresh {
@@ -400,7 +399,6 @@ mod tests {
                 target_timestamp,
                 refresh,
                 divisor: 1,
-                woken: 0,
             };
             assert_eq!(shared.input.frame_wall(Some(timing), observed), observed);
         }

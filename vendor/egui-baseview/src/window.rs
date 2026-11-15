@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use baseview::{
@@ -49,6 +50,33 @@ impl std::fmt::Debug for SizeSource {
     }
 }
 
+/// How anything outside the window asks it for a UI pass on its next frame:
+/// a thread that has changed what the UI shows, with nothing the window would
+/// otherwise notice.
+///
+/// A frame runs the UI only when something asks for it (see `pass_due`): an
+/// event, a size from [`SizeSource`], the repaint deadline the last pass left,
+/// or this. A change made on another thread reaches none of the others, so
+/// without it the window sees the change at the UI's next deadline.
+///
+/// One flag however many ask: a pass shows every change made before it.
+#[derive(Clone, Debug, Default)]
+pub struct PassRequest(Arc<AtomicBool>);
+
+impl PassRequest {
+    /// Run the UI on the window's next frame. Cheap enough to call from any
+    /// thread on every change: one store.
+    pub fn request(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// Whether a pass has been asked for since the last take, clearing it:
+    /// the window's own read, once a frame.
+    pub fn take(&self) -> bool {
+        self.0.swap(false, Ordering::Acquire)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EguiWindowSettings {
     pub title: String,
@@ -67,6 +95,9 @@ pub struct EguiWindowSettings {
     /// Where a size given to this window from outside arrives, if anywhere.
     /// See [`SizeSource`].
     pub size_source: Option<SizeSource>,
+
+    /// How another thread asks this window for a pass. See [`PassRequest`].
+    pub pass_request: PassRequest,
 }
 
 impl EguiWindowSettings {
@@ -98,6 +129,11 @@ impl EguiWindowSettings {
         self.size_source = Some(source);
         self
     }
+
+    pub fn with_pass_request(mut self, request: PassRequest) -> Self {
+        self.pass_request = request;
+        self
+    }
 }
 
 impl Default for EguiWindowSettings {
@@ -111,6 +147,7 @@ impl Default for EguiWindowSettings {
             scale_policy: WindowScalePolicy::default(),
             graphics: GraphicsConfig::default(),
             size_source: None,
+            pass_request: PassRequest::default(),
         }
     }
 }
@@ -123,6 +160,7 @@ pub struct Queue<'a> {
     focus_takes_only_arrows: &'a mut bool,
     frame_divisor: &'a mut Option<u32>,
     frame_timing: Option<baseview::FrameTiming>,
+    longest_tick_gap: Option<Duration>,
     tess_ms: f32,
     draw_gpu_ms: Option<f32>,
     acquire_ms: f32,
@@ -146,6 +184,7 @@ impl<'a> Queue<'a> {
         focus_takes_only_arrows: &'a mut bool,
         frame_divisor: &'a mut Option<u32>,
         frame_timing: Option<baseview::FrameTiming>,
+        longest_tick_gap: Option<Duration>,
         tess_ms: f32,
         draw_gpu_ms: Option<f32>,
         acquire_ms: f32,
@@ -169,6 +208,7 @@ impl<'a> Queue<'a> {
             focus_takes_only_arrows,
             frame_divisor,
             frame_timing,
+            longest_tick_gap,
             tess_ms,
             draw_gpu_ms,
             acquire_ms,
@@ -227,8 +267,8 @@ impl<'a> Queue<'a> {
         self.render_ms
     }
 
-    /// Milliseconds the previous frame callback took end to end, less the
-    /// time it spent blocked waiting for a drawable ([`Self::acquire_ms`]).
+    /// Milliseconds the previous pass's frame callback took end to end, less
+    /// the time it spent blocked waiting for a drawable ([`Self::acquire_ms`]).
     ///
     /// Every other reading is a STAGE; this is the whole of the work. The
     /// wait is left out because it is not work: with three drawables a frame
@@ -272,11 +312,19 @@ impl<'a> Queue<'a> {
         self.frame_timing
     }
 
+    /// The longest gap since the last pass between two frames the display
+    /// asked for, or out of one into a frame it did not (see `TickGaps`):
+    /// what an app's check for a stalled run loop reads. Measured on every
+    /// frame, the ones that run no pass included, so a pass that waited out
+    /// the idle poll reads the display's own gaps rather than the poll's.
+    pub fn longest_tick_gap(&self) -> Option<Duration> {
+        self.longest_tick_gap
+    }
+
     /// Run the frame callback on every `divisor`th refresh of the display
     /// from here on; 0 and 1 are every refresh. See
-    /// [`baseview::Window::set_frame_divisor`]. While the UI waits on a later
-    /// repaint deadline, the window skips the frames before it
-    /// ([`paced_divisor`]).
+    /// [`baseview::Window::set_frame_divisor`]. Whether a frame runs the UI is
+    /// decided apart from this, by `pass_due`.
     ///
     /// Applied once the frame returns (the window isn't reachable from
     /// inside), so calling it repeatedly within one frame keeps only the last
@@ -391,7 +439,16 @@ where
     points_per_pixel: f32,
     bg_color: Rgba,
     close_requested: bool,
+    /// When the UI next wants a pass, on the frame clock (see [`frame_at`]):
+    /// the frame time of the last pass plus the repaint delay it asked for.
+    /// `None` while it asks for none.
     repaint_after: Option<Instant>,
+    /// See [`PassRequest`].
+    pass_request: PassRequest,
+    /// Something on this thread asked for the next pass: an event, or a size
+    /// from [`SizeSource`].
+    pass_asked: bool,
+    tick_gaps: TickGaps,
     /// How many frames in a row the surface has refused to present. Reset by
     /// the first one that lands. See [`REFUSALS_BEFORE_BACKOFF`].
     refused_presents: u32,
@@ -400,15 +457,8 @@ where
     ///
     /// Separate from `repaint_after` because it paces something else:
     /// `repaint_after` is what the UI asked for, this is what the surface has
-    /// shown it will accept. See [`wants_render`].
+    /// shown it will accept. See [`pass_due`].
     retry_after: Option<Instant>,
-    /// The divisor the app last chose ([`Queue::set_frame_divisor`]): the
-    /// link's rate whenever the UI wants a frame at once, and the one any
-    /// event restores. See [`paced_divisor`] for the rest of the time.
-    frame_divisor: u32,
-    /// When the window last changed size, by [`SizeSource`] or a `Resized`
-    /// event: the chosen rate is held for [`RESIZE_HOLD`] after it.
-    resized_at: Option<Instant>,
     key_capture: KeyCapture,
     /// See [`Queue::set_focus_takes_only_arrows`].
     focus_takes_only_arrows: bool,
@@ -511,6 +561,7 @@ where
             &mut frame_divisor,
             // The build runs outside any frame the display asked for.
             None,
+            None,
             // No frame has been measured yet: tess, draw gpu, acquire, tick,
             // render, upload, ubuf, texture, encode, submit, then the two
             // geometry counts.
@@ -576,10 +627,11 @@ where
             bg_color,
             close_requested,
             repaint_after: Some(start_time),
+            pass_request: settings.pass_request.clone(),
+            pass_asked: false,
+            tick_gaps: TickGaps::default(),
             refused_presents: 0,
             retry_after: None,
-            frame_divisor: frame_divisor.unwrap_or(1),
-            resized_at: None,
             key_capture,
             focus_takes_only_arrows,
             tess_ms: 0.0,
@@ -692,7 +744,22 @@ const REFUSALS_BEFORE_BACKOFF: u32 = 3;
 /// how long the window stays frozen.
 const SURFACE_RETRY: Duration = Duration::from_millis(250);
 
-/// Whether this tick paints, or stops after the egui pass it has already run.
+/// Whether this frame runs the UI pass, and so draws: every pass that runs
+/// renders, so this is decided before the pass rather than after it.
+///
+/// A pass is due when something asked for it (`asked`: an event, a size from
+/// [`SizeSource`], a [`PassRequest`]), or when the frame lands past the
+/// deadline the last pass left (`repaint_after`). Every other frame returns
+/// before the UI runs, which is what an idle editor's frames are: before this,
+/// the pass ran on every refresh to find out whether anything had changed, and
+/// cost a still editor 107 ms of Bitwig's main thread a second at 144 Hz
+/// (#1676).
+///
+/// `frame_at` and the deadline are both on the frame clock ([`frame_at`]), so
+/// the comparison is between two refreshes of the display's grid rather than
+/// between two moments the callbacks happened to run at, which is what made
+/// it a coin toss on pass-time jitter (#1703, #1708). A frame must land
+/// [`DEADLINE_SLACK`] past the deadline, so one exactly on it waits a refresh.
 ///
 /// Split out of the frame because it is the whole of the decision and the only
 /// part of it a test can reach: the tick around it needs a live window, a
@@ -726,125 +793,77 @@ const SURFACE_RETRY: Duration = Duration::from_millis(250);
 /// So a refusing surface is still offered a frame every [`SURFACE_RETRY`], and
 /// the first one that presents clears the backoff.
 ///
-/// Texture deltas are the exception, and they come first. They are uploaded
-/// only inside `render()`, and a frame carrying one that is skipped drops it
-/// permanently, leaving egui's glyph coordinates pointing into a stale atlas
-/// (scrambled text). Honouring them during a backoff costs nothing that
-/// repeats: consuming the delta is what clears it, so each one buys a single
-/// frame rather than re-arming the loop this exists to stop.
-fn wants_render(
-    has_texture_updates: bool,
+/// A pass asked for runs whatever the backoff says: what asks is an event or
+/// another thread's change, which come seldom, and the backoff exists to stop
+/// an animating UI's deadline of now from submitting every frame.
+///
+/// Texture deltas need no term of their own, as they did while a pass could
+/// run without drawing: they are uploaded only inside `render()`, and every
+/// pass now renders, so no delta outlives its pass.
+fn pass_due(
+    asked: bool,
     repaint_after: Option<Instant>,
     retry_after: Option<Instant>,
-    repaint_delay: Duration,
-    now: Instant,
+    frame_at: Instant,
 ) -> bool {
-    if has_texture_updates {
-        return true;
+    // A refusing surface is paced by its own clock, never the UI's: the UI
+    // asks for a zero-delay repaint on every animating frame, and honouring
+    // that is the spin the backoff exists to stop.
+    let due = retry_after.or(repaint_after).and_then(|due| due.checked_add(DEADLINE_SLACK));
+    asked || due.is_some_and(|due| frame_at > due)
+}
+
+/// How far past its deadline a frame must land for its pass to be due.
+///
+/// A deadline exactly on a refresh, as the 50 ms idle poll is at 60 and 120 Hz,
+/// is then not met by that refresh, whatever microseconds the clocks drift
+/// between the deadline's frame and this one: the poll draws a refresh later,
+/// every 66.7 ms at 60 Hz and 58.3 at 120, rather than every 50 ms or every
+/// other refresh by turns (#1708). Well under any refresh interval (4.2 ms at
+/// 240 Hz), so a deadline of the last frame (a repaint asked for at once) is
+/// met by the next one, and under the 0.67 ms by which harmonigraph-ui's
+/// startup splash's 16 ms passes a 60 Hz refresh.
+const DEADLINE_SLACK: Duration = Duration::from_micros(500);
+
+/// The instant this frame is drawn for: the display link's target refresh,
+/// which a frame the link asked for is on screen by, or `now` for one it did
+/// not (the watchdog's, a reveal's, any frame off macOS). One clock for egui's
+/// time, the repaint deadline and the decision on it.
+fn frame_at(timing: Option<baseview::FrameTiming>, now: Instant) -> Instant {
+    timing.and_then(|timing| timing.target_at()).unwrap_or(now)
+}
+
+/// The gaps between frames, measured on every frame whether it runs a pass or
+/// not, for an app's check that its run loop has not stalled
+/// ([`Queue::longest_tick_gap`]).
+///
+/// Only a gap out of a frame the display link asked for counts. A view whose
+/// link has paused (minimized, ordered out) runs on baseview's watchdog, a
+/// frame every 0.1 s or slower, and that cadence is the pause rather than a
+/// stall: counted, it logged a line per frame. The first gap out of a link
+/// frame still counts, whatever ends it.
+#[derive(Default)]
+struct TickGaps {
+    last_linked: Option<Instant>,
+    longest: Option<Duration>,
+}
+
+impl TickGaps {
+    fn tick(&mut self, at: Instant, linked: bool) {
+        if let Some(last) = self.last_linked {
+            let gap = at.saturating_duration_since(last);
+            self.longest = Some(self.longest.map_or(gap, |longest| longest.max(gap)));
+        }
+        self.last_linked = linked.then_some(at);
     }
-    if let Some(t) = retry_after {
-        // Deliberately not `repaint_delay`: the UI asks for a zero-delay
-        // repaint on every animating frame, and honouring that is the spin
-        // this exists to stop. A refusing surface is paced by its own clock
-        // and by nothing the UI has to say about it.
-        return now >= t;
-    }
-    match repaint_after {
-        Some(t) => now >= t || repaint_delay.is_zero(),
-        None => repaint_delay.is_zero(),
+
+    /// The longest gap since the last take.
+    fn take(&mut self) -> Option<Duration> {
+        self.longest.take()
     }
 }
 
-/// The furthest apart, in seconds, [`paced_divisor`] spaces the link's frames
-/// beyond the app's chosen rate, whatever the UI waits for: a UI that asks for
-/// no repaint at all still runs a pass this often, and so still sees what
-/// changed outside it. It bounds the gap between UI passes while the editor
-/// idles, and so how late a change from another thread is seen; a chosen rate
-/// slower than this is kept as it is, never sped up.
-///
-/// Public so the app's own check for a stalled loop can sit clear above it:
-/// paced gaps land on whole refreshes and run-loop jitter on top, so a cap
-/// equal to a stall threshold reads half its idle gaps as stalls.
-pub const MAX_FRAME_GAP: f64 = 0.08;
-
-/// How long after a size change [`paced_divisor`] keeps the chosen rate.
-///
-/// A host resizing the window on macOS sends no event: the size is polled at
-/// the top of each frame ([`SizeSource`]), so a link slowed to the idle poll
-/// would take each step of a border drag up to a poll late, about 18 a second.
-/// Held, the next size of the drag is seen within one chosen frame. The hold
-/// restarts at every size, so it need only bridge the gap between two host
-/// updates, which follow the pointer's moves; 0.2 s bridges a hand slowing
-/// mid-drag. What it costs is a fifth of a second of undrawn passes at the
-/// chosen rate once a resize ends, under 30 at 144 Hz, and nothing while idle.
-const RESIZE_HOLD: Duration = Duration::from_millis(200);
-
-/// How far past its deadline, in seconds, [`paced_divisor`] needs a frame to
-/// land before pacing the link to it rather than to the next.
-///
-/// The deadline is `now` after one frame's UI pass, and the frame that meets
-/// it compares it with `now` after its own, so a frame landing a margin past
-/// the deadline draws only if its callback came no more than that margin
-/// earlier, and its pass ran no more than that margin faster, than the last
-/// one's. In three Bitwig frame logs (#1703) two idle passes differ by a
-/// median 0.13 ms, by 1.2 to 1.5 ms one time in a hundred and 3 ms one in a
-/// thousand; the lateness of two link callbacks differs by up to 1 ms one time
-/// in a hundred and 2 ms one in a thousand. A frame closer to the deadline than these draws on
-/// a coin toss, and one that loses runs a pass for nothing and draws a refresh
-/// late: just under 60 Hz the poll's third refresh landed 0.05 ms past it.
-/// 2 ms clears the hundredth case of either.
-///
-/// An absolute time and not a share of the frame, because the jitter belongs
-/// to the pass and the run loop rather than to the display: a share of a slow
-/// chosen rate waits out frames far clear of it. Capped at half a chosen frame
-/// in `paced_divisor`, so a deadline of now still paces the chosen rate.
-///
-/// Every delayed repaint pays it, not only the idle poll: a delay that lands
-/// within it of a refresh waits a refresh more. harmonigraph-ui's startup
-/// splash asks for 14 ms rather than 16 for that reason, so a larger margin
-/// owes it a shorter delay.
-const PACE_MARGIN: f64 = 0.002;
-
-/// The divisor to pace the display link at until the next frame: `chosen`, or
-/// a whole multiple of it that skips the frames which could draw nothing
-/// because they fall before the deadline `until_due` away (`None`: there is
-/// none).
-///
-/// The UI pass runs on every frame the link paces, drawn or not, and an idle
-/// editor waiting out its 50 ms poll ran it on every refresh for nothing
-/// (#1676). So the link skips to the first of the chosen rate's frames at
-/// least [`PACE_MARGIN`] past the deadline, which is the frame `wants_render`
-/// would draw on anyway: the drawn cadence is the one the chosen rate gives,
-/// and only the undrawn passes go. One closer than that is skipped because it
-/// may not draw (see [`PACE_MARGIN`]); what that costs is a frame landing up
-/// to the margin past the deadline is waited out to the next chosen frame. A
-/// deadline of now (the UI asked for a frame at once, as an animating editor
-/// does every frame) is the chosen rate itself, so the first animating frame
-/// restores it. A frame that still lands a hair before its deadline is no
-/// loss: it reads the deadline as moments away and paces the next of the
-/// chosen rate's frames. What the UI does not schedule waits for the next of
-/// these frames: an event restores the chosen rate at once (see `on_event`),
-/// but a change from another thread (a note, audio, a host parameter) is seen
-/// when the deadline comes.
-///
-/// A size change is the exception: `since_resize` (how long ago the window
-/// last changed size) within [`RESIZE_HOLD`] keeps the chosen rate.
-fn paced_divisor(
-    chosen: u32, refresh: f64, until_due: Option<Duration>, since_resize: Option<Duration>,
-) -> u32 {
-    let chosen = chosen.max(1);
-    let period = refresh * f64::from(chosen);
-    if !(period.is_finite() && period > 0.0) || since_resize.is_some_and(|t| t < RESIZE_HOLD) {
-        return chosen;
-    }
-    let wait = until_due.map_or(MAX_FRAME_GAP, |due| due.as_secs_f64().min(MAX_FRAME_GAP));
-    let most = (MAX_FRAME_GAP / period).floor().max(1.0);
-    let margin = PACE_MARGIN.min(period / 2.0);
-    let frames = (((wait + margin) / period).floor() + 1.0).min(most);
-    chosen * frames as u32
-}
-
-/// What a finished render leaves behind for [`wants_render`] to read next
+/// What a finished render leaves behind for [`pass_due`] to read next
 /// tick: how many presents have now been refused in a row, and when to offer
 /// the surface another frame.
 ///
@@ -896,19 +915,17 @@ mod wheel_delta_tests {
     }
 }
 
-/// The time egui animates a frame at: the display link's target refresh when
-/// it asked for the frame, so egui's own animations step by whole refreshes as
-/// the plugin's picture does, however late the callback ran; otherwise now.
-/// Never before `previous`, since a frame the link did not ask for, between
-/// two it did, is behind the last target, and egui reads time going backwards
-/// as a negative frame time.
-fn egui_time(previous: f64, start: Instant, timing: Option<baseview::FrameTiming>) -> f64 {
-    let at = timing.and_then(|timing| timing.target_at()).unwrap_or_else(Instant::now);
+/// The time egui animates a frame at: its [`frame_at`], so egui's own
+/// animations step by whole refreshes as the plugin's picture does, however
+/// late the callback ran. Never before `previous`, since a frame the link did
+/// not ask for, between two it did, is behind the last target, and egui reads
+/// time going backwards as a negative frame time.
+fn egui_time(previous: f64, start: Instant, at: Instant) -> f64 {
     at.saturating_duration_since(start).as_secs_f64().max(previous)
 }
 
 #[cfg(test)]
-mod wants_render_tests {
+mod pass_due_tests {
     use super::*;
 
     /// Link frames whose callbacks ran 0.3–9 ms late animate egui one refresh
@@ -927,13 +944,14 @@ mod wants_render_tests {
                 target_timestamp: 500.0 + vsync + refresh,
                 refresh,
                 divisor: 1,
-                woken: 0,
             }
         };
+        let now = Instant::now();
         let mut time = 0.0;
         let mut times = Vec::new();
         for (frame, late_ms) in [0.3, 5.1, 0.4, 9.0, 0.6].into_iter().enumerate() {
-            time = egui_time(time, start, Some(link(1.0 + frame as f64 * refresh, late_ms)));
+            let at = frame_at(Some(link(1.0 + frame as f64 * refresh, late_ms)), now);
+            time = egui_time(time, start, at);
             times.push(time);
         }
         for step in times.windows(2).map(|pair| pair[1] - pair[0]) {
@@ -941,10 +959,12 @@ mod wants_render_tests {
         }
         // The link frames ran a second past `start`, so now is well before the
         // last target, as a reveal repaint between link frames is.
-        assert_eq!(egui_time(time, start, None), time, "a frame the link did not ask for");
+        let unasked = egui_time(time, start, frame_at(None, now));
+        assert_eq!(unasked, time, "a frame the link did not ask for");
         // Five seconds ahead is not this frame's, so it falls back to now too.
         let far = baseview::FrameTiming { target_timestamp: 500.0 + 7.0, ..link(1.1, 0.3) };
-        assert_eq!(egui_time(time, start, Some(far)), time, "a target AppKit got wrong");
+        let wrong = egui_time(time, start, frame_at(Some(far), now));
+        assert_eq!(wrong, time, "a target AppKit got wrong");
     }
 
     #[test]
@@ -959,7 +979,7 @@ mod wants_render_tests {
         for sample in [Some(2.0), None, None, None, None, Some(10.0), None] {
             let mut queue = Queue::new(
                 &mut color, &mut close, &mut size, &mut capture, &mut arrows_only, &mut divisor,
-                None,
+                None, None,
                 0.0, sample, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0,
             );
             completed.extend(queue.take_draw_gpu_ms());
@@ -968,185 +988,139 @@ mod wants_render_tests {
         assert_eq!(completed, [2.0, 10.0]);
     }
 
-    /// The shape the plugin's UI actually asks for while anything is moving:
-    /// `request_repaint()`, which is a repaint delay of zero, and a deadline
-    /// already behind us. Under it a visible window paints every tick.
-    fn animating(now: Instant) -> (Option<Instant>, Duration) {
-        (now.checked_sub(Duration::from_millis(1)), Duration::ZERO)
+    /// The deadline the plugin's UI leaves while anything is moving:
+    /// `request_repaint()`, a repaint delay of zero, from the last frame, a
+    /// refresh before this one. Under it a visible window draws every frame.
+    fn animating(now: Instant) -> Option<Instant> {
+        now.checked_sub(Duration::from_secs_f64(1.0 / 144.0))
     }
 
     #[test]
     fn a_backed_off_surface_is_not_offered_a_frame_every_tick() {
         let now = Instant::now();
-        let (repaint_after, delay) = animating(now);
-        assert!(wants_render(false, repaint_after, None, delay, now));
+        assert!(pass_due(false, animating(now), None, now));
         // Same frame, same zero-delay request, and the only difference is
         // that the surface has shown it will refuse: the unpaced submit loop
         // is exactly this assertion coming back true.
         let armed = now.checked_add(SURFACE_RETRY);
-        assert!(!wants_render(false, repaint_after, armed, delay, now));
+        assert!(!pass_due(false, animating(now), armed, now));
     }
 
     #[test]
     fn a_backed_off_surface_is_still_offered_a_frame_each_interval() {
         let now = Instant::now();
-        // An idle UI, whose own deadline is an interval away and whose delay
-        // is not zero: with the backoff gone this tick paints nothing, so a
-        // due retry is the only thing that can explain the frame — which is
-        // what makes this measure the poll rather than agree with it.
-        let idle = Duration::from_secs(1);
-        let ahead = now.checked_add(idle);
-        assert!(!wants_render(false, ahead, None, idle, now));
-        // Armed one interval ago, so this tick tries the acquire — the offer
+        // An idle UI, whose own deadline is an interval away: with the backoff
+        // gone this frame runs nothing, so a due retry is the only thing that
+        // can explain the pass — which is what makes this measure the retry
+        // rather than agree with it.
+        let ahead = now.checked_add(Duration::from_secs(1));
+        assert!(!pass_due(false, ahead, None, now));
+        // Armed one interval ago, so this frame tries the acquire — the offer
         // whose success is the only thing that has to be believed for a
         // window with no `Occluded(false)` to come back.
-        assert!(wants_render(false, ahead, now.checked_sub(SURFACE_RETRY), idle, now));
+        assert!(pass_due(false, ahead, now.checked_sub(SURFACE_RETRY), now));
     }
 
     #[test]
     fn a_transient_refusal_still_retries_on_the_next_tick() {
         let now = Instant::now();
-        let (_, delay) = animating(now);
         // A resize's surface goes Outdated for a frame or two. Every refusal
         // below the threshold must leave the backoff unarmed, so the retry is
-        // the very next tick and the drag stays smooth — 250 ms of stale
+        // the very next frame and the drag stays smooth — 250 ms of stale
         // content per hitch is exactly what this must not buy.
         let mut refused = 0;
         for _ in 1..REFUSALS_BEFORE_BACKOFF {
             let retry;
             (refused, retry) = after_render(false, refused, now);
             assert_eq!(retry, None);
-            assert!(wants_render(false, Some(now), retry, delay, now));
+            assert!(pass_due(false, animating(now), retry, now));
         }
         // One more, and it is no longer transient.
         let (_, retry) = after_render(false, refused, now);
         assert!(retry.is_some());
-        assert!(!wants_render(false, Some(now), retry, delay, now));
+        assert!(!pass_due(false, animating(now), retry, now));
     }
 
     #[test]
     fn one_present_ends_the_backoff() {
         let now = Instant::now();
-        let (repaint_after, delay) = animating(now);
         // However long it has been refusing — this is the recovery that has
         // to work without any occlusion event arriving to announce it.
         let (refused, retry) = after_render(false, u32::MAX - 1, now);
         assert!(retry.is_some());
-        assert!(!wants_render(false, repaint_after, retry, delay, now));
+        assert!(!pass_due(false, animating(now), retry, now));
         let (refused, retry) = after_render(true, refused, now);
         assert_eq!((refused, retry), (0, None));
-        assert!(wants_render(false, repaint_after, retry, delay, now));
+        assert!(pass_due(false, animating(now), retry, now));
     }
 
+    /// An idle UI's deadline is ahead, so its frames run nothing; an event, a
+    /// size or another thread's request runs the next one, backed off or not,
+    /// and a UI that asks for nothing at all runs none until something asks.
     #[test]
-    fn a_texture_delta_is_uploaded_even_while_backed_off() {
+    fn a_frame_runs_a_pass_only_when_asked_or_due() {
         let now = Instant::now();
-        let idle = Duration::from_secs(1);
-        // Not due, and the UI is asking for nothing, so this tick paints
-        // nothing at all — which is what would drop the atlas upload for good.
-        let armed = now.checked_add(SURFACE_RETRY);
-        let ahead = now.checked_add(idle);
-        assert!(!wants_render(false, ahead, armed, idle, now));
-        assert!(wants_render(true, ahead, armed, idle, now));
+        let poll = now.checked_add(Duration::from_millis(50));
+        assert!(!pass_due(false, poll, None, now));
+        assert!(pass_due(true, poll, None, now), "asked");
+        assert!(pass_due(true, poll, now.checked_add(SURFACE_RETRY), now), "asked, backed off");
+        assert!(!pass_due(false, None, None, now), "nothing asked for");
     }
 
+    /// The idle poll's deadline, set on one refresh, is met by the first
+    /// refresh past it at any rate in use, even where it falls exactly on a
+    /// refresh (50 ms at 60 and 120 Hz) and the two frames' clocks drift by
+    /// microseconds either way: that one waits a refresh more, every time
+    /// (#1708). A deadline of now is met by the next refresh, and the splash's
+    /// 16 ms by the next 60 Hz refresh.
     #[test]
-    fn a_presenting_window_keeps_its_deadline() {
-        let now = Instant::now();
-        let capped = Duration::from_millis(16);
-        // A delayed repaint (the idle poll), with no backoff because the
-        // surface is taking frames: the deadline is ahead, so this tick waits.
-        assert!(!wants_render(false, now.checked_add(capped), None, capped, now));
-        // Reached, so it paints.
-        assert!(wants_render(false, now.checked_sub(capped), None, capped, now));
-        // No deadline yet and nothing urgent asked for: still waits.
-        assert!(!wants_render(false, None, None, capped, now));
-    }
-
-    /// Waiting out the 50 ms idle poll, the link skips to the first of the
-    /// chosen rate's frames past it, at any display rate, never further apart
-    /// than the cap unless the chosen rate is, and never faster than the
-    /// chosen rate; a frame asked for at once (an animating editor) puts the
-    /// chosen rate back.
-    #[test]
-    fn an_idle_poll_slows_the_link_to_the_frame_it_draws_on() {
-        let poll = Some(Duration::from_millis(50));
-        for hz in [60.0, 100.0, 120.0, 144.0] {
+    fn a_deadline_is_met_by_the_first_refresh_past_it() {
+        let set = Instant::now();
+        let on = |refreshes: f64, refresh: f64, drift_us: f64| {
+            let at = set + Duration::from_secs_f64(refreshes * refresh);
+            let drift = Duration::from_secs_f64(drift_us.abs() / 1e6);
+            if drift_us < 0.0 { at - drift } else { at + drift }
+        };
+        let poll = set.checked_add(Duration::from_millis(50));
+        for hz in [59.94, 60.0, 75.0, 90.0, 100.0, 119.88, 120.0, 144.0, 165.0, 240.0] {
             let refresh = 1.0 / hz;
-            for chosen in 1..=4 {
-                let idle = paced_divisor(chosen, refresh, poll, None);
-                let gap = f64::from(idle) * refresh;
-                let step = f64::from(chosen) * refresh;
-                assert_eq!(idle % chosen, 0, "{hz} Hz, divisor {chosen}: off the chosen grid");
-                assert!(gap > 0.05 - 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
-                assert!(gap < 0.05 + PACE_MARGIN + step + 1e-9, "{hz} Hz, {chosen}: {gap} s");
-                assert!(gap <= MAX_FRAME_GAP + 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
-                assert_eq!(paced_divisor(chosen, refresh, Some(Duration::ZERO), None), chosen);
+            let past = |k: u32| f64::from(k) * refresh > 0.05 + DEADLINE_SLACK.as_secs_f64();
+            let first = (1..).find(|&k| past(k)).unwrap();
+            for drift_us in [-20.0, 0.0, 20.0] {
+                let met = |k: u32| pass_due(false, poll, None, on(f64::from(k), refresh, drift_us));
+                assert_eq!((1..).find(|&k| met(k)), Some(first), "{hz} Hz, {drift_us} us");
+                let next = on(1.0, refresh, drift_us);
+                assert!(pass_due(false, Some(set), None, next), "{hz} Hz: a repaint asked at once");
             }
         }
-        // #1673's still picture in Bitwig drew every 8th refresh at 144 Hz.
-        assert_eq!(paced_divisor(1, 1.0 / 144.0, poll, None), 8);
-        // Third at 60 Hz is the poll's own period: doubling it to the next
-        // frame past the poll would space passes 100 ms apart, which the
-        // plugin's stall check reads as a stall. The cap keeps it at Third.
-        assert_eq!(paced_divisor(3, 1.0 / 60.0, poll, None), 3);
-        // Quarter at 60 Hz is already slower than the poll.
-        assert_eq!(paced_divisor(4, 1.0 / 60.0, poll, None), 4);
-        // 75 Hz's fourth refresh lands 3.3 ms past the poll, clear of the
-        // margin, so it keeps it.
-        assert_eq!(paced_divisor(1, 1.0 / 75.0, poll, None), 4);
-        // Nothing asked for at all: still a pass every 0.08 s or sooner.
-        assert_eq!(paced_divisor(1, 1.0 / 144.0, None, None), 11);
+        assert!(!pass_due(false, poll, None, on(3.0, 1.0 / 60.0, 20.0)), "exactly on it at 60 Hz");
+        let splash = set.checked_add(Duration::from_millis(16));
+        assert!(pass_due(false, splash, None, on(1.0, 1.0 / 60.0, -20.0)), "the splash at 60 Hz");
     }
 
-    /// The frame paced for an idle poll draws even when it reaches its UI
-    /// pass's end up to [`PACE_MARGIN`] sooner after its refresh than the
-    /// frame that set the deadline did. Just under 60 and 120 Hz the poll's
-    /// third and sixth refreshes land 0.05 ms past it, which a pass that much
-    /// faster misses, and the missed frame ran a pass for nothing and drew a
-    /// refresh late (#1703). Pacing cannot help where the link already runs
-    /// unslowed because its next chosen frame is past `MAX_FRAME_GAP` (Third
-    /// near 60 Hz, Quarter up to 90 Hz), so those are left out.
+    /// A gap counts only out of a frame the display link asked for: the
+    /// watchdog's frames while the link is paused are its cadence, not
+    /// stalls, though the first gap out of a link frame into one is still a
+    /// gap. Each pass reads the longest since the last.
     #[test]
-    fn the_paced_frame_draws_though_its_pass_runs_faster() {
-        let poll = Duration::from_millis(50);
-        let faster = Duration::from_secs_f64(PACE_MARGIN) - Duration::from_micros(100);
-        let pass = Duration::from_millis(3);
-        let fired = Instant::now();
-        let deadline = fired + pass + poll;
-        for hz in [59.94, 60.0, 75.0, 90.0, 100.0, 119.88, 120.0, 144.0, 165.0] {
-            let refresh = 1.0 / hz;
-            for chosen in 1..=4 {
-                let divisor = paced_divisor(chosen, refresh, Some(poll), None);
-                if divisor == chosen && f64::from(2 * chosen) * refresh > MAX_FRAME_GAP {
-                    continue;
-                }
-                let next = fired + Duration::from_secs_f64(f64::from(divisor) * refresh);
-                let now = next + pass - faster;
-                assert!(
-                    wants_render(false, Some(deadline), None, poll, now),
-                    "{hz} Hz, divisor {chosen}: paced {divisor} lands too close to the poll"
-                );
-            }
+    fn only_a_gap_out_of_a_link_frame_counts() {
+        let start = Instant::now();
+        let at = |seconds: f64| start + Duration::from_secs_f64(seconds);
+        let mut gaps = TickGaps::default();
+        gaps.tick(at(0.0), true);
+        gaps.tick(at(0.007), true);
+        gaps.tick(at(0.5), true);
+        gaps.tick(at(0.507), true);
+        assert_eq!(gaps.take(), Some(at(0.5) - at(0.007)), "between two link frames");
+        assert_eq!(gaps.take(), None, "taken");
+        gaps.tick(at(0.7), false);
+        assert_eq!(gaps.take(), Some(at(0.7) - at(0.507)), "out of a link frame");
+        for tick in 1..=50 {
+            gaps.tick(at(0.7 + 0.21 * f64::from(tick)), false);
         }
-    }
-
-    /// A host resize on macOS arrives as no event, only as a size the next
-    /// frame polls, so a still editor whose link idles would step a border
-    /// drag at the poll. Within the hold after a size change the link keeps
-    /// the chosen rate, whatever the deadline; after it the link idles again.
-    #[test]
-    fn a_resize_holds_the_chosen_rate_for_a_moment() {
-        let poll = Some(Duration::from_millis(50));
-        let refresh = 1.0 / 144.0;
-        let just = Some(Duration::from_millis(10));
-        let late = Some(RESIZE_HOLD - Duration::from_millis(1));
-        assert_eq!(paced_divisor(1, refresh, poll, just), 1);
-        assert_eq!(paced_divisor(2, refresh, poll, late), 2);
-        assert_eq!(paced_divisor(1, refresh, None, just), 1);
-        let after = Some(RESIZE_HOLD + Duration::from_millis(1));
-        assert_eq!(paced_divisor(1, refresh, poll, after), 8);
-        assert_eq!(paced_divisor(2, refresh, poll, after), 8);
+        assert_eq!(gaps.take(), None, "the watchdog's frames");
+        gaps.tick(at(11.5), true);
+        assert_eq!(gaps.take(), None, "the link's return");
     }
 }
 
@@ -1162,19 +1136,23 @@ where
         // `tick` against the interval between frames separates "the work is
         // slow" from "we are not being called".
         let tick_start = Instant::now();
-        let mut waited_ms = 0.0;
         #[cfg(all(feature = "frame-log", target_os = "macos"))]
         let log_start = crate::frame_log::begin();
-        #[cfg(all(feature = "frame-log", target_os = "macos"))]
-        let log_chosen = self.frame_divisor;
         let Some(state) = &mut self.user_state else {
             return;
         };
 
+        // Every frame, before deciding whether it runs the UI: the gaps a
+        // stall check reads are the display's, not the passes'.
+        let timing = window.frame_timing();
+        self.tick_gaps.tick(tick_start, timing.is_some());
+
         // BEFORE the input the frame is laid out from: a size this window has
         // already been given from outside (see `SizeSource`). Read after it,
         // the frame is built for a window that has stopped being that size,
-        // and lands in a surface that is already the new one.
+        // and lands in a surface that is already the new one. Asked every
+        // frame, the ones that run no pass included, since the source is also
+        // where the app does its own host-window duties.
         let old_physical_size = self.physical_size;
         if let Some(size) = self.size_source.as_ref().and_then(SizeSource::take) {
             let adopted = PhySize::new(
@@ -1182,10 +1160,28 @@ where
                 (size.height * self.pixels_per_point as f64).round().max(1.0) as u32,
             );
             self.physical_size = adopted;
-            self.resized_at = Some(tick_start);
+            self.pass_asked = true;
         }
 
-        self.egui_time = egui_time(self.egui_time, self.start_time, window.frame_timing());
+        let frame_at = frame_at(timing, tick_start);
+        self.pass_asked |= self.pass_request.take();
+        if !pass_due(self.pass_asked, self.repaint_after, self.retry_after, frame_at) {
+            #[cfg(all(feature = "frame-log", target_os = "macos"))]
+            crate::frame_log::end(crate::frame_log::Tick {
+                window: std::ptr::from_ref(self) as usize,
+                start: log_start,
+                timing,
+                tick_ms: tick_start.elapsed().as_secs_f32() * 1000.0,
+                acquire_ms: 0.0,
+                render_ms: 0.0,
+                rendered: false,
+                drawables: self.renderer.max_drawables(),
+            });
+            return;
+        }
+        self.pass_asked = false;
+
+        self.egui_time = egui_time(self.egui_time, self.start_time, frame_at);
         self.egui_input.time = Some(self.egui_time);
         let screen_rect = calculate_screen_rect(self.physical_size, self.points_per_pixel);
         self.egui_input.screen_rect = Some(screen_rect);
@@ -1202,7 +1198,8 @@ where
             &mut self.key_capture,
             &mut self.focus_takes_only_arrows,
             &mut frame_divisor,
-            window.frame_timing(),
+            timing,
+            self.tick_gaps.take(),
             self.tess_ms,
             self.draw_gpu_ms.take(),
             self.acquire_ms,
@@ -1222,7 +1219,7 @@ where
         });
 
         if let Some(divisor) = frame_divisor {
-            self.frame_divisor = divisor;
+            window.set_frame_divisor(divisor);
         }
 
         if self.close_requested {
@@ -1260,97 +1257,53 @@ where
             });
         }
 
-        let now = Instant::now();
-        let has_texture_updates = !full_output.textures_delta.set.is_empty()
-            || !full_output.textures_delta.free.is_empty();
         // Copied out of the borrow so it stays readable after `render()` takes
         // `&mut full_output` below (Duration is Copy, so this costs nothing).
         let repaint_delay = viewport_output.repaint_delay;
-        let do_repaint_now = wants_render(
-            has_texture_updates,
-            self.repaint_after,
-            self.retry_after,
-            repaint_delay,
-            now,
+
+        // The renderer half of the callback, whole. `tick` minus this is the
+        // egui half — the UI closure plus egui's own end-of-pass work — so
+        // between them nothing in the frame is unattributed, even though
+        // neither is a single stage.
+        let render_start = Instant::now();
+        let presented = self.renderer.render(
+            window,
+            self.bg_color,
+            self.physical_size,
+            self.pixels_per_point,
+            &mut self.egui_ctx,
+            &mut full_output,
         );
 
-        if do_repaint_now {
-            // The renderer half of the callback, whole. `tick` minus this is
-            // the egui half — the UI closure plus egui's own end-of-pass work
-            // — so between them nothing in the frame is unattributed, even
-            // though neither is a single stage.
-            let render_start = Instant::now();
-            let presented = self.renderer.render(
-                window,
-                self.bg_color,
-                self.physical_size,
-                self.pixels_per_point,
-                &mut self.egui_ctx,
-                &mut full_output,
-            );
+        let waited_ms = self.renderer.last_acquire_ms();
+        self.render_ms = render_start.elapsed().as_secs_f32() * 1000.0 - waited_ms;
 
-            waited_ms = self.renderer.last_acquire_ms();
-            self.render_ms = render_start.elapsed().as_secs_f32() * 1000.0 - waited_ms;
+        // A skipped present (occluded window, lost/outdated surface) must not
+        // consume the repaint request: the next frame runs a pass again, so
+        // the first frame after the surface comes back is fresh rather than
+        // the pre-occlusion ghost.
+        //
+        // On the frame clock (`frame_at`), as `pass_due` compares it: from the
+        // refresh this pass drew for, not from when the pass happened to end.
+        self.repaint_after =
+            if presented { frame_at.checked_add(repaint_delay) } else { Some(frame_at) };
 
-            // A skipped present (occluded window, lost/outdated surface)
-            // must not consume the repaint request: retry next tick, so
-            // the first frame after the surface comes back is fresh
-            // rather than the pre-occlusion ghost.
-            //
-            // On a successful paint, schedule the next deadline from THIS
-            // instant rather than leaving it unset. Clearing it to `None`
-            // costs a whole tick: the deadline would only be established on
-            // the following tick, from that later `now`, so every delayed
-            // repaint (the idle poll, the startup delay) silently ran one
-            // tick long.
-            self.repaint_after =
-                if presented { now.checked_add(repaint_delay) } else { Some(now) };
-
-            // A present PROVES the surface is available — the acquire refuses
-            // an occluded window — so it is what the backoff defers to, and
-            // the only thing that has to be believed for the window to come
-            // back. See `after_render`.
-            (self.refused_presents, self.retry_after) =
-                after_render(presented, self.refused_presents, now);
-            self.tess_ms = self.renderer.last_tess_ms();
-            self.draw_gpu_ms = self.renderer.take_gpu_ms();
-            self.acquire_ms = self.renderer.last_acquire_ms();
-            self.upload_ms = self.renderer.last_upload_ms();
-            self.ubuf_ms = self.renderer.last_ubuf_ms();
-            self.texture_ms = self.renderer.last_texture_ms();
-            self.prims = self.renderer.last_prims();
-            self.verts = self.renderer.last_verts();
-            self.encode_ms = self.renderer.last_encode_ms();
-            self.submit_ms = self.renderer.last_submit_ms();
-        } else if let Some(candidate) = now.checked_add(repaint_delay) {
-            // Keep the EARLIEST pending deadline rather than overwriting it.
-            //
-            // egui recomputes `repaint_delay` from scratch on every pass (it
-            // resets to MAX in `begin_pass_repaint_logic` and takes the min of
-            // that pass's requests), and the UI closure runs on every tick —
-            // including ticks that paint nothing. Overwriting meant a steady
-            // `request_repaint_after(N)` re-based the deadline to `now + N` on
-            // each tick, so for any N longer than the tick interval `now`
-            // never caught up and the deadline receded forever: the window
-            // stopped painting until an input event or a texture upload forced
-            // it. That silently disabled every delayed repaint, the idle poll
-            // included.
-            self.repaint_after =
-                Some(self.repaint_after.map_or(candidate, |pending| pending.min(candidate)));
-        }
-
-        // The link's rate until the next frame, now that what that frame waits
-        // for is known: the deadline `wants_render` reads next.
-        let until_due =
-            self.retry_after.or(self.repaint_after).map(|due| due.saturating_duration_since(now));
-        let since_resize = self.resized_at.map(|at| now.saturating_duration_since(at));
-        let divisor = match window.frame_timing() {
-            Some(timing) => {
-                paced_divisor(self.frame_divisor, timing.refresh, until_due, since_resize)
-            }
-            None => self.frame_divisor,
-        };
-        window.set_frame_divisor(divisor);
+        // A present PROVES the surface is available — the acquire refuses an
+        // occluded window — so it is what the backoff defers to, and the only
+        // thing that has to be believed for the window to come back. See
+        // `after_render`.
+        (self.refused_presents, self.retry_after) =
+            after_render(presented, self.refused_presents, frame_at);
+        self.tess_ms = self.renderer.last_tess_ms();
+        self.draw_gpu_ms = self.renderer.take_gpu_ms();
+        self.acquire_ms = self.renderer.last_acquire_ms();
+        self.upload_ms = self.renderer.last_upload_ms();
+        self.ubuf_ms = self.renderer.last_ubuf_ms();
+        self.texture_ms = self.renderer.last_texture_ms();
+        self.prims = self.renderer.last_prims();
+        self.verts = self.renderer.last_verts();
+        self.encode_ms = self.renderer.last_encode_ms();
+        self.submit_ms = self.renderer.last_submit_ms();
 
         for command in full_output.platform_output.commands {
             match command {
@@ -1395,22 +1348,20 @@ where
         crate::frame_log::end(crate::frame_log::Tick {
             window: std::ptr::from_ref(self) as usize,
             start: log_start,
-            timing: window.frame_timing(),
-            chosen: log_chosen,
+            timing,
             tick_ms: self.tick_ms,
             acquire_ms: waited_ms,
             render_ms: self.render_ms,
-            rendered: do_repaint_now,
+            rendered: true,
             drawables: self.renderer.max_drawables(),
         });
     }
 
     #[allow(unused_variables)]
     fn on_event(&mut self, window: &mut Window, event: Event) -> EventStatus {
-        // Back to the chosen rate, so an editor the link has slowed to its
-        // poll ([`paced_divisor`]) draws this event on the next refresh rather
-        // than a poll later. Nothing changes while the link is not slowed.
-        window.set_frame_divisor(self.frame_divisor);
+        // Any event runs the UI on the next frame (see `pass_due`): whatever
+        // it changes is drawn on the next refresh.
+        self.pass_asked = true;
 
         // Parent/embedded windows do not always gain keyboard focus
         // Automatically on click. Request focus explicitly before forwarding the event.
@@ -1585,12 +1536,6 @@ where
                         .unwrap();
                     viewport_info.native_pixels_per_point = Some(self.pixels_per_point);
                     viewport_info.inner_rect = Some(screen_rect);
-
-                    // Schedule to repaint on the next frame, and hold the
-                    // chosen rate for the rest of a drag (`RESIZE_HOLD`).
-                    let now = Instant::now();
-                    self.repaint_after = Some(now);
-                    self.resized_at = Some(now);
                 }
                 baseview::WindowEvent::Focused => {
                     self.egui_input
@@ -1619,14 +1564,15 @@ where
                     self.renderer.window_occluded(*occluded);
                     if !occluded {
                         // Re-exposed after occlusion: the compositor may
-                        // have kept showing a stale snapshot of the
-                        // window; repaint and present a fresh frame now.
-                        self.repaint_after = Some(Instant::now());
-                        // And drop the backoff the occlusion earned, so that
-                        // frame is not held behind it. This is a shortcut,
-                        // never the way back: the poll recovers a window whose
-                        // `Occluded(false)` never arrives, which is why
-                        // `wants_render` is keyed on refusals and not on this.
+                        // have kept showing a stale snapshot of the window,
+                        // and this event runs a pass on the next frame like
+                        // any other. Drop the backoff the occlusion earned
+                        // too, so a surface not ready for that frame is
+                        // offered the next ones rather than one 250 ms later.
+                        // This is a shortcut, never the way back: the retry
+                        // recovers a window whose `Occluded(false)` never
+                        // arrives, which is why `pass_due` is keyed on
+                        // refusals and not on this.
                         self.refused_presents = 0;
                         self.retry_after = None;
                     }

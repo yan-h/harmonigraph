@@ -58,9 +58,9 @@ which contains a ready-made capture texture + readback buffer + blit (upstream `
 
 Frame pacing.
 The plugin repaints **on demand**, not at a fixed rate:
-continuously only while voices are sounding or decaying, otherwise a 50 ms poll (`IDLE_REPAINT_INTERVAL` in `crates/harmonigraph-ui/src/lib.rs`), on top of frames driven by the view's display link on macOS (one per refresh while anything moves, slowed to the poll while the editor is still; `vendor/baseview/src/platform/macos/view.rs`) and a Fifo swapchain.
+continuously only while voices are sounding or decaying, otherwise a 50 ms poll (`IDLE_REPAINT_INTERVAL` in `crates/harmonigraph-ui/src/lib.rs`), on top of frames driven by the view's display link on macOS (one per refresh, `vendor/baseview/src/platform/macos/view.rs`, of which a still editor's run its UI and draw only when the poll comes due or something asks; `pass_due` in `vendor/egui-baseview/src/window.rs`) and a Fifo swapchain.
 Presents are also skipped outright on Occluded/Outdated/Lost (`renderer.rs:214-262`).
-The editor logs gaps after paced GUI frames (`note_frame` in `editor/shared.rs`),
+The editor logs gaps between the display link's frames (`STALL_GAP` in `editor/frame.rs`),
 not skipped presents;
 a frame that runs on time but skips its present produces no such warning.
 

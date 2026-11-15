@@ -52,7 +52,13 @@ pub(super) fn frame(
     // The display link's timing for this frame, or `None` for one it did not ask
     // for (the watchdog's, an occlusion repaint).
     let timing = queue.frame_timing();
-    shared.note_frame(timing.is_some() || !cfg!(target_os = "macos"));
+    // A stalled run loop (run-loop mode issues, a host blocking its main
+    // thread), so freezes stay attributable: measured by the window on every
+    // display frame, including the ones that ran no pass.
+    if let Some(gap) = queue.longest_tick_gap().filter(|gap| gap.as_secs_f64() > STALL_GAP) {
+        let ms = gap.as_secs_f64() * 1000.0;
+        shared.ui.picture.runtime.console.log(format!("frame stall: {ms:.0} ms between updates"));
+    }
 
     // The input worker ([`crate::background`]) drains the rings and runs the
     // analysis, and a frame reads what it left — unless it never started.
@@ -152,6 +158,10 @@ pub(super) fn frame(
         harmonigraph_ui::keys::claimed(ui.ctx()),
     ));
 }
+
+/// The gap between display frames, in seconds, past which a pass logs a stall:
+/// clear of any interval the link paces at, Quarter at 60 Hz being 67 ms.
+const STALL_GAP: f64 = 0.1;
 
 /// State handed to egui-baseview's run loop.
 pub(super) struct WindowState {
