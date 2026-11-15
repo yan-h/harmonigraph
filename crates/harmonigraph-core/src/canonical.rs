@@ -1,16 +1,25 @@
 //! The canonical display/take boundary: observed direct input, accepted output,
-//! complete source replacement and explicit missing history. Runtime lease and
-//! credit validation belongs to the audio owner before this publication boundary.
+//! complete source replacement and explicit missing history, as the Hub
+//! schedules them from its own sequenced rows.
 use crate::configuration::ResolvedConfig;
-use crate::confirmed::{ConfirmedPitch, PitchProvenance, HELD_PER_SOURCE};
 use crate::{Expressions, LatticePos, NoteEvent, NoteEventKind, SourceId, Time, VoiceKey};
+
+/// Held voices one source's baseline can carry.
+pub const HELD_PER_SOURCE: usize = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PitchProvenance {
+    ObservedDirect,
+    AcceptedOutput,
+}
 
 /// What the tuner decided about one attack. It also named the configuration
 /// revision the decision was taken under, for reconstructing historical
-/// configuration from a note; #712 settled that configuration is adopted per
-/// block and captured when a group's assignment starts, so nothing
-/// reconstructs it and nothing ever read the number. The take's configuration
-/// timeline still carries every revision and when it applied.
+/// configuration from a note. Nothing ever read the number: the take's
+/// configuration timeline carries every revision at the sample it applied
+/// from, which is the configuration the attack was assigned under (#1749) —
+/// except an attack the history no longer reached, a record held over past a
+/// steady-clock regression, which was assigned from the live state (#1792).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AssignmentMetadata {
     pub decision: u64,
@@ -158,15 +167,6 @@ impl VoiceBaseline {
 
     pub fn pitch(&self) -> f32 {
         (self.pitch_microcents as f64 / 100_000_000.0) as f32
-    }
-
-    pub fn confirmed(&self, source: SourceId) -> ConfirmedPitch {
-        ConfirmedPitch {
-            key: self.key(source),
-            lifetime: Some(self.lifetime),
-            pitch_microcents: self.pitch_microcents,
-            provenance: self.provenance,
-        }
     }
 }
 

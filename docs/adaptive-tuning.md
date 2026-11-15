@@ -98,7 +98,7 @@ a design whose rejected branch was implemented first knows exactly what it cost.
 | The delay | A per-Tune **Tuning delay** parameter: 1 to 16 multiples of the host's advertised maximum callback size, resolved at activation, fixed for that activation and reported as latency | One fixed session-wide delay of 512 samples | A sample count is either short at one buffer size or needless latency at another; a multiple of the host's own callback is the quantity the round trip actually has to fit inside, and 16× reaches the old 512 even from a 32-frame callback | Automatic latency adaptation is requested — it explicitly is not, today |
 | Tune→Hub transport | Self-contained copied records through bounded preallocated queues; the Hub owns what it receives and Tune owns its pending state | A shared `CaptureArena` with `unsafe impl Sync`, `Token`/`Key`/`Permissions`, a split between original and local storage, and a storage-retirement handshake | Each record is fixed-size and its storage preallocated, so copying costs no allocation and no extra delay — and it deletes an entire ownership protocol whose only purpose was avoiding the copy | Copying is measured to cost callback budget the assignment cannot afford |
 | Same-sample ordering | Merge the per-source streams by sample; within one sample apply every release and controller from every source, then assign onsets in key, channel, source order | A 15-phase incremental topological sort over a 1,280-vertex adjacency bitset, built by an O(n²) pairwise scan and budgeted across callbacks | Across sources the dependency graph is empty by construction, and within one source the host already delivers events in dependency order, which copying preserves. There was nothing for a graph to discover | A dependency exists that this order does not already respect |
-| Configuration granularity | For Adaptive, one resolved configuration adopted per enclosing Hub callback, captured when a group's assignment starts and held until that group completes | A 128-marker `ConfigTimeline` with a `ControlBudget`, and a pass-routing `Recording` of 2,178 segments (~198 KB live on the audio thread) answering which tuning was in force at an exact sample | An edit waits at most one host block — about 10.7 ms at 512/48 kHz — and Adaptive never has to ask the sample-exact question | Sample-exact configuration automation becomes a musical requirement for Adaptive. It became one for Lattice Map, and [#890](https://github.com/yan-h/harmonigraph/pull/890) rebuilt sample-exact configuration there as a bounded sample-indexed history |
+| Configuration granularity | One sample-indexed configuration history for every engine, the one [#890](https://github.com/yan-h/harmonigraph/pull/890) built for Lattice Map: an attack is assigned, and a take segmented, by the configuration in force at its own input sample ([#1749](https://github.com/yan-h/harmonigraph/issues/1749)) | A 128-marker `ConfigTimeline` with a `ControlBudget`, and a pass-routing `Recording` of 2,178 segments (~198 KB live on the audio thread); then, beside the history, a per-callback `block` configuration that Adaptive and Pass through assigned and recorded from | The history already answered the sample-exact question for every engine and the Hub discarded the answer unless the engine was Lattice Map, so a second granularity was one more rule to hold and a block-size dependence near automation, for no saving | A take's configuration records under dense axis modulation, one per event rather than one per block, are measured to cost more than a pass can afford |
 | Divergence and faults | No retrospective reassignment, and no reassignment at all: a correction fault is a status bit and the admitted note sounds raw | An 8-phase recovery transaction (Prepare→Inventory→Preserve→Status→Rebuild→Replay→Resume) with its own protocol messages, ~20 `recovering()` branches and three duplicated ordinary/replay code pairs | Its documented outcome when it fired was a note sounding 467 ms late. The latch that replaced it then produced silence instead, which is the failure Yan actually heard, so #786 removed that half too | A measured ordinary case needs a recovered phrase rather than a raw one |
 | Controller context for a late note | A late note meets the receiver's current controller state; shared channel controls keep their own input-plus-delay schedule | A channel-wave mechanism replaying 130 folded controller registers plus raw prelude history into the receiver ahead of a younger onset | Different articulation during a late note is accepted; reconstructing the controller context a note "should have" met is a replay, and replay is the thing this design excludes | A measured ordinary case is musically wrong because of it |
 | Publication loss | The lane reports its own loss into a reserved cell; the display clears stale state and refreshes from a current snapshot; an incomplete take exports with a warning | Per-source baselines with generation handles, an `UnsafeCell` bank behind a busy state machine, cross-thread resync requests and per-source repair cursors | A snapshot restores what is sounding now, which is the whole of what a display needs after a gap; the repair protocol was reconstructing history the display had already drawn | Reconstructing lost history becomes worth its own protocol |
@@ -285,25 +285,25 @@ Those controls cover the keyboard tuning, neighborhood radius and axes, pitch fl
 their exact ranges and defaults live in the [implementation record](adaptive-tuning-plugin.md#controls).
 The UI mirrors that resolved configuration rather than running a competing authority, and restoring state or automating tuning works with the editor never opened.
 
-Adoption is **block-level**.
-At the start of each enclosing Hub audio callback, pending edits are adopted coherently, and one resolved configuration serves every assignment group started in that block.
-An edit encountered during a block becomes effective at the next block boundary;
-parameter-driven sub-blocks do not create extra boundaries.
-
-Every assignment in a batch uses the configuration adopted for that Hub callback;
+Adoption is **sample-exact**, under every engine.
+At the start of each enclosing Hub audio callback, pending editor edits are adopted coherently and enter one sample-indexed configuration history at the block's start;
+host automation of an axis enters it at its own input sample.
+Every assignment group uses the configuration in force at its input sample,
+including a record held over from an earlier callback;
 the batch runs to completion at its input boundary.
-An unassigned note uses the configuration current when the Hub *starts assigning its group* —
-never one reconstructed from the note's original input sample.
+Where the history no longer reaches that sample (a steady-clock regression clears it), every engine assigns from the live state:
+the configuration the reducer holds now, which includes any later host automation in that block, and under Lattice Map the current map (#1792).
 Once assigned, the adaptive correction and harmonic onset reference stay fixed through later edits and delayed emission.
 Already sounding notes keep that choice while later player expression and MIDI channel bend can still move their emitted pitch.
-Note timestamps retain sample precision;
-only configuration application is block-granular.
 
-Recognized temperament links and Learn results become effective at block boundaries too, without reducing musical observation to the notes held at a block end.
+A recognized temperament link takes effect with the edit that made it.
+Learn results become effective at the next block boundary:
+Learn reads the Hub's rows as the Hub's callback start leaves them, which is everything sequenced through the previous callback,
+and applies at the block's start after the walk, so it rides the next adoption rather than entering the history out of order.
 Display and recording use the configuration actually adopted, and take replay reuses the recorded pitches, times and configurations instead of re-running inference.
 
 Ordinary tuning edits do not reset the plugin or change its reported latency.
-An edit can wait about one host block, notes near an automation transition may get the old configuration, and changing the DAW's block size can change assignment results near configuration automation.
+An editor edit or a Learn result can wait about one host block; host automation lands at its own sample, so the DAW's block size does not change assignment results near it.
 Replay of a recorded take still follows the recorded results.
 
 ## Membership
@@ -549,12 +549,12 @@ Shrinking a buffer does not make its overflow path unreachable.
 | Constant | Value | Resource |
 |---|---:|---|
 | `TUNERS` | 16 | Tune rows in the session; the Hub's own track is a seventeenth source with a reserved index |
-| `HELD_PER_SOURCE` / `HELD_SESSION` | 64 / 256 | Held voices per source / across the session |
+| `HELD_PER_SOURCE` | 64 | Held voices per source. Learn hears every voice every row holds |
 | `PENDING_EVENTS` | 8,192 | Retained events in one Tune's delay line, including unrelated MIDI |
 | `CAPTURE_RING` / `REPLY_RING` | 1,024 / 1,024 | The two rings per row. A full capture ring costs that note its correction |
 | `BATCH_EVENTS` | 2,048 | Records one ordering pass holds across every source, and deltas one callback may publish |
 | `CUT_EVENTS` | 112 | Note-offs and pedal neutralizations one cut may owe: every held voice, plus sustain, sostenuto and legato on each of sixteen channels. What does not fit is reported as a dropped event |
-| `MAX_CONTEXT` / `MAX_MEMORY` / `MAX_CANDIDATES` | 256 / 24 / 4,096 | Held policy references, released contributions and the complete local candidate union |
+| `MAX_CONTEXT` / `MAX_MEMORY` / `MAX_CANDIDATES` | 256 / 24 / 4,096 | Held voices the Hub's context holds across every source, released contributions and the complete local candidate union |
 | `PUBLICATION_RING` / `SNAPSHOT_SLOTS` / `GAP_RESERVE` | 4,096 / 20 / 1 | Publication items, snapshot frames, and the one cell an outage may always spend |
 | `EMIT_PER_CALLBACK` | 512 | Accepted output-event budget, checked between queued inputs. A note and its tuning expression complete together, even when the pair crosses the budget |
 | `DELAY_MULTIPLIER_MAX` | 16 | Steps on the Tuning delay parameter |
@@ -588,6 +588,8 @@ Every row is tuned now, the Hub's own included, so feeding Learn what was emitte
 The old design avoided that only because the Hub's own track was the one thing it did not retune.
 Learn also reads one callback later than it used to, because the Hub's own input is delayed by D like everyone else's;
 the configuration walk that runs it happens before the performance input for that callback is delivered.
+It reads the Hub's rows themselves (`Hub::held_classes`), as the Hub's callback start leaves them,
+and refuses only while a row has lost an event, since that row's held notes are then unknown (#1751).
 
 Publication is two independent lanes, one for the display and one for the take, and the rule that keeps them independent is stated as a type:
 **no capacity, outcome or cursor on the publication path is a value derived from both lanes.** A full display ring must not hold back a snapshot the take needs, and a take-lane gap must not blank the display.

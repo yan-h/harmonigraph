@@ -645,6 +645,7 @@ fn releasing_an_interval_link_accounts_for_the_hosts_current_modulation() {
     assert!((released.tuning.seven_cents() - linked.seven_cents()).abs() < 0.001);
 }
 
+/// Goes with #1756, which retires host automation of the axes.
 #[test]
 fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flush() {
     let _scope = crate::test_scope::enter();
@@ -655,11 +656,7 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
     assert_eq!(before.raw[1], 700.0, "untimed flush has not invented a boundary");
     device.activate();
     device.run(500, vec![], false);
-    assert_eq!(
-        mailbox.visible().0.effective_sample,
-        564,
-        "an edit adopted at the boundary of [500,564) is effective at the next one"
-    );
+    assert_eq!(mailbox.visible().0.raw[1], 690.0, "an untimed flush applies at the next boundary");
     let first = mailbox
         .submit(packet(ConfigEdit::axis(2, harmonigraph_core::tuning::microcents(390.0))))
         .unwrap();
@@ -678,12 +675,11 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
     );
     let snapshot = mailbox.visible().0;
     assert_eq!(snapshot.applied_id, second);
-    assert_eq!(snapshot.effective_sample, 628, "at7 and at31 share this block's boundary");
+    assert_eq!(snapshot.raw[1], 699.0, "the last automation wins");
     assert!(!view(snapshot, false).resolved.modes.tempered.syntonic);
     device.flush(vec![device.param(ParamKey::Three, 697.0, 44)]);
-    assert_eq!(mailbox.visible().0.effective_sample, 628, "an untimed flush applies nothing yet");
+    assert_eq!(mailbox.visible().0.raw[1], 699.0, "an untimed flush applies nothing yet");
     device.run(628, vec![], false);
-    assert_eq!(mailbox.visible().0.effective_sample, 692);
     assert_eq!(mailbox.visible().0.raw[1], 697.0);
 }
 
@@ -771,7 +767,9 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
     // it on the next callback, not whenever that source next plays.
     let heard = |device: &Device| {
         device.wrapper().test_inspect_plugin(|plugin| {
-            plugin.configuration.as_ref().unwrap().confirmed.rows().count()
+            let mut scratch = [harmonigraph_core::tuning::PitchClass::from_microcents(0);
+                crate::tuning::HELD_VOICES];
+            plugin.aggregation.as_ref().unwrap().held_classes(&mut scratch).unwrap()
         })
     };
     assert_eq!(heard(&device), 3);
@@ -2266,11 +2264,6 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
         ..Default::default()
     });
     let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 1.0, 0, true, &voices).unwrap();
-    let mut confirmed = ConfirmedPitches::default();
-    confirmed
-        .replace_source(SourceId::DIRECT, &voices.map(|row| row.confirmed(SourceId::DIRECT)))
-        .unwrap();
-    let before: Vec<_> = confirmed.rows().copied().collect();
     let start = std::time::Instant::now();
     nice_assert_no_alloc::assert_no_alloc(|| {
         for _ in 0..SNAPSHOT_SLOTS {
@@ -2286,9 +2279,6 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
             publisher.note(harmonigraph_core::NoteEvent::off(2.0, SourceId::DIRECT, 0, 60).into()),
             Err(PublishError::Lost)
         );
-        // Reporting ownership and failure have no access to musical state.
-        assert!(confirmed.is_complete());
-        assert!(confirmed.rows().copied().eq(before.iter().copied()));
     });
     let duration = start.elapsed();
     // Consume outside the audio guard, then exercise payload reuse under it.
@@ -2689,38 +2679,45 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
     }
 }
 
+/// Goes with #1756, which retires host automation of the axes.
 #[test]
-fn lattice_map_records_shared_tuning_at_its_actual_sample_boundary() {
+fn every_engine_records_shared_tuning_at_its_actual_sample_boundary() {
     let _scope = crate::test_scope::enter();
-    let (mut device, mut capture) = recorded_device();
-    device.activate();
-    let mut state = restored(&device, 696.0);
-    state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(2));
-    device.load(state, false);
-    device.run(0, vec![], false);
-    capture.arm();
-    // Two changes in one block, so the second is dated from a segment that
-    // does not start at the block's own start.
-    device.run(
-        64,
-        vec![device.param(ParamKey::Three, 690.0, 16), device.param(ParamKey::Three, 685.0, 40)],
-        false,
-    );
-    let configs: Vec<_> = capture
-        .drain_entries()
-        .into_iter()
-        .filter_map(|entry| match entry {
-            harmonigraph_record::Entry::Configuration(config) => Some(config),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(configs.len(), 3);
-    assert_eq!(configs[0].axes[1], 696_000_000);
-    assert_eq!(configs[1].axes[1], 690_000_000);
-    assert_eq!(configs[2].axes[1], 685_000_000);
-    assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
-    assert!((configs[1].t - 80.0 / 48000.0).abs() < 1e-9);
-    assert!((configs[2].t - 104.0 / 48000.0).abs() < 1e-9);
+    // Pass through, Adaptive and Lattice Map.
+    for engine in 0..3 {
+        let (mut device, mut capture) = recorded_device();
+        device.activate();
+        let mut state = restored(&device, 696.0);
+        state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(engine));
+        device.load(state, false);
+        device.run(0, vec![], false);
+        capture.arm();
+        // Two changes in one block, so the second is dated from a segment that
+        // does not start at the block's own start.
+        device.run(
+            64,
+            vec![
+                device.param(ParamKey::Three, 690.0, 16),
+                device.param(ParamKey::Three, 685.0, 40),
+            ],
+            false,
+        );
+        let configs: Vec<_> = capture
+            .drain_entries()
+            .into_iter()
+            .filter_map(|entry| match entry {
+                harmonigraph_record::Entry::Configuration(config) => Some(config),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(configs.len(), 3, "engine {engine}");
+        assert_eq!(configs[0].axes[1], 696_000_000);
+        assert_eq!(configs[1].axes[1], 690_000_000);
+        assert_eq!(configs[2].axes[1], 685_000_000);
+        assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
+        assert!((configs[1].t - 80.0 / 48000.0).abs() < 1e-9);
+        assert!((configs[2].t - 104.0 / 48000.0).abs() < 1e-9);
+    }
 }
 
 /// Real CLAP automation and project restoration with no editor constructed.
@@ -2854,6 +2851,7 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
 /// or `closed(false)` (#1609).
 #[test]
 fn the_close_button_tells_the_host_to_destroy_the_editor() {
+    let _scope = crate::test_scope::enter();
     let device = Device::new();
     let host = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_host.clone().unwrap());
     assert!(host.closed(), "a host with a gui extension is told");
