@@ -233,7 +233,7 @@ pub(crate) fn gesture_open(ctx: &egui::Context) -> bool {
 /// the standalone harness the same via its `App::ui` hook).
 ///
 /// The rest of the sequence a shell runs around this — theming a new context,
-/// releasing the old one's textures, the fold floor, the window session, and
+/// the fold floor, the window session, and
 /// spending what a fold leaves the window needing — is [`shell`], which both
 /// shells call rather than keep in step by hand.
 ///

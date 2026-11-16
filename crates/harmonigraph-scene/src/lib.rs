@@ -422,7 +422,7 @@ pub const PITCH_LUT_N: usize = 64;
 ///
 /// A ceiling on the light's TEXTURE rather than on the picture: the renderer
 /// reads every lit node's colour into one row of a strip, and a texture has a
-/// maximum dimension (8192 on every backend the plugin runs on), where
+/// maximum dimension (the adapter's own limit, 16,384 on Apple silicon), where
 /// [`MAX_DRAWN_NODES`] is 20480, so a fully zoomed-out lattice can light more
 /// nodes than a strip holds. Past this a node simply gets no light: its layers
 /// draw exactly as they do with the glow off, which is the graceful end of a

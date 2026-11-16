@@ -68,7 +68,7 @@ It replaces the recorded document completely;
 `--size` and other explicit output flags retain their precedence.
 
 Editor saves below version 7 are refused whole and a fresh instance opens at defaults, with a console message.
-Take formats v1–v7 are refused with a version error and must be recorded again;
+Take formats before v9 are refused with a version error and must be recorded again;
 there is no converter.
 An unreadable or unsupported selected appearance document refuses the export with an error on stderr.
 A valid replacement overrides the recorded document completely.
@@ -401,7 +401,7 @@ Internal pixel fixtures and scratch look prototypes still compose a single pane 
 ## What is and isn't captured
 
 **Captured:** every note event with its own sub-frame timestamp (so a 60 fps render is not quantized to 60 fps —
-envelopes start where they actually started), per-note tuning and MPE bends, the ten parameters a take records over time (tuning and the camera), and the view/camera/spectrum settings, Note fade and the Pitch color range among them, as they stood when the take was armed.
+envelopes start where they actually started), per-note tuning and MPE bends, the five camera parameters a take records over time, the tuning configuration at each change, and the view/camera/spectrum settings, Note fade and the Pitch color range among them, as they stood when the take was armed.
 
 **Captured alongside the notes:** the selected analysis input as 32-bit float, aligned to them.
 

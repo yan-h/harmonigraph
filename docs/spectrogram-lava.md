@@ -35,28 +35,28 @@ procedural motion or simulation.
 ## Measurement and retention
 
 Each FFT-center point sample enters history as an unquantized `f32` power sum and a represented sample count.
-Coarsening adds both;
+Every slab width adds both;
 it never averages dB or re-quantizes a previous mean.
-Mixed history tiers therefore contribute in proportion to the number of original measurements they contain.
 At the fixed live cadence this is time weighting by represented analysis hops.
 Gaps do not acquire extra weight from the distance between timestamps.
-The existing one-slab jitter hold remains a display copy,
-with no fabricated measurements in the accumulator.
+A gap draws as silence however short:
+the one-slab hold that repeated a slab across it is gone (#1784 S1),
+and nothing fabricates measurements in the accumulator.
 
 A slab uses an `f64` sum and count while it is mutable.
 It divides once when read and quantizes to the existing half-dB byte grid.
 Further arrivals continue the unquantized sum;
 completed slabs and GPU uploads stay byte-sized.
-Live incremental aggregation,
-batch/offline aggregation and partial first-slab repair use the same accumulator.
+The plugin, the offline renderer and the standalone synth all fold through the same slab pyramid,
+one shared history whose every level takes each column as it arrives.
 No additional FFTs are required.
 
-Coarsening necessarily loses timing within a group.
-A full refold can assign that group to a different slab than the original measurements occupied.
-The live grid preserves completed raw-arrival slabs rather than rebuilding on every history cascade.
+A slab necessarily loses the timing of the columns inside it.
+Slabs sit on an absolute grid at each level,
+and a closed slab is never refolded:
+a rung change, a late open or the Video preview reads what was folded on arrival.
 Count weighting preserves totals,
-not arbitrary reconstruction of discarded timing or gaps inside a coarsened group.
-The existing retention and gap policies remain unchanged.
+not arbitrary reconstruction of timing or gaps inside a slab.
 Likewise,
 an offline whole-song analysis using a larger hop is not a bit-identical replay of live analysis.
 The shared fold agrees when given the same measurements.

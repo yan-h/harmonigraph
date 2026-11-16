@@ -10,8 +10,9 @@
 //! The bars are FOUND rather than listed, and so is which input each one reads
 //! (#1752): every input path is observed. Each numeric path of the saved blob
 //! is nudged alone (a float to the edges below, an integer by one) and every
-//! scenario drawn through the real load door; the host's tuning parameters and
-//! adaptive policy fields are nudged the same way through the test backend.
+//! scenario drawn through the real load door; the tuning axes and adaptive
+//! policy fields, plugin settings the blob does not carry, are nudged the same
+//! way through the test backend.
 //! Three claims follow, and none needs a list of what a page draws:
 //!
 //! - every path moves some bar's raw value or changes which bars draw, unless
@@ -680,8 +681,8 @@ struct Input {
 }
 
 /// Every input path: the blob's numeric scalars under [`dialled`] owners
-/// bar the [`Held::Unpoisoned`] ones, the host's tuning parameters and the
-/// adaptive policy fields.
+/// bar the [`Held::Unpoisoned`] ones, the tuning axes and the adaptive policy
+/// fields.
 fn inputs(blob: &str) -> Vec<Input> {
     let mut inputs = Vec::new();
     for (path, range) in nested_scalars(blob) {

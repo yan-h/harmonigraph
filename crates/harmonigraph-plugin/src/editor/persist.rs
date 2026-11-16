@@ -188,8 +188,9 @@ impl Default for UiState {
 }
 
 impl<'a> nice_plug::params::persist::PersistentField<'a, String> for UiState {
-    /// Called when the host restores state, on its main thread, under
-    /// nice-plug's configuration producer lock — which is why it only posts.
+    /// Called when the host restores state, on its main thread, where it must
+    /// not take the editor lock (see `lock`'s module doc) — which is why it
+    /// only posts.
     fn set(&self, new_value: String) {
         self.inbox.deliver(new_value.into());
     }
