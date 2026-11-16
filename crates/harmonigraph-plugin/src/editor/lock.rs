@@ -6,18 +6,20 @@
 //! a saved document back, so closing and reopening the window leaves the
 //! state, its look slots' undo histories included, where it was (#1740).
 //!
-//! A restore cannot be installed where it arrives. The host calls it on its
-//! main thread inside nice-plug's configuration producer lock, which a frame
-//! takes while holding the editor lock, so taking the editor lock there would
-//! order the two locks both ways. It waits in the [`Inbox`] instead, a leaf
-//! lock held only for a swap or a clone, and every acquisition of the editor
-//! lock installs it before handing out the state. That is a property of the
+//! A restore is not installed where it arrives. The host calls it on its
+//! main thread, where taking the editor lock would wait out the input
+//! worker's holds (`background.rs`), time taken from the host's main thread,
+//! and would deadlock if a host ever restored from inside a frame's own hold.
+//! It waits in the [`Inbox`] instead, a leaf lock held only for a swap or a
+//! clone, and every acquisition of the editor lock installs it before handing
+//! out the state. That is a property of the
 //! lock type rather than a step each of its holders remembers: the raw mutex
 //! is private, and no accessor skips the delivery.
 //!
-//! Lock order: editor, then producer (a frame's submit); producer, then inbox
-//! (a restore); editor, then inbox (a delivery, a save, a close). The inbox
-//! takes nothing, so the graph has no cycle.
+//! Lock order: editor, then the configuration's producer (a frame's edit or
+//! view); editor, then inbox (a delivery, a save, a close). A restore takes
+//! the producer and the inbox each alone, and neither takes anything, so the
+//! graph has no cycle.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,8 +53,8 @@ impl EditorLock {
     }
 
     /// Install the newest restore waiting, if any. The parse runs here, under
-    /// the editor lock, rather than in the restore, under the producer lock:
-    /// its Console lines and the settings it installs are this lock's state.
+    /// the editor lock, rather than in the host's restore call: its Console
+    /// lines and the settings it installs are this lock's state.
     fn delivered<'a>(
         &self,
         mut guard: MutexGuard<'a, EditorShared>,

@@ -209,3 +209,23 @@ fn a_gap_warns_where_it_overlaps_a_run_and_a_failure_always_does() {
     }));
     assert!(failed.incomplete.is_some());
 }
+
+/// A voice whose onset the take's lane lost is drawn from the snapshot that
+/// restates it, so its restated onset moves by the run it sounded in, as its
+/// attack would have, rather than by the snapshot's run.
+#[test]
+fn a_restated_onset_lost_to_a_gap_keeps_the_run_it_sounded_in() {
+    let resumed = 2.0 + 128.0 / RATE;
+    let take = read(&[
+        run(0, 2.0),
+        // 60's onset, sounding at 74, lost from the take's lane.
+        gap(1, 74, 74),
+        end(128),
+        run(256, resumed),
+        snapshot(1, &[struck(60, 10)], 256),
+        delta(2, 60, false, 300),
+    ])
+    .unwrap();
+    let notes = notes_of(&take, 60);
+    assert!(notes.len() == 1 && (notes[0].0 - song(74, 0, 2.0)).abs() < 1e-9, "{notes:?}");
+}

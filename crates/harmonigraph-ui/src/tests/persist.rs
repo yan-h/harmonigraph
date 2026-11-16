@@ -167,8 +167,9 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
     }
 }
 
-/// [`dialled`], plus a camera preset and a look stored in slot 2: a document
-/// whose sweeps reach the structs inside a list, a tuple and a `Some`.
+/// [`dialled`], plus a camera preset, a look stored in slot 2 and the
+/// geometry an unfolded Analyzer frame leaves: a document whose sweeps reach
+/// the structs inside a list, a tuple and a `Some`.
 fn filled() -> SharedState {
     use crate::appearance_edit::{AppearanceEditor, Look, Slots};
 
@@ -184,6 +185,11 @@ fn filled() -> SharedState {
     let slots: Slots = ron::from_str(&format!("(stored:(None,Some({look}),None,None),active:0)"))
         .expect("a slot holding a look parses");
     state.workspace.interaction.appearance_editor = AppearanceEditor::restore(slots);
+    // What a drawn, unfolded Analyzer records, written as its save has it:
+    // the geometry is private to the pane that draws it.
+    state.workspace.interaction.analyzer_regions =
+        ron::from_str("(geometry:Some((depths:(300.0,200.0),dial:0.5,vertical:false)))")
+            .expect("an Analyzer's regions parse");
     state
 }
 
@@ -1132,8 +1138,9 @@ fn nested_defaults() -> [(&'static str, String, &'static str); 10] {
 /// reads as 0 for the floor to refuse.
 ///
 /// The fixture is `dialled`, which moves a few values in the camera, view,
-/// spectrum, render and workspace off fresh, plus a camera preset and a stored
-/// look, so the walk reaches the structs inside a list, a tuple and a `Some`.
+/// spectrum, render and workspace off fresh, plus a camera preset, a stored
+/// look and the Analyzer's region geometry, so the walk reaches the structs
+/// inside a list, a tuple and a `Some`.
 #[test]
 fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
     let saved = filled().save_persist();
@@ -1156,6 +1163,7 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
         "prefs.spiral.zoom",
         "camera_presets[0].yaw",
         "look_slots.stored[1].view.shadow.lattice_text.width",
+        "analyzer_regions.geometry.depths",
     ] {
         assert!(pairs.iter().any(|(path, _)| path == deep), "the sweep never reaches {deep}");
     }

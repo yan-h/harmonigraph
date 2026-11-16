@@ -4,9 +4,9 @@
 //! other's windowing stack — the plugin editor runs on egui-baseview inside a
 //! host's window, the dev harness on eframe in one of its own. What they can
 //! share is everything AROUND the drawing, which is the same steps in the same
-//! order: a freshly built context has to be themed and stripped of the last
-//! one's textures, the fold floor has to reach the state and the last
-//! window's leftovers have to leave it before the first frame, and the state
+//! order: a freshly built context has to be themed, the fold floor has to
+//! reach the state and the last window's leftovers have to leave it before
+//! the first frame, and the state
 //! has to be drawn before the folds it settles can be spent on the window.
 //!
 //! Kept by hand in two places that sequence is a doc comment, and a doc

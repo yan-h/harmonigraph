@@ -22,10 +22,10 @@ and the console borrows the runtime.
 The reset-layout request is consumed after traversal;
 there is no temporary empty dock or write-back that can overwrite the request.
 
-`SurfaceState` owns viewport reports, divider geometry, each surface's carried node lights (`GlowFade`), and spectrogram aggregation/GPU mirrors.
-Spectrogram preparation borrows bounded history separately from surface storage.
-The audio ring's levels and gate envelope remain shared between dock and preview;
-carried lights, slab geometry and GPU ownership remain distinct per surface.
+`SurfaceState` owns viewport reports, divider geometry, each surface's carried node lights (`GlowFade`), and each spectrogram surface's run and pyramid level (`SpectrogramSurfaces`).
+Spectrogram preparation borrows the shared slab pyramid separately from surface storage (#1770).
+The audio ring's levels, the gate envelope and the slab pyramid remain shared between dock and preview;
+carried lights, the spectrogram run a surface reads and GPU ownership remain distinct per surface.
 Existing repeated/discarded-pass behavior and callback ownership remain unchanged.
 
 ## Advancement and remaining host boundaries

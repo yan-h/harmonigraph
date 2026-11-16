@@ -1448,8 +1448,8 @@ mod tests {
     /// once it has run out.
     ///
     /// The wiring is what this is for, and it is wiring nothing else here
-    /// touches: the duration is a host param and the curve a view setting, put
-    /// back together by `ViewConfig::envelope` — so a pass that reached for one
+    /// touches: the duration and the curve are two view settings, put back
+    /// together by `ViewConfig::envelope` — so a pass that reached for one
     /// of them alone, or built an envelope of its own, would draw a ring
     /// arriving at a speed no bar on screen names. Every claim in
     /// `harmonigraph_scene` about the fade would go on passing.

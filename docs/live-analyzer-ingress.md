@@ -62,10 +62,8 @@ No feeder dates its columns by when they arrive (#1758):
 the offline renderer counts frames from the first it reads of its soundtrack,
 and the standalone app's synth counts the frames it renders and, after a stall over 200 ms, starts a new run whose first column dates after the last of the run before, however its resolution changed,
 so their dates only advance too.
-A release build meets a backward date at the pyramid's guard instead (#1758):
-a column up to a second at or before the newest is dropped,
-and one further back resets the history,
-both counted on the performance overlay.
+A release build has no guard against a backward date (#1784):
+a column dated at or before the newest averages into each level's open slab.
 Factual note timestamps and take/export clocks are unchanged.
 
 This is a timing and ownership contract improvement,
@@ -90,14 +88,6 @@ and actual process transport loops/stops/unavailable positions.
 
 `fast_bounce_preserves_the_realtime_picture_timeline` holds the mapper to audio time through a faster-than-realtime bounce,
 comparing the real analyzer and note publication paths.
-The overlap rule's regression,
-`corrected_source_clock_keeps_history_and_incremental_aggregation_ordered`,
-drives `AudioSpectrum` directly with a backward correction no plugin path now produces.
-It failed at the first corrected hop before the overlap policy was added.
-It follows the correction through a full newly silent FFT window and recovery,
-checks strict timestamp order,
-compares every incremental aggregate with a fresh complete-history fold,
-and covers exact equality with the old tail.
 
 ## Cost measurements — 2026-09-09 (historical evidence for this design)
 
