@@ -95,8 +95,9 @@ impl GlyphInstance {
 }
 
 /// The drawn marks' sheet, as a CPU image: no shell can publish it for us,
-/// because it is the UI crate's own, so each renderer keeps a GPU copy. egui's
-/// font atlas never travels this way (see [`published_font`]). The key changes
+/// because it is the UI crate's own, so each window keeps one GPU copy, in its
+/// `Sheets`. egui's font atlas never travels this way (see
+/// [`published_font`]). The key changes
 /// whenever its pixels do. Tests also use one as the image a stand-in font
 /// texture is made from.
 ///
@@ -209,9 +210,7 @@ uniform_group! {
     /// device's whatever the target's pixels are.
     struct TextUniforms {
         screen_points: Float2,
-        /// The two sheets' sizes in texels, ADJACENT so one partial write covers
-        /// the pair — see [`ATLAS_SIZES_OFFSET`], which is the whole reason they
-        /// sit together rather than each beside what it belongs to.
+        /// The two sheets' sizes in texels: font atlas, then marks.
         atlas_size: Float2,
         mark_atlas_size: Float2,
         /// The axes this surface's labels slide along — see [`SlideAxis`], and
@@ -291,8 +290,6 @@ impl SlideAxis {
 
 pub(crate) struct TextResources {
     pipelines: TextPipelines,
-    /// The three sheets a glyph is cut from, as this callback binds them.
-    sheets: Sheets,
     /// Every text batch this renderer has drawn, by pane id, and never swept,
     /// like the lattice's panes. An id is one of a few flush slots on a
     /// surface (`harmonigraph_ui::text`), so the map holds a few entries per
@@ -329,17 +326,34 @@ pub(crate) struct TextPipelines {
     generation: u64,
 }
 
-/// The sheets one renderer binds a glyph pipeline against — the font atlas
-/// and the drawn marks' — with the 1x1 stand-in for whichever has not arrived.
+/// The sheets a glyph pipeline is bound against — egui's font atlas and the
+/// drawn marks' — with the 1x1 stand-in for whichever has not arrived.
 ///
-/// Both glyph callbacks hold one: the text pass ([`TextResources`]) and the
-/// lattice's own (`crate::LatticeResources`). What each does with a
-/// REPLACEMENT differs and stays with each — see [`TextResources::bind_sheets`]
-/// and the note at its lattice counterpart's call site — but deciding whether
-/// anything moved, what the uniforms' sizes are, and which two views a bind
-/// group names is one question in both, and was written out twice.
+/// One per window, in its own entry of `CallbackResources`, shared by both
+/// glyph callbacks: the text pass ([`TextCallback`]) and the lattice's own
+/// (`crate::LatticeCallback`). Each takes it through [`current`](Self::current)
+/// at the top of its `prepare`, so whichever callback first carries a new
+/// publication uploads it, once, and every later one in the frame finds it
+/// held.
+///
+/// A pane of either kind records [`keys`](Self::keys) beside its bind group
+/// and rebuilds the group in its own `prepare` when they differ. A pane that
+/// prepared earlier in the frame than a replacement keeps the texture it was
+/// bound to, and the sizes it wrote with it, for that frame's draw: stale but
+/// self-consistent, and the right pixels. Only the mark sheet can be replaced
+/// mid-frame — egui's font texture is published once, before any `prepare` —
+/// and it only ever appends within a pass and grows downward
+/// (`harmonigraph_ui::text::MarkAtlas`), so every uv the pane holds names the
+/// same texels in the texture it kept. Its next `prepare` moves it onto the
+/// replacement.
+///
+/// What a later callback can write under an earlier pane is an in-place
+/// upload into the texture that pane is bound to, which the queue orders
+/// ahead of the frame's passes. By the same rule it only fills texels no
+/// earlier uv names.
+#[derive(Clone)]
 pub(crate) struct Sheets {
-    /// The font atlas texture this renderer binds.
+    /// egui's font texture, as the window's one binding both callbacks share.
     pub(crate) atlas: AtlasTexture,
     /// And the drawn marks', which a session that never draws one leaves
     /// empty for its whole life.
@@ -348,35 +362,51 @@ pub(crate) struct Sheets {
 }
 
 impl Sheets {
-    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    /// This window's sheets, brought up to what this frame published, as a
+    /// handle the caller reads sizes and keys from and binds against.
+    ///
+    /// `marks` is the drawn marks' sheet the callback carries, on the frames it
+    /// may have moved; egui's font texture is the one the shell published to
+    /// `resources` ([`published_font`]).
+    ///
+    /// The handle is a clone, a few GPU handles, because the caller goes on to
+    /// borrow its own entry of the same map.
+    pub(crate) fn current(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        resources: &mut CallbackResources,
+        marks: Option<&MarkSheet>,
+    ) -> Sheets {
+        let font = published_font(resources);
+        if resources.get::<Sheets>().is_none() {
+            resources.insert(Sheets::new(device, queue));
+        }
+        let sheets: &mut Sheets = resources.get_mut().expect("inserted above when missing");
+        if let Some(font) = &font {
+            sheets.atlas.share(font);
+        }
+        if let Some(marks) = marks.filter(|a| !sheets.marks.holds(a)) {
+            // Keys only rise (`next_sheet_key`), and callbacks prepare in the
+            // order their snapshots were taken, so no producer hands over a
+            // sheet older than the one held. One that did would overwrite
+            // patches an earlier pane this frame still reads.
+            debug_assert!(
+                sheets.marks.uploaded_key.is_none_or(|held| held < marks.key),
+                "a mark sheet (key {}) older than the one uploaded ({:?})",
+                marks.key,
+                sheets.marks.uploaded_key,
+            );
+            sheets.marks.upload(device, queue, marks);
+        }
+        sheets.clone()
+    }
+
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         Sheets {
             atlas: AtlasTexture::default(),
             marks: AtlasTexture::default(),
             blank: blank_atlas(device, queue),
         }
-    }
-
-    /// Take whatever this frame published, and say whether any binding was
-    /// REPLACED — which is what makes every bind group naming one stale.
-    ///
-    /// `font` is egui's own renderer texture, as the shell published it to
-    /// `CallbackResources`; `marks` is the drawn marks' sheet, on the frames
-    /// it may have moved.
-    pub(crate) fn bind(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        font: Option<&wgpu::Texture>,
-        marks: Option<&MarkSheet>,
-    ) -> bool {
-        let mut recreated = false;
-        if let Some(font) = font {
-            recreated |= self.atlas.share(font);
-        }
-        if let Some(marks) = marks.filter(|a| !self.marks.holds(a)) {
-            recreated |= self.marks.upload(device, queue, marks);
-        }
-        recreated
     }
 
     /// The two sheets' sizes, as the glyph uniforms carry them: font atlas
@@ -410,10 +440,12 @@ impl Sheets {
     }
 }
 
-/// One glyph sheet bound by a renderer: egui's shared GPU texture
-/// ([`share`](Self::share), the font atlas) or a private texture uploaded from
-/// a [`MarkSheet`] ([`upload`](Self::upload), the marks' sheet). The key
-/// identifies which texture a pane's bind group names.
+/// One of the window's two glyph sheets, which the text and lattice callbacks
+/// both bind ([`Sheets`]): egui's GPU texture ([`share`](Self::share), the font
+/// atlas) or a texture uploaded from a [`MarkSheet`] ([`upload`](Self::upload),
+/// the marks' sheet). The key identifies which texture a pane's bind group
+/// names.
+#[derive(Clone)]
 pub(crate) struct AtlasTexture {
     texture: Option<wgpu::Texture>,
     size: [u32; 2],
@@ -464,33 +496,26 @@ impl AtlasTexture {
         self.view().unwrap_or_else(|| blank.create_view(&Default::default()))
     }
 
-    /// Bind an existing texture, returning whether bind groups naming the
+    /// Bind an existing texture, moving the key when bind groups naming the
     /// previous allocation are stale. Equality is GPU-resource identity: an
     /// in-place atlas patch keeps every bind group valid, while a full egui
     /// atlas replacement changes identity even at the same dimensions.
-    pub(crate) fn share(&mut self, texture: &wgpu::Texture) -> bool {
+    pub(crate) fn share(&mut self, texture: &wgpu::Texture) {
         if self.texture.as_ref() == Some(texture) {
-            return false;
+            return;
         }
         self.size = [texture.width(), texture.height()];
         self.texture = Some(texture.clone());
         self.binding_key = self.binding_key.wrapping_add(1);
-        true
     }
 
-    /// Take a copy of `atlas`, and say whether the texture was RECREATED —
+    /// Take a copy of `atlas`, moving the key when the texture is RECREATED —
     /// which is what makes every bind group naming it stale. A same-size
     /// upload writes in place, so bind groups keep pointing at the right
     /// texture and only the pixels move.
-    pub(crate) fn upload(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        atlas: &MarkSheet,
-    ) -> bool {
+    pub(crate) fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &MarkSheet) {
         let size = [atlas.image.width() as u32, atlas.image.height() as u32];
-        let recreated = self.texture.is_none() || self.size != size;
-        if recreated {
+        if self.texture.is_none() || self.size != size {
             self.texture = Some(crate::gpu_memory::texture(
                 device,
                 &wgpu::TextureDescriptor {
@@ -523,13 +548,15 @@ impl AtlasTexture {
             wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
         );
         self.uploaded_key = Some(atlas.key);
-        recreated
     }
 }
 
 struct TextPane {
     uniform_buffer: wgpu::Buffer,
+    /// Names both sampled sheets, so it is rebuilt whenever either allocation
+    /// is replaced — and `sheet_keys` is which bindings it names.
     bind_group: Option<wgpu::BindGroup>,
+    sheet_keys: (u64, u64),
     instance_buffer: wgpu::Buffer,
     /// Each glyph's own name's `ShadowBox`, beside `instance_buffer` at the
     /// same capacity: what the cell fill and the shadow composite read the
@@ -869,101 +896,24 @@ impl TextPipelines {
 }
 
 impl TextResources {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
-        Self::from_pipelines(TextPipelines::new(device, target_format), device, queue)
+    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        Self::from_pipelines(TextPipelines::new(device, target_format))
     }
 
-    /// Fresh sheets and panes around `pipelines`. The sheets' stand-in is one
-    /// texel written through the queue, which is why this half stays with
-    /// the window rather than the worker that compiles the other.
-    fn from_pipelines(
-        pipelines: TextPipelines,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) -> Self {
-        TextResources { pipelines, sheets: Sheets::new(device, queue), panes: HashMap::new() }
+    /// Fresh panes around `pipelines`.
+    fn from_pipelines(pipelines: TextPipelines) -> Self {
+        TextResources { pipelines, panes: HashMap::new() }
     }
 
     /// Hand a renderer the loading stage's build, unless it holds one already;
-    /// replacing a stale one stays with the callback, which keeps its sheets.
+    /// replacing a stale one stays with the callback, which keeps its panes.
     #[cfg(not(feature = "hot-reload"))]
-    pub(crate) fn adopt(
-        pipelines: &TextPipelines,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        resources: &mut CallbackResources,
-    ) {
+    pub(crate) fn adopt(pipelines: &TextPipelines, resources: &mut CallbackResources) {
         if resources.get::<TextResources>().is_none() {
-            resources.insert(Self::from_pipelines(pipelines.clone(), device, queue));
-        }
-    }
-
-    /// Bind the current font and mark sheets, carrying every pane already
-    /// prepared this frame onto any replacement texture.
-    ///
-    /// That last part is the whole of why this is not four lines. egui-wgpu
-    /// runs EVERY callback's `prepare` and only then every `paint`. The shared
-    /// font texture is final before that sequence begins, while the mark sheet
-    /// is carried by whichever pane first packed a new mark. Every pane that
-    /// prepared before a replacement already had its turn:
-    ///
-    ///   - its bind group names the texture being replaced here, and a pane
-    ///     whose bind group is dropped paints nothing at all — a whole pane's
-    ///     text gone for one frame, which on a pane that is scrolling reads as
-    ///     the text flickering;
-    ///   - its uniforms carry the atlas size it prepared against, and the
-    ///     shader normalizes texels by that, so a pane left holding the old one
-    ///     would sample a fraction of the way into the wrong row.
-    ///
-    /// Both are put right here rather than deferred to a next frame that, for
-    /// those panes, comes after they have been drawn. Their instance data needs
-    /// nothing. The font texture's resource identity changes whenever egui
-    /// replaces it, including a same-size rebuild, so its bind groups cannot
-    /// silently point at the allocation before the rebuild.
-    ///
-    /// The mark atlas owes the same two things and pays them the same way:
-    /// `harmonigraph_ui::text::MarkAtlas` hands out a patch before deciding
-    /// whether to publish, and it only ever APPENDS within a pass — a repack
-    /// waits for the next one, where it is ahead of every uv rather than
-    /// behind some of them.
-    fn bind_sheets(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        font: Option<&wgpu::Texture>,
-        marks: Option<&MarkSheet>,
-    ) {
-        if !self.sheets.bind(device, queue, font, marks) {
-            return;
-        }
-        let sizes = self.sheets.sizes();
-        let (view, mark_view) = self.sheets.views();
-        let (layout, sampler) = (&self.pipelines.layout, &self.pipelines.sampler);
-        for pane in self.panes.values_mut() {
-            // The sizes alone, not the whole struct: a pane that has already
-            // prepared wrote the rest of its uniforms this frame, and one that
-            // has not is about to write all of them including these.
-            queue.write_buffer(
-                &pane.uniform_buffer,
-                ATLAS_SIZES_OFFSET,
-                bytemuck::cast_slice(&sizes),
-            );
-            pane.bind_group =
-                Some(bind_group(device, layout, sampler, &view, &mark_view, &pane.uniform_buffer));
+            resources.insert(Self::from_pipelines(pipelines.clone()));
         }
     }
 }
-
-/// Where [`TextUniforms::atlas_size`] sits, for the partial write above —
-/// which covers the mark atlas's size too, the two being adjacent (asserted
-/// below). Taken from the type rather than counted, so reordering the struct
-/// cannot leave this pointing at `screen_points`.
-const ATLAS_SIZES_OFFSET: wgpu::BufferAddress =
-    std::mem::offset_of!(TextUniforms, atlas_size) as wgpu::BufferAddress;
-const _: () = assert!(
-    std::mem::offset_of!(TextUniforms, mark_atlas_size)
-        == std::mem::offset_of!(TextUniforms, atlas_size) + size_of::<Float2>()
-);
 
 /// One surface's bind group: its own uniforms, the two shared sheets, and the
 /// sampler they share.
@@ -1106,31 +1056,32 @@ impl CallbackTrait for TextCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let shared_atlas = published_font(callback_resources);
+        // The sheets first, before this callback's own entry is borrowed: the
+        // two are neighbours in one map.
+        let sheets = Sheets::current(device, queue, callback_resources, self.marks.as_ref());
         match callback_resources.get_mut::<TextResources>() {
             // Stale pipelines are the whole of what a reload or a format change
-            // owes; the atlas binding beside them updates independently, so
-            // it survives the pipeline rebuild.
+            // owes; the sheets live in an entry of their own, so they and the
+            // panes bound to them survive the pipeline rebuild.
             Some(resources) if resources.pipelines.is_stale(self.target_format) => {
                 resources.pipelines.rebuild(device, self.target_format);
             }
             Some(_) => {}
             None => {
-                callback_resources.insert(TextResources::new(device, queue, self.target_format));
+                callback_resources.insert(TextResources::new(device, self.target_format));
             }
         }
         let resources: &mut TextResources =
             callback_resources.get_mut().expect("inserted above when missing");
-        resources.bind_sheets(device, queue, shared_atlas.as_ref(), self.marks.as_ref());
         // No font texture published yet: nothing can be drawn until the
         // shell's first publication.
-        if resources.sheets.atlas.is_empty() {
+        if sheets.atlas.is_empty() {
             return Vec::new();
         }
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let style = self.shadow.map(|style| style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX));
-        let sizes = resources.sheets.sizes();
+        let sizes = sheets.sizes();
         let mut uniforms = TextUniforms {
             screen_points: Float2([
                 screen_descriptor.size_in_pixels[0] as f32 / ppp,
@@ -1148,13 +1099,11 @@ impl CallbackTrait for TextCallback {
             _pad1: Float2::default(),
         };
 
-        // Every one of these mints a wgpu `TextureView`, and the only thing
-        // that reads them is a pane being bound for the first time —
-        // `bind_sheets` above has already rebound every pane that was bound
-        // against a texture since replaced. So they are built where they are
-        // used, not beside the rest of the frame's setup.
-        let pane_views = resources.panes.get(&self.pane_id).is_none_or(|p| p.bind_group.is_none());
-        let pane_views = pane_views.then(|| resources.sheets.views());
+        // A pane is bound against the sheets in hand when it has no bind group,
+        // or one naming a texture since replaced — by this callback or the
+        // lattice's, in this frame or an earlier one. Its sizes above are the
+        // same sheets', so the two agree whichever it is.
+        let sheet_keys = sheets.keys();
         let (layout, sampler) = (&resources.pipelines.layout, &resources.pipelines.sampler);
         let pane = resources.panes.entry(self.pane_id).or_insert_with(|| TextPane {
             uniform_buffer: crate::gpu_memory::buffer(
@@ -1167,6 +1116,7 @@ impl CallbackTrait for TextCallback {
                 },
             ),
             bind_group: None,
+            sheet_keys,
             instance_buffer: create_vertex_buffer::<GlyphInstance>(
                 device,
                 "text_glyphs",
@@ -1177,10 +1127,13 @@ impl CallbackTrait for TextCallback {
             capacity: INITIAL_GLYPH_CAPACITY,
             count: 0,
         });
-        if pane.bind_group.is_none() {
-            let (view, mark_view) = pane_views.expect("built above when unbound");
+        if pane.bind_group.is_none() || pane.sheet_keys != sheet_keys {
+            // Each of these mints a wgpu `TextureView`, so they are built only
+            // where a bind group is about to be.
+            let (view, mark_view) = sheets.views();
             pane.bind_group =
                 Some(bind_group(device, layout, sampler, &view, &mark_view, &pane.uniform_buffer));
+            pane.sheet_keys = sheet_keys;
         }
 
         if self.glyphs.len() > pane.capacity {
@@ -1386,10 +1339,10 @@ pub(crate) mod tests {
     #[test]
     fn pipelines_built_for_another_format_are_stale() {
         let _guard = crate::reload::test_lock();
-        let Some((device, queue)) = headless_device() else {
+        let Some((device, _queue)) = headless_device() else {
             return;
         };
-        let resources = TextResources::new(&device, &queue, FORMAT);
+        let resources = TextResources::new(&device, FORMAT);
         assert!(!resources.pipelines.is_stale(FORMAT));
         assert!(resources.pipelines.is_stale(wgpu::TextureFormat::Bgra8Unorm));
     }
@@ -1402,10 +1355,10 @@ pub(crate) mod tests {
     #[cfg(feature = "hot-reload")]
     fn pipelines_built_before_a_reload_are_stale() {
         let _guard = crate::reload::test_lock();
-        let Some((device, queue)) = headless_device() else {
+        let Some((device, _queue)) = headless_device() else {
             return;
         };
-        let resources = TextResources::new(&device, &queue, FORMAT);
+        let resources = TextResources::new(&device, FORMAT);
         assert!(
             !resources.pipelines.is_stale(FORMAT),
             "nothing has been published since these were built"
@@ -1425,66 +1378,16 @@ pub(crate) mod tests {
 
         // ...and a build taken after it is current again, so the rebuild
         // happens once rather than on every frame from here on.
-        let after = TextResources::new(&device, &queue, FORMAT);
+        let after = TextResources::new(&device, FORMAT);
         assert!(!after.pipelines.is_stale(FORMAT));
-    }
-
-    /// And the rebuild it asks for keeps the atlas binding.
-    ///
-    /// `pipelines_built_before_a_reload_are_stale` asks only that the rebuild
-    /// happen; this asks what it costs. A reload changes shader pipelines, not
-    /// the sampled texture or the pane bind groups naming it, so discarding
-    /// either would make the next callback wait for unrelated atlas activity
-    /// before its labels can return.
-    #[test]
-    #[cfg(feature = "hot-reload")]
-    fn a_reload_rebuilds_the_pipelines_without_dropping_the_atlas() {
-        let _guard = crate::reload::test_lock();
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let mut resources = TextResources::new(&device, &queue, FORMAT);
-
-        // A sheet in hand, the way a frame that has drawn one label leaves it.
-        let font = font_texture(&device, &queue, &atlas());
-        resources.bind_sheets(&device, &queue, Some(&font), Some(&mark_sheet()));
-        assert!(
-            !resources.sheets.atlas.is_empty() && !resources.sheets.marks.is_empty(),
-            "the fixture never filled the atlas bindings, so what follows measures nothing",
-        );
-
-        crate::reload::publish(
-            format!(
-                "{}\n// a_reload_rebuilds_the_pipelines_without_dropping_the_atlas\n",
-                crate::with_common(TEXT_SRC)
-            ),
-            crate::COMMON_SRC.to_owned(),
-        );
-        assert!(
-            resources.pipelines.is_stale(FORMAT),
-            "a reload the text pipelines never heard about"
-        );
-
-        resources.pipelines.rebuild(&device, FORMAT);
-
-        assert!(
-            !resources.pipelines.is_stale(FORMAT),
-            "the rebuild did not take the published build"
-        );
-        assert!(
-            !resources.sheets.atlas.is_empty(),
-            "the reload dropped the font atlas binding: nothing upstream will send \
-             another, so every haloed label stays absent from here on",
-        );
-        assert!(!resources.sheets.marks.is_empty(), "the reload dropped the mark sheet binding");
     }
 
     #[test]
     fn the_pipelines_build_against_a_headless_device() {
-        let Some((device, queue)) = headless_device() else {
+        let Some((device, _queue)) = headless_device() else {
             return;
         };
-        let _resources = TextResources::new(&device, &queue, FORMAT);
+        let _resources = TextResources::new(&device, FORMAT);
     }
 
     /// The shell's font texture is keyed by GPU-resource identity. A patch to
@@ -1514,18 +1417,15 @@ pub(crate) mod tests {
         let mut encoder = device.create_command_encoder(&Default::default());
         cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
 
-        let bound = resources.get::<TextResources>().expect("the callback prepares resources");
-        assert_eq!(bound.sheets.atlas.texture.as_ref(), Some(&shared));
-        assert_eq!(
-            bound.sheets.atlas.size(),
-            [sheet.image.width() as u32, sheet.image.height() as u32]
-        );
-        let first_key = bound.sheets.atlas.key();
+        let bound = resources.get::<Sheets>().expect("the callback prepares the sheets");
+        assert_eq!(bound.atlas.texture.as_ref(), Some(&shared));
+        assert_eq!(bound.atlas.size(), [sheet.image.width() as u32, sheet.image.height() as u32]);
+        let first_key = bound.atlas.key();
 
         let mut encoder = device.create_command_encoder(&Default::default());
         cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         assert_eq!(
-            resources.get::<TextResources>().unwrap().sheets.atlas.key(),
+            resources.get::<Sheets>().unwrap().atlas.key(),
             first_key,
             "an in-place atlas patch keeps the same binding key",
         );
@@ -1546,13 +1446,9 @@ pub(crate) mod tests {
         resources.insert(replacement.clone());
         let mut encoder = device.create_command_encoder(&Default::default());
         cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        let rebound = resources.get::<TextResources>().unwrap();
-        assert_eq!(rebound.sheets.atlas.texture.as_ref(), Some(&replacement));
-        assert_ne!(
-            rebound.sheets.atlas.key(),
-            first_key,
-            "a new allocation must rebuild bind groups"
-        );
+        let rebound = resources.get::<Sheets>().unwrap();
+        assert_eq!(rebound.atlas.texture.as_ref(), Some(&replacement));
+        assert_ne!(rebound.atlas.key(), first_key, "a new allocation must rebuild bind groups");
     }
 
     /// A stand-in atlas: one opaque 8x8 "glyph" at (8, 8), with nothing
@@ -2122,30 +2018,27 @@ pub(crate) mod tests {
     }
 
     /// A pane whose marks are already prepared keeps them when a LATER pane in
-    /// the same frame brings a grown mark sheet. egui's font texture cannot
-    /// arrive this way: the shell publishes it once, before any `prepare`.
+    /// the same frame brings a grown mark sheet, and draws off the grown sheet
+    /// from its next `prepare` on — whichever callback grew it. egui's font
+    /// texture cannot arrive this way: the shell publishes it once, before any
+    /// `prepare`.
     ///
     /// Which pane brings one is not a property of the pane: it is whichever
     /// happened to lay out a mark nobody had drawn before, so on any frame the
     /// panes ahead of it in paint order have already had their `prepare` and
-    /// will not get another before they are painted. Both halves of what
-    /// [`TextResources::bind_sheets`] hands them are checked here, and each
-    /// fails on its own — dropping the bind group paints nothing at all, and
-    /// leaving the old `atlas_size` in the uniforms normalizes the glyph's
-    /// texels by the wrong height, which lands the sample below the patch,
-    /// where the atlas is empty. Both are a pane's whole text gone for a frame,
-    /// and on a pane that is scrolling that is text flickering.
+    /// will not get another before they are painted. Such a pane keeps the
+    /// texture it was bound to and the size it wrote with it, which is stale
+    /// but self-consistent ([`Sheets`]): the grown frame checks that it still
+    /// draws. A pane holding the old texture with the NEW size would normalize
+    /// the glyph's texels by the wrong height and land below the patch, where
+    /// the sheet is empty.
     ///
-    /// The last frame is what makes the second one mean anything. A pane left
-    /// holding BOTH its old bind group and its old uniforms is stale but
-    /// self-consistent: it samples the retired texture by the size that texture
-    /// really is, so it draws the right pixels and passes any assertion about
-    /// the frame it was stranded on. What it can never do is read a glyph
-    /// rasterized into the region the atlas grew INTO, since its texture stops
-    /// short of it — and it never recovers on its own, because `prepare`
-    /// rebuilds a bind group only when there is none. So the third frame draws
-    /// off a patch that exists solely in the grown half, which no pane still
-    /// bound to the old texture can reach.
+    /// What a stale pane can never do is read a glyph rasterized into the
+    /// region the sheet grew INTO, since its texture stops short of it. So the
+    /// later frames draw off patches that exist solely in a grown half, which
+    /// no pane still bound to the old texture can reach: the first grown by
+    /// another text pane, the second by the lattice, which binds the same
+    /// sheets through the same [`Sheets::current`].
     #[test]
     fn a_prepared_pane_survives_a_later_pane_growing_the_mark_sheet() {
         let Some((device, queue)) = headless_device() else {
@@ -2153,14 +2046,14 @@ pub(crate) mod tests {
         };
         let sheet = GlyphInstance::MARK;
         // An opaque 8x8 patch at (8, 8), and — once the atlas is tall enough to
-        // hold one — a second at (8, 40), which is reachable only through a
-        // texture of the grown size. Everything else stays transparent, so a
+        // hold one — more at (8, 40) and (8, 96), each reachable only through a
+        // texture of a grown size. Everything else stays transparent, so a
         // glyph normalized by the wrong height samples nothing rather than
         // something plausible: the stale size puts this fixture's probe at texel
         // 25, which is inside the ORIGINAL rows and below the first patch.
         let atlas_of = |height: usize, key: u64| {
             let mut image = egui::ColorImage::filled([32, height], egui::Color32::TRANSPARENT);
-            for top in [8, GROWN_PATCH_TOP] {
+            for top in [8, GROWN_PATCH_TOP, LAST_PATCH_TOP] {
                 if top + 8 > height {
                     continue;
                 }
@@ -2243,41 +2136,58 @@ pub(crate) mod tests {
         // the old one: it draws off the patch that only the grown atlas holds.
         // The trailing pane re-uploads at the SAME size here, which is the
         // ordinary case — a glyph packed into space the atlas already had — and
-        // takes `bind_sheets`'s early return, so nothing is handed to the
-        // leading pane on this frame either.
-        let reaching = GlyphInstance {
-            atlas: sheet,
-            rect: [8.0, 24.0, 8.0, 8.0],
-            uv: [8.0, GROWN_PATCH_TOP as f32, 16.0, GROWN_PATCH_TOP as f32 + 8.0],
-            ..glyph()
+        // moves no key, so the leading pane rebinds on what the grown frame
+        // left rather than on anything this one brings.
+        let reaching = |top: usize| TextCallback {
+            point_scale: 1.0,
+            runs: GlyphRuns::default(),
+            glyphs: vec![GlyphInstance {
+                atlas: sheet,
+                rect: [8.0, 24.0, 8.0, 8.0],
+                uv: [8.0, top as f32, 16.0, top as f32 + 8.0],
+                ..glyph()
+            }],
+            shadow: None,
+            marks: None,
+            slide: SlideAxis::default(),
+            target_format: FORMAT,
+            pane_id: 0,
         };
-        let deeper = frame(
-            &mut resources,
-            [
-                TextCallback {
-                    point_scale: 1.0,
-                    runs: GlyphRuns::default(),
-                    glyphs: vec![reaching],
-                    shadow: None,
-                    marks: None,
-                    slide: SlideAxis::default(),
-                    target_format: FORMAT,
-                    pane_id: 0,
-                },
-                at(40.0, 1, Some(atlas_of(64, 3))),
-            ],
-        );
+        let deeper =
+            frame(&mut resources, [reaching(GROWN_PATCH_TOP), at(40.0, 1, Some(atlas_of(64, 3)))]);
         assert_eq!(
             pixel(&deeper, 12, 28),
             [255, 255, 255, 255],
             "the leading pane must be reading the grown texture, not the retired one",
         );
         assert_eq!(pixel(&deeper, 44, 28), [255, 255, 255, 255], "the trailing pane's glyph");
+
+        // The lattice grows it next, between two text frames, with the first
+        // line of its own `prepare`. No text callback carries that sheet, and
+        // the text pass draws its newest patch all the same.
+        Sheets::current(&device, &queue, &mut resources, Some(&atlas_of(128, 4)));
+        let lattice_grown = frame(&mut resources, [reaching(LAST_PATCH_TOP), at(40.0, 1, None)]);
+        assert_eq!(
+            pixel(&lattice_grown, 12, 28),
+            [255, 255, 255, 255],
+            "a sheet the lattice grew must reach the text pass's panes",
+        );
+        assert_eq!(
+            pixel(&lattice_grown, 44, 28),
+            [255, 255, 255, 255],
+            "the trailing pane's glyph"
+        );
     }
 
     /// Where the second patch of the fixture above sits: past the 32 rows the
     /// atlas starts with, so only a texture of the grown size holds it.
     const GROWN_PATCH_TOP: usize = 40;
+
+    /// And the third: past the 64 rows of the first growth, and where a pane
+    /// left on that 64-row texture but handed the 128-row size lands its probe
+    /// (texel 100 halved, 50) in the transparent rows below the second patch,
+    /// so the lattice step's leading pane fails on its own.
+    const LAST_PATCH_TOP: usize = 96;
 
     /// The spectral shadow derives a visible knockout from the glyph's
     /// coverage and leaves the glyph fill on top of it.

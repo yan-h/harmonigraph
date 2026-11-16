@@ -200,15 +200,10 @@ impl PanePipelines {
     }
 
     /// Give each pane these programs, unless it already holds its own.
-    pub(super) fn adopt(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        resources: &mut CallbackResources,
-    ) {
+    pub(super) fn adopt(&self, resources: &mut CallbackResources) {
         crate::roll::RollResources::adopt(&self.roll, resources);
         crate::dot_surround::Resources::adopt(&self.dots, resources);
-        crate::text::TextResources::adopt(&self.text, device, queue, resources);
+        crate::text::TextResources::adopt(&self.text, resources);
         crate::spectrogram::SpectrogramResources::adopt(&self.spectrogram, resources);
     }
 }

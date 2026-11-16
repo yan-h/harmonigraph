@@ -140,8 +140,9 @@ fn prepare_shadow_uploads_preserve_exact_cells_and_picture_across_panes() {
             &mut shooter.resources,
         );
         shooter.queue.submit(commands.into_iter().chain([encoder.finish()]));
+        let has_atlas =
+            shooter.resources.get::<crate::text::Sheets>().is_some_and(|s| !s.atlas.is_empty());
         let resources = shooter.resources.get_mut::<LatticeResources>().unwrap();
-        let has_atlas = !resources.sheets.atlas.is_empty();
         assert_eq!(has_atlas, atlas);
         let expected = collected(&cb, has_atlas, shooter.device.limits().max_texture_dimension_2d);
         let gpu_pane = resources.panes.get_mut(&pane).unwrap();
