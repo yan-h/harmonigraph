@@ -96,7 +96,8 @@ impl Grab {
         // nor soften.
         //
         // A bar that declares a `min_span` never reaches this: every pair one
-        // is handed was opened to the minimum by its config's `sanitize`.
+        // is handed was opened to the minimum by its config's `sanitize`,
+        // which `show` asserts in debug builds.
         if hi <= lo {
             return if v < lo { Grab::Low } else { Grab::Span { offset: v - lo, width: 0.0 } };
         }
@@ -466,6 +467,19 @@ impl<'a> RangeBar<'a> {
             Sense::click_and_drag(),
         );
         let (min, max) = (*self.range.start(), *self.range.end());
+        // Every pair a `min_span` bar is handed went through its config's
+        // `sanitize`, which opens it to the minimum, so no producer hands one
+        // a closed, inverted or narrower pair. The tolerance is for the f32
+        // sum `sanitize` clamps against, `(lo + span) - lo`, which can land a
+        // few ulps under `span`.
+        let span = self.min_span.min(max - min);
+        debug_assert!(
+            span <= 0.0 || *self.high - *self.low >= span - 1e-3 * span.max(1.0),
+            "{}: handed {}..{}, narrower than its min_span {span}",
+            self.label,
+            *self.low,
+            *self.high,
+        );
         // A [`fade_span`](RangeBar::fade_span) bar's values run the whole bar,
         // the way the octave strip's wheel does: its low end IS the bar's left
         // end — a gutter of no softness at all, a note standing off nothing —
