@@ -99,9 +99,14 @@ impl Worker {
 
     fn assert_failed(&self, cause: &str) {
         let control = self.control.as_ref().unwrap();
-        // A Stop seals on the pass after the one that polled it.
+        // A Stop seals on the pass after the one that polled it. A write
+        // error reaches the status line alone, and the same pass then
+        // replaces it with the whole failure, so the wait is for the whole.
         wait_for("failure on the status line, no Stop pending", || {
-            control.status().contains(cause) && !self.fence.finishing.load(Ordering::Acquire)
+            let message = control.status();
+            message.contains(cause)
+                && message.contains("no render started")
+                && !self.fence.finishing.load(Ordering::Acquire)
         });
         assert!(self.fence.failed.load(Ordering::Acquire));
         assert!(!self.recorder.as_ref().unwrap().wants_audio());
