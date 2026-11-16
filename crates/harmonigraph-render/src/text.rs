@@ -353,7 +353,7 @@ pub(crate) struct TextPipelines {
 /// earlier uv names.
 #[derive(Clone)]
 pub(crate) struct Sheets {
-    /// The font atlas texture this renderer binds.
+    /// egui's font texture, as the window's one binding both callbacks share.
     pub(crate) atlas: AtlasTexture,
     /// And the drawn marks', which a session that never draws one leaves
     /// empty for its whole life.
@@ -386,6 +386,16 @@ impl Sheets {
             sheets.atlas.share(font);
         }
         if let Some(marks) = marks.filter(|a| !sheets.marks.holds(a)) {
+            // Keys only rise (`next_sheet_key`), and callbacks prepare in the
+            // order their snapshots were taken, so no producer hands over a
+            // sheet older than the one held. One that did would overwrite
+            // patches an earlier pane this frame still reads.
+            debug_assert!(
+                sheets.marks.uploaded_key.is_none_or(|held| held < marks.key),
+                "a mark sheet (key {}) older than the one uploaded ({:?})",
+                marks.key,
+                sheets.marks.uploaded_key,
+            );
             sheets.marks.upload(device, queue, marks);
         }
         sheets.clone()
@@ -430,10 +440,11 @@ impl Sheets {
     }
 }
 
-/// One glyph sheet bound by a renderer: egui's shared GPU texture
-/// ([`share`](Self::share), the font atlas) or a private texture uploaded from
-/// a [`MarkSheet`] ([`upload`](Self::upload), the marks' sheet). The key
-/// identifies which texture a pane's bind group names.
+/// One of the window's two glyph sheets, which the text and lattice callbacks
+/// both bind ([`Sheets`]): egui's GPU texture ([`share`](Self::share), the font
+/// atlas) or a texture uploaded from a [`MarkSheet`] ([`upload`](Self::upload),
+/// the marks' sheet). The key identifies which texture a pane's bind group
+/// names.
 #[derive(Clone)]
 pub(crate) struct AtlasTexture {
     texture: Option<wgpu::Texture>,
@@ -2035,14 +2046,14 @@ pub(crate) mod tests {
         };
         let sheet = GlyphInstance::MARK;
         // An opaque 8x8 patch at (8, 8), and — once the atlas is tall enough to
-        // hold one — more at (8, 40) and (8, 80), each reachable only through a
+        // hold one — more at (8, 40) and (8, 96), each reachable only through a
         // texture of a grown size. Everything else stays transparent, so a
         // glyph normalized by the wrong height samples nothing rather than
         // something plausible: the stale size puts this fixture's probe at texel
         // 25, which is inside the ORIGINAL rows and below the first patch.
         let atlas_of = |height: usize, key: u64| {
             let mut image = egui::ColorImage::filled([32, height], egui::Color32::TRANSPARENT);
-            for top in [8, GROWN_PATCH_TOP, 2 * GROWN_PATCH_TOP] {
+            for top in [8, GROWN_PATCH_TOP, LAST_PATCH_TOP] {
                 if top + 8 > height {
                     continue;
                 }
@@ -2155,8 +2166,7 @@ pub(crate) mod tests {
         // line of its own `prepare`. No text callback carries that sheet, and
         // the text pass draws its newest patch all the same.
         Sheets::current(&device, &queue, &mut resources, Some(&atlas_of(128, 4)));
-        let lattice_grown =
-            frame(&mut resources, [reaching(2 * GROWN_PATCH_TOP), at(40.0, 1, None)]);
+        let lattice_grown = frame(&mut resources, [reaching(LAST_PATCH_TOP), at(40.0, 1, None)]);
         assert_eq!(
             pixel(&lattice_grown, 12, 28),
             [255, 255, 255, 255],
@@ -2170,9 +2180,14 @@ pub(crate) mod tests {
     }
 
     /// Where the second patch of the fixture above sits: past the 32 rows the
-    /// atlas starts with, so only a texture of the grown size holds it. The
-    /// third sits at twice this, past the 64 rows of the first growth.
+    /// atlas starts with, so only a texture of the grown size holds it.
     const GROWN_PATCH_TOP: usize = 40;
+
+    /// And the third: past the 64 rows of the first growth, and where a pane
+    /// left on that 64-row texture but handed the 128-row size lands its probe
+    /// (texel 100 halved, 50) in the transparent rows below the second patch,
+    /// so the lattice step's leading pane fails on its own.
+    const LAST_PATCH_TOP: usize = 96;
 
     /// The spectral shadow derives a visible knockout from the glyph's
     /// coverage and leaves the glyph fill on top of it.
