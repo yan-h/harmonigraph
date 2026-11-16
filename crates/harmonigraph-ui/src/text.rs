@@ -779,7 +779,7 @@ pub(crate) struct MarkPatch {
 /// dragging every letter with it (issue #304).
 ///
 /// Two rules make the sheet safe to hand out mid-frame, and they are the same
-/// two egui's atlas keeps (see `harmonigraph_render::text`'s `bind_sheets`):
+/// two egui's atlas keeps (see `harmonigraph_render::text`'s `Sheets`):
 /// a patch is only ever APPENDED within a pass, and the sheet only ever grows
 /// downward, so a uv issued earlier in the pass still points at its own mark.
 /// A repack waits for the next pass, where it runs before any uv is issued.
@@ -1187,11 +1187,13 @@ mod tests {
     /// the sheet has grown under it.
     ///
     /// This is the rule the whole publication scheme rests on, and it is the
-    /// same one egui's atlas keeps: `harmonigraph_render`'s `bind_sheets`
-    /// carries a pane that has already prepared onto a texture some LATER pane
-    /// grew, and what makes that safe is that the earlier pane's uvs still
-    /// name their own texels. Repack inside a pass instead and every mark
-    /// already drawn this frame is reading whatever moved into its place.
+    /// same one egui's atlas keeps: in `harmonigraph_render`'s `Sheets`, a pane
+    /// that has already prepared keeps drawing from the texture it was bound
+    /// to after some LATER pane grew the sheet into a new one, and later
+    /// panes write more patches into that same texture in place. Both are safe
+    /// only because the earlier pane's uvs still name their own texels. Repack
+    /// inside a pass instead and every mark already drawn this frame is
+    /// reading whatever moved into its place.
     ///
     /// Driven past the soft height on purpose: that is where a repack becomes
     /// tempting, and the test is that it does not happen HERE. The pass after

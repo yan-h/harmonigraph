@@ -1141,9 +1141,6 @@ struct CompiledLatticeResources {
 /// context starts empty even when its pane IDs match a previous window.
 struct LatticeResources {
     compiled: CompiledLatticeResources,
-    /// This renderer's bindings for the sheets a glyph can be cut from — egui's
-    /// shared font texture and the drawn marks' private texture.
-    sheets: text::Sheets,
     panes: HashMap<u64, PaneBuffers>,
     /// GPU-side timing of the lattice passes. `None` when the device didn't
     /// grant timestamp queries — plenty of GPUs (and the offline renderer,
@@ -1203,7 +1200,7 @@ impl LatticePipelineCache {
                 *cached = Some((instance.clone(), device.clone(), compiled));
             }
             let compiled = &cached.as_ref().expect("initialized above").2;
-            compiled.panes.adopt(device, queue, resources);
+            compiled.panes.adopt(resources);
             resources.insert(LatticeResources::from_compiled(
                 compiled.lattice.clone(),
                 device,
@@ -1564,7 +1561,6 @@ impl LatticeResources {
     ) -> Self {
         Self {
             compiled,
-            sheets: text::Sheets::new(device, queue),
             panes: HashMap::new(),
             timer: GpuTimer::new(device, queue),
             shadow_buffers: Default::default(),
@@ -1579,10 +1575,12 @@ impl LatticeResources {
     /// glow target exactly while `glow` asks for one and an ink strip of
     /// exactly `rows`.
     /// `screen_size` is the pane's native (unscaled) pixel size, which
-    /// sizes the bloom chain.
+    /// sizes the bloom chain. `sheets` is this frame's glyph sheets, as
+    /// `prepare` brought them up to date.
     fn pane_buffers(
         &mut self,
         device: &wgpu::Device,
+        sheets: &text::Sheets,
         pane_id: u64,
         offscreen_size: Option<[u32; 2]>,
         screen_size: [u32; 2],
@@ -1591,28 +1589,25 @@ impl LatticeResources {
         let layout = &self.compiled.bind_group_layout;
         let caster_layout = &self.compiled.caster_layout;
         // Taken before the pane is borrowed: the view is a fresh handle onto
-        // this frame's font texture and mark sheet — `prepare` binds them
-        // before it gets here.
+        // this frame's font texture and mark sheet.
         let (glyph_layout, glyph_sampler) =
             (&self.compiled.glyph_layout, &self.compiled.glyph_sampler);
-        let sheet_keys = self.sheets.keys();
+        let sheet_keys = sheets.keys();
         // Each of these mints a `wgpu::TextureView`, and the only thing that
         // reads them is the bind-group rebuild below — which the ordinary
         // frame skips, because the sheets it names have not moved. So they are
         // built off that rebuild's own predicate rather than beside the rest
         // of the frame's setup, and holding one IS the decision to rebuild.
-        // #907 did this for the text callback and left this copy, which is the
-        // same views in the same shape.
         //
         // The font atlas decides on its own account: the first frames of a
         // session arrive before one exists, and a pane cannot be bound against
         // a sheet that has not come.
-        let wants_views = !self.sheets.atlas.is_empty()
+        let wants_views = !sheets.atlas.is_empty()
             && self
                 .panes
                 .get(&pane_id)
                 .is_none_or(|p| p.glyph_bind_group.is_none() || p.glyph_sheet_keys != sheet_keys);
-        let views = wants_views.then(|| self.sheets.views());
+        let views = wants_views.then(|| sheets.views());
         let shared = OffscreenShared {
             format: LATTICE_COLOR_FORMAT,
             composite_layout: &self.compiled.composite_layout,

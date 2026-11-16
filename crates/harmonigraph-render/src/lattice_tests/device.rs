@@ -56,21 +56,13 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
         "the populated context must own its ink strip"
     );
     let pipeline = window.compiled.shaders.scenes[0].draws.nodes.clone();
-    let atlas = MarkSheet {
-        image: std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::WHITE)),
-        key: 99,
-    };
-    let font = crate::text::tests::font_texture(&shooter.device, &shooter.queue, &atlas);
-    window.sheets.atlas.share(&font);
-    window.sheets.marks.upload(&shooter.device, &shooter.queue, &atlas);
-    let font_binding = window.sheets.atlas.key();
     // Clone the compiled owner out of a populated, still-live context. Its
     // type excludes mutable state, and constructing another context must
-    // initialize every such field independently.
+    // initialize every such field independently. The glyph sheets are no such
+    // field: they are the window's own entry of the map dropped below.
     let reset =
         LatticeResources::from_compiled(window.compiled.clone(), &shooter.device, &shooter.queue);
     assert!(reset.panes.is_empty());
-    assert!(reset.sheets.atlas.view().is_none() && reset.sheets.marks.view().is_none());
     assert_eq!(reset.compiled.shaders.scenes[0].draws.nodes, pipeline);
     if let Some(timer) = &window.timer {
         let fresh = reset.timer.as_ref().expect("same timestamp-capable device");
@@ -79,11 +71,6 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
         assert!(fresh.state == TimerState::Idle);
         assert!(!std::sync::Arc::ptr_eq(&fresh.ready, &timer.ready));
     }
-    // The live context keeps the font texture it was bound to: building
-    // another one shares nothing it could have replaced.
-    assert_eq!(window.sheets.atlas.key(), font_binding, "the live font binding moved");
-    assert!(!window.sheets.atlas.share(&font), "the live context lost its font texture");
-    assert!(window.sheets.marks.holds(&atlas));
     drop(reset);
     shooter.resources = CallbackResources::default();
 
