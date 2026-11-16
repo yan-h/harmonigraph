@@ -1062,6 +1062,49 @@ fn a_late_reply_draws_the_note_raw_from_the_miss_on() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #1799. A miss the Hub reads a callback after its onset was scheduled is
+/// withdrawn at the start of the callback that reads it, never at the onset's
+/// earlier time: a snapshot an earlier callback published covers the voice
+/// with its correction, and a withdrawal timed before it would sort ahead of
+/// it on read, and the take would refuse to export.
+#[test]
+fn a_miss_read_a_callback_late_is_withdrawn_at_that_callbacks_start() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let mut tune = Device::new(true);
+    tune.activate();
+    let at = |raw: i64| Some(timeline(1.0 + raw as f64 / 48_000.0, true));
+    let hub_block = |raw: i64| hub.run_callback(raw, vec![], (None, None), (512, false), at(raw));
+    let tune_block =
+        |raw: i64, played| tune.run_callback(raw, played, (None, None), (512, false), at(raw));
+    hub_block(0);
+    // What the Hub's first callback publishes is timed at its first sample.
+    let zero = capture.display_events()[0].time();
+    tune_block(0, vec![note(1, 0, 64, 0, true)]);
+    let sounded = tune_block(512, vec![]);
+    assert!(tuning_of(&sounded.values).is_none(), "the fixture must reach a late reply");
+    // No Hub callback at 512: the one at 1024 reads the onset and its miss.
+    hub_block(1024);
+    // The onset, then the delta that withdraws its correction.
+    let events = capture.display_events();
+    let at_kind = |on: bool| {
+        events.iter().find_map(|record| match record {
+            harmonigraph_take::CanonicalRecord::Delta(d)
+                if matches!(d.event.kind, harmonigraph_take::NoteKind::On { .. }) == on =>
+            {
+                Some(d.event.t - zero)
+            }
+            _ => None,
+        })
+    };
+    let (onset, withdrawn) = (at_kind(true).unwrap(), at_kind(false).unwrap());
+    let start = 1024.0 / 48_000.0;
+    assert!(onset < start, "the fixture's onset must be scheduled before {start}: {onset}");
+    assert!((withdrawn - start).abs() < 1e-9, "withdrawn at {withdrawn}, not at {start}");
+}
+
 /// #1799. A miss names its onset by serial, so one for a voice already
 /// released changes nothing, even with a new press held on the same key.
 #[test]
