@@ -44,13 +44,13 @@ The section below records the design it replaced.
 `GlowStep` carries only brightness,
 row identity and row index.
 The redundant scene `mix` input is removed.
-Timed live and offline scenes keep the existing renderer-owned ink history,
-which computes interpolation from the last frame actually encoded for that pane.
-Untimed scenes are stateless snapshots seeded from current ink.
-The two consumers still need their own timestamps:
+Timed live and offline scenes kept a renderer-owned ink history (removed in #1767),
+which computed interpolation from the last frame actually encoded for that pane.
+Untimed scenes were stateless snapshots seeded from current ink.
+The two consumers needed their own timestamps:
 UI layout can advance without a corresponding GPU frame.
-Brightness is stepped on the CPU,
-while directional color history lives on the GPU.
+Brightness was stepped on the CPU,
+while directional color history lived on the GPU.
 
 The previously tested attack fix is retained:
 a newly lit node starts dark when attack is nonzero,
@@ -191,12 +191,9 @@ The intended visual tradeoff is slightly softer fine glow detail.
 
 The angular blur still reads 64 samples per node and preserves the existing color model.
 A 64-weight CPU table replaces the repeated cosine/exponential evaluations inside that convolution.
-The table is cached per pane using only sanitized Color Blend;
-its resolution is a compile-time constant.
-Camera,
-note activity,
-breathing,
-viewport size and row capacity do not invalidate it or reset color history.
+The trial cached the table per pane, keyed on sanitized Color Blend;
+#1791 replaced that cache with the plain `ink_kernel()`, recomputed from Color Blend at each prepare.
+Its resolution is a compile-time constant.
 Weights use circular distance so mirrored offsets are exactly equal.
 
 At a 768×768 scene,
@@ -215,7 +212,7 @@ The analytic curve fixture now aligns a node with a shared center texel of odd-s
 the lone-glow equation fixture reads the native glow grid before reconstruction.
 The existing resize test now exercises odd dimensions and checks all four half-sized allocations while retaining full-sized scene targets and release history.
 The existing Color Blend test reuses a pane through multiple settings and back to its original setting,
-checking cache invalidation against a cold frame.
+checking that the frame matches a cold one.
 
 ### Trial timing
 

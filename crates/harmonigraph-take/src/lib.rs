@@ -317,8 +317,8 @@ pub enum Record {
 #[derive(Clone, Debug, Default)]
 pub struct Take {
     pub header: Header,
-    /// Note events in the order they were recorded (which is time order:
-    /// the audio thread stamps them from a monotonic sample counter).
+    /// Note events in song-time order: the reader sorts them by time,
+    /// stably, so simultaneous events keep the order they were recorded in.
     pub events: Vec<CanonicalRecord>,
     /// Parameter changes, time-ordered. Only *changes* are recorded, so
     /// the value at any moment is the last record at or before it.

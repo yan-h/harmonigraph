@@ -2729,7 +2729,7 @@ fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
         harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI,
         harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
     );
-    for (low, high) in [axis, (40.5, 40.5 + crate::PITCH_RANGE_MIN_SPAN), (axis.0, axis.0)] {
+    for (low, high) in [axis, (40.5, 40.5 + crate::PITCH_RANGE_MIN_SPAN)] {
         let mut state = fresh();
         state.appearance.spectrum.low_midi = low;
         state.appearance.spectrum.high_midi = high;

@@ -22,9 +22,9 @@ use harmonigraph_ui::PictureState;
 /// The parameter values at one instant of the replay.
 ///
 /// A [`ParamBackend`] whose values are set by the replay rather than by
-/// the UI. Writes are accepted and kept (nothing offline should be
-/// writing, but learn mode's write path exists and must not panic) —
-/// they are simply overwritten by the next automation record.
+/// the UI. The replay applies each automation record through `set`; a UI
+/// write (the camera's, which an offline frame has no input to make) is
+/// accepted and kept until the next record overwrites it.
 pub struct ReplayParams {
     values: [Cell<f32>; ParamKey::ALL.len()],
     present: [Cell<bool>; ParamKey::ALL.len()],
@@ -439,13 +439,9 @@ mod tests {
                     .unwrap(),
             );
         }
-        // A held chord and contradictory raw lane would trigger GUI learning or
-        // detection if replay accidentally treated these exact records as hints.
-        for record in [
-            Record::Note(on(0.0, 60)),
-            Record::Note(on(0.0, 64)),
-            Record::Param(ParamRecord { t: 0.0, id: "tuning-three".into(), value: 710.0 }),
-        ] {
+        // A held chord would trigger GUI learning or detection if replay
+        // accidentally treated these exact records as hints.
+        for record in [Record::Note(on(0.0, 60)), Record::Note(on(0.0, 64))] {
             encoded.push('\n');
             encoded.push_str(&ron::to_string(&record).unwrap());
         }

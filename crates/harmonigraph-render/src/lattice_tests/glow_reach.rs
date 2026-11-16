@@ -235,8 +235,8 @@ fn the_glow_blend_says_how_separate_a_node_keeps_its_colours() {
     let tight = shooter.shot(&at(0.0));
     let middle = shooter.shot_again(&at(0.5));
     let broad = shooter.shot_again(&at(1.0));
-    // Reuse one pane: changing the cached kernel and returning to the first
-    // setting must reproduce a cold render, without stale blend weights.
+    // Reuse one pane: changing the blend and returning to the first setting
+    // must reproduce a cold render, without stale blend weights.
     assert_eq!(tight, shooter.shot_again(&at(0.0)));
 
     // The annulus, sized off the light itself rather than guessed: the farthest

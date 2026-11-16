@@ -39,7 +39,7 @@ the total is checked against Bitwig's overlay below.
 | Recorder publication lanes, take and display | 2.1 | 2 × (4,096 items + 20 baselines) | plugin construction | never |
 | Tuning hub (`tuning::hub::Hub`) | 1.7 | per-row voice state, one `Tune`'s 8,192-entry delay line | plugin construction | never |
 | Spectrum ingress (`audio_ingress`) | 1.2 | 131,072-sample ring, its drain scratch, 4,096 block descriptors | plugin construction | never |
-| Spectrogram run, per visible spectrogram (`FoldedGrid`) | under 0.1 | a pointer per slab of the pyramid it reads, and the open slab's copy | first drawn | never; it lives in `SharedState` |
+| Spectrogram run, per visible spectrogram (`FoldedGrid`) | under 0.1 while drawing; up to ~4 once stopped | a pointer per slab of the pyramid it reads, and the open slab's copy; a surface that stops drawing keeps its last run, which pins slabs the pyramid has since evicted, up to 1,032 × 4 KB | first drawn | never; it lives in `SharedState` |
 | egui font atlas and context | 2 | glyphs drawn | editor open | with the window |
 | Other editor state: mark atlas, lattice node buffers, egui-wgpu staging | the rest, ~5 | window size, visible nodes | editor open | partly |
 | Each Harmonigraph Tune instance | 0.6 | its 8,192-entry delay line | its construction | never |
