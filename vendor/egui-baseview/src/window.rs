@@ -683,8 +683,6 @@ where
                 title: settings.title.clone(),
                 size: settings.logical_size,
                 scale: settings.scale_policy,
-                #[cfg(feature = "opengl")]
-                gl_config: Some(settings.graphics.gl_config.clone()),
                 ..Default::default()
             },
             move |window: &mut baseview::Window<'_>| -> EguiWindow<State, U> {
@@ -712,8 +710,6 @@ where
                 title: settings.title.clone(),
                 size: settings.logical_size,
                 scale: settings.scale_policy,
-                #[cfg(feature = "opengl")]
-                gl_config: Some(settings.graphics.gl_config.clone()),
                 ..Default::default()
             },
             move |window: &mut baseview::Window<'_>| -> EguiWindow<State, U> {

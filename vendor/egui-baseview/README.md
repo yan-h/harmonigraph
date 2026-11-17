@@ -11,13 +11,3 @@ This is used by the [nice-plug](https://codeberg.org/RustAudio/nice-plug) framew
 <div align="center">
     <img src="screenshot.png">
 </div>
-
-## Prerequisites
-
-### Linux
-
-Install dependencies, e.g.,
-
-```sh
-sudo apt-get install libx11-dev libxcursor-dev libxcb-dri2-0-dev libxcb-icccm4-dev libx11-xcb-dev mesa-common-dev libgl1-mesa-dev libglu1-mesa-dev
-```
