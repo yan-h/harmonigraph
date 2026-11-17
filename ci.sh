@@ -277,26 +277,18 @@ run golden_diff
 
 # The vendored crates are `exclude`d from the workspace (the `[workspace]`
 # table's own key, in Cargo.toml), so `--workspace` compiles them as
-# dependencies and runs none of their tests. The GUI patches carry focused
-# tests: baseview's macOS view decides when a gesture ends, and egui-baseview
-# tests the font-atlas bound. nice-plug's upstream tests exercise macros and
-# serialization; its patched CLAP boundary is exercised by the exported-CLAP
-# fixture above, including activation latency and allocation guards. The nested
-# crate cannot see the workspace's baseview patch, so its command repeats that
-# path explicitly; WGPU is the one backend the fork keeps.
+# dependencies and runs none of their tests. nice-plug's upstream tests exercise
+# macros and serialization; its patched CLAP boundary is exercised by the
+# exported-CLAP fixture above, including activation latency and allocation
+# guards. The editor window's crates (baseview, egui-baseview) are pinned from
+# egui-plugin-window, whose own CI runs their tests.
 #
-# Each crate is its own workspace root, so keep both of their targets under
-# `target/debug`: the idle-worktree reclaimer owns that whole subtree.
+# nice-plug is its own workspace root, so keep its target under `target/debug`:
+# the idle-worktree reclaimer owns that whole subtree.
 # Production opt-in CLAP performance boundary and CLAP auxiliary bounds.
 run cargo test --no-fail-fast --manifest-path vendor/nice-plug/Cargo.toml \
   --target-dir target/debug/vendor-nice-plug --features assert_process_allocs,clap-boundary-tests \
   --test clap_boundary --test clap_auxiliary
-run cargo test --no-fail-fast --manifest-path vendor/baseview/Cargo.toml \
-  --target-dir target/debug/vendor-baseview
-run cargo test --no-fail-fast --manifest-path vendor/egui-baseview/Cargo.toml \
-  --no-default-features --features wgpu,tracing \
-  --config 'patch.crates-io.baseview.path="vendor/baseview"' \
-  --target-dir target/debug/vendor-egui-baseview
 
 group workspace
 

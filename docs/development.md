@@ -189,7 +189,7 @@ writing to `~/harmonigraph-hangs/`;
 
 ### Timing frames against the display
 
-A build with the plugin's `frame-log` feature writes every editor frame's timing to `~/Library/Logs/Harmonigraph/frames-<unix seconds>-<pid>.csv`, one file per host process (macOS only; [`frame_log.rs`](../vendor/egui-baseview/src/frame_log.rs) documents the columns):
+A build with the plugin's `frame-log` feature writes every editor frame's timing to `~/Library/Logs/Harmonigraph/frames-<unix seconds>-<pid>.csv`, one file per host process (macOS only; [`frame_log.rs`](https://github.com/yan-h/egui-plugin-window/blob/main/egui-baseview/src/frame_log.rs) documents the columns):
 
 ```sh
 cargo build --release -p harmonigraph-plugin -p harmonigraph-offline --features harmonigraph-plugin/frame-log
@@ -324,7 +324,8 @@ wgpu 29 and baseview 0.1.
 The workspace [`Cargo.toml`](../Cargo.toml) centralizes these versions;
 bump the cluster together.
 
-The workspace carries local dependency patches under [`vendor/`](../vendor).
+The workspace carries local dependency patches under [`vendor/`](../vendor),
+and pins the editor window's two patched crates from [egui-plugin-window](https://github.com/yan-h/egui-plugin-window).
 Their provenance,
 platform scope and upgrade notes live in [`PATCHES.md`](../PATCHES.md).
 

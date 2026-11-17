@@ -2,7 +2,7 @@
 """Summarise a frame log: how often the editor missed the glass, and why.
 
 The log comes from the plugin's `--features frame-log` build
-(`vendor/egui-baseview/src/frame_log.rs`), one CSV per host process in
+(`egui-baseview/src/frame_log.rs` in egui-plugin-window), one CSV per host process in
 `~/Library/Logs/Harmonigraph/`. With no path, the newest log there is read.
 
 The run is split into phases at every change of the chosen Editor frame rate
