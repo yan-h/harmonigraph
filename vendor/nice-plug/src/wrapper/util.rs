@@ -1,6 +1,5 @@
 use backtrace::Backtrace;
 use std::cmp;
-use std::marker::PhantomData;
 use std::os::raw::c_char;
 
 use crate::util::permit_alloc;
@@ -178,48 +177,13 @@ fn log_panics() {
 }
 
 /// A wrapper around the entire process function, including the plugin wrapper parts. This sets up
-/// `assert_no_alloc` if needed, while also making sure that things like FTZ are set up correctly if
-/// the host has not already done so.
+/// `assert_no_alloc` if needed.
 pub fn process_wrapper<T, F: FnOnce() -> T>(f: F) -> T {
-    // Make sure FTZ is always enabled, even if the host doesn't do it for us
-    let _ftz_guard = ScopedFtz::enable();
-
     #[cfg(all(debug_assertions, feature = "assert_process_allocs"))]
     return nice_assert_no_alloc::assert_no_alloc(f);
 
     #[cfg(not(all(debug_assertions, feature = "assert_process_allocs")))]
     return f();
-}
-
-/// Enable the CPU's Flush To Zero flag while this object is in scope. If the flag was not already
-/// set, it will be restored to its old value when this gets dropped.
-struct ScopedFtz {
-    /// Whether FTZ should be disabled again, i.e. if FTZ was not enabled before.
-    /// Only unused if not on SSE or aarch64 with the "unsafe_flush_denormals"
-    /// feature enabled.
-    #[allow(unused)]
-    should_disable_again: bool,
-    /// We can't directly implement !Send and !Sync, but this will do the same thing. This object
-    /// affects the current thread's floating point registers, so it may only be dropped on the
-    /// current thread.
-    _send_sync_marker: PhantomData<*const ()>,
-}
-
-impl ScopedFtz {
-    fn enable() -> Self {
-        // This is only unreachable if on SSE or aarch64 with the "unsafe_flush_denormals"
-        // feature enabled.
-        #[allow(unreachable_code)]
-        Self {
-            should_disable_again: false,
-            _send_sync_marker: PhantomData,
-        }
-    }
-}
-
-impl Drop for ScopedFtz {
-    fn drop(&mut self) {
-    }
 }
 
 #[cfg(test)]

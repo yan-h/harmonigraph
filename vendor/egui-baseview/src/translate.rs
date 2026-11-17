@@ -23,15 +23,13 @@ pub(crate) fn translate_mouse_button(button: baseview::MouseButton) -> Option<eg
 /// report Ctrl as `command` there. Upstream egui-baseview 0.7 has this shape.
 pub(crate) fn translate_modifiers(modifiers: keyboard_types::Modifiers) -> egui::Modifiers {
     use keyboard_types::Modifiers as M;
-    let ctrl = modifiers.contains(M::CONTROL);
     let meta = modifiers.contains(M::META);
-    let mac = cfg!(target_os = "macos");
     egui::Modifiers {
         alt: modifiers.contains(M::ALT),
-        ctrl,
+        ctrl: modifiers.contains(M::CONTROL),
         shift: modifiers.contains(M::SHIFT),
-        mac_cmd: mac && meta,
-        command: if mac { meta } else { ctrl },
+        mac_cmd: meta,
+        command: meta,
     }
 }
 
@@ -160,13 +158,12 @@ mod tests {
         assert_eq!(translate_modifiers(M::empty()), egui::Modifiers::NONE);
         assert!(!translate_modifiers(M::empty()).matches_any(egui::Modifiers::COMMAND));
 
-        let mac = cfg!(target_os = "macos");
         let ctrl = translate_modifiers(M::CONTROL);
         assert!(ctrl.ctrl);
-        assert_eq!(ctrl.command, !mac);
+        assert!(!ctrl.command);
 
         let meta = translate_modifiers(M::META);
         assert!(!meta.ctrl);
-        assert_eq!((meta.mac_cmd, meta.command), (mac, mac));
+        assert_eq!((meta.mac_cmd, meta.command), (true, true));
     }
 }

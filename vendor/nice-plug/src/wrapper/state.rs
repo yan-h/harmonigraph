@@ -102,10 +102,7 @@ pub(crate) unsafe fn serialize_json<'a, P: Plugin>(
 pub(crate) fn serialize_state_json(plugin_state: &PluginState) -> Result<Vec<u8>> {
     let json = serde_json::to_vec(plugin_state).context("Could not format as JSON")?;
 
-    #[cfg(not(feature = "zstd"))]
-    {
-        Ok(json)
-    }
+    Ok(json)
 }
 
 /// Deserialize a plugin's state from a [`PluginState`] object. This is used to allow the plugin to
@@ -194,14 +191,11 @@ pub(crate) unsafe fn deserialize_object<P: Plugin>(
 /// `Plugin::reset()`, and this way all of that behavior can be encapsulated so it can be reused in
 /// multiple places. The returned state object can be passed to [`deserialize_object()`].
 pub(crate) unsafe fn deserialize_json(state: &[u8]) -> Option<PluginState> {
-    #[cfg(not(feature = "zstd"))]
-    let result: Option<PluginState> = match serde_json::from_slice(state) {
+    match serde_json::from_slice(state) {
         Ok(s) => Some(s),
         Err(err) => {
             crate::nice_debug_assert_failure!("Error while deserializing state: {}", err);
             None
         }
-    };
-
-    result
+    }
 }
