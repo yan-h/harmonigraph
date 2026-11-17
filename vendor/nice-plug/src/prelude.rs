@@ -5,10 +5,6 @@ pub use std::num::NonZeroU32;
 pub use crate::debug::*;
 
 pub use crate::nice_export_clap;
-#[cfg(feature = "vst3")]
-pub use crate::nice_export_vst3;
-#[cfg(feature = "standalone")]
-pub use crate::wrapper::standalone::{nice_export_standalone, nice_export_standalone_with_args};
 
 pub use crate::formatters;
 pub use crate::util;
@@ -38,7 +34,3 @@ pub use crate::plugin::PluginState;
 pub use crate::plugin::{Plugin, ProcessStatus, TaskExecutor};
 pub use crate::wrapper::clap::features::ClapFeature;
 pub use crate::wrapper::clap::{ClapPlugin, PolyModulationConfig};
-#[cfg(feature = "vst3")]
-pub use crate::wrapper::vst3::Vst3Plugin;
-#[cfg(feature = "vst3")]
-pub use crate::wrapper::vst3::subcategories::Vst3SubCategory;

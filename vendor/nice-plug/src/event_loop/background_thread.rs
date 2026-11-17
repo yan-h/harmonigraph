@@ -1,7 +1,8 @@
-//! Used by the other [`EventLoop`][super::EventLoop] implementations to spawn threads for running
-//! tasks in the background without blocking the GUI thread.
+//! Used by the CLAP wrapper's [`EventLoop`][super::EventLoop] implementation to spawn threads for
+//! running tasks in the background without blocking the GUI thread.
 //!
-//! This is essentially a slimmed down version of the `LinuxEventLoop`.
+//! This is essentially a slimmed down version of upstream's Linux event loop, which went with the
+//! VST3 and standalone wrappers that used it.
 
 use anymap3::Entry;
 use nice_plug_core::nice_trace;

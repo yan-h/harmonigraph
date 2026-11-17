@@ -26,8 +26,11 @@ use crate::wrapper::util::strlcpy;
 ///
 /// # Note
 ///
-/// See the VST3 `WrapperInitContext` for an explanation of why we need this `pending_requests`
-/// field.
+/// Requests to change the latency are only sent when this object is dropped. Otherwise there's the
+/// risk that the host will immediately deactivate/reactivate the plugin while still in the init
+/// call. Reentrant function calls are difficult to handle in Rust without forcing everything to
+/// use interior mutability, so this will have to do for now. This does mean that `Plugin` mutex
+/// lock has to be dropped before this object.
 pub(crate) struct WrapperInitContext<'a, P: ClapPlugin> {
     pub(super) wrapper: &'a Wrapper<P>,
     pub(super) pending_requests: PendingInitContextRequests,

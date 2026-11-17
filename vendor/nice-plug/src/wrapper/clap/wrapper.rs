@@ -281,10 +281,9 @@ pub struct Wrapper<P: ClapPlugin> {
     current_voice_capacity: AtomicU32,
 
     /// A queue of tasks that still need to be performed. Because CLAP lets the plugin request a
-    /// host callback directly, we don't need to use the OsEventLoop we use in our other plugin
-    /// implementations. Instead, we'll post tasks to this queue, ask the host to call
-    /// [`on_main_thread()`][Self::on_main_thread()] on the main thread, and then continue to pop
-    /// tasks off this queue there until it is empty.
+    /// host callback directly, we don't need a platform event loop of our own. Instead, we'll post
+    /// tasks to this queue, ask the host to call [`on_main_thread()`][Self::on_main_thread()] on
+    /// the main thread, and then continue to pop tasks off this queue there until it is empty.
     tasks: ArrayQueue<Task<P>>,
     /// The ID of the main thread. In practice this is the ID of the thread that created this
     /// object. If the host supports the thread check extension (and
@@ -387,8 +386,8 @@ const _: () = {
     assert!(mem::size_of::<rtrb::RingBuffer<OutputParamEvent>>() <= 384);
 };
 
-/// Because CLAP has this [`clap_host::request_host_callback()`] function, we don't need to use
-/// `OsEventLoop` and can instead just request a main thread callback directly.
+/// Because CLAP has this [`clap_host::request_host_callback()`] function, we don't need a platform
+/// event loop and can instead just request a main thread callback directly.
 impl<P: ClapPlugin> EventLoop<Task<P>, Wrapper<P>> for Wrapper<P> {
     fn new_and_spawn(_executor: Weak<Self>) -> Self {
         panic!("What are you doing");
@@ -2917,10 +2916,6 @@ impl<P: ClapPlugin> Wrapper<P> {
             if CStr::from_ptr(api) == CLAP_WINDOW_API_COCOA {
                 return true;
             }
-            #[cfg(target_os = "windows")]
-            if CStr::from_ptr(api) == CLAP_WINDOW_API_WIN32 {
-                return true;
-            }
         }
 
         false
@@ -2941,10 +2936,6 @@ impl<P: ClapPlugin> Wrapper<P> {
             #[cfg(target_os = "macos")]
             {
                 *api = CLAP_WINDOW_API_COCOA.as_ptr();
-            }
-            #[cfg(target_os = "windows")]
-            {
-                *api = CLAP_WINDOW_API_WIN32.as_ptr();
             }
 
             // We don't do standalone floating windows yet

@@ -421,7 +421,6 @@ mod miri {
 
     #[test]
     fn buffer_io() {
-        // This works very similarly to the standalone CPAL and dummy backends
         let mut main_io_storage = vec![vec![0.0f32; BUFFER_SIZE]; NUM_MAIN_OUTPUT_CHANNELS];
         let mut aux_input_storage =
             vec![vec![vec![0.0f32; BUFFER_SIZE]; NUM_AUX_CHANNELS]; NUM_AUX_PORTS];
