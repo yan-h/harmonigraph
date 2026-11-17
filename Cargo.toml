@@ -61,8 +61,8 @@ baseview = "0.1.4"
 
 # Plugin framework: the community continuation of nih-plug. Host->plugin
 # window resizing is supported natively (ResizeHint / Editor::set_size).
-# Its CLAP wrapper is unconditional; the default feature is the VST3 wrapper,
-# and Harmonigraph ships only as a CLAP (#1185).
+# The vendored fork is pruned to its CLAP wrapper, since Harmonigraph ships
+# only as a CLAP (#1185, #1810), and declares no default features.
 nice-plug = { version = "0.1.10", default-features = false }
 
 # Math / utility
@@ -77,8 +77,9 @@ bytemuck = { version = "1", features = ["derive"] }
 # nothing there and costs it every frame. Already in the graph via wgpu.
 foldhash = "0.2"
 # Held at 0.3 because vendored nice-plug pins it, and two copies buy nothing;
-# retire the hold when nice-plug is next re-based. A GUI-stack move would not
-# move it: nice-plug can stay put under baseview 0.4 (#1529).
+# the fork is no longer re-vendored (PATCHES.md), so move both together. A
+# GUI-stack move would not move it: nice-plug can stay put under baseview 0.4
+# (#1529).
 rtrb = "0.3"
 crossbeam = "0.8"
 parking_lot = "0.12"
@@ -90,7 +91,7 @@ midir = "0.11"
 raw-window-handle = "0.5"
 
 # Vendored crates with local patches. PATCHES.md lists what each one carries
-# and how to re-apply it when upstream moves; it is the only list.
+# and how each is upgraded; it is the only list.
 [patch.crates-io]
 baseview = { path = "vendor/baseview" }
 egui-baseview = { path = "vendor/egui-baseview" }

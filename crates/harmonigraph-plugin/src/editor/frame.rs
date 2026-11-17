@@ -44,8 +44,7 @@ pub(super) fn frame(
     // path runs on this same GUI thread. The other parties hold it briefly:
     // the input worker, for its take and its give but never for its FFTs, and
     // a host state save (`UiState`'s `map`), for one serialization on the
-    // host's main thread, which is this thread on macOS and Windows and a
-    // different one on X11.
+    // host's main thread, which is this thread.
     let mut guard = state.shared.lock();
     let shared = &mut *guard;
 

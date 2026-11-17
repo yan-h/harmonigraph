@@ -106,14 +106,13 @@ impl<'a> nice_plug::params::persist::PersistentField<'a, EguiState> for Arc<Egui
 /// How long a host's state save waits for the editor's state lock before it
 /// settles for the inbox's fallback.
 ///
-/// Short, because on macOS and Windows the host saves on the same thread the
-/// frames run on, so a frame holding the lock there is one that is itself
-/// waiting on this save (a host answering something the frame asked by
-/// saving state), and the lock is not reentrant, so no wait helps. What can
-/// hold it in parallel is the input worker, for a take or a give
-/// (microseconds, a few milliseconds for a full ring; see
-/// [`crate::background`]), and on X11, where the editor has its own thread, a
-/// frame mid-run, for a few milliseconds. Bounded rather than a plain `lock`
+/// Short, because on macOS the host saves on the same thread the frames run
+/// on, so a frame holding the lock there is one that is itself waiting on
+/// this save (a host answering something the frame asked by saving state),
+/// and the lock is not reentrant, so no wait helps. What can hold it in
+/// parallel is the input worker, for a take or a give (microseconds, a few
+/// milliseconds for a full ring; see [`crate::background`]). Bounded rather
+/// than a plain `lock`
 /// so the re-entrant case costs the save its freshness and not the host a
 /// hang — the kind issue #296 is about.
 const SAVE_WAIT: Duration = Duration::from_millis(20);
