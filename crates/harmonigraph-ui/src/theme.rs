@@ -276,17 +276,14 @@ pub(crate) const TAB_BAR_HEIGHT: f32 = 26.0;
 // pixels on knobs and more on the picture.
 //
 // Deliberately not egui's `zoom_factor`, which is the obvious tool and the
-// wrong one here. Zoom works by moving `pixels_per_point`, and the plugin's
-// shell (vendored egui-baseview) builds its `screen_rect`, its pointer
-// coordinates, and its render descriptor from the NATIVE scale alone — so a
-// zoom would lay the UI out for a window a different size than the one it has,
-// and the fix is four edits deep in the input path of a plugin that runs
-// inside somebody else's process. Scaling the style reaches the same chrome
-// through code this crate owns.
+// wrong one here, though the plugin's shell (egui-baseview, from
+// egui-plugin-window) honours it in every points conversion. Nothing here sets
+// one, and egui's keyboard zoom cannot fire in the plugin, whose key table
+// produces no `Plus`, `Equals` or `Minus`.
 //
-// It also leaves the picture alone, which zoom would not: the lattice, the
-// roll and the spectrogram size themselves off their pane rect, so nothing
-// here moves a single node. That is the whole request — the panel gets out of
+// Scaling the style leaves the picture alone, which zoom would not: the
+// lattice, the roll and the spectrogram size themselves off their pane rect, so
+// nothing here moves a single node. That is the whole request — the panel gets out of
 // the way, the picture is untouched.
 
 /// What the chrome scale may be dialled to. Down to 0.75, where the 14pt body

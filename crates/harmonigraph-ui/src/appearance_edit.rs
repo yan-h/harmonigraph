@@ -465,9 +465,10 @@ mod tests {
 
     /// Zoom the Analyzer with `wheel(frame)` events over 40 frames and assert
     /// the whole gesture, however many frames it changed the look on, is one
-    /// undo entry.
+    /// undo entry. `focused` is the window's keyboard focus throughout.
     fn assert_one_undoable_zoom(
         navigation: crate::panes::spectral::Navigation,
+        focused: bool,
         wheel: impl Fn(usize) -> Option<egui::Vec2>,
     ) {
         let ctx = crate::tests::probe::themed();
@@ -490,7 +491,7 @@ mod tests {
                 });
             }
             let _ = ctx.run_ui(
-                egui::RawInput { screen_rect: Some(rect), events, ..Default::default() },
+                egui::RawInput { screen_rect: Some(rect), events, focused, ..Default::default() },
                 |ui| {
                     let before = Look::capture(&state.appearance);
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
@@ -513,7 +514,7 @@ mod tests {
     fn a_wheel_zoom_of_the_docked_analyzer_is_one_undoable_look_edit() {
         // Three wheel notches on consecutive frames, then the smoothed scroll
         // running out over the frames after them.
-        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, |frame| {
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, true, |frame| {
             (2..5).contains(&frame).then(|| egui::vec2(0.0, 20.0))
         });
     }
@@ -522,8 +523,17 @@ mod tests {
     fn a_trackpad_zoom_with_quiet_frames_between_events_is_one_undoable_look_edit() {
         // Point deltas under 8 pt are applied unsmoothed, so the frames
         // between two events read a zero scroll delta.
-        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, |frame| {
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, true, |frame| {
             ((2..12).contains(&frame) && frame % 2 == 0).then(|| egui::vec2(0.0, 6.0))
+        });
+    }
+
+    #[test]
+    fn a_wheel_zoom_over_a_window_without_the_keyboard_is_one_undoable_look_edit() {
+        // Hovered but never clicked: the focus flag is false on every frame,
+        // and no frame loses focus.
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, false, |frame| {
+            (2..5).contains(&frame).then(|| egui::vec2(0.0, 20.0))
         });
     }
 
@@ -531,7 +541,7 @@ mod tests {
     fn a_wheel_zoom_of_the_video_previews_analyzer_is_one_undoable_look_edit() {
         // The preview takes the wheel's delta for itself, leaving the frame's
         // scroll delta zero while the wheel is still turning.
-        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Preview, |frame| {
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Preview, true, |frame| {
             (2..5).contains(&frame).then(|| egui::vec2(0.0, 20.0))
         });
     }
@@ -634,10 +644,10 @@ mod tests {
         let _ = ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::WindowFocused(false)],
+                focused: false,
                 ..Default::default()
             },
             |ui| {
-                assert!(ui.input(|i| i.focused), "fixture matches baseview's unchanged raw flag");
                 editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx(), false);
             },
         );

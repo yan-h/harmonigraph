@@ -191,18 +191,16 @@ fn end_stranded_drag(ctx: &egui::Context) -> Option<String> {
 /// `workspace::Runtime`). Losing focus is the one unambiguous end of a gesture: a
 /// pointer that has merely left the window is still dragging, and still ours.
 ///
-/// Focus is read from the EVENT as well as the flag. `InputState::focused` comes
-/// from `RawInput::focused`, which starts true and only moves if an integration
-/// sets it — and the plugin's (vendored egui-baseview) reports focus by pushing
-/// `WindowFocused` and filling in `ViewportInfo`, never that field. The flag
-/// alone would therefore be true forever in the one shell this is most needed
-/// in. Reading both means neither a shell that sets the flag nor one that only
-/// sends the event is missed, and a shell that says nothing either way (the
-/// offline renderer, the tests) is untouched.
+/// The end is the frame focus is LOST, read from the `WindowFocused(false)`
+/// event, not the state of being unfocused that `InputState::focused` holds.
+/// Both shells set that flag, and it stays false for as long as the editor
+/// lacks the keyboard: a window hovered but never clicked, which is ordinary
+/// with the host in front. A wheel or pinch over such a window is still one
+/// gesture, so on the flag its edits would split into many undo entries and
+/// host gestures. A shell that sends no event (the offline renderer, the tests)
+/// never ends one this way.
 fn kept_focus(ctx: &egui::Context) -> bool {
-    ctx.input(|i| {
-        i.focused && !i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))
-    })
+    ctx.input(|i| !i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false))))
 }
 
 /// Whether a pointer gesture is still under way this frame, so the edits it
