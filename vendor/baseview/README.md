@@ -6,16 +6,6 @@ A low-level windowing system geared towards making audio plugin UIs.
 
 Interested in learning more about the project? Join us on [discord](https://discord.gg/b3hjnGw), channel `#baseview`.
 
-## Prerequisites
-
-### Linux
-
-Install dependencies, e.g.:
-
-```sh
-sudo apt-get install libx11-dev libxcb1-dev libx11-xcb-dev libgl1-mesa-dev
-```
-
 ## Contributing
 
 Contributions are very much welcomed! As long as they comply to the policy and licensing requirements

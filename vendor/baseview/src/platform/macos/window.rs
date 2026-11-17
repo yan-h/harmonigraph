@@ -16,8 +16,6 @@ use raw_window_handle::{
 use super::cursor::Cursor;
 use crate::{MouseCursor, Size, WindowHandler, WindowInfo, WindowOpenOptions};
 
-#[cfg(feature = "opengl")]
-use crate::gl::GlContext;
 use crate::platform::macos::view::{BaseviewView, ViewParentingType};
 use crate::wrappers::appkit::{create_window, extract_raw_window_handle, View, ViewRef};
 
@@ -179,11 +177,6 @@ impl<'a> Window<'a> {
 
     pub fn frame_timing(&self) -> Option<crate::FrameTiming> {
         BaseviewView::frame_timing(self.view.inner_ref())
-    }
-
-    #[cfg(feature = "opengl")]
-    pub fn gl_context(&self) -> Option<&GlContext> {
-        self.inner.gl_context.get()
     }
 }
 

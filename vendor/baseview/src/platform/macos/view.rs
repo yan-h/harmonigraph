@@ -103,9 +103,6 @@ pub(crate) struct BaseviewView {
     keyboard_state: KeyboardState,
 
     parenting: ViewParentingType,
-
-    #[cfg(feature = "opengl")]
-    pub(crate) gl_context: std::cell::OnceCell<crate::gl::GlContext>,
 }
 
 impl BaseviewView {
@@ -138,9 +135,6 @@ impl BaseviewView {
             window_visible: None.into(),
             occlusion_ready: false.into(),
             parenting,
-
-            #[cfg(feature = "opengl")]
-            gl_context: std::cell::OnceCell::new(),
         };
 
         let view = View::new(view_rect, inner, |view| {
@@ -155,13 +149,6 @@ impl BaseviewView {
                     owned_window.setContentView(Some(view.view));
                     set_delegate(&owned_window, view.view);
                 }
-            }
-
-            #[cfg(feature = "opengl")]
-            if let Some(gl_config) = options.gl_config {
-                let gl_context = super::gl::GlContext::create(view.view, gl_config).unwrap();
-                let gl_context = crate::gl::GlContext::new(gl_context);
-                let Ok(()) = view.gl_context.set(gl_context) else { unreachable!() };
             }
 
             // Initialize handler
@@ -247,13 +234,6 @@ impl BaseviewView {
 
         this.view.setFrameSize(size);
         this.view.setNeedsDisplay(true);
-
-        // When using OpenGL the `NSOpenGLView` needs to be resized separately? Why? Because
-        // macOS.
-        #[cfg(feature = "opengl")]
-        if let Some(gl_context) = this.gl_context.get() {
-            gl_context.inner.resize(size);
-        }
 
         // If this is a standalone window then we'll also need to resize the window itself
         if let ViewParentingType::Windowed { owned_window, .. } = &this.parenting {
@@ -615,29 +595,13 @@ impl ViewImpl for BaseviewView {
         }
     }
 
-    /// `hitTest:` override that collapses hits on baseview's internal
-    /// OpenGL render subview to this NSView.
+    /// `hitTest:` override that passes NSView's own result through.
     ///
-    /// `src/gl/gl` attaches an `NSOpenGLView` as a subview of this
-    /// view so the GL context is isolated from event handling. The side
-    /// effect is that `[NSView hitTest:]` returns the GL subview for
-    /// every click inside our frame — `NSOpenGLView` inherits the
-    /// default `acceptsFirstMouse:` which returns `NO`, so AppKit treats
-    /// the first click in a non-key window as an activation click and
-    /// never dispatches `mouseDown:`. That's the "first click dead zone"
-    /// symptom reported in baseview#129 / #202 / #169.
-    ///
-    /// Fix: if the hit lands on our own GL render subview (pointer
-    /// equality against the `NSOpenGLView` stored in `GlContext`),
-    /// collapse the result to `self`. AppKit then asks US about
-    /// `acceptsFirstMouse:` (we return `YES`), and `mouseDown:` is
-    /// dispatched on the first click. Hits on any other subview pass
-    /// through unchanged — we only redirect our own render child, not
-    /// anything the consumer may add.
-    ///
-    /// No-op without the `opengl` feature: there's no GL subview to
-    /// collapse, so the override pass-through is equivalent to the
-    /// default implementation.
+    /// Upstream it collapsed hits on baseview's OpenGL render subview to
+    /// this view, so the first click in a non-key window reached
+    /// `mouseDown:` (baseview#129 / #202 / #169). That subview went with the
+    /// `opengl` feature, and the override stays as a pass-through so that
+    /// pruning the fork changed nothing macOS compiles to.
     fn hit_test(this: ViewRef<'_, Self>, point: NSPoint) -> Option<&NSView> {
         let superclass = this.view.class().superclass().unwrap();
 
@@ -645,15 +609,6 @@ impl ViewImpl for BaseviewView {
         let super_result: Option<&NSView> =
             unsafe { msg_send![super(this.view, superclass), hitTest: point] };
         let super_result = super_result?;
-
-        #[cfg(feature = "opengl")]
-        {
-            if let Some(gl_context) = this.gl_context.get() {
-                if *super_result == **gl_context.inner.0.view {
-                    return Some(this.view);
-                }
-            }
-        }
 
         Some(super_result)
     }
