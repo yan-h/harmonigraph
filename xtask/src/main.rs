@@ -86,7 +86,8 @@ fn main() -> Result<()> {
             }
             // Elsewhere than `target/bundled` for a bundle that must not
             // replace the one there: in the main checkout that is the slot a
-            // host loads (`load-plugin.sh`).
+            // host loads (`load-plugin.sh`). A relative path is taken from
+            // the workspace root, the directory this now runs in.
             let bundled = match build_args.iter().position(|arg| arg == "--bundle-dir") {
                 Some(at) if at + 1 < build_args.len() => {
                     build_args.remove(at);
