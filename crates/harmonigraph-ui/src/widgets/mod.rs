@@ -81,5 +81,13 @@ pub(crate) use timing::{fade, response};
 mod direct_tests;
 
 pub use plot::handle_focused as plot_handle_focused;
+
+/// Whether `response`'s widget holds egui's keyboard focus, whether or not the
+/// window has the keyboard. `Response::has_focus` also asks the window, which
+/// both shells report, so a field or a lit control would let go whenever the
+/// host is clicked; here focus moves only within the editor.
+pub(crate) fn holds_focus(response: &egui::Response) -> bool {
+    response.ctx.memory(|m| m.has_focus(response.id))
+}
 #[cfg(test)]
 pub(crate) use plot::height as direct_plot_height;
