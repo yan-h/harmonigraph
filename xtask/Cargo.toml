@@ -1,9 +1,10 @@
 [package]
 name = "xtask"
+description = "Bundling for harmonigraph-plugin: `cargo xtask bundle harmonigraph-plugin --release` writes a .clap into target/bundled."
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
 publish = false
 
 [dependencies]
-nice-plug-xtask = { workspace = true }
+anyhow = "1.0.104"

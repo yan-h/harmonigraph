@@ -64,7 +64,6 @@ baseview = "0.1.4"
 # Its CLAP wrapper is unconditional; the default feature is the VST3 wrapper,
 # and Harmonigraph ships only as a CLAP (#1185).
 nice-plug = { version = "0.1.10", default-features = false }
-nice-plug-xtask = "0.1.1"
 
 # Math / utility
 glam = { version = "0.34", features = ["serde"] }

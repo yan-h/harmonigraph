@@ -1,4 +1,0 @@
-# Metadata for NIH-plug's `cargo xtask bundle <package>` plugin bundler.
-
-[harmonigraph-plugin]
-name = "Harmonigraph"

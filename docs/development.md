@@ -129,11 +129,10 @@ Create the bundle structure once from the main checkout before using either load
 cargo xtask bundle harmonigraph-plugin --release
 ```
 
-A branch build is otherwise hidden from Bitwig for two reasons:
-
-- Every worktree has its own `target/`.
-- `cargo xtask bundle` chooses the topmost ancestor containing `Cargo.toml`.
-  From a nested worktree it can silently bundle the main checkout's source rather than the branch.
+A branch build is otherwise hidden from Bitwig,
+because every worktree has its own `target/` and `cargo xtask bundle` writes into the one it runs from.
+The bundler is harmonigraph's own (`xtask/src/main.rs`):
+it lays out the bundle `nice-plug-xtask` 0.1.1 made, with the same `Info.plist` and `PkgInfo` bytes, and signs it ad hoc.
 
 After that one-time bootstrap,
 use the repository scripts for branch builds.

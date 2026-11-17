@@ -27,7 +27,7 @@ rustc-wrapper = "sccache"
 # macOS 14 (#1551). Raising the floor here stamps it into the dylib's
 # LC_BUILD_VERSION; whether a host on an older system refuses the bundle or
 # loads it and fails at the first display link is untested, and neither is
-# supported. nice-plug-xtask's Info.plist carries no LSMinimumSystemVersion.
+# supported. The bundle's Info.plist (xtask) carries no LSMinimumSystemVersion.
 [env]
 MACOSX_DEPLOYMENT_TARGET = "14.0"
 

@@ -22,10 +22,10 @@ on 6.1.5 the plugin drops out of the browser after every swap, and clicking the 
 Building first serializes them for no reason:
 a 1m28s build followed by a 6-7 minute CI run is eight minutes where pushing first is seven.
 
-**Don't use `cargo xtask bundle` from a nested Claude worktree** —
-nice-plug-xtask's `chdir_workspace_root()` takes the *topmost* ancestor with a `Cargo.toml` (`ancestors().filter(has Cargo.toml).last()`), which for a nested worktree is the main repo root, so it silently builds main.
-The bundle looks fresh and contains none of the branch's changes.
-`load-plugin.sh` exists to sidestep this.
+**Don't use `cargo xtask bundle` from a worktree** —
+it bundles into that worktree's own `target/bundled/`, which Bitwig never scans,
+and pointing its `--bundle-dir` at the main checkout's slot would evict whatever Yan has loaded.
+Build with `cargo build` and leave the swap to `load-plugin.sh`.
 
 ## Yan: load whichever build you want
 

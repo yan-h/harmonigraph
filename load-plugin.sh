@@ -16,11 +16,10 @@
 #   ./load-plugin.sh --list     # every worktree's build and which is loaded; load nothing
 #   ./load-plugin.sh --tag      # print the overlay tag of THIS worktree's build
 #
-# Building here rather than with `cargo xtask bundle` sidesteps two footguns:
-# xtask picks the *topmost* Cargo.toml ancestor, so run from a nested worktree
-# it silently bundles the MAIN checkout's sources; and Bitwig scans only the
-# main checkout's target/bundled/, so a worktree build is invisible until its
-# binary is copied over. Plain `cargo build` resolves the nearest workspace.
+# Building here rather than with `cargo xtask bundle`: Bitwig scans only the
+# main checkout's target/bundled/, and a worktree's xtask bundles into that
+# worktree's own target/, so a worktree build is invisible until its binary is
+# copied over, which is what this script does.
 #
 # Staleness is WARN-ONLY: a build not made at its branch HEAD is flagged but
 # still loadable. The test is the commit STAMPED IN THE BINARY against HEAD,
