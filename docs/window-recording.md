@@ -16,7 +16,7 @@ read §5 first if you only want the recommendation.
 ## 1. What the window actually is
 
 On macOS the plugin editor is egui 0.35 → egui-wgpu 0.35 → wgpu 29 → **Metal**.
-No OpenGL path is compiled in (`Cargo.toml` builds egui-baseview with `default-features = false, features = ["wgpu"]`).
+No OpenGL path exists: the vendored egui-baseview keeps only its wgpu renderer (#1810).
 
 `EguiWindow::open_parented` (in `crates/harmonigraph-plugin/src/editor/window.rs`) parents onto the host's `NSView`, and `vendor/egui-baseview/src/renderer/wgpu/renderer.rs:59-83` creates a wgpu surface on it —
 a `CAMetalLayer` swapchain, presented Fifo (vsync).

@@ -17,10 +17,8 @@
 
 //! Keyboard types.
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use keyboard_types::{Code, Location};
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 /// Map key code to location.
 ///
 /// The logic for this is adapted from InitKeyEvent in TextInputHandler (in the Mozilla
@@ -28,6 +26,7 @@ use keyboard_types::{Code, Location};
 ///
 /// Note: in the original, this is based on kVK constants, but since we don't have those
 /// readily available, we use the mapping to code (which should be effectively lossless).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // only the macOS platform reads keys
 pub fn code_to_location(code: Code) -> Location {
     match code {
         Code::MetaLeft | Code::ShiftLeft | Code::AltLeft | Code::ControlLeft => Location::Left,

@@ -5,11 +5,6 @@ pub mod clap;
 pub(crate) mod state;
 pub(crate) mod util;
 
-#[cfg(feature = "standalone")]
-pub mod standalone;
-#[cfg(feature = "vst3")]
-pub mod vst3;
-
 // This is used by the wrappers.
 pub use util::setup_logger;
 // A plugin that reads raw parameter events needs the same string-to-id hash the

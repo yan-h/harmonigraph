@@ -50,12 +50,7 @@ pub struct Window<'a> {
 }
 
 impl<'a> Window<'a> {
-    #[cfg(target_os = "windows")]
-    pub(crate) fn new(window: platform::Window<'a>) -> Window<'a> {
-        Window { window, phantom: PhantomData }
-    }
-
-    #[cfg(not(target_os = "windows"))]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // the stub platform builds no window
     pub(crate) fn new(window: platform::Window) -> Window {
         Window { window, phantom: PhantomData }
     }
@@ -128,13 +123,6 @@ impl<'a> Window<'a> {
 
     pub fn focus(&mut self) {
         self.window.focus()
-    }
-
-    /// If provided, then an OpenGL context will be created for this window. You'll be able to
-    /// access this context through [crate::Window::gl_context].
-    #[cfg(feature = "opengl")]
-    pub fn gl_context(&self) -> Option<&crate::gl::GlContext> {
-        self.window.gl_context()
     }
 }
 

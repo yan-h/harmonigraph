@@ -3,6 +3,15 @@
 Four dependencies carry local patches, wired in via `[patch.crates-io]` in the workspace `Cargo.toml`.
 Keep this file current when bumping them.
 
+nice-plug, baseview and egui-baseview are pruned to what Harmonigraph compiles on macOS, plus a no-window baseview platform that lets a Linux session build and test (#1810).
+They are no longer re-vendored from upstream releases (Yan, 2026-11-17):
+an upgrade is a port of the code kept, taking from a newer upstream only what is wanted,
+rather than a fresh registry package with these patches reapplied.
+Upstreaming was declined on 2026-07-19, and both upgrade evaluations found nothing upstream had absorbed.
+Their manifests are Cargo's normalized form of the published ones, edited in place;
+nice-plug's registry `Cargo.toml.orig` went with the prune.
+wgpu-hal is still the unmodified package plus two sites, and is re-vendored as its own section says.
+
 ## wgpu-hal — vendored at `vendor/wgpu-hal/`
 
 Based on the unmodified crates.io `wgpu-hal` 29.0.4 package, retaining its licenses and a standalone `[workspace]` table.
@@ -23,7 +32,11 @@ These two diagnostics are now the whole reason the crate stays vendored.
 
 ## nice-plug — vendored at `vendor/nice-plug/`
 
-- **Upstream base**: crates.io nice-plug 0.1.10, with its normalized standalone manifest, original manifest, README, sources and tests, plus the ISC `LICENSE` from pinned upstream commit `a80e0e267e52027be4bc07480bef77e798d3342c`.
+- **Upstream base**: crates.io nice-plug 0.1.10, with its normalized manifest, README, sources and tests, plus the ISC `LICENSE` from pinned upstream commit `a80e0e267e52027be4bc07480bef77e798d3342c`.
+- **Pruned to the CLAP wrapper** (#1810): the VST3 and standalone wrappers, the macOS, Linux and Windows event loops only they constructed, the Win32 window-API branches, and the `simd`, `zstd` and `unsafe_flush_denormals` features with the code behind them are gone, with the dependencies only they used.
+The flush-to-zero guard went too:
+every effect it had sat behind `unsafe_flush_denormals`, so on macOS it was a no-op.
+The background-thread executor stays, since the CLAP wrapper spawns it, and so do `assert_process_allocs` and `clap-boundary-tests`, which the fixtures and harmonigraph-plugin's tests enable.
 - **Activation notification ordering** (`src/wrapper/clap/wrapper.rs`, `activate`): drop the plugin lock and initialization context before marking the wrapper active.
 The context publishes the initial latency while activation is still in progress, as the CLAP latency contract requires, instead of requesting a redundant restart from an already-active wrapper.
 This fixes the Bitwig offline-export stall measured by #615;
@@ -69,9 +82,11 @@ tuning sources follow it unless the user has set a custom name (#1426).
 `gui.show` and `gui.hide` still refuse, as upstream:
 Bitwig calls them on every switch of the frontmost app, so answering them hid the editor's own window whenever another app came forward.
 `crates/harmonigraph-plugin/src/configuration/tests.rs` checks that `closed` reaches a host's gui extension asking for destruction.
-- **VST3 wrapper**: unpatched upstream, and not compiled into Harmonigraph, which ships only as a CLAP and depends on nice-plug without its default `vst3` feature (#1185).
-The local VST3 fixes (#741's bus arrangements, #1128's note-expression lanes) and their fixture were reverted with the export, so an upgrade has nothing VST3 to reapply.
-- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply activation notification ordering, scalar tail publication, auxiliary descriptor bounds and storage sizing, production configuration/performance/setup seams, track info, the editor host, root wrapper and state glue, manifest features, and both boundary fixtures.
+- **VST3 wrapper**: deleted by the prune, since Harmonigraph ships only as a CLAP (#1185).
+The local VST3 fixes (#741's bus arrangements, #1128's note-expression lanes) and their fixture had already been reverted with the export.
+- **Upgrade**: a port onto this tree, not a re-vendor.
+Read what a newer nice-plug changed in the CLAP wrapper, the state glue and the tests, and port what is wanted, keeping activation notification ordering, scalar tail publication, auxiliary descriptor bounds and storage sizing, production configuration/performance/setup seams, track info, the editor host, root wrapper and state glue, the manifest features, the standalone `[workspace]` table and both boundary fixtures.
+Nothing the prune deleted comes back with it.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`
@@ -79,6 +94,10 @@ No tuning or sequencing policy belongs in this framework patch.
 - **Upstream base**: `baseview 0.1.4` from crates.io (the version
 egui-baseview 0.3 pins;
 wired in via `[patch.crates-io]` in the workspace `Cargo.toml`, which covers both our direct dependency and egui-baseview's).
+- **Pruned to the macOS platform** (#1810): the X11 and Windows platforms, their Xlib, xkbcommon, GLX, connection-poller and Win32 wrappers, the macOS OpenGL context with the `opengl` and `uuid` features, and their target dependencies are gone.
+The `hitTest:` override stays as a pass-through of NSView's result, since its one case was the deleted OpenGL subview.
+- **No-window platform off macOS** (`src/platform/none.rs`, from otonal's prune in yan-h/otonal#1557): no window opens, and everything else compiles, so a Linux cloud session builds the workspace and runs its headless tests.
+`open_parented` returns a handle that reports itself closed, `open_blocking` returns at once, and `Window` is uninhabited, so a build closure is never called.
 - **Patch** (3 lines, `src/wrappers/appkit/timer.rs`): register the macOS
 run-loop timer in `kCFRunLoopCommonModes` instead of `kCFRunLoopDefaultMode`.
 Default-mode timers stop firing while the run loop is in an event-tracking mode (native drags/resizes, menu tracking), freezing plugin GUIs until mouse release.
@@ -168,14 +187,15 @@ through one the button reads down.
 `Cargo.toml` gains an empty `[workspace]` table so `cargo test --manifest-path` reaches the unit tests over the mask arithmetic;
 ci.sh runs them.
 macOS only.
-- **Upgrade**: start from a fresh comparison with the versions then published.
+- **Upgrade**: a port onto this tree, not a re-vendor.
+Start from a fresh comparison with the versions then published.
 The [last one](docs/archive/gui-cohort-feasibility.md) is archived as a dated result (2026-09-19, re-evaluated 2026-10-21):
 its disposition table stops at Patch 6, so dispose of later patches from their entries here.
 Patch 7 (#1692's re-pace of a changed divisor, with `FrameTiming::woken`) was retired whole in #1747, with the idle pacing it served;
 a divisor set from a frame takes effect after the one frame the link has already scheduled.
 baseview 0.4 drives frames from a display link too, but pauses it while idle and has no divisor, watchdog or frame timing.
-Download the new crates.io tarball into `vendor/baseview`,
-re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the display link with its divisor, watchdog and frame timing, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
+Take from a newer baseview only the macOS changes wanted,
+keeping the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the display link with its divisor, watchdog and frame timing, the withheld pointer exit, the synthesized release for a stuck button, the no-window platform off macOS, and the `[workspace]` table that lets the tests run.
 - **Upstreaming**: declined (2026-07-19).
 Kept as a local patch rather than proposed upstream.
 
@@ -183,6 +203,10 @@ Kept as a local patch rather than proposed upstream.
 
 - **Upstream base**: `egui-baseview 0.3.0` from crates.io (the RustAudio
 fork used by nice-plug).
+- **Pruned to the wgpu renderer on macOS** (#1810): the OpenGL renderer and its `opengl` feature, the `x11` features of copypasta and egui-wgpu, the examples and the upstream CI workflow are gone.
+The conditions constant on macOS are folded:
+cut, copy and paste take Cmd alone, and the modifier translation and the wheel's flip take their macOS branches.
+Off macOS the clipboard is copypasta's no-op context, since no window opens there.
 - **Patch 1** (2 call sites, `src/window.rs`): after a `Queue::resize()`,
 the window resize triggered by the physical-size change passed physical pixels to `Window::resize()`, which takes logical points —
 on scaled displays the window/view ended up `pixels_per_point` times too large (2x-zoomed, bottom-left-anchored content on Retina).
@@ -194,7 +218,7 @@ Force a render whenever `textures_delta` is non-empty.
 Only visible for apps that throttle repaints;
 always-repaint apps mask it.
 Since Patch 22 every pass renders, so no delta can outlive its pass and the forcing term is gone.
-- **Patch 3** (`src/window.rs` + both renderers): stale-frame ("ghost")
+- **Patch 3** (`src/window.rs` + the renderer): stale-frame ("ghost")
 recovery after window occlusion.
 `Renderer::render` now returns whether a frame was actually presented;
 a skipped present (occluded window, outdated/lost surface —
@@ -292,7 +316,7 @@ The release of a drag let go outside the window was therefore thrown away here, 
 every `ScrollArea` in the editor refuses the wheel while anything at all is being dragged (`end_stranded_drag` in `harmonigraph-ui` is the shell-side backstop for it).
 The position is the pointer's last known one, which is where a release lands;
 `None` now means only that the pointer has never been seen, which is the case the guard is for.
-- **Patch 12** (`src/renderer/{wgpu,opengl}/renderer.rs`, `src/window.rs`):
+- **Patch 12** (`src/renderer/wgpu/renderer.rs`, `src/window.rs`):
 the same layer as Patch 10, across the other discontinuity —
 a window coming back from occlusion.
 Nothing can present while it is hidden, so the layer still holds the frame from before it went away and the compositor puts that back on screen the instant the window is visible again, before this process is told anything.
@@ -305,13 +329,12 @@ a successful acquire proves both that the window is visible —
 the acquire refuses an occluded one —
 and that there is something to show, so no occlusion event has to be trusted to arrive for the layer to come back, and no frame unhides ahead of content.
 A lost `Occluded(false)` (a view momentarily without a window, a host reparenting the plugin) would otherwise leave a permanently blank editor.
-The GL renderer draws into the view's own context and takes the no-op.
 - **Patch 13** (`src/renderer/wgpu/renderer.rs`): publish egui's managed font
 texture into `CallbackResources` after this frame's texture deltas and before paint callbacks prepare.
 Harmonigraph's glyph callbacks bind that GPU allocation directly;
 cloning the `wgpu::Texture` handle does not copy its pixels.
 This removes the 4.67–24.69 ms whole-atlas mirror upload paid whenever a zoom first reaches a new label size.
-- **Patch 14** (`src/renderer.rs`, both renderers, `src/window.rs`): cap the
+- **Patch 14** (`src/renderer.rs`, the renderer, `src/window.rs`): cap the
 font atlas at 4096 on devices whose texture limit is larger.
 egui fixes the atlas width at the reported limit and doubles its CPU image's height, so an 8192-wide atlas retained 64–128 MiB after walking the lattice's zoom sizes;
 a full texture delta and the GPU texture temporarily multiplied that cost into roughly 400 MiB of process memory.
@@ -395,7 +418,8 @@ A size from the `SizeSource` runs that frame's pass whatever the backoff says, s
 `Queue::longest_tick_gap` hands the app the longest gap between link frames since its last pass, measured on every frame, for its stall check.
 It replaces Patch 21 (#1692, #1707), which slowed the link's divisor to land on the frame the idle poll drew on, and is retired whole with baseview Patch 7:
 `paced_divisor`, `PACE_MARGIN`, `MAX_FRAME_GAP`, `RESIZE_HOLD`, the restore of the chosen divisor on every event and the earliest-deadline keep for undrawn passes all went with it.
-- **Upgrade**: start from a fresh comparison with the versions then published.
+- **Upgrade**: a port onto this tree, not a re-vendor.
+Start from a fresh comparison with the versions then published.
 The [last one](docs/archive/gui-cohort-feasibility.md) is archived as a dated result (2026-09-19, re-evaluated 2026-10-21):
 its disposition table stops at Patch 17, so dispose of later patches from their entries here.
 The egui 0.36 publication trigger is met and investigated,

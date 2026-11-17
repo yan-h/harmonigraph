@@ -8,9 +8,6 @@ mod window_open_options;
 
 pub(crate) mod platform;
 
-#[cfg(feature = "opengl")]
-pub mod gl;
-
 /// When the display asked for the frame `on_frame` is running: in seconds on
 /// the media clock (`CACurrentMediaTime` on macOS), but for `fired_at`, which
 /// is on `Instant`'s. See [`Window::frame_timing`].

@@ -283,7 +283,7 @@ run golden_diff
 # serialization; its patched CLAP boundary is exercised by the exported-CLAP
 # fixture above, including activation latency and allocation guards. The nested
 # crate cannot see the workspace's baseview patch, so its command repeats that
-# path explicitly; WGPU is the backend the plugin ships.
+# path explicitly; WGPU is the one backend the fork keeps.
 #
 # Each crate is its own workspace root, so keep both of their targets under
 # `target/debug`: the idle-worktree reclaimer owns that whole subtree.

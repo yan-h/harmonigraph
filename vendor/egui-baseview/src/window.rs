@@ -13,6 +13,13 @@ use raw_window_handle::HasRawWindowHandle;
 
 use crate::{GraphicsConfig, renderer::Renderer};
 
+/// copypasta's native clipboard, which off macOS would need its `x11`
+/// feature; there baseview opens no window, so copypasta's no-op one stands in.
+#[cfg(target_os = "macos")]
+type Clipboard = copypasta::ClipboardContext;
+#[cfg(not(target_os = "macos"))]
+type Clipboard = copypasta::nop_clipboard::NopClipboardContext;
+
 #[cfg(feature = "nice-log")]
 use nice_plug_core::{nice_error as error, nice_warn as warn};
 
@@ -437,7 +444,7 @@ where
 
     renderer: Renderer,
 
-    clipboard_ctx: Option<copypasta::ClipboardContext>,
+    clipboard_ctx: Option<Clipboard>,
 
     physical_size: PhySize,
     /// See [`SizeSource`]: polled at the top of every frame, before the input
@@ -600,7 +607,7 @@ where
             });
         }
 
-        let clipboard_ctx = match copypasta::ClipboardContext::new() {
+        let clipboard_ctx = match Clipboard::new() {
             Ok(clipboard_ctx) => Some(clipboard_ctx),
             Err(e) => {
                 error!("Failed to initialize clipboard: {}", e);
@@ -683,8 +690,6 @@ where
                 title: settings.title.clone(),
                 size: settings.logical_size,
                 scale: settings.scale_policy,
-                #[cfg(feature = "opengl")]
-                gl_config: Some(settings.graphics.gl_config.clone()),
                 ..Default::default()
             },
             move |window: &mut baseview::Window<'_>| -> EguiWindow<State, U> {
@@ -712,8 +717,6 @@ where
                 title: settings.title.clone(),
                 size: settings.logical_size,
                 scale: settings.scale_policy,
-                #[cfg(feature = "opengl")]
-                gl_config: Some(settings.graphics.gl_config.clone()),
                 ..Default::default()
             },
             move |window: &mut baseview::Window<'_>| -> EguiWindow<State, U> {
@@ -891,8 +894,8 @@ fn after_render(presented: bool, refused: u32, now: Instant) -> (u32, Option<Ins
 /// horizontal one by the time it reaches us, with the vertical wheel's own
 /// sign, and egui folds a Shift wheel back to `x + y`. Flipping x on top of
 /// that reverses every Shift-wheel, which on the lattice reversed the zoom.
-fn wheel_delta(delta: egui::Vec2, shift: bool, macos: bool) -> egui::Vec2 {
-    if macos && !shift {
+fn wheel_delta(delta: egui::Vec2, shift: bool) -> egui::Vec2 {
+    if !shift {
         egui::vec2(-delta.x, delta.y)
     } else {
         delta
@@ -906,15 +909,13 @@ mod wheel_delta_tests {
     #[test]
     fn shift_wheel_keeps_its_sign_on_macos() {
         // macOS delivers a Shift + wheel-up as a positive x; egui sums x and y.
-        let d = wheel_delta(egui::vec2(1.0, 0.0), true, true);
+        let d = wheel_delta(egui::vec2(1.0, 0.0), true);
         assert_eq!(d.x + d.y, 1.0);
     }
 
     #[test]
-    fn horizontal_scroll_is_flipped_on_macos_only() {
-        assert_eq!(wheel_delta(egui::vec2(1.0, 2.0), false, true), egui::vec2(-1.0, 2.0));
-        assert_eq!(wheel_delta(egui::vec2(1.0, 2.0), false, false), egui::vec2(1.0, 2.0));
-        assert_eq!(wheel_delta(egui::vec2(1.0, 2.0), true, false), egui::vec2(1.0, 2.0));
+    fn horizontal_scroll_is_flipped_without_shift() {
+        assert_eq!(wheel_delta(egui::vec2(1.0, 2.0), false), egui::vec2(-1.0, 2.0));
     }
 }
 
@@ -1419,7 +1420,7 @@ where
                         ),
                     };
                     let shift = self.egui_input.modifiers.shift;
-                    let delta = wheel_delta(delta, shift, cfg!(target_os = "macos"));
+                    let delta = wheel_delta(delta, shift);
 
                     self.egui_input.events.push(egui::Event::MouseWheel {
                         unit,
@@ -1637,24 +1638,15 @@ fn egui_claims_key(
 }
 
 fn is_cut_command(modifiers: egui::Modifiers, keycode: keyboard_types::Code) -> bool {
-    (modifiers.command && keycode == keyboard_types::Code::KeyX)
-        || (cfg!(target_os = "windows")
-            && modifiers.shift
-            && keycode == keyboard_types::Code::Delete)
+    modifiers.command && keycode == keyboard_types::Code::KeyX
 }
 
 fn is_copy_command(modifiers: egui::Modifiers, keycode: keyboard_types::Code) -> bool {
-    (modifiers.command && keycode == keyboard_types::Code::KeyC)
-        || (cfg!(target_os = "windows")
-            && modifiers.ctrl
-            && keycode == keyboard_types::Code::Insert)
+    modifiers.command && keycode == keyboard_types::Code::KeyC
 }
 
 fn is_paste_command(modifiers: egui::Modifiers, keycode: keyboard_types::Code) -> bool {
-    (modifiers.command && keycode == keyboard_types::Code::KeyV)
-        || (cfg!(target_os = "windows")
-            && modifiers.shift
-            && keycode == keyboard_types::Code::Insert)
+    modifiers.command && keycode == keyboard_types::Code::KeyV
 }
 
 /// Calculate screen rectangle in logical size.
@@ -1718,7 +1710,7 @@ mod key_capture_tests {
     #[test]
     fn reserved_shortcuts_are_not_forwarded_to_the_host_without_widget_focus() {
         use keyboard_types::{Key, KeyState, KeyboardEvent, Modifiers as M};
-        let command = if cfg!(target_os = "macos") { M::META } else { M::CONTROL };
+        let command = M::META;
         let capture = KeyCapture::CaptureShortcuts(vec![
             egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z),
             egui::KeyboardShortcut::new(

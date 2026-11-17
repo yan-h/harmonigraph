@@ -19,7 +19,7 @@
 //!   allocations during DSP code in debug mode.
 //!
 //! - An nice-plug plugin consists of an implementation of the [`Plugin`][prelude::Plugin] trait and
-//!   a call to [`nice_export_vst3!()`] and/or [`nice_export_clap!()`] in your `lib.rs` file to expose
+//!   a call to [`nice_export_clap!()`] in your `lib.rs` file to expose
 //!   the plugin functionality. Some of these traits will require you to implement an additional
 //!   trait containing API-specific information for the plugin.
 //!
@@ -30,9 +30,6 @@
 //!   readme for
 //!   [`nice-plug-xtask`](https://codeberg.org/BillyDM/nice-plug/src/branch/main/crates/nice-plug-xtask)
 //!   for instructions on how to use this within your own project.
-//! - It's also possible to export a standalone application from a plugin using the
-//!   [`nice_export_standalone()`] function. Check that function's documentation to learn how to do
-//!   this. This requires enabling the `standalone` crate feature.
 //! - Everything is described in more detail on the [`Plugin`][prelude::Plugin] trait and everything
 //!   linked from there, but a plugin's general lifecycle involves the following function calls.
 //!
@@ -89,9 +86,3 @@ pub mod prelude;
 pub mod wrapper;
 
 mod event_loop;
-
-// This is also re-exported from the prelude but since the other export entry points are macros and
-// macros are always accessible from the crate's root, it seems like a good idea to keep the
-// symmetry and also export this function in the same places
-#[cfg(feature = "standalone")]
-pub use wrapper::standalone::nice_export_standalone;
