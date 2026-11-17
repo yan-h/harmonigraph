@@ -17,7 +17,7 @@ doctest = false
 [features]
 # Log every editor frame's timing to ~/Library/Logs/Harmonigraph (macOS), for
 # diagnosing missed refreshes. A diagnostic build only; see
-# vendor/egui-baseview/src/frame_log.rs.
+# egui-baseview/src/frame_log.rs in egui-plugin-window.
 frame-log = ["egui-baseview/frame-log"]
 startup-probe =["objc2-app-kit/NSApplication", "objc2-app-kit/NSEvent", "objc2-app-kit/NSGraphicsContext"]
 

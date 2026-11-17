@@ -16,9 +16,9 @@ read §5 first if you only want the recommendation.
 ## 1. What the window actually is
 
 On macOS the plugin editor is egui 0.35 → egui-wgpu 0.35 → wgpu 29 → **Metal**.
-No OpenGL path exists: the vendored egui-baseview keeps only its wgpu renderer (#1810).
+No OpenGL path exists: the forked egui-baseview keeps only its wgpu renderer (#1810).
 
-`EguiWindow::open_parented` (in `crates/harmonigraph-plugin/src/editor/window.rs`) parents onto the host's `NSView`, and `vendor/egui-baseview/src/renderer/wgpu/renderer.rs:59-83` creates a wgpu surface on it —
+`EguiWindow::open_parented` (in `crates/harmonigraph-plugin/src/editor/window.rs`) parents onto the host's `NSView`, and `egui-baseview/src/renderer/wgpu/renderer.rs:59-83` (in egui-plugin-window) creates a wgpu surface on it —
 a `CAMetalLayer` swapchain, presented Fifo (vsync).
 
 MSAA is off, so egui renders **straight into the swapchain texture** (`renderer.rs:264-321`).
@@ -34,20 +34,20 @@ the swapchain texture.** That single fact drives everything below.
 Two things block a readback from where you'd want to put it:
 
 - **The surface isn't copyable.**
-`vendor/egui-baseview/src/renderer/wgpu/renderer.rs:94` configures it `usage = RENDER_ATTACHMENT` —
+`egui-baseview/src/renderer/wgpu/renderer.rs:94` configures it `usage = RENDER_ATTACHMENT` —
 no `COPY_SRC`, so `copy_texture_to_buffer` on the swapchain texture is a validation error.
 Metal *permits* `COPY_SRC` on a surface (`wgpu-hal/src/metal/adapter.rs:428`);
 the cost is that `framebufferOnly` goes false on the layer (`wgpu-hal/src/metal/surface.rs:73`), which is why the flag isn't on by default.
 - **There is no `Device`/`Queue`/`RenderState` reachable from the
-editor.** egui-baseview's `Renderer` keeps them private (`renderer.rs:48-56`) and hands the app only a small `Queue` of window commands (`vendor/egui-baseview/src/window.rs:76-119`).
+editor.** egui-baseview's `Renderer` keeps them private (`renderer.rs:48-56`) and hands the app only a small `Queue` of window commands (`egui-baseview/src/window.rs:76-119`).
 `editor.rs:20-29` already documents this gap —
 it's the same missing accessor that forces the `ASSUMED_SURFACE_FORMAT` hack.
 
 A paint callback *can* see a `Device` and `Queue` (`prepare()`'s arguments, `harmonigraph-render/src/lib.rs`) and they're cheap clonable handles, so a callback could stash them.
 But a callback's `paint()` gets only a `&mut RenderPass` —
 you can't copy inside a render pass, and the `SurfaceTexture` is never handed to callbacks.
-**Full-window capture has to live in `Renderer::render`, which means a vendored egui-baseview patch.** (The project already carries three of those;
-see `PATCHES.md`.)
+**Full-window capture has to live in `Renderer::render`, which means an egui-baseview patch in egui-plugin-window.** (It already carries several;
+see its `PATCHES.md`.)
 
 Two smaller blockers in the same area:
 `egui-wgpu`'s `capture` feature —
@@ -58,7 +58,7 @@ which contains a ready-made capture texture + readback buffer + blit (upstream `
 
 Frame pacing.
 The plugin repaints **on demand**, not at a fixed rate:
-continuously only while voices are sounding or decaying, otherwise a 50 ms poll (`IDLE_REPAINT_INTERVAL` in `crates/harmonigraph-ui/src/lib.rs`), on top of frames driven by the view's display link on macOS (one per refresh, `vendor/baseview/src/platform/macos/view.rs`, of which a still editor's run its UI and draw only when the poll comes due or something asks; `pass_due` in `vendor/egui-baseview/src/window.rs`) and a Fifo swapchain.
+continuously only while voices are sounding or decaying, otherwise a 50 ms poll (`IDLE_REPAINT_INTERVAL` in `crates/harmonigraph-ui/src/lib.rs`), on top of frames driven by the view's display link on macOS (one per refresh, `baseview/src/platform/macos/view.rs` in egui-plugin-window, of which a still editor's run its UI and draw only when the poll comes due or something asks; `pass_due` in `egui-baseview/src/window.rs`) and a Fifo swapchain.
 Presents are also skipped outright on Occluded/Outdated/Lost (`renderer.rs:214-262`).
 The editor logs gaps between the display link's frames (`STALL_GAP` in `editor/frame.rs`),
 not skipped presents;

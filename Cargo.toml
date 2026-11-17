@@ -16,7 +16,7 @@ members = [
     "xtask",
 ]
 # The vendored crates are their own workspaces, only referenced via [patch].
-exclude = ["vendor/baseview", "vendor/egui-baseview", "vendor/nice-plug", "vendor/wgpu-hal"]
+exclude = ["vendor/nice-plug", "vendor/wgpu-hal"]
 
 [workspace.package]
 version = "0.6.1"
@@ -56,7 +56,7 @@ egui-baseview = { version = "0.3", default-features = false, features = [
     # from either `tracing` or `nice-log`.
     "tracing",
 ] }
-# Vendored and patched below ([patch.crates-io]); see PATCHES.md.
+# Patched below ([patch.crates-io]); see PATCHES.md.
 baseview = "0.1.4"
 
 # Plugin framework: the community continuation of nih-plug. Host->plugin
@@ -90,11 +90,14 @@ ron = "0.12"
 midir = "0.11"
 raw-window-handle = "0.5"
 
-# Vendored crates with local patches. PATCHES.md lists what each one carries
-# and how each is upgraded; it is the only list.
+# Crates with local patches, vendored or pinned. PATCHES.md lists what each
+# one carries, or where that is listed, and how each is upgraded.
 [patch.crates-io]
-baseview = { path = "vendor/baseview" }
-egui-baseview = { path = "vendor/egui-baseview" }
+# The editor window (baseview, egui-baseview) is shared with otonal and pinned
+# here by commit. A change to it lands in egui-plugin-window first and reaches
+# Harmonigraph as a bump of this rev; PATCHES.md says how to try one locally.
+baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "772a28924a92272f9ccef6ad3ecb5d40080d6095" }
+egui-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "772a28924a92272f9ccef6ad3ecb5d40080d6095" }
 nice-plug = { path = "vendor/nice-plug" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
 
