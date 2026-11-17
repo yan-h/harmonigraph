@@ -13,6 +13,13 @@ use raw_window_handle::HasRawWindowHandle;
 
 use crate::{GraphicsConfig, renderer::Renderer};
 
+/// copypasta's native clipboard, which off macOS would need its `x11`
+/// feature; there baseview opens no window, so copypasta's no-op one stands in.
+#[cfg(target_os = "macos")]
+type Clipboard = copypasta::ClipboardContext;
+#[cfg(not(target_os = "macos"))]
+type Clipboard = copypasta::nop_clipboard::NopClipboardContext;
+
 #[cfg(feature = "nice-log")]
 use nice_plug_core::{nice_error as error, nice_warn as warn};
 
@@ -437,7 +444,7 @@ where
 
     renderer: Renderer,
 
-    clipboard_ctx: Option<copypasta::ClipboardContext>,
+    clipboard_ctx: Option<Clipboard>,
 
     physical_size: PhySize,
     /// See [`SizeSource`]: polled at the top of every frame, before the input
@@ -600,7 +607,7 @@ where
             });
         }
 
-        let clipboard_ctx = match copypasta::ClipboardContext::new() {
+        let clipboard_ctx = match Clipboard::new() {
             Ok(clipboard_ctx) => Some(clipboard_ctx),
             Err(e) => {
                 error!("Failed to initialize clipboard: {}", e);

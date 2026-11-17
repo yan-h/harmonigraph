@@ -50,6 +50,7 @@ pub struct Window<'a> {
 }
 
 impl<'a> Window<'a> {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // the stub platform builds no window
     pub(crate) fn new(window: platform::Window) -> Window {
         Window { window, phantom: PhantomData }
     }
