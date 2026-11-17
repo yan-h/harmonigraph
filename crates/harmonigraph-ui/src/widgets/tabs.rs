@@ -86,7 +86,7 @@ fn overflow<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, hidden: &
     };
     let response = button.atom_ui(ui);
     if let Some(rect) = response.rect(icon) {
-        let hot = response.response.hovered() || response.response.has_focus();
+        let hot = response.response.hovered() || super::holds_focus(&response.response);
         let color = if current.is_some() || hot { theme::text() } else { theme::text_dim() };
         if current.is_some() {
             paint_chevron(ui, rect, color);
