@@ -2110,8 +2110,12 @@ impl<P: ClapPlugin> Wrapper<P> {
             // clear. Letting the context drop after this flag instead requests an
             // unnecessary restart, which can stall Bitwig's next offline export
             // (#615): the CLAP latency contract wants the initial latency published
-            // while activation is still in progress. Release the plugin lock before
-            // host callbacks.
+            // while activation is still in progress. No fixture checks this now: the
+            // exported-factory assertions of one initial latency notification and no
+            // restart (#630) went with #788 (3687b608), and the `latency_changes` and
+            // `restarts` counters in `tuning/tests.rs` and `tests/clap_boundary.rs`
+            // are counted but never read. Release the plugin lock before host
+            // callbacks.
             drop(plugin);
             drop(init_context);
             // The one place the reported latency moves and the one place the host
