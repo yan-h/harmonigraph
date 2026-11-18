@@ -56,12 +56,10 @@ egui-baseview = { version = "0.3", default-features = false, features = [
     # from either `tracing` or `nice-log`.
     "tracing",
 ] }
-# Patched below ([patch.crates-io]); see PATCHES.md.
-baseview = "0.1.4"
 # The editor's own window, from egui-plugin-window at the commit the
-# `[patch.crates-io]` below pins baseview and egui-baseview to: the three
-# move together. A plain git dependency, since it is no crates.io crate.
-plugin-own-window = { git = "https://github.com/yan-h/egui-plugin-window", rev = "d8ae9969b022735405a327e1b32928e4965ee020" }
+# `[patch.crates-io]` below pins egui-baseview to: the two move together.
+# A plain git dependency, since it is no crates.io crate.
+plugin-own-window = { git = "https://github.com/yan-h/egui-plugin-window", rev = "dea7319cba0b210e656546c419ce03f08501b32c" }
 
 # Plugin framework: the community continuation of nih-plug. Host->plugin
 # window resizing is supported natively (ResizeHint / Editor::set_size).
@@ -97,12 +95,13 @@ raw-window-handle = "0.5"
 # Crates with local patches, vendored or pinned. PATCHES.md lists what each
 # one carries, or where that is listed, and how each is upgraded.
 [patch.crates-io]
-# The editor window (baseview, egui-baseview) is shared with otonal and pinned
-# here by commit. A change to it lands in egui-plugin-window first and reaches
+# The editor window (egui-baseview, which brings baseview from the same
+# commit) is shared with otonal and pinned here by commit. The plugin names
+# baseview only through `egui_baseview::baseview`, so it has no pin of its
+# own to keep in step. A change lands in egui-plugin-window first and reaches
 # Harmonigraph as a bump of this rev, and of plugin-own-window's above;
 # PATCHES.md says how to try one locally.
-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "d8ae9969b022735405a327e1b32928e4965ee020" }
-egui-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "d8ae9969b022735405a327e1b32928e4965ee020" }
+egui-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "dea7319cba0b210e656546c419ce03f08501b32c" }
 nice-plug = { path = "vendor/nice-plug" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
 
