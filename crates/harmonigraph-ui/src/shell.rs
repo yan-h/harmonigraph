@@ -122,9 +122,19 @@ mod tests {
     use crate::tests::probe::{fresh, Defaults};
 
     fn frame(ctx: &egui::Context, state: &mut SharedState, size: egui::Vec2) -> Option<egui::Vec2> {
+        frame_with(ctx, state, size, Vec::new())
+    }
+
+    fn frame_with(
+        ctx: &egui::Context,
+        state: &mut SharedState,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+    ) -> Option<egui::Vec2> {
         let mut ask = None;
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            events,
             ..Default::default()
         };
         let _ = ctx.run_ui(raw, |ui| {
@@ -177,5 +187,43 @@ mod tests {
         assert_eq!(reopened.workspace.layout.position, crate::workspace::Position::Below);
         assert!(reopened.workspace.layout.folded[0]);
         assert_eq!(reopened.workspace.min_window_size, MIN_WINDOW_SIZE);
+    }
+
+    /// An edit to what a save stores is told once, at the end of the gesture
+    /// that made it (#1813). A restore, a new window's first layout, the
+    /// host's camera and the Stars solo are no edit: a project reopened at
+    /// another window size redraws the Analyzer's region depths it saved.
+    #[test]
+    fn an_edit_to_what_a_save_stores_is_told_once_at_its_gestures_end() {
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+        let ctx = egui::Context::default();
+        let mut saved = fresh();
+        Opening { ctx: &ctx, state: &mut saved }.open();
+        let _ = frame(&ctx, &mut saved, SIZE);
+
+        let told = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut state = fresh();
+        let counter = told.clone();
+        state.on_edit(move || {
+            counter.fetch_add(1, Relaxed);
+        });
+        assert!(state.install_document(&close(&saved)));
+        let ctx = egui::Context::default();
+        Opening { ctx: &ctx, state: &mut state }.open();
+        let size = SIZE + egui::vec2(300.0, 100.0);
+        for _ in 0..3 {
+            let _ = frame(&ctx, &mut state, size);
+        }
+        state.picture.appearance.camera.yaw += 0.5;
+        state.picture.appearance.view.atmosphere.stars.star_solo[0] = true;
+        let _ = frame(&ctx, &mut state, size);
+        assert_eq!(told.load(Relaxed), 0, "nothing a save stores was edited");
+
+        state.workspace.layout.folded[0] = true;
+        let _ = frame_with(&ctx, &mut state, size, vec![egui::Event::Zoom(1.1)]);
+        assert_eq!(told.load(Relaxed), 0, "not while a pinch is open");
+        let _ = frame(&ctx, &mut state, size);
+        let _ = frame(&ctx, &mut state, size);
+        assert_eq!(told.load(Relaxed), 1, "once, as the pinch ends");
     }
 }

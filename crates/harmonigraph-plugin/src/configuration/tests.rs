@@ -842,6 +842,33 @@ fn a_restore_and_a_reset_leave_the_project_unmodified() {
     assert_eq!(device.service(), before, "Reset all voices saves nothing");
 }
 
+/// An edit to what `ui-state` saves has the host mark the project modified
+/// once, as a musical setting's does; restoring it marks nothing (#1813).
+/// Ended by a close, which reports a gesture it cut off.
+#[test]
+fn a_ui_state_edit_marks_the_project_once_and_its_restore_does_not() {
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    device.run(0, vec![], false);
+    let lock = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone());
+    let before = device.service();
+    let mut project = harmonigraph_ui::SharedState::new(crate::editor::ASSUMED_SURFACE_FORMAT);
+    project.picture.appearance.view.max_sevens = 3;
+    let mut state = device.wrapper().get_state_object();
+    let blob = harmonigraph_ui::shell::close(&project);
+    state.fields.insert("ui-state".into(), serde_json::to_string(&blob).unwrap());
+    device.load(state, false);
+    assert_eq!(lock.lock().ui.picture.appearance.view.max_sevens, 3, "the restore installed");
+    let _ = lock.end_window_session();
+    assert_eq!(device.service(), before, "a restore is not an edit");
+
+    lock.lock().ui.picture.appearance.view.max_sevens = 4;
+    let _ = lock.end_window_session();
+    assert_eq!(device.service(), before + 1, "the edit marks the project modified");
+    assert_eq!(device.service(), before + 1, "once");
+}
+
 /// The queue keeps arrival order across kinds: an edit queued before a restore
 /// is overwritten by it, and one queued after it lands on the restored record.
 #[test]

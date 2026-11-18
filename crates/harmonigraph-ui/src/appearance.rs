@@ -7,7 +7,7 @@ const APPEARANCE_VERSION: u32 = 1;
 
 /// Owned directly by live state. Only save/capture/export boundaries snapshot
 /// this document; drawing and analysis borrow the individual groups.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AppearanceDocument {
     version: u32,

@@ -237,7 +237,7 @@ const LOOK_MAX: f32 = 1.0;
 /// it. What persisting costs is that a framing left somewhere odd is still
 /// there next session — the same trade the camera already makes, and the
 /// double-click is the way out of it.
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpiralView {
     /// How much larger than its fit the disc is drawn. 1 is the whole disc in

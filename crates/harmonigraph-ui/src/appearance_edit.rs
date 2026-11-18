@@ -63,7 +63,7 @@ pub(crate) const SLOT_COUNT: usize = 4;
 /// The comparison slots. The active slot is always the live document, so its
 /// entry is empty; there is no second writable copy. A slot never visited is
 /// empty too, and starts as a copy of the current look when switched to.
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct Slots {
     stored: [Option<Look>; SLOT_COUNT],
