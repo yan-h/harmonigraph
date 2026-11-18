@@ -241,6 +241,24 @@ impl Editor for LatticeEditor {
             Some(Size::new(f64::from(width), f64::from(height)))
         });
 
+        // The editor stopped being seen (covered, minimized, ordered out, on
+        // another Space, or its view hidden or moved into a window not yet on
+        // screen): no frame runs until it is seen again, so what a frame would
+        // end is ended here. An open look edit becomes one undo entry, and
+        // every host gesture the editor holds is ended, with the editor lock
+        // free (`EditorLock::end_unseen`). baseview calls this on the main
+        // thread, outside its handler's borrow; it can come inside this
+        // editor's own moves of its view (`PopOut`'s pop and dock), none of
+        // which holds the editor lock or the pop-out's state borrow.
+        let unseen = {
+            let (shared, params, context) =
+                (self.shared.clone(), self.params.clone(), context.clone());
+            egui_baseview::baseview::UnseenNotice::new(move || {
+                let Some(open) = shared.end_unseen() else { return };
+                let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
+                super::gestures::end(open, &params, &setter);
+            })
+        };
         let mut graphics = graphics_config();
         graphics.shared_context = Some(self.shared.lock().gpu_context.clone());
         let closing_context = context.clone();
@@ -255,6 +273,7 @@ impl Editor for LatticeEditor {
                 )
                 .with_graphics_config(graphics)
                 .with_size_source(size_source)
+                .with_unseen_notice(unseen)
                 .with_pass_request(self.egui_state.pass_request.clone()),
             WindowState::new(self.shared.clone(), self.params.clone(), Arc::downgrade(&pop_out)),
             |egui_ctx: &Context, _queue, state: &mut WindowState| {
