@@ -63,7 +63,7 @@ pub(crate) const SLOT_COUNT: usize = 4;
 /// The comparison slots. The active slot is always the live document, so its
 /// entry is empty; there is no second writable copy. A slot never visited is
 /// empty too, and starts as a copy of the current look when switched to.
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct Slots {
     stored: [Option<Look>; SLOT_COUNT],
@@ -86,6 +86,26 @@ impl Slots {
     pub(crate) fn stored(&self, slot: usize) -> Option<&Look> {
         self.stored[slot].as_ref()
     }
+
+    /// Take on the Stars solos `live`'s stored looks hold, which a save skips,
+    /// so that equality is what a save stores.
+    pub(crate) fn copy_solo(&mut self, live: &Slots) {
+        for (own, live) in self.stored.iter_mut().zip(&live.stored) {
+            if let (Some(own), Some(live)) = (own, live) {
+                copy_solo((&mut own.view, &mut own.spectrum), (&live.view, &live.spectrum));
+            }
+        }
+    }
+}
+
+/// Copy the Stars solos, which a save skips (`StarSettings::star_solo`), from
+/// one look's view and spectrum into another's: the one list of where they are.
+pub(crate) fn copy_solo(
+    (view, spectrum): (&mut ViewConfig, &mut SpectrumConfig),
+    (from_view, from_spectrum): (&ViewConfig, &SpectrumConfig),
+) {
+    view.atmosphere.stars.star_solo = from_view.atmosphere.stars.star_solo;
+    spectrum.atmosphere.stars.star_solo = from_spectrum.atmosphere.stars.star_solo;
 }
 
 pub(crate) fn slot_name(slot: usize) -> String {

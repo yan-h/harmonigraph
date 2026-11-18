@@ -51,3 +51,7 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 - An editor that has installed nothing and opened no window since it was fresh still saves the empty blob (Q2); installing a document or opening a window ends that, rather than a frame drawing the editor. An empty restore leaves it as it was, so it never turns an editor's later saves into the empty blob. #1757
 - A save that cannot take the editor lock stores the newest of the last restore, close or successful save, the stated limit of #1301. The first drawn frame no longer refreshes it: the fallback is the empty blob only after a fresh start or an empty restore, both of which leave the fresh look, so before any save or close the refreshed copy restored the same look as the empty blob it replaced. #1757
 - No guard is kept for an X11 frame after the close, or for a restore landing inside an X11 frame's hold: on macOS, the one platform that ships, closes, frames, restores and saves share the host's main thread. #1757
+
+## 2026-11-17 (#1813, in chat)
+
+- Any edit to what `ui-state` saves marks the Bitwig project modified, as a musical setting's does: the layout and pane sizes, view settings, look slots, camera presets and editor preferences (option A). A restore, opening the editor, and what the editor writes by itself, such as the layout fitted to the window, mark nothing. #1813

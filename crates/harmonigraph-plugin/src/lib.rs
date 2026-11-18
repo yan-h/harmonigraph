@@ -630,15 +630,17 @@ impl Default for Harmonigraph {
         let aggregation = tuning::hub::Hub::new();
         let wake = aggregation.shared.clone();
         take_control.set_stop_wakeup(move || wake.request_main());
-        let editor_shared = Arc::new(editor::EditorLock::new(
-            editor::EditorShared::new(
-                consumer,
-                audio_consumer,
-                sample_rate_bits.clone(),
-                take_control,
-            ),
-            params.ui_state.inbox(),
-        ));
+        let mut editor = editor::EditorShared::new(
+            consumer,
+            audio_consumer,
+            sample_rate_bits.clone(),
+            take_control,
+        );
+        // An edit to what `ui-state` saves marks the project modified, as a
+        // musical setting's does (#1813).
+        let settings = params.settings.clone();
+        editor.ui.on_edit(move || settings.changed());
+        let editor_shared = Arc::new(editor::EditorLock::new(editor, params.ui_state.inbox()));
         // From HERE, not from `initialize` or the editor: the point of the
         // thread is to cover the stretches nothing else does, and both of those
         // are stretches. `initialize` runs on activation, so a suspended plugin

@@ -171,7 +171,7 @@ pub enum VideoEncoder {
 /// struct in the tree is built this way now, and none of them keeps a second
 /// set of values for what a blob was SAVED with — see CLAUDE.md's compat
 /// section, which makes that an invariant rather than a coincidence.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RenderConfig {
     /// What "finishes" means; see [`RenderTrigger`].
@@ -395,7 +395,7 @@ impl LatticeSide {
 /// chosen separately); the split feeds `Layout::split` in `harmonigraph-ui`,
 /// so the plugin's live preview and the offline renderer build the identical
 /// frame.
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RenderFrame {
     /// Frame aspect numerator (e.g. 16 of 16:9). Drives the preview letterbox

@@ -6,7 +6,7 @@ use egui::{Pos2, Rect, Sense, Vec2};
 use super::{axes::Axes, gestures, Navigation, RegionView};
 use crate::{panes::DOCKED_SURFACE, theme, PictureState};
 
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct Regions {
     pub collapsed: [bool; 2],
@@ -21,7 +21,7 @@ pub(crate) struct Regions {
     restore: bool,
 }
 
-#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct Geometry {
     depths: [f32; 2],
@@ -36,6 +36,18 @@ impl Geometry {
 }
 
 impl Regions {
+    /// Take on what the pane writes by itself as it lays the Analyzer out:
+    /// the depths it draws, every frame, from the pane's size, the Tape tab and
+    /// the spectrum hold, and the relayout flag a save skips. The pane writes
+    /// the depths every frame it draws whole, so a copy settled at each write
+    /// holds `live`'s. An edit that moves them moves the dial or the layout on
+    /// the way, which the key sees, a divider dragged back to where it began
+    /// included (`SharedState::report_edit` reports a gesture that moved).
+    pub(crate) fn copy_layout(&mut self, live: &Regions) {
+        self.geometry = live.geometry;
+        self.restore = live.restore;
+    }
+
     pub fn sanitize(&mut self) {
         self.geometry = self.geometry.filter(|geometry| {
             geometry.depths.iter().all(|d| d.is_finite() && (0.0..=16_384.0).contains(d))

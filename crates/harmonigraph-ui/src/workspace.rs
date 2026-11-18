@@ -72,7 +72,7 @@ impl Default for Sizes {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Layout {
     pub position: Position,
@@ -413,9 +413,15 @@ impl Runtime {
 /// fold asks for nothing: it toggles at its click, after its pane has drawn,
 /// and the next frame draws it.
 /// Owning the buttons directly removes the dock's flag/fraction feedback loop.
+///
+/// `told` is the layout the host was last told a save stores
+/// (`SharedState::reported`): fitting the layout to the
+/// window is no edit, so a fit of the layout it was told of settles there too,
+/// while one over an edit not yet told leaves that edit to be reported.
 pub(crate) fn show(
     ui: &mut egui::Ui,
     layout: &mut Layout,
+    told: &mut Layout,
     runtime: &mut Runtime,
     viewer: &mut Viewer<'_>,
     frameless: bool,
@@ -436,8 +442,12 @@ pub(crate) fn show(
     let frame = ui.ctx().cumulative_frame_nr();
     let answering = runtime.requested.is_some_and(|asked| frame <= asked + 1);
     if !layout.sized || (resized && runtime.area.is_some() && !answering) {
+        let settled = *told == *layout;
         layout.fit(area.size(), rail, gap);
         layout.sized = true;
+        if settled {
+            told.clone_from(layout);
+        }
     }
     if !answering {
         runtime.requested = None;

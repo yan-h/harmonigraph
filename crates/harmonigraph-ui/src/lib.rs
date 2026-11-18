@@ -315,6 +315,7 @@ pub fn root_ui(
     if let Some(change) = workspace::show(
         ui,
         &mut workspace.layout,
+        &mut state.reported.layout,
         &mut workspace.layout_runtime,
         &mut panes::Viewer {
             state: &mut state.picture,
@@ -395,6 +396,8 @@ pub fn root_ui(
             build_tag,
         );
     }
+    // Last, after the overlay's drag has written where the HUD sits.
+    state.end_frame(ui.ctx());
 }
 
 /// Everything that must happen once per frame before any pane draws:

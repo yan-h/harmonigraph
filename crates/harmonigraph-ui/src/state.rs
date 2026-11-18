@@ -109,6 +109,17 @@ pub struct SharedState {
     /// empty restore leaves it as it was, so one into an editor that has held
     /// settings never turns its later saves into `""`.
     untouched: bool,
+    /// What a save stores as of the last restore or edit the host was told
+    /// of, with every automatic write since settled into it as it was made
+    /// (the layout fitted to the window, in `workspace::show`): the key
+    /// [`report_edit`](Self::report_edit) compares the live settings against.
+    pub(crate) reported: UiPersist,
+    /// A frame of the gesture still open differed from
+    /// [`reported`](Self::reported), so its end reports even if it came back.
+    moved: bool,
+    /// Told, under the editor lock, when an edit changes what a save stores:
+    /// the plugin has the host mark its project modified (#1813).
+    on_edit: Option<Box<dyn Fn() + Send>>,
 }
 
 /// Shared live/offline picture. A picture pane cannot access the editor dock,
@@ -234,7 +245,7 @@ pub struct SurfaceState {
 /// `Default`, and a repair in [`Self::sanitize`] if it needs one; saving and
 /// loading copy the struct. None of it rides in a take or a recorded
 /// appearance.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct EditorPrefs {
     /// Which settings sections are folded, as "page/section" titles
@@ -544,7 +555,7 @@ impl FrameRate {
 /// A saved camera angle: what the built-in Flat/Isometric buttons are,
 /// but user-defined. Only the orbit angles — projection, zoom, and pan
 /// are deliberately not captured, so a preset composes with any of them.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct CameraPreset {
     pub name: String,
@@ -577,10 +588,50 @@ impl CameraPreset {
 
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
-        Self {
-            picture: PictureState::new(target_format),
-            workspace: Workspace::default(),
-            untouched: true,
+        let picture = PictureState::new(target_format);
+        let workspace = Workspace::default();
+        let reported = UiPersist::capture(&workspace, &picture.appearance);
+        Self { picture, workspace, untouched: true, reported, moved: false, on_edit: None }
+    }
+
+    /// Call `notice` whenever an edit changes what a host save stores.
+    pub fn on_edit(&mut self, notice: impl Fn() + Send + 'static) {
+        self.on_edit = Some(Box::new(notice));
+    }
+
+    /// Tell the edit notice if what a save stores has moved since it was last
+    /// told, now or at any frame of the gesture this ends. Every frame that
+    /// holds no drag, scroll or pinch open, and each close, so a gesture is
+    /// one notice, at its end, even one that came back to where it started.
+    ///
+    /// The key is everything [`UiPersist`] saves but what the editor writes
+    /// by itself or the host learns otherwise (see [`UiPersist::stores`]).
+    /// A field compare rather than a serialization, so a frame pays a
+    /// fraction of a microsecond; the copy is taken only when it moved.
+    pub(crate) fn report_edit(&mut self) {
+        if !self.moved && self.reported.stores(&self.workspace, &self.picture.appearance) {
+            return;
+        }
+        self.settle();
+        if let Some(notice) = &self.on_edit {
+            notice();
+        }
+    }
+
+    /// Take what a save stores now as told, with nothing of a gesture still
+    /// to report.
+    fn settle(&mut self) {
+        self.reported = UiPersist::capture(&self.workspace, &self.picture.appearance);
+        self.moved = false;
+    }
+
+    /// The end of a frame: one with no gesture open reports what moved, and
+    /// one inside a gesture notes whether it differs.
+    pub(crate) fn end_frame(&mut self, ctx: &egui::Context) {
+        if !crate::gesture_open(ctx) {
+            self.report_edit();
+        } else if !self.moved {
+            self.moved = !self.reported.stores(&self.workspace, &self.picture.appearance);
         }
     }
 
@@ -629,7 +680,15 @@ impl SharedState {
     /// reopening does not (#1740).
     ///
     /// Whether the document's settings were installed, whole or in part.
+    /// Installed or refused, it is no edit: what a save stores now is taken as
+    /// told, and a gesture it lands in reports only what moves after it.
     pub fn install_document(&mut self, serialized: &str) -> bool {
+        let installed = self.install(serialized);
+        self.settle();
+        installed
+    }
+
+    fn install(&mut self, serialized: &str) -> bool {
         if serialized.is_empty() {
             self.apply_persist(UiPersist::capture(
                 &Workspace::default(),
@@ -739,9 +798,10 @@ impl SharedState {
     /// The editor is closing, or has stopped being seen: an appearance edit
     /// still open, a drag that cut off, becomes one undo entry. The plugin's
     /// close calls this before it refreshes a save's fallback, so the fallback
-    /// holds the session.
+    /// holds the session. A gesture the close cut off is reported here.
     pub fn finish_open_edit(&mut self) {
         self.workspace.interaction.appearance_editor.end_window_session(&self.picture.appearance);
+        self.report_edit();
     }
 }
 
@@ -808,6 +868,60 @@ impl UiPersist {
             look_slots: workspace.interaction.appearance_editor.slots.clone(),
             prefs: workspace.interaction.prefs.clone(),
         }
+    }
+
+    /// Whether this document holds what a save of `workspace` and `appearance`
+    /// stores, but for what the editor writes by itself or the host learns
+    /// otherwise or never, which is copied in from the live state first so
+    /// that this document takes it on:
+    ///
+    /// - the host-owned camera ([`AppearanceDocument::copy_host_owned`]),
+    ///   which reaches it as parameters and which automation moves;
+    /// - the Stars solos of the live look and the stored ones, which serde
+    ///   skips ([`appearance_edit::copy_solo`]);
+    /// - what the Analyzer's regions lay out by themselves
+    ///   ([`Regions::copy_layout`]).
+    ///
+    /// The layout `workspace::show` fits to the window is settled where it is
+    /// written instead, since the layout is also edited.
+    ///
+    /// What the compiler holds: the destructure fails to build until a new
+    /// top-level field of this document is compared, and each member compares
+    /// whole by its derived `PartialEq`, so a field added inside one is in the
+    /// key by itself. What it does not: a `#[serde(skip)]` field added to any
+    /// of them is compared all the same, and marks the project at every change
+    /// until it is copied in here.
+    ///
+    /// [`AppearanceDocument::copy_host_owned`]: crate::AppearanceDocument::copy_host_owned
+    /// [`appearance_edit::copy_solo`]: crate::appearance_edit::copy_solo
+    /// [`Regions::copy_layout`]: crate::panes::spectral::collapse::Regions::copy_layout
+    fn stores(&mut self, workspace: &Workspace, appearance: &crate::AppearanceDocument) -> bool {
+        let UiPersist {
+            version: _,
+            layout,
+            analyzer_regions,
+            appearance: own,
+            camera_presets,
+            look_slots,
+            prefs,
+        } = self;
+        let interaction = &workspace.interaction;
+        crate::AppearanceDocument::copy_host_owned(
+            (&mut own.camera, &mut own.view),
+            (&appearance.camera, &appearance.view),
+        );
+        crate::appearance_edit::copy_solo(
+            (&mut own.view, &mut own.spectrum),
+            (&appearance.view, &appearance.spectrum),
+        );
+        look_slots.copy_solo(&interaction.appearance_editor.slots);
+        analyzer_regions.copy_layout(&interaction.analyzer_regions);
+        *own == *appearance
+            && *layout == workspace.layout
+            && *analyzer_regions == interaction.analyzer_regions
+            && *camera_presets == interaction.camera_presets
+            && *look_slots == interaction.appearance_editor.slots
+            && *prefs == interaction.prefs
     }
 }
 
