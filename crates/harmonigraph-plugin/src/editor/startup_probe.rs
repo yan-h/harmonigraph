@@ -95,12 +95,23 @@ pub fn run() {
         WindowOpenOptions::new()
             .with_title("Harmonigraph startup measurement")
             .with_size(1000.0, 700.0),
-        move |_| Host {
-            shared: host_shared,
-            context,
-            observations: host_observations,
-            child: None,
-            opening: 0,
+        move |_| {
+            // A command-line application can start behind another window,
+            // and Metal skips presentation while it is occluded. Brought
+            // forward as the window is built rather than from its first
+            // frame, which a window that cannot be seen may never run.
+            use objc2::MainThreadMarker;
+            let app =
+                objc2_app_kit::NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
+            #[allow(deprecated)]
+            app.activateIgnoringOtherApps(true);
+            Host {
+                shared: host_shared,
+                context,
+                observations: host_observations,
+                child: None,
+                opening: 0,
+            }
         },
     );
     shared.lock().picture.editor_graphics().shutdown_startup();
@@ -138,15 +149,6 @@ impl WindowHandler for Host {
             return;
         }
         let mut graphics = counted(&self.observations);
-        if self.opening == 0 {
-            // A command-line application can start behind another window.
-            // Metal deliberately skips presentation while it is occluded.
-            use objc2::MainThreadMarker;
-            let app =
-                objc2_app_kit::NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
-            #[allow(deprecated)]
-            app.activateIgnoringOtherApps(true);
-        }
         graphics.shared_context = Some(self.context.clone());
         self.child = Some(EguiWindow::open_parented(
             window,
