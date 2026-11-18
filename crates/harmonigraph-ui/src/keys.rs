@@ -1,9 +1,17 @@
-//! The app shortcuts a frame reads with nothing focused, and the claim the
-//! native shell makes on them so the host does not act on the same press.
+//! The keys the editor reads, and the claim the native shell makes on them:
+//! the editor's alone, so the host does not act on the same press.
+//!
+//! The shell's rule (egui-plugin-window's Patch 18): the editor gets the
+//! shortcuts listed here and, while a text field has the keyboard, that
+//! field's typing and editing keys; every other key goes to the host and
+//! never reaches egui. A focused widget of another kind gets no key by its
+//! focus: Space or Enter on a focused button, a slider's arrows and Tab go to
+//! the host unless listed. So a widget that reads keys while focused lists
+//! them ([`claim`]), as a plot handle lists its arrows.
 //!
 //! Taking a shortcut and claiming it are one call, [`take`]: a shortcut read
 //! here is a shortcut kept from the host. The shell hands [`claimed`] to
-//! egui-baseview's `KeyCapture::CaptureShortcuts` at the end of each frame.
+//! egui-baseview's `Queue::set_shortcuts` at the end of each frame.
 //!
 //! A claim is a prediction. macOS asks the shell at key-down whether to pass
 //! a key up, before the frame that will read it runs, so the claims a key
@@ -32,10 +40,11 @@ fn claims_id() -> egui::Id {
     egui::Id::new("harmonigraph_ui::keys::Claims")
 }
 
-/// Keep `shortcuts` from the host this frame without reading them: for a
-/// branch where a focused widget reads the key instead, which the shell then
-/// claims by its focus anyway. Claiming it here too keeps the key from the
-/// host on the frame the focus leaves, which the next frame takes it on.
+/// Keep `shortcuts` from the host this frame without reading them here: for
+/// a focused widget that reads them itself, and for a branch where a text
+/// field reads the key, which the shell gives it by the text field's rule.
+/// Claimed then too, the key stays the editor's on the frame the field's
+/// focus leaves, which the next frame takes it on.
 pub(crate) fn claim(ctx: &egui::Context, shortcuts: &[KeyboardShortcut]) {
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|data| {

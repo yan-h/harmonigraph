@@ -289,9 +289,8 @@ pub fn root_ui(
     // It takes precedence over keyboard focus traversal outside text edits;
     // cancelling the queued focus move keeps the toggle from moving focus too.
     // Bare Tab alone, as the shell reserves it. A Tab with a modifier goes to
-    // the host, so it moves no focus here either: Shift-Tab would otherwise
-    // focus the last widget, which then claims every key. A text edit moves
-    // focus on Tab, and its focus keeps the key from the host; claimed here as
+    // the host, so it moves no focus here either. A text edit moves focus on
+    // Tab, which the shell gives it by the text-field rule; claimed here as
     // well for a frame that ends the edit, whose Tab the next frame toggles on.
     if ui.ctx().text_edit_focused() {
         keys::claim(ui.ctx(), &[FRAMELESS_SHORTCUT]);
@@ -643,7 +642,6 @@ pub mod lattice_maps;
 mod appearance;
 mod appearance_edit;
 pub mod keys;
-pub use widgets::plot_handle_focused;
 
 /// Toggles the hidden chrome.
 const FRAMELESS_SHORTCUT: egui::KeyboardShortcut =

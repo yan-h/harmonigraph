@@ -3,17 +3,25 @@ use crate::theme;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 use std::ops::RangeInclusive;
 
-fn focused_handle_key() -> egui::Id {
-    egui::Id::new("focused-plot-handle")
-}
-
-/// Whether the keyboard focus is on a plot handle, which uses only the arrows.
-/// A click leaves it there, so a shell keeps just those from its host: a DAW's
-/// Space must still work after moving a handle.
-pub fn handle_focused(ctx: &egui::Context) -> bool {
-    let focused = ctx.memory(|m| m.focused());
-    focused.is_some() && focused == ctx.data(|d| d.get_temp(focused_handle_key()))
-}
+/// The keys a focused plot handle reads: the arrows, bare and with Shift for
+/// the finer step, and Escape, which egui ends the focus on. Claimed while it
+/// has the focus, since a shell gives the editor only the keys it lists; every
+/// other key, a DAW's Space among them, still goes to the host.
+const HANDLE_KEYS: [egui::KeyboardShortcut; 9] = {
+    use egui::{Key, KeyboardShortcut, Modifiers};
+    let (none, shift) = (Modifiers::NONE, Modifiers::SHIFT);
+    [
+        KeyboardShortcut::new(none, Key::ArrowLeft),
+        KeyboardShortcut::new(none, Key::ArrowRight),
+        KeyboardShortcut::new(none, Key::ArrowUp),
+        KeyboardShortcut::new(none, Key::ArrowDown),
+        KeyboardShortcut::new(shift, Key::ArrowLeft),
+        KeyboardShortcut::new(shift, Key::ArrowRight),
+        KeyboardShortcut::new(shift, Key::ArrowUp),
+        KeyboardShortcut::new(shift, Key::ArrowDown),
+        KeyboardShortcut::new(none, Key::Escape),
+    ]
+};
 
 pub(super) struct Plot {
     pub rect: Rect,
@@ -148,7 +156,7 @@ impl Plot {
                 ..Default::default()
             };
             ui.memory_mut(|m| m.set_focus_lock_filter(response.id, arrows));
-            ui.ctx().data_mut(|d| d.insert_temp(focused_handle_key(), response.id));
+            crate::keys::claim(ui.ctx(), &HANDLE_KEYS);
             let delta = ui.input(|i| {
                 let step = if i.modifiers.shift { 0.001 } else { 0.01 };
                 egui::vec2(
@@ -231,14 +239,16 @@ mod tests {
     use super::*;
     use crate::tests::probe::{events_into, themed};
 
-    /// A nudge leaves the focus on the handle: moved to the neighbour, it
-    /// would stop being a focus that leaves Space to the host.
+    /// A clicked handle lists its keys for the shell, and a nudge leaves the
+    /// focus on it, so it goes on listing them: moved to the neighbour, the
+    /// arrows would go to the host.
     #[test]
     fn a_clicked_handle_keeps_the_focus_through_an_arrow() {
         let ctx = themed();
         let screen = egui::vec2(400.0, 400.0);
         let rect = Rect::from_min_size(Pos2::ZERO, screen);
         let mut at = Pos2::ZERO;
+        let mut listed = false;
         let mut frame = |events| {
             events_into(&ctx, screen, rect, events, |ui| {
                 let response = ui.allocate_response(egui::vec2(200.0, 100.0), Sense::hover());
@@ -247,10 +257,11 @@ mod tests {
                 let plot = Plot { rect: response.rect, response, fields: Rect::NOTHING };
                 plot.handle(ui, "handle", 0.1, 0.1);
                 let _ = ui.button("neighbour");
+                listed = crate::keys::claimed(ui.ctx()).contains(&HANDLE_KEYS[3]);
             });
-            at
+            (at, listed)
         };
-        let at = frame(vec![]);
+        let (at, _) = frame(vec![]);
         let press = |pressed| egui::Event::PointerButton {
             pos: at,
             button: egui::PointerButton::Primary,
@@ -260,8 +271,8 @@ mod tests {
         frame(vec![egui::Event::PointerMoved(at)]);
         frame(vec![press(true)]);
         frame(vec![press(false)]);
-        frame(vec![]);
-        assert!(handle_focused(&ctx), "the click focused the handle");
+        let (_, listed) = frame(vec![]);
+        assert!(listed, "the clicked handle did not list its arrows");
 
         frame(vec![egui::Event::Key {
             key: egui::Key::ArrowDown,
@@ -270,7 +281,7 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }]);
-        frame(vec![]);
-        assert!(handle_focused(&ctx), "the arrow left it there");
+        let (_, listed) = frame(vec![]);
+        assert!(listed, "the arrow moved the focus off the handle");
     }
 }
