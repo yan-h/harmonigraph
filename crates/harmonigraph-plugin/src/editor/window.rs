@@ -368,9 +368,8 @@ impl Drop for LatticeEditorHandle {
     fn drop(&mut self) {
         // The session ends, and the host's gestures with it, under the lock
         // (see `EditorLock::end_window_session` on why in that order). The
-        // lock is taken with `open` still TRUE, which keeps the input worker
-        // from ageing the picture until the window is gone — see
-        // [`crate::background`].
+        // input worker ages the picture whether or not the window is open, so
+        // where `open` is cleared below sets only its poll rate.
         let setter = nice_plug::prelude::ParamSetter::new(self.context.as_ref());
         self.shared.end_window_session(|gestures| {
             for (key, active) in harmonigraph_ui::params::ParamKey::ALL.into_iter().zip(gestures) {

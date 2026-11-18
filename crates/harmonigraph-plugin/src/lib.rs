@@ -1203,77 +1203,48 @@ mod tests {
         plugin.take.publish_clock(plugin.presentation_seconds);
     }
 
-    /// The window flag the editor announces itself through has to be the one
-    /// the input worker watches, and nothing but this says so.
-    ///
-    /// They are two clones of one `Arc<EguiState>` today — `Default` hands one
-    /// to [`background::InputWorker::spawn`] and `editor` hands the same
-    /// field to `editor::create`. The worker drains the rings either way
-    /// (#1559); what the flag decides is whether it also ages the picture,
-    /// which an open window's frames do. A second `EguiState` on either side
-    /// compiles, passes every other test, and leaves the worker ageing under
-    /// an open window, or never.
+    /// The running input worker ages the picture with no frame running, with
+    /// the editor open as well as shut: a frame runs only while the editor
+    /// can be seen, so an open editor that is covered or minimized would
+    /// otherwise keep every released voice. The flag the editor sets decides
+    /// only how often the worker polls.
     ///
     /// Driven through the REAL spawned thread rather than by calling `step`,
     /// because the wiring is precisely what a direct call would bypass.
     #[test]
-    fn the_input_worker_watches_the_flag_the_editor_sets() {
+    fn the_input_worker_ages_the_picture_with_the_editor_open_or_shut() {
         let voices = |plugin: &Harmonigraph| {
             plugin.editor_shared.lock().ui.picture.runtime.tracker.voices().count()
         };
-        let mut plugin = Harmonigraph::default();
-        plugin.params.editor_state.set_open(true);
-        // A completed step after the store: every step after it sees the flag.
-        let rounds = plugin._input_worker.completed_rounds();
-        assert!(
-            a_round_after(&plugin, rounds),
-            "no worker step in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
-        );
-        {
-            // Under the lock, so one take gets all three. A note played and
-            // released far behind one still held, whose onset pins the batch's
-            // clock: a voice whose fade ended long ago, which only ageing
-            // removes.
-            let _batch = plugin.editor_shared.lock();
-            for event in [
-                CoreNoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0),
-                CoreNoteEvent::off(0.1, SourceId::DIRECT, 0, 60),
-                CoreNoteEvent::on(100.0, SourceId::DIRECT, 0, 64, 1.0),
-            ] {
-                plugin.take.publish_clock(event.time);
-                plugin.take.publish_note(event.into()).expect_both();
+        for open in [true, false] {
+            let mut plugin = Harmonigraph::default();
+            plugin.params.editor_state.set_open(open);
+            {
+                // Under the lock, so one take gets all three. A note played
+                // and released far behind one still held, whose onset pins the
+                // batch's clock: a voice whose fade ended long ago, which only
+                // ageing removes. The step that takes them ages them, so the
+                // count goes from none to one.
+                let _batch = plugin.editor_shared.lock();
+                for event in [
+                    CoreNoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0),
+                    CoreNoteEvent::off(0.1, SourceId::DIRECT, 0, 60),
+                    CoreNoteEvent::on(100.0, SourceId::DIRECT, 0, 64, 1.0),
+                ] {
+                    plugin.take.publish_clock(event.time);
+                    plugin.take.publish_note(event.into()).expect_both();
+                }
             }
-        }
-        let started = Instant::now();
-        while voices(&plugin) < 2 {
-            assert!(
-                started.elapsed() < ANALYSIS_DEADLINE,
-                "no notes in {ANALYSIS_DEADLINE:?} with the window open: the worker left the ring",
-            );
-            std::thread::sleep(background::POLL);
-        }
-        let rounds = plugin._input_worker.completed_rounds();
-        assert!(
-            a_round_after(&plugin, rounds),
-            "no worker step in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
-        );
-        assert_eq!(
-            voices(&plugin),
-            2,
-            "the worker aged the picture under an open window: it is not watching the \
-             EguiState the editor sets",
-        );
-
-        plugin.params.editor_state.set_open(false);
-        let started = Instant::now();
-        while voices(&plugin) != 1 {
-            assert!(
-                started.elapsed() < ANALYSIS_DEADLINE,
-                "the released voice was never aged out in {ANALYSIS_DEADLINE:?} after the \
-                 editor announced itself shut: either the worker is not watching the \
-                 EguiState the editor sets, or this runner never scheduled it",
-            );
-            std::thread::sleep(background::POLL);
+            let started = Instant::now();
+            while voices(&plugin) != 1 {
+                assert!(
+                    started.elapsed() < ANALYSIS_DEADLINE,
+                    "editor open: {open}. The released voice was never aged out in \
+                     {ANALYSIS_DEADLINE:?}: either the worker leaves ageing to a frame, or \
+                     this runner never scheduled it",
+                );
+                std::thread::sleep(background::POLL);
+            }
         }
     }
 

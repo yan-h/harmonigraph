@@ -729,7 +729,8 @@ impl Control {
 
     /// Tell the audio thread whether a backward jump ends the take rather than
     /// recording on — true only for `AtLoopEnd`, whose take is one loop.
-    /// Called every GUI frame.
+    /// Called at every poll of the take's end: each input worker step, and
+    /// each editor frame.
     pub fn set_end_at_rewind(&self, on: bool) {
         self.end_at_rewind.store(on, Ordering::Relaxed);
     }
@@ -752,9 +753,9 @@ impl Control {
     }
 
     /// The bar to end the take at, or `None` for every trigger but
-    /// `AtBar`. Called every GUI
-    /// frame, like [`set_end_at_rewind`](Self::set_end_at_rewind), so a
-    /// mid-take change of mind reaches the audio thread.
+    /// `AtBar`. Called at every poll of the take's end, like
+    /// [`set_end_at_rewind`](Self::set_end_at_rewind), so a mid-take change
+    /// of mind reaches the audio thread.
     pub fn set_stop_bar(&self, bar: Option<f64>) {
         self.latches.stop_at_bar.set(bar);
     }

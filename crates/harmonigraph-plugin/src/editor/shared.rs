@@ -87,11 +87,12 @@ impl EditorShared {
     ///
     /// Counted in seconds rather than in calls to
     /// [`poll_take_end`](Self::poll_take_end), because who calls it decides
-    /// how often: a frame at 144 Hz or at a quarter of 60 Hz, or the input
-    /// worker every [`SHUT_POLL`](crate::background::SHUT_POLL) with the window
-    /// shut. Counted in calls, the same debounce ran from 139 ms to 1.3 s
-    /// (#1567). It starts at the first poll to find the transport still, so a
-    /// take ends up to one poll interval after this.
+    /// how often: a frame at 144 Hz or at a quarter of 60 Hz, and the input
+    /// worker every [`POLL`](crate::background::POLL) with the window open or
+    /// [`SHUT_POLL`](crate::background::SHUT_POLL) with it shut. Counted in
+    /// calls, the same debounce ran from 139 ms to 1.3 s (#1567). It starts at
+    /// the first poll to find the transport still, so a take ends up to one
+    /// poll interval after this.
     pub(crate) const STOP_SECONDS: f64 = 0.4;
 
     /// Reflect the Video pane's toggle into the recorder, and the
@@ -147,12 +148,12 @@ impl EditorShared {
     /// signal came back.
     ///
     /// **Split out of [`sync_take`](Self::sync_take) so it can also run with
-    /// the editor window SHUT.** Every trigger but `OnDisarm` decides here,
-    /// which meant a take armed and then left with the window closed — a Bitwig
+    /// no frame running.** Every trigger but `OnDisarm` decides here, which
+    /// meant a take armed and then left with the window closed — a Bitwig
     /// audio export is exactly that — never ended itself and never rendered, no
-    /// matter which trigger was chosen. The input worker calls this every
-    /// [`SHUT_POLL`](crate::background::SHUT_POLL) while the window is shut, so
-    /// the decision no longer depends on anyone watching.
+    /// matter which trigger was chosen; and a frame runs only while the editor
+    /// can be seen. The input worker calls this every step, window open or
+    /// shut, so the decision does not depend on anyone watching.
     ///
     /// Nothing here draws or reads a widget, which is what makes it callable
     /// from that thread: it moves settings out to the recorder and take state

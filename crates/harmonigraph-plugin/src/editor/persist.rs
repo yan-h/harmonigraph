@@ -70,8 +70,8 @@ impl EguiState {
     /// Record that the window has opened or closed.
     ///
     /// Named rather than stored inline because it is not only the host's
-    /// business: [`crate::background`] reads it to decide whether to do a shut
-    /// window's duties, and how often to poll, so the two transitions are a
+    /// business: [`crate::background`] reads it to decide how often to poll,
+    /// and the tape whether its roll is drawn, so the two transitions are a
     /// seam between threads and not just a bit.
     pub(crate) fn set_open(&self, open: bool) {
         self.open.store(open, Ordering::Release);
