@@ -114,7 +114,7 @@ pub struct SharedState {
     /// compares the live settings against.
     reported: UiPersist,
     /// The next frame that draws lays out a new window, and what that writes
-    /// (a fresh layout fitted to it, the Analyzer's region depths) is no edit.
+    /// (a layout never sized before, fitted to it) is no edit.
     laying_out: bool,
     /// Told, under the editor lock, when an edit changes what a save stores:
     /// the plugin has the host mark its project modified (#1813).
@@ -603,11 +603,11 @@ impl SharedState {
     /// drag, scroll or pinch open, and each close, so a gesture is one
     /// notice, at its end.
     ///
-    /// The key is everything [`UiPersist`] saves but what reaches the host
-    /// some other way or not at all: the camera the host's parameters own
-    /// (automation moves it every frame), and what serde skips (see
-    /// [`UiPersist::stores`]). A field compare rather than a serialization,
-    /// so a frame pays microseconds; the copy is taken only when it moved.
+    /// The key is everything [`UiPersist`] saves but the camera the host's
+    /// parameters own (automation moves it every frame), what serde skips and
+    /// the Analyzer's region depths (see [`UiPersist::stores`]). A field
+    /// compare rather than a serialization, so a frame pays a fraction of a
+    /// microsecond; the copy is taken only when it moved.
     pub(crate) fn report_edit(&mut self) {
         if self.reported.stores(&self.workspace, &self.picture.appearance) {
             return;
@@ -871,15 +871,34 @@ impl UiPersist {
     }
 
     /// Whether this document holds what a save of `workspace` and `appearance`
-    /// stores, but for what the host learns otherwise or never: the host-owned
-    /// camera ([`AppearanceDocument::copy_host_owned`]), which reaches it as
-    /// parameters, and the Stars solo, which serde skips. Those are copied in
-    /// from the live state first, so this document takes them on. The
-    /// Analyzer regions' own `PartialEq` leaves out what they skip.
+    /// stores, but for what no edit moves alone or what the host learns
+    /// otherwise or never:
+    ///
+    /// - the host-owned camera ([`AppearanceDocument::copy_host_owned`]),
+    ///   which reaches it as parameters;
+    /// - what serde skips: the Stars solo, and the Analyzer regions' relayout
+    ///   flag. A `#[serde(skip)]` field added to a saved type is copied in here
+    ///   too, or `PartialEq` marks the project at every change to it;
+    /// - the Analyzer regions' depths, which follow the pane's size: the
+    ///   window, the Tape tab and the spectrum hold, none of them saved here.
+    ///   An edit that moves them moves the layout, a preference or the
+    ///   spectrum settings too.
+    ///
+    /// The camera and the solo are copied in from the live state first, so
+    /// this document takes them on. Destructured, so a field added to the
+    /// document is a compile error here until it is in the key.
     ///
     /// [`AppearanceDocument::copy_host_owned`]: crate::AppearanceDocument::copy_host_owned
     fn stores(&mut self, workspace: &Workspace, appearance: &crate::AppearanceDocument) -> bool {
-        let own = &mut self.appearance;
+        let UiPersist {
+            version: _,
+            layout,
+            analyzer_regions,
+            appearance: own,
+            camera_presets,
+            look_slots,
+            prefs,
+        } = self;
         crate::AppearanceDocument::copy_host_owned(
             (&mut own.camera, &mut own.view),
             (&appearance.camera, &appearance.view),
@@ -888,11 +907,11 @@ impl UiPersist {
         own.spectrum.atmosphere.stars.star_solo = appearance.spectrum.atmosphere.stars.star_solo;
         let interaction = &workspace.interaction;
         *own == *appearance
-            && self.layout == workspace.layout
-            && self.analyzer_regions == interaction.analyzer_regions
-            && self.camera_presets == interaction.camera_presets
-            && self.look_slots == interaction.appearance_editor.slots
-            && self.prefs == interaction.prefs
+            && *layout == workspace.layout
+            && analyzer_regions.collapsed == interaction.analyzer_regions.collapsed
+            && *camera_presets == interaction.camera_presets
+            && *look_slots == interaction.appearance_editor.slots
+            && *prefs == interaction.prefs
     }
 }
 

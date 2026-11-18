@@ -191,39 +191,33 @@ mod tests {
 
     /// An edit to what a save stores is told once, at the end of the gesture
     /// that made it (#1813). A restore, a new window's first layout, the
-    /// host's camera and the Stars solo are no edit: a project reopened at
-    /// another window size redraws the Analyzer's region depths it saved.
+    /// host's camera and the Stars solo are no edit: a project saved before
+    /// its editor ever opened fits its layout to the first window.
     #[test]
     fn an_edit_to_what_a_save_stores_is_told_once_at_its_gestures_end() {
         use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-        let ctx = egui::Context::default();
-        let mut saved = fresh();
-        Opening { ctx: &ctx, state: &mut saved }.open();
-        let _ = frame(&ctx, &mut saved, SIZE);
-
         let told = std::sync::Arc::new(AtomicUsize::new(0));
         let mut state = fresh();
         let counter = told.clone();
         state.on_edit(move || {
             counter.fetch_add(1, Relaxed);
         });
-        assert!(state.install_document(&close(&saved)));
+        assert!(state.install_document(""));
         let ctx = egui::Context::default();
         Opening { ctx: &ctx, state: &mut state }.open();
-        let size = SIZE + egui::vec2(300.0, 100.0);
         for _ in 0..3 {
-            let _ = frame(&ctx, &mut state, size);
+            let _ = frame(&ctx, &mut state, SIZE);
         }
         state.picture.appearance.camera.yaw += 0.5;
         state.picture.appearance.view.atmosphere.stars.star_solo[0] = true;
-        let _ = frame(&ctx, &mut state, size);
+        let _ = frame(&ctx, &mut state, SIZE);
         assert_eq!(told.load(Relaxed), 0, "nothing a save stores was edited");
 
         state.workspace.layout.folded[0] = true;
-        let _ = frame_with(&ctx, &mut state, size, vec![egui::Event::Zoom(1.1)]);
+        let _ = frame_with(&ctx, &mut state, SIZE, vec![egui::Event::Zoom(1.1)]);
         assert_eq!(told.load(Relaxed), 0, "not while a pinch is open");
-        let _ = frame(&ctx, &mut state, size);
-        let _ = frame(&ctx, &mut state, size);
+        let _ = frame(&ctx, &mut state, SIZE);
+        let _ = frame(&ctx, &mut state, SIZE);
         assert_eq!(told.load(Relaxed), 1, "once, as the pinch ends");
     }
 }

@@ -21,14 +21,7 @@ pub(crate) struct Regions {
     restore: bool,
 }
 
-/// Equal when a save stores the same: `restore` is not saved.
-impl PartialEq for Regions {
-    fn eq(&self, other: &Self) -> bool {
-        (self.collapsed, self.geometry) == (other.collapsed, other.geometry)
-    }
-}
-
-#[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct Geometry {
     depths: [f32; 2],

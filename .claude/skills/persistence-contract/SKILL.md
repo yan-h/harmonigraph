@@ -68,7 +68,9 @@ The one exception to "a save stores what the editor holds": an editor that has i
 An empty restore installs the fresh look and leaves that flag as it was.
 A restore therefore resets what it installs and nothing else, and a window session resets only what belongs to the window (`start_window_session`).
 A new persisted field needs no step at either:
-`UiPersist::capture` and `apply_persist` are its two sites.
+`UiPersist::capture` and `apply_persist` are two of its three sites.
+The third is `UiPersist::stores`, the key an edit is compared on to mark the project modified (#1813), which destructures the document so a new field does not compile until it is there.
+A `#[serde(skip)]` field added to any saved type is copied in there too, or its `PartialEq` marks the project at every change to it.
 
 ## Appearance and editor workspace have separate boundaries
 
