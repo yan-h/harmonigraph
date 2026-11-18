@@ -355,40 +355,51 @@ impl Prepared for Restore {
     }
 }
 
-/// The Hub's setup: its own instance settings beside the musical settings.
+/// The Hub's setup, the one owner of everything Harmonigraph saves beside its
+/// host parameters: the editor's and the maps' fields (`saved_fields`), its
+/// own instance settings and the musical settings.
 pub(crate) struct HubSetup {
     pub instance: crate::tuning::setup::Adapter,
-    pub settings: Arc<Settings>,
+    pub params: Arc<crate::HarmonigraphParams>,
 }
-struct Both(Box<dyn Prepared>, Box<dyn Prepared>);
-impl Prepared for Both {
+/// Prepared restores, committed in order.
+struct All([Box<dyn Prepared>; 3]);
+impl Prepared for All {
     fn commit(self: Box<Self>) {
-        self.0.commit();
-        self.1.commit();
+        for prepared in self.0 {
+            prepared.commit();
+        }
     }
 }
 impl Setup for HubSetup {
     fn track_name_changed(&self, name: Option<&str>) {
         self.instance.track_name_changed(name);
     }
+    /// Only the musical settings and the instance settings can refuse; the
+    /// other fields are installed first, as nice-plug's derive did before
+    /// either committed.
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
-        let musical = self.settings.prepare(state)?;
-        Ok(Box::new(Both(self.instance.prepare(state)?, Box::new(musical))))
+        let musical = self.params.settings.prepare(state)?;
+        let instance = self.instance.prepare(state)?;
+        let fields = crate::saved_fields::prepare(&self.params, state);
+        Ok(Box::new(All([Box::new(fields), instance, Box::new(musical)])))
     }
     fn save(&self, state: &mut PluginState) {
+        crate::saved_fields::save(&self.params, state);
         self.instance.save(state);
-        self.settings.save(state);
+        self.params.settings.save(state);
     }
     fn install_wakeup(&self, wake: Box<dyn Fn() + Send + Sync>) {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::from(wake);
         let instance = wake.clone();
         self.instance.install_wakeup(Box::new(move || instance()));
-        assert!(self.settings.wake.set(wake).is_ok(), "one wakeup");
+        assert!(self.params.settings.wake.set(wake).is_ok(), "one wakeup");
     }
     fn service(&self) -> Serviced {
         let mut serviced = self.instance.service();
-        serviced.modified |= self.settings.modified.swap(false, Ordering::AcqRel);
-        serviced.text |= self.settings.text.swap(false, Ordering::AcqRel);
+        let settings = &self.params.settings;
+        serviced.modified |= settings.modified.swap(false, Ordering::AcqRel);
+        serviced.text |= settings.text.swap(false, Ordering::AcqRel);
         serviced
     }
 }

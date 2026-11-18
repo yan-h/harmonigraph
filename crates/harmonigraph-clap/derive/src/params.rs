@@ -31,7 +31,6 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
     // TODO: This duplication check doesn't work for nested fields since we don't know anything
     //       about the fields on the nested structs
     let mut params: Vec<Param> = Vec::new();
-    let mut persistent_fields: Vec<PersistentField> = Vec::new();
     for field in fields.named {
         let field_name = match &field.ident {
             Some(ident) => ident,
@@ -80,44 +79,6 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                             attr.span(),
                             "The id attribute should be a key-value pair with a string argument: \
                              #[id = \"foo_bar\"]",
-                        )
-                        .to_compile_error()
-                        .into();
-                    }
-                };
-            } else if attr.path.is_ident("persist") {
-                match attr.parse_meta() {
-                    Ok(syn::Meta::NameValue(syn::MetaNameValue {
-                        lit: syn::Lit::Str(s), ..
-                    })) => {
-                        if processed_attribute {
-                            return syn::Error::new(
-                                attr.span(),
-                                "Duplicate or incompatible attribute found",
-                            )
-                            .to_compile_error()
-                            .into();
-                        }
-
-                        if persistent_fields.iter().any(|p| p.key == s) {
-                            return syn::Error::new(
-                                field.span(),
-                                "Multiple persistent fields with the same key found",
-                            )
-                            .to_compile_error()
-                            .into();
-                        }
-
-                        persistent_fields
-                            .push(PersistentField { key: s, field: field_name.clone() });
-
-                        processed_attribute = true;
-                    }
-                    _ => {
-                        return syn::Error::new(
-                            attr.span(),
-                            "The persist attribute should be a key-value pair with a string \
-                             argument: #[persist = \"foo_bar\"]",
                         )
                         .to_compile_error()
                         .into();
@@ -244,163 +205,10 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
         }
     };
 
-    let (serialize_fields_tokens, deserialize_fields_tokens) = {
-        // Like with `param_map()`, we'll try to do the serialization for this struct and then
-        // recursively call the child parameter structs. We don't know anything about the actual
-        // field types, but because we can generate this function we can get type erasure for free
-        // since we only need to worry about byte vectors.
-        let (serialize_fields_self_tokens, deserialize_fields_match_self_tokens): (Vec<_>, Vec<_>) =
-            persistent_fields
-                .into_iter()
-                .map(|PersistentField { field, key }| {
-                    (
-                        quote! {
-                            match ::nice_plug::params::persist::PersistentField::map(
-                                &self.#field,
-                                ::nice_plug::params::persist::serialize_field,
-                            ) {
-                                Ok(data) => {
-                                    serialized.insert(String::from(#key), data);
-                                }
-                                Err(err) => {
-                                    ::nice_plug::nice_debug_assert_failure!(
-                                        "Could not serialize '{}': {}",
-                                        #key,
-                                        err
-                                    )
-                                }
-                            };
-                        },
-                        quote! {
-                            #key => {
-                                match ::nice_plug::params::persist::deserialize_field(&data) {
-                                    Ok(deserialized) => {
-                                        ::nice_plug::params::persist::PersistentField::set(
-                                            &self.#field,
-                                            deserialized,
-                                        );
-                                    }
-                                    Err(err) => {
-                                        ::nice_plug::nice_debug_assert_failure!(
-                                            "Could not deserialize '{}': {}",
-                                            #key,
-                                            err
-                                        )
-                                    }
-                                };
-                            }
-                        },
-                    )
-                })
-                .unzip();
-
-        // ID prefixes are also added for nested objects
-        let (serialize_fields_nested_tokens, deserialize_fields_nested_tokens): (Vec<_>, Vec<_>) =
-            params
-                .iter()
-                .filter_map(|p| match p {
-                    Param::Single { .. } => None,
-                    Param::Nested(nested) => Some(nested),
-                })
-                .map(|nested| match nested {
-                    NestedParams::Inline { field, .. } => (
-                        quote! { serialized.extend(self.#field.serialize_fields()); },
-                        quote! { self.#field.deserialize_fields(serialized); },
-                    ),
-                    NestedParams::Prefixed { field, id_prefix, .. } => (
-                        quote! {
-                            let prefixed = self
-                                .#field
-                                .serialize_fields()
-                                .into_iter()
-                                .map(|(key, value)| (format!("{}_{}", #id_prefix, key), value));
-
-                            serialized.extend(prefixed);
-                        },
-                        quote! {
-                            let prefix = format!("{}_", #id_prefix);
-                            let matching_fields = serialized
-                                .iter()
-                                .filter_map(|(key, value)| {
-                                    let original_key = key.strip_prefix(&prefix)?;
-                                    Some((original_key.to_owned(), value.to_owned()))
-                                })
-                                .collect();
-
-                            self.#field.deserialize_fields(&matching_fields);
-                        },
-                    ),
-                    NestedParams::Array { field, .. } => (
-                        quote! {
-                            for (field_idx, field) in self.#field.iter().enumerate() {
-                                let idx = field_idx + 1;
-                                let suffixed = field
-                                    .serialize_fields()
-                                    .into_iter()
-                                    .map(|(key, value)| (format!("{}_{}", key, idx), value));
-
-                                serialized.extend(suffixed);
-                            }
-                        },
-                        quote! {
-                            for (field_idx, field) in self.#field.iter().enumerate() {
-                                let idx = field_idx + 1;
-                                let suffix = format!("_{}", idx);
-                                let matching_fields = serialized
-                                    .iter()
-                                    .filter_map(|(key, value)| {
-                                        let original_key = key.strip_suffix(&suffix)?;
-                                        Some((original_key.to_owned(), value.to_owned()))
-                                    })
-                                    .collect();
-
-                                field.deserialize_fields(&matching_fields);
-                            }
-                        },
-                    ),
-                })
-                .unzip();
-
-        let serialize_fields_tokens = quote! {
-            #[allow(unused_mut)]
-            let mut serialized = ::std::collections::BTreeMap::new();
-            #(#serialize_fields_self_tokens);*
-
-            #(#serialize_fields_nested_tokens);*
-
-            serialized
-        };
-
-        let deserialize_fields_tokens = quote! {
-            for (field_name, data) in serialized {
-                match field_name.as_str() {
-                    #(#deserialize_fields_match_self_tokens)*
-                    _ => ::nice_plug::nice_trace!("Unknown serialized field name: {} (this may not be accurate when using nested param structs)", field_name),
-                }
-            }
-
-            // FIXME: The above warning will course give false postiives when using nested
-            //        parameter structs. An easy fix would be to use
-            //        https://doc.rust-lang.org/std/collections/struct.HashMap.html#method.drain_filter
-            //        once that gets stabilized.
-            #(#deserialize_fields_nested_tokens);*
-        };
-
-        (serialize_fields_tokens, deserialize_fields_tokens)
-    };
-
     quote! {
         unsafe impl #impl_generics Params for #struct_name #ty_generics #where_clause {
             fn param_map(&self) -> Vec<(String, nice_plug::prelude::ParamPtr, String)> {
                 #param_map_tokens
-            }
-
-            fn serialize_fields(&self) -> ::std::collections::BTreeMap<String, String> {
-                #serialize_fields_tokens
-            }
-
-            fn deserialize_fields(&self, serialized: &::std::collections::BTreeMap<String, String>) {
-                #deserialize_fields_tokens
             }
         }
     }
@@ -434,15 +242,6 @@ impl Param {
             Param::Nested(params) => params.param_map_tokens(),
         }
     }
-}
-
-/// A field containing data that must be stored in the plugin's state.
-#[derive(Debug)]
-struct PersistentField {
-    /// The name of the field on the struct.
-    field: syn::Ident,
-    /// The field's unique key.
-    key: syn::LitStr,
 }
 
 /// A field containing another object whose parameters and persistent fields should be added to this

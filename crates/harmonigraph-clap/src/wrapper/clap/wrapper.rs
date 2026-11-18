@@ -141,9 +141,8 @@ pub struct Wrapper<P: ClapPlugin> {
     /// The plugin's background task executor closure.
     pub task_executor: Mutex<TaskExecutor<P>>,
     /// The plugin's parameters. These are fetched once during initialization. That way the
-    /// `ParamPtr`s are guaranteed to live at least as long as this object and we can interact with
-    /// the `Params` object without having to acquire a lock on `plugin`.
-    params: Arc<dyn Params>,
+    /// `ParamPtr`s are guaranteed to live at least as long as this object. Held only for that.
+    _params: Arc<dyn Params>,
     /// The plugin's editor, if it has one. This object does not do anything on its own, but we need
     /// to instantiate this in advance so we don't need to lock the entire [`Plugin`] object when
     /// creating an editor. Wrapped in an `AtomicRefCell` because it needs to be initialized late.
@@ -683,7 +682,7 @@ impl<P: ClapPlugin> Wrapper<P> {
 
             plugin: Mutex::new(plugin),
             task_executor,
-            params,
+            _params: params,
             // Initialized later as it needs a reference to the wrapper for the async executor
             editor: AtomicRefCell::new(None),
             editor_handle: Mutex::new(None),
@@ -1789,10 +1788,10 @@ impl<P: ClapPlugin> Wrapper<P> {
     /// the JSON in the relevant plugin API methods instead.
     pub fn get_state_object(&self) -> PluginState {
         let mut state = unsafe {
-            state::serialize_object::<P>(
-                self.params.clone(),
-                state::make_params_iter(&self.param_by_hash, &self.param_id_to_hash),
-            )
+            state::serialize_object::<P>(state::make_params_iter(
+                &self.param_by_hash,
+                &self.param_id_to_hash,
+            ))
         };
         if let Some(setup) = &self.setup {
             setup.save(&mut state);
@@ -1876,7 +1875,6 @@ impl<P: ClapPlugin> Wrapper<P> {
         let success = unsafe {
             state::deserialize_object::<P>(
                 state,
-                self.params.clone(),
                 state::make_params_getter(&self.param_by_hash, &self.param_id_to_hash),
                 self.current_buffer_config.load().as_ref(),
             )
@@ -1974,7 +1972,6 @@ impl<P: ClapPlugin> Wrapper<P> {
         let mut success = permit_alloc(|| unsafe {
             state::deserialize_object::<P>(
                 state,
-                self.params.clone(),
                 state::make_params_getter(&self.param_by_hash, &self.param_id_to_hash),
                 self.current_buffer_config.load().as_ref(),
             )
@@ -3539,10 +3536,10 @@ impl<P: ClapPlugin> Wrapper<P> {
             state::serialize_state_json(&wrapper.get_state_object())
         } else {
             unsafe {
-                state::serialize_json::<P>(
-                    wrapper.params.clone(),
-                    state::make_params_iter(&wrapper.param_by_hash, &wrapper.param_id_to_hash),
-                )
+                state::serialize_json::<P>(state::make_params_iter(
+                    &wrapper.param_by_hash,
+                    &wrapper.param_id_to_hash,
+                ))
             }
         };
         match serialized {

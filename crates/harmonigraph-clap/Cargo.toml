@@ -48,10 +48,6 @@ name = "derive_params"
 path = "tests/derive_params.rs"
 
 [[test]]
-name = "derive_persist"
-path = "tests/derive_persist.rs"
-
-[[test]]
 name = "clap_boundary"
 path = "tests/clap_boundary.rs"
 required-features = ["assert_process_allocs", "clap-boundary-tests"]

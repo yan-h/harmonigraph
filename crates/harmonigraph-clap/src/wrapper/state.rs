@@ -1,11 +1,8 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{
     audio_setup::BufferConfig,
-    params::{InternalParamMut, Param, Params, internals::ParamPtr},
+    params::{InternalParamMut, Param, internals::ParamPtr},
     plugin::{ParamValue, Plugin, PluginState},
 };
 use anyhow::{Context, Result};
@@ -38,7 +35,6 @@ pub(crate) fn make_params_getter<'a>(
 /// `plugin_params` by default to avoid unnecessary allocations in the `.param_map()` method, as the
 /// plugin wrappers will already have a list of parameters handy. See [`make_params_iter()`].
 pub(crate) unsafe fn serialize_object<'a, P: Plugin>(
-    plugin_params: Arc<dyn Params>,
     params_iter: impl IntoIterator<Item = (&'a String, ParamPtr)>,
 ) -> PluginState {
     // We'll serialize parameter values as a simple `string_param_id: display_value` map.
@@ -71,20 +67,16 @@ pub(crate) unsafe fn serialize_object<'a, P: Plugin>(
             .collect()
     };
 
-    // The plugin can also persist arbitrary fields alongside its parameters. This is useful for
-    // storing things like sample data.
-    let fields = plugin_params.serialize_fields();
-
-    PluginState { version: String::from(P::VERSION), params, fields }
+    // The fields are the setup's to write.
+    PluginState { version: String::from(P::VERSION), params, fields: BTreeMap::new() }
 }
 
 /// Serialize a plugin's state to a vector containing JSON data. This can (and should) be shared
 /// across plugin formats.
 pub(crate) unsafe fn serialize_json<'a, P: Plugin>(
-    plugin_params: Arc<dyn Params>,
     params_iter: impl IntoIterator<Item = (&'a String, ParamPtr)>,
 ) -> Result<Vec<u8>> {
-    let plugin_state = unsafe { serialize_object::<P>(plugin_params, params_iter) };
+    let plugin_state = unsafe { serialize_object::<P>(params_iter) };
     serialize_state_json(&plugin_state)
 }
 
@@ -109,7 +101,6 @@ pub(crate) fn serialize_state_json(plugin_state: &PluginState) -> Result<Vec<u8>
 /// state.
 pub(crate) unsafe fn deserialize_object<P: Plugin>(
     state: &mut PluginState,
-    plugin_params: Arc<dyn Params>,
     params_getter: impl Fn(&str) -> Option<ParamPtr>,
     current_buffer_config: Option<&BufferConfig>,
 ) -> bool {
@@ -168,10 +159,6 @@ pub(crate) unsafe fn deserialize_object<P: Plugin>(
             unsafe { param_ptr._internal_update_smoother(sample_rate, true) };
         }
     }
-
-    // The plugin can also persist arbitrary fields alongside its parameters. This is useful for
-    // storing things like sample data.
-    plugin_params.deserialize_fields(&state.fields);
 
     true
 }

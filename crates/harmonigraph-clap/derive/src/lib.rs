@@ -15,7 +15,7 @@ pub fn derive_enum(input: TokenStream) -> TokenStream {
 }
 
 /// Derive the `Params` trait for your plugin's parameters struct. See the `Plugin` trait.
-#[proc_macro_derive(Params, attributes(id, persist, nested))]
+#[proc_macro_derive(Params, attributes(id, nested))]
 pub fn derive_params(input: TokenStream) -> TokenStream {
     params::derive_params(input)
 }

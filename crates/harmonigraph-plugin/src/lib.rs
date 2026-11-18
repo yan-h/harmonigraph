@@ -19,6 +19,7 @@ mod background;
 mod configuration;
 mod editor;
 mod lattice_maps;
+mod saved_fields;
 mod tape;
 
 /// Identity of this plugin build, supplied to the shared performance overlay.
@@ -193,7 +194,7 @@ impl std::ops::DerefMut for RecorderSlot {
 
 #[derive(Params)]
 pub struct HarmonigraphParams {
-    #[persist = "lattice-maps"]
+    /// Saved in the `lattice-maps` field (`saved_fields`).
     pub maps: Arc<parking_lot::RwLock<harmonigraph_ui::lattice_maps::MapDocument>>,
     pub map_editor: Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapEditor>>,
     pub map_playback: Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapPlayback>>,
@@ -222,14 +223,12 @@ pub struct HarmonigraphParams {
     /// The tuning axes, links, Learn and adaptive policy: plugin-owned
     /// settings rather than host parameters, saved in `musical-settings`.
     settings: Arc<configuration::Settings>,
-    /// Window size in logical pixels, persisted with the plugin state.
-    #[persist = "editor-state"]
+    /// Window size in logical pixels, saved in the `editor-state` field.
     pub editor_state: Arc<editor::EguiState>,
 
-    /// Serialized UI state (layout, camera, view settings), persisted with
-    /// the plugin state: a restore installs into the editor state and a save
+    /// Serialized UI state (layout, camera, view settings), saved in the
+    /// `ui-state` field: a restore installs into the editor state and a save
     /// serializes out of it (see `UiState`).
-    #[persist = "ui-state"]
     pub ui_state: editor::UiState,
 
     /// Which input feeds the analyzer and the audio recorded with a take. This
@@ -926,7 +925,7 @@ impl ClapPlugin for Harmonigraph {
     fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
         Some(Arc::new(configuration::HubSetup {
             instance: tuning::setup::Adapter(self.aggregation.as_ref().unwrap().shared.clone()),
-            settings: self.params.settings.clone(),
+            params: self.params.clone(),
         }))
     }
     fn clap_editor_host(&mut self, host: Arc<dyn nice_plug::wrapper::clap::EditorHost>) {
@@ -1337,15 +1336,23 @@ mod tests {
         );
     }
 
-    /// What a host save stores in `ui-state`: through the derived
-    /// `serialize_fields`, which is what a host save calls, on the real plugin
-    /// whose `Default` attaches the editor state — a `UiState` attached by
-    /// hand would pass these tests and reach nothing a host saves.
+    /// What a host save stores in `ui-state`: through `saved_fields::save`,
+    /// which is what a host save calls, on the real plugin whose `Default`
+    /// attaches the editor state — a `UiState` attached by hand would pass
+    /// these tests and reach nothing a host saves.
     fn saved(plugin: &Harmonigraph) -> String {
-        use nice_plug::params::Params;
-
-        let field = plugin.params.serialize_fields().remove("ui-state").expect("ui-state saved");
+        let mut state = empty_state();
+        saved_fields::save(&plugin.params, &mut state);
+        let field = state.fields.remove("ui-state").expect("ui-state saved");
         serde_json::from_str(&field).expect("the field is a JSON string")
+    }
+
+    fn empty_state() -> nice_plug::plugin::PluginState {
+        nice_plug::plugin::PluginState {
+            version: String::new(),
+            params: Default::default(),
+            fields: Default::default(),
+        }
     }
 
     /// [`saved`], read back as the camera yaw.
@@ -1355,17 +1362,15 @@ mod tests {
         state.picture.appearance.camera.yaw
     }
 
-    /// A host restore of `blob`: through the derived `deserialize_fields`,
-    /// which is what a host's state load calls, so it reaches `UiState::set`
-    /// the way a project or preset load does.
+    /// A host restore of `blob`: through `saved_fields`' prepare and commit,
+    /// which is what a host's state load calls, so it reaches
+    /// `UiState::restore` the way a project or preset load does.
     fn restore(plugin: &Harmonigraph, blob: &str) {
-        use nice_plug::params::Params;
+        use nice_plug::wrapper::clap::setup::Prepared;
 
-        let field = serde_json::to_string(blob).expect("a string serializes");
-        plugin.params.deserialize_fields(&std::collections::BTreeMap::from([(
-            "ui-state".to_string(),
-            field,
-        )]));
+        let mut state = empty_state();
+        state.fields.insert("ui-state".into(), serde_json::to_string(blob).unwrap());
+        Box::new(saved_fields::prepare(&plugin.params, &state)).commit();
     }
 
     /// A host restore of a project whose camera yaw is `yaw`, and its blob.

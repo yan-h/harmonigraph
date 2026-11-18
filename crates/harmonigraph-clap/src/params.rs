@@ -4,7 +4,6 @@
 //! [`Plugin::params()`][crate::plugin::Plugin::params()] method. See the `Params` trait for more
 //! information.
 
-use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
@@ -20,7 +19,6 @@ mod float;
 mod integer;
 
 pub mod internals;
-pub mod persist;
 pub mod range;
 pub mod smoothing;
 
@@ -245,7 +243,7 @@ pub trait InternalParamMut: Param {
     unsafe fn _internal_update_smoother(&self, sample_rate: f32, reset: bool);
 }
 
-/// Describes a struct containing parameters and other persistent fields.
+/// Describes a struct containing parameters.
 ///
 /// # Deriving `Params` and `#[id = "stable"]`
 ///
@@ -254,13 +252,6 @@ pub trait InternalParamMut: Param {
 /// the `#[id = "stable"]` attribute, where `stable` is an up to 6 character long string (to avoid
 /// collisions) that will be used to identify the parameter internally so you can safely move it
 /// around and rename the field without breaking compatibility with old presets.
-///
-/// ## `#[persist = "key"]`
-///
-/// The struct can also contain other fields that should be persisted along with the rest of the
-/// preset data. These fields should be [`PersistentField`][persist::PersistentField]s annotated
-/// with the `#[persist = "key"]` attribute containing types that can be serialized and deserialized
-/// with [Serde](https://serde.rs/).
 ///
 /// ## `#[nested]`, `#[nested(group_name = "group name")]`
 ///
@@ -309,34 +300,11 @@ pub unsafe trait Params: 'static + Send + Sync {
     /// This uses `String` even though for the `Params` derive macro `&'static str` would have been
     /// fine to be able to support custom reusable Params implementations.
     fn param_map(&self) -> Vec<(String, ParamPtr, String)>;
-
-    /// Serialize all fields marked with `#[persist = "stable_name"]` into a hash map containing
-    /// JSON-representations of those fields so they can be written to the plugin's state and
-    /// recalled later. This uses [`persist::serialize_field()`] under the hood.
-    fn serialize_fields(&self) -> BTreeMap<String, String> {
-        BTreeMap::new()
-    }
-
-    /// Restore all fields marked with `#[persist = "stable_name"]` from a hashmap created by
-    /// [`serialize_fields()`][Self::serialize_fields()]. All of these fields should be wrapped in a
-    /// [`persist::PersistentField`] with thread safe interior mutability, like an `RwLock` or a
-    /// `Mutex`. This gets called when the plugin's state is being restored. This uses
-    /// [`persist::deserialize_field()`] under the hood.
-    #[allow(unused_variables)]
-    fn deserialize_fields(&self, serialized: &BTreeMap<String, String>) {}
 }
 
 /// This may be useful when building generic UIs using nested `Params` objects.
 unsafe impl<P: Params> Params for Arc<P> {
     fn param_map(&self) -> Vec<(String, ParamPtr, String)> {
         self.as_ref().param_map()
-    }
-
-    fn serialize_fields(&self) -> BTreeMap<String, String> {
-        self.as_ref().serialize_fields()
-    }
-
-    fn deserialize_fields(&self, serialized: &BTreeMap<String, String>) {
-        self.as_ref().deserialize_fields(serialized)
     }
 }

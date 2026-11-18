@@ -38,9 +38,8 @@ pub struct PluginState {
     /// be recalled when when the parameter's range gets increased. Doing so may still mess with
     /// parameter automation though, depending on how the host implements that.
     pub params: BTreeMap<String, ParamValue>,
-    /// Arbitrary fields that should be persisted together with the plugin's parameters. Any field
-    /// on the [`Params`][crate::params::Params] struct that's annotated with `#[persist =
-    /// "stable_name"]` will be persisted this way.
+    /// Saved settings beside the parameters, each written and read by the plugin's
+    /// [`Setup`][crate::wrapper::clap::setup::Setup].
     ///
     /// The individual fields are also serialized as JSON so they can safely be restored
     /// independently of the other fields.
