@@ -7,8 +7,8 @@
 //! stereo at 48 kHz, so it saturates within seconds and every sample after
 //! that is dropped. A frame used to drain both with the window open and this
 //! thread with it shut; now this thread drains them always. The window's
-//! state sets how often it polls, and whether it also ages the picture while
-//! nothing draws it; it decides nothing about what is drained (#1559).
+//! state sets how often it polls; it decides nothing about what is drained
+//! (#1559), nor whether the picture ages and a take's end is polled.
 //!
 //! **The FFTs run with no lock held.** A step takes the editor's lock to move
 //! the notes into the tracker and the audio out of its ring (a copy), lets
@@ -47,13 +47,18 @@
 //! possible cost reduction, and would need to keep the pyramid's levels on
 //! the `live_slab` ladder of their shared `FFT_INTERVAL` grid.
 //!
-//! **With the window shut, a step also does the frame's other duties:** the
-//! ageing a frame gets from `begin_frame`
+//! **Every step also does the two duties no frame may be needed for,** editor
+//! open or shut: the ageing a frame gets from `begin_frame`
 //! ([`VisualRuntime::advance_time`](harmonigraph_ui::VisualRuntime::advance_time)),
-//! and [`EditorShared::poll_take_end`] so a take can finish and render
-//! without an open editor. This completion poll is separate from the GUI's full
-//! recording control synchronization; the
-//! `a_take_ends_itself_while_the_editor_window_is_shut` test covers it.
+//! and [`EditorShared::poll_take_end`] so a take can finish and render.
+//! A frame runs only while the editor can be seen, so an open editor that is
+//! covered, minimized or on another Space runs none; were these a frame's
+//! alone, the released voices would pile up and an OnTransportStop take would
+//! record on past its stop. Frames still make both calls too, which is
+//! harmless: both run under the editor lock, ageing on one monotone clock
+//! and removing only voices whose fade is over, and the take's debounce
+//! counts seconds. This completion poll is separate from the GUI's recording
+//! commands; `a_take_ends_itself_with_no_frame_running` covers it.
 //!
 //! **The project's own settings arrive here too**, for the same reason: this
 //! is the only thing running before the editor's window exists. A host
@@ -86,8 +91,8 @@ use crate::editor::{EditorLock, EguiState};
 pub(crate) const POLL: Duration = Duration::from_millis(4);
 
 /// How often it looks with the window shut, where nothing is drawing what it
-/// analyzes, so it need not wake as often; the closed window's duties (see
-/// [`step`]) are content with any cadence this bound allows.
+/// analyzes, so it need not wake as often; the ageing and the take's poll
+/// (see [`step`]) are content with any cadence this bound allows.
 ///
 /// Bounded above by the ring itself, and tightly: it holds
 /// [`AUDIO_RING_CAPACITY`](crate::AUDIO_RING_CAPACITY) interleaved samples,
@@ -110,10 +115,11 @@ pub(crate) struct InputWorker {
     /// boundary after changing the editor-open flag.
     #[cfg(test)]
     rounds: Arc<AtomicU64>,
-    /// `None` when the thread could not be spawned. The window's frames then
-    /// drain both rings themselves, on the host's main thread as before #1559
-    /// (see [`frame_drains`](crate::editor::EditorShared::frame_drains)), and
-    /// only a shut window loses its input.
+    /// `None` when the thread could not be spawned. Nothing else reads the
+    /// rings, ages the picture or ends a take, so the editor then shows no
+    /// input until the plug-in is reloaded: a case outside the use, with a
+    /// Console line rather than a fallback that would run the analysis on
+    /// the host's main thread.
     thread: Option<JoinHandle<()>>,
 }
 
@@ -143,16 +149,12 @@ impl InputWorker {
         let thread = match thread {
             Ok(thread) => Some(thread),
             // Audible rather than silent, on the same argument as a refused
-            // persist blob: what is lost is the spectrogram over every stretch
-            // the window was shut, and a heatmap with holes in it looks exactly
-            // like one nobody was playing into.
+            // persist blob: an empty picture looks exactly like one nobody
+            // was playing into.
             Err(err) => {
-                let mut shared = shared.lock();
-                shared.frame_drains = true;
-                shared.ui.picture.runtime.console.log(format!(
-                    "input worker not started ({err}) — the editor window drains \
-                     its own input, and the spectrogram will only cover time it \
-                     was open",
+                shared.lock().ui.picture.runtime.console.log(format!(
+                    "input worker not started ({err}) — no input is read until the \
+                     plug-in is reloaded",
                 ));
                 None
             }
@@ -209,30 +211,29 @@ thread_local! {
     static BETWEEN_HOLDS: std::cell::RefCell<Option<Box<dyn FnMut(&EditorLock, &crate::editor::input::Taken)>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// One step: take the notes and the audio under the lock, analyze the audio
-/// without it, and give the columns back under it — then, with the window
-/// shut, the frame's other duties. Taking the lock installs a host restore
-/// waiting for it ([`EditorLock`]), window open or shut, and the first hold
-/// takes it BEFORE the take: the settings decide how the samples about to be
-/// taken are analyzed.
+/// One step: take the notes and the audio under the lock, age the picture and
+/// poll a take's end in that same hold, analyze the audio without it, and give
+/// the columns back under it. Taking the lock installs a host restore waiting
+/// for it ([`EditorLock`]), window open or shut, and the first hold takes it
+/// BEFORE the take: the settings decide how the samples about to be taken are
+/// analyzed.
 ///
-/// Those duties run once a step, and a shut window's steps come every
-/// [`SHUT_POLL`]. `poll_take_end` times its OnTransportStop debounce in seconds
+/// The ageing and the poll run once a step, every [`POLL`] with the window
+/// open and every [`SHUT_POLL`] with it shut. `poll_take_end` times its
+/// OnTransportStop debounce in seconds
 /// ([`STOP_SECONDS`](crate::editor::EditorShared::STOP_SECONDS)), so it holds
 /// at whatever rate it is polled.
 ///
 /// Split out from the sleep loop so what it DECIDES can be tested without a
 /// clock, which is most of what there is to get wrong here.
 ///
-/// The window check orders ageing against the window: `LatticeEditorHandle::drop`
-/// takes the lock with `open` still true, so a step ages the picture only once
-/// the window is gone.
-///
 /// **The lock is waited for, not tried**: this thread never runs on the
 /// host's main thread, so waiting out a frame costs the host nothing, and a
 /// frame or a window opening waits on this thread only for a take (a copy of
-/// what the ring holds) or a give (folding its columns into every level of the
-/// spectrogram's history, 11 µs a column): a few tens of microseconds for the
+/// what the ring holds, then the ageing, a pass over the fading voices, and
+/// the take's poll, a few atomics) or a give (folding its columns into every
+/// level of the spectrogram's history, 11 µs a column): a few tens of
+/// microseconds for the
 /// two or three columns a step usually brings, and a few milliseconds for a
 /// catch-up's: the ring's 131,072 samples are 341 mono columns at 48 kHz,
 /// after this thread was starved for 2.7 s, and 371 at 44.1 kHz after 3 s
@@ -276,7 +277,16 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
         if let Some(taken) = &taken {
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
-        (taken, newest_onset(&shared.ui.picture.runtime) > onset)
+        let struck = newest_onset(&shared.ui.picture.runtime) > onset;
+        // A frame's duties that must not wait for one: none runs while the
+        // editor cannot be seen, open or not. Every trigger but OnDisarm is
+        // decided in `poll_take_end`, so without it here an armed take would
+        // run to whenever a frame next noticed, and a Bitwig audio export,
+        // which leaves the window shut, would render nothing.
+        let display = shared.input.display_now(now);
+        shared.ui.picture.runtime.advance_time(display, &shared.ui.picture.appearance);
+        shared.poll_take_end();
+        (taken, struck)
     };
     // Asked once the lock is let go, so the pass it runs does not wait on it.
     if struck {
@@ -298,7 +308,7 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
         crate::editor::input::LiveInput::analyze(&mut taken);
         taken
     });
-    if taken.is_none() && editor_state.is_open() && tape.logs.is_empty() {
+    if taken.is_none() && tape.logs.is_empty() {
         return;
     }
     let mut guard = shared.lock();
@@ -307,18 +317,6 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
         taken.is_some_and(|taken| shared.input.give(&mut shared.ui.picture.runtime, taken));
     for line in tape.logs.drain(..) {
         shared.ui.picture.runtime.console.log(line);
-    }
-    if !editor_state.is_open() {
-        let now = shared.input.now();
-        let now = shared.input.display_now(now);
-        shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
-        // A take can end itself while nobody is watching, and an audio export
-        // with the plugin window shut is precisely that. Every trigger but
-        // OnDisarm is decided in this call, which otherwise only a GUI frame
-        // makes — so a shut window meant an armed take ran to whenever it was
-        // noticed and no video was ever rendered. See
-        // `EditorShared::poll_take_end`.
-        shared.poll_take_end();
     }
     drop(guard);
     if resumed {
@@ -335,7 +333,7 @@ fn newest_onset(runtime: &harmonigraph_ui::VisualRuntime) -> Option<f64> {
 
 /// A [`step`] that survives its own panic. One would otherwise end the
 /// thread with the analysis out and nothing draining either ring, which
-/// freezes the picture and every shut-window duty for the session with
+/// freezes the picture and every duty of a step for the session with
 /// nothing said. Handing the drain to the frames instead would only move the
 /// same panic onto the host's main thread. So the analysis is put back fresh,
 /// the source run restarts so its columns re-anchor, the console says so
@@ -635,38 +633,41 @@ mod tests {
     }
 
     /// Feeding the tracker and AGEING it are one job, and this is the drainer
-    /// that has to do both halves itself.
+    /// that has to do both halves itself, with the editor open or shut.
     ///
     /// `NoteTracker` parks every note-off in a released tail that only
     /// [`NoteTracker::prune`](harmonigraph_core::NoteTracker::prune) empties,
     /// and the frame reaches `prune` through
-    /// `begin_frame` rather than through the drain. A window that never opens
-    /// therefore feeds that tail and nothing ever empties it — which
-    /// `notes.rs` already names as the hazard behind its whole envelope
-    /// design: "the released tail would accumulate for the whole session
-    /// against an O(nodes x voices) loop".
+    /// `begin_frame` rather than through the drain. A window that runs no
+    /// frames, shut or open and unseen, therefore feeds that tail and nothing
+    /// else empties it — which `notes.rs` already names as the hazard behind
+    /// its whole envelope design: "the released tail would accumulate for the
+    /// whole session against an O(nodes x voices) loop".
     #[test]
-    fn a_closed_window_ages_the_voices_it_tracks() {
-        let mut h = harness();
-        // Played and released far behind the batch's newest event, which is
-        // what `ClockMapper` pins to `now` — so this voice's 1 s fade is 99 s
-        // over by the time it lands, and nothing but a missing prune can keep
-        // it alive.
-        h.push_note(0.0, 60);
-        h.push_note_off(0.1, 60);
-        // Still held, so it is never a prune candidate: it is here to pin the
-        // batch's newest timestamp, and to prove the count below is measuring
-        // the released tail rather than an empty tracker.
-        h.push_note(100.0, 64);
+    fn the_worker_ages_the_voices_it_tracks_with_no_frame_running() {
+        for open in [false, true] {
+            let mut h = harness();
+            h.editor_state.set_open(open);
+            // Played and released far behind the batch's newest event, which
+            // is what `ClockMapper` pins to `now` — so this voice's 1 s fade
+            // is 99 s over by the time it lands, and nothing but a missing
+            // prune can keep it alive.
+            h.push_note(0.0, 60);
+            h.push_note_off(0.1, 60);
+            // Still held, so it is never a prune candidate: it is here to pin
+            // the batch's newest timestamp, and to prove the count below is
+            // measuring the released tail rather than an empty tracker.
+            h.push_note(100.0, 64);
 
-        h.step();
+            h.step();
 
-        assert_eq!(
-            h.voices(),
-            1,
-            "a voice whose fade finished 99 s ago is still in the tracker: the drain \
-             feeds the released tail and nothing empties it while the window is shut",
-        );
+            assert_eq!(
+                h.voices(),
+                1,
+                "editor open: {open}. A voice whose fade finished 99 s ago is still in the \
+                 tracker: the drain feeds the released tail and nothing empties it",
+            );
+        }
     }
 
     /// And with the window open: the worker drains both rings all the same,
@@ -709,21 +710,27 @@ mod tests {
         assert!(!asked(&h), "sound that goes on");
     }
 
-    /// A take ends itself with the window SHUT, which is the state a Bitwig
-    /// audio export leaves the plugin in.
+    /// A take ends itself with no frame running: with the window SHUT, which
+    /// is the state a Bitwig audio export leaves the plugin in, and with it
+    /// open but unseen, where no frame runs either.
     ///
-    /// Every trigger but `OnDisarm` is decided in `poll_take_end`, and until
-    /// this call that only ever ran inside a GUI frame — so an armed take with
-    /// nobody watching ran on and rendered nothing, whichever trigger was
-    /// chosen. Driven here through `OnTransportStop`'s debounce rather than the
-    /// bar, because that path needs no audio thread to latch
-    /// anything: what is being claimed is that the DECISION runs at all, not
-    /// which signal reaches it.
+    /// Every trigger but `OnDisarm` is decided in `poll_take_end`, and while
+    /// only a GUI frame made that call, an armed take with nobody watching ran
+    /// on and rendered nothing, whichever trigger was chosen. Driven here
+    /// through `OnTransportStop`'s debounce rather than the bar, because that
+    /// path needs no audio thread to latch anything: what is being claimed is
+    /// that the DECISION runs at all, not which signal reaches it.
     #[test]
-    fn a_take_ends_itself_while_the_editor_window_is_shut() {
+    fn a_take_ends_itself_with_no_frame_running() {
+        for open in [false, true] {
+            a_take_ends_itself_with_the_editor(open);
+        }
+    }
+
+    fn a_take_ends_itself_with_the_editor(open: bool) {
         let mut h = harness();
         let directory =
-            std::env::temp_dir().join(format!("background-take-end-{}", std::process::id()));
+            std::env::temp_dir().join(format!("background-take-end-{open}-{}", std::process::id()));
         {
             let mut shared = h.shared.lock();
             harmonigraph_record::testing::set_renderer_program(
@@ -748,12 +755,15 @@ mod tests {
         let on = CoreNoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
         let _ = h.recorder.publish_note(on.into());
 
-        h.editor_state.set_open(false);
+        h.editor_state.set_open(open);
         h.step();
-        assert!(h.shared.lock().take.is_recording(), "ended before the debounce");
+        assert!(
+            h.shared.lock().take.is_recording(),
+            "editor open: {open}. Ended before the debounce"
+        );
         std::thread::sleep(Duration::from_secs_f64(EditorShared::STOP_SECONDS));
         h.step();
-        assert!(!h.shared.lock().take.is_recording(), "the shut window ended the take");
+        assert!(!h.shared.lock().take.is_recording(), "editor open: {open}. The take ran on");
     }
 
     /// The point of the worker: its FFTs run with the editor's lock free, so

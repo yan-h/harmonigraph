@@ -170,11 +170,12 @@ impl Editor for LatticeEditor {
         // macOS is also why there is nothing to listen to instead: baseview
         // raises `Resized` there for the initial size and for backing-property
         // changes, and for nothing else — a host resizing the parent view
-        // reaches the plugin only as `Editor::set_size`, on another thread.
+        // reaches the plugin only as `Editor::set_size`, a CLAP `gui` call and
+        // so on the main thread, outside this window's callbacks.
         let resized = self.egui_state.clone();
         let logging = self.shared.clone();
         let asking = context.clone();
-        let pop_out = PopOut::new();
+        let pop_out = PopOut::new(self.egui_state.clone());
         let popping = Arc::downgrade(&pop_out);
         let size_source = SizeSource::new(move || {
             // The editor handle owns the controller. A retained view cannot
@@ -228,16 +229,6 @@ impl Editor for LatticeEditor {
                     resized.host_resized.swap(None);
                     return Some(Size::new(f64::from(size.0), f64::from(size.1)));
                 }
-            }
-            // The host's window, concealed, has no say over the editor's size,
-            // and what arrives from it is mostly its echo of the editor's own.
-            // `set_size` has already stored it as the size the project saves,
-            // which is the editor's own window's again.
-            if let Some(own) = popping.size() {
-                if resized.host_resized.swap(None).is_some() {
-                    resized.size.store(own);
-                }
-                return None;
             }
             let (width, height) = resized.host_resized.swap(None)?;
             // The one diagnostic this path had, kept. try_lock rather than
@@ -317,6 +308,17 @@ impl Editor for LatticeEditor {
     }
 
     fn set_size(&self, width: u32, height: u32) -> bool {
+        // In its own window the editor's size is that window's, which the
+        // project saves, and the host's window, concealed, has no say over
+        // it: what arrives from there is mostly its echo of the editor's own.
+        // Stored, it would be what a save keeps until the own window next
+        // resized, however long the editor went unseen. Accepted all the
+        // same, as the host's window may be sized as the host likes. CLAP
+        // makes this call on the main thread, where `PopOut` moves the view
+        // and sets the flag, so the two cannot interleave.
+        if self.egui_state.in_own_window() {
+            return true;
+        }
         // A set_size with the current size must succeed without side
         // effects (hosts echo plugin-initiated resizes back through here).
         let clamped = (width.max(MIN_SIZE.0), height.max(MIN_SIZE.1));
@@ -368,9 +370,9 @@ impl Drop for LatticeEditorHandle {
     fn drop(&mut self) {
         // The session ends, and the host's gestures with it, under the lock
         // (see `EditorLock::end_window_session` on why in that order). The
-        // lock is taken with `open` still TRUE, which keeps the input worker
-        // from ageing the picture until the window is gone — see
-        // [`crate::background`].
+        // input worker ages the picture whether or not the window is open, so
+        // where `open` is cleared below sets only its poll rate and whether
+        // the tape treats its roll as drawn (`tape::Worker::exchange`).
         let setter = nice_plug::prelude::ParamSetter::new(self.context.as_ref());
         self.shared.end_window_session(|gestures| {
             for (key, active) in harmonigraph_ui::params::ParamKey::ALL.into_iter().zip(gestures) {
@@ -389,7 +391,39 @@ impl Drop for LatticeEditorHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use harmonigraph_render::startup::{Status, WindowStartup};
+
+    /// A host resize while the editor sits in its own window leaves the size
+    /// the project saves, which is that window's; in the host's window it is
+    /// the editor's size.
+    #[test]
+    fn a_host_resize_leaves_the_saved_size_while_the_editor_is_in_its_own_window() {
+        let (_notes, consumer) = harmonigraph_record::publication::channel();
+        let (_audio, audio_consumer) = crate::audio_ingress::channel(64);
+        let (_recorder, control) = harmonigraph_record::channel();
+        let shared = super::super::EditorShared::new(
+            consumer,
+            audio_consumer,
+            Arc::new(std::sync::atomic::AtomicU32::new(48_000.0f32.to_bits())),
+            control,
+        );
+        let params = Arc::new(crate::HarmonigraphParams::default());
+        let lock = Arc::new(super::EditorLock::new(shared, Arc::default()));
+        let editor = super::create(params.clone(), lock, None).expect("an editor");
+        let state = &params.editor_state;
+        let saved = state.size();
+        let (width, height) = (saved.0 + 100, saved.1 + 50);
+
+        state.set_in_own_window(true);
+        assert!(editor.set_size(width, height));
+        assert_eq!(state.size(), saved, "the host's size replaced the own window's");
+
+        state.set_in_own_window(false);
+        assert!(editor.set_size(width, height));
+        assert_eq!(state.size(), (width, height), "docked, the host's resize was refused");
+    }
 
     /// What activation does (#1746): the device it makes is the one the
     /// window will reuse AND the one the job compiles on, and activating again

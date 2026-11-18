@@ -1,10 +1,15 @@
 //! A native parented editor without a DAW. Uses the production graphics setup,
 //! loading path and frame pacing, and closes children from their host callback.
 //! Times are observed on the update after presentation, not display photons.
+//!
+//! Its window must be on screen, uncovered, for the whole run: every opening
+//! and close is sequenced from its window's frames, and a window that cannot
+//! be seen may run none. A run that stalls so is ended by [`TIMEOUT`]
+//! from a thread of its own, which needs no frame.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use baseview::{Event, EventStatus, Window, WindowHandle, WindowHandler, WindowOpenOptions};
 use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, SharedGpuContext, WgpuSetup};
@@ -15,6 +20,9 @@ use harmonigraph_ui::{
 use parking_lot::Mutex;
 
 const OPENINGS: usize = 3;
+
+/// How long the whole run may take before the probe gives up and exits.
+const TIMEOUT: Duration = Duration::from_secs(90);
 
 struct Defaults;
 impl ParamBackend for Defaults {
@@ -37,7 +45,6 @@ struct Host {
     observations: Arc<Observations>,
     child: Option<WindowHandle>,
     opening: usize,
-    started: Instant,
 }
 
 /// The editor's graphics setup, counting every device made from it.
@@ -71,19 +78,40 @@ pub fn run() {
         );
     }
     assert_eq!(observations.devices.load(Ordering::Relaxed), 1, "activation made no device");
+    // Ended when `run` returns, which drops the sender.
+    let (finished, timer) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = timer.recv_timeout(TIMEOUT) {
+            eprintln!(
+                "NATIVE_LIFECYCLE timed out after {}s: is the probe's window on screen?",
+                TIMEOUT.as_secs()
+            );
+            std::process::exit(1);
+        }
+    });
     let host_shared = shared.clone();
     let host_observations = observations.clone();
     Window::open_blocking(
         WindowOpenOptions::new()
             .with_title("Harmonigraph startup measurement")
             .with_size(1000.0, 700.0),
-        move |_| Host {
-            shared: host_shared,
-            context,
-            observations: host_observations,
-            child: None,
-            opening: 0,
-            started: Instant::now(),
+        move |_| {
+            // A command-line application can start behind another window,
+            // and Metal skips presentation while it is occluded. Brought
+            // forward as the window is built rather than from its first
+            // frame, which a window that cannot be seen may never run.
+            use objc2::MainThreadMarker;
+            let app =
+                objc2_app_kit::NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
+            #[allow(deprecated)]
+            app.activateIgnoringOtherApps(true);
+            Host {
+                shared: host_shared,
+                context,
+                observations: host_observations,
+                child: None,
+                opening: 0,
+            }
         },
     );
     shared.lock().picture.editor_graphics().shutdown_startup();
@@ -91,16 +119,11 @@ pub fn run() {
     assert_eq!(observations.dropped.load(Ordering::Relaxed), OPENINGS);
     assert_eq!(observations.devices.load(Ordering::Relaxed), 1, "reopen recreated device");
     eprintln!("NATIVE_LIFECYCLE openings={OPENINGS} devices=1 dropped={OPENINGS}");
+    drop(finished);
 }
 
 impl WindowHandler for Host {
     fn on_frame(&mut self, window: &mut Window) {
-        if self.started.elapsed().as_secs() > 90 {
-            if let Some(mut child) = self.child.take() {
-                child.close();
-            }
-            self.opening = OPENINGS;
-        }
         if self.child.is_some() {
             if self.observations.completed.load(Ordering::Relaxed) > self.opening {
                 self.child.take().unwrap().close();
@@ -108,7 +131,7 @@ impl WindowHandler for Host {
             }
             return;
         }
-        if self.opening == OPENINGS || self.started.elapsed().as_secs() > 90 {
+        if self.opening == OPENINGS {
             self.shared.lock().picture.editor_graphics().shutdown_startup();
             window.close();
             // Wake NSApplication after baseview calls stop() from a frame.
@@ -126,15 +149,6 @@ impl WindowHandler for Host {
             return;
         }
         let mut graphics = counted(&self.observations);
-        if self.opening == 0 {
-            // A command-line application can start behind another window.
-            // Metal deliberately skips presentation while it is occluded.
-            use objc2::MainThreadMarker;
-            let app =
-                objc2_app_kit::NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
-            #[allow(deprecated)]
-            app.activateIgnoringOtherApps(true);
-        }
         graphics.shared_context = Some(self.context.clone());
         self.child = Some(EguiWindow::open_parented(
             window,

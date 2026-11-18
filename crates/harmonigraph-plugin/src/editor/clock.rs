@@ -287,31 +287,16 @@ mod tests {
     /// Twelve seconds roll the longest window over several times. The frames
     /// of the first second are skipped, while the window first fills.
     ///
-    /// Drained as the two real configurations drain. The input worker with
-    /// the window open drains every [`DRAIN`], whatever the frame rate. The
-    /// frame-drain fallback, when the worker's thread could not be spawned
-    /// (`EditorShared::frame_drains`), drains once per frame, just before the
-    /// frame reads the clock: at 60 and 15 fps that is a 17 and 67 ms gap,
-    /// which is what sizes the lead's buckets past their minimum. A fixed
-    /// quarter second bucket does as well as the sized one at [`DRAIN`], but
-    /// steps 4096-sample blocks by 8.7 ms at 60 fps and 10.7 ms at 15, where
-    /// the sized one steps 0.7 and 0.0 ms; these limits refuse the former. A
-    /// worker shut with the window drains at its own slower cadence, but then
-    /// no frame is drawn to step, so that pairing is not a row. 512-sample
-    /// blocks are not run through the fallback: at 60 fps they step 0.67 ms,
-    /// which does not fit the 0.5 ms limit, and the fallback is the rare path.
+    /// Drained as the input worker drains with the window open: every
+    /// [`DRAIN`], whatever the frame rate. A worker shut with the window
+    /// drains at its own slower cadence, but then no frame is drawn to step,
+    /// so that pairing is not a row.
     #[test]
     fn block_delivery_does_not_step_the_drawn_time() {
-        // A drain of `None` is the frame-drain fallback: one per frame.
-        let (fast, slow) = ([FRAME, 1.0 / 60.0, 1.0 / 15.0], [1.0 / 60.0, 1.0 / 15.0]);
-        for (drain, samples, limit, frames) in [
-            (Some(DRAIN), 512.0, 5e-4, &fast[..]),
-            (Some(DRAIN), 4096.0, 1.5e-3, &fast[..]),
-            (None, 4096.0, 1.5e-3, &slow[..]),
-        ] {
+        for (samples, limit) in [(512.0, 5e-4), (4096.0, 1.5e-3)] {
             let block = samples / 48_000.0;
-            for &frame in frames {
-                let every = drain.unwrap_or(frame);
+            for frame in [FRAME, 1.0 / 60.0, 1.0 / 15.0] {
+                let every = DRAIN;
                 let frames = frames_at(frame, block, 12.0, every, on_time(block));
                 let worst = worst_step(&frames[(0.5 / frame) as usize..], frame);
                 assert!(

@@ -37,6 +37,15 @@ pub struct EguiState {
     /// default.
     #[serde(default)]
     docked: AtomicBool,
+    /// The editor's view is in its own window right now, which then has the
+    /// say over its size (see `PopOut`). Set as the view moves, on the main
+    /// thread, where a host `set_size` also arrives (a CLAP `gui` call), so
+    /// the two are ordered. Here because the editor that receives `set_size`
+    /// does not hold the window, whose state is bound to the main thread; not
+    /// [`Self::docked`], the setting, which the move follows a run-loop turn
+    /// later, and which reads "own window" on a platform that offers none.
+    #[serde(skip)]
+    in_own_window: AtomicBool,
 }
 
 impl EguiState {
@@ -48,6 +57,7 @@ impl EguiState {
             open: AtomicBool::new(false),
             pass_request: Default::default(),
             docked: AtomicBool::new(false),
+            in_own_window: AtomicBool::new(false),
         })
     }
 
@@ -63,6 +73,14 @@ impl EguiState {
         self.docked.store(docked, Ordering::Relaxed);
     }
 
+    pub(super) fn in_own_window(&self) -> bool {
+        self.in_own_window.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn set_in_own_window(&self, own: bool) {
+        self.in_own_window.store(own, Ordering::Relaxed);
+    }
+
     pub fn is_open(&self) -> bool {
         self.open.load(Ordering::Acquire)
     }
@@ -70,8 +88,8 @@ impl EguiState {
     /// Record that the window has opened or closed.
     ///
     /// Named rather than stored inline because it is not only the host's
-    /// business: [`crate::background`] reads it to decide whether to do a shut
-    /// window's duties, and how often to poll, so the two transitions are a
+    /// business: [`crate::background`] reads it to decide how often to poll,
+    /// and the tape whether its roll is drawn, so the two transitions are a
     /// seam between threads and not just a bit.
     pub(crate) fn set_open(&self, open: bool) {
         self.open.store(open, Ordering::Release);

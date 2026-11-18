@@ -24,12 +24,13 @@ pub struct EditorShared {
     pub(super) gesture: std::cell::Cell<[bool; harmonigraph_ui::params::ParamKey::ALL.len()]>,
     /// Take recording, driven from the Video pane's toggle.
     ///
-    /// `pub(crate)` for the same reason [`ui`](Self::ui) is: the background
-    /// analyzer polls the end of a take through this state while the window is
-    /// shut, and its tests read back what that round decided.
+    /// `pub(crate)` for the same reason [`ui`](Self::ui) is: the input worker
+    /// polls the end of a take through this state, and its tests read back
+    /// what that round decided.
     pub(crate) take: harmonigraph_record::Control,
-    /// Whether the transport was rolling as of the last recorded event,
-    /// for the status line. Derived, not authoritative.
+    /// Whether the transport was rolling as of the last
+    /// [`poll_take_end`](Self::poll_take_end), for the status line. Derived,
+    /// not authoritative.
     take_rolling: bool,
     /// The recorder's note count for the current take, as of the last
     /// [`poll_take_end`](Self::poll_take_end), for the status line.
@@ -39,9 +40,6 @@ pub struct EditorShared {
     /// it has stayed stopped since. Debounces the OnTransportStop trigger: a
     /// host reporting one still block mid-playback must not end a take.
     take_still_since: Option<f64>,
-    /// The input worker could not be started, so the window's frames drain
-    /// the rings themselves, as they did before it existed.
-    pub(crate) frame_drains: bool,
     /// The device every window of this editor opens on (#698). Here rather
     /// than on the editor because activation creates it, before any window,
     /// and starts compiling on it ([`super::start_graphics`]).
@@ -75,7 +73,6 @@ impl EditorShared {
             take_rolling: false,
             take_last_count: 0,
             take_still_since: None,
-            frame_drains: false,
             gpu_context: egui_baseview::SharedGpuContext::default(),
         }
     }
@@ -86,21 +83,33 @@ impl EditorShared {
     /// feels immediate.
     ///
     /// Counted in seconds rather than in calls to
-    /// [`poll_take_end`](Self::poll_take_end), because who calls it decides
-    /// how often: a frame at 144 Hz or at a quarter of 60 Hz, or the input
-    /// worker every [`SHUT_POLL`](crate::background::SHUT_POLL) with the window
-    /// shut. Counted in calls, the same debounce ran from 139 ms to 1.3 s
-    /// (#1567). It starts at the first poll to find the transport still, so a
-    /// take ends up to one poll interval after this.
+    /// [`poll_take_end`](Self::poll_take_end), because its one caller, the
+    /// input worker, calls it every [`POLL`](crate::background::POLL) with the
+    /// window open and every [`SHUT_POLL`](crate::background::SHUT_POLL) with
+    /// it shut. Counted in calls, as when frames polled too, the same debounce
+    /// ran from 139 ms to 1.3 s (#1567). It starts at the first poll to find
+    /// the transport still, so a take ends up to one poll interval after this.
     pub(crate) const STOP_SECONDS: f64 = 0.4;
 
-    /// Reflect the Video pane's toggle into the recorder, and the
-    /// recorder's progress back into the pane. Called once per frame,
-    /// before `root_ui` reads the state it draws.
-    pub(super) fn sync_take(&mut self, sample_rate: f32) {
-        // The plugin can record; the control is hidden in shells that
-        // can't (the standalone uses an env var instead).
-        self.ui.workspace.interaction.take.supported = true;
+    /// One editor pass's share of the take, around `draw`, the pass's UI:
+    /// the recorder's progress mirrored into the Video pane before it draws,
+    /// and what the pane asked for (Record, Stop, the export actions)
+    /// applied after, in the pass that received the click. Applied at the
+    /// next pass instead, a click followed by the editor going unseen would
+    /// wait for it to be seen again, since an unseen editor runs no passes.
+    pub(super) fn take_pass<R>(
+        &mut self,
+        sample_rate: f32,
+        draw: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.mirror_take();
+        let drawn = draw(self);
+        self.apply_take_commands(sample_rate);
+        drawn
+    }
+
+    /// Reflect the Video pane's toggle and export actions into the recorder.
+    fn apply_take_commands(&mut self, sample_rate: f32) {
         let recording = self.take.is_recording();
         if self.ui.workspace.interaction.take.recording && !recording {
             // Start from the CURRENT look, not the last-saved one: what
@@ -114,8 +123,6 @@ impl EditorShared {
         } else if !self.ui.workspace.interaction.take.recording && recording {
             self.take.stop();
         }
-
-        self.ui.workspace.interaction.take.last_take = self.take.last_take();
         for action in std::mem::take(&mut self.ui.workspace.interaction.take.export_actions) {
             match action {
                 harmonigraph_ui::ExportAction::Queue { take, appearance, size } => {
@@ -130,8 +137,15 @@ impl EditorShared {
                 harmonigraph_ui::ExportAction::Reveal(video) => reveal_file(&video),
             }
         }
+    }
 
-        self.poll_take_end();
+    /// Reflect the recorder's progress into the Video pane, before it draws.
+    fn mirror_take(&mut self) {
+        // The plugin can record; the control is hidden in shells that
+        // can't (the standalone uses an env var instead).
+        self.ui.workspace.interaction.take.supported = true;
+        self.ui.workspace.interaction.take.last_take = self.take.last_take();
+        // As the input worker's last step left them: it alone polls the end.
         self.take.tick(self.take_rolling, self.take_last_count);
         self.ui.workspace.interaction.take.status = self.take.status();
         self.ui.workspace.interaction.take.exports = self.take.export_jobs();
@@ -146,18 +160,18 @@ impl EditorShared {
     /// the two settings the audio thread decides on, then act on whichever
     /// signal came back.
     ///
-    /// **Split out of [`sync_take`](Self::sync_take) so it can also run with
-    /// the editor window SHUT.** Every trigger but `OnDisarm` decides here,
-    /// which meant a take armed and then left with the window closed — a Bitwig
-    /// audio export is exactly that — never ended itself and never rendered, no
-    /// matter which trigger was chosen. The input worker calls this every
-    /// [`SHUT_POLL`](crate::background::SHUT_POLL) while the window is shut, so
-    /// the decision no longer depends on anyone watching.
+    /// **The input worker's alone, called every step, window open or shut.**
+    /// Every trigger but `OnDisarm` decides here, and a frame runs only while
+    /// the editor can be seen: polled from frames, a take armed and then left
+    /// with the window closed — a Bitwig audio export is exactly that — or
+    /// with it unseen never ended itself and never rendered, whichever
+    /// trigger was chosen. It is also the one publisher of the two settings,
+    /// so they reach the audio thread within a step of changing.
     ///
     /// Nothing here draws or reads a widget, which is what makes it callable
     /// from that thread: it moves settings out to the recorder and take state
     /// back into `Interaction`, and the next frame — whenever there is one —
-    /// draws what it left.
+    /// mirrors and draws what it left ([`take_pass`](Self::take_pass)).
     pub(crate) fn poll_take_end(&mut self) {
         self.poll_take_end_at(self.input.now());
     }
@@ -283,8 +297,7 @@ mod tests {
             &shared.take,
             directory.join("absent-renderer"),
         );
-        shared.ui.workspace.interaction.take.recording = true;
-        shared.sync_take(48_000.0);
+        shared.take_pass(48_000.0, |shared| shared.ui.workspace.interaction.take.recording = true);
         assert!(shared.take.is_recording());
         // One note captured, as the Hub publishes one into the take's first run.
         recorder.is_armed();
@@ -334,8 +347,7 @@ mod tests {
         shared.ui.picture.appearance.render.short_edge = 2160;
         shared.ui.workspace.interaction.prefs.ui_scale = 1.25;
         let expected = shared.ui.picture.appearance.serialize();
-        shared.ui.workspace.interaction.take.recording = true;
-        shared.sync_take(44_100.0);
+        shared.take_pass(44_100.0, |shared| shared.ui.workspace.interaction.take.recording = true);
         assert!(shared.take.is_recording(), "{}", shared.take.status());
         shared.ui.picture.appearance = Default::default();
         // Closing the producer finalizes the writer without launching an export.

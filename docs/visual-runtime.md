@@ -33,20 +33,28 @@ Existing repeated/discarded-pass behavior and callback ownership remain unchange
 `VisualRuntime::advance` observes parameters before pruning,
 so an increased Fade is honored in the same frame.
 `advance_time` performs the same aging without parameter observation or drawing.
-The input worker drains in every window state;
-with the window shut it also advances time with the last observed parameter mirrors,
+The input worker is the only reader of the input rings, in every window state;
+if its thread cannot start, no input is read until the plug-in is reloaded, with a Console line.
+In every step, window open or shut, it also advances time with the last observed parameter mirrors,
 including the existing default mirrors before first open.
-Closed-only persisted-document adoption still happens before draining,
+A frame runs only while the editor can be seen,
+so nothing that must happen while it is open but unseen waits for one.
+Frames advance time too, under the same lock and on the same monotone display clock,
+and pruning removes only voices whose fade is over, so the two callers agree.
+A host restore is installed by whichever holder of the editor lock comes first,
+and the worker's first hold of a step comes before its take,
 so a restored analysis window affects the first consumed audio.
-An open window's unsaved controls are never replaced by its last saved blob.
 
-Full recording control synchronization remains once per GUI callback in [`EditorShared::sync_take`](../crates/harmonigraph-plugin/src/editor/shared.rs).
-Closed-window [`background::step`](../crates/harmonigraph-plugin/src/background.rs) separately calls `EditorShared::poll_take_end`,
-so a completed take can finish and render without reopening the editor.
-Both paths share one stopped-transport debounce, timed in seconds on `LiveInput::now`'s clock (`EditorShared::STOP_SECONDS`),
-so it lasts as long whichever of them polls it, and however often.
-The completion poll does not run the GUI's full start/control synchronization.
-This boundary is covered by `a_take_ends_itself_while_the_editor_window_is_shut` in the background module.
+The recording commands (Record, Stop and the export actions) are applied once per GUI callback,
+after the UI has drawn, in the pass that received them,
+and the recorder's status, as the worker's last poll left it, is mirrored into the Video pane before it draws ([`EditorShared::take_pass`](../crates/harmonigraph-plugin/src/editor/shared.rs)).
+Only [`background::step`](../crates/harmonigraph-plugin/src/background.rs) calls `EditorShared::poll_take_end`, every step,
+so a completed take can finish and render with no frame running,
+and the trigger settings it publishes reach the audio thread within a step of changing.
+Its stopped-transport debounce is timed in seconds on `LiveInput::now`'s clock (`EditorShared::STOP_SECONDS`),
+so it lasts as long at either poll rate.
+The completion poll does not apply the GUI's recording commands.
+This boundary is covered by `a_take_ends_itself_with_no_frame_running` in the background module.
 The open check, window/context construction and restore boundaries remain in the host shell.
 The worker waits for the shared mutex rather than trying it (#1566),
 holds it to move input out and to hand the columns back,

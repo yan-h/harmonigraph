@@ -1,5 +1,5 @@
 use std::sync::{Arc, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use egui_baseview::Queue;
 use nice_plug::prelude::{GuiContext, ParamSetter};
@@ -11,9 +11,10 @@ use super::persist::EguiState;
 use super::pop_out::PopOut;
 
 /// The plugin's per-frame GUI work: take the frame's lock, close out the note
-/// frame, reconcile the take — and then hand the state the input worker has
-/// fed to [`harmonigraph_ui::shell::Frame`], which draws it and answers with
-/// whatever the folds it settled leave the window needing.
+/// frame — and then hand the state the input worker has fed to
+/// [`harmonigraph_ui::shell::Frame`], which draws it and answers with
+/// whatever the folds it settled leave the window needing, with the take
+/// reconciled around it ([`EditorShared::take_pass`](super::EditorShared::take_pass)).
 ///
 /// What stays here is what only this shell can do: the take and the params
 /// are its own, and so is the frame rate at the end, since it is the only
@@ -31,9 +32,10 @@ pub(super) fn frame(
     // must be able to release the view and its callbacks.
     let Some(pop_out) = state.pop_out.upgrade() else { return };
 
-    // Everything the shell does before the UI runs: the lock, a restore,
-    // the camera and the take. Timed separately because `ui cpu` starts at
-    // the dock build, so this stretch sits outside every other CPU reading.
+    // Everything the shell does before the UI runs: the lock, a restore and
+    // the camera. Timed separately because `ui cpu` starts at the dock build,
+    // so this stretch sits outside every other CPU reading; the last pass's
+    // take work, around its UI, is added to it below.
     // The rings and their FFTs are the input worker's, off this thread.
     let shell_start = Instant::now();
     let setter = ParamSetter::new(context);
@@ -49,7 +51,7 @@ pub(super) fn frame(
     let shared = &mut *guard;
 
     // The display link's timing for this frame, or `None` for one it did not ask
-    // for (the watchdog's, an occlusion repaint).
+    // for (an occlusion repaint, or the watchdog's where the window keeps one).
     let timing = queue.frame_timing();
     // A stalled run loop (run-loop mode issues, a host blocking its main
     // thread), so freezes stay attributable: measured by the window on every
@@ -59,13 +61,9 @@ pub(super) fn frame(
         shared.ui.picture.runtime.console.log(format!("frame stall: {ms:.0} ms between updates"));
     }
 
-    // The input worker ([`crate::background`]) drains the rings and runs the
-    // analysis, and a frame reads what it left — unless it never started.
+    // The input worker ([`crate::background`]) drains the rings, runs the
+    // analysis and polls the take's end; a frame reads what it left.
     let now = shared.input.now();
-    if shared.frame_drains {
-        let runtime = &mut shared.ui.picture.runtime;
-        shared.input.drain(runtime, &shared.ui.picture.appearance, now);
-    }
     // Drained on the clock it arrived by, drawn at the refresh it is for.
     let wall = shared.input.frame_wall(timing, now);
     let now = shared.input.display_now(wall);
@@ -81,14 +79,6 @@ pub(super) fn frame(
         gesture: &shared.gesture,
         configuration,
     });
-    shared.sync_take(sample_rate);
-
-    let backend = PluginParamBackend {
-        params: &state.params,
-        setter: &setter,
-        gesture: &shared.gesture,
-        configuration,
-    };
     // Last frame's costs that the shell measures and the UI cannot: they
     // happen after `root_ui` returns.
     //
@@ -96,7 +86,8 @@ pub(super) fn frame(
     // starts publishing and this forgets to copy is a missing field the
     // compiler names, not a line nobody misses — the overlay would otherwise
     // show it as a steady zero, which reads as a cost that isn't there.
-    // `shell_ms` comes last because it measures everything above it.
+    // `shell_ms` comes last because it measures everything above it, and
+    // carries the last pass's take work, which ran after its reading.
     shared.ui.picture.instruments.timings = harmonigraph_perf::ShellTimings {
         tess_ms: queue.tess_ms(),
         draw_gpu_ms: queue.take_draw_gpu_ms(),
@@ -112,7 +103,7 @@ pub(super) fn frame(
         submit_ms: queue.submit_ms(),
         target_fps: timing
             .and_then(|timing| harmonigraph_perf::link_target_fps(timing.refresh, timing.divisor)),
-        shell_ms: shell_start.elapsed().as_secs_f32() * 1000.0,
+        shell_ms: shell_start.elapsed().as_secs_f32() * 1000.0 + state.take_ms,
     };
     // A fold is priced against `egui_state.size`, which is the size the window
     // actually has: `requested_size` is empty by now whatever happened above,
@@ -123,15 +114,32 @@ pub(super) fn frame(
     // Offered only where the shell can give the editor its own window, and
     // read back after the UI has had the chance to flip it.
     shared.ui.workspace.interaction.own_window = pop_out.offered().then(|| !egui_state.docked());
-    let ask = harmonigraph_ui::shell::Frame {
-        ui,
-        state: &mut shared.ui,
-        params: &backend,
-        now,
-        build_tag: crate::BUILD_TAG,
-        window_size: egui::vec2(window_width as f32, window_height as f32),
-    }
-    .draw();
+    let take_start = Instant::now();
+    let mut drawing = Duration::ZERO;
+    let ask = shared.take_pass(sample_rate, |shared| {
+        let backend = PluginParamBackend {
+            params: &state.params,
+            setter: &setter,
+            gesture: &shared.gesture,
+            configuration,
+        };
+        let drawn = Instant::now();
+        let ask = harmonigraph_ui::shell::Frame {
+            ui,
+            state: &mut shared.ui,
+            params: &backend,
+            now,
+            build_tag: crate::BUILD_TAG,
+            window_size: egui::vec2(window_width as f32, window_height as f32),
+        }
+        .draw();
+        drawing = drawn.elapsed();
+        ask
+    });
+    // The take's mirror before the UI and its commands after (a take's start
+    // makes its directory and hands the writer its channel): main-thread time
+    // in no other reading, so the next frame's shell reading carries it.
+    state.take_ms = take_start.elapsed().saturating_sub(drawing).as_secs_f32() * 1000.0;
     #[cfg(all(feature = "frame-log", target_os = "macos"))]
     state.logged.note(&shared.ui);
 
@@ -171,6 +179,8 @@ pub(super) struct WindowState {
     pub(super) shared: Arc<EditorLock>,
     pub(super) params: Arc<HarmonigraphParams>,
     pub(super) pop_out: Weak<PopOut>,
+    /// The last pass's take work, in ms, for this pass's shell reading.
+    take_ms: f32,
     /// What the frame log was last told the editor was doing.
     #[cfg(all(feature = "frame-log", target_os = "macos"))]
     logged: Logged,
@@ -186,6 +196,7 @@ impl WindowState {
             shared,
             params,
             pop_out,
+            take_ms: 0.0,
             #[cfg(all(feature = "frame-log", target_os = "macos"))]
             logged: Logged::default(),
         }

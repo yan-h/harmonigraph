@@ -101,12 +101,13 @@ pub struct ShellTimings {
     /// shown separately to help attribute 3D cost. Do not add the two.
     /// None means no new completion; the metric window retains its mean.
     pub draw_gpu_ms: Option<f32>,
-    /// Milliseconds the shell spent on its own per-frame work before the UI
-    /// ran — draining the event rings and reconciling the take.
+    /// Milliseconds the shell spent on its own per-frame work outside the
+    /// UI: before it ran (the lock, a host restore, the camera), and the last
+    /// pass's take work around its UI (the status mirror, and the Record, Stop
+    /// and export commands after it).
     ///
     /// Separate from the frame's CPU time because that starts at the dock
-    /// build: this stretch scales with events ARRIVING rather than with what
-    /// is drawn, and there was no reading it could show up in.
+    /// build, and there was no reading this could show up in.
     pub shell_ms: f32,
     /// Milliseconds blocked acquiring the surface — waiting for the display
     /// to free a drawable. Large here with every cost small means the frame
@@ -142,7 +143,8 @@ pub struct ShellTimings {
     pub submit_ms: f32,
     /// The frame rate the display link was asked for this frame (see
     /// [`link_target_fps`]), or `None` for a frame the link did not ask for —
-    /// the watchdog's and the occlusion repaint's — and wherever no link drives
+    /// the occlusion repaint's, and on window pins that keep one the
+    /// watchdog's — and wherever no link drives
     /// the window at all. The overlay keeps the last `Some` it saw
     /// ([`PerfStats::target_fps`]).
     pub target_fps: Option<f32>,
@@ -166,7 +168,7 @@ pub fn link_target_fps(refresh_s: f64, divisor: u32) -> Option<f32> {
 /// compile error.
 #[derive(Clone, Copy, Default)]
 pub struct FrameCosts {
-    /// Shell work before the UI ran: draining the event rings.
+    /// Shell work outside the UI (see [`ShellTimings::shell_ms`]).
     pub shell_ms: f32,
     /// Building the UI — the dock and its panes.
     pub cpu_ms: f32,
@@ -583,7 +585,8 @@ pub struct PerfStats {
     pub spec_uploads: f32,
     /// The frame rate the display link was last asked for, which the headline
     /// rate is judged against. Kept across the frames the link did not ask for
-    /// (the watchdog's and the occlusion repaint's, which carry none), so one
+    /// (the occlusion repaint's, and the watchdog's where the window keeps
+    /// one, which carry none), so one
     /// of them does not drop the colour back to the fixed thresholds. `None`
     /// where no link ever paced the window: the standalone.
     pub target_fps: Option<f32>,
@@ -989,8 +992,8 @@ mod tests {
         assert_eq!(link_target_fps(0.0, 1), None, "a refresh period of nothing is no target");
     }
 
-    /// The watchdog and the occlusion repaint run frames the display link did
-    /// not ask for, and those carry no target. The overlay keeps the last one
+    /// The occlusion repaint, and the watchdog where the window keeps one, run
+    /// frames the display link did not ask for, and those carry no target. The overlay keeps the last one
     /// it was given rather than judging such a frame against the fixed
     /// thresholds, which would flip a divided rate's colour for a tick.
     #[test]
@@ -1002,7 +1005,7 @@ mod tests {
         perf.record(costs(Some(36.0)), 1.0, workload);
         assert_eq!(perf.target_fps, Some(36.0));
         perf.record(costs(None), 2.0, workload);
-        assert_eq!(perf.target_fps, Some(36.0), "a watchdog frame keeps the target");
+        assert_eq!(perf.target_fps, Some(36.0), "a frame without link timing keeps the target");
         perf.record(costs(Some(72.0)), 3.0, workload);
         assert_eq!(perf.target_fps, Some(72.0), "a new target replaces it");
     }
