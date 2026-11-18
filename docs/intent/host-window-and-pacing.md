@@ -36,3 +36,8 @@ The 2026-10-22 section moved here from `editor-shell.md` when the 2026-11-02 dri
 ## 2026-11-14 (premises audit, #1739)
 - No committed Metal shader corpus: delete it, its provider, gates, workflow, skill and the wgpu-hal sites that served only it, and start the editor's loading job at plugin activation on the device the editor reuses. Branch builds Yan loads were built before the runner regenerated the corpus, so it only ever spared the first load after a merge or an OS update; up to about 2.4 s of loading screen there is accepted. Supersedes #1712. #1739 D2, #1746
 - Idle pacing takes #1676 option 2 now: check whether a pass is due before running the UI, on the display link's clock, with a wake from the input worker and the 50 ms poll kept; this supersedes the 2026-11-10 option-1 line above and retires the prediction chain in the vendored crates and #1708. Chosen for maintenance, ahead of the recorded trigger. #1739 D3, #1747
+
+## 2026-11-17 (the shared own window, yan-h/otonal#1673)
+
+- The own window remembers only where it was: each instance opens its own window at the size its project saved, rather than at the last own window's size. yan-h/egui-plugin-window#12 (answer A)
+- The own window has a maximum size, and keeps its top-left corner when a pane folds. yan-h/otonal#1673 (The value is the implementer's, derived in `MAX_SIZE`'s comment, not Yan's choice.)

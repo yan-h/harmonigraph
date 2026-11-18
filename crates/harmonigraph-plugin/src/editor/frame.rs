@@ -8,7 +8,7 @@ use crate::{HarmonigraphParams, PluginParamBackend};
 
 use super::lock::EditorLock;
 use super::persist::EguiState;
-use super::pop_out::PopOut;
+use super::pop_out::OwnWindow;
 
 /// The plugin's per-frame GUI work: take the frame's lock, close out the note
 /// frame — and then hand the state the input worker has fed to
@@ -108,7 +108,8 @@ pub(super) fn frame(
     // A fold is priced against `egui_state.size`, which is the size the window
     // actually has: `requested_size` is empty by now whatever happened above,
     // since the window's size source clears it on refusal as well as on
-    // accept, and `size` is only updated when the host agrees. So two folds in
+    // accept, and `size` is only updated when the host agrees, or in the own
+    // window to the size AppKit applied. So two folds in
     // consecutive frames add up rather than the second cancelling the first.
     let (window_width, window_height) = egui_state.size();
     // Offered only where the shell can give the editor its own window, and
@@ -178,7 +179,7 @@ const STALL_GAP: f64 = 0.1;
 pub(super) struct WindowState {
     pub(super) shared: Arc<EditorLock>,
     pub(super) params: Arc<HarmonigraphParams>,
-    pub(super) pop_out: Weak<PopOut>,
+    pub(super) pop_out: Weak<OwnWindow>,
     /// The last pass's take work, in ms, for this pass's shell reading.
     take_ms: f32,
     /// What the frame log was last told the editor was doing.
@@ -190,7 +191,7 @@ impl WindowState {
     pub(super) fn new(
         shared: Arc<EditorLock>,
         params: Arc<HarmonigraphParams>,
-        pop_out: Weak<PopOut>,
+        pop_out: Weak<OwnWindow>,
     ) -> Self {
         WindowState {
             shared,

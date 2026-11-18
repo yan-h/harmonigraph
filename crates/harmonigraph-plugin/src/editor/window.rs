@@ -16,7 +16,7 @@ use super::frame::{frame, WindowState};
 use super::lock::EditorLock;
 use super::open_window_session;
 use super::persist::EguiState;
-use super::pop_out::{PopOut, Sized};
+use super::pop_out::{self, OwnSize, OwnWindow};
 use super::MIN_SIZE;
 
 /// The wgpu setup, which is `GraphicsConfig::default()` with the device
@@ -175,24 +175,24 @@ impl Editor for LatticeEditor {
         let resized = self.egui_state.clone();
         let logging = self.shared.clone();
         let asking = context.clone();
-        let pop_out = PopOut::new(self.egui_state.clone());
-        let popping = Arc::downgrade(&pop_out);
+        let own_window = OwnWindow::new(pop_out::NAME);
+        let popping = Arc::downgrade(&own_window);
         let size_source = SizeSource::new(move || {
             // The editor handle owns the controller. A retained view cannot
             // keep its native owner alive through this callback.
             let popping = popping.upgrade()?;
-            // The editor's own window resized (see `PopOut`): the editor
+            // The editor's own window resized (see `pop_out`): the editor
             // takes its size, and the project saves it as the editor's.
             let as_size =
                 |(width, height): (u32, u32)| Some(Size::new(f64::from(width), f64::from(height)));
-            match popping.take_size() {
-                Some(Sized::Own(size)) => {
+            match popping.take_size(pop_out::LIMITS) {
+                Some(OwnSize::Resized(size)) => {
                     resized.size.store(size);
                     return as_size(size);
                 }
                 // Back in the host's window, which is asked for the editor's
                 // size just below, as a fold's ask is.
-                Some(Sized::Docked) => resized.requested_size.store(Some(resized.size())),
+                Some(OwnSize::Docked) => resized.requested_size.store(Some(resized.size())),
                 None => {}
             }
             // OUR ask first, and from here rather than from inside the frame,
@@ -203,11 +203,14 @@ impl Editor for LatticeEditor {
             // the layout that wanted it and the arrangement wears an extra
             // frame stretched across the old window.
             if let Some(size) = resized.requested_size.load() {
-                // In its own window, the ask is that window's to grant.
-                if popping.resize(size) {
+                // In its own window, the ask is that window's to grant, at
+                // the size it applies.
+                // Within the window's limits, which AppKit does not hold a
+                // frame set by code to.
+                if let Some(applied) = popping.resize(pop_out::LIMITS.clamp(size)) {
                     resized.requested_size.store(None);
-                    resized.size.store(size);
-                    return as_size(size);
+                    resized.size.store(applied);
+                    return as_size(applied);
                 }
                 let started = Instant::now();
                 let accepted = asking.request_resize();
@@ -248,8 +251,9 @@ impl Editor for LatticeEditor {
         // every host gesture the editor holds is ended, with the editor lock
         // free (`EditorLock::end_unseen`). baseview calls this on the main
         // thread, outside its handler's borrow; it can come inside this
-        // editor's own moves of its view (`PopOut`'s pop and dock), none of
-        // which holds the editor lock or the pop-out's state borrow.
+        // editor's own moves of its view (the own window's open, its deferred
+        // moves and its close), none of which is made under the editor lock,
+        // and whose `moving` takes no lock (`pop_out`).
         let unseen = {
             let (shared, params, context) =
                 (self.shared.clone(), self.params.clone(), context.clone());
@@ -275,7 +279,7 @@ impl Editor for LatticeEditor {
                 .with_size_source(size_source)
                 .with_unseen_notice(unseen)
                 .with_pass_request(self.egui_state.pass_request.clone()),
-            WindowState::new(self.shared.clone(), self.params.clone(), Arc::downgrade(&pop_out)),
+            WindowState::new(self.shared.clone(), self.params.clone(), Arc::downgrade(&own_window)),
             |egui_ctx: &Context, _queue, state: &mut WindowState| {
                 // Everything this context owes the shared UI state, which is
                 // NOT new when the context is: the theme, the fold floor and
@@ -291,10 +295,10 @@ impl Editor for LatticeEditor {
             },
         );
 
-        pop_out.open(parent, &window, self.egui_state.docked(), self.host.clone());
+        pop_out::open(&own_window, parent, &window, self.egui_state.clone(), self.host.clone());
         self.egui_state.set_open(true);
         let handle = LatticeEditorHandle {
-            pop_out,
+            pop_out: own_window,
             egui_state: self.egui_state.clone(),
             shared: self.shared.clone(),
             params: self.params.clone(),
@@ -333,9 +337,11 @@ impl Editor for LatticeEditor {
         // Stored, it would be what a save keeps until the own window next
         // resized, however long the editor went unseen. Accepted all the
         // same, as the host's window may be sized as the host likes. CLAP
-        // makes this call on the main thread, where `PopOut` moves the view
-        // and sets the flag, so the two cannot interleave.
-        if self.egui_state.in_own_window() {
+        // makes this call on the main thread, where the own window moves the
+        // view and its `moving` sets the flag, so the two cannot interleave.
+        // Before the host attaches the editor, the saved choice stands in for
+        // where it will open (`EguiState::owns_size`).
+        if self.egui_state.owns_size() {
             return true;
         }
         // A set_size with the current size must succeed without side
@@ -372,7 +378,7 @@ impl Editor for LatticeEditor {
 struct LatticeEditorHandle {
     // The sole persistent owner; view callbacks upgrade weak references only
     // for their invocation, so retaining the view cannot retain this owner.
-    pop_out: Arc<PopOut>,
+    pop_out: Arc<OwnWindow>,
     egui_state: Arc<EguiState>,
     shared: Arc<EditorLock>,
     params: Arc<HarmonigraphParams>,
@@ -396,7 +402,9 @@ impl Drop for LatticeEditorHandle {
         let setter = nice_plug::prelude::ParamSetter::new(self.context.as_ref());
         super::gestures::end(open, &self.params, &setter);
         // The editor's own window closes with the editor rather than
-        // outliving it empty, and the host's is shown again.
+        // outliving it empty, and the host's is shown again. With the editor
+        // lock free: closing tells `moving`, and can hide the view, which
+        // the unseen notice hears.
         self.pop_out.close();
         self.egui_state.set_open(false);
         self.window.close();
@@ -409,9 +417,9 @@ mod tests {
 
     use harmonigraph_render::startup::{Status, WindowStartup};
 
-    /// A host resize while the editor sits in its own window leaves the size
-    /// the project saves, which is that window's; in the host's window it is
-    /// the editor's size.
+    /// A host resize while the open editor sits in its own window leaves the
+    /// size the project saves, which is that window's; in the host's window it
+    /// is the editor's size.
     #[test]
     fn a_host_resize_leaves_the_saved_size_while_the_editor_is_in_its_own_window() {
         let (_notes, consumer) = harmonigraph_record::publication::channel();
@@ -429,12 +437,14 @@ mod tests {
         let state = &params.editor_state;
         let saved = state.size();
         let (width, height) = (saved.0 + 100, saved.1 + 50);
+        state.set_open(true);
 
-        state.set_in_own_window(true);
+        let moving = super::super::pop_out::moving(state.clone());
+        moving(plugin_own_window::Move::Out(saved));
         assert!(editor.set_size(width, height));
         assert_eq!(state.size(), saved, "the host's size replaced the own window's");
 
-        state.set_in_own_window(false);
+        moving(plugin_own_window::Move::Back);
         assert!(editor.set_size(width, height));
         assert_eq!(state.size(), (width, height), "docked, the host's resize was refused");
     }

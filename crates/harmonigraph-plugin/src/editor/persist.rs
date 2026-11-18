@@ -32,13 +32,13 @@ pub struct EguiState {
     #[serde(skip)]
     pub(crate) pass_request: egui_baseview::PassRequest,
     /// The editor kept in the host's window rather than its own (see
-    /// `PopOut`), from the System tab. Saved with the project; a project
+    /// `pop_out`), from the System tab. Saved with the project; a project
     /// from before it was opens in the editor's own window, which is the
     /// default.
     #[serde(default)]
     docked: AtomicBool,
     /// The editor's view is in its own window right now, which then has the
-    /// say over its size (see `PopOut`). Set as the view moves, on the main
+    /// say over its size (see `pop_out`). Set as the view moves, on the main
     /// thread, where a host `set_size` also arrives (a CLAP `gui` call), so
     /// the two are ordered. Here because the editor that receives `set_size`
     /// does not hold the window, whose state is bound to the main thread; not
@@ -69,7 +69,7 @@ impl EguiState {
         self.docked.load(Ordering::Relaxed)
     }
 
-    pub(super) fn set_docked(&self, docked: bool) {
+    pub(crate) fn set_docked(&self, docked: bool) {
         self.docked.store(docked, Ordering::Relaxed);
     }
 
@@ -79,6 +79,21 @@ impl EguiState {
 
     pub(super) fn set_in_own_window(&self, own: bool) {
         self.in_own_window.store(own, Ordering::Relaxed);
+    }
+
+    /// Whether the editor's size is its own window's, which the project
+    /// saves, so that a host `set_size`, which then sizes only the host's
+    /// window, must not replace it: while the editor is open, whether its view
+    /// is in its own window; before the host attaches it (CLAP allows
+    /// `set_size` before `set_parent`), whether it will open there, which the
+    /// saved choice says where the platform offers one (Yan decided the own
+    /// window opens at the size its project saved, egui-plugin-window#12).
+    pub(super) fn owns_size(&self) -> bool {
+        if self.is_open() {
+            self.in_own_window()
+        } else {
+            super::OWN_WINDOW_OFFERED && !self.docked()
+        }
     }
 
     pub fn is_open(&self) -> bool {
