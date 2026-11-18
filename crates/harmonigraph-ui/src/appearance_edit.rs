@@ -239,7 +239,11 @@ impl AppearanceEditor {
         // TextEdit leaves key events in the input even after handling them.
         // Keep its ownership for the whole frame: Undo followed by Enter can
         // undo text and release focus in one pass, but must not also undo a look.
-        if crate::kept_focus(ctx) && !text_edit_was_focused && !ctx.text_edit_focused() {
+        //
+        // A press that shares its pass with the editor losing the keyboard is
+        // taken all the same: it was the editor's when it was pressed, and the
+        // claim the last pass made has already kept it from the host.
+        if !text_edit_was_focused && !ctx.text_edit_focused() {
             let taken = crate::keys::take_each(ctx, APPEARANCE_SHORTCUTS);
             for shortcut in &taken {
                 if *shortcut == APPEARANCE_SHORTCUTS[0] {
@@ -633,26 +637,28 @@ mod tests {
         }
     }
 
+    /// A pinch in flight holds a look edit open, and the editor losing the
+    /// keyboard in the same pass finishes it all the same.
     #[test]
     fn window_focus_loss_finishes_a_pending_action() {
-        let ctx = crate::tests::probe::themed();
-        let mut appearance = AppearanceDocument::default();
-        let mut editor = AppearanceEditor::default();
-        let before = Look::capture(&appearance);
-        appearance.spectrum.attack = 0.2;
-        editor.history.observe(before, &appearance, true);
-        let _ = ctx.run_ui(
-            egui::RawInput {
-                events: vec![egui::Event::WindowFocused(false)],
-                focused: false,
-                ..Default::default()
-            },
-            |ui| {
-                editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx(), false);
-            },
-        );
-        assert!(editor.history.pending.is_none());
-        assert_eq!(editor.history.undo.len(), 1);
+        for (lost, finished) in [(true, true), (false, false)] {
+            let ctx = crate::tests::probe::themed();
+            let mut appearance = AppearanceDocument::default();
+            let mut editor = AppearanceEditor::default();
+            let before = Look::capture(&appearance);
+            appearance.spectrum.attack = 0.2;
+            editor.history.observe(before, &appearance, true);
+            let mut events = vec![egui::Event::Zoom(1.1)];
+            if lost {
+                events.push(egui::Event::WindowFocused(false));
+            }
+            let _ =
+                ctx.run_ui(egui::RawInput { events, focused: !lost, ..Default::default() }, |ui| {
+                    editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx(), false);
+                });
+            assert_eq!(editor.history.pending.is_none(), finished, "focus lost: {lost}");
+            assert_eq!(editor.history.undo.len(), usize::from(finished));
+        }
     }
 
     #[test]

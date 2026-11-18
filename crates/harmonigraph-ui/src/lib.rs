@@ -106,10 +106,10 @@ use params::ParamBackend;
 /// is delivered somewhere that is not us. egui then believes the button is
 /// still down forever.
 ///
-/// So: no pointer, or no focus, means no drag. Neither is the ordinary end of
-/// a gesture, and a gesture no longer reaches either by going out of the
-/// window: the plugin shell holds the pointer's exit back for as long as a
-/// button is down (`mouse_exited` in the vendored baseview), so a slider
+/// So: no pointer, or the focus lost this pass, means no drag. Neither is the
+/// ordinary end of a gesture, and a gesture no longer reaches either by going
+/// out of the window: the plugin shell holds the pointer's exit back for as
+/// long as a button is down (`mouse_exited` in baseview), so a slider
 /// dragged past the window edge keeps tracking, and the exit arrives here only
 /// once the button is up. What is left for this to catch is a release that
 /// never comes at all, where the alternative is every settings pane's wheel
@@ -120,8 +120,8 @@ use params::ParamBackend;
 /// indistinguishable from a gesture still going by either signal above. Two
 /// answers cover it, and only one of them is here. The shell's is the
 /// authority: the plugin's frame tick asks the OS whether the button is really
-/// held and synthesises the release it is owed (`settle_stuck_buttons` in the
-/// vendored baseview), which is a question neither egui nor this can put. What
+/// held and synthesises the release it is owed (`settle_stuck_buttons` in
+/// baseview), which is a question neither egui nor this can put. What
 /// this has of its own is the WHEEL. A notch is a hand doing something that is
 /// not holding a button, so a drag whose widget the pointer is not even over
 /// any more is finished, whatever egui still believes the button is doing —
@@ -154,7 +154,7 @@ fn end_stranded_drag(ctx: &egui::Context) -> Option<String> {
             i.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. })),
         )
     });
-    if !kept_focus(ctx) || at.is_none() {
+    if lost_focus_this_pass(ctx) || at.is_none() {
         ctx.stop_dragging();
         return None;
     }
@@ -182,8 +182,8 @@ fn end_stranded_drag(ctx: &egui::Context) -> Option<String> {
     })
 }
 
-/// Whether the editor still has the window whatever gesture is in flight began
-/// in.
+/// Whether the editor lost the keyboard this pass, which ends whatever
+/// gesture is in flight.
 ///
 /// A host that takes focus mid-drag is handed the release, so what is left here
 /// is a button egui believes is held forever — and anything of ours that follows
@@ -199,8 +199,8 @@ fn end_stranded_drag(ctx: &egui::Context) -> Option<String> {
 /// gesture, so on the flag its edits would split into many undo entries and
 /// host gestures. A shell that sends no event (the offline renderer, the tests)
 /// never ends one this way.
-fn kept_focus(ctx: &egui::Context) -> bool {
-    ctx.input(|i| !i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false))))
+fn lost_focus_this_pass(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false))))
 }
 
 /// Whether a pointer gesture is still under way this frame, so the edits it
@@ -221,7 +221,7 @@ fn kept_focus(ctx: &egui::Context) -> bool {
 /// that button held until the next one arrives; on the button alone, every edit
 /// until the user's next click would join one undo entry and one host gesture.
 pub(crate) fn gesture_open(ctx: &egui::Context) -> bool {
-    kept_focus(ctx)
+    !lost_focus_this_pass(ctx)
         && (ctx.dragged_id().is_some() && ctx.input(|i| i.pointer.any_down())
             || ctx.input(|i| i.is_scrolling() || i.zoom_delta() != 1.0))
 }
