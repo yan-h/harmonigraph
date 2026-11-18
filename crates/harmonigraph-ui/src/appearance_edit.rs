@@ -239,7 +239,11 @@ impl AppearanceEditor {
         // TextEdit leaves key events in the input even after handling them.
         // Keep its ownership for the whole frame: Undo followed by Enter can
         // undo text and release focus in one pass, but must not also undo a look.
-        if crate::kept_focus(ctx) && !text_edit_was_focused && !ctx.text_edit_focused() {
+        //
+        // A press that shares its pass with the editor losing the keyboard is
+        // taken all the same: it was the editor's when it was pressed, and the
+        // claim the last pass made has already kept it from the host.
+        if !text_edit_was_focused && !ctx.text_edit_focused() {
             let taken = crate::keys::take_each(ctx, APPEARANCE_SHORTCUTS);
             for shortcut in &taken {
                 if *shortcut == APPEARANCE_SHORTCUTS[0] {
@@ -465,9 +469,10 @@ mod tests {
 
     /// Zoom the Analyzer with `wheel(frame)` events over 40 frames and assert
     /// the whole gesture, however many frames it changed the look on, is one
-    /// undo entry.
+    /// undo entry. `focused` is the window's keyboard focus throughout.
     fn assert_one_undoable_zoom(
         navigation: crate::panes::spectral::Navigation,
+        focused: bool,
         wheel: impl Fn(usize) -> Option<egui::Vec2>,
     ) {
         let ctx = crate::tests::probe::themed();
@@ -490,7 +495,7 @@ mod tests {
                 });
             }
             let _ = ctx.run_ui(
-                egui::RawInput { screen_rect: Some(rect), events, ..Default::default() },
+                egui::RawInput { screen_rect: Some(rect), events, focused, ..Default::default() },
                 |ui| {
                     let before = Look::capture(&state.appearance);
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
@@ -513,7 +518,7 @@ mod tests {
     fn a_wheel_zoom_of_the_docked_analyzer_is_one_undoable_look_edit() {
         // Three wheel notches on consecutive frames, then the smoothed scroll
         // running out over the frames after them.
-        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, |frame| {
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, true, |frame| {
             (2..5).contains(&frame).then(|| egui::vec2(0.0, 20.0))
         });
     }
@@ -522,8 +527,17 @@ mod tests {
     fn a_trackpad_zoom_with_quiet_frames_between_events_is_one_undoable_look_edit() {
         // Point deltas under 8 pt are applied unsmoothed, so the frames
         // between two events read a zero scroll delta.
-        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, |frame| {
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, true, |frame| {
             ((2..12).contains(&frame) && frame % 2 == 0).then(|| egui::vec2(0.0, 6.0))
+        });
+    }
+
+    #[test]
+    fn a_wheel_zoom_over_a_window_without_the_keyboard_is_one_undoable_look_edit() {
+        // Hovered but never clicked: the focus flag is false on every frame,
+        // and no frame loses focus.
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, false, |frame| {
+            (2..5).contains(&frame).then(|| egui::vec2(0.0, 20.0))
         });
     }
 
@@ -531,7 +545,7 @@ mod tests {
     fn a_wheel_zoom_of_the_video_previews_analyzer_is_one_undoable_look_edit() {
         // The preview takes the wheel's delta for itself, leaving the frame's
         // scroll delta zero while the wheel is still turning.
-        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Preview, |frame| {
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Preview, true, |frame| {
             (2..5).contains(&frame).then(|| egui::vec2(0.0, 20.0))
         });
     }
@@ -623,26 +637,28 @@ mod tests {
         }
     }
 
+    /// A pinch in flight holds a look edit open, and the editor losing the
+    /// keyboard in the same pass finishes it all the same.
     #[test]
     fn window_focus_loss_finishes_a_pending_action() {
-        let ctx = crate::tests::probe::themed();
-        let mut appearance = AppearanceDocument::default();
-        let mut editor = AppearanceEditor::default();
-        let before = Look::capture(&appearance);
-        appearance.spectrum.attack = 0.2;
-        editor.history.observe(before, &appearance, true);
-        let _ = ctx.run_ui(
-            egui::RawInput {
-                events: vec![egui::Event::WindowFocused(false)],
-                ..Default::default()
-            },
-            |ui| {
-                assert!(ui.input(|i| i.focused), "fixture matches baseview's unchanged raw flag");
-                editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx(), false);
-            },
-        );
-        assert!(editor.history.pending.is_none());
-        assert_eq!(editor.history.undo.len(), 1);
+        for (lost, finished) in [(true, true), (false, false)] {
+            let ctx = crate::tests::probe::themed();
+            let mut appearance = AppearanceDocument::default();
+            let mut editor = AppearanceEditor::default();
+            let before = Look::capture(&appearance);
+            appearance.spectrum.attack = 0.2;
+            editor.history.observe(before, &appearance, true);
+            let mut events = vec![egui::Event::Zoom(1.1)];
+            if lost {
+                events.push(egui::Event::WindowFocused(false));
+            }
+            let _ =
+                ctx.run_ui(egui::RawInput { events, focused: !lost, ..Default::default() }, |ui| {
+                    editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx(), false);
+                });
+            assert_eq!(editor.history.pending.is_none(), finished, "focus lost: {lost}");
+            assert_eq!(editor.history.undo.len(), usize::from(finished));
+        }
     }
 
     #[test]

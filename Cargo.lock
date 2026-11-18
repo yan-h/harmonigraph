@@ -218,7 +218,7 @@ dependencies = [
 [[package]]
 name = "baseview"
 version = "0.1.4"
-source = "git+https://github.com/yan-h/egui-plugin-window?rev=772a28924a92272f9ccef6ad3ecb5d40080d6095#772a28924a92272f9ccef6ad3ecb5d40080d6095"
+source = "git+https://github.com/yan-h/egui-plugin-window?rev=52e3e73ad805f20672798b03fc6f9b5ba2f4b479#52e3e73ad805f20672798b03fc6f9b5ba2f4b479"
 dependencies = [
  "block2 0.6.2",
  "keyboard-types",
@@ -931,7 +931,7 @@ dependencies = [
 [[package]]
 name = "egui-baseview"
 version = "0.3.0"
-source = "git+https://github.com/yan-h/egui-plugin-window?rev=772a28924a92272f9ccef6ad3ecb5d40080d6095#772a28924a92272f9ccef6ad3ecb5d40080d6095"
+source = "git+https://github.com/yan-h/egui-plugin-window?rev=52e3e73ad805f20672798b03fc6f9b5ba2f4b479#52e3e73ad805f20672798b03fc6f9b5ba2f4b479"
 dependencies = [
  "baseview",
  "block2 0.6.2",
