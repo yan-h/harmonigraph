@@ -220,10 +220,7 @@ impl<T: Smoothable> Clone for Smoother<T> {
 impl<T: Smoothable> Smoother<T> {
     /// Use the specified style for the smoothing.
     pub fn new(style: SmoothingStyle) -> Self {
-        Self {
-            style,
-            ..Default::default()
-        }
+        Self { style, ..Default::default() }
     }
 
     /// Convenience function for not applying any smoothing at all. Same as `Smoother::default`.
@@ -408,8 +405,7 @@ impl<T: Smoothable> Smoother<T> {
             block_values[num_smoothed_values..].fill(target);
 
             self.current.store(current, Ordering::Relaxed);
-            self.steps_left
-                .fetch_sub(num_smoothed_values as i32, Ordering::Relaxed);
+            self.steps_left.fetch_sub(num_smoothed_values as i32, Ordering::Relaxed);
         } else {
             block_values.fill(target);
         }
@@ -448,10 +444,8 @@ impl<T: Smoothable> Smoother<T> {
 
             // See `next_block_exact()` for more details
             if num_smoothed_values == steps_left {
-                for (idx, value) in block_values
-                    .iter_mut()
-                    .enumerate()
-                    .take(num_smoothed_values - 1)
+                for (idx, value) in
+                    block_values.iter_mut().enumerate().take(num_smoothed_values - 1)
                 {
                     current = self.style.next(current, target_f32, step_size);
                     *value = f(idx, current);
@@ -460,27 +454,18 @@ impl<T: Smoothable> Smoother<T> {
                 current = target_f32.to_f32();
                 block_values[num_smoothed_values - 1] = f(num_smoothed_values - 1, target_f32);
             } else {
-                for (idx, value) in block_values
-                    .iter_mut()
-                    .enumerate()
-                    .take(num_smoothed_values)
-                {
+                for (idx, value) in block_values.iter_mut().enumerate().take(num_smoothed_values) {
                     current = self.style.next(current, target_f32, step_size);
                     *value = f(idx, current);
                 }
             }
 
-            for (idx, value) in block_values
-                .iter_mut()
-                .enumerate()
-                .skip(num_smoothed_values)
-            {
+            for (idx, value) in block_values.iter_mut().enumerate().skip(num_smoothed_values) {
                 *value = f(idx, target_f32);
             }
 
             self.current.store(current, Ordering::Relaxed);
-            self.steps_left
-                .fetch_sub(num_smoothed_values as i32, Ordering::Relaxed);
+            self.steps_left.fetch_sub(num_smoothed_values as i32, Ordering::Relaxed);
         } else {
             for (idx, value) in block_values.iter_mut().enumerate() {
                 *value = f(idx, target_f32);

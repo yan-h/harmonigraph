@@ -8,10 +8,9 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
     let struct_name = &ast.ident;
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
     let fields = match ast.data {
-        syn::Data::Struct(syn::DataStruct {
-            fields: syn::Fields::Named(named_fields),
-            ..
-        }) => named_fields,
+        syn::Data::Struct(syn::DataStruct { fields: syn::Fields::Named(named_fields), .. }) => {
+            named_fields
+        }
         _ => {
             return syn::Error::new(
                 ast.span(),
@@ -46,8 +45,7 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
             if attr.path.is_ident("id") {
                 match attr.parse_meta() {
                     Ok(syn::Meta::NameValue(syn::MetaNameValue {
-                        lit: syn::Lit::Str(s),
-                        ..
+                        lit: syn::Lit::Str(s), ..
                     })) => {
                         if processed_attribute {
                             return syn::Error::new(
@@ -73,10 +71,7 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                             .into();
                         }
 
-                        params.push(Param::Single {
-                            id: s,
-                            field: field_name.clone(),
-                        });
+                        params.push(Param::Single { id: s, field: field_name.clone() });
 
                         processed_attribute = true;
                     }
@@ -93,8 +88,7 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
             } else if attr.path.is_ident("persist") {
                 match attr.parse_meta() {
                     Ok(syn::Meta::NameValue(syn::MetaNameValue {
-                        lit: syn::Lit::Str(s),
-                        ..
+                        lit: syn::Lit::Str(s), ..
                     })) => {
                         if processed_attribute {
                             return syn::Error::new(
@@ -114,10 +108,8 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                             .into();
                         }
 
-                        persistent_fields.push(PersistentField {
-                            key: s,
-                            field: field_name.clone(),
-                        });
+                        persistent_fields
+                            .push(PersistentField { key: s, field: field_name.clone() });
 
                         processed_attribute = true;
                     }
@@ -141,10 +133,7 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                 match attr.parse_meta() {
                     // In this case it's a plain `#[nested]` attribute without parameters
                     Ok(syn::Meta::Path(..)) => (),
-                    Ok(syn::Meta::List(syn::MetaList {
-                        nested: nested_attrs,
-                        ..
-                    })) => {
+                    Ok(syn::Meta::List(syn::MetaList { nested: nested_attrs, .. })) => {
                         if processed_attribute {
                             return syn::Error::new(
                                 attr.span(),
@@ -162,20 +151,12 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                                     nested_array = true;
                                 }
                                 syn::NestedMeta::Meta(syn::Meta::NameValue(
-                                    syn::MetaNameValue {
-                                        path,
-                                        lit: syn::Lit::Str(s),
-                                        ..
-                                    },
+                                    syn::MetaNameValue { path, lit: syn::Lit::Str(s), .. },
                                 )) if path.is_ident("id_prefix") => {
                                     nested_id_prefix = Some(s.clone());
                                 }
                                 syn::NestedMeta::Meta(syn::Meta::NameValue(
-                                    syn::MetaNameValue {
-                                        path,
-                                        lit: syn::Lit::Str(s),
-                                        ..
-                                    },
+                                    syn::MetaNameValue { path, lit: syn::Lit::Str(s), .. },
                                 )) if path.is_ident("group") => {
                                     let group_name = s.value();
                                     if group_name.is_empty() {
@@ -220,19 +201,17 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                 };
 
                 params.push(Param::Nested(match (nested_array, nested_id_prefix) {
-                    (true, None) => NestedParams::Array {
-                        field: field_name.clone(),
-                        group: nested_group,
-                    },
+                    (true, None) => {
+                        NestedParams::Array { field: field_name.clone(), group: nested_group }
+                    }
                     (false, Some(id_prefix)) => NestedParams::Prefixed {
                         field: field_name.clone(),
                         id_prefix,
                         group: nested_group,
                     },
-                    (false, None) => NestedParams::Inline {
-                        field: field_name.clone(),
-                        group: nested_group,
-                    },
+                    (false, None) => {
+                        NestedParams::Inline { field: field_name.clone(), group: nested_group }
+                    }
                     (true, Some(_)) => {
                         return syn::Error::new(
                             attr.span(),
@@ -328,9 +307,7 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                         quote! { serialized.extend(self.#field.serialize_fields()); },
                         quote! { self.#field.deserialize_fields(serialized); },
                     ),
-                    NestedParams::Prefixed {
-                        field, id_prefix, ..
-                    } => (
+                    NestedParams::Prefixed { field, id_prefix, .. } => (
                         quote! {
                             let prefixed = self
                                 .#field
@@ -473,24 +450,14 @@ struct PersistentField {
 #[derive(Debug)]
 enum NestedParams {
     /// The nested struct's parameters are taken as is.
-    Inline {
-        field: syn::Ident,
-        group: Option<syn::LitStr>,
-    },
+    Inline { field: syn::Ident, group: Option<syn::LitStr> },
     /// The nested struct's parameters will get an ID prefix. The original parameter with ID `foo`
     /// will become `{id_prefix}_foo`.
-    Prefixed {
-        field: syn::Ident,
-        id_prefix: syn::LitStr,
-        group: Option<syn::LitStr>,
-    },
+    Prefixed { field: syn::Ident, id_prefix: syn::LitStr, group: Option<syn::LitStr> },
     /// This field is an array-like data structure containing nested parameter structs. The
     /// parameter `foo` will get the new parameter ID `foo_{array_idx + 1}`, and if the group name
     /// is set then the group will be `{group_name} {array_idx + 1}`.
-    Array {
-        field: syn::Ident,
-        group: Option<syn::LitStr>,
-    },
+    Array { field: syn::Ident, group: Option<syn::LitStr> },
 }
 
 impl NestedParams {
@@ -506,10 +473,7 @@ impl NestedParams {
         match self {
             // TODO: No idea how to splice this as an `Option<&str>`, so this involves some
             //       copy-pasting
-            NestedParams::Inline {
-                field,
-                group: Some(group),
-            } => quote! {
+            NestedParams::Inline { field, group: Some(group) } => quote! {
                 self.#field.param_map().into_iter().map(|(param_id, param_ptr, nested_group_name)| {
                     if nested_group_name.is_empty() {
                         (param_id, param_ptr, String::from(#group))
@@ -521,11 +485,7 @@ impl NestedParams {
             NestedParams::Inline { field, group: None } => quote! {
                 self.#field.param_map()
             },
-            NestedParams::Prefixed {
-                field,
-                id_prefix,
-                group: Some(group),
-            } => quote! {
+            NestedParams::Prefixed { field, id_prefix, group: Some(group) } => quote! {
                 self.#field.param_map().into_iter().map(|(param_id, param_ptr, nested_group_name)| {
                     let param_id = format!("{}_{}", #id_prefix, param_id);
 
@@ -536,11 +496,7 @@ impl NestedParams {
                     }
                 })
             },
-            NestedParams::Prefixed {
-                field,
-                id_prefix,
-                group: None,
-            } => quote! {
+            NestedParams::Prefixed { field, id_prefix, group: None } => quote! {
                 self.#field.param_map().into_iter().map(|(param_id, param_ptr, nested_group_name)| {
                     let param_id = format!("{}_{}", #id_prefix, param_id);
 
@@ -549,10 +505,7 @@ impl NestedParams {
             },
             // We'll start at index 1 for display purposes. Both the group and the parameter ID get
             // a suffix matching the array index.
-            NestedParams::Array {
-                field,
-                group: Some(group),
-            } => quote! {
+            NestedParams::Array { field, group: Some(group) } => quote! {
                 self.#field.iter().enumerate().flat_map(|(idx, params)| {
                     let idx = idx + 1;
 

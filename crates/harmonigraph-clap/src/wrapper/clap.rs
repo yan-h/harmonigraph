@@ -14,13 +14,13 @@ use crate::wrapper::clap::features::ClapFeature;
 /// Re-export for the macro
 pub use self::descriptor::PluginDescriptor;
 pub use self::wrapper::Wrapper;
+use crate::context::remote_controls::RemoteControlsContext;
+use crate::plugin::Plugin;
 pub use clap_sys::entry::clap_plugin_entry;
 pub use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory};
 pub use clap_sys::host::clap_host;
 pub use clap_sys::plugin::{clap_plugin, clap_plugin_descriptor};
 pub use clap_sys::version::CLAP_VERSION;
-use crate::context::remote_controls::RemoteControlsContext;
-use crate::plugin::Plugin;
 
 /// The host's side of the editor, for an editor with a window of its own
 /// (see [`ClapPlugin::clap_editor_host`]). Main thread only.
@@ -36,7 +36,9 @@ pub trait EditorHost: Send + Sync {
 pub trait ClapPlugin: Plugin {
     /// Plugin-owned saved settings, prepared before and committed after a restore.
     /// Obtained off audio once, then used independently of the plugin mutex.
-    fn clap_setup(&self) -> Option<std::sync::Arc<dyn setup::Setup>> { None }
+    fn clap_setup(&self) -> Option<std::sync::Arc<dyn setup::Setup>> {
+        None
+    }
     /// Default-disabled configuration walk: each process callback hands the
     /// plugin its boundary, then every owned input in order with its exact
     /// sample, then the group's end. The plugin owns its configuration and

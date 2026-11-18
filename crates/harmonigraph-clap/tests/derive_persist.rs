@@ -64,13 +64,7 @@ mod persist {
             params.deserialize_fields(&serialized);
 
             // This contains the values passed to the inner struct's deserialize function
-            let deserialized = params
-                .inner
-                .deserialize_called_with
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap();
+            let deserialized = params.inner.deserialize_called_with.lock().unwrap().take().unwrap();
             assert_eq!(deserialized.len(), 1);
             assert_eq!(deserialized["bar"], "aaa");
         }
@@ -79,22 +73,13 @@ mod persist {
         fn deserialize_mismatching_prefix() {
             let mut serialized = BTreeMap::new();
             serialized.insert(String::from("foo_bar"), String::from("aaa"));
-            serialized.insert(
-                String::from("something"),
-                String::from("this should not be there"),
-            );
+            serialized.insert(String::from("something"), String::from("this should not be there"));
 
             let params = WrapperParams::default();
             params.deserialize_fields(&serialized);
 
             // The `something` key should not be passed to the child struct
-            let deserialized = params
-                .inner
-                .deserialize_called_with
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap();
+            let deserialized = params.inner.deserialize_called_with.lock().unwrap().take().unwrap();
             assert_eq!(deserialized.len(), 1);
             assert_eq!(deserialized["bar"], "aaa");
         }
@@ -124,12 +109,7 @@ mod persist {
             let params = ArrayWrapperParams::default();
             params.deserialize_fields(&serialized);
             for (inner, expected_value) in params.inners.into_iter().zip(["aaa", "bbb", "ccc"]) {
-                let deserialized = inner
-                    .deserialize_called_with
-                    .lock()
-                    .unwrap()
-                    .take()
-                    .unwrap();
+                let deserialized = inner.deserialize_called_with.lock().unwrap().take().unwrap();
                 assert_eq!(deserialized.len(), 1);
                 assert_eq!(deserialized["bar"], expected_value);
             }

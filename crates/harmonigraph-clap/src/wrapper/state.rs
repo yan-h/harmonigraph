@@ -3,12 +3,12 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Context, Result};
 use crate::{
     audio_setup::BufferConfig,
     params::{InternalParamMut, Param, Params, internals::ParamPtr},
     plugin::{ParamValue, Plugin, PluginState},
 };
+use anyhow::{Context, Result};
 
 /// Create a parameters iterator from the hashtables stored in the plugin wrappers. This avoids
 /// having to call `.param_map()` again, which may include expensive user written code.
@@ -29,10 +29,7 @@ pub(crate) fn make_params_getter<'a>(
     param_id_to_hash: &'a HashMap<String, u32>,
 ) -> impl Fn(&str) -> Option<ParamPtr> + 'a {
     |param_id_str| {
-        param_id_to_hash
-            .get(param_id_str)
-            .and_then(|hash| param_by_hash.get(hash))
-            .copied()
+        param_id_to_hash.get(param_id_str).and_then(|hash| param_by_hash.get(hash)).copied()
     }
 }
 
@@ -51,18 +48,15 @@ pub(crate) unsafe fn serialize_object<'a, P: Plugin>(
         params_iter
             .into_iter()
             .map(|(param_id_str, param_ptr)| match param_ptr {
-                ParamPtr::FloatParam(p) => (
-                    param_id_str.clone(),
-                    ParamValue::F32((*p).unmodulated_plain_value()),
-                ),
-                ParamPtr::IntParam(p) => (
-                    param_id_str.clone(),
-                    ParamValue::I32((*p).unmodulated_plain_value()),
-                ),
-                ParamPtr::BoolParam(p) => (
-                    param_id_str.clone(),
-                    ParamValue::Bool((*p).unmodulated_plain_value()),
-                ),
+                ParamPtr::FloatParam(p) => {
+                    (param_id_str.clone(), ParamValue::F32((*p).unmodulated_plain_value()))
+                }
+                ParamPtr::IntParam(p) => {
+                    (param_id_str.clone(), ParamValue::I32((*p).unmodulated_plain_value()))
+                }
+                ParamPtr::BoolParam(p) => {
+                    (param_id_str.clone(), ParamValue::Bool((*p).unmodulated_plain_value()))
+                }
                 ParamPtr::EnumParam(p) => (
                     // Enums are either serialized based on the active variant's index (which may not be
                     // the same as the discriminator), or a custom set stable string ID. The latter
@@ -81,11 +75,7 @@ pub(crate) unsafe fn serialize_object<'a, P: Plugin>(
     // storing things like sample data.
     let fields = plugin_params.serialize_fields();
 
-    PluginState {
-        version: String::from(P::VERSION),
-        params,
-        fields,
-    }
+    PluginState { version: String::from(P::VERSION), params, fields }
 }
 
 /// Serialize a plugin's state to a vector containing JSON data. This can (and should) be shared

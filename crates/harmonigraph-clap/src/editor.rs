@@ -190,10 +190,7 @@ impl ResizeHint {
     /// A freely resizable editor: both axes, no aspect-ratio lock. Convenience
     /// for the common case.
     pub fn resizable() -> Self {
-        Self {
-            can_resize: true,
-            ..Self::default()
-        }
+        Self { can_resize: true, ..Self::default() }
     }
 }
 

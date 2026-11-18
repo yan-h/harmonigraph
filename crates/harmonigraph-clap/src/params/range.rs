@@ -16,12 +16,7 @@ pub enum FloatRange {
     /// The same as [`FloatRange::Skewed`], but with the skewing happening from a central point.
     /// This central point is rescaled to be at 50% of the parameter's range for convenience of use.
     /// Git blame this comment to find a version that doesn't do this.
-    SymmetricalSkewed {
-        min: f32,
-        max: f32,
-        factor: f32,
-        center: f32,
-    },
+    SymmetricalSkewed { min: f32, max: f32, factor: f32, center: f32 },
     /// A reversed range that goes from high to low instead of from low to high.
     Reversed(&'static FloatRange),
 }
@@ -68,12 +63,7 @@ impl FloatRange {
             FloatRange::Skewed { min, max, factor } => {
                 ((plain.clamp(*min, *max) - min) / (max - min)).powf(*factor)
             }
-            FloatRange::SymmetricalSkewed {
-                min,
-                max,
-                factor,
-                center,
-            } => {
+            FloatRange::SymmetricalSkewed { min, max, factor, center } => {
                 // There's probably a much faster equivalent way to write this. Also, I have no clue
                 // how I managed to implement this correctly on the first try.
                 let unscaled_proportion = (plain.clamp(*min, *max) - min) / (max - min);
@@ -107,12 +97,7 @@ impl FloatRange {
             FloatRange::Skewed { min, max, factor } => {
                 (normalized.powf(factor.recip()) * (max - min)) + min
             }
-            FloatRange::SymmetricalSkewed {
-                min,
-                max,
-                factor,
-                center,
-            } => {
+            FloatRange::SymmetricalSkewed { min, max, factor, center } => {
                 // Reconstructing the subranges works the same as with the normal skewed ranges
                 let center_proportion = (center - min) / (max - min);
                 let skewed_proportion = if normalized > 0.5 {
@@ -292,10 +277,7 @@ mod tests {
     use super::*;
 
     const fn make_linear_float_range() -> FloatRange {
-        FloatRange::Linear {
-            min: 10.0,
-            max: 20.0,
-        }
+        FloatRange::Linear { min: 10.0, max: 20.0 }
     }
 
     const fn make_linear_int_range() -> IntRange {
@@ -303,20 +285,11 @@ mod tests {
     }
 
     const fn make_skewed_float_range(factor: f32) -> FloatRange {
-        FloatRange::Skewed {
-            min: 10.0,
-            max: 20.0,
-            factor,
-        }
+        FloatRange::Skewed { min: 10.0, max: 20.0, factor }
     }
 
     const fn make_symmetrical_skewed_float_range(factor: f32) -> FloatRange {
-        FloatRange::SymmetricalSkewed {
-            min: 10.0,
-            max: 20.0,
-            factor,
-            center: 12.5,
-        }
+        FloatRange::SymmetricalSkewed { min: 10.0, max: 20.0, factor, center: 12.5 }
     }
 
     #[test]
@@ -394,10 +367,7 @@ mod tests {
         fn range_unnormalize_linear_equiv_float() {
             let linear_range = make_linear_float_range();
             let skewed_range = make_skewed_float_range(1.0);
-            assert_eq!(
-                linear_range.unnormalize(0.25),
-                skewed_range.unnormalize(0.25)
-            );
+            assert_eq!(linear_range.unnormalize(0.25), skewed_range.unnormalize(0.25));
         }
     }
 
@@ -474,10 +444,7 @@ mod tests {
             const WRAPPED_SKEWED_RANGE: FloatRange = make_skewed_float_range(1.0);
             let linear_range = FloatRange::Reversed(&WRAPPED_LINEAR_RANGE);
             let skewed_range = FloatRange::Reversed(&WRAPPED_SKEWED_RANGE);
-            assert_eq!(
-                linear_range.unnormalize(0.25),
-                skewed_range.unnormalize(0.25)
-            );
+            assert_eq!(linear_range.unnormalize(0.25), skewed_range.unnormalize(0.25));
         }
     }
 }

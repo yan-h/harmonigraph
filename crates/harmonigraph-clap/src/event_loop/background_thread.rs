@@ -4,8 +4,8 @@
 //! This is essentially a slimmed down version of upstream's Linux event loop, which went with the
 //! VST3 and standalone wrappers that used it.
 
-use anymap3::Entry;
 use crate::nice_trace;
+use anymap3::Entry;
 use parking_lot::Mutex;
 use std::sync::{Arc, LazyLock, Weak};
 use std::thread::{self, JoinHandle};
@@ -86,10 +86,7 @@ impl<T: Send + 'static, E: MainThreadExecutor<T> + 'static> WorkerThread<T, E> {
             .spawn(move || worker_thread(tasks_receiver))
             .expect("Could not spawn background worker thread");
 
-        Self {
-            join_handle: Some(join_handle),
-            tasks_sender,
-        }
+        Self { join_handle: Some(join_handle), tasks_sender }
     }
 }
 
@@ -158,10 +155,7 @@ where
             },
             Ok(Message::Shutdown) => return,
             Err(err) => {
-                nice_trace!(
-                    "Worker thread got disconnected unexpectedly, shutting down: {}",
-                    err
-                );
+                nice_trace!("Worker thread got disconnected unexpectedly, shutting down: {}", err);
                 return;
             }
         }

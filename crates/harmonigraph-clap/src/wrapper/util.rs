@@ -21,13 +21,18 @@ compile_error!(
     "The 'clap-boundary-tests' feature replaces the 'assert_process_allocs' global allocator with a counting one, whose base allocator is the plain system allocator unless 'assert_process_allocs' is also enabled. Enable both features together, or neither."
 );
 
-#[cfg(all(debug_assertions, feature = "assert_process_allocs", not(feature = "clap-boundary-tests")))]
+#[cfg(all(
+    debug_assertions,
+    feature = "assert_process_allocs",
+    not(feature = "clap-boundary-tests")
+))]
 #[global_allocator]
 static A: nice_assert_no_alloc::AllocDisabler = nice_assert_no_alloc::AllocDisabler;
 
 #[cfg(all(debug_assertions, feature = "clap-boundary-tests"))]
 #[global_allocator]
-static MEASURED: super::allocation_probe::MeasuredAllocator = super::allocation_probe::MeasuredAllocator;
+static MEASURED: super::allocation_probe::MeasuredAllocator =
+    super::allocation_probe::MeasuredAllocator;
 
 /// A Rabin fingerprint based string hash for parameter ID strings.
 pub fn hash_param_id(id: &str) -> u32 {
@@ -104,11 +109,8 @@ pub fn clamp_output_event_timing(timing: u32, total_buffer_len: u32) -> u32 {
 /// - A file path, in which case the output gets appended to the end of that file which will be
 ///   created if necessary.
 pub fn setup_logger() {
-    let log_level = if cfg!(debug_assertions) {
-        log::LevelFilter::Trace
-    } else {
-        log::LevelFilter::Info
-    };
+    let log_level =
+        if cfg!(debug_assertions) { log::LevelFilter::Trace } else { log::LevelFilter::Info };
 
     let logger_builder = nice_log::LoggerBuilder::new(log_level)
         .filter_module("cosmic_text::buffer")
@@ -197,10 +199,7 @@ mod miri {
         let mut dest = [0; 256];
         strlcpy(&mut dest, "Hello, world!");
 
-        assert_eq!(
-            unsafe { CStr::from_ptr(dest.as_ptr()) }.to_str(),
-            Ok("Hello, world!")
-        );
+        assert_eq!(unsafe { CStr::from_ptr(dest.as_ptr()) }.to_str(), Ok("Hello, world!"));
     }
 
     #[test]
@@ -208,9 +207,6 @@ mod miri {
         let mut dest = [0; 6];
         strlcpy(&mut dest, "Hello, world!");
 
-        assert_eq!(
-            unsafe { CStr::from_ptr(dest.as_ptr()) }.to_str(),
-            Ok("Hello")
-        );
+        assert_eq!(unsafe { CStr::from_ptr(dest.as_ptr()) }.to_str(), Ok("Hello"));
     }
 }

@@ -205,10 +205,8 @@ impl InternalParamMut for IntParam {
         // computations when a parameter changes.
         let old_value = self.value.swap(value, Ordering::Relaxed);
         if value != old_value {
-            self.normalized_value
-                .store(normalized_value, Ordering::Relaxed);
-            self.unmodulated_value
-                .store(unmodulated_value, Ordering::Relaxed);
+            self.normalized_value.store(normalized_value, Ordering::Relaxed);
+            self.unmodulated_value.store(unmodulated_value, Ordering::Relaxed);
             self.unmodulated_normalized_value
                 .store(unmodulated_normalized_value, Ordering::Relaxed);
             if let Some(f) = &self.value_changed {
@@ -230,8 +228,7 @@ impl InternalParamMut for IntParam {
     }
 
     unsafe fn _internal_modulate_value(&self, modulation_offset: f32) -> bool {
-        self.modulation_offset
-            .store(modulation_offset, Ordering::Relaxed);
+        self.modulation_offset.store(modulation_offset, Ordering::Relaxed);
 
         // TODO: This renormalizes this value, which is not necessary
         unsafe { self._internal_set_plain_value(self.unmodulated_plain_value()) }
@@ -241,8 +238,7 @@ impl InternalParamMut for IntParam {
         if reset {
             self.smoothed.reset(self.modulated_plain_value());
         } else {
-            self.smoothed
-                .set_target(sample_rate, self.modulated_plain_value());
+            self.smoothed.set_target(sample_rate, self.modulated_plain_value());
         }
     }
 }

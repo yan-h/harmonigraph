@@ -33,9 +33,8 @@ impl<P: ClapPlugin> Wrapper<P> {
         let writable = status != CLAP_PROCESS_ERROR
             && callback.input_status == performance::InputStatus::Complete;
         {
-            let mut writer = unsafe {
-                performance::Output::new(output, &self.output_high_water, writable)
-            };
+            let mut writer =
+                unsafe { performance::Output::new(output, &self.output_high_water, writable) };
             self.plugin.lock().clap_performance_finalize(callback, status, &mut writer);
         }
         // The parameter half drains with the real list even on an error exit:
@@ -64,10 +63,7 @@ impl<P: ClapPlugin> Wrapper<P> {
     /// spends here across all of its sub-block drains. The loop would terminate
     /// without it — the GUI half is a prefix admitted once per callback, at
     /// capture — but it would terminate at `INPUT_SCAN`.
-    pub(super) unsafe fn drain_performance(
-        &self,
-        output: *const clap_output_events,
-    ) {
+    pub(super) unsafe fn drain_performance(&self, output: *const clap_output_events) {
         let Some(output) = unsafe { output.as_ref() }.filter(|o| o.try_push.is_some()) else {
             return;
         };

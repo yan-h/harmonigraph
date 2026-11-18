@@ -94,10 +94,7 @@ impl<P: Plugin> AsyncExecutor<P> {
         execute_background: Arc<dyn Fn(P::BackgroundTask) + Send + Sync>,
         execute_gui: Arc<dyn Fn(P::BackgroundTask) + Send + Sync>,
     ) -> Self {
-        Self {
-            execute_background,
-            execute_gui,
-        }
+        Self { execute_background, execute_gui }
     }
 }
 
@@ -146,9 +143,7 @@ impl<P: Plugin> AsyncExecutor<P> {
 
 impl<'a> ParamSetter<'a> {
     pub fn new(context: &'a dyn GuiContext) -> Self {
-        Self {
-            raw_context: context,
-        }
+        Self { raw_context: context }
     }
 
     /// Inform the host that you will start automating a parameter. This needs to be called before
@@ -169,10 +164,7 @@ impl<'a> ParamSetter<'a> {
     pub fn set_parameter<P: Param>(&self, param: &P, value: P::Plain) {
         let ptr = param.as_ptr();
         let normalized = param.preview_normalized(value);
-        unsafe {
-            self.raw_context
-                .raw_set_parameter_normalized(ptr, normalized)
-        };
+        unsafe { self.raw_context.raw_set_parameter_normalized(ptr, normalized) };
     }
 
     /// Set a parameter to an already normalized value. Works exactly the same as
@@ -184,10 +176,7 @@ impl<'a> ParamSetter<'a> {
     /// normalized value known to the host matches `param.normalized_value()`.
     pub fn set_parameter_normalized<P: Param>(&self, param: &P, normalized: f32) {
         let ptr = param.as_ptr();
-        unsafe {
-            self.raw_context
-                .raw_set_parameter_normalized(ptr, normalized)
-        };
+        unsafe { self.raw_context.raw_set_parameter_normalized(ptr, normalized) };
     }
 
     /// Inform the host that you are done automating a parameter. This needs to be called after one

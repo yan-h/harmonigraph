@@ -102,11 +102,7 @@ impl<T: Enum + PartialEq> Display for EnumParam<T> {
 
 impl Display for EnumParamInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            self.variants[self.inner.modulated_plain_value() as usize]
-        )
+        write!(f, "{}", self.variants[self.inner.modulated_plain_value() as usize])
     }
 }
 
@@ -183,8 +179,7 @@ impl<T: Enum + PartialEq> Param for EnumParam<T> {
     }
 
     fn normalized_value_to_string(&self, normalized: f32, include_unit: bool) -> String {
-        self.inner
-            .normalized_value_to_string(normalized, include_unit)
+        self.inner.normalized_value_to_string(normalized, include_unit)
     }
 
     fn string_to_normalized_value(&self, string: &str) -> Option<f32> {
@@ -299,10 +294,7 @@ impl Param for EnumParamInner {
 
 impl<T: Enum + PartialEq> InternalParamMut for EnumParam<T> {
     unsafe fn _internal_set_plain_value(&self, plain: Self::Plain) -> bool {
-        unsafe {
-            self.inner
-                ._internal_set_plain_value(T::to_index(plain) as i32)
-        }
+        unsafe { self.inner._internal_set_plain_value(T::to_index(plain) as i32) }
     }
 
     unsafe fn _internal_set_normalized_value(&self, normalized: f32) -> bool {
@@ -348,10 +340,7 @@ impl<T: Enum + PartialEq + 'static> EnumParam<T> {
                 inner: IntParam::new(
                     name,
                     T::to_index(default) as i32,
-                    IntRange::Linear {
-                        min: 0,
-                        max: variants.len() as i32 - 1,
-                    },
+                    IntRange::Linear { min: 0, max: variants.len() as i32 - 1 },
                 ),
                 variants,
                 ids,
@@ -387,9 +376,10 @@ impl<T: Enum + PartialEq + 'static> EnumParam<T> {
     /// multiple times in rapid succession, and it can be run from both the GUI and the audio
     /// thread.
     pub fn with_callback(mut self, callback: Arc<dyn Fn(T) + Send + Sync>) -> Self {
-        self.inner.inner = self.inner.inner.with_callback(Arc::new(move |value| {
-            callback(T::from_index(value as usize))
-        }));
+        self.inner.inner = self
+            .inner
+            .inner
+            .with_callback(Arc::new(move |value| callback(T::from_index(value as usize))));
         self
     }
 
@@ -437,10 +427,7 @@ impl EnumParamInner {
     /// Set the parameter based on a serialized stable string identifier. Return whether the ID was
     /// known and the parameter was set.
     pub fn set_from_id(&self, id: &str) -> bool {
-        match self
-            .ids
-            .and_then(|ids| ids.iter().position(|candidate| *candidate == id))
-        {
+        match self.ids.and_then(|ids| ids.iter().position(|candidate| *candidate == id)) {
             Some(index) => {
                 unsafe {
                     self._internal_set_plain_value(index as i32);

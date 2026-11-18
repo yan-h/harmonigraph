@@ -99,11 +99,7 @@ impl Default for NestedArrayParams {
     fn default() -> Self {
         NestedArrayParams {
             one: BoolParam::new("one", true),
-            lots_of_twos: [
-                FlatParams::default(),
-                FlatParams::default(),
-                FlatParams::default(),
-            ],
+            lots_of_twos: [FlatParams::default(), FlatParams::default(), FlatParams::default()],
             three: IntParam::new("three", 0, IntRange::Linear { min: 0, max: 100 }),
         }
     }
@@ -146,16 +142,10 @@ mod param_order {
         let plain_nested = PlainNestedParams::default();
         let grouped = GroupedParams::default();
 
-        let plain_nested_ids_groups: Vec<(String, String)> = plain_nested
-            .param_map()
-            .into_iter()
-            .map(|(id, _, group)| (id, group))
-            .collect();
-        let grouped_param_ids_groups: Vec<(String, String)> = grouped
-            .param_map()
-            .into_iter()
-            .map(|(id, _, group)| (id, group))
-            .collect();
+        let plain_nested_ids_groups: Vec<(String, String)> =
+            plain_nested.param_map().into_iter().map(|(id, _, group)| (id, group)).collect();
+        let grouped_param_ids_groups: Vec<(String, String)> =
+            grouped.param_map().into_iter().map(|(id, _, group)| (id, group)).collect();
 
         assert_eq!(plain_nested_ids_groups, grouped_param_ids_groups);
     }
@@ -189,10 +179,7 @@ mod param_order {
         // parameters which are not grouped explicitly is preserved.
         let param_ids: Vec<String> = p.param_map().into_iter().map(|(id, _, _)| id).collect();
 
-        assert_eq!(
-            param_ids,
-            ["one", "two_one", "two_two", "two_three", "three"]
-        );
+        assert_eq!(param_ids, ["one", "two_one", "two_two", "two_three", "three"]);
     }
 
     #[test]
@@ -219,11 +206,8 @@ mod param_groups {
         let p = FlatParams::default();
 
         // These groups should be all empty
-        let param_groups: Vec<String> = p
-            .param_map()
-            .into_iter()
-            .map(|(_, _, group)| group)
-            .collect();
+        let param_groups: Vec<String> =
+            p.param_map().into_iter().map(|(_, _, group)| group).collect();
         assert_eq!(param_groups, ["", "", ""]);
     }
 
@@ -231,11 +215,8 @@ mod param_groups {
     fn grouped() {
         let p = GroupedParams::default();
 
-        let param_groups: Vec<String> = p
-            .param_map()
-            .into_iter()
-            .map(|(_, _, group)| group)
-            .collect();
+        let param_groups: Vec<String> =
+            p.param_map().into_iter().map(|(_, _, group)| group).collect();
         assert_eq!(
             param_groups,
             [
@@ -255,11 +236,8 @@ mod param_groups {
     fn grouped_groups() {
         let p = GroupedGroupedParams::default();
 
-        let param_groups: Vec<String> = p
-            .param_map()
-            .into_iter()
-            .map(|(_, _, group)| group)
-            .collect();
+        let param_groups: Vec<String> =
+            p.param_map().into_iter().map(|(_, _, group)| group).collect();
         assert_eq!(
             param_groups,
             [
@@ -280,11 +258,8 @@ mod param_groups {
         let p = NestedParams::default();
 
         // The nested structs here don't have any groups assigned to them
-        let param_groups: Vec<String> = p
-            .param_map()
-            .into_iter()
-            .map(|(_, _, group)| group)
-            .collect();
+        let param_groups: Vec<String> =
+            p.param_map().into_iter().map(|(_, _, group)| group).collect();
         assert_eq!(param_groups, ["", "", "", "", ""]);
     }
 
@@ -293,11 +268,8 @@ mod param_groups {
         let p = NestedArrayParams::default();
 
         // The groups get a numeric suffix here
-        let param_groups: Vec<String> = p
-            .param_map()
-            .into_iter()
-            .map(|(_, _, group)| group)
-            .collect();
+        let param_groups: Vec<String> =
+            p.param_map().into_iter().map(|(_, _, group)| group).collect();
         assert_eq!(
             param_groups,
             [

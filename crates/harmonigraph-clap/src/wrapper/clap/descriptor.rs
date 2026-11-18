@@ -61,11 +61,8 @@ impl PluginDescriptor {
         };
 
         // The keyword list is an environ-like list of char pointers terminated by a null pointer.
-        descriptor.clap_features_ptrs = descriptor
-            .clap_features
-            .iter()
-            .map(|feature| feature.as_ptr())
-            .collect();
+        descriptor.clap_features_ptrs =
+            descriptor.clap_features.iter().map(|feature| feature.as_ptr()).collect();
         descriptor.clap_features_ptrs.push(std::ptr::null());
 
         // We couldn't initialize this directly because of all the CStrings

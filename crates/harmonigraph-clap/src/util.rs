@@ -9,9 +9,7 @@ pub use stft::StftHelper;
 
 pub const MINUS_INFINITY_DB: f32 = -100.0;
 pub const MINUS_INFINITY_GAIN: f32 = 1e-5; // 10f32.powf(MINUS_INFINITY_DB / 20)
-pub const NOTES: [&str; 12] = [
-    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-];
+pub const NOTES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 /// Temporarily allow allocations within `func` if nice-plug was configured with the
 /// `assert_process_allocs` feature.
@@ -30,11 +28,7 @@ pub fn permit_alloc<T, F: FnOnce() -> T>(func: F) -> T {
 /// Convert decibels to a voltage gain ratio, treating anything below -100 dB as minus infinity.
 #[inline]
 pub fn db_to_gain(dbs: f32) -> f32 {
-    if dbs > MINUS_INFINITY_DB {
-        10.0f32.powf(dbs * 0.05)
-    } else {
-        0.0
-    }
+    if dbs > MINUS_INFINITY_DB { 10.0f32.powf(dbs * 0.05) } else { 0.0 }
 }
 
 /// Convert a voltage gain ratio to decibels. Gain ratios that aren't positive will be treated as
@@ -58,11 +52,7 @@ pub fn db_to_gain_fast(dbs: f32) -> f32 {
 /// Bikeshedding over a better name is welcome.
 #[inline]
 pub fn db_to_gain_fast_branching(dbs: f32) -> f32 {
-    if dbs > MINUS_INFINITY_DB {
-        db_to_gain_fast(dbs)
-    } else {
-        0.0
-    }
+    if dbs > MINUS_INFINITY_DB { db_to_gain_fast(dbs) } else { 0.0 }
 }
 
 /// An approximation of [`gain_to_db()`] using `ln()`. Will run faster on most architectures, but

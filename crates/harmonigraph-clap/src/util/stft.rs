@@ -73,23 +73,14 @@ impl StftInput for Buffer<'_> {
 
     #[inline]
     unsafe fn get_sample_unchecked(&self, channel: usize, sample_idx: usize) -> f32 {
-        unsafe {
-            *self
-                .as_slice_immutable()
-                .get_unchecked(channel)
-                .get_unchecked(sample_idx)
-        }
+        unsafe { *self.as_slice_immutable().get_unchecked(channel).get_unchecked(sample_idx) }
     }
 }
 
 impl StftInputMut for Buffer<'_> {
     #[inline]
     unsafe fn get_sample_unchecked_mut(&mut self, channel: usize, sample_idx: usize) -> &mut f32 {
-        unsafe {
-            self.as_slice()
-                .get_unchecked_mut(channel)
-                .get_unchecked_mut(sample_idx)
-        }
+        unsafe { self.as_slice().get_unchecked_mut(channel).get_unchecked_mut(sample_idx) }
     }
 }
 
@@ -113,10 +104,7 @@ impl StftInput for Block<'_, '_> {
 impl StftInputMut for Block<'_, '_> {
     #[inline]
     unsafe fn get_sample_unchecked_mut(&mut self, channel: usize, sample_idx: usize) -> &mut f32 {
-        unsafe {
-            self.get_unchecked_mut(channel)
-                .get_unchecked_mut(sample_idx)
-        }
+        unsafe { self.get_unchecked_mut(channel).get_unchecked_mut(sample_idx) }
     }
 }
 
@@ -157,10 +145,7 @@ impl StftInput for [&mut [f32]] {
 impl StftInputMut for [&mut [f32]] {
     #[inline]
     unsafe fn get_sample_unchecked_mut(&mut self, channel: usize, sample_idx: usize) -> &mut f32 {
-        unsafe {
-            self.get_unchecked_mut(channel)
-                .get_unchecked_mut(sample_idx)
-        }
+        unsafe { self.get_unchecked_mut(channel).get_unchecked_mut(sample_idx) }
     }
 }
 
@@ -323,10 +308,7 @@ impl<const NUM_SIDECHAIN_INPUTS: usize> StftHelper<NUM_SIDECHAIN_INPUTS> {
         S: StftInput,
         F: FnMut(usize, Option<usize>, &mut [f32]),
     {
-        assert_eq!(
-            main_buffer.num_channels(),
-            self.main_input_ring_buffers.len()
-        );
+        assert_eq!(main_buffer.num_channels(), self.main_input_ring_buffers.len());
         assert!(overlap_times > 0);
 
         // We'll copy samples from `*_buffer` into `*_ring_buffers` while simultaneously copying
@@ -374,9 +356,8 @@ impl<const NUM_SIDECHAIN_INPUTS: usize> StftHelper<NUM_SIDECHAIN_INPUTS> {
             }
 
             // And for the sidechain buffers we only need to copy the inputs
-            for (sidechain_buffer, sidechain_ring_buffers) in sidechain_buffers
-                .iter()
-                .zip(self.sidechain_ring_buffers.iter_mut())
+            for (sidechain_buffer, sidechain_ring_buffers) in
+                sidechain_buffers.iter().zip(self.sidechain_ring_buffers.iter_mut())
             {
                 for sample_offset in 0..samples_to_process {
                     for channel_idx in 0..num_channels {
@@ -478,9 +459,8 @@ impl<const NUM_SIDECHAIN_INPUTS: usize> StftHelper<NUM_SIDECHAIN_INPUTS> {
                     // iteration's scratch buffer. Like mentioned above, the padding can be larger
                     // than the block size so we also need to do overlap-add here.
                     if self.padding > 0 {
-                        for (padding_sample, scratch_sample) in padding_buffer
-                            .iter_mut()
-                            .zip(&mut self.scratch_buffer[block_size..])
+                        for (padding_sample, scratch_sample) in
+                            padding_buffer.iter_mut().zip(&mut self.scratch_buffer[block_size..])
                         {
                             *padding_sample += *scratch_sample;
                         }

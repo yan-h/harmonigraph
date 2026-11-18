@@ -36,8 +36,7 @@ pub fn derive_enum(input: TokenStream) -> TokenStream {
             if attr.path.is_ident("name") {
                 match attr.parse_meta() {
                     Ok(syn::Meta::NameValue(syn::MetaNameValue {
-                        lit: syn::Lit::Str(s),
-                        ..
+                        lit: syn::Lit::Str(s), ..
                     })) => {
                         if name_attr.is_none() {
                             name_attr = Some(s.value());
@@ -60,8 +59,7 @@ pub fn derive_enum(input: TokenStream) -> TokenStream {
             } else if attr.path.is_ident("id") {
                 match attr.parse_meta() {
                     Ok(syn::Meta::NameValue(syn::MetaNameValue {
-                        lit: syn::Lit::Str(s),
-                        ..
+                        lit: syn::Lit::Str(s), ..
                     })) => {
                         if id_attr.is_none() {
                             id_attr = Some(s.value());

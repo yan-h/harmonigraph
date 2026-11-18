@@ -37,13 +37,7 @@ pub fn v2s_f32_percentage(digits: usize) -> Arc<dyn Fn(f32) -> String + Send + S
 /// Parse a `[0, 100]` percentage to a `[0, 1]` number. Handles the percentage unit for you. Used in
 /// conjunction with [`v2s_f32_percentage()`].
 pub fn s2v_f32_percentage() -> Arc<dyn Fn(&str) -> Option<f32> + Send + Sync> {
-    Arc::new(|string| {
-        string
-            .trim_end_matches([' ', '%'])
-            .parse()
-            .ok()
-            .map(|x: f32| x / 100.0)
-    })
+    Arc::new(|string| string.trim_end_matches([' ', '%']).parse().ok().map(|x: f32| x / 100.0))
 }
 
 /// Format a positive number as a compression ratio. A value of 4 will be formatted as `4.0:1` while
@@ -130,10 +124,8 @@ pub fn v2s_f32_panning() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
 pub fn s2v_f32_panning() -> Arc<dyn Fn(&str) -> Option<f32> + Send + Sync> {
     Arc::new(|string| {
         let string = string.trim();
-        let cleaned_string = string
-            .trim_end_matches([' ', 'l', 'L', 'c', 'C', 'r', 'R'])
-            .parse()
-            .ok();
+        let cleaned_string =
+            string.trim_end_matches([' ', 'l', 'L', 'c', 'C', 'r', 'R']).parse().ok();
         match string.chars().last()?.to_uppercase().next()? {
             'L' => cleaned_string.map(|x: f32| x / -100.0),
             'C' => Some(0.0),
@@ -186,12 +178,7 @@ pub fn v2s_f32_hz_then_khz_with_note_name(
         if value < 1000.0 {
             format!("{value:.digits$} Hz, {note_str}")
         } else {
-            format!(
-                "{:.digits$} kHz, {}",
-                value / 1000.0,
-                note_str,
-                digits = digits.max(1)
-            )
+            format!("{:.digits$} kHz, {}", value / 1000.0, note_str, digits = digits.max(1))
         }
     })
 }
@@ -223,10 +210,9 @@ pub fn s2v_f32_hz_then_khz() -> Arc<dyn Fn(&str) -> Option<f32> + Send + Sync> {
                 .trim_start_matches([' ', '+'])
                 .trim_end_matches([' ', 'C', 'c', 'E', 'e', 'N', 'n', 'T', 't', 'S', 's', '.']);
 
-            if let (Some(midi_note_number), Ok(cents)) = (
-                note_formatter(midi_note_number_str),
-                cents_str.parse::<i32>(),
-            ) {
+            if let (Some(midi_note_number), Ok(cents)) =
+                (note_formatter(midi_note_number_str), cents_str.parse::<i32>())
+            {
                 let plain_note_freq = util::f32_midi_note_to_freq(midi_note_number as f32);
                 let cents_multiplier = 2.0f32.powf(cents as f32 / 100.0 / 12.0);
                 return Some(plain_note_freq * cents_multiplier);
@@ -243,10 +229,8 @@ pub fn s2v_f32_hz_then_khz() -> Arc<dyn Fn(&str) -> Option<f32> + Send + Sync> {
 
         // Otherwise we'll accept values in either Hz (with or without unit) or kHz
         let frequency_segment = segments.0?;
-        let cleaned_string = frequency_segment
-            .trim_end_matches([' ', 'k', 'K', 'h', 'H', 'z', 'Z'])
-            .parse()
-            .ok();
+        let cleaned_string =
+            frequency_segment.trim_end_matches([' ', 'k', 'K', 'h', 'H', 'z', 'Z']).parse().ok();
         match frequency_segment.get(frequency_segment.len().saturating_sub(3)..) {
             Some(unit) if unit.eq_ignore_ascii_case("khz") => cleaned_string.map(|x| x * 1000.0),
             // Even if there's no unit at all, just assume the input is in Hertz
@@ -288,9 +272,8 @@ pub fn s2v_i32_note_formatter() -> Arc<dyn Fn(&str) -> Option<i32> + Send + Sync
         // A valid trimmed string will either be be at least two characters (we already checked the
         // length) or at least three characters if the second character is a hash, and there may be
         // spaces in between the note name and the octave number
-        let (note_name, octave) = string
-            .split_once(|c: char| c.is_whitespace())
-            .unwrap_or_else(|| {
+        let (note_name, octave) =
+            string.split_once(|c: char| c.is_whitespace()).unwrap_or_else(|| {
                 // Sharps need to be handled separately
                 if string.len() > 2 && &string[1..2] == "#" {
                     (&string[..2], &string[2..])
@@ -299,10 +282,9 @@ pub fn s2v_i32_note_formatter() -> Arc<dyn Fn(&str) -> Option<i32> + Send + Sync
                 }
             });
 
-        let note_id = util::NOTES
-            .iter()
-            .position(|&candidate| note_name.eq_ignore_ascii_case(candidate))?
-            as i32;
+        let note_id =
+            util::NOTES.iter().position(|&candidate| note_name.eq_ignore_ascii_case(candidate))?
+                as i32;
         let octave: i32 = octave.trim().parse().ok()?;
 
         // 0 = C-1, 12 = C0, 24 = C1
@@ -313,13 +295,11 @@ pub fn s2v_i32_note_formatter() -> Arc<dyn Fn(&str) -> Option<i32> + Send + Sync
 /// Display 'Bypassed' or 'Not Bypassed' depending on whether the parameter is true or false.
 /// 'Enabled' would have also been a possibility here, but that could be a bit confusing.
 pub fn v2s_bool_bypass() -> Arc<dyn Fn(bool) -> String + Send + Sync> {
-    Arc::new(move |value| {
-        if value {
-            String::from("Bypassed")
-        } else {
-            String::from("Not Bypassed")
-        }
-    })
+    Arc::new(
+        move |value| {
+            if value { String::from("Bypassed") } else { String::from("Not Bypassed") }
+        },
+    )
 }
 
 /// Parse a string in the same format as [`v2s_bool_bypass()`].

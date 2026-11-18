@@ -96,7 +96,9 @@ impl<P: ClapPlugin> Wrapper<P> {
         // notification head until the complete host batch has validated.
         let gui_snapshot = if P::CLAP_PERFORMANCE {
             self.output_parameter_events.borrow_mut().events.slots()
-        } else { 0 };
+        } else {
+            0
+        };
         let (batch, original_len) = {
             let mut guard = self.owned_input.lock();
             let input = guard.as_mut().unwrap();
@@ -162,16 +164,28 @@ impl<P: ClapPlugin> Wrapper<P> {
             let chunk = gui.events.read_chunk(admitted + visits).expect("GUI snapshot retained");
             let (first, second) = chunk.as_slices();
             for index in admitted..admitted + visits {
-                let change = if index < first.len() { first[index] } else { second[index - first.len()] };
+                let change =
+                    if index < first.len() { first[index] } else { second[index - first.len()] };
                 if let OutputParamEvent::SetValue { param_hash, clap_plain_value } = change {
-                    input.storage.push(make(InputValue::Parameter {
-                        id: param_hash, value: clap_plain_value, modulation: false,
-                    }, u32::MAX, 0)).unwrap();
+                    input
+                        .storage
+                        .push(make(
+                            InputValue::Parameter {
+                                id: param_hash,
+                                value: clap_plain_value,
+                                modulation: false,
+                            },
+                            u32::MAX,
+                            0,
+                        ))
+                        .unwrap();
                 }
             }
             // Dropping a read chunk does not reclaim notifications.
             admitted + visits
-        } else { 0 };
+        } else {
+            0
+        };
         let mut status = InputStatus::Complete;
         let mut previous_time = 0;
         for index in 0..count {

@@ -178,12 +178,7 @@ impl Transport {
 
     /// The position in the song in samples. Will be calculated from other information if needed.
     pub fn pos_samples(&self) -> Option<i64> {
-        match (
-            self.pos_samples,
-            self.pos_seconds,
-            self.pos_beats,
-            self.tempo,
-        ) {
+        match (self.pos_samples, self.pos_seconds, self.pos_beats, self.tempo) {
             (Some(pos_samples), _, _, _) => Some(pos_samples),
             (_, Some(pos_seconds), _, _) => {
                 Some((pos_seconds * self.sample_rate as f64).round() as i64)
@@ -197,12 +192,7 @@ impl Transport {
 
     /// The position in the song in seconds. Can be used to calculate the time in samples if needed.
     pub fn pos_seconds(&self) -> Option<f64> {
-        match (
-            self.pos_samples,
-            self.pos_seconds,
-            self.pos_beats,
-            self.tempo,
-        ) {
+        match (self.pos_samples, self.pos_seconds, self.pos_beats, self.tempo) {
             (_, Some(pos_seconds), _, _) => Some(pos_seconds),
             (Some(pos_samples), _, _, _) => Some(pos_samples as f64 / self.sample_rate as f64),
             (_, _, Some(pos_beats), Some(tempo)) => Some(pos_beats / tempo * 60.0),
@@ -213,12 +203,7 @@ impl Transport {
     /// The position in the song in quarter notes. Will be calculated from other information if
     /// needed.
     pub fn pos_beats(&self) -> Option<f64> {
-        match (
-            self.pos_samples,
-            self.pos_seconds,
-            self.pos_beats,
-            self.tempo,
-        ) {
+        match (self.pos_samples, self.pos_seconds, self.pos_beats, self.tempo) {
             (_, _, Some(pos_beats), _) => Some(pos_beats),
             (_, Some(pos_seconds), _, Some(tempo)) => Some(pos_seconds / 60.0 * tempo),
             (Some(pos_samples), _, _, Some(tempo)) => {
@@ -234,11 +219,7 @@ impl Transport {
             return self.bar_start_pos_beats;
         }
 
-        match (
-            self.time_sig_numerator,
-            self.time_sig_denominator,
-            self.pos_beats(),
-        ) {
+        match (self.time_sig_numerator, self.time_sig_denominator, self.pos_beats()) {
             (Some(time_sig_numerator), Some(time_sig_denominator), Some(pos_beats)) => {
                 let quarter_note_bar_length =
                     time_sig_numerator as f64 / time_sig_denominator as f64 * 4.0;
@@ -255,11 +236,7 @@ impl Transport {
             return self.bar_number;
         }
 
-        match (
-            self.time_sig_numerator,
-            self.time_sig_denominator,
-            self.pos_beats(),
-        ) {
+        match (self.time_sig_numerator, self.time_sig_denominator, self.pos_beats()) {
             (Some(time_sig_numerator), Some(time_sig_denominator), Some(pos_beats)) => {
                 let quarter_note_bar_length =
                     time_sig_numerator as f64 / time_sig_denominator as f64 * 4.0;
@@ -273,12 +250,8 @@ impl Transport {
     /// the plugin API docs mention whether this is exclusive or inclusive, but just assume that the
     /// end is exclusive. Will be calculated from other information if needed.
     pub fn loop_range_samples(&self) -> Option<(i64, i64)> {
-        match (
-            self.loop_range_samples,
-            self.loop_range_seconds,
-            self.loop_range_beats,
-            self.tempo,
-        ) {
+        match (self.loop_range_samples, self.loop_range_seconds, self.loop_range_beats, self.tempo)
+        {
             (Some(loop_range_samples), _, _, _) => Some(loop_range_samples),
             (_, Some((start_seconds, end_seconds)), _, _) => Some((
                 ((start_seconds * self.sample_rate as f64).round() as i64),
@@ -296,12 +269,8 @@ impl Transport {
     /// the plugin API docs mention whether this is exclusive or inclusive, but just assume that the
     /// end is exclusive. Will be calculated from other information if needed.
     pub fn loop_range_seconds(&self) -> Option<(f64, f64)> {
-        match (
-            self.loop_range_samples,
-            self.loop_range_seconds,
-            self.loop_range_beats,
-            self.tempo,
-        ) {
+        match (self.loop_range_samples, self.loop_range_seconds, self.loop_range_beats, self.tempo)
+        {
             (_, Some(loop_range_seconds), _, _) => Some(loop_range_seconds),
             (Some((start_samples, end_samples)), _, _, _) => Some((
                 start_samples as f64 / self.sample_rate as f64,
@@ -318,12 +287,8 @@ impl Transport {
     /// None of the plugin API docs mention whether this is exclusive or inclusive, but just assume
     /// that the end is exclusive. Will be calculated from other information if needed.
     pub fn loop_range_beats(&self) -> Option<(f64, f64)> {
-        match (
-            self.loop_range_samples,
-            self.loop_range_seconds,
-            self.loop_range_beats,
-            self.tempo,
-        ) {
+        match (self.loop_range_samples, self.loop_range_seconds, self.loop_range_beats, self.tempo)
+        {
             (_, _, Some(loop_range_beats), _) => Some(loop_range_beats),
             (_, Some((start_seconds, end_seconds)), _, Some(tempo)) => {
                 Some((start_seconds / 60.0 * tempo, end_seconds / 60.0 * tempo))

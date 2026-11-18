@@ -529,58 +529,39 @@ impl<S: SysExMessage> NoteEvent<S> {
     /// other polyphonic note expression types will not be converted to MIDI CC messages.
     pub fn as_midi(self) -> Option<MidiResult<S>> {
         match self {
-            NoteEvent::NoteOn {
-                timing: _,
-                voice_id: _,
-                channel,
-                note,
-                velocity,
-            } => Some(MidiResult::Basic([
-                midi::NOTE_ON | channel,
-                note,
-                // MIDI treats note ons with zero velocity as note offs, because reasons
-                (velocity * 127.0).round().clamp(1.0, 127.0) as u8,
-            ])),
-            NoteEvent::NoteOff {
-                timing: _,
-                voice_id: _,
-                channel,
-                note,
-                velocity,
-            } => Some(MidiResult::Basic([
-                midi::NOTE_OFF | channel,
-                note,
-                (velocity * 127.0).round().clamp(0.0, 127.0) as u8,
-            ])),
-            NoteEvent::PolyPressure {
-                timing: _,
-                voice_id: _,
-                channel,
-                note,
-                pressure,
-            } => Some(MidiResult::Basic([
-                midi::POLYPHONIC_KEY_PRESSURE | channel,
-                note,
-                (pressure * 127.0).round().clamp(0.0, 127.0) as u8,
-            ])),
-            NoteEvent::MidiChannelPressure {
-                timing: _,
-                channel,
-                pressure,
-            } => Some(MidiResult::Basic([
-                midi::CHANNEL_KEY_PRESSURE | channel,
-                (pressure * 127.0).round().clamp(0.0, 127.0) as u8,
-                0,
-            ])),
-            NoteEvent::MidiPitchBend {
-                timing: _,
-                channel,
-                value,
-            } => {
+            NoteEvent::NoteOn { timing: _, voice_id: _, channel, note, velocity } => {
+                Some(MidiResult::Basic([
+                    midi::NOTE_ON | channel,
+                    note,
+                    // MIDI treats note ons with zero velocity as note offs, because reasons
+                    (velocity * 127.0).round().clamp(1.0, 127.0) as u8,
+                ]))
+            }
+            NoteEvent::NoteOff { timing: _, voice_id: _, channel, note, velocity } => {
+                Some(MidiResult::Basic([
+                    midi::NOTE_OFF | channel,
+                    note,
+                    (velocity * 127.0).round().clamp(0.0, 127.0) as u8,
+                ]))
+            }
+            NoteEvent::PolyPressure { timing: _, voice_id: _, channel, note, pressure } => {
+                Some(MidiResult::Basic([
+                    midi::POLYPHONIC_KEY_PRESSURE | channel,
+                    note,
+                    (pressure * 127.0).round().clamp(0.0, 127.0) as u8,
+                ]))
+            }
+            NoteEvent::MidiChannelPressure { timing: _, channel, pressure } => {
+                Some(MidiResult::Basic([
+                    midi::CHANNEL_KEY_PRESSURE | channel,
+                    (pressure * 127.0).round().clamp(0.0, 127.0) as u8,
+                    0,
+                ]))
+            }
+            NoteEvent::MidiPitchBend { timing: _, channel, value } => {
                 const PITCH_BEND_RANGE: f32 = ((1 << 14) - 1) as f32;
-                let midi_value = (value * PITCH_BEND_RANGE)
-                    .round()
-                    .clamp(0.0, PITCH_BEND_RANGE) as u16;
+                let midi_value =
+                    (value * PITCH_BEND_RANGE).round().clamp(0.0, PITCH_BEND_RANGE) as u16;
 
                 Some(MidiResult::Basic([
                     midi::PITCH_BEND_CHANGE | channel,
@@ -588,25 +569,14 @@ impl<S: SysExMessage> NoteEvent<S> {
                     (midi_value >> 7) as u8,
                 ]))
             }
-            NoteEvent::MidiCC {
-                timing: _,
-                channel,
-                cc,
-                value,
-            } => Some(MidiResult::Basic([
+            NoteEvent::MidiCC { timing: _, channel, cc, value } => Some(MidiResult::Basic([
                 midi::CONTROL_CHANGE | channel,
                 cc,
                 (value * 127.0).round().clamp(0.0, 127.0) as u8,
             ])),
-            NoteEvent::MidiProgramChange {
-                timing: _,
-                channel,
-                program,
-            } => Some(MidiResult::Basic([
-                midi::PROGRAM_CHANGE | channel,
-                program,
-                0,
-            ])),
+            NoteEvent::MidiProgramChange { timing: _, channel, program } => {
+                Some(MidiResult::Basic([midi::PROGRAM_CHANGE | channel, program, 0]))
+            }
             // `message` is serialized and written to `sysex_buffer`, and the result contains the
             // message's actual length
             NoteEvent::MidiSysEx { timing: _, message } => {
@@ -721,34 +691,21 @@ mod tests {
 
     #[test]
     fn test_pitch_bend_midi_conversion() {
-        let event = NoteEvent::<()>::MidiPitchBend {
-            timing: TIMING,
-            channel: 1,
-            value: 0.6929134,
-        };
+        let event = NoteEvent::<()>::MidiPitchBend { timing: TIMING, channel: 1, value: 0.6929134 };
 
         assert_eq!(roundtrip_basic_event(event), event);
     }
 
     #[test]
     fn test_cc_midi_conversion() {
-        let event = NoteEvent::<()>::MidiCC {
-            timing: TIMING,
-            channel: 1,
-            cc: 2,
-            value: 0.6929134,
-        };
+        let event = NoteEvent::<()>::MidiCC { timing: TIMING, channel: 1, cc: 2, value: 0.6929134 };
 
         assert_eq!(roundtrip_basic_event(event), event);
     }
 
     #[test]
     fn test_program_change_midi_conversion() {
-        let event = NoteEvent::<()>::MidiProgramChange {
-            timing: TIMING,
-            channel: 1,
-            program: 42,
-        };
+        let event = NoteEvent::<()>::MidiProgramChange { timing: TIMING, channel: 1, program: 42 };
 
         assert_eq!(roundtrip_basic_event(event), event);
     }
@@ -785,20 +742,14 @@ mod tests {
 
             assert_eq!(
                 parsed,
-                NoteEvent::MidiSysEx {
-                    timing: TIMING,
-                    message: MessageType::Foo(1.0)
-                }
+                NoteEvent::MidiSysEx { timing: TIMING, message: MessageType::Foo(1.0) }
             );
         }
 
         #[test]
         fn test_convert_to_buffer() {
             let message = MessageType::Foo(1.0);
-            let event = NoteEvent::MidiSysEx {
-                timing: TIMING,
-                message,
-            };
+            let event = NoteEvent::MidiSysEx { timing: TIMING, message };
 
             match event.as_midi() {
                 Some(MidiResult::SysEx(padded_sysex_buffer, length)) => {

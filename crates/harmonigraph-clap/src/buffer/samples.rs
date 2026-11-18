@@ -175,9 +175,7 @@ impl<'slice, 'sample> ChannelSamples<'slice, 'sample> {
         let mut values = [0.0; LANES];
         for (channel_idx, value) in values.iter_mut().enumerate().take(used_lanes) {
             *value = unsafe {
-                *(&(*self.buffers))
-                    .get_unchecked(channel_idx)
-                    .get_unchecked(self.current_sample)
+                *(&(*self.buffers)).get_unchecked(channel_idx).get_unchecked(self.current_sample)
             };
         }
 
@@ -196,9 +194,7 @@ impl<'slice, 'sample> ChannelSamples<'slice, 'sample> {
         let mut values = [0.0; LANES];
         for (channel_idx, value) in values.iter_mut().enumerate() {
             *value = unsafe {
-                *(&(*self.buffers))
-                    .get_unchecked(channel_idx)
-                    .get_unchecked(self.current_sample)
+                *(&(*self.buffers)).get_unchecked(channel_idx).get_unchecked(self.current_sample)
             };
         }
 

@@ -76,14 +76,8 @@ impl BufferManager {
     /// using channel pointer data using [`create_buffers()`][Self::create_buffers()].
     pub fn for_audio_io_layout(max_buffer_size: usize, audio_io_layout: AudioIOLayout) -> Self {
         crate::nice_debug_assert!(
-            audio_io_layout
-                .main_input_channels
-                .map(NonZeroU32::get)
-                .unwrap_or(0)
-                <= audio_io_layout
-                    .main_output_channels
-                    .map(NonZeroU32::get)
-                    .unwrap_or(0),
+            audio_io_layout.main_input_channels.map(NonZeroU32::get).unwrap_or(0)
+                <= audio_io_layout.main_output_channels.map(NonZeroU32::get).unwrap_or(0),
             "Stereo-to-mono and other many-to-few audio channel configurations are currently not \
              supported"
         );
@@ -94,10 +88,7 @@ impl BufferManager {
         unsafe {
             main_buffer.set_slices(0, |output_slices| {
                 output_slices.resize_with(
-                    audio_io_layout
-                        .main_output_channels
-                        .map(NonZeroU32::get)
-                        .unwrap_or(0) as usize,
+                    audio_io_layout.main_output_channels.map(NonZeroU32::get).unwrap_or(0) as usize,
                     || &mut [],
                 );
             })
@@ -114,10 +105,7 @@ impl BufferManager {
             };
 
             aux_input_buffers.push(buffer);
-            aux_input_storage.push(vec![
-                vec![0.0; max_buffer_size];
-                num_channels.get() as usize
-            ]);
+            aux_input_storage.push(vec![vec![0.0; max_buffer_size]; num_channels.get() as usize]);
         }
 
         let mut aux_output_buffers = Vec::with_capacity(audio_io_layout.aux_output_ports.len());
@@ -222,10 +210,9 @@ impl BufferManager {
 
         // Since nice-plug processes audio in-place, main input data needs to be copied to the main
         // output buffers
-        if let (Some(input_channel_pointers), Some(output_channel_pointers)) = (
-            self.main_input_channel_pointers,
-            self.main_output_channel_pointers,
-        ) {
+        if let (Some(input_channel_pointers), Some(output_channel_pointers)) =
+            (self.main_input_channel_pointers, self.main_output_channel_pointers)
+        {
             unsafe {
                 self.main_buffer.set_slices(num_samples, |output_slices| {
                     for (channel_idx, output_slice) in output_slices
@@ -267,12 +254,10 @@ impl BufferManager {
         // Because nice-plug's `Buffer` type is geared around in-place processing, auxiliary inputs
         // need to be copied to our own buffers first (backed by the 'storage' vectors on this
         // object). That way the plugin can modify those buffers like any other buffers.
-        for (input_channel_pointers, (input_storage, input_buffer)) in
-            self.aux_input_channel_pointers.iter().zip(
-                self.aux_input_storage
-                    .iter_mut()
-                    .zip(self.aux_input_buffers.iter_mut()),
-            )
+        for (input_channel_pointers, (input_storage, input_buffer)) in self
+            .aux_input_channel_pointers
+            .iter()
+            .zip(self.aux_input_storage.iter_mut().zip(self.aux_input_buffers.iter_mut()))
         {
             // Both copied input and silence must expose this callback's length,
             // even when a preceding callback shrank the backing slices.
@@ -307,9 +292,8 @@ impl BufferManager {
 
                     // In case we were provided too few channels we'll fill the rest with zeroes to
                     // avoid unexpected situations
-                    for channel in input_storage
-                        .iter_mut()
-                        .skip(input_channel_pointers.num_channels)
+                    for channel in
+                        input_storage.iter_mut().skip(input_channel_pointers.num_channels)
                     {
                         channel.fill(0.0);
                     }
@@ -338,10 +322,8 @@ impl BufferManager {
 
         // The auxiliary output buffers can point directly to the host's buffers. This logic is the
         // same as the main outputs, minus the copying of input cdata
-        for (output_channel_pointers, output_buffer) in self
-            .aux_output_channel_pointers
-            .iter()
-            .zip(self.aux_output_buffers.iter_mut())
+        for (output_channel_pointers, output_buffer) in
+            self.aux_output_channel_pointers.iter().zip(self.aux_output_buffers.iter_mut())
         {
             unsafe {
                 output_buffer.set_slices(num_samples, |output_slices| {
@@ -427,10 +409,8 @@ mod miri {
         let mut aux_output_storage =
             vec![vec![vec![0.0f32; BUFFER_SIZE]; NUM_AUX_CHANNELS]; NUM_AUX_PORTS];
 
-        let mut main_io_channel_pointers: Vec<*mut f32> = main_io_storage
-            .iter_mut()
-            .map(|channel_slice| channel_slice.as_mut_ptr())
-            .collect();
+        let mut main_io_channel_pointers: Vec<*mut f32> =
+            main_io_storage.iter_mut().map(|channel_slice| channel_slice.as_mut_ptr()).collect();
         let mut aux_input_channel_pointers: Vec<Vec<*mut f32>> = aux_input_storage
             .iter_mut()
             .map(|aux_input_storage| {
@@ -491,18 +471,8 @@ mod miri {
         for channel_samples in buffers
             .main_buffer
             .iter_samples()
-            .chain(
-                buffers
-                    .aux_inputs
-                    .iter_mut()
-                    .flat_map(|buffer| buffer.iter_samples()),
-            )
-            .chain(
-                buffers
-                    .aux_outputs
-                    .iter_mut()
-                    .flat_map(|buffer| buffer.iter_samples()),
-            )
+            .chain(buffers.aux_inputs.iter_mut().flat_map(|buffer| buffer.iter_samples()))
+            .chain(buffers.aux_outputs.iter_mut().flat_map(|buffer| buffer.iter_samples()))
         {
             for sample in channel_samples {
                 *sample += 1.0;

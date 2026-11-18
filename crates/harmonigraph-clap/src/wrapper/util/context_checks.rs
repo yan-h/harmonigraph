@@ -18,11 +18,7 @@ impl Drop for ParamGestureChecker {
             self.active_params.is_empty(),
             "GuiContext::end_set_parameter() was never called for {} {} {:?}",
             self.active_params.len(),
-            if self.active_params.len() == 1 {
-                "parameter"
-            } else {
-                "parameters"
-            },
+            if self.active_params.len() == 1 { "parameter" } else { "parameters" },
             self.active_params
         );
     }

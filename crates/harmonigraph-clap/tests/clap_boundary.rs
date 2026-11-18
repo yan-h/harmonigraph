@@ -1094,10 +1094,8 @@ fn one_batch_scan_limit_includes_nonperformance_events() {
     // Only the callback whose input was captured carries the final flush; the
     // Full one finalizes with a blind writer.
     assert_eq!(d.sink.attempts.len(), 1);
-    let mut d = Device::new(
-        Control { final_flush: true, ..Default::default() },
-        c"fixture.performance",
-    );
+    let mut d =
+        Device::new(Control { final_flush: true, ..Default::default() }, c"fixture.performance");
     assert_eq!(d.run(0, 64, vec![on(0); INPUT_SCAN + 1], true), CLAP_PROCESS_ERROR);
     assert!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.is_empty());
     assert!(d.sink.attempts.is_empty());
@@ -1195,13 +1193,9 @@ fn missing_output_and_error_exits_finalize_with_a_blind_writer() {
 #[test]
 fn parameter_output_follows_its_subblock_notes_at_the_subblock_end() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut script = instructions([(0, note(CLAP_EVENT_NOTE_OFF)), (31, note(CLAP_EVENT_NOTE_OFF))]);
-    script.push(Instruction {
-        callback: 1,
-        block: 32,
-        time: 40,
-        value: note(CLAP_EVENT_NOTE_OFF),
-    });
+    let mut script =
+        instructions([(0, note(CLAP_EVENT_NOTE_OFF)), (31, note(CLAP_EVENT_NOTE_OFF))]);
+    script.push(Instruction { callback: 1, block: 32, time: 40, value: note(CLAP_EVENT_NOTE_OFF) });
     let mut d = Device::new(Control { script, ..Default::default() }, c"fixture.combined");
     let gui = d.gui::<true, true>();
     gui(&[0.75]);

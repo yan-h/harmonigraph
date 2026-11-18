@@ -78,7 +78,11 @@ pub(crate) struct InputStorage {
 }
 impl Default for InputStorage {
     fn default() -> Self {
-        Self { cells: vec![None; INPUT_SCAN].into_boxed_slice().try_into().unwrap(), head: 0, len: 0 }
+        Self {
+            cells: vec![None; INPUT_SCAN].into_boxed_slice().try_into().unwrap(),
+            head: 0,
+            len: 0,
+        }
     }
 }
 impl InputStorage {

@@ -1,7 +1,3 @@
-use atomic_refcell::AtomicRefMut;
-use clap_sys::ext::remote_controls::{CLAP_REMOTE_CONTROLS_COUNT, clap_remote_controls_page};
-use clap_sys::id::{CLAP_INVALID_ID, clap_id};
-use clap_sys::string_sizes::CLAP_NAME_SIZE;
 use crate::context::PluginApi;
 use crate::context::gui::GuiContext;
 use crate::context::init::InitContext;
@@ -13,6 +9,10 @@ use crate::midi::PluginNoteEvent;
 use crate::params::Param;
 use crate::params::internals::ParamPtr;
 use crate::plugin::PluginState;
+use atomic_refcell::AtomicRefMut;
+use clap_sys::ext::remote_controls::{CLAP_REMOTE_CONTROLS_COUNT, clap_remote_controls_page};
+use clap_sys::id::{CLAP_INVALID_ID, clap_id};
+use clap_sys::string_sizes::CLAP_NAME_SIZE;
 use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -128,7 +128,9 @@ impl<P: ClapPlugin> ProcessContext<P> for WrapperProcessContext<'_, P> {
     fn send_event(&mut self, event: PluginNoteEvent<P>) {
         if P::CLAP_PERFORMANCE {
             self.wrapper.legacy_send_misuse.store(true, std::sync::atomic::Ordering::Release);
-        } else { self.output_events_guard.push_back(event); }
+        } else {
+            self.output_events_guard.push_back(event);
+        }
     }
 
     fn set_latency_samples(&self, samples: u32) {
@@ -169,10 +171,7 @@ impl<P: ClapPlugin> GuiContext for WrapperGuiContext<P> {
 
         #[cfg(debug_assertions)]
         match self.wrapper.param_id_from_ptr(param) {
-            Some(param_id) => self
-                .param_gesture_checker
-                .borrow_mut()
-                .begin_set_parameter(param_id),
+            Some(param_id) => self.param_gesture_checker.borrow_mut().begin_set_parameter(param_id),
             None => crate::nice_debug_assert_failure!(
                 "raw_begin_set_parameter() called with an unknown ParamPtr"
             ),
@@ -188,12 +187,10 @@ impl<P: ClapPlugin> GuiContext for WrapperGuiContext<P> {
                 // host notification retries never mutate the parameter again.
                 let clap_plain_value =
                     normalized as f64 * unsafe { param.step_count().unwrap_or(1) as f64 };
-                let success = self
-                    .wrapper
-                    .queue_parameter_event(OutputParamEvent::SetValue {
-                        param_hash: *hash,
-                        clap_plain_value,
-                    });
+                let success = self.wrapper.queue_parameter_event(OutputParamEvent::SetValue {
+                    param_hash: *hash,
+                    clap_plain_value,
+                });
 
                 crate::nice_debug_assert!(
                     success,
@@ -206,10 +203,7 @@ impl<P: ClapPlugin> GuiContext for WrapperGuiContext<P> {
 
         #[cfg(debug_assertions)]
         match self.wrapper.param_id_from_ptr(param) {
-            Some(param_id) => self
-                .param_gesture_checker
-                .borrow_mut()
-                .set_parameter(param_id),
+            Some(param_id) => self.param_gesture_checker.borrow_mut().set_parameter(param_id),
             None => {
                 crate::nice_debug_assert_failure!(
                     "raw_set_parameter() called with an unknown ParamPtr"
@@ -236,10 +230,7 @@ impl<P: ClapPlugin> GuiContext for WrapperGuiContext<P> {
 
         #[cfg(debug_assertions)]
         match self.wrapper.param_id_from_ptr(param) {
-            Some(param_id) => self
-                .param_gesture_checker
-                .borrow_mut()
-                .end_set_parameter(param_id),
+            Some(param_id) => self.param_gesture_checker.borrow_mut().end_set_parameter(param_id),
             None => {
                 crate::nice_debug_assert_failure!(
                     "raw_end_set_parameter() called with an unknown ParamPtr"
@@ -278,10 +269,7 @@ impl<'a> RemoteControlPages<'a> {
         param_ptr_to_hash: &'a HashMap<ParamPtr, u32>,
     ) {
         // The magic happens in the `add_section()` function defined below
-        plugin.remote_controls(&mut Self {
-            pages,
-            param_ptr_to_hash,
-        });
+        plugin.remote_controls(&mut Self { pages, param_ptr_to_hash });
     }
 
     /// Perform the boilerplate needed for creating and adding a new [`clap_remote_controls_page`].
@@ -341,9 +329,7 @@ impl RemoteControlsContext for RemoteControlPages<'_> {
 
     fn add_section(&mut self, name: impl Into<String>, f: impl FnOnce(&mut Self::Section)) {
         let section_name = name.into();
-        let mut section = Section {
-            pages: Vec::with_capacity(1),
-        };
+        let mut section = Section { pages: Vec::with_capacity(1) };
         f(&mut section);
 
         // The pages in the section may need to be split up into multiple pages if it defines more
@@ -372,10 +358,8 @@ impl RemoteControlsSection for Section {
     type Page = Page;
 
     fn add_page(&mut self, name: impl Into<String>, f: impl FnOnce(&mut Self::Page)) {
-        let mut page = Page {
-            name: name.into(),
-            params: Vec::with_capacity(CLAP_REMOTE_CONTROLS_COUNT),
-        };
+        let mut page =
+            Page { name: name.into(), params: Vec::with_capacity(CLAP_REMOTE_CONTROLS_COUNT) };
         f(&mut page);
 
         self.pages.push(page);

@@ -127,12 +127,8 @@ impl AudioIOLayout {
 
         // If the name is not set then we'll try to come up with something descriptive
         match (
-            self.main_input_channels
-                .map(NonZeroU32::get)
-                .unwrap_or_default(),
-            self.main_output_channels
-                .map(NonZeroU32::get)
-                .unwrap_or_default(),
+            self.main_input_channels.map(NonZeroU32::get).unwrap_or_default(),
+            self.main_output_channels.map(NonZeroU32::get).unwrap_or_default(),
             self.aux_input_ports.len(),
             self.aux_output_ports.len(),
         ) {
