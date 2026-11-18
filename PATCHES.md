@@ -95,7 +95,7 @@ No tuning or sequencing policy belongs in this framework patch.
 
 The editor window's two crates are shared with otonal and live in their own public repository, [egui-plugin-window](https://github.com/yan-h/egui-plugin-window), whose `PATCHES.md` now holds the patches they carry and how they are upgraded.
 The root `Cargo.toml` pins both by commit in `[patch.crates-io]`.
-A change to them lands there first and reaches Harmonigraph as a bump of that `rev`, which moves only the two packages' `source` lines in `Cargo.lock`.
+A change to them lands there first and reaches Harmonigraph as a bump of that `rev`, together with `plugin-own-window`'s below, which moves only the three packages' `source` lines in `Cargo.lock`.
 
 The editor's own window comes from the same repository and commit:
 its crate `plugin-own-window`, shared with otonal, which carries no patch since it has no upstream.
@@ -106,13 +106,17 @@ that file is now the adapter, which gives the window its name, its size limits, 
 Harmonigraph keeps proving the one build that repository's CI cannot:
 the plugin's `frame-log` feature, which reaches into egui-baseview and needs the patched wgpu-hal above (`cargo build -p harmonigraph-plugin --features frame-log`).
 
-To try a windowing change against Harmonigraph before pushing it there, point the patch at a local checkout:
+To try a windowing change against Harmonigraph before pushing it there, point the three crates at a local checkout:
 
 ```
 cargo build -p harmonigraph-plugin \
   --config 'patch.crates-io.baseview.path="<checkout>/baseview"' \
-  --config 'patch.crates-io.egui-baseview.path="<checkout>/egui-baseview"'
+  --config 'patch.crates-io.egui-baseview.path="<checkout>/egui-baseview"' \
+  --config 'patch."https://github.com/yan-h/egui-plugin-window".plugin-own-window.path="<checkout>/plugin-own-window"'
 ```
+
+The override rewrites the packages' `source` lines in `Cargo.lock`;
+restore it with `git checkout Cargo.lock` afterwards, and do not commit it.
 
 A patch in configuration takes precedence over the manifest's, so this builds the checkout rather than the pin.
 It also rewrites the two packages' `source` lines in `Cargo.lock`;

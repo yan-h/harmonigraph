@@ -280,8 +280,9 @@ run golden_diff
 # dependencies and runs none of their tests. nice-plug's upstream tests exercise
 # macros and serialization; its patched CLAP boundary is exercised by the
 # exported-CLAP fixture above, including activation latency and allocation
-# guards. The editor window's crates (baseview, egui-baseview) are pinned from
-# egui-plugin-window, whose own CI runs their tests.
+# guards. The editor window's crates (baseview, egui-baseview) and the editor's
+# own window (plugin-own-window) are pinned from egui-plugin-window, whose own
+# CI runs their tests.
 #
 # nice-plug is its own workspace root, so keep its target under `target/debug`:
 # the idle-worktree reclaimer owns that whole subtree.

@@ -40,4 +40,4 @@ The 2026-10-22 section moved here from `editor-shell.md` when the 2026-11-02 dri
 ## 2026-11-17 (the shared own window, yan-h/otonal#1673)
 
 - The own window remembers only where it was: each instance opens its own window at the size its project saved, rather than at the last own window's size. yan-h/egui-plugin-window#12 (answer A)
-- The own window has a maximum size, and keeps its top-left corner when a pane folds. The maximum chosen is 8192 points a side (`MAX_SIZE`), the size past which egui-baseview already refused the picture's surface on a Retina display. yan-h/otonal#1673
+- The own window has a maximum size, and keeps its top-left corner when a pane folds. yan-h/otonal#1673 (The value is the implementer's, derived in `MAX_SIZE`'s comment, not Yan's choice.)
