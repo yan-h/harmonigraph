@@ -606,7 +606,11 @@ fn a_full_command_queue_keeps_accepted_state() {
     let mut refused = restored(&device, 700.0);
     refused.params.insert(ParamKey::CameraDistance.id().into(), ParamValue::F32(20.0));
     assert!(!device.try_load(refused), "a restore needs a free slot");
-    assert_eq!(settings.take_notice(), Some(RESTORE_REFUSED), "and says so in the Console");
+    assert_eq!(
+        settings.take_notice().as_deref(),
+        Some(RESTORE_REFUSED),
+        "and says so in the Console"
+    );
     let after = device.save();
     assert_eq!(saved(&after).axes[1], microcents(695.0));
     assert_eq!(
@@ -746,6 +750,33 @@ fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
     }
 }
 
+/// A saved field that does not parse costs that field alone, with a Console
+/// line: the rest of the project restores, and the instance keeps what it
+/// held for the field.
+#[test]
+fn a_field_that_does_not_parse_is_skipped_with_a_console_line() {
+    let _scope = crate::test_scope::enter();
+    let device = Device::new();
+    let maps = |device: &Device| {
+        device.wrapper().test_inspect_plugin(|plugin| {
+            serde_json::to_string(&*plugin.params.maps.read()).unwrap()
+        })
+    };
+    let before = maps(&device);
+    let mut state = device.wrapper().get_state_object();
+    state.fields.insert("lattice-maps".into(), "{not json".into());
+    state.fields.insert("editor-state".into(), r#"{"size":[901,702]}"#.into());
+    state.params.insert("map-fifths".into(), ParamValue::I32(3));
+    device.load(state, false);
+    assert_eq!(maps(&device), before, "the maps the instance held");
+    let (size, fifths) = device.wrapper().test_inspect_plugin(|plugin| {
+        (plugin.params.editor_state.size(), plugin.params.int(crate::Row::MapFifths))
+    });
+    assert_eq!((size, fifths), ((901, 702), 3), "the rest of the project");
+    let line = device.settings().take_notice().expect("a Console line");
+    assert!(line.starts_with("This project's saved lattice-maps could not be read"), "{line}");
+}
+
 /// A project saved while the axes were host parameters (#1756) holds them
 /// there, beside musical settings without axes. It opens at fresh axes with
 /// one Console notice, keeps its links, and saves no tuning parameter back.
@@ -761,7 +792,14 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     state.params.insert("tuning-tolerance".into(), ParamValue::F32(3.0));
     state.fields.insert(MUSICAL_SETTINGS.into(), r#"{"meantone":false,"marvel":true}"#.into());
     device.load(state, false);
-    assert_eq!(settings.take_notice(), Some(LEGACY_AXES));
+    assert_eq!(
+        settings.take_notice().as_deref(),
+        Some(
+            "This project saved parameters this build no longer has, which were not read: \
+             tuning-three, tuning-tolerance."
+        )
+    );
+    assert_eq!(settings.take_notice().as_deref(), Some(LEGACY_AXES));
     assert_eq!(settings.take_notice(), None, "the notice is given once");
     device.activate();
     device.run(0, vec![], false);

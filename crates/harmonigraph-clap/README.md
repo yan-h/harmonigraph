@@ -45,13 +45,13 @@ Each change's reason is a comment at the code it explains; this is the map.
   - Main-thread registration, setup service and the joined lifecycle hooks (`clap_main_*`) keep registry locking and endpoint reclamation outside audio callbacks.
     Joined destruction runs `clap_main_destroy`, which transfers recording ownership.
   - The seams also expose the parameter hash (`wrapper::hash_param_id`), reject legacy sends from a performance owner, serialize the setup's saved fields beside the parameters, and give tests `Wrapper::test_inspect_plugin`.
+    `wrapper::allocation_probe` instruments the debug allocation guard on the calling thread, deallocation included, for the exported-factory fixtures; it measures neither RSS nor other threads.
+
+  [The adaptive tuning design](../../docs/adaptive-tuning.md#the-framework-boundary) says what the plugin asks of this boundary.
 - **The parameter table** (`src/params.rs`, #1814 step 5).
   Each row is an integer, an enumeration or a linear float; the host sees it from 0 to its step count, and the conversions repeat nice-plug's `f32` arithmetic step for step, so saves and automation read as before.
   A save stores each row's unmodulated value under its id; a restore sets every row by one rule (missing, wrong-typed or an unknown variant takes the default, out of range is clamped) and logs once the ids no row has.
   The editor sets a row through `GuiContext` by its index.
-    `wrapper::allocation_probe` instruments the debug allocation guard on the calling thread, deallocation included, for the exported-factory fixtures; it measures neither RSS nor other threads.
-
-  [The adaptive tuning design](../../docs/adaptive-tuning.md#the-framework-boundary) says what the plugin asks of this boundary.
 - **Activation notification ordering** (`Wrapper::activate`, #615).
 - **Auxiliary descriptor bounds and storage sizing** (the process loop in `src/wrapper/clap/wrapper.rs` and `BufferManager::create_buffers`, #638), reached by `tests/clap_auxiliary.rs`.
 - **Scalar tail publication** (`Wrapper::last_tail_samples`), checked by `tests/clap_boundary.rs`.

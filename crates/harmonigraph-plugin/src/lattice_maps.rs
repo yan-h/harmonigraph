@@ -19,19 +19,6 @@ fn map_slot(value: i32) -> usize {
     value.clamp(0, LAST_MAP) as usize
 }
 
-/// Each offset lane's host id, in [`LANES`] order. The ids are spelled again
-/// in the rows `HarmonigraphParams` declares;
-/// `map_and_engine_parameters_keep_their_host_contract` holds each id to the
-/// row its lane names.
-pub const HOST_LANE_IDS: [&str; LANES.len()] = [
-    "map-fifths",
-    "map-thirds",
-    "map-sevenths",
-    "map-fifths-extension",
-    "map-thirds-extension",
-    "map-sevenths-extension",
-];
-
 /// The follow offset as one atomic word: it only ever moves fifths and thirds.
 pub fn pack(offset: LatticePos) -> u64 {
     (u64::from(offset.threes as u32) << 32) | u64::from(offset.fives as u32)
@@ -71,7 +58,7 @@ pub(crate) fn lane_row(axis: MapAxis, grain: MapOffsetLane) -> Row {
 pub fn offsets(params: &crate::HarmonigraphParams) -> MapOffsets {
     let mut offsets = MapOffsets::default();
     for (axis, grain) in LANES {
-        *offsets.lane_mut(axis, grain) = params.unmodulated(lane_row(axis, grain));
+        *offsets.lane_mut(axis, grain) = params.int(lane_row(axis, grain));
     }
     offsets
 }
@@ -311,9 +298,9 @@ impl Seed {
     pub fn read(params: &crate::HarmonigraphParams) -> Self {
         Self {
             engine: params.int(Row::TuningEngine),
-            map: params.unmodulated(Row::LatticeMap),
+            map: params.int(Row::LatticeMap),
             offsets: offsets(params),
-            follow: params.unmodulated(Row::MapFollow),
+            follow: params.int(Row::MapFollow),
         }
     }
 }
@@ -428,20 +415,19 @@ impl AudioMaps {
             if !value.is_finite() {
                 return;
             }
-            if id == nice_plug::wrapper::hash_param_id("lattice-map") {
+            if id == nice_plug::wrapper::hash_param_id(Row::LatticeMap.id()) {
                 self.playback.selected = map_slot(value.round() as i32);
-            } else if id == nice_plug::wrapper::hash_param_id("tuning-engine") {
+            } else if id == nice_plug::wrapper::hash_param_id(Row::TuningEngine.id()) {
                 self.set_engine(TuningEngine::from_index(value.round() as i32));
-            } else if id == nice_plug::wrapper::hash_param_id("map-follow") {
+            } else if id == nice_plug::wrapper::hash_param_id(Row::MapFollow.id()) {
                 self.set_follow(Follow::from_index(value.round() as i32));
             } else {
                 // CLAP stepped values are indices from zero, unlike saved/plain params.
                 let step = (value.round() as i32).clamp(0, 2 * OFFSET_LIMIT) - OFFSET_LIMIT;
-                let lane = HOST_LANE_IDS
-                    .into_iter()
-                    .zip(LANES)
-                    .find(|(name, _)| id == nice_plug::wrapper::hash_param_id(name));
-                let Some((_, (axis, grain))) = lane else { return };
+                let lane = LANES.into_iter().find(|&(axis, grain)| {
+                    id == nice_plug::wrapper::hash_param_id(lane_row(axis, grain).id())
+                });
+                let Some((axis, grain)) = lane else { return };
                 *self.offsets.lane_mut(axis, grain) = step;
                 self.playback.offset = self.offsets.total();
             }

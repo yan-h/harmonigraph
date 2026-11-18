@@ -4,10 +4,11 @@
 //! its musical settings and instance settings, so one owner writes every
 //! field a project stores (#1814).
 //!
-//! A field that does not parse is skipped with a line in the log and the rest
-//! of the restore goes ahead, as the fields did when nice-plug's derive
-//! restored them, which skipped one in silence. A field the save lacks keeps
-//! what the instance holds.
+//! A field that does not parse is skipped with a line in the editor's Console
+//! and in the log, and the rest of the restore goes ahead, as the fields did
+//! when nice-plug's derive restored them, which skipped one in silence. A
+//! field the save lacks keeps what the instance holds. The parameter ids a
+//! save holds that no row has are named in the Console the same way.
 
 use std::sync::Arc;
 
@@ -42,18 +43,42 @@ pub(crate) fn save(params: &HarmonigraphParams, state: &mut PluginState) {
 /// Parse the three fields `state` holds, for [`Fields::commit`] to install.
 /// Never refuses: a field that does not parse is skipped.
 pub(crate) fn prepare(params: &Arc<HarmonigraphParams>, state: &PluginState) -> Fields {
-    Fields {
-        params: params.clone(),
-        maps: parse(state, LATTICE_MAPS),
-        window: parse(state, EDITOR_STATE),
-        look: parse(state, UI_STATE),
+    let mut notes = Vec::new();
+    let maps = parse(state, LATTICE_MAPS, &mut notes);
+    let window = parse(state, EDITOR_STATE, &mut notes);
+    let look = parse(state, UI_STATE, &mut notes);
+    let table = &params.table;
+    let unknown: Vec<&str> = state
+        .params
+        .keys()
+        .map(String::as_str)
+        .filter(|id| (0..table.len()).all(|row| table.spec(row).id != *id))
+        .collect();
+    if !unknown.is_empty() {
+        notes.push(format!(
+            "This project saved parameters this build no longer has, which were not read: \
+             {}.",
+            unknown.join(", ")
+        ));
     }
+    Fields { params: params.clone(), maps, window, look, notes }
 }
 
-fn parse<T: serde::de::DeserializeOwned>(state: &PluginState, key: &str) -> Option<T> {
+/// The field `key` of `state`, or `None` with a Console line when it does not
+/// parse.
+fn parse<T: serde::de::DeserializeOwned>(
+    state: &PluginState,
+    key: &str,
+    notes: &mut Vec<String>,
+) -> Option<T> {
     let json = state.fields.get(key)?;
     serde_json::from_str(json)
-        .inspect_err(|error| nice_error!("The saved field {key} could not be read: {error}"))
+        .inspect_err(|error| {
+            nice_error!("The saved field {key} could not be read: {error}");
+            notes.push(format!(
+                "This project's saved {key} could not be read, so it kept what it had: {error}."
+            ));
+        })
         .ok()
 }
 
@@ -63,6 +88,8 @@ pub(crate) struct Fields {
     maps: Option<MapDocument>,
     window: Option<EguiState>,
     look: Option<String>,
+    /// The Console lines the restore owes.
+    notes: Vec<String>,
 }
 
 impl Prepared for Fields {
@@ -70,7 +97,7 @@ impl Prepared for Fields {
     /// to the editor's inbox, which reads an empty one as the fresh look
     /// (#1757).
     fn commit(self: Box<Self>) {
-        let Fields { params, maps, window, look } = *self;
+        let Fields { params, maps, window, look, notes } = *self;
         if let Some(maps) = maps {
             *params.maps.write() = maps;
         }
@@ -79,6 +106,9 @@ impl Prepared for Fields {
         }
         if let Some(look) = look {
             params.ui_state.restore(look);
+        }
+        for note in notes {
+            params.settings.notify(note);
         }
     }
 }

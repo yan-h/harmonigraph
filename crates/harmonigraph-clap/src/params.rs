@@ -123,38 +123,28 @@ impl Spec {
         self.steps().unwrap_or(1)
     }
 
-    /// The integer bounds an enumeration's index lies in.
-    fn int_range(&self) -> Option<(i32, i32)> {
-        match &self.kind {
-            Kind::Int { min, max, .. } => Some((*min, *max)),
-            Kind::Enum { ids, .. } => Some((0, ids.len() as i32 - 1)),
-            Kind::Float { .. } => None,
-        }
-    }
-
     /// Plain to normalized, clamped: `IntRange::normalize` and
-    /// `FloatRange::Linear`'s.
+    /// `FloatRange::Linear`'s. An integer's offset from the minimum is taken
+    /// in `i64`, so typed text far past the range clamps to its near end.
     pub fn normalize(&self, plain: f32) -> f32 {
-        match (&self.kind, self.int_range()) {
-            (Kind::Float { min, max }, _) => (plain.clamp(*min, *max) - min) / (max - min),
-            (_, Some((min, max))) => {
-                ((plain as i32 - min) as f32 / (max - min) as f32).clamp(0.0, 1.0)
-            }
-            _ => unreachable!("an integer row has a range"),
-        }
+        let (min, max) = match &self.kind {
+            Kind::Float { min, max } => return (plain.clamp(*min, *max) - min) / (max - min),
+            Kind::Int { min, max, .. } => (*min, *max),
+            Kind::Enum { ids, .. } => (0, ids.len() as i32 - 1),
+        };
+        ((plain as i64 - i64::from(min)) as f32 / (max - min) as f32).clamp(0.0, 1.0)
     }
 
     /// Normalized to plain, clamped and, for an integer, rounded:
     /// `IntRange::unnormalize` and `FloatRange::Linear`'s.
     pub fn unnormalize(&self, normalized: f32) -> f32 {
         let normalized = normalized.clamp(0.0, 1.0);
-        match (&self.kind, self.int_range()) {
-            (Kind::Float { min, max }, _) => (normalized * (max - min)) + min,
-            (_, Some((min, max))) => {
-                ((normalized * (max - min) as f32).round() as i32 + min) as f32
-            }
-            _ => unreachable!("an integer row has a range"),
-        }
+        let (min, max) = match &self.kind {
+            Kind::Float { min, max } => return (normalized * (max - min)) + min,
+            Kind::Int { min, max, .. } => (*min, *max),
+            Kind::Enum { ids, .. } => (0, ids.len() as i32 - 1),
+        };
+        ((normalized * (max - min) as f32).round() as i32 + min) as f32
     }
 
     /// A plain value as the host reads it.
@@ -185,7 +175,8 @@ impl Spec {
             Kind::Int { from_text: Some(f), .. } => f(text)? as f32,
             Kind::Int { from_text: None, .. } => text.parse::<i32>().ok()? as f32,
             Kind::Enum { names, .. } => names.iter().position(|name| *name == text)? as f32,
-            Kind::Float { .. } => text.parse::<f32>().ok()?,
+            // A NaN would be saved as `null`, which no load reads back.
+            Kind::Float { .. } => text.parse::<f32>().ok().filter(|value| !value.is_nan())?,
         };
         Some(self.normalize(plain) as f64 * self.scale() as f64)
     }
@@ -201,15 +192,11 @@ impl Spec {
 
     /// The plain value a restore takes from `saved`: the default for a value
     /// that is missing, of the wrong type or an unknown variant, and the
-    /// nearest bound for one out of range. An integer is taken as an
-    /// enumeration's index.
+    /// nearest bound for one out of range.
     fn restore(&self, saved: Option<&ParamValue>) -> f32 {
         match (&self.kind, saved) {
             (Kind::Int { min, max, .. }, Some(ParamValue::I32(value))) => {
                 (*value).clamp(*min, *max) as f32
-            }
-            (Kind::Enum { ids, .. }, Some(ParamValue::I32(index))) => {
-                (*index).clamp(0, ids.len() as i32 - 1) as f32
             }
             (Kind::Enum { ids, .. }, Some(ParamValue::String(id))) => {
                 match ids.iter().position(|candidate| candidate == id) {
@@ -297,11 +284,6 @@ impl Table {
         self.rows[row].modulated() as i32
     }
 
-    /// An integer or enumeration row's value as saved, without modulation.
-    pub fn unmodulated_int(&self, row: usize) -> i32 {
-        self.rows[row].plain.load(Ordering::Relaxed) as i32
-    }
-
     /// A float row's value, modulated.
     pub fn float(&self, row: usize) -> f32 {
         self.rows[row].modulated()
@@ -378,8 +360,7 @@ mod tests {
 
     /// A restore sets every row by one rule, whatever the save holds for it:
     /// the default for a value that is missing, of the wrong type or an
-    /// unknown variant, and the nearest bound for one out of range; an
-    /// enumeration also takes an integer as its index.
+    /// unknown variant, and the nearest bound for one out of range.
     #[test]
     fn a_restore_takes_the_default_or_the_nearest_bound() {
         let table = Table::new([
@@ -398,7 +379,7 @@ mod tests {
         assert_eq!(
             restore(&[
                 ("int", ParamValue::F32(1.0)),
-                ("enum", ParamValue::Bool(true)),
+                ("enum", ParamValue::I32(2)),
                 ("float", ParamValue::I32(1)),
             ]),
             (1, 1, 0.5),
@@ -406,12 +387,8 @@ mod tests {
         );
         assert_eq!(restore(&[("enum", ParamValue::String("z".into()))]).1, 1, "unknown variant");
         assert_eq!(
-            restore(&[
-                ("int", ParamValue::I32(9)),
-                ("enum", ParamValue::I32(-4)),
-                ("float", ParamValue::F32(3.0)),
-            ]),
-            (2, 0, 1.0),
+            restore(&[("int", ParamValue::I32(9)), ("float", ParamValue::F32(3.0)),]),
+            (2, 1, 1.0),
             "out of range"
         );
         assert_eq!(
@@ -424,5 +401,30 @@ mod tests {
             (-1, 2, 0.25),
             "in range, beside an id no row has"
         );
+    }
+
+    /// Typed text far past an integer row's range clamps to the near end, and
+    /// a float row refuses `nan`, which a save could not hold.
+    #[test]
+    fn typed_text_out_of_range_clamps_and_nan_is_refused() {
+        let int = Spec::int("int", "Int", 0, -9, 9);
+        assert_eq!(int.parse("2147483600"), Some(18.0));
+        assert_eq!(int.parse("-2147483600"), Some(0.0));
+        let float = Spec::float("float", "Float", 0.0, -1.0, 1.0);
+        assert_eq!(float.parse("nan"), None);
+        assert_eq!(float.parse("inf"), Some(1.0));
+    }
+
+    /// A value the host sets while its modulation holds the row at a bound is
+    /// still the one saved, though the modulated value does not move.
+    #[test]
+    fn a_value_set_under_modulation_held_at_a_bound_is_saved() {
+        let table = Table::new([Spec::float("float", "Float", 0.5, 0.0, 1.0)]);
+        assert!(table.modulate_host(0, 1.0));
+        table.set_host(0, 0.2);
+        assert_eq!(table.float(0), 1.0, "held at the bound");
+        table.set_host(0, 0.3);
+        assert_eq!(table.float(0), 1.0);
+        assert!(matches!(table.save()["float"], ParamValue::F32(value) if value == 0.3));
     }
 }

@@ -75,9 +75,9 @@ impl ParamKey {
 
     /// The stable string id this parameter is known by outside the
     /// program: the host's automation lane, a saved project, a recorded
-    /// take. **These strings must match the `#[id = "..."]` attributes on
-    /// `HarmonigraphParams`** — changing one orphans every project that
-    /// automates it.
+    /// take. **These strings are the ids of the plugin's camera rows**
+    /// (`Row::id` in harmonigraph-plugin) — changing one orphans every
+    /// project that automates it.
     pub fn id(self) -> &'static str {
         match self {
             ParamKey::CameraYaw => "camera-yaw",

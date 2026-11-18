@@ -158,10 +158,10 @@ quick run cargo clippy --workspace --all-targets -- -D warnings
 # callbacks, and the CLAP configuration owner's allocation-free paths
 # (`configuration::tests`), which this is the only run of. It is also the only
 # run of harmonigraph-clap's own tests: its unit tests and the CLAP boundary and
-# auxiliary fixtures. harmonigraph-plugin's
-# dev-dependency already turns both features on in a workspace run; naming them
-# here keeps `clap_boundary`, whose `required-features` would otherwise skip it
-# without a word, running if that dev-dependency ever changes.
+# auxiliary fixtures. harmonigraph-plugin's dev-dependency already turns the
+# fixture feature (which brings the allocation guard) on in a workspace run;
+# naming it here keeps `clap_boundary`, whose `required-features` would
+# otherwise skip it without a word, running if that dev-dependency ever changes.
 #
 # harmonigraph-render is EXCLUDED because this run was the SECOND of two copies
 # of its tests and the wrong one to keep: 282 of them here in 47.7s, 284 of them
@@ -178,7 +178,7 @@ quick run cargo clippy --workspace --all-targets -- -D warnings
 # fails here; what is given up is a hot-reload-only RUNTIME failure inside a
 # render test, in a feature that is standalone-harness-only.
 run cargo test --no-fail-fast --workspace --exclude harmonigraph-render \
-  --features harmonigraph-clap/assert_process_allocs,harmonigraph-clap/clap-boundary-tests
+  --features harmonigraph-clap/clap-boundary-tests
 
 group isolated
 

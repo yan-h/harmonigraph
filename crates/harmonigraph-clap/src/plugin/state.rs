@@ -14,7 +14,7 @@ pub enum ParamValue {
     F32(f32),
     I32(i32),
     Bool(bool),
-    /// Only used for enum parameters that have the `#[id = "..."]` attribute set.
+    /// An enumeration row's value, by its variant's stable id.
     String(String),
 }
 

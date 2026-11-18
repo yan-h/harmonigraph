@@ -195,9 +195,10 @@ pub(crate) struct Settings {
     rejected: AtomicBool,
     /// Counts committed restores, for the map editor's undo.
     restored: AtomicU64,
-    /// A Console line the editor owes: a restore that opened a project at
-    /// fresh axes, or one the full queue refused.
-    notice: Mutex<Option<&'static str>>,
+    /// The Console lines the editor owes, oldest first: a restore that opened
+    /// a project at fresh axes, one the full queue refused, or what a restore
+    /// skipped (`saved_fields`).
+    notice: Mutex<std::collections::VecDeque<String>>,
     wake: OnceLock<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -226,7 +227,7 @@ impl Default for Settings {
             text: AtomicBool::new(false),
             rejected: AtomicBool::new(false),
             restored: AtomicU64::new(0),
-            notice: Mutex::new(None),
+            notice: Mutex::default(),
             wake: OnceLock::new(),
         }
     }
@@ -275,8 +276,13 @@ impl Settings {
     }
 
     /// The Console line a restore since the last call left, if any.
-    pub fn take_notice(&self) -> Option<&'static str> {
-        self.notice.lock().take()
+    pub fn take_notice(&self) -> Option<String> {
+        self.notice.lock().pop_front()
+    }
+
+    /// Owe the editor a Console line.
+    pub(crate) fn notify(&self, line: impl Into<String>) {
+        self.notice.lock().push_back(line.into());
     }
 
     /// Something the project saves changed: have the host mark it modified.
@@ -315,12 +321,12 @@ impl Settings {
             None => MusicalSettings::default(),
         };
         if self.producer.lock().queue.slots() == 0 {
-            *self.notice.lock() = Some(RESTORE_REFUSED);
+            self.notify(RESTORE_REFUSED);
             return Err("the tuning edit queue is full");
         }
-        // Nice-plug drops a parameter id it does not know, so the host values
-        // of a project saved before #1756 vanish on their own; only the
-        // notice is ours to give.
+        // The parameter table skips an id it does not know, so the host
+        // values of a project saved before #1756 vanish on their own; only
+        // the notice is ours to give.
         let legacy = LEGACY_AXIS_IDS.iter().any(|id| state.params.contains_key(*id));
         Ok(Restore { settings: self.clone(), value, legacy })
     }
@@ -350,7 +356,7 @@ impl Prepared for Restore {
         if self.legacy {
             // The log keeps it for a project saved before an editor opens.
             nice_error!("{LEGACY_AXES}");
-            *settings.notice.lock() = Some(LEGACY_AXES);
+            settings.notify(LEGACY_AXES);
         }
     }
 }

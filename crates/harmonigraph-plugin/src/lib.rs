@@ -10,7 +10,7 @@ use editor::gestures::Gesture;
 use harmonigraph_core::lattice_map::{Follow, TuningEngine};
 use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, SourceId};
 use harmonigraph_record::TAKE_CHANNELS;
-use harmonigraph_ui::lattice_maps::{MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
+use harmonigraph_ui::lattice_maps::{MapDocument, MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
 use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
 use nice_plug::prelude::*;
 
@@ -244,9 +244,120 @@ pub enum Row {
 }
 
 impl Row {
+    /// Every row, in host order.
+    pub const ALL: [Row; 15] = [
+        Row::LatticeMap,
+        Row::MapFifths,
+        Row::MapThirds,
+        Row::MapSevenths,
+        Row::MapFifthsExtension,
+        Row::MapThirdsExtension,
+        Row::MapSeventhsExtension,
+        Row::TuningEngine,
+        Row::MapFollow,
+        Row::AnalysisInput,
+        Row::CameraYaw,
+        Row::CameraPitch,
+        Row::CameraDistance,
+        Row::CameraPanX,
+        Row::CameraPanY,
+    ];
+
     /// The row's index in the table.
     pub fn index(self) -> usize {
         self as usize
+    }
+
+    /// The id a save stores the row under and the host knows it by: saved
+    /// projects and automation lanes hold these, so one never changes.
+    pub fn id(self) -> &'static str {
+        match self {
+            Row::LatticeMap => "lattice-map",
+            Row::MapFifths => "map-fifths",
+            Row::MapThirds => "map-thirds",
+            Row::MapSevenths => "map-sevenths",
+            Row::MapFifthsExtension => "map-fifths-extension",
+            Row::MapThirdsExtension => "map-thirds-extension",
+            Row::MapSeventhsExtension => "map-sevenths-extension",
+            Row::TuningEngine => "tuning-engine",
+            Row::MapFollow => "map-follow",
+            Row::AnalysisInput => "analysis-input",
+            Row::CameraYaw => ParamKey::CameraYaw.id(),
+            Row::CameraPitch => ParamKey::CameraPitch.id(),
+            Row::CameraDistance => ParamKey::CameraDistance.id(),
+            Row::CameraPanX => ParamKey::CameraPanX.id(),
+            Row::CameraPanY => ParamKey::CameraPanY.id(),
+        }
+    }
+
+    /// The row's declaration. The Lattice Map's label names the map in its
+    /// slot, which it reads from `maps`.
+    fn spec(self, maps: &Arc<parking_lot::RwLock<MapDocument>>) -> Spec {
+        let id = self.id();
+        let lane = |name, grain| {
+            let spec = Spec::int(id, name, 0, -OFFSET_LIMIT, OFFSET_LIMIT).non_modulatable();
+            match grain {
+                MapOffsetLane::Fine => spec,
+                // An extension lane reads and parses in steps of EXTENSION_STEP.
+                MapOffsetLane::Extension => spec
+                    .with_to_text(|value| (value * EXTENSION_STEP).to_string())
+                    .with_from_text(|text| {
+                        let steps: i32 = text.trim().parse().ok()?;
+                        (steps % EXTENSION_STEP == 0).then_some(steps / EXTENSION_STEP)
+                    }),
+            }
+        };
+        // Entirely from the ParamKey metadata (name, default and range), so the
+        // host-facing parameter can never drift from what the UI clamps and
+        // displays.
+        let camera = |key: ParamKey| {
+            let range = key.range();
+            Spec::float(id, key.host_name(), key.default_value(), *range.start(), *range.end())
+        };
+        match self {
+            Row::LatticeMap => {
+                let names = maps.clone();
+                Spec::int(id, "Lattice Map", 0, 0, lattice_maps::LAST_MAP)
+                    .non_modulatable()
+                    .with_to_text(move |slot| match names.read().name(slot as usize) {
+                        Some(name) => format!("{} · {name}", slot + 1),
+                        None => format!("{} · unavailable", slot + 1),
+                    })
+            }
+            Row::MapFifths => lane("Map Fifths", MapOffsetLane::Fine),
+            Row::MapThirds => lane("Map Thirds", MapOffsetLane::Fine),
+            Row::MapSevenths => lane("Map Sevenths", MapOffsetLane::Fine),
+            Row::MapFifthsExtension => lane("Map Fifths x10", MapOffsetLane::Extension),
+            Row::MapThirdsExtension => lane("Map Thirds x10", MapOffsetLane::Extension),
+            Row::MapSeventhsExtension => lane("Map Sevenths x10", MapOffsetLane::Extension),
+            Row::TuningEngine => Spec::int(
+                id,
+                "Note Retuning",
+                TuningEngine::default().index(),
+                0,
+                TuningEngine::HOST_MAX,
+            )
+            .with_to_text(|value| TuningEngine::from_index(value).label().into())
+            .non_automatable(),
+            Row::MapFollow => {
+                Spec::int(id, "Map Follow", Follow::default().index(), 0, Follow::HOST_MAX)
+                    .non_modulatable()
+                    .with_to_text(|value| Follow::from_index(value).label().into())
+            }
+            Row::AnalysisInput => Spec::enumeration(
+                id,
+                "Analyzer Audio Input",
+                0,
+                &["main", "sidechain"],
+                &["Main", "Sidechain"],
+            )
+            .non_automatable(),
+            Row::CameraYaw => camera(ParamKey::CameraYaw),
+            Row::CameraPitch => camera(ParamKey::CameraPitch),
+            Row::CameraDistance => camera(ParamKey::CameraDistance),
+            Row::CameraPanX => camera(ParamKey::CameraPanX),
+            Row::CameraPanY => camera(ParamKey::CameraPanY),
+        }
     }
 
     /// The row a camera key is saved and automated through.
@@ -261,81 +372,16 @@ impl Row {
     }
 }
 
-/// The Analyzer Audio Input row's variants, by index: saved by id, shown by
-/// name.
+/// The Analyzer Audio Input row's variants, by index; [`Row::spec`] gives each
+/// its saved id and its name.
 const ANALYSIS_INPUTS: [AnalysisInput; 2] = [AnalysisInput::Main, AnalysisInput::Sidechain];
-
-/// A camera row, entirely from the ParamKey metadata (name, default and
-/// range), so the host-facing parameters can never drift from what the UI
-/// clamps and displays.
-fn camera_row(key: ParamKey) -> Spec {
-    let range = key.range();
-    Spec::float(key.id(), key.host_name(), key.default_value(), *range.start(), *range.end())
-}
-
-/// A map offset lane: one lattice step per value, or [`EXTENSION_STEP`] on an
-/// extension lane, which reads and parses in steps.
-fn map_lane(id: &'static str, name: &'static str, lane: MapOffsetLane) -> Spec {
-    let spec = Spec::int(id, name, 0, -OFFSET_LIMIT, OFFSET_LIMIT).non_modulatable();
-    match lane {
-        MapOffsetLane::Fine => spec,
-        MapOffsetLane::Extension => {
-            spec.with_to_text(|value| (value * EXTENSION_STEP).to_string()).with_from_text(|text| {
-                let steps: i32 = text.trim().parse().ok()?;
-                (steps % EXTENSION_STEP == 0).then_some(steps / EXTENSION_STEP)
-            })
-        }
-    }
-}
 
 impl Default for HarmonigraphParams {
     fn default() -> Self {
         let maps = Arc::new(parking_lot::RwLock::new(
             harmonigraph_ui::lattice_maps::MapDocument::default(),
         ));
-        let names = maps.clone();
-        let table = Table::new([
-            Spec::int("lattice-map", "Lattice Map", 0, 0, lattice_maps::LAST_MAP)
-                .non_modulatable()
-                .with_to_text(move |id| {
-                    let doc = names.read();
-                    match doc.name(id as usize) {
-                        Some(name) => format!("{} · {name}", id + 1),
-                        None => format!("{} · unavailable", id + 1),
-                    }
-                }),
-            map_lane("map-fifths", "Map Fifths", MapOffsetLane::Fine),
-            map_lane("map-thirds", "Map Thirds", MapOffsetLane::Fine),
-            map_lane("map-sevenths", "Map Sevenths", MapOffsetLane::Fine),
-            map_lane("map-fifths-extension", "Map Fifths x10", MapOffsetLane::Extension),
-            map_lane("map-thirds-extension", "Map Thirds x10", MapOffsetLane::Extension),
-            map_lane("map-sevenths-extension", "Map Sevenths x10", MapOffsetLane::Extension),
-            Spec::int(
-                "tuning-engine",
-                "Note Retuning",
-                TuningEngine::default().index(),
-                0,
-                TuningEngine::HOST_MAX,
-            )
-            .with_to_text(|value| TuningEngine::from_index(value).label().into())
-            .non_automatable(),
-            Spec::int("map-follow", "Map Follow", Follow::default().index(), 0, Follow::HOST_MAX)
-                .non_modulatable()
-                .with_to_text(|value| Follow::from_index(value).label().into()),
-            Spec::enumeration(
-                "analysis-input",
-                "Analyzer Audio Input",
-                0,
-                &["main", "sidechain"],
-                &["Main", "Sidechain"],
-            )
-            .non_automatable(),
-            camera_row(ParamKey::CameraYaw),
-            camera_row(ParamKey::CameraPitch),
-            camera_row(ParamKey::CameraDistance),
-            camera_row(ParamKey::CameraPanX),
-            camera_row(ParamKey::CameraPanY),
-        ]);
+        let table = Table::new(Row::ALL.map(|row| row.spec(&maps)));
         HarmonigraphParams {
             table: Arc::new(table),
             maps,
@@ -356,11 +402,6 @@ impl HarmonigraphParams {
     /// An integer row's value, modulated.
     pub fn int(&self, row: Row) -> i32 {
         self.table.int(row.index())
-    }
-
-    /// An integer row's value as saved, without modulation.
-    pub fn unmodulated(&self, row: Row) -> i32 {
-        self.table.unmodulated_int(row.index())
     }
 
     /// A camera row's value, modulated.
@@ -1519,30 +1560,16 @@ mod tests {
     /// `ParamKey::id` is what a recorded take names its automation by, and
     /// what the host names its automation lanes by. If a key's row drifts from
     /// its id, takes silently replay with default parameters and projects
-    /// silently lose their automation. The one operational parameter is named
-    /// separately: it selects which audio is recorded rather than describing a
-    /// value the replay must reconstruct.
+    /// silently lose their automation.
     #[test]
     fn every_param_key_id_matches_the_host_facing_id() {
         let params = HarmonigraphParams::default();
-        let host_ids: Vec<&str> =
-            (0..params.table.len()).map(|row| params.table.spec(row).id).collect();
         for key in ParamKey::ALL {
             assert_eq!(params.table.spec(Row::camera(key).index()).id, key.id(), "{key:?}");
         }
-        let operational: Vec<&str> =
-            ["analysis-input", "lattice-map", "tuning-engine", "map-follow"]
-                .into_iter()
-                .chain(lattice_maps::HOST_LANE_IDS)
-                .collect();
-        for &id in &operational {
-            assert!(host_ids.contains(&id), "missing operational parameter {id}");
+        for (index, row) in Row::ALL.into_iter().enumerate() {
+            assert_eq!(row.index(), index, "{row:?} is not at its own index");
         }
-        assert_eq!(
-            host_ids.len(),
-            ParamKey::ALL.len() + operational.len(),
-            "the plugin exposes an unnamed operational parameter: {host_ids:?}"
-        );
     }
 
     /// Saved projects and automation hold these integers and hosts show these
@@ -1572,8 +1599,11 @@ mod tests {
         assert_eq!((name.as_str(), default, range), ("Lattice Map", 0, 0..=127));
         let fine: Vec<String> = (-9..=9).map(|value: i32| value.to_string()).collect();
         let extension: Vec<String> = (-9..=9).map(|value: i32| (value * 10).to_string()).collect();
+        // Each lane in `LANES` is the row of its id.
+        let lane_ids = harmonigraph_ui::lattice_maps::LANES
+            .map(|(axis, grain)| params.table.spec(lattice_maps::lane_row(axis, grain).index()).id);
         assert_eq!(
-            lattice_maps::HOST_LANE_IDS,
+            lane_ids,
             [
                 "map-fifths",
                 "map-thirds",
@@ -1583,22 +1613,13 @@ mod tests {
                 "map-sevenths-extension",
             ]
         );
-        // Each id is the row its lane in `LANES` names.
-        let lanes = harmonigraph_ui::lattice_maps::LANES;
-        for (id, (axis, grain)) in lattice_maps::HOST_LANE_IDS.into_iter().zip(lanes) {
-            let lane = lattice_maps::lane_row(axis, grain);
-            assert_eq!(params.table.spec(lane.index()).id, id, "the {axis:?} {grain:?} lane");
-        }
         let non_modulatable: Vec<&str> = (0..params.table.len())
             .map(|row| params.table.spec(row))
             .filter(|spec| spec.automatable && !spec.modulatable)
             .map(|spec| spec.id)
             .collect();
-        let expected: Vec<&str> = ["lattice-map"]
-            .into_iter()
-            .chain(lattice_maps::HOST_LANE_IDS)
-            .chain(["map-follow"])
-            .collect();
+        let expected: Vec<&str> =
+            ["lattice-map"].into_iter().chain(lane_ids).chain(["map-follow"]).collect();
         assert_eq!(non_modulatable, expected);
         for (row, name, labels) in [
             (Row::MapFifths, "Map Fifths", &fine),

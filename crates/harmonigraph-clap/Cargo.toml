@@ -32,7 +32,8 @@ license = "ISC"
 
 [features]
 # Enables deterministic scheduling observations only in the boundary fixtures.
-clap-boundary-tests = []
+# Its counting allocator wraps the allocation guard, so it brings the guard.
+clap-boundary-tests = ["assert_process_allocs"]
 assert_process_allocs = ["dep:nice-assert-no-alloc"]
 
 [lib]
@@ -46,7 +47,7 @@ doctest = false
 [[test]]
 name = "clap_boundary"
 path = "tests/clap_boundary.rs"
-required-features = ["assert_process_allocs", "clap-boundary-tests"]
+required-features = ["clap-boundary-tests"]
 
 [[test]]
 name = "clap_auxiliary"

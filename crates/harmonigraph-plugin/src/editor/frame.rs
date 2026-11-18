@@ -67,7 +67,7 @@ pub(super) fn frame(
     let wall = shared.input.frame_wall(timing, now);
     let now = shared.input.display_now(wall);
     let sample_rate = shared.input.sample_rate();
-    if let Some(line) = state.params.settings.take_notice() {
+    while let Some(line) = state.params.settings.take_notice() {
         shared.ui.log(line);
     }
     // Snapshot current host movement before arming or queuing a render.

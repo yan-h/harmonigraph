@@ -8,19 +8,9 @@ pub(crate) mod buffer_management;
 #[cfg(debug_assertions)]
 pub(crate) mod context_checks;
 
-// `clap-boundary-tests` REPLACES the guard below rather than adding to it: it
-// installs `MeasuredAllocator`, whose base is `AllocDisabler` only when
-// `assert_process_allocs` is on and `std::alloc::System` otherwise. Enabling
-// the boundary tests alone therefore counts every allocation an audio callback
-// makes and permits all of them — a suite that looks like it measures a guarded
-// callback while guarding nothing. The pairing is not expressible as a Cargo
-// feature dependency here without editing the vendored manifest, so it is held
-// at compile time instead.
-#[cfg(all(feature = "clap-boundary-tests", not(feature = "assert_process_allocs")))]
-compile_error!(
-    "The 'clap-boundary-tests' feature replaces the 'assert_process_allocs' global allocator with a counting one, whose base allocator is the plain system allocator unless 'assert_process_allocs' is also enabled. Enable both features together, or neither."
-);
-
+// `clap-boundary-tests` installs `MeasuredAllocator` in place of the guard
+// below, counting over the same `AllocDisabler`; the feature brings
+// `assert_process_allocs` with it, so the boundary fixtures are always guarded.
 #[cfg(all(
     debug_assertions,
     feature = "assert_process_allocs",
