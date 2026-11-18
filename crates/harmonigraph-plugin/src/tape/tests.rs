@@ -476,11 +476,8 @@ fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
 /// selection where it happens.
 #[test]
 fn a_pass_records_the_map_selection_where_it_changes() {
-    use nice_plug::params::InternalParamMut;
     let params = Arc::new(crate::HarmonigraphParams::default());
-    // SAFETY: as the host wrapper sets a parameter, with the parameter object
-    // alive throughout.
-    let select = |slot| assert!(unsafe { params.map._internal_set_plain_value(slot) });
+    let select = |slot: i32| params.set(crate::Row::LatticeMap, slot as f32);
     select(2);
     let (_, mut worker) = channel(params.clone());
     for (i, song) in [0, 100].into_iter().enumerate() {

@@ -82,9 +82,6 @@ impl<'a> Buffer<'a> {
     /// expensive per-sample branching or that can use per-sample SIMD as opposed to per-channel
     /// SIMD.
     ///
-    /// The parameter smoothers can also produce smoothed values for an entire block using
-    /// [`Smoother::next_block()`][crate::params::smoothing::Smoother::next_block()].
-    ///
     /// You can use this to obtain block-slices from a buffer so you can pass them to a library:
     ///
     /// ```ignore

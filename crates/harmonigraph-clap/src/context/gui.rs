@@ -2,10 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::{
-    params::{Param, internals::ParamPtr},
-    plugin::{Plugin, PluginState},
-};
+use crate::plugin::{Plugin, PluginState};
 
 use super::PluginApi;
 
@@ -30,33 +27,16 @@ pub trait GuiContext: Send + Sync + 'static {
     /// TODO: Host->Plugin resizing has not been implemented yet
     fn request_resize(&self) -> bool;
 
-    /// Inform the host a parameter will be automated. Create a [`ParamSetter`] and use
-    /// [`ParamSetter::begin_set_parameter()`] instead for a safe, user friendly API.
-    ///
-    /// # Safety
-    ///
-    /// The implementing function still needs to check if `param` actually exists. This function is
-    /// mostly marked as unsafe for API reasons.
-    unsafe fn raw_begin_set_parameter(&self, param: ParamPtr);
+    /// Begin a gesture on the parameter table's `row`: the host records the
+    /// values set until [`Self::end_set_parameter`] as one edit.
+    fn begin_set_parameter(&self, row: usize);
 
-    /// Inform the host a parameter is being automated with an already normalized value. Create a
-    /// [`ParamSetter`] and use [`ParamSetter::set_parameter()`] instead for a safe, user friendly
-    /// API.
-    ///
-    /// # Safety
-    ///
-    /// The implementing function still needs to check if `param` actually exists. This function is
-    /// mostly marked as unsafe for API reasons.
-    unsafe fn raw_set_parameter_normalized(&self, param: ParamPtr, normalized: f32);
+    /// Set the parameter table's `row` to the plain value `plain` (an integer
+    /// or a variant's index as a float), and tell the host.
+    fn set_parameter(&self, row: usize, plain: f32);
 
-    /// Inform the host a parameter has been automated. Create a [`ParamSetter`] and use
-    /// [`ParamSetter::end_set_parameter()`] instead for a safe, user friendly API.
-    ///
-    /// # Safety
-    ///
-    /// The implementing function still needs to check if `param` actually exists. This function is
-    /// mostly marked as unsafe for API reasons.
-    unsafe fn raw_end_set_parameter(&self, param: ParamPtr);
+    /// End the gesture [`Self::begin_set_parameter`] began on `row`.
+    fn end_set_parameter(&self, row: usize);
 
     /// Serialize the plugin's current state to a serde-serializable object. Useful for implementing
     /// preset handling within a plugin's GUI.
@@ -108,13 +88,6 @@ impl<P: Plugin> Clone for AsyncExecutor<P> {
     }
 }
 
-/// A convenience helper for setting parameter values. Any changes made here will be broadcasted to
-/// the host and reflected in the plugin's [`Params`][crate::params::Params] object. These
-/// functions should only be called from the main thread.
-pub struct ParamSetter<'a> {
-    pub raw_context: &'a dyn GuiContext,
-}
-
 impl<P: Plugin> AsyncExecutor<P> {
     /// Execute a task on a background thread using `[Plugin::task_executor]`. This allows you to
     /// defer expensive tasks for later without blocking either the process function or the GUI
@@ -138,51 +111,5 @@ impl<P: Plugin> AsyncExecutor<P> {
     /// your task executor.
     pub fn execute_gui(&self, task: P::BackgroundTask) {
         (self.execute_gui)(task);
-    }
-}
-
-impl<'a> ParamSetter<'a> {
-    pub fn new(context: &'a dyn GuiContext) -> Self {
-        Self { raw_context: context }
-    }
-
-    /// Inform the host that you will start automating a parameter. This needs to be called before
-    /// calling [`set_parameter()`][Self::set_parameter()] for the specified parameter.
-    pub fn begin_set_parameter<P: Param>(&self, param: &P) {
-        unsafe { self.raw_context.raw_begin_set_parameter(param.as_ptr()) };
-    }
-
-    /// Set a parameter to the specified parameter value. You will need to call
-    /// [`begin_set_parameter()`][Self::begin_set_parameter()] before and
-    /// [`end_set_parameter()`][Self::end_set_parameter()] after calling this so the host can
-    /// properly record automation for the parameter. This can be called multiple times in a row
-    /// before calling [`end_set_parameter()`][Self::end_set_parameter()], for instance when moving
-    /// a slider around.
-    ///
-    /// This function assumes you're already calling this from a GUI thread. Calling any of these
-    /// functions from any other thread may result in unexpected behavior.
-    pub fn set_parameter<P: Param>(&self, param: &P, value: P::Plain) {
-        let ptr = param.as_ptr();
-        let normalized = param.preview_normalized(value);
-        unsafe { self.raw_context.raw_set_parameter_normalized(ptr, normalized) };
-    }
-
-    /// Set a parameter to an already normalized value. Works exactly the same as
-    /// [`set_parameter()`][Self::set_parameter()] and needs to follow the same rules, but this may
-    /// be useful when implementing a GUI.
-    ///
-    /// This does not perform any snapping. Consider converting the normalized value to a plain
-    /// value and setting that with [`set_parameter()`][Self::set_parameter()] instead so the
-    /// normalized value known to the host matches `param.normalized_value()`.
-    pub fn set_parameter_normalized<P: Param>(&self, param: &P, normalized: f32) {
-        let ptr = param.as_ptr();
-        unsafe { self.raw_context.raw_set_parameter_normalized(ptr, normalized) };
-    }
-
-    /// Inform the host that you are done automating a parameter. This needs to be called after one
-    /// or more [`set_parameter()`][Self::set_parameter()] calls for a parameter so the host knows
-    /// the automation gesture has finished.
-    pub fn end_set_parameter<P: Param>(&self, param: &P) {
-        unsafe { self.raw_context.raw_end_set_parameter(param.as_ptr()) };
     }
 }

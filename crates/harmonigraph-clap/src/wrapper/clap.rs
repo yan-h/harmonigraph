@@ -14,7 +14,6 @@ use crate::wrapper::clap::features::ClapFeature;
 /// Re-export for the macro
 pub use self::descriptor::PluginDescriptor;
 pub use self::wrapper::Wrapper;
-use crate::context::remote_controls::RemoteControlsContext;
 use crate::plugin::Plugin;
 pub use clap_sys::entry::clap_plugin_entry;
 pub use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory};
@@ -44,9 +43,6 @@ pub trait ClapPlugin: Plugin {
     /// sample, then the group's end. The plugin owns its configuration and
     /// how edits reach it; other plugins retain the legacy path.
     const CLAP_CONFIGURATION: bool = false;
-    /// Discrete state selectors may support automation without additive modulation.
-    /// These parameter IDs omit the modulation capability and refuse mod events.
-    const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] = &[];
 
     /// Called once, before the editor is created, with the host's side of
     /// it: the editor is the host's to destroy, so an editor with a close
@@ -146,12 +142,6 @@ pub trait ClapPlugin: Plugin {
 
     /// If set, this informs the host about the plugin's capabilities for polyphonic modulation.
     const CLAP_POLY_MODULATION_CONFIG: Option<PolyModulationConfig> = None;
-
-    /// This function can be implemented to define plugin-specific [remote control
-    /// pages](https://github.com/free-audio/clap/blob/main/include/clap/ext/draft/remote-controls.h)
-    /// that the host can use to provide better hardware mapping for a plugin. See the linked
-    /// extension for more information.
-    fn remote_controls(&self, context: &mut impl RemoteControlsContext) {}
 }
 
 /// Configuration for the plugin's polyphonic modulation options, if it supports .

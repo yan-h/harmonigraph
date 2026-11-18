@@ -157,8 +157,8 @@ quick run cargo clippy --workspace --all-targets -- -D warnings
 # Guard the existing production performance scenarios at their exported
 # callbacks, and the CLAP configuration owner's allocation-free paths
 # (`configuration::tests`), which this is the only run of. It is also the only
-# run of harmonigraph-clap's own tests: nice-plug-core's unit tests, the derive
-# tests, and the CLAP boundary and auxiliary fixtures. harmonigraph-plugin's
+# run of harmonigraph-clap's own tests: its unit tests and the CLAP boundary and
+# auxiliary fixtures. harmonigraph-plugin's
 # dev-dependency already turns both features on in a workspace run; naming them
 # here keeps `clap_boundary`, whose `required-features` would otherwise skip it
 # without a word, running if that dev-dependency ever changes.

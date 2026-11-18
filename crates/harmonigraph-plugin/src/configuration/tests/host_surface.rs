@@ -504,12 +504,11 @@ fn report() -> String {
     {
         use harmonigraph_ui::params::ParamBackend;
         let (context, _) = device.wrapper().test_gui_context("camera-yaw");
-        let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
         let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
         let gestures = std::cell::Cell::default();
         let backend = crate::PluginParamBackend {
             params: &params,
-            setter: &setter,
+            host: context.as_ref(),
             configuration: params.settings.view(),
             gestures: &gestures,
         };
@@ -599,4 +598,27 @@ fn a_modulated_camera_is_recorded_modulated_and_saved_unmodulated() {
     let modulated = 0.6_f32 * std::f32::consts::TAU - std::f32::consts::PI;
     assert!((record.value - modulated).abs() < 1e-5, "recorded {}", record.value);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A host asking for the parameter one past the last, the Tune's first
+/// included, is answered no rather than read out of bounds.
+#[test]
+fn a_parameter_index_past_the_last_is_refused() {
+    let _scope = crate::test_scope::enter();
+    for id in [c"com.yan-h.harmonigraph", c"com.yan-h.harmonigraph-tune"] {
+        let instance = Instance::new(id);
+        let params = unsafe {
+            &*(((*instance.plugin).get_extension.unwrap())(
+                instance.plugin,
+                CLAP_EXT_PARAMS.as_ptr(),
+            )
+            .cast::<clap_plugin_params>())
+        };
+        let count = unsafe { (params.count.unwrap())(instance.plugin) };
+        let mut info: clap_param_info = unsafe { std::mem::zeroed() };
+        assert!(
+            !unsafe { (params.get_info.unwrap())(instance.plugin, count, &mut info) },
+            "{id:?}"
+        );
+    }
 }

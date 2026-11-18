@@ -253,12 +253,10 @@ impl Editor for LatticeEditor {
         // moves and its close), none of which is made under the editor lock,
         // and whose `moving` takes no lock (`pop_out`).
         let unseen = {
-            let (shared, params, context) =
-                (self.shared.clone(), self.params.clone(), context.clone());
+            let (shared, context) = (self.shared.clone(), context.clone());
             egui_baseview::baseview::UnseenNotice::new(move || {
                 let Some(open) = shared.end_unseen() else { return };
-                let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
-                super::gestures::end(open, &params, &setter);
+                super::gestures::end(open, context.as_ref());
             })
         };
         let mut graphics = graphics_config();
@@ -299,7 +297,6 @@ impl Editor for LatticeEditor {
             pop_out: own_window,
             egui_state: self.egui_state.clone(),
             shared: self.shared.clone(),
-            params: self.params.clone(),
             context: closing_context,
             window,
         };
@@ -363,14 +360,6 @@ impl Editor for LatticeEditor {
         self.scaling_factor.store(Some(factor));
         true
     }
-
-    fn param_value_changed(&self, _id: &str, _normalized_value: f32) {
-        // root_ui repaints while animating and polls otherwise; nothing to do.
-    }
-
-    fn param_modulation_changed(&self, _id: &str, _modulation_offset: f32) {}
-
-    fn param_values_changed(&self) {}
 }
 
 struct LatticeEditorHandle {
@@ -379,7 +368,6 @@ struct LatticeEditorHandle {
     pop_out: Arc<OwnWindow>,
     egui_state: Arc<EguiState>,
     shared: Arc<EditorLock>,
-    params: Arc<HarmonigraphParams>,
     context: Arc<dyn GuiContext>,
     window: WindowHandle,
 }
@@ -397,8 +385,7 @@ impl Drop for LatticeEditorHandle {
         // where `open` is cleared below sets only its poll rate and whether
         // the tape treats its roll as drawn (`tape::Worker::exchange`).
         let open = self.shared.end_window_session();
-        let setter = nice_plug::prelude::ParamSetter::new(self.context.as_ref());
-        super::gestures::end(open, &self.params, &setter);
+        super::gestures::end(open, self.context.as_ref());
         // The editor's own window closes with the editor rather than
         // outliving it empty, and the host's is shown again. With the editor
         // lock free: closing tells `moving`, and can hide the view, which

@@ -90,11 +90,6 @@ pub trait ProcessContext<P: Plugin> {
     /// allows the host to better optimize polyphonic modulation, or to switch to strictly monophonic
     /// modulation when dropping the capacity down to 1.
     fn set_current_voice_capacity(&self, capacity: u32);
-
-    // TODO: Add this, this works similar to [GuiContext::set_parameter] but it adds the parameter
-    //       change to a queue (or directly to the VST3 plugin's parameter output queues) instead of
-    //       using main thread host automation (and all the locks involved there).
-    // fn set_parameter<P: Param>(&self, param: &P, value: P::Plain);
 }
 
 /// Information about the plugin's transport. Depending on the plugin API and the host not all

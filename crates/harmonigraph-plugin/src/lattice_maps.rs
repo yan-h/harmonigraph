@@ -1,5 +1,6 @@
 //! Editor-owned musical document, bounded audio snapshot and sample-indexed
 //! next-attack state. No editor window is needed for restore or automation.
+use crate::Row;
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine};
 use harmonigraph_core::LatticePos;
@@ -19,9 +20,9 @@ fn map_slot(value: i32) -> usize {
 }
 
 /// Each offset lane's host id, in [`LANES`] order. The ids are spelled again
-/// in the `#[id]` attributes on `HarmonigraphParams`, which take only a
-/// literal; `map_and_engine_parameters_keep_their_host_contract` holds each id
-/// to the parameter its lane names.
+/// in the rows `HarmonigraphParams` declares;
+/// `map_and_engine_parameters_keep_their_host_contract` holds each id to the
+/// row its lane names.
 pub const HOST_LANE_IDS: [&str; LANES.len()] = [
     "map-fifths",
     "map-thirds",
@@ -44,9 +45,9 @@ pub fn unpack(word: u64) -> LatticePos {
 /// reach an attack; the parameters mask it as well, because with no process
 /// callbacks running the Hub publishes nothing at all.
 fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
-    let following = TuningEngine::from_index(params.tuning_engine.value())
+    let following = TuningEngine::from_index(params.int(Row::TuningEngine))
         == TuningEngine::LatticeMap
-        && Follow::from_index(params.map_follow.value()) != Follow::Off;
+        && Follow::from_index(params.int(Row::MapFollow)) != Follow::Off;
     if following {
         unpack(params.map_followed.load(std::sync::atomic::Ordering::Acquire))
     } else {
@@ -55,26 +56,22 @@ fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
 }
 
 /// The host parameter behind one lane: the plugin's one place an axis and a
-/// grain name a field.
-pub(crate) fn lane_param(
-    params: &crate::HarmonigraphParams,
-    axis: MapAxis,
-    grain: MapOffsetLane,
-) -> &IntParam {
+/// grain name a row.
+pub(crate) fn lane_row(axis: MapAxis, grain: MapOffsetLane) -> Row {
     match (axis, grain) {
-        (MapAxis::Fifths, MapOffsetLane::Fine) => &params.map_fifths,
-        (MapAxis::Thirds, MapOffsetLane::Fine) => &params.map_thirds,
-        (MapAxis::Sevenths, MapOffsetLane::Fine) => &params.map_sevenths,
-        (MapAxis::Fifths, MapOffsetLane::Extension) => &params.map_fifths_extension,
-        (MapAxis::Thirds, MapOffsetLane::Extension) => &params.map_thirds_extension,
-        (MapAxis::Sevenths, MapOffsetLane::Extension) => &params.map_sevenths_extension,
+        (MapAxis::Fifths, MapOffsetLane::Fine) => Row::MapFifths,
+        (MapAxis::Thirds, MapOffsetLane::Fine) => Row::MapThirds,
+        (MapAxis::Sevenths, MapOffsetLane::Fine) => Row::MapSevenths,
+        (MapAxis::Fifths, MapOffsetLane::Extension) => Row::MapFifthsExtension,
+        (MapAxis::Thirds, MapOffsetLane::Extension) => Row::MapThirdsExtension,
+        (MapAxis::Sevenths, MapOffsetLane::Extension) => Row::MapSeventhsExtension,
     }
 }
 
 pub fn offsets(params: &crate::HarmonigraphParams) -> MapOffsets {
     let mut offsets = MapOffsets::default();
     for (axis, grain) in LANES {
-        *offsets.lane_mut(axis, grain) = lane_param(params, axis, grain).unmodulated_plain_value();
+        *offsets.lane_mut(axis, grain) = params.unmodulated(lane_row(axis, grain));
     }
     offsets
 }
@@ -100,8 +97,8 @@ impl MapSelection {
     /// The selection the parameters ask for, at the lanes' offset alone.
     fn requested(params: &crate::HarmonigraphParams) -> MapSelection {
         MapSelection {
-            engine: TuningEngine::from_index(params.tuning_engine.value()),
-            slot: map_slot(params.map.value()),
+            engine: TuningEngine::from_index(params.int(Row::TuningEngine)),
+            slot: map_slot(params.int(Row::LatticeMap)),
             position: offset(params),
         }
     }
@@ -156,7 +153,7 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
         selected,
         offset: requested.position,
         map: requested.placed(&document),
-        follow: Follow::from_index(params.map_follow.value()),
+        follow: Follow::from_index(params.int(Row::MapFollow)),
     };
     // Intent is compared before following is added: the Hub's own movement is
     // not host state waiting for audio to adopt it.
@@ -175,24 +172,24 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     }
 }
 
-pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: MapEdit) {
-    let set = |param: &IntParam, value| {
-        setter.begin_set_parameter(param);
-        setter.set_parameter(param, value);
-        setter.end_set_parameter(param);
+pub fn edit(params: &crate::HarmonigraphParams, host: &dyn GuiContext, edit: MapEdit) {
+    let set = |row: Row, value: i32| {
+        host.begin_set_parameter(row.index());
+        host.set_parameter(row.index(), value as f32);
+        host.end_set_parameter(row.index());
     };
-    let selected = map_slot(params.map.value());
+    let selected = map_slot(params.int(Row::LatticeMap));
     // Whether the saved document changed, decided by each arm from what it
     // did rather than by its variant: a no-op edit must not mark the host
     // project modified.
     let document_changed = match edit {
         MapEdit::Engine(mode) => {
-            set(&params.tuning_engine, mode.index());
+            set(Row::TuningEngine, mode.index());
             false
         }
         MapEdit::Select(id) => {
             if id < MAP_CAPACITY {
-                set(&params.map, id as i32);
+                set(Row::LatticeMap, id as i32);
             }
             false
         }
@@ -211,7 +208,7 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
         // which the parameter backend opens and closes around this edit.
         MapEdit::BeginOffset(..) | MapEdit::EndOffset(..) => false,
         MapEdit::Offset(axis, lane, value) => {
-            setter.set_parameter(lane_param(params, axis, lane), value);
+            host.set_parameter(lane_row(axis, lane).index(), value as f32);
             false
         }
         MapEdit::Translate(step, lane) => {
@@ -225,7 +222,7 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
                     from.lanes().into_iter().zip(to.lanes())
                 {
                     if before != after {
-                        set(lane_param(params, axis, lane), after);
+                        set(lane_row(axis, lane), after);
                     }
                 }
                 params.map_editor.lock().translated = Some((seen, to));
@@ -233,7 +230,7 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             false
         }
         MapEdit::Follow(mode) => {
-            set(&params.map_follow, mode.index());
+            set(Row::MapFollow, mode.index());
             false
         }
         MapEdit::Replace(destination) => {
@@ -260,7 +257,7 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             let id = copy.and_then(|(map, name)| document.capture(map, name));
             drop(document);
             if let Some(id) = id {
-                set(&params.map, id as i32);
+                set(Row::LatticeMap, id as i32);
             }
             id.is_some()
         }
@@ -277,7 +274,7 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             let deleted = document.delete(id);
             drop(document);
             if let Some(neighbour) = neighbour {
-                set(&params.map, neighbour as i32);
+                set(Row::LatticeMap, neighbour as i32);
             }
             deleted
         }
@@ -313,10 +310,10 @@ pub struct Seed {
 impl Seed {
     pub fn read(params: &crate::HarmonigraphParams) -> Self {
         Self {
-            engine: params.tuning_engine.value(),
-            map: params.map.unmodulated_plain_value(),
+            engine: params.int(Row::TuningEngine),
+            map: params.unmodulated(Row::LatticeMap),
             offsets: offsets(params),
-            follow: params.map_follow.unmodulated_plain_value(),
+            follow: params.unmodulated(Row::MapFollow),
         }
     }
 }

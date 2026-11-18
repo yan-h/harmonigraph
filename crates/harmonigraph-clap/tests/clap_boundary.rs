@@ -21,11 +21,6 @@ type GuiEdit = Box<dyn Fn(&[f32])>;
 
 static SERIAL: Mutex<()> = Mutex::new(());
 static CONSTRUCTION: Mutex<Option<Arc<Control>>> = Mutex::new(None);
-#[derive(Params)]
-struct Parameters {
-    #[id = "axis"]
-    axis: FloatParam,
-}
 #[derive(Clone, Copy)]
 struct Instruction {
     callback: usize,
@@ -97,7 +92,7 @@ impl Default for Control {
     }
 }
 struct Fixture<const CONFIG: bool, const PERFORMANCE: bool> {
-    params: Arc<Parameters>,
+    params: Arc<Table>,
     control: Arc<Control>,
     callback: usize,
     processed: usize,
@@ -105,9 +100,7 @@ struct Fixture<const CONFIG: bool, const PERFORMANCE: bool> {
 impl<const C: bool, const P: bool> Default for Fixture<C, P> {
     fn default() -> Self {
         Self {
-            params: Arc::new(Parameters {
-                axis: FloatParam::new("Axis", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 }),
-            }),
+            params: Arc::new(Table::new([Spec::float("axis", "Axis", 0.0, 0.0, 1.0)])),
             control: CONSTRUCTION
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -147,7 +140,7 @@ impl<const C: bool, const P: bool> Plugin for Fixture<C, P> {
             control.tasks_run.fetch_add(1, Ordering::Relaxed);
         })
     }
-    fn params(&self) -> Arc<dyn Params> {
+    fn params(&self) -> Arc<Table> {
         self.params.clone()
     }
     fn initialize(
@@ -550,13 +543,13 @@ impl Device {
                 .plugin_data
                 .cast::<nice_plug::wrapper::clap::Wrapper<Fixture<C, P>>>())
         };
-        let (context, param) = wrapper.test_gui_context("axis");
-        move |values| unsafe {
-            context.raw_begin_set_parameter(param);
+        let (context, row) = wrapper.test_gui_context("axis");
+        move |values| {
+            context.begin_set_parameter(row);
             for &value in values {
-                context.raw_set_parameter_normalized(param, value);
+                context.set_parameter(row, value);
             }
-            context.raw_end_set_parameter(param);
+            context.end_set_parameter(row);
         }
     }
     fn new(control: Control, id: &CStr) -> Self {

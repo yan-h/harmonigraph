@@ -7,13 +7,6 @@ use std::sync::Arc;
 
 use super::{setup, tune::Tune};
 
-/// A Tune exports no host parameter. Its Tuning delay is a saved setting
-/// (`setup::InstanceSettings`): a change needs the host to reactivate the Tune,
-/// so it cannot usefully be automated, and the saved value is there for the
-/// Tune to report its latency from before any Hub exists.
-#[derive(Params)]
-struct NoParams {}
-
 pub struct HarmonigraphTune {
     pub shared: Arc<setup::Shared>,
     pub tune: Option<Box<Tune>>,
@@ -59,8 +52,12 @@ impl Plugin for HarmonigraphTune {
     const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
     type SysExMessage = ();
     type BackgroundTask = ();
-    fn params(&self) -> Arc<dyn Params> {
-        Arc::new(NoParams {})
+    /// A Tune exports no host parameter. Its Tuning delay is a saved setting
+    /// (`setup::InstanceSettings`): a change needs the host to reactivate the
+    /// Tune, so it cannot usefully be automated, and the saved value is there
+    /// for the Tune to report its latency from before any Hub exists.
+    fn params(&self) -> Arc<Table> {
+        Arc::new(Table::empty())
     }
     fn initialize(
         &mut self,

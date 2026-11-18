@@ -127,12 +127,12 @@ pub enum NoteEvent<S> {
     ///   - This value can be obtained by calling `param.preview_plain(param.normalized_value() +
     ///     event.normalized_offset)`. These functions automatically clamp the values as necessary.
     ///   - If the parameter uses smoothing, then the parameter's smoother can be copied to the
-    ///     voice. [`Smoother::set_target()`][crate::params::smoothing::Smoother::set_target()] can
+    ///     voice. `Smoother::set_target()` can
     ///     then be used to have the smoother use the modulated value.
     ///   - One caveat with smoothing is that copying the smoother like this only works correctly if
     ///     it last produced a value during the sample before the `PolyModulation` event. Otherwise
     ///     there may still be an audible jump in parameter values. A solution for this would be to
-    ///     first call the [`Smoother::reset()`][crate::params::smoothing::Smoother::reset()] with
+    ///     first call the `Smoother::reset()` with
     ///     the current sample's global value before calling `set_target()`.
     ///   - Finally, if the polyphonic modulation happens on the same sample as the `NoteOn` event,
     ///     then the smoothing should not start at the current global value. In this case, `reset()`

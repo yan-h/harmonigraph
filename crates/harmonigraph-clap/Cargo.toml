@@ -1,8 +1,8 @@
 # nice-plug 0.1.10's normalized manifest, edited in place since the fork was
 # pruned to what harmonigraph compiles on macOS, with nice-plug-core 0.1.5's
 # dependencies and features merged in now that its sources live here too
-# (README.md). The library keeps the name `nice_plug`, so the plugin's paths and
-# the derive's generated `::nice_plug::` paths are unchanged.
+# (README.md). The library keeps the name `nice_plug`, so the plugin's paths are
+# unchanged.
 
 [package]
 edition = "2024"
@@ -44,10 +44,6 @@ path = "src/lib.rs"
 doctest = false
 
 [[test]]
-name = "derive_params"
-path = "tests/derive_params.rs"
-
-[[test]]
 name = "clap_boundary"
 path = "tests/clap_boundary.rs"
 required-features = ["assert_process_allocs", "clap-boundary-tests"]
@@ -80,9 +76,6 @@ version = "0.5.0"
 [dependencies.crossbeam]
 workspace = true
 
-[dependencies.crossbeam-utils]
-version = "0.8.21"
-
 [dependencies.log]
 version = "0.4"
 
@@ -101,10 +94,6 @@ version = "0.2.4"
 [dependencies.midi-consts]
 version = "0.1"
 
-# nice-plug-derive 0.1.2, as a member crate until the parameter layer replaces it.
-[dependencies.harmonigraph-clap-derive]
-path = "derive"
-
 [dependencies.parking_lot]
 workspace = true
 
@@ -119,6 +108,3 @@ workspace = true
 
 [dependencies.serde_json]
 version = "1.0"
-
-[dev-dependencies.approx]
-version = "0.5.1"

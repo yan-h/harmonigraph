@@ -12,7 +12,7 @@ use crate::{
     context::{gui::AsyncExecutor, init::InitContext, process::ProcessContext},
     editor::Editor,
     midi::{MidiConfig, sysex::SysExMessage},
-    params::Params,
+    params::Table,
 };
 
 /// A function that can execute a plugin's [`BackgroundTask`][Plugin::BackgroundTask]s. A plugin can
@@ -40,8 +40,7 @@ pub type TaskExecutor<P> = Box<dyn Fn(<P as Plugin>::BackgroundTask) + Send>;
 ///     impose a lot of restrictions on code structure and meta programming without any real
 ///     benefits. In those cases the trait defines a method that is queried once and only once,
 ///     immediately after instantiating the `Plugin` through `Plugin::default()`. Examples of these
-///     methods are [`Plugin::params()`], and
-///     `ClapPlugin::remote_controls()`.
+///     methods are [`Plugin::params()`] and [`Plugin::editor()`].
 ///   - Some of the data is defined through associated types. Rust currently sadly does not support
 ///     default values for associated types, but all of these types can be set to `()` if you wish
 ///     to ignore them. Examples of these types are [`Plugin::SysExMessage`] and
@@ -54,8 +53,7 @@ pub type TaskExecutor<P> = Box<dyn Fn(<P as Plugin>::BackgroundTask) + Send>;
 ///   these extension structs since they're more loosely coupled to a specific `Plugin`
 ///   implementation.
 ///
-/// The main thing you need to do is define a `[Params]` struct containing all of your parameters.
-/// See the trait's documentation for more information on how to do that, or check out the examples.
+/// The main thing you need to do is declare a [`Table`] of all of your parameters.
 /// The plugin also needs a `Default` implementation so it can be initialized. Most of the other
 /// functionality is optional and comes with default trait method implementations.
 #[allow(unused_variables)]
@@ -148,19 +146,17 @@ pub trait Plugin: Default + Send + 'static {
         Box::new(|_| ())
     }
 
-    /// The plugin's parameters. The host will update the parameter values before calling
-    /// `process()`. These string parameter IDs parameters should never change as they are used to
-    /// distinguish between parameters.
+    /// The plugin's host parameters, in the order the host lists them. A save stores
+    /// each row's value under its stable id, so an id never changes.
     ///
     /// Queried only once immediately after the plugin instance is created.
-    fn params(&self) -> Arc<dyn Params>;
+    fn params(&self) -> Arc<Table>;
 
     /// Returns an extension struct for interacting with the plugin's editor, if it has one. Later
     /// the host may call [`Editor::spawn()`] to create an editor instance. To read the current
-    /// parameter values, you will need to clone and move the `Arc` containing your `Params` object
+    /// parameter values, you will need to clone and move the `Arc` containing your [`Table`]
     /// into the editor. You can later modify the parameters through the
-    /// [`GuiContext`][crate::context::gui::GuiContext] and
-    /// [`ParamSetter`][crate::context::gui::ParamSetter] after the editor GUI has been created.
+    /// [`GuiContext`][crate::context::gui::GuiContext] after the editor GUI has been created.
     /// nice-plug comes with wrappers for several common GUI frameworks that may have their own ways
     /// of interacting with parameters. See the repo's readme for more information.
     ///
@@ -169,18 +165,6 @@ pub trait Plugin: Default + Send + 'static {
     fn editor(&mut self, async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         None
     }
-
-    /// This function is always called just before a [`PluginState`] is loaded. This lets you
-    /// directly modify old plugin state to perform migrations based on the [`PluginState::version`]
-    /// field. Some examples of use cases for this are renaming parameter indices, remapping
-    /// parameter values, and preserving old preset compatibility when introducing new parameters
-    /// with default values that would otherwise change the sound of a preset. Keep in mind that
-    /// automation may still be broken in the first two use cases.
-    ///
-    /// # Note
-    ///
-    /// This is an advanced feature that the vast majority of plugins won't need to implement.
-    fn filter_state(state: &mut PluginState) {}
 
     //
     // The following functions follow the lifetime of the plugin.
@@ -229,10 +213,7 @@ pub trait Plugin: Default + Send + 'static {
     /// The framework provides convenient iterators on the [`Buffer`] object to process audio either
     /// either per-sample per-channel, or per-block per-channel per-sample. The first approach is
     /// preferred for plugins that don't require block-based processing because of their use of
-    /// per-sample SIMD or excessive branching. The parameter smoothers can also work in both modes:
-    /// use [`Smoother::next()`][crate::params::smoothing::Smoother::next()] for per-sample processing,
-    /// and [`Smoother::next_block()`][crate::params::smoothing::Smoother::next_block()] for
-    /// block-based processing.
+    /// per-sample SIMD or excessive branching.
     ///
     /// The `context` object contains context information as well as callbacks for working with note
     /// events. The [`AuxiliaryBuffers`] contain the plugin's sidechain input buffers and
