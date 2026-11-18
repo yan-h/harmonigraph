@@ -25,11 +25,12 @@
 //! did, and drops to the normal level while another app is, which is where
 //! Bitwig's would have vanished.
 //!
-//! A key the editor leaves unclaimed, Space among them, walks the responder
-//! chain. Docked, that ends in the host's view and window, and Bitwig's post
-//! it to the main app. This window's chain would end at itself, where AppKit
-//! beeps, so it goes on into the host's view, which works concealed: Bitwig's
-//! forward asks nothing of the window but that it be theirs.
+//! A key the editor leaves unclaimed, Space among them, goes to the host's view
+//! from either window: baseview sends it to the view it was opened in, held
+//! weakly, rather than up the responder chain, which in this window ends at the
+//! window itself, where AppKit beeps (egui-plugin-window's baseview Patch 8).
+//! Bitwig's view posts it to the main app, which works concealed: its forward
+//! asks nothing of the window but that it be theirs.
 //!
 //! Its close button does not close it: the editor is the host's to destroy,
 //! and the host's show/hide control would otherwise still think it open. The
@@ -458,9 +459,6 @@ mod macos {
             // The close button asks the agent, which refuses it and tells the
             // host. The window keeps the delegate weakly; `State` owns both.
             own.setDelegate(Some(ProtocolObject::from_ref(&*agent)));
-            // SAFETY: a window does not retain its next responder; `State`
-            // owns the host's view until `close` clears this.
-            unsafe { own.setNextResponder(Some(host.as_ref())) };
             own.setTitle(&NSString::from_str("Harmonigraph"));
             let min = super::super::MIN_SIZE;
             own.setContentMinSize(NSSize::new(f64::from(min.0), f64::from(min.1)));
@@ -531,9 +529,6 @@ mod macos {
                 agent.cancel_host_close();
             }
             window.setDelegate(None);
-            // SAFETY: clear the unretained link while State still owns its
-            // host view, just as in editor teardown.
-            unsafe { window.setNextResponder(None) };
             if let (Some(host), Some(view)) = (host, view) {
                 view.removeFromSuperview();
                 host.addSubview(&view);
@@ -667,9 +662,6 @@ mod macos {
                     reveal(&host_window);
                 }
                 window.setDelegate(None);
-                // SAFETY: clearing the reference `pop` set, while `state`
-                // still owns the view it points at.
-                unsafe { window.setNextResponder(None) };
                 window.close();
             }
         }

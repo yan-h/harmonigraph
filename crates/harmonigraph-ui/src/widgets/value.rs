@@ -383,8 +383,10 @@ impl<'a> ValueBar<'a> {
             // only two frames: egui drops the focus of a widget that goes a
             // frame undrawn (a folded section, another tab), so a bar away
             // longer would come back an unfocused field that nothing closes.
+            // Asked of egui's memory, so the host taking the keyboard leaves
+            // the field open ([`super::holds_focus`]).
             let cancelled = ui.input(|i| i.key_pressed(Key::Escape));
-            if cancelled || !pending && !output.has_focus() {
+            if cancelled || !pending && !super::holds_focus(&output) {
                 if !cancelled {
                     if let Some(v) = self.parse(&text) {
                         let v = self.snapped(v.clamp(self.min(), self.max()));
@@ -1022,6 +1024,51 @@ mod tests {
             "the entry outlived its focus"
         );
         assert_eq!(value, 0.25);
+    }
+
+    /// An entry stays open, its text uncommitted, while the host has the
+    /// keyboard: on the frame the editor loses it and on the frames after.
+    #[test]
+    fn an_entry_outlasts_the_editor_losing_the_keyboard() {
+        use crate::tests::probe::{held_into, press, themed};
+        let ctx = themed();
+        let size = egui::vec2(300.0, 100.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut value = 0.5;
+        let bar = std::cell::Cell::new((egui::Id::NULL, egui::Rect::NOTHING));
+        let mut held = |modifiers, events| {
+            held_into(&ctx, size, rect, modifiers, events, |ui| {
+                let response = ValueBar::new(&mut value, 0.0..=1.0, "Amount").show(ui);
+                bar.set((response.id, response.rect));
+            })
+        };
+        held(Modifiers::NONE, vec![]);
+        let (id, at) = (bar.get().0, bar.get().1.center());
+        held(Modifiers::NONE, vec![egui::Event::PointerMoved(at)]);
+        held(Modifiers::COMMAND, vec![press(at, true)]);
+        held(Modifiers::COMMAND, vec![press(at, false)]);
+        held(Modifiers::NONE, vec![]);
+        let edit_id = id.with("edit");
+        assert!(ctx.data(|d| d.get_temp::<String>(edit_id)).is_some(), "no entry opened");
+        ctx.data_mut(|d| d.insert_temp(edit_id, "0.25".to_owned()));
+        for events in [vec![egui::Event::WindowFocused(false)], vec![], vec![]] {
+            let raw = egui::RawInput {
+                screen_rect: Some(rect),
+                events,
+                focused: false,
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(raw, |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                ValueBar::new(&mut value, 0.0..=1.0, "Amount").show(&mut child);
+            });
+            assert_eq!(
+                ctx.data(|d| d.get_temp::<String>(edit_id)).as_deref(),
+                Some("0.25"),
+                "the entry closed without the keyboard"
+            );
+            assert_eq!(value, 0.5);
+        }
     }
 
     /// A double-click puts the value back on its default, held to the range,

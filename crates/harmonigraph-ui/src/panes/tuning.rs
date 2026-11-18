@@ -1161,7 +1161,9 @@ fn map_name_field(
             params.edit_lattice_map(crate::lattice_maps::MapEdit::Rename(selected, text.into()));
         }
         ui.data_mut(|data| data.remove::<String>(buffer));
-    } else if field.has_focus() {
+    } else if crate::widgets::holds_focus(&field) {
+        // Not `has_focus`, which also asks the window: a keystroke in the
+        // frame the host takes the keyboard still reaches the field.
         ui.data_mut(|data| data.insert_temp(buffer, text));
     }
 }

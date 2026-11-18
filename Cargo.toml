@@ -96,8 +96,8 @@ raw-window-handle = "0.5"
 # The editor window (baseview, egui-baseview) is shared with otonal and pinned
 # here by commit. A change to it lands in egui-plugin-window first and reaches
 # Harmonigraph as a bump of this rev; PATCHES.md says how to try one locally.
-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "772a28924a92272f9ccef6ad3ecb5d40080d6095" }
-egui-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "772a28924a92272f9ccef6ad3ecb5d40080d6095" }
+baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "52e3e73ad805f20672798b03fc6f9b5ba2f4b479" }
+egui-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "52e3e73ad805f20672798b03fc6f9b5ba2f4b479" }
 nice-plug = { path = "vendor/nice-plug" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
 
