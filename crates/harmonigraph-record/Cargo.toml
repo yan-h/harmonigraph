@@ -38,4 +38,4 @@ parking_lot = { workspace = true }
 libc = "0.2"
 
 [dev-dependencies]
-nice-assert-no-alloc = "1.0"
+nice-assert-no-alloc = { workspace = true }

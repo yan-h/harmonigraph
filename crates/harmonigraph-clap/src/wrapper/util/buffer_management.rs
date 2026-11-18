@@ -3,8 +3,8 @@
 use std::num::NonZeroU32;
 use std::ptr::NonNull;
 
-use nice_plug_core::audio_setup::AudioIOLayout;
-use nice_plug_core::buffer::Buffer;
+use crate::audio_setup::AudioIOLayout;
+use crate::buffer::Buffer;
 
 /// Buffers created using [`create_buffers`]. At some point the main `Plugin::process()` should
 /// probably also take an argument like this instead of main+aux buffers if we also want to provide
@@ -400,7 +400,7 @@ impl BufferManager {
 
 #[cfg(any(miri, test))]
 mod miri {
-    use nice_plug_core::audio_setup::{PortNames, new_nonzero_u32};
+    use crate::audio_setup::{PortNames, new_nonzero_u32};
 
     use super::*;
 

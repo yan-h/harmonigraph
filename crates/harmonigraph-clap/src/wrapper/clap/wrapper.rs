@@ -63,15 +63,15 @@ use clap_sys::stream::{clap_istream, clap_ostream};
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::{self, SendTimeoutError};
 use crossbeam::queue::ArrayQueue;
-use nice_plug_core::audio_setup::{AudioIOLayout, AuxiliaryBuffers, BufferConfig, ProcessMode};
-use nice_plug_core::context::gui::AsyncExecutor;
-use nice_plug_core::context::process::Transport;
-use nice_plug_core::editor::{Editor, ParentWindowHandle};
-use nice_plug_core::midi::sysex::SysExMessage;
-use nice_plug_core::midi::{MidiConfig, NoteEvent, PluginNoteEvent};
-use nice_plug_core::params::internals::ParamPtr;
-use nice_plug_core::params::{ParamFlags, Params};
-use nice_plug_core::plugin::{Plugin, PluginState, ProcessStatus, TaskExecutor};
+use crate::audio_setup::{AudioIOLayout, AuxiliaryBuffers, BufferConfig, ProcessMode};
+use crate::context::gui::AsyncExecutor;
+use crate::context::process::Transport;
+use crate::editor::{Editor, ParentWindowHandle};
+use crate::midi::sysex::SysExMessage;
+use crate::midi::{MidiConfig, NoteEvent, PluginNoteEvent};
+use crate::params::internals::ParamPtr;
+use crate::params::{ParamFlags, Params};
+use crate::plugin::{Plugin, PluginState, ProcessStatus, TaskExecutor};
 use parking_lot::Mutex;
 
 #[path = "configuration_adapter.rs"]
@@ -178,7 +178,7 @@ pub struct Wrapper<P: ClapPlugin> {
     /// its error string) would make AtomicCell fall back to a lock on the audio thread.
     last_tail_samples: AtomicU32,
     /// The current latency in samples, as set by the plugin through the
-    /// [`ProcessContext`](nice_plug_core::context::process::ProcessContext). Uses the latency
+    /// [`ProcessContext`](crate::context::process::ProcessContext). Uses the latency
     /// extension.
     pub current_latency: AtomicU32,
     /// The latency the plugin last asked for. CLAP lets the reported latency

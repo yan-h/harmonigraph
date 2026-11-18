@@ -1,7 +1,7 @@
 //! Optional plugin-owned saved settings, outside the host parameter list.
 //! The wrapper prepares before restoring any ordinary fields, commits only on
 //! success, and never calls these methods under its audio/plugin runtime lock.
-use nice_plug_core::plugin::PluginState;
+use crate::plugin::PluginState;
 
 pub trait Prepared: Send {
     /// Off-audio commit of a prepared complete value, after the ordinary

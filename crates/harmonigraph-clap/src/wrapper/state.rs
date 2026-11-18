@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use nice_plug_core::{
+use crate::{
     audio_setup::BufferConfig,
     params::{InternalParamMut, Param, Params, internals::ParamPtr},
     plugin::{ParamValue, Plugin, PluginState},

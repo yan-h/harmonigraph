@@ -19,8 +19,8 @@ pub use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_
 pub use clap_sys::host::clap_host;
 pub use clap_sys::plugin::{clap_plugin, clap_plugin_descriptor};
 pub use clap_sys::version::CLAP_VERSION;
-use nice_plug_core::context::remote_controls::RemoteControlsContext;
-use nice_plug_core::plugin::Plugin;
+use crate::context::remote_controls::RemoteControlsContext;
+use crate::plugin::Plugin;
 
 /// The host's side of the editor, for an editor with a window of its own
 /// (see [`ClapPlugin::clap_editor_host`]). Main thread only.
@@ -75,7 +75,7 @@ pub trait ClapPlugin: Plugin {
     fn clap_main_init(&mut self) -> bool {
         true
     }
-    fn clap_main_activate(&mut self, config: &nice_plug_core::audio_setup::BufferConfig) -> bool {
+    fn clap_main_activate(&mut self, config: &crate::audio_setup::BufferConfig) -> bool {
         true
     }
     fn clap_main_deactivate(&mut self) {}
@@ -103,12 +103,12 @@ pub trait ClapPlugin: Plugin {
     fn clap_performance_input_boundary(&mut self) {}
     fn clap_performance_process(
         &mut self,
-        buffer: &mut nice_plug_core::buffer::Buffer,
-        aux: &mut nice_plug_core::audio_setup::AuxiliaryBuffers,
-        context: &mut impl nice_plug_core::context::process::ProcessContext<Self>,
+        buffer: &mut crate::buffer::Buffer,
+        aux: &mut crate::audio_setup::AuxiliaryBuffers,
+        context: &mut impl crate::context::process::ProcessContext<Self>,
         block: performance::Block,
         output: &mut performance::Output<'_>,
-    ) -> nice_plug_core::plugin::ProcessStatus {
+    ) -> crate::plugin::ProcessStatus {
         self.process(buffer, aux, context)
     }
     /// The last chance to emit in this callback, including invalid input,

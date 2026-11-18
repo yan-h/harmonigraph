@@ -136,6 +136,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fb5dfbc6d8d2675589ccbe4d0fd61df2419075625f8c1a62325e718e2b0049f9"
 
 [[package]]
+name = "approx"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "arboard"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1453,6 +1462,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "harmonigraph-clap"
+version = "0.1.10"
+dependencies = [
+ "anyhow",
+ "anymap3",
+ "approx",
+ "atomic_float",
+ "atomic_refcell",
+ "backtrace",
+ "bitflags 2.13.2",
+ "clap-sys",
+ "crossbeam",
+ "crossbeam-utils",
+ "harmonigraph-clap-derive",
+ "log",
+ "midi-consts",
+ "nice-assert-no-alloc",
+ "nice-log",
+ "parking_lot",
+ "raw-window-handle 0.5.2",
+ "rtrb",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "harmonigraph-clap-derive"
+version = "0.1.2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "harmonigraph-core"
 version = "0.6.1"
 
@@ -1499,6 +1543,7 @@ dependencies = [
  "egui",
  "egui-baseview",
  "egui-wgpu",
+ "harmonigraph-clap",
  "harmonigraph-core",
  "harmonigraph-perf",
  "harmonigraph-record",
@@ -1506,7 +1551,6 @@ dependencies = [
  "harmonigraph-take",
  "harmonigraph-ui",
  "nice-assert-no-alloc",
- "nice-plug",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -2237,58 +2281,6 @@ dependencies = [
  "termcolor",
  "time",
  "windows",
-]
-
-[[package]]
-name = "nice-plug"
-version = "0.1.10"
-dependencies = [
- "anyhow",
- "anymap3",
- "atomic_float",
- "atomic_refcell",
- "backtrace",
- "clap-sys",
- "crossbeam",
- "log",
- "nice-assert-no-alloc",
- "nice-log",
- "nice-plug-core",
- "nice-plug-derive",
- "parking_lot",
- "rtrb",
- "serde_json",
-]
-
-[[package]]
-name = "nice-plug-core"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a78f4ef39ad3c98061dd38fc51b04989839d50e7a39a771f695fc130e40a35e"
-dependencies = [
- "atomic_float",
- "atomic_refcell",
- "bitflags 2.13.2",
- "crossbeam-utils",
- "log",
- "midi-consts",
- "nice-assert-no-alloc",
- "nice-plug-derive",
- "parking_lot",
- "raw-window-handle 0.5.2",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "nice-plug-derive"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2952ae91d0701916f887973dd0b84ac70007761872b7689395c7adc0e803b232"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
 ]
 
 [[package]]

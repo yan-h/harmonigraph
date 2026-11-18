@@ -5,7 +5,7 @@
 //! VST3 and standalone wrappers that used it.
 
 use anymap3::Entry;
-use nice_plug_core::nice_trace;
+use crate::nice_trace;
 use parking_lot::Mutex;
 use std::sync::{Arc, LazyLock, Weak};
 use std::thread::{self, JoinHandle};

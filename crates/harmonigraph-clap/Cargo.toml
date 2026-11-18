@@ -1,10 +1,13 @@
-# Cargo's normalized form of the published manifest, edited in place since
-# the fork was pruned to what harmonigraph compiles on macOS (PATCHES.md).
+# nice-plug 0.1.10's normalized manifest, edited in place since the fork was
+# pruned to what harmonigraph compiles on macOS, with nice-plug-core 0.1.5's
+# dependencies and features merged in now that its sources live here too
+# (README.md). The library keeps the name `nice_plug`, so the plugin's paths and
+# the derive's generated `::nice_plug::` paths are unchanged.
 
 [package]
 edition = "2024"
 rust-version = "1.87"
-name = "nice-plug"
+name = "harmonigraph-clap"
 version = "0.1.10"
 authors = [
     "Robbert van der Helm <mail@robbertvanderhelm.nl>",
@@ -16,7 +19,8 @@ autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "An audio plugin development framework that is nice to use :)"
+description = "Harmonigraph's CLAP shell: nice-plug and nice-plug-core, owned"
+publish = false
 readme = "README.md"
 keywords = [
     "audio",
@@ -35,14 +39,16 @@ all-features = true
 [features]
 # Enables deterministic scheduling observations only in the boundary fixtures.
 clap-boundary-tests = []
-assert_process_allocs = [
-    "dep:nice-assert-no-alloc",
-    "nice-plug-core/assert_process_allocs",
-]
+assert_process_allocs = ["dep:nice-assert-no-alloc"]
+# nice-plug-core's `std::simd` buffer adapters, which need a nightly compiler.
+# Nothing enables it; it is declared so the code behind it is not an unknown cfg.
+simd = []
 
 [lib]
 name = "nice_plug"
 path = "src/lib.rs"
+# The upstream doc examples were never run here, and do not build as written.
+doctest = false
 
 [[test]]
 name = "derive_params"
@@ -76,17 +82,24 @@ version = "0.1"
 [dependencies.backtrace]
 version = "0.3.76"
 
+[dependencies.bitflags]
+version = "2"
+
 [dependencies.clap-sys]
 version = "0.5.0"
 
 [dependencies.crossbeam]
 version = "0.8"
 
+[dependencies.crossbeam-utils]
+version = "0.8.21"
+
 [dependencies.log]
 version = "0.4"
 
+# Without default features, as the workspace entry says why.
 [dependencies.nice-assert-no-alloc]
-version = "1.0"
+workspace = true
 features = [
     "backtrace",
     "log",
@@ -96,22 +109,28 @@ optional = true
 [dependencies.nice-log]
 version = "0.2.4"
 
-[dependencies.nice-plug-core]
-version = "0.1.5"
+[dependencies.midi-consts]
+version = "0.1"
 
-[dependencies.nice-plug-derive]
-version = "0.1.2"
+# nice-plug-derive 0.1.2, as a member crate until the parameter layer replaces it.
+[dependencies.harmonigraph-clap-derive]
+path = "derive"
 
 [dependencies.parking_lot]
 version = "0.12"
 
+[dependencies.raw-window-handle]
+version = "0.5"
+
 [dependencies.rtrb]
 version = "0.3.3"
+
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
 
 [dependencies.serde_json]
 version = "1.0"
 
 [dev-dependencies.approx]
 version = "0.5.1"
-
-[workspace]
