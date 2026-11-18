@@ -205,7 +205,9 @@ impl Editor for LatticeEditor {
             if let Some(size) = resized.requested_size.load() {
                 // In its own window, the ask is that window's to grant, at
                 // the size it applies.
-                if let Some(applied) = popping.resize(size) {
+                // Within the window's limits, which AppKit does not hold a
+                // frame set by code to.
+                if let Some(applied) = popping.resize(pop_out::LIMITS.clamp(size)) {
                     resized.requested_size.store(None);
                     resized.size.store(applied);
                     return as_size(applied);
@@ -337,7 +339,9 @@ impl Editor for LatticeEditor {
         // same, as the host's window may be sized as the host likes. CLAP
         // makes this call on the main thread, where the own window moves the
         // view and its `moving` sets the flag, so the two cannot interleave.
-        if self.egui_state.in_own_window() {
+        // Before the host attaches the editor, the saved choice stands in for
+        // where it will open (`EguiState::owns_size`).
+        if self.egui_state.owns_size() {
             return true;
         }
         // A set_size with the current size must succeed without side
@@ -413,9 +417,9 @@ mod tests {
 
     use harmonigraph_render::startup::{Status, WindowStartup};
 
-    /// A host resize while the editor sits in its own window leaves the size
-    /// the project saves, which is that window's; in the host's window it is
-    /// the editor's size.
+    /// A host resize while the open editor sits in its own window leaves the
+    /// size the project saves, which is that window's; in the host's window it
+    /// is the editor's size.
     #[test]
     fn a_host_resize_leaves_the_saved_size_while_the_editor_is_in_its_own_window() {
         let (_notes, consumer) = harmonigraph_record::publication::channel();
@@ -433,6 +437,7 @@ mod tests {
         let state = &params.editor_state;
         let saved = state.size();
         let (width, height) = (saved.0 + 100, saved.1 + 50);
+        state.set_open(true);
 
         let moving = super::super::pop_out::moving(state.clone());
         moving(plugin_own_window::Move::Out(saved));

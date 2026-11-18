@@ -69,7 +69,7 @@ impl EguiState {
         self.docked.load(Ordering::Relaxed)
     }
 
-    pub(super) fn set_docked(&self, docked: bool) {
+    pub(crate) fn set_docked(&self, docked: bool) {
         self.docked.store(docked, Ordering::Relaxed);
     }
 
@@ -79,6 +79,21 @@ impl EguiState {
 
     pub(super) fn set_in_own_window(&self, own: bool) {
         self.in_own_window.store(own, Ordering::Relaxed);
+    }
+
+    /// Whether the editor's size is its own window's, which the project
+    /// saves, so that a host `set_size`, which then sizes only the host's
+    /// window, must not replace it: while the editor is open, whether its view
+    /// is in its own window; before the host attaches it (CLAP allows
+    /// `set_size` before `set_parent`), whether it will open there, which the
+    /// saved choice says where the platform offers one (Yan decided the own
+    /// window opens at the size its project saved, egui-plugin-window#12).
+    pub(super) fn owns_size(&self) -> bool {
+        if self.is_open() {
+            self.in_own_window()
+        } else {
+            super::OWN_WINDOW_OFFERED && !self.docked()
+        }
     }
 
     pub fn is_open(&self) -> bool {

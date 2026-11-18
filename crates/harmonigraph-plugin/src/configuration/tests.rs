@@ -3,7 +3,7 @@
 use super::*;
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::events::*;
-use clap_sys::ext::gui::{clap_host_gui, CLAP_EXT_GUI};
+use clap_sys::ext::gui::{clap_host_gui, clap_plugin_gui, CLAP_EXT_GUI};
 use clap_sys::ext::params::{clap_host_params, clap_plugin_params, CLAP_EXT_PARAMS};
 use clap_sys::ext::state::{clap_host_state, clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
@@ -2495,4 +2495,46 @@ fn the_close_button_tells_the_host_to_destroy_the_editor() {
     assert!(host.closed(), "a host with a gui extension is told");
     assert_eq!(device.stats.closed.load(Ordering::Relaxed), 1);
     assert!(device.stats.closed_destroyed.load(Ordering::Relaxed));
+}
+
+/// A size the host gives its plugin window before it attaches the editor
+/// (CLAP allows `set_size` before `set_parent`) becomes the editor's only
+/// where the editor will open in the host's window. Opening in its own, it
+/// opens at the size its project saved, which a save keeps
+/// (yan-h/egui-plugin-window#12); a platform that offers no own window takes
+/// the host's size either way.
+#[test]
+fn a_host_size_before_attach_is_the_editors_only_where_it_opens_docked() {
+    let _scope = crate::test_scope::enter();
+    let device = Device::new();
+    let gui = unsafe {
+        &*(((*device.plugin).get_extension.unwrap())(device.plugin, CLAP_EXT_GUI.as_ptr())
+            .cast::<clap_plugin_gui>())
+    };
+    let state = device.wrapper().test_inspect_plugin(|plugin| plugin.params.editor_state.clone());
+    let (mut api, mut floating) = (ptr::null(), false);
+    unsafe {
+        assert!((gui.get_preferred_api.unwrap())(device.plugin, &mut api, &mut floating));
+        assert!((gui.create.unwrap())(device.plugin, api, false));
+    }
+    let set_size = |(width, height): (u32, u32)| {
+        assert!(unsafe { (gui.set_size.unwrap())(device.plugin, width, height) });
+    };
+    let size = || {
+        let (mut width, mut height) = (0, 0);
+        assert!(unsafe { (gui.get_size.unwrap())(device.plugin, &mut width, &mut height) });
+        (width, height)
+    };
+    let saved = size();
+    let host = (saved.0 + 160, saved.1 + 90);
+
+    state.set_docked(false);
+    set_size(host);
+    let own = cfg!(target_os = "macos");
+    assert_eq!(size(), if own { saved } else { host }, "the project's saved size stays");
+
+    state.set_docked(true);
+    let host = (host.0 + 40, host.1 + 30);
+    set_size(host);
+    assert_eq!(size(), host, "docked, the host's size is the editor's");
 }

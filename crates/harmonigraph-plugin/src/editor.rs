@@ -46,3 +46,6 @@ const MIN_SIZE: (u32, u32) = (
 /// following the window, so the window stops where the picture already did,
 /// and no display reaches it. The host's window has no maximum of ours.
 const MAX_SIZE: (u32, u32) = (8192, 8192);
+/// Whether the editor can open in a window of its own on this platform
+/// (`pop_out`); elsewhere it stays in the host's.
+const OWN_WINDOW_OFFERED: bool = cfg!(target_os = "macos");

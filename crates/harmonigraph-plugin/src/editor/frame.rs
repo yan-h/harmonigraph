@@ -108,7 +108,8 @@ pub(super) fn frame(
     // A fold is priced against `egui_state.size`, which is the size the window
     // actually has: `requested_size` is empty by now whatever happened above,
     // since the window's size source clears it on refusal as well as on
-    // accept, and `size` is only updated when the host agrees. So two folds in
+    // accept, and `size` is only updated when the host agrees, or in the own
+    // window to the size AppKit applied. So two folds in
     // consecutive frames add up rather than the second cancelling the first.
     let (window_width, window_height) = egui_state.size();
     // Offered only where the shell can give the editor its own window, and
