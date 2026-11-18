@@ -4,7 +4,7 @@
 //!
 //! Its window must be on screen, uncovered, for the whole run: every opening
 //! and close is sequenced from its window's frames, and a window that cannot
-//! be seen may run none. A run that stalls so is ended by [`TIMEOUT`]
+//! be seen runs none. A run that stalls so is ended by [`TIMEOUT`]
 //! from a thread of its own, which needs no frame.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -99,7 +99,7 @@ pub fn run() {
             // A command-line application can start behind another window,
             // and Metal skips presentation while it is occluded. Brought
             // forward as the window is built rather than from its first
-            // frame, which a window that cannot be seen may never run.
+            // frame, which a window that cannot be seen never runs.
             use objc2::MainThreadMarker;
             let app =
                 objc2_app_kit::NSApplication::sharedApplication(MainThreadMarker::new().unwrap());

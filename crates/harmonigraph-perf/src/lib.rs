@@ -143,9 +143,8 @@ pub struct ShellTimings {
     pub submit_ms: f32,
     /// The frame rate the display link was asked for this frame (see
     /// [`link_target_fps`]), or `None` for a frame the link did not ask for —
-    /// the occlusion repaint's, and on window pins that keep one the
-    /// watchdog's — and wherever no link drives
-    /// the window at all. The overlay keeps the last `Some` it saw
+    /// the one a window back from occlusion runs from the notification — and
+    /// wherever no link drives the window at all. The overlay keeps the last `Some` it saw
     /// ([`PerfStats::target_fps`]).
     pub target_fps: Option<f32>,
 }
@@ -585,8 +584,8 @@ pub struct PerfStats {
     pub spec_uploads: f32,
     /// The frame rate the display link was last asked for, which the headline
     /// rate is judged against. Kept across the frames the link did not ask for
-    /// (the occlusion repaint's, and the watchdog's where the window keeps
-    /// one, which carry none), so one
+    /// (a reveal's, run from the occlusion notification, which carries
+    /// none), so one
     /// of them does not drop the colour back to the fixed thresholds. `None`
     /// where no link ever paced the window: the standalone.
     pub target_fps: Option<f32>,
@@ -992,8 +991,8 @@ mod tests {
         assert_eq!(link_target_fps(0.0, 1), None, "a refresh period of nothing is no target");
     }
 
-    /// The occlusion repaint, and the watchdog where the window keeps one, run
-    /// frames the display link did not ask for, and those carry no target. The overlay keeps the last one
+    /// A window back from occlusion runs a frame from the notification, which
+    /// the display link did not ask for, and that carries no target. The overlay keeps the last one
     /// it was given rather than judging such a frame against the fixed
     /// thresholds, which would flip a divided rate's colour for a tick.
     #[test]
