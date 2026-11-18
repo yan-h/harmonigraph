@@ -1,5 +1,5 @@
 use std::sync::{Arc, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use egui_baseview::Queue;
 use nice_plug::prelude::{GuiContext, ParamSetter};
@@ -33,9 +33,9 @@ pub(super) fn frame(
     let Some(pop_out) = state.pop_out.upgrade() else { return };
 
     // Everything the shell does before the UI runs: the lock, a restore and
-    // the camera; the take's mirror, a few loads and copies, runs just after.
-    // Timed separately because `ui cpu` starts at the dock build, so this
-    // stretch sits outside every other CPU reading.
+    // the camera. Timed separately because `ui cpu` starts at the dock build,
+    // so this stretch sits outside every other CPU reading; the last pass's
+    // take work, around its UI, is added to it below.
     // The rings and their FFTs are the input worker's, off this thread.
     let shell_start = Instant::now();
     let setter = ParamSetter::new(context);
@@ -86,7 +86,8 @@ pub(super) fn frame(
     // starts publishing and this forgets to copy is a missing field the
     // compiler names, not a line nobody misses — the overlay would otherwise
     // show it as a steady zero, which reads as a cost that isn't there.
-    // `shell_ms` comes last because it measures everything above it.
+    // `shell_ms` comes last because it measures everything above it, and
+    // carries the last pass's take work, which ran after its reading.
     shared.ui.picture.instruments.timings = harmonigraph_perf::ShellTimings {
         tess_ms: queue.tess_ms(),
         draw_gpu_ms: queue.take_draw_gpu_ms(),
@@ -102,7 +103,7 @@ pub(super) fn frame(
         submit_ms: queue.submit_ms(),
         target_fps: timing
             .and_then(|timing| harmonigraph_perf::link_target_fps(timing.refresh, timing.divisor)),
-        shell_ms: shell_start.elapsed().as_secs_f32() * 1000.0,
+        shell_ms: shell_start.elapsed().as_secs_f32() * 1000.0 + state.take_ms,
     };
     // A fold is priced against `egui_state.size`, which is the size the window
     // actually has: `requested_size` is empty by now whatever happened above,
@@ -113,6 +114,8 @@ pub(super) fn frame(
     // Offered only where the shell can give the editor its own window, and
     // read back after the UI has had the chance to flip it.
     shared.ui.workspace.interaction.own_window = pop_out.offered().then(|| !egui_state.docked());
+    let take_start = Instant::now();
+    let mut drawing = Duration::ZERO;
     let ask = shared.take_pass(sample_rate, |shared| {
         let backend = PluginParamBackend {
             params: &state.params,
@@ -120,7 +123,8 @@ pub(super) fn frame(
             gesture: &shared.gesture,
             configuration,
         };
-        harmonigraph_ui::shell::Frame {
+        let drawn = Instant::now();
+        let ask = harmonigraph_ui::shell::Frame {
             ui,
             state: &mut shared.ui,
             params: &backend,
@@ -128,8 +132,14 @@ pub(super) fn frame(
             build_tag: crate::BUILD_TAG,
             window_size: egui::vec2(window_width as f32, window_height as f32),
         }
-        .draw()
+        .draw();
+        drawing = drawn.elapsed();
+        ask
     });
+    // The take's mirror before the UI and its commands after (a take's start
+    // makes its directory and hands the writer its channel): main-thread time
+    // in no other reading, so the next frame's shell reading carries it.
+    state.take_ms = take_start.elapsed().saturating_sub(drawing).as_secs_f32() * 1000.0;
     #[cfg(all(feature = "frame-log", target_os = "macos"))]
     state.logged.note(&shared.ui);
 
@@ -169,6 +179,8 @@ pub(super) struct WindowState {
     pub(super) shared: Arc<EditorLock>,
     pub(super) params: Arc<HarmonigraphParams>,
     pub(super) pop_out: Weak<PopOut>,
+    /// The last pass's take work, in ms, for this pass's shell reading.
+    take_ms: f32,
     /// What the frame log was last told the editor was doing.
     #[cfg(all(feature = "frame-log", target_os = "macos"))]
     logged: Logged,
@@ -184,6 +196,7 @@ impl WindowState {
             shared,
             params,
             pop_out,
+            take_ms: 0.0,
             #[cfg(all(feature = "frame-log", target_os = "macos"))]
             logged: Logged::default(),
         }
