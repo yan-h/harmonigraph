@@ -3,25 +3,33 @@ use crate::theme;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 use std::ops::RangeInclusive;
 
-/// The keys a focused plot handle reads: the arrows, bare and with Shift for
-/// the finer step, and Escape, which egui ends the focus on. Claimed while it
-/// has the focus, since a shell gives the editor only the keys it lists; every
-/// other key, a DAW's Space among them, still goes to the host.
-const HANDLE_KEYS: [egui::KeyboardShortcut; 9] = {
+/// A focused plot handle's arrows and what each moves it, bare a coarse step
+/// and with Shift a fine one: one table for what is claimed from the host and
+/// what is read, matched exactly as the shell matches. Any other chord on an
+/// arrow, and every other key, a DAW's Space among them, goes to the host.
+const HANDLE_ARROWS: [(egui::KeyboardShortcut, Vec2); 8] = {
     use egui::{Key, KeyboardShortcut, Modifiers};
+    const fn nudge(modifiers: Modifiers, key: Key, x: f32, y: f32) -> (KeyboardShortcut, Vec2) {
+        let step = if modifiers.shift { 0.001 } else { 0.01 };
+        (KeyboardShortcut::new(modifiers, key), Vec2::new(x * step, y * step))
+    }
     let (none, shift) = (Modifiers::NONE, Modifiers::SHIFT);
     [
-        KeyboardShortcut::new(none, Key::ArrowLeft),
-        KeyboardShortcut::new(none, Key::ArrowRight),
-        KeyboardShortcut::new(none, Key::ArrowUp),
-        KeyboardShortcut::new(none, Key::ArrowDown),
-        KeyboardShortcut::new(shift, Key::ArrowLeft),
-        KeyboardShortcut::new(shift, Key::ArrowRight),
-        KeyboardShortcut::new(shift, Key::ArrowUp),
-        KeyboardShortcut::new(shift, Key::ArrowDown),
-        KeyboardShortcut::new(none, Key::Escape),
+        nudge(none, Key::ArrowLeft, -1.0, 0.0),
+        nudge(none, Key::ArrowRight, 1.0, 0.0),
+        nudge(none, Key::ArrowUp, 0.0, 1.0),
+        nudge(none, Key::ArrowDown, 0.0, -1.0),
+        nudge(shift, Key::ArrowLeft, -1.0, 0.0),
+        nudge(shift, Key::ArrowRight, 1.0, 0.0),
+        nudge(shift, Key::ArrowUp, 0.0, 1.0),
+        nudge(shift, Key::ArrowDown, 0.0, -1.0),
     ]
 };
+
+/// Bare Escape, which egui ends a focused handle's focus on: the editor's
+/// while a handle holds the focus, as it was before the shell's key rule.
+const HANDLE_ESCAPE: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Escape);
 
 pub(super) struct Plot {
     pub rect: Rect,
@@ -147,8 +155,12 @@ impl Plot {
                 ));
             }
         }
-        if response.has_focus() {
-            // Claimed, or egui would spend each arrow moving focus to a
+        // Egui's focus, not the window's: claimed while the host has the
+        // keyboard too, so the first arrow after clicking back finds it the
+        // editor's. Read under the same test, since a key reaches the editor
+        // only while its window has the keyboard.
+        if super::holds_focus(&response) {
+            // Locked, or egui would spend each arrow moving focus to a
             // neighbouring widget as well.
             let arrows = egui::EventFilter {
                 horizontal_arrows: true,
@@ -156,16 +168,12 @@ impl Plot {
                 ..Default::default()
             };
             ui.memory_mut(|m| m.set_focus_lock_filter(response.id, arrows));
-            crate::keys::claim(ui.ctx(), &HANDLE_KEYS);
-            let delta = ui.input(|i| {
-                let step = if i.modifiers.shift { 0.001 } else { 0.01 };
-                egui::vec2(
-                    (i.key_pressed(egui::Key::ArrowRight) as i32
-                        - i.key_pressed(egui::Key::ArrowLeft) as i32) as f32,
-                    (i.key_pressed(egui::Key::ArrowUp) as i32
-                        - i.key_pressed(egui::Key::ArrowDown) as i32) as f32,
-                ) * step
-            });
+            crate::keys::claim(ui.ctx(), &[HANDLE_ESCAPE]);
+            let taken = crate::keys::take_each(ui.ctx(), &HANDLE_ARROWS.map(|(chord, _)| chord));
+            let delta = taken
+                .iter()
+                .filter_map(|chord| HANDLE_ARROWS.iter().find(|(c, _)| c == chord))
+                .fold(Vec2::ZERO, |sum, (_, step)| sum + *step);
             if delta != Vec2::ZERO {
                 next = Some((egui::vec2(x, y) + delta).clamp(Vec2::ZERO, Vec2::splat(1.0)));
             }
@@ -239,49 +247,66 @@ mod tests {
     use super::*;
     use crate::tests::probe::{events_into, themed};
 
-    /// A clicked handle lists its keys for the shell, and a nudge leaves the
-    /// focus on it, so it goes on listing them: moved to the neighbour, the
-    /// arrows would go to the host.
+    /// A clicked handle claims the chord it reads, an arrow nudges it by that
+    /// chord's step and leaves the focus on it, so the next arrow is still the
+    /// handle's; a chord it does not read is not claimed, and goes to the host.
     #[test]
-    fn a_clicked_handle_keeps_the_focus_through_an_arrow() {
+    fn a_clicked_handle_claims_its_arrows_and_keeps_them_through_a_nudge() {
+        use egui::{Key, KeyboardShortcut, Modifiers};
         let ctx = themed();
         let screen = egui::vec2(400.0, 400.0);
         let rect = Rect::from_min_size(Pos2::ZERO, screen);
         let mut at = Pos2::ZERO;
-        let mut listed = false;
+        let mut claimed = Vec::new();
+        let mut moved = None;
         let mut frame = |events| {
             events_into(&ctx, screen, rect, events, |ui| {
                 let response = ui.allocate_response(egui::vec2(200.0, 100.0), Sense::hover());
                 // Directly above the neighbour, where an arrow would send the focus.
                 at = response.rect.left_top() + egui::vec2(20.0, 90.0);
                 let plot = Plot { rect: response.rect, response, fields: Rect::NOTHING };
-                plot.handle(ui, "handle", 0.1, 0.1);
+                moved = plot.handle(ui, "handle", 0.1, 0.1).1;
                 let _ = ui.button("neighbour");
-                listed = crate::keys::claimed(ui.ctx()).contains(&HANDLE_KEYS[3]);
+                claimed = crate::keys::claimed(ui.ctx());
             });
-            (at, listed)
+            (at, claimed.clone(), moved)
         };
-        let (at, _) = frame(vec![]);
+        let (at, _, _) = frame(vec![]);
         let press = |pressed| egui::Event::PointerButton {
             pos: at,
             button: egui::PointerButton::Primary,
             pressed,
-            modifiers: egui::Modifiers::NONE,
+            modifiers: Modifiers::NONE,
         };
         frame(vec![egui::Event::PointerMoved(at)]);
         frame(vec![press(true)]);
         frame(vec![press(false)]);
-        let (_, listed) = frame(vec![]);
-        assert!(listed, "the clicked handle did not list its arrows");
+        let fine_down = KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowDown);
+        let (_, claimed, _) = frame(vec![]);
+        assert!(claimed.contains(&fine_down), "the clicked handle did not claim Shift-Down");
+        let command_down = KeyboardShortcut::new(Modifiers::COMMAND, Key::ArrowDown);
+        assert!(!claimed.contains(&command_down), "it claimed a chord it does not read");
 
-        frame(vec![egui::Event::Key {
-            key: egui::Key::ArrowDown,
+        let (_, _, moved) = frame(vec![egui::Event::Key {
+            key: Key::ArrowDown,
             physical_key: None,
             pressed: true,
             repeat: false,
-            modifiers: egui::Modifiers::NONE,
+            modifiers: Modifiers::SHIFT,
         }]);
-        let (_, listed) = frame(vec![]);
-        assert!(listed, "the arrow moved the focus off the handle");
+        let moved = moved.expect("Shift-Down did not nudge the handle");
+        assert!((moved.y - (0.1 - 0.001)).abs() < 1e-6 && moved.x == 0.1, "{moved:?}");
+        // A bare arrow, which egui would also spend moving the focus on.
+        let (_, _, moved) = frame(vec![egui::Event::Key {
+            key: Key::ArrowDown,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        let moved = moved.expect("Down did not nudge the handle");
+        assert!((moved.y - (0.1 - 0.01)).abs() < 1e-6, "{moved:?}");
+        let (_, claimed, _) = frame(vec![]);
+        assert!(claimed.contains(&fine_down), "the arrow moved the focus off the handle");
     }
 }
