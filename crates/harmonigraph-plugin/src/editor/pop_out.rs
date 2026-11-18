@@ -52,6 +52,8 @@ use std::sync::Arc;
 use nice_plug::prelude::ParentWindowHandle;
 use nice_plug::wrapper::clap::EditorHost;
 
+use super::persist::EguiState;
+
 #[cfg(target_os = "macos")]
 pub(super) use macos::PopOut;
 
@@ -111,6 +113,9 @@ mod macos {
 
     struct LocalPopOut {
         state: RefCell<State>,
+        /// Told whether the view is in its own window as it moves
+        /// ([`EguiState::in_own_window`]).
+        editor: Arc<EguiState>,
     }
 
     #[derive(Default)]
@@ -265,9 +270,9 @@ mod macos {
     }
 
     impl PopOut {
-        pub(in crate::editor) fn new() -> Arc<Self> {
+        pub(in crate::editor) fn new(editor: Arc<EguiState>) -> Arc<Self> {
             Arc::new(Self(MainThreadBound::new(
-                LocalPopOut { state: RefCell::new(State::default()) },
+                LocalPopOut { state: RefCell::new(State::default()), editor },
                 main_thread(),
             )))
         }
@@ -369,13 +374,6 @@ mod macos {
                 Some(false) => self.dock(),
                 None => {}
             }
-        }
-
-        /// The size of the editor's own window, while it is in one, which
-        /// then has the say over the editor's size rather than the host.
-        pub(in crate::editor) fn size(&self) -> Option<(u32, u32)> {
-            let state = self.state().borrow();
-            state.window.as_ref().map(|_| state.size)
         }
 
         /// The size source's question, asked before the host's: what the
@@ -493,6 +491,14 @@ mod macos {
             // attaching a view can draw a frame on the spot, and its size
             // source borrows the state.
             let Some(own_content) = own.contentView() else { return };
+            // From here the editor's size is this window's, which takes the
+            // view's: a host resize not yet taken is dropped, as is any the
+            // host makes from now on (`Editor::set_size`). Before the move,
+            // whose frame on the spot must not take the host's size either.
+            let editor = &self.0.get(mtm).editor;
+            editor.host_resized.store(None);
+            editor.size.store(logical(content));
+            editor.set_in_own_window(true);
             view.removeFromSuperview();
             own_content.addSubview(&view);
             view.setFrameOrigin(NSPoint::ZERO);
@@ -516,6 +522,7 @@ mod macos {
                 // Before the move, which can draw a frame on the spot: that
                 // frame's size source must already find it docked.
                 state.redocked = true;
+                self.0.get(main_thread()).editor.set_in_own_window(false);
                 (window, state.host.clone(), state.view.clone(), state.agent.clone())
             };
             if let Some(agent) = agent {
@@ -647,6 +654,7 @@ mod macos {
             // Release the borrow before native calls, which may reenter a
             // size source or frame. Those callbacks find the empty state.
             let state = std::mem::take(&mut *self.state.borrow_mut());
+            self.editor.set_in_own_window(false);
             if let Some(agent) = &state.agent {
                 agent.cancel_host_close();
                 // SAFETY: removing an observer this added, still alive.
@@ -793,7 +801,7 @@ mod elsewhere {
     pub(in crate::editor) struct PopOut;
 
     impl PopOut {
-        pub(in crate::editor) fn new() -> Arc<Self> {
+        pub(in crate::editor) fn new(_: Arc<EguiState>) -> Arc<Self> {
             Arc::new(Self)
         }
         pub(in crate::editor) fn open(
@@ -808,9 +816,6 @@ mod elsewhere {
             false
         }
         pub(in crate::editor) fn want(&self, _: bool) {}
-        pub(in crate::editor) fn size(&self) -> Option<(u32, u32)> {
-            None
-        }
         pub(in crate::editor) fn take_size(&self) -> Option<Sized> {
             None
         }

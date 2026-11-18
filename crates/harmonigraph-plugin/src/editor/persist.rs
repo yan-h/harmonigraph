@@ -37,6 +37,14 @@ pub struct EguiState {
     /// default.
     #[serde(default)]
     docked: AtomicBool,
+    /// The editor's view is in its own window right now, which then has the
+    /// say over its size (see `PopOut`). Set as the view moves, so a host
+    /// `set_size`, which arrives outside the window's callbacks, can tell
+    /// without reaching for the window; not [`Self::docked`], the setting,
+    /// which the move follows a run-loop turn later, and which reads "own
+    /// window" on a platform that offers none.
+    #[serde(skip)]
+    in_own_window: AtomicBool,
 }
 
 impl EguiState {
@@ -48,6 +56,7 @@ impl EguiState {
             open: AtomicBool::new(false),
             pass_request: Default::default(),
             docked: AtomicBool::new(false),
+            in_own_window: AtomicBool::new(false),
         })
     }
 
@@ -61,6 +70,14 @@ impl EguiState {
 
     pub(super) fn set_docked(&self, docked: bool) {
         self.docked.store(docked, Ordering::Relaxed);
+    }
+
+    pub(super) fn in_own_window(&self) -> bool {
+        self.in_own_window.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn set_in_own_window(&self, own: bool) {
+        self.in_own_window.store(own, Ordering::Relaxed);
     }
 
     pub fn is_open(&self) -> bool {
