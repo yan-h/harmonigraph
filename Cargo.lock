@@ -218,7 +218,7 @@ dependencies = [
 [[package]]
 name = "baseview"
 version = "0.1.4"
-source = "git+https://github.com/yan-h/egui-plugin-window?rev=dea7319cba0b210e656546c419ce03f08501b32c#dea7319cba0b210e656546c419ce03f08501b32c"
+source = "git+https://github.com/yan-h/egui-plugin-window?rev=3c838ddf642cb160929a22beff171c7e9994b1cb#3c838ddf642cb160929a22beff171c7e9994b1cb"
 dependencies = [
  "block2 0.6.2",
  "keyboard-types",
@@ -931,7 +931,7 @@ dependencies = [
 [[package]]
 name = "egui-baseview"
 version = "0.3.0"
-source = "git+https://github.com/yan-h/egui-plugin-window?rev=dea7319cba0b210e656546c419ce03f08501b32c#dea7319cba0b210e656546c419ce03f08501b32c"
+source = "git+https://github.com/yan-h/egui-plugin-window?rev=3c838ddf642cb160929a22beff171c7e9994b1cb#3c838ddf642cb160929a22beff171c7e9994b1cb"
 dependencies = [
  "baseview",
  "block2 0.6.2",
@@ -2828,7 +2828,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "plugin-own-window"
 version = "0.1.0"
-source = "git+https://github.com/yan-h/egui-plugin-window?rev=dea7319cba0b210e656546c419ce03f08501b32c#dea7319cba0b210e656546c419ce03f08501b32c"
+source = "git+https://github.com/yan-h/egui-plugin-window?rev=3c838ddf642cb160929a22beff171c7e9994b1cb#3c838ddf642cb160929a22beff171c7e9994b1cb"
 dependencies = [
  "dispatch2",
  "objc2 0.6.4",
