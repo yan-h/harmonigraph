@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use baseview::WindowHandle;
+use egui_baseview::baseview::WindowHandle;
 use nice_plug::prelude::ParentWindowHandle;
 use nice_plug::wrapper::clap::EditorHost;
 use plugin_own_window::{Limits, Move};

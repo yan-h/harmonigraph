@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use baseview::{Event, EventStatus, Window, WindowHandle, WindowHandler, WindowOpenOptions};
+use egui_baseview::baseview::{
+    Event, EventStatus, Window, WindowHandle, WindowHandler, WindowOpenOptions,
+};
 use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, SharedGpuContext, WgpuSetup};
 use harmonigraph_ui::{
     params::{ParamBackend, ParamKey},
@@ -153,7 +155,7 @@ impl WindowHandler for Host {
         self.child = Some(EguiWindow::open_parented(
             window,
             EguiWindowSettings::new()
-                .with_logical_size(baseview::Size::new(1000.0, 700.0))
+                .with_logical_size(egui_baseview::baseview::Size::new(1000.0, 700.0))
                 .with_graphics_config(graphics),
             Probe {
                 shared: self.shared.clone(),

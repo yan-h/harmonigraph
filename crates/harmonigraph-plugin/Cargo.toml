@@ -42,7 +42,6 @@ egui = { workspace = true }
 egui-wgpu = { workspace = true }
 pollster = "0.4"
 egui-baseview = { workspace = true }
-baseview = { workspace = true }
 raw-window-handle = { workspace = true }
 # The editor's own window, shared with otonal (`editor::pop_out`).
 plugin-own-window = { workspace = true }
