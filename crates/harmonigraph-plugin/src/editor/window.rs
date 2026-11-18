@@ -310,10 +310,9 @@ impl Editor for LatticeEditor {
         // In its own window the editor's size is that window's, which the
         // project saves, and the host's window, concealed, has no say over
         // it: what arrives from there is mostly its echo of the editor's own.
-        // Stored, a save before the size source put the own window's back
-        // would keep the host's, and an editor nobody can see runs no size
-        // source. Accepted all the same, as the host's window may be sized
-        // as the host likes.
+        // Stored, it would be what a save keeps until the own window next
+        // resized, however long the editor went unseen. Accepted all the
+        // same, as the host's window may be sized as the host likes.
         if self.egui_state.in_own_window() {
             return true;
         }
