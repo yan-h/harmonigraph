@@ -58,7 +58,7 @@ STATE_START = b'{"version"'
 
 # Every nice-plug plugin saves this same JSON shape, so a project's other
 # plugins are found too. An instance is ours when it holds one of our saved
-# fields, or one of the editor's param ids (`#[id]`s in
+# fields, or one of the editor's param ids (`Row::id` in
 # crates/harmonigraph-plugin/src/lib.rs); without the check another plugin read
 # as an editor "never open before a save", a warning a session acts on.
 # A Harmonigraph Tune exports no host parameter, so it is the instance of ours
@@ -69,18 +69,27 @@ EDITOR_PARAMS = {"camera-yaw", "tuning-engine"}
 SETTINGS_FIELDS = ("musical-settings", "tuning-instance")
 
 PARAM_SOURCE = pathlib.Path(__file__).resolve().parent / "crates/harmonigraph-plugin/src/lib.rs"
+# The camera rows take their ids from `ParamKey::id`.
+CAMERA_SOURCE = pathlib.Path(__file__).resolve().parent / "crates/harmonigraph-take/src/params.rs"
 VIEW_SOURCE = pathlib.Path(__file__).resolve().parent / "crates/harmonigraph-scene/src/view/mod.rs"
 
 
 def declared_params() -> "set[str]":
-    """The host parameters the plugin declares now (`#[id = ".."]`; an enum's
-    variant ids ride along, harmlessly). A project saved by an earlier build
-    keeps the value of one since retired, which the plugin ignores on load, so
-    it is labelled rather than shown as live. Read from the source, as
-    `view_fields` is: a list kept here missed the ids #1795 and #1801 retired."""
-    ids = set(re.findall(r'#\[id = "([^"]+)"\]', PARAM_SOURCE.read_text()))
-    if not ids:
-        sys.exit(f"No parameter ids found in {PARAM_SOURCE}.")
+    """The host parameters the plugin declares now: the string ids in
+    `Row::id`, and the camera rows' in `ParamKey::id`. A project saved by an
+    earlier build keeps the value of one since retired, which the plugin
+    ignores on load, so it is labelled rather than shown as live. Read from the
+    source, as `view_fields` is: a list kept here missed the ids #1795 and
+    #1801 retired."""
+    ids = set()
+    for source in (PARAM_SOURCE, CAMERA_SOURCE):
+        text = source.read_text()
+        start = text.find("pub fn id(self) -> &'static str {")
+        body = text[start:].split("\n    }\n", 1)[0] if start >= 0 else ""
+        found = set(re.findall(r'=> "([^"]+)"', body))
+        if not found:
+            sys.exit(f"No parameter ids found in {source}.")
+        ids |= found
     return ids
 
 

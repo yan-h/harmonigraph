@@ -6,7 +6,6 @@ pub use crate::debug::*;
 
 pub use crate::nice_export_clap;
 
-pub use crate::formatters;
 pub use crate::util;
 
 pub use crate::audio_setup::{
@@ -14,22 +13,14 @@ pub use crate::audio_setup::{
 };
 pub use crate::buffer::Buffer;
 pub use crate::context::PluginApi;
-pub use crate::context::gui::{AsyncExecutor, GuiContext, ParamSetter};
+pub use crate::context::gui::{AsyncExecutor, GuiContext};
 pub use crate::context::init::InitContext;
 pub use crate::context::process::{ProcessContext, Transport};
-pub use crate::context::remote_controls::{
-    RemoteControlsContext, RemoteControlsPage, RemoteControlsSection,
-};
 // This also includes the derive macro
 pub use crate::editor::{Editor, Modifiers, ParentWindowHandle, ResizeHint, VirtualKeyCode};
 pub use crate::midi::sysex::SysExMessage;
 pub use crate::midi::{MidiConfig, NoteEvent, PluginNoteEvent, control_change};
-pub use crate::params::Params;
-pub use crate::params::enums::{Enum, EnumParam};
-pub use crate::params::internals::ParamPtr;
-pub use crate::params::range::{FloatRange, IntRange};
-pub use crate::params::smoothing::{AtomicF32, Smoothable, Smoother, SmoothingStyle};
-pub use crate::params::{BoolParam, FloatParam, IntParam, Param, ParamFlags};
+pub use crate::params::{Spec, Table};
 pub use crate::plugin::PluginState;
 pub use crate::plugin::{Plugin, ProcessStatus, TaskExecutor};
 pub use crate::wrapper::clap::features::ClapFeature;

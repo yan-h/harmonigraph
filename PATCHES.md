@@ -32,7 +32,7 @@ These two diagnostics are now the whole reason the crate stays vendored.
 ## nice-plug — owned as `crates/harmonigraph-clap/`
 
 nice-plug, nice-plug-core and nice-plug-derive are no longer a patched dependency:
-they moved into the workspace as `crates/harmonigraph-clap` (#1814 step 4).
+they moved into the workspace as `crates/harmonigraph-clap` (#1814 step 4), where a parameter table of its own has since replaced the derive (step 5).
 Its [README](crates/harmonigraph-clap/README.md) holds where they came from, what harmonigraph changed in them and how they are upgraded,
 and each change's reason is a comment at the code it explains.
 

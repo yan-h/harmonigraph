@@ -1,7 +1,7 @@
 //! The bridge between UI widgets and "wherever parameters actually live".
 //!
-//! In the plugin, automatable parameters live in nice-plug's parameter system
-//! and must be changed through a `ParamSetter` so the host sees the
+//! In the plugin, automatable parameters live in the CLAP shell's parameter
+//! table and must be changed through its `GuiContext` so the host sees the
 //! automation. In the standalone harness they're plain values. Panes only
 //! talk to this trait, so every pane works in both shells.
 //!

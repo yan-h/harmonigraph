@@ -14,9 +14,6 @@ use std::{
     sync::Arc,
 };
 
-#[derive(Default, Params)]
-struct Parameters {}
-
 #[derive(Default)]
 struct AuxiliaryFixture;
 
@@ -36,8 +33,8 @@ impl Plugin for AuxiliaryFixture {
     type SysExMessage = ();
     type BackgroundTask = ();
 
-    fn params(&self) -> Arc<dyn Params> {
-        Arc::new(Parameters::default())
+    fn params(&self) -> Arc<Table> {
+        Arc::new(Table::empty())
     }
 
     fn process(

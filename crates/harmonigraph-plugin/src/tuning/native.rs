@@ -142,9 +142,6 @@ impl Editor for NativeEditor {
     fn set_scale_factor(&self, _: f32) -> bool {
         true
     }
-    fn param_value_changed(&self, _: &str, _: f32) {}
-    fn param_modulation_changed(&self, _: &str, _: f32) {}
-    fn param_values_changed(&self) {}
 }
 struct Handle {
     actions: Retained<Actions>,

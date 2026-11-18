@@ -266,7 +266,7 @@ impl Device {
             port_index: -1,
             channel: -1,
             key: -1,
-            value: f64::from(values.param_for(key).preview_normalized(plain)),
+            value: values.table.spec(crate::Row::camera(key).index()).to_host(plain),
         })
     }
     fn load(&self, state: PluginState, gui: bool) {
@@ -606,7 +606,11 @@ fn a_full_command_queue_keeps_accepted_state() {
     let mut refused = restored(&device, 700.0);
     refused.params.insert(ParamKey::CameraDistance.id().into(), ParamValue::F32(20.0));
     assert!(!device.try_load(refused), "a restore needs a free slot");
-    assert_eq!(settings.take_notice(), Some(RESTORE_REFUSED), "and says so in the Console");
+    assert_eq!(
+        settings.take_notice().as_deref(),
+        Some(RESTORE_REFUSED),
+        "and says so in the Console"
+    );
     let after = device.save();
     assert_eq!(saved(&after).axes[1], microcents(695.0));
     assert_eq!(
@@ -746,6 +750,33 @@ fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
     }
 }
 
+/// A saved field that does not parse costs that field alone, with a Console
+/// line: the rest of the project restores, and the instance keeps what it
+/// held for the field.
+#[test]
+fn a_field_that_does_not_parse_is_skipped_with_a_console_line() {
+    let _scope = crate::test_scope::enter();
+    let device = Device::new();
+    let maps = |device: &Device| {
+        device.wrapper().test_inspect_plugin(|plugin| {
+            serde_json::to_string(&*plugin.params.maps.read()).unwrap()
+        })
+    };
+    let before = maps(&device);
+    let mut state = device.wrapper().get_state_object();
+    state.fields.insert("lattice-maps".into(), "{not json".into());
+    state.fields.insert("editor-state".into(), r#"{"size":[901,702]}"#.into());
+    state.params.insert("map-fifths".into(), ParamValue::I32(3));
+    device.load(state, false);
+    assert_eq!(maps(&device), before, "the maps the instance held");
+    let (size, fifths) = device.wrapper().test_inspect_plugin(|plugin| {
+        (plugin.params.editor_state.size(), plugin.params.int(crate::Row::MapFifths))
+    });
+    assert_eq!((size, fifths), ((901, 702), 3), "the rest of the project");
+    let line = device.settings().take_notice().expect("a Console line");
+    assert!(line.starts_with("This project's saved lattice-maps could not be read"), "{line}");
+}
+
 /// A project saved while the axes were host parameters (#1756) holds them
 /// there, beside musical settings without axes. It opens at fresh axes with
 /// one Console notice, keeps its links, and saves no tuning parameter back.
@@ -761,7 +792,14 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     state.params.insert("tuning-tolerance".into(), ParamValue::F32(3.0));
     state.fields.insert(MUSICAL_SETTINGS.into(), r#"{"meantone":false,"marvel":true}"#.into());
     device.load(state, false);
-    assert_eq!(settings.take_notice(), Some(LEGACY_AXES));
+    assert_eq!(
+        settings.take_notice().as_deref(),
+        Some(
+            "This project saved parameters this build no longer has, which were not read: \
+             tuning-three, tuning-tolerance."
+        )
+    );
+    assert_eq!(settings.take_notice().as_deref(), Some(LEGACY_AXES));
     assert_eq!(settings.take_notice(), None, "the notice is given once");
     device.activate();
     device.run(0, vec![], false);
@@ -1429,21 +1467,13 @@ fn pre_play_scrubs_emit_no_records_before_the_real_configuration_and_audio_origi
 /// sidechain's channels in the wrong order, cannot pass.
 #[test]
 fn a_sidechain_selection_reaches_the_armed_takes_audio() {
-    use nice_plug::params::InternalParamMut;
     let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = recorded_device();
     let left: [f32; 64] = std::array::from_fn(|i| 1.0 + i as f32);
     let right: [f32; 64] = std::array::from_fn(|i| -1.0 - i as f32);
     device.sidechain.set([left, right]);
     device.wrapper().test_inspect_plugin(|plugin| {
-        // SAFETY: the fixture sets the parameter between callbacks, as the
-        // host wrapper does, while the parameter object stays alive.
-        assert!(unsafe {
-            plugin
-                .params
-                .analysis_input
-                ._internal_set_plain_value(crate::AnalysisInputParam::Sidechain)
-        });
+        plugin.params.set(crate::Row::AnalysisInput, 1.0);
     });
     device.activate();
     capture.arm();
@@ -1542,7 +1572,6 @@ fn a_short_stopped_export_finishes_with_or_without_midi() {
 /// callback to observe disarm. Only its complete, released prefix may finish.
 #[test]
 fn destruction_closes_a_stopped_take_without_another_process_callback() {
-    use nice_plug::params::InternalParamMut;
     let _scope = crate::test_scope::enter();
     for (stopped, held) in [(true, false), (false, false), (true, true)] {
         let mut device = Device::new();
@@ -1550,13 +1579,7 @@ fn destruction_closes_a_stopped_take_without_another_process_callback() {
         let right = left.map(|v| -v);
         device.sidechain.set([left, right]);
         device.wrapper().test_inspect_plugin(|plugin| {
-            // SAFETY: set between callbacks while the parameter stays alive.
-            assert!(unsafe {
-                plugin
-                    .params
-                    .analysis_input
-                    ._internal_set_plain_value(crate::AnalysisInputParam::Sidechain)
-            });
+            plugin.params.set(crate::Row::AnalysisInput, 1.0);
         });
         device.activate();
         let dir = std::env::temp_dir()
@@ -1627,7 +1650,6 @@ fn destruction_closes_a_stopped_take_without_another_process_callback() {
 /// without process or destruction, including when activation beats the wake.
 #[test]
 fn deactivated_stop_finishes_without_another_process_callback() {
-    use nice_plug::params::InternalParamMut;
     let _scope = crate::test_scope::enter();
     for (resume, stop_before_deactivate, held, source_state) in [
         (0, false, false, 0),
@@ -1643,12 +1665,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         let right = left.map(|v| -v);
         device.sidechain.set([left, right]);
         device.wrapper().test_inspect_plugin(|plugin| {
-            assert!(unsafe {
-                plugin
-                    .params
-                    .analysis_input
-                    ._internal_set_plain_value(crate::AnalysisInputParam::Sidechain)
-            });
+            plugin.params.set(crate::Row::AnalysisInput, 1.0);
         });
         device.activate();
         let mut source = (source_state != 0).then(|| {
@@ -2046,7 +2063,7 @@ fn a_fresh_hub_passes_note_pitch_through() {
     device.activate();
     device.run(0, vec![], false);
     let (param, engine) = device.wrapper().test_inspect_plugin(|plugin| {
-        (plugin.params.tuning_engine.value(), plugin.params.map_playback.lock().engine)
+        (plugin.params.int(crate::Row::TuningEngine), plugin.params.map_playback.lock().engine)
     });
     assert_eq!(param, 0);
     assert_eq!(engine, harmonigraph_core::lattice_map::TuningEngine::Off);
@@ -2120,13 +2137,12 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(plugin.configuration.as_ref().unwrap().current().tuning.three, 696_500_000);
     });
     let (context, _) = device.wrapper().test_gui_context("lattice-map");
-    let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
     let destination = map.position + harmonigraph_core::LatticePos::new(-3, 0, 0);
     let mut changed = map;
     assert!(changed.replace(destination), "the edit must change the captured geometry");
     device.wrapper().test_inspect_plugin(|plugin| {
         assert!(!crate::lattice_maps::view(&plugin.params).pending);
-        let edit = |action| crate::lattice_maps::edit(&plugin.params, &setter, action);
+        let edit = |action| crate::lattice_maps::edit(&plugin.params, context.as_ref(), action);
         let dirty = &plugin.params.settings.modified;
         dirty.store(false, std::sync::atomic::Ordering::Release);
         edit(MapEdit::EditShape(true));
@@ -2178,7 +2194,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         );
         // Each row of the editor's list deletes its own map, so a delete can
         // name a map that is not selected.
-        crate::lattice_maps::edit(&plugin.params, &setter, MapEdit::Delete(0));
+        crate::lattice_maps::edit(&plugin.params, context.as_ref(), MapEdit::Delete(0));
     });
     device.run(80, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {
@@ -2189,7 +2205,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(playback.map, Some(kept), "new attacks keep the selected map");
         let names = crate::lattice_maps::view(&plugin.params).names;
         assert!(names.iter().all(|(id, _)| *id != 0), "the deleted map leaves the list");
-        crate::lattice_maps::edit(&plugin.params, &setter, MapEdit::Delete(2));
+        crate::lattice_maps::edit(&plugin.params, context.as_ref(), MapEdit::Delete(2));
     });
     device.run(96, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {
@@ -2243,8 +2259,8 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     assert!(matches!(repaired.params["map-thirds"], nice_plug::plugin::ParamValue::I32(-9)));
 }
 
-/// A plain restore stores an `IntParam`'s value unclamped, while the host's
-/// label clamps it. An engine or map index out of range at either end —
+/// A restore once stored an integer parameter's value unclamped, while the
+/// host's label clamps it. An engine or map index out of range at either end —
 /// hand-edited or foreign state, since the plugin never saves one — must load
 /// as the value the host shows, in the editor and in the audio alike, and save
 /// back as that value. On `main` before the repair, the high side's engines,
@@ -2272,10 +2288,10 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
         device.wrapper().test_inspect_plugin(|plugin| {
             let preview = crate::lattice_maps::view(&plugin.params);
             let audio = *plugin.params.map_playback.lock();
-            assert_eq!(plugin.params.tuning_engine.to_string(), shown);
+            assert_eq!(plugin.params.label(crate::Row::TuningEngine), shown);
             assert_eq!(preview.playback.engine, decoded, "the editor disagrees");
             assert_eq!(audio.engine, decoded, "the audio disagrees");
-            let label = plugin.params.map.to_string();
+            let label = plugin.params.label(crate::Row::LatticeMap);
             assert!(label.starts_with(&format!("{} · ", slot + 1)), "the host shows {label}");
             assert_eq!((preview.playback.selected, audio.selected), (slot, slot));
         });
@@ -2407,12 +2423,11 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
     let mut device = Device::new();
     device.activate();
     let (context, _) = device.wrapper().test_gui_context("camera-yaw");
-    let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
     let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
     let gestures = std::cell::Cell::default();
     let backend = crate::PluginParamBackend {
         params: &params,
-        setter: &setter,
+        host: context.as_ref(),
         configuration: params.settings.view(),
         gestures: &gestures,
     };
@@ -2457,7 +2472,6 @@ fn the_editors_gestures_end_once_when_it_stops_being_seen_or_closes() {
     let mut device = Device::new();
     device.activate();
     let (context, _) = device.wrapper().test_gui_context("camera-yaw");
-    let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
     let (params, lock) = device
         .wrapper()
         .test_inspect_plugin(|plugin| (plugin.params.clone(), plugin.editor_shared.clone()));
@@ -2466,12 +2480,13 @@ fn the_editors_gestures_end_once_when_it_stops_being_seen_or_closes() {
         let shared = lock.lock();
         act(&crate::PluginParamBackend {
             params: &params,
-            setter: &setter,
+            host: context.as_ref(),
             configuration: params.settings.view(),
             gestures: &shared.gestures,
         });
     };
-    let lane_id = device.id_named(crate::lattice_maps::lane_param(&params, axis, lane).name());
+    let lane_id =
+        device.id_named(params.table.spec(crate::lattice_maps::lane_row(axis, lane).index()).name);
     let yaw_id = device.id(ParamKey::CameraYaw);
     let count = |events: &[_], kind, id| {
         events.iter().filter(|e: &&(u16, _, u32, bool)| e.0 == kind && e.2 == id && e.3).count()
@@ -2487,14 +2502,14 @@ fn the_editors_gestures_end_once_when_it_stops_being_seen_or_closes() {
     });
     let mut events = device.run(0, vec![], false).attempts;
     let open = lock.end_unseen().expect("the editor lock is free");
-    crate::editor::gestures::end(open, &params, &setter);
+    crate::editor::gestures::end(open, context.as_ref());
     events.extend(device.run(64, vec![], false).attempts);
     for id in [yaw_id, lane_id] {
         assert_eq!(count(&events, begins, id), 1, "param {id}");
         assert_eq!(count(&events, ends, id), 1, "unseen left {id} open");
     }
     let open = lock.end_window_session();
-    crate::editor::gestures::end(open, &params, &setter);
+    crate::editor::gestures::end(open, context.as_ref());
     events.extend(device.run(128, vec![], false).attempts);
     for id in [yaw_id, lane_id] {
         assert_eq!(count(&events, ends, id), 1, "the close ended {id} again");
@@ -2511,7 +2526,7 @@ fn the_editors_gestures_end_once_when_it_stops_being_seen_or_closes() {
     // A lane's gesture alone, begun and never moved, ended by the close.
     with_backend(&|backend| backend.edit_lattice_map(MapEdit::BeginOffset(axis, lane)));
     let open = lock.end_window_session();
-    crate::editor::gestures::end(open, &params, &setter);
+    crate::editor::gestures::end(open, context.as_ref());
     events.extend(device.run(256, vec![], false).attempts);
     assert_eq!(count(&events, begins, lane_id), 3, "a lane's begin bypassed the registry");
     assert_eq!(count(&events, ends, lane_id), 3, "the close left a lane open");

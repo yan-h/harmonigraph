@@ -61,20 +61,9 @@
 //!      gets deactivated. You probably don't need to do anything here, but you could deallocate or
 //!      clean up resources here.
 //!
-//!  - Plugin parameters are managed automatically by creating a struct deriving the
-//!    [`Params`][prelude::Params] trait and returning a handle to it from the
-//!    [`Plugin::params()`][prelude::Plugin::params()] function. Any
-//!    [`FloatParam`][prelude::FloatParam], [`IntParam`][prelude::IntParam],
-//!    [`BoolParam`][prelude::BoolParam] or [`EnumParam`][prelude::EnumParam] fields on that struct
-//!    will automatically be registered as a parameter if they have an `#[id = "foobar"]` attribute.
-//!    The string `"foobar"` here uniquely identifies the parameter, making it possible to reorder
-//!    and rename parameters as long as this string stays constant. You can also store persistent
-//!    non-parameter data and other parameter objects in a `Params` struct. Check out the trait's
-//!    documentation for details on all supported features, and also be sure to take a look at the
-//!    [example plugins](https://codeberg.org/BillyDM/nice-plug/src/branch/main/examples).
-//!  - After calling `.with_smoother()` during an integer or floating point parameter's creation,
-//!    you can use `param.smoothed` to access smoothed values for that parameter. Be sure to check
-//!    out the [`Smoother`][prelude::Smoother] API for more details.
+//!  - Plugin parameters are rows of one [`Table`][prelude::Table], which the plugin returns
+//!    from [`Plugin::params()`][prelude::Plugin::params()]. Each row's string id uniquely
+//!    identifies it in a save, so a row can be renamed as long as its id stays constant.
 //!
 //! There's a whole lot more to discuss, but once you understand the above you should be able to
 //! figure out the rest by reading through the examples and the API documentation. Good luck!
@@ -87,7 +76,6 @@ pub mod audio_setup;
 pub mod buffer;
 pub mod context;
 pub mod editor;
-pub mod formatters;
 pub mod midi;
 pub mod params;
 pub mod plugin;

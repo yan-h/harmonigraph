@@ -11,7 +11,7 @@ use super::lock::{EditorLock, Inbox};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EguiState {
     /// Size in logical pixels (before DPI scaling).
-    #[serde(with = "nice_plug::params::persist::serialize_atomic_cell")]
+    #[serde(with = "atomic_cell")]
     pub(super) size: AtomicCell<(u32, u32)>,
     #[serde(skip)]
     pub(super) requested_size: AtomicCell<Option<(u32, u32)>>,
@@ -122,17 +122,34 @@ impl EguiState {
     }
 }
 
-impl<'a> nice_plug::params::persist::PersistentField<'a, EguiState> for Arc<EguiState> {
-    fn set(&self, new_value: EguiState) {
-        self.size.store(new_value.size.load());
-        self.set_docked(new_value.docked());
+impl EguiState {
+    /// Take what a restore saved: the size and the docked choice, the two
+    /// fields the `editor-state` save holds.
+    pub(crate) fn restore(&self, saved: EguiState) {
+        self.size.store(saved.size.load());
+        self.set_docked(saved.docked());
+    }
+}
+
+/// An `AtomicCell` saved as the value it holds.
+mod atomic_cell {
+    use crossbeam::atomic::AtomicCell;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S, T>(cell: &AtomicCell<T>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Serialize + Copy,
+    {
+        cell.load().serialize(serializer)
     }
 
-    fn map<F, R>(&self, f: F) -> R
+    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<AtomicCell<T>, D::Error>
     where
-        F: Fn(&EguiState) -> R,
+        D: Deserializer<'de>,
+        T: Deserialize<'de> + Copy,
     {
-        f(self)
+        T::deserialize(deserializer).map(AtomicCell::new)
     }
 }
 
@@ -154,9 +171,9 @@ const SAVE_WAIT: Duration = Duration::from_millis(20);
 /// project: an input into the live state and an output out of it, never a
 /// copy that is read back (#1757).
 ///
-/// A restore (`set`) goes to the [`Inbox`], which the next holder of the
+/// A restore ([`Self::restore`]) goes to the [`Inbox`], which the next holder of the
 /// editor lock installs from — a frame, the input worker, the window's build
-/// or close, or a save. A save (`map`, the one thing a host save calls)
+/// or close, or a save. A save ([`Self::save`], the one thing a host save calls)
 /// takes that lock, window open or shut, and stores what
 /// [`SharedState::save_answer`](harmonigraph_ui::SharedState::save_answer)
 /// says: the live settings, or `""` for an editor nobody has opened since it
@@ -194,7 +211,9 @@ impl UiState {
     }
 
     /// What a save stores, waiting at most [`SAVE_WAIT`] for the editor lock.
-    fn save(&self) -> Arc<str> {
+    /// Called when the host saves state, on its main thread: one RON
+    /// serialization per save, window open or shut.
+    pub(crate) fn save(&self) -> Arc<str> {
         let Some(lock) = self.live.get().and_then(Weak::upgrade) else {
             return self.inbox.fallback();
         };
@@ -219,28 +238,17 @@ impl Default for UiState {
     }
 }
 
-impl<'a> nice_plug::params::persist::PersistentField<'a, String> for UiState {
+impl UiState {
     /// Called when the host restores state, on its main thread, where it must
     /// not take the editor lock (see `lock`'s module doc) — which is why it
     /// only posts.
-    fn set(&self, new_value: String) {
-        self.inbox.deliver(new_value.into());
-    }
-
-    /// Called when the host saves state, on its main thread: one RON
-    /// serialization per save, window open or shut.
-    fn map<F, R>(&self, f: F) -> R
-    where
-        F: Fn(&String) -> R,
-    {
-        f(&self.save().to_string())
+    pub(crate) fn restore(&self, saved: String) {
+        self.inbox.deliver(saved.into());
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use nice_plug::params::persist::PersistentField;
-
     use super::*;
 
     /// The System tab's Own window choice is saved with the window size, and a
@@ -251,14 +259,14 @@ mod tests {
         docked.set_docked(true);
         let saved = serde_json::to_string(&*docked).unwrap();
         let restored = EguiState::from_size(1, 1);
-        restored.set(serde_json::from_str(&saved).unwrap());
+        restored.restore(serde_json::from_str(&saved).unwrap());
         assert!(restored.docked());
         assert_eq!(restored.size(), (800, 600));
 
         let mut old: serde_json::Value = serde_json::from_str(&saved).unwrap();
         old.as_object_mut().unwrap().remove("docked");
         let restored = EguiState::from_size(1, 1);
-        restored.set(serde_json::from_value(old).unwrap());
+        restored.restore(serde_json::from_value(old).unwrap());
         assert!(!restored.docked());
     }
 }

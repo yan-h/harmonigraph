@@ -31,6 +31,16 @@ pub(crate) enum Gesture {
     Lane(MapAxis, MapOffsetLane),
 }
 
+impl Gesture {
+    /// The host parameter the gesture is on.
+    pub(crate) fn row(self) -> crate::Row {
+        match self {
+            Gesture::Param(key) => crate::Row::camera(key),
+            Gesture::Lane(axis, lane) => crate::lattice_maps::lane_row(axis, lane),
+        }
+    }
+}
+
 /// Which gestures are open. A value, so the editor state holds it in a `Cell`
 /// beside the frame's parameter backend, which is rebuilt every frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -82,18 +92,9 @@ impl Gestures {
 /// Send the host the end of each gesture in `open`. Called with the editor
 /// lock free: `end_set_parameter` is a host callback, and a host may save from
 /// inside it, which takes that lock.
-pub(crate) fn end(
-    open: Gestures,
-    params: &crate::HarmonigraphParams,
-    setter: &nice_plug::prelude::ParamSetter<'_>,
-) {
+pub(crate) fn end(open: Gestures, host: &dyn nice_plug::prelude::GuiContext) {
     for gesture in open.open() {
-        match gesture {
-            Gesture::Param(key) => setter.end_set_parameter(params.param_for(key)),
-            Gesture::Lane(axis, lane) => {
-                setter.end_set_parameter(crate::lattice_maps::lane_param(params, axis, lane))
-            }
-        }
+        host.end_set_parameter(gesture.row().index());
     }
 }
 

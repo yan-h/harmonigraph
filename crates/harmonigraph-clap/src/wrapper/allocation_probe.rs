@@ -1,9 +1,6 @@
 //! Off-audio fixture accounting. The underlying allocation guard still checks
 //! every allocation/deallocation; production builds do not include this probe.
-#[cfg(feature = "assert_process_allocs")]
 use nice_assert_no_alloc::AllocDisabler as BaseAllocator;
-#[cfg(not(feature = "assert_process_allocs"))]
-use std::alloc::System as BaseAllocator;
 use std::alloc::{GlobalAlloc, Layout};
 use std::cell::Cell;
 

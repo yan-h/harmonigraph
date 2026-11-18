@@ -12,10 +12,8 @@ use crate::context::gui::GuiContext;
 pub trait Editor: Send {
     /// Create an instance of the plugin's editor and embed it in the parent window. As explained in
     /// [`Plugin::editor()`][crate::plugin::Plugin::editor()], you can then read the parameter
-    /// values directly from your [`Params`][crate::params::Params] object, and modifying the
-    /// values can be done using the functions on the [`ParamSetter`][crate::context::gui::ParamSetter].
-    /// When you change a parameter value that way it will be broadcasted to the host and also
-    /// updated in your [`Params`][crate::params::Params] struct.
+    /// values directly from the plugin's [`Table`][crate::params::Table], and set them through
+    /// the [`GuiContext`], which tells the host.
     ///
     /// This function should return a handle to the editor, which will be dropped when the editor
     /// gets closed. Implement the [`Drop`] trait on the returned handle if you need to explicitly
@@ -54,21 +52,6 @@ pub trait Editor: Send {
     /// Right now this is never called on macOS since DPI scaling is built into the operating system
     /// there.
     fn set_scale_factor(&self, factor: f32) -> bool;
-
-    /// Called whenever a specific parameter's value has changed while the editor is open. You don't
-    /// need to do anything with this, but this can be used to force a redraw when the host sends a
-    /// new value for a parameter or when a parameter change sent to the host gets processed.
-    fn param_value_changed(&self, id: &str, normalized_value: f32);
-
-    /// Called whenever a specific parameter's monophonic modulation value has changed while the
-    /// editor is open.
-    fn param_modulation_changed(&self, id: &str, modulation_offset: f32);
-
-    /// Called whenever one or more parameter values or modulations have changed while the editor is
-    /// open. This may be called in place of [`param_value_changed()`][Self::param_value_changed()]
-    /// when multiple parameter values hcange at the same time. For example, when a preset is
-    /// loaded.
-    fn param_values_changed(&self);
 
     /// Called when the host delivers a virtual-key event to the plugin's
     /// view. Return `true` if the editor consumed the key (the wrapper

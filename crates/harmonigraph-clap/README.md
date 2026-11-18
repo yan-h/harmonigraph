@@ -3,13 +3,13 @@
 Harmonigraph's CLAP shell:
 the plugin framework nice-plug, which harmonigraph used to vendor, together with the two registry crates it built on, now owned here (#1814 step 4).
 
-- **`src/`** is nice-plug 0.1.10 (its CLAP wrapper, state glue and background-thread executor) and nice-plug-core 0.1.5 (parameters, buffers, contexts, the `Plugin` trait, the debug macros), merged into one crate.
+- **`src/`** is nice-plug 0.1.10 (its CLAP wrapper, state glue and background-thread executor) and nice-plug-core 0.1.5 (buffers, contexts, the `Plugin` trait, the debug macros), merged into one crate.
   nice-plug-core's modules sit at the crate root, where nice-plug's `pub use nice_plug_core::*` used to put them.
-- **`derive/`** is nice-plug-derive 0.1.2, the `Params` and `Enum` derives, a member crate until the parameter layer replaces them.
-- **`tests/`** are nice-plug's: two derive tests, and the CLAP boundary and auxiliary fixtures that drive an exported plugin through `clap-sys`.
+- **`src/params.rs`** is harmonigraph's own (#1814 step 5): one fixed table of host parameters, which replaced nice-plug-core's parameter types and nice-plug-derive's `Params` and `Enum` derives.
+- **`tests/`** are nice-plug's CLAP boundary and auxiliary fixtures, which drive an exported plugin through `clap-sys`.
   They run in `ci.sh`'s workspace test gate, which names both fixture features (`assert_process_allocs`, `clap-boundary-tests`).
 
-The libraries keep the names `nice_plug` and `nice_plug_derive`, so harmonigraph-plugin's paths and the derive's generated `::nice_plug::` paths did not change with the move.
+The library keeps the name `nice_plug`, so harmonigraph-plugin's paths did not change with the move.
 The later steps of #1814 collapse these layers into a shell written on `clap-sys`, and rename them as they go.
 
 ## Where it came from
@@ -40,7 +40,7 @@ Each change's reason is a comment at the code it explains; this is the map.
     Keeping the list sorted is the caller's contract:
     both halves raise a per-callback high-water mark, and the wrapper puts its own parameter output at it, so that traffic follows the plugin's rather than interleaving with it.
     `PARAMETER_OUTPUT_ATTEMPTS` bounds that half at 512 pushes per callback; the plugin bounds its own.
-  - A prepared `Setup` validates before the parameters and fields restore, and commits after; the plugin adopts what it commits at its next input boundary.
+  - A prepared `Setup` owns every saved field: it validates before the parameters restore, and commits after; the plugin adopts what it commits at its next input boundary.
     Its `service` reports what it changed as `Serviced`: a modified project is marked dirty, and changed parameter values or text are rescanned, each only when reported.
   - Main-thread registration, setup service and the joined lifecycle hooks (`clap_main_*`) keep registry locking and endpoint reclamation outside audio callbacks.
     Joined destruction runs `clap_main_destroy`, which transfers recording ownership.
@@ -48,6 +48,10 @@ Each change's reason is a comment at the code it explains; this is the map.
     `wrapper::allocation_probe` instruments the debug allocation guard on the calling thread, deallocation included, for the exported-factory fixtures; it measures neither RSS nor other threads.
 
   [The adaptive tuning design](../../docs/adaptive-tuning.md#the-framework-boundary) says what the plugin asks of this boundary.
+- **The parameter table** (`src/params.rs`, #1814 step 5).
+  Each row is an integer, an enumeration or a linear float; the host sees it from 0 to its step count, and the conversions repeat nice-plug's `f32` arithmetic step for step, so saves and automation read as before.
+  A save stores each row's unmodulated value under its id; a restore sets every row by one rule (missing, wrong-typed or an unknown variant takes the default, out of range is clamped) and logs once the ids no row has.
+  The editor sets a row through `GuiContext` by its index.
 - **Activation notification ordering** (`Wrapper::activate`, #615).
 - **Auxiliary descriptor bounds and storage sizing** (the process loop in `src/wrapper/clap/wrapper.rs` and `BufferManager::create_buffers`, #638), reached by `tests/clap_auxiliary.rs`.
 - **Scalar tail publication** (`Wrapper::last_tail_samples`), checked by `tests/clap_boundary.rs`.

@@ -2,7 +2,7 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use egui_baseview::Queue;
-use nice_plug::prelude::{GuiContext, ParamSetter};
+use nice_plug::prelude::GuiContext;
 
 use crate::{HarmonigraphParams, PluginParamBackend};
 
@@ -38,7 +38,6 @@ pub(super) fn frame(
     // take work, around its UI, is added to it below.
     // The rings and their FFTs are the input worker's, off this thread.
     let shell_start = Instant::now();
-    let setter = ParamSetter::new(context);
 
     // One lock for the whole frame, which also installs a host restore made
     // since the last holder (a preset load, an undo; see `EditorLock`). The
@@ -68,14 +67,14 @@ pub(super) fn frame(
     let wall = shared.input.frame_wall(timing, now);
     let now = shared.input.display_now(wall);
     let sample_rate = shared.input.sample_rate();
-    if let Some(line) = state.params.settings.take_notice() {
+    while let Some(line) = state.params.settings.take_notice() {
         shared.ui.log(line);
     }
     // Snapshot current host movement before arming or queuing a render.
     let configuration = state.params.settings.view();
     shared.ui.picture.appearance.sync_camera(&PluginParamBackend {
         params: &state.params,
-        setter: &setter,
+        host: context,
         gestures: &shared.gestures,
         configuration,
     });
@@ -120,7 +119,7 @@ pub(super) fn frame(
     let ask = shared.take_pass(sample_rate, |shared| {
         let backend = PluginParamBackend {
             params: &state.params,
-            setter: &setter,
+            host: context,
             gestures: &shared.gestures,
             configuration,
         };

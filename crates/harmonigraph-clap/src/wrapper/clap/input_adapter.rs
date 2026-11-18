@@ -287,7 +287,6 @@ impl<P: ClapPlugin> Wrapper<P> {
                         } else {
                             ClapParamUpdate::PlainValueSet(value)
                         },
-                        self.current_buffer_config.load().map(|c| c.sample_rate),
                     );
                 }
                 _ => {}

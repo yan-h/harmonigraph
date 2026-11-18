@@ -195,9 +195,10 @@ pub(crate) struct Settings {
     rejected: AtomicBool,
     /// Counts committed restores, for the map editor's undo.
     restored: AtomicU64,
-    /// A Console line the editor owes: a restore that opened a project at
-    /// fresh axes, or one the full queue refused.
-    notice: Mutex<Option<&'static str>>,
+    /// The Console lines the editor owes, oldest first: a restore that opened
+    /// a project at fresh axes, one the full queue refused, or what a restore
+    /// skipped (`saved_fields`).
+    notice: Mutex<std::collections::VecDeque<String>>,
     wake: OnceLock<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -226,7 +227,7 @@ impl Default for Settings {
             text: AtomicBool::new(false),
             rejected: AtomicBool::new(false),
             restored: AtomicU64::new(0),
-            notice: Mutex::new(None),
+            notice: Mutex::default(),
             wake: OnceLock::new(),
         }
     }
@@ -275,8 +276,13 @@ impl Settings {
     }
 
     /// The Console line a restore since the last call left, if any.
-    pub fn take_notice(&self) -> Option<&'static str> {
-        self.notice.lock().take()
+    pub fn take_notice(&self) -> Option<String> {
+        self.notice.lock().pop_front()
+    }
+
+    /// Owe the editor a Console line.
+    pub(crate) fn notify(&self, line: impl Into<String>) {
+        self.notice.lock().push_back(line.into());
     }
 
     /// Something the project saves changed: have the host mark it modified.
@@ -315,12 +321,12 @@ impl Settings {
             None => MusicalSettings::default(),
         };
         if self.producer.lock().queue.slots() == 0 {
-            *self.notice.lock() = Some(RESTORE_REFUSED);
+            self.notify(RESTORE_REFUSED);
             return Err("the tuning edit queue is full");
         }
-        // Nice-plug drops a parameter id it does not know, so the host values
-        // of a project saved before #1756 vanish on their own; only the
-        // notice is ours to give.
+        // The parameter table skips an id it does not know, so the host
+        // values of a project saved before #1756 vanish on their own; only
+        // the notice is ours to give.
         let legacy = LEGACY_AXIS_IDS.iter().any(|id| state.params.contains_key(*id));
         Ok(Restore { settings: self.clone(), value, legacy })
     }
@@ -350,45 +356,56 @@ impl Prepared for Restore {
         if self.legacy {
             // The log keeps it for a project saved before an editor opens.
             nice_error!("{LEGACY_AXES}");
-            *settings.notice.lock() = Some(LEGACY_AXES);
+            settings.notify(LEGACY_AXES);
         }
     }
 }
 
-/// The Hub's setup: its own instance settings beside the musical settings.
+/// The Hub's setup, the one owner of everything Harmonigraph saves beside its
+/// host parameters: the editor's and the maps' fields (`saved_fields`), its
+/// own instance settings and the musical settings.
 pub(crate) struct HubSetup {
     pub instance: crate::tuning::setup::Adapter,
-    pub settings: Arc<Settings>,
+    pub params: Arc<crate::HarmonigraphParams>,
 }
-struct Both(Box<dyn Prepared>, Box<dyn Prepared>);
-impl Prepared for Both {
+/// Prepared restores, committed in order.
+struct All([Box<dyn Prepared>; 3]);
+impl Prepared for All {
     fn commit(self: Box<Self>) {
-        self.0.commit();
-        self.1.commit();
+        for prepared in self.0 {
+            prepared.commit();
+        }
     }
 }
 impl Setup for HubSetup {
     fn track_name_changed(&self, name: Option<&str>) {
         self.instance.track_name_changed(name);
     }
+    /// Only the musical settings and the instance settings can refuse; the
+    /// other fields are installed first, as nice-plug's derive did before
+    /// either committed.
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
-        let musical = self.settings.prepare(state)?;
-        Ok(Box::new(Both(self.instance.prepare(state)?, Box::new(musical))))
+        let musical = self.params.settings.prepare(state)?;
+        let instance = self.instance.prepare(state)?;
+        let fields = crate::saved_fields::prepare(&self.params, state);
+        Ok(Box::new(All([Box::new(fields), instance, Box::new(musical)])))
     }
     fn save(&self, state: &mut PluginState) {
+        crate::saved_fields::save(&self.params, state);
         self.instance.save(state);
-        self.settings.save(state);
+        self.params.settings.save(state);
     }
     fn install_wakeup(&self, wake: Box<dyn Fn() + Send + Sync>) {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::from(wake);
         let instance = wake.clone();
         self.instance.install_wakeup(Box::new(move || instance()));
-        assert!(self.settings.wake.set(wake).is_ok(), "one wakeup");
+        assert!(self.params.settings.wake.set(wake).is_ok(), "one wakeup");
     }
     fn service(&self) -> Serviced {
         let mut serviced = self.instance.service();
-        serviced.modified |= self.settings.modified.swap(false, Ordering::AcqRel);
-        serviced.text |= self.settings.text.swap(false, Ordering::AcqRel);
+        let settings = &self.params.settings;
+        serviced.modified |= settings.modified.swap(false, Ordering::AcqRel);
+        serviced.text |= settings.text.swap(false, Ordering::AcqRel);
         serviced
     }
 }

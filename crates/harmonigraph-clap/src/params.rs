@@ -1,342 +1,430 @@
-//! nice-plug can handle floating point, integer, boolean, and enum parameters. Parameters are
-//! managed by creating a struct deriving the [`Params`] trait containing fields
-//! for those parameter types, and then returning a reference to that object from your
-//! [`Plugin::params()`][crate::plugin::Plugin::params()] method. See the `Params` trait for more
-//! information.
+//! The plugin's host parameters, as one fixed table of rows.
+//!
+//! A row is an integer, an enumeration or a float. The host sees every row as
+//! a value from 0 to its step count (0 to 1 for a float), the *host value*;
+//! the plugin reads and writes the row's *plain* value, its integer, its
+//! variant's index or its float. The conversions repeat nice-plug's
+//! `IntRange` and `FloatRange::Linear` arithmetic in `f32`, step for step, so
+//! a project saves and automates as it did before the table replaced them
+//! (#1814).
+//!
+//! A row holds its unmodulated plain value and a mono modulation offset, in
+//! normalized units. Every read of the plain value the plugin acts on is
+//! modulated; a save stores the unmodulated value.
 
 use std::collections::BTreeMap;
-use std::fmt::{Debug, Display};
-use std::sync::Arc;
 
-use self::internals::ParamPtr;
+use atomic_float::AtomicF32;
+use std::sync::atomic::Ordering;
 
-// The proc-macro for deriving `Params`
-pub use nice_plug_derive::Params;
+use crate::plugin::ParamValue;
+use crate::wrapper::hash_param_id;
 
-// Parameter types
-mod boolean;
-pub mod enums;
-mod float;
-mod integer;
+/// An integer row's text, both ways.
+pub type IntToText = Box<dyn Fn(i32) -> String + Send + Sync>;
+pub type TextToInt = Box<dyn Fn(&str) -> Option<i32> + Send + Sync>;
 
-pub mod internals;
-pub mod persist;
-pub mod range;
-pub mod smoothing;
+/// What a row holds.
+pub enum Kind {
+    /// An integer from `min` to `max`, with optional text both ways. Without
+    /// them it reads and parses as the integer.
+    Int { min: i32, max: i32, to_text: Option<IntToText>, from_text: Option<TextToInt> },
+    /// One of `names`, saved by its stable id from `ids`, which are in the
+    /// same order.
+    Enum { ids: &'static [&'static str], names: &'static [&'static str] },
+    /// A float from `min` to `max`, linear, read and parsed as the number.
+    Float { min: f32, max: f32 },
+}
 
-pub use boolean::BoolParam;
-pub use enums::EnumParam;
-pub use float::FloatParam;
-pub use integer::IntParam;
+/// One row as the plugin declares it.
+pub struct Spec {
+    /// The stable id a save stores the value under, and the source of the
+    /// CLAP id the host knows the row by.
+    pub id: &'static str,
+    pub name: &'static str,
+    pub kind: Kind,
+    /// The plain default: an integer or a variant's index as a float.
+    pub default: f32,
+    pub automatable: bool,
+    /// Whether the host may modulate it. Only an automatable row is.
+    pub modulatable: bool,
+}
 
-bitflags::bitflags! {
-    /// Flags for controlling a parameter's behavior.
-    #[repr(transparent)]
-    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct ParamFlags: u32 {
-        /// When applied to a [`BoolParam`], this will cause the parameter to be linked to the
-        /// host's bypass control. Only a single parameter can be marked as a bypass parameter. If
-        /// you don't have a bypass parameter, then nice-plug will add one for you. You will need to
-        /// implement this yourself if your plugin introduces latency.
-        const BYPASS = 1 << 0;
-        /// The parameter cannot be changed from an automation lane. The parameter can however still
-        /// be manually changed by the user from either the plugin's own GUI or from the host's
-        /// generic UI.
-        const NON_AUTOMATABLE = 1 << 1;
-        /// Hides the parameter in the host's generic UI for this plugin. This also implies
-        /// `NON_AUTOMATABLE`. Setting this does not prevent you from changing the parameter in the
-        /// plugin's editor GUI.
-        const HIDDEN = 1 << 2;
-        /// Don't show this parameter when generating a generic UI for the plugin using one of
-        /// nice-plug's generic UI widgets.
-        const HIDE_IN_GENERIC_UI = 1 << 3;
+impl Spec {
+    /// An automatable, modulatable integer.
+    pub fn int(id: &'static str, name: &'static str, default: i32, min: i32, max: i32) -> Spec {
+        assert!(min < max && (min..=max).contains(&default), "{id}: a range around its default");
+        let kind = Kind::Int { min, max, to_text: None, from_text: None };
+        Spec { id, name, kind, default: default as f32, automatable: true, modulatable: true }
+    }
+
+    /// An automatable, modulatable enumeration of `names`, saved as `ids`.
+    pub fn enumeration(
+        id: &'static str,
+        name: &'static str,
+        default: usize,
+        ids: &'static [&'static str],
+        names: &'static [&'static str],
+    ) -> Spec {
+        assert!(ids.len() == names.len() && ids.len() > 1 && default < ids.len(), "{id}: variants");
+        let kind = Kind::Enum { ids, names };
+        Spec { id, name, kind, default: default as f32, automatable: true, modulatable: true }
+    }
+
+    /// An automatable, modulatable float.
+    pub fn float(id: &'static str, name: &'static str, default: f32, min: f32, max: f32) -> Spec {
+        assert!(min < max && (min..=max).contains(&default), "{id}: a range around its default");
+        let kind = Kind::Float { min, max };
+        Spec { id, name, kind, default, automatable: true, modulatable: true }
+    }
+
+    /// Neither automated nor modulated by the host.
+    pub fn non_automatable(self) -> Spec {
+        Spec { automatable: false, modulatable: false, ..self }
+    }
+
+    /// Automated, but not modulated, by the host.
+    pub fn non_modulatable(self) -> Spec {
+        Spec { modulatable: false, ..self }
+    }
+
+    /// An integer row's text from its value.
+    pub fn with_to_text(mut self, f: impl Fn(i32) -> String + Send + Sync + 'static) -> Spec {
+        match &mut self.kind {
+            Kind::Int { to_text, .. } => *to_text = Some(Box::new(f)),
+            _ => panic!("{}: only an integer row takes its own text", self.id),
+        }
+        self
+    }
+
+    /// An integer row's value from text, already trimmed.
+    pub fn with_from_text(
+        mut self,
+        f: impl Fn(&str) -> Option<i32> + Send + Sync + 'static,
+    ) -> Spec {
+        match &mut self.kind {
+            Kind::Int { from_text, .. } => *from_text = Some(Box::new(f)),
+            _ => panic!("{}: only an integer row parses its own text", self.id),
+        }
+        self
+    }
+
+    /// The host steps: `None` for a float, which the host sees as 0 to 1.
+    pub fn steps(&self) -> Option<usize> {
+        match &self.kind {
+            Kind::Int { min, max, .. } => Some((max - min) as usize),
+            Kind::Enum { ids, .. } => Some(ids.len() - 1),
+            Kind::Float { .. } => None,
+        }
+    }
+
+    /// The step count as the host scales by it, 1 for a float.
+    fn scale(&self) -> usize {
+        self.steps().unwrap_or(1)
+    }
+
+    /// Plain to normalized, clamped: `IntRange::normalize` and
+    /// `FloatRange::Linear`'s. An integer's offset from the minimum is taken
+    /// in `i64`, so typed text far past the range clamps to its near end.
+    pub fn normalize(&self, plain: f32) -> f32 {
+        let (min, max) = match &self.kind {
+            Kind::Float { min, max } => return (plain.clamp(*min, *max) - min) / (max - min),
+            Kind::Int { min, max, .. } => (*min, *max),
+            Kind::Enum { ids, .. } => (0, ids.len() as i32 - 1),
+        };
+        ((plain as i64 - i64::from(min)) as f32 / (max - min) as f32).clamp(0.0, 1.0)
+    }
+
+    /// Normalized to plain, clamped and, for an integer, rounded:
+    /// `IntRange::unnormalize` and `FloatRange::Linear`'s.
+    pub fn unnormalize(&self, normalized: f32) -> f32 {
+        let normalized = normalized.clamp(0.0, 1.0);
+        let (min, max) = match &self.kind {
+            Kind::Float { min, max } => return (normalized * (max - min)) + min,
+            Kind::Int { min, max, .. } => (*min, *max),
+            Kind::Enum { ids, .. } => (0, ids.len() as i32 - 1),
+        };
+        ((normalized * (max - min) as f32).round() as i32 + min) as f32
+    }
+
+    /// A plain value as the host reads it.
+    pub fn to_host(&self, plain: f32) -> f64 {
+        self.normalize(plain) as f64 * self.scale() as f64
+    }
+
+    /// A host value as normalized: divided in `f32`, as nice-plug did.
+    pub(crate) fn host_to_normalized(&self, host: f64) -> f32 {
+        host as f32 / self.scale() as f32
+    }
+
+    /// The text for a host value.
+    pub fn text(&self, host: f64) -> String {
+        let plain = self.unnormalize(self.host_to_normalized(host));
+        match &self.kind {
+            Kind::Int { to_text: Some(f), .. } => f(plain as i32),
+            Kind::Int { to_text: None, .. } => (plain as i32).to_string(),
+            Kind::Enum { names, .. } => names[plain as usize].to_string(),
+            Kind::Float { .. } => plain.to_string(),
+        }
+    }
+
+    /// The host value for text, if it parses.
+    pub fn parse(&self, text: &str) -> Option<f64> {
+        let text = text.trim();
+        let plain = match &self.kind {
+            Kind::Int { from_text: Some(f), .. } => f(text)? as f32,
+            Kind::Int { from_text: None, .. } => text.parse::<i32>().ok()? as f32,
+            Kind::Enum { names, .. } => names.iter().position(|name| *name == text)? as f32,
+            // A NaN would be saved as `null`, which no load reads back.
+            Kind::Float { .. } => text.parse::<f32>().ok().filter(|value| !value.is_nan())?,
+        };
+        Some(self.normalize(plain) as f64 * self.scale() as f64)
+    }
+
+    /// What a save stores for a plain value.
+    fn save(&self, plain: f32) -> ParamValue {
+        match &self.kind {
+            Kind::Int { .. } => ParamValue::I32(plain as i32),
+            Kind::Enum { ids, .. } => ParamValue::String(ids[plain as usize].to_owned()),
+            Kind::Float { .. } => ParamValue::F32(plain),
+        }
+    }
+
+    /// The plain value a restore takes from `saved`: the default for a value
+    /// that is missing, of the wrong type or an unknown variant, and the
+    /// nearest bound for one out of range.
+    fn restore(&self, saved: Option<&ParamValue>) -> f32 {
+        match (&self.kind, saved) {
+            (Kind::Int { min, max, .. }, Some(ParamValue::I32(value))) => {
+                (*value).clamp(*min, *max) as f32
+            }
+            (Kind::Enum { ids, .. }, Some(ParamValue::String(id))) => {
+                match ids.iter().position(|candidate| candidate == id) {
+                    Some(index) => index as f32,
+                    None => self.default,
+                }
+            }
+            (Kind::Float { min, max }, Some(ParamValue::F32(value))) => value.clamp(*min, *max),
+            _ => self.default,
+        }
     }
 }
 
-// See https://rust-lang.github.io/api-guidelines/future-proofing.html for more information
-mod sealed {
-    /// Dummy trait to prevent [`Param`][super::Param] from being implemented outside of nice-plug. This is not
-    /// possible because of the way `ParamPtr` works, so it's best to just make it flat out impossible.
-    pub trait Sealed {}
-}
-pub(crate) use sealed::Sealed;
-
-/// Describes a single parameter of any type. Most parameter implementations also have a field
-/// called `value` that and a field called `smoothed`. The former stores the latest unsmoothed
-/// value, and the latter can be used to access the smoother. These two fields should be used in DSP
-/// code to either get the parameter's current (smoothed) value. In UI code the getters from this
-/// trait should be used instead.
-///
-/// # Sealed
-///
-/// This trait cannot be implemented outside of nice-plug itself. If you want to create new
-/// abstractions around parameters, consider wrapping them in a struct instead. Then use the
-/// `#[nested(id_prefix = "foo")]` syntax from the [`Params`] trait to reuse that wrapper in
-/// multiple places.
-pub trait Param: Display + Debug + sealed::Sealed {
-    /// The plain parameter type.
-    type Plain: PartialEq;
-
-    /// Get the human readable name for this parameter.
-    fn name(&self) -> &str;
-
-    /// Get the unit label for this parameter, if any.
-    fn unit(&self) -> &'static str;
-
-    /// Get this parameter's polyphonic modulation ID. If this is set for a parameter in a CLAP
-    /// plugin, then polyphonic modulation will be enabled for that parameter. Polyphonic modulation
-    /// is communicated to the plugin through
-    /// [`NoteEvent::PolyModulation`][crate::midi::NoteEvent::PolyModulation] and
-    /// [`NoteEvent::MonoAutomation`][crate::midi::NoteEvent::MonoAutomation] events. See the
-    /// documentation on those events for more information.
-    ///
-    /// # Important
-    ///
-    /// After enabling polyphonic modulation, the plugin **must** start sending
-    /// [`NoteEvent::VoiceTerminated`][crate::midi::NoteEvent::VoiceTerminated] events to the
-    /// host when a voice has fully ended. This allows the host to reuse its modulation resources.
-    fn poly_modulation_id(&self) -> Option<u32>;
-
-    /// Get the unnormalized value for this parameter.
-    fn modulated_plain_value(&self) -> Self::Plain;
-
-    /// Get the normalized `[0, 1]` value for this parameter.
-    fn modulated_normalized_value(&self) -> f32;
-
-    /// Get the unnormalized value for this parameter before any (monophonic) modulation coming from
-    /// the host has been applied. If the host is not currently modulating this parameter than this
-    /// will be the same as [`modulated_plain_value()`][Self::modulated_plain_value()]. This may be
-    /// useful for displaying modulation differently in plugin GUIs. Right now only CLAP plugins in
-    /// Bitwig Studio use modulation.
-    fn unmodulated_plain_value(&self) -> Self::Plain;
-
-    /// Get the normalized `[0, 1]` value for this parameter before any (monophonic) modulation
-    /// coming from the host has been applied. If the host is not currently modulating this
-    /// parameter than this will be the same as
-    /// [`modulated_normalized_value()`][Self::modulated_normalized_value()]. This may be useful for
-    /// displaying modulation differently in plugin GUIs. Right now only CLAP plugins in Bitwig
-    /// Studio use modulation.
-    fn unmodulated_normalized_value(&self) -> f32;
-
-    /// Get the unnormalized default value for this parameter.
-    fn default_plain_value(&self) -> Self::Plain;
-
-    /// Get the normalized `[0, 1]` default value for this parameter.
-    #[inline]
-    fn default_normalized_value(&self) -> f32 {
-        self.preview_normalized(self.default_plain_value())
-    }
-
-    /// Get the number of steps for this parameter, if it is discrete. Used for the host's generic
-    /// UI.
-    fn step_count(&self) -> Option<usize>;
-
-    /// Returns the previous step from a specific value for this parameter. This can be the same as
-    /// `from` if the value is at the start of its range. This is mainly used for scroll wheel
-    /// interaction in plugin GUIs. When the parameter is not discrete then a step should cover one
-    /// hundredth of the normalized range instead.
-    ///
-    /// If `finer` is true, then the step size should be decreased if the parameter is continuous.
-    fn previous_step(&self, from: Self::Plain, finer: bool) -> Self::Plain;
-
-    /// Returns the next step from a specific value for this parameter. This can be the same as
-    /// `from` if the value is at the end of its range. This is mainly used for scroll wheel
-    /// interaction in plugin GUIs. When the parameter is not discrete then a step should cover one
-    /// hundredth of the normalized range instead.
-    ///
-    /// If `finer` is true, then the step size should be decreased if the parameter is continuous.
-    fn next_step(&self, from: Self::Plain, finer: bool) -> Self::Plain;
-
-    /// The same as [`previous_step()`][Self::previous_step()], but for normalized values. This is
-    /// mostly useful for GUI widgets.
-    fn previous_normalized_step(&self, from: f32, finer: bool) -> f32 {
-        self.preview_normalized(self.previous_step(self.preview_plain(from), finer))
-    }
-
-    /// The same as [`next_step()`][Self::next_step()], but for normalized values. This is mostly
-    /// useful for GUI widgets.
-    fn next_normalized_step(&self, from: f32, finer: bool) -> f32 {
-        self.preview_normalized(self.next_step(self.preview_plain(from), finer))
-    }
-
-    /// Get the string representation for a normalized value. Used as part of the wrappers. Most
-    /// plugin formats already have support for units, in which case it shouldn't be part of this
-    /// string or some DAWs may show duplicate units.
-    fn normalized_value_to_string(&self, normalized: f32, include_unit: bool) -> String;
-
-    /// Get the string representation for a normalized value. Used as part of the wrappers.
-    fn string_to_normalized_value(&self, string: &str) -> Option<f32>;
-
-    /// Get the normalized value for a plain, unnormalized value, as a float. Used as part of the
-    /// wrappers.
-    fn preview_normalized(&self, plain: Self::Plain) -> f32;
-
-    /// Get the plain, unnormalized value for a normalized value, as a float. Used as part of the
-    /// wrappers. This **does** snap to step sizes for continuous parameters (i.e. [`FloatParam`]).
-    fn preview_plain(&self, normalized: f32) -> Self::Plain;
-
-    /// Get the plain, unnormalized value for this parameter after polyphonic modulation has been
-    /// applied. This is a convenience method for calling [`preview_plain()`][Self::preview_plain()]
-    /// with `unmodulated_normalized_value() + normalized_offset`.
-    #[inline]
-    fn preview_modulated(&self, normalized_offset: f32) -> Self::Plain {
-        self.preview_plain(self.unmodulated_normalized_value() + normalized_offset)
-    }
-
-    /// Flags to control the parameter's behavior. See [`ParamFlags`].
-    fn flags(&self) -> ParamFlags;
-
-    /// Internal implementation detail for implementing [`Params`]. This should
-    /// not be used directly.
-    fn as_ptr(&self) -> internals::ParamPtr;
+/// A row: its declaration and its values.
+struct Row {
+    spec: Spec,
+    hash: u32,
+    /// The unmodulated plain value.
+    plain: AtomicF32,
+    /// The host's mono modulation, normalized.
+    offset: AtomicF32,
 }
 
-/// Contains the setters for parameters. Only to be used by nice-plug's internal libraries.
-/// These are exposed as unsafe methods to avoid confusion.
-pub trait InternalParamMut: Param {
-    /// Set this parameter based on a plain, unnormalized value. This does not snap to step sizes
-    /// for continuous parameters (i.e. [`FloatParam`]). If
-    /// [`modulate_value()`][Self::_internal_modulate_value()] has previously been called with a non
-    /// zero value then this offset is taken into account to form the effective value.
-    ///
-    /// Returns whether or not the value has changed. Any parameter callbacks are only run the value
-    /// has actually changed.
-    ///
-    /// This does **not** update the smoother.
-    ///
-    /// # Safety
-    /// This is only allowed to be used by nice-plug's internal libraries.
-    unsafe fn _internal_set_plain_value(&self, plain: Self::Plain) -> bool;
+impl Row {
+    fn normalized(&self) -> f32 {
+        let normalized = self.spec.normalize(self.plain.load(Ordering::Relaxed));
+        let offset = self.offset.load(Ordering::Relaxed);
+        if offset == 0.0 { normalized } else { (normalized + offset).clamp(0.0, 1.0) }
+    }
 
-    /// Set this parameter based on a normalized value. The normalized value will be snapped to the
-    /// step size for continuous parameters (i.e. [`FloatParam`]). If
-    /// [`modulate_value()`][Self::_internal_modulate_value()] has previously been called with a non
-    /// zero value then this offset is taken into account to form the effective value.
-    ///
-    /// Returns whether or not the value has changed. Any parameter callbacks are only run the value
-    /// has actually changed.
-    ///
-    /// This does **not** update the smoother.
-    ///
-    /// # Safety
-    /// This is only allowed to be used by nice-plug's internal libraries.
-    unsafe fn _internal_set_normalized_value(&self, normalized: f32) -> bool;
-
-    /// Add a modulation offset to the value's unmodulated value. This value sticks until this
-    /// function is called again with a 0.0 value. Out of bound values will be clamped to the
-    /// parameter's range. The normalized value will be snapped to the step size for continuous
-    /// parameters (i.e. [`FloatParam`]).
-    ///
-    /// Returns whether or not the value has changed. Any parameter callbacks are only run the
-    /// value has actually changed.
-    ///
-    /// This does **not** update the smoother.
-    ///
-    /// # Safety
-    /// This is only allowed to be used by nice-plug's internal libraries.
-    unsafe fn _internal_modulate_value(&self, modulation_offset: f32) -> bool;
-
-    /// Update the smoother state to point to the current value. Also used when initializing and
-    /// restoring a plugin so everything is in sync. In that case the smoother should completely
-    /// reset to the current value.
-    ///
-    /// # Safety
-    /// This is only allowed to be used by nice-plug's internal libraries.
-    unsafe fn _internal_update_smoother(&self, sample_rate: f32, reset: bool);
+    fn modulated(&self) -> f32 {
+        if self.offset.load(Ordering::Relaxed) == 0.0 {
+            self.plain.load(Ordering::Relaxed)
+        } else {
+            self.spec.unnormalize(self.normalized())
+        }
+    }
 }
 
-/// Describes a struct containing parameters and other persistent fields.
-///
-/// # Deriving `Params` and `#[id = "stable"]`
-///
-/// This trait can be derived on a struct containing [`FloatParam`] and other parameter fields by
-/// adding `#[derive(Params)]`. When deriving this trait, any of those parameter fields should have
-/// the `#[id = "stable"]` attribute, where `stable` is an up to 6 character long string (to avoid
-/// collisions) that will be used to identify the parameter internally so you can safely move it
-/// around and rename the field without breaking compatibility with old presets.
-///
-/// ## `#[persist = "key"]`
-///
-/// The struct can also contain other fields that should be persisted along with the rest of the
-/// preset data. These fields should be [`PersistentField`][persist::PersistentField]s annotated
-/// with the `#[persist = "key"]` attribute containing types that can be serialized and deserialized
-/// with [Serde](https://serde.rs/).
-///
-/// ## `#[nested]`, `#[nested(group_name = "group name")]`
-///
-/// Finally, the `Params` object may include parameters from other objects. Setting a group name is
-/// optional, but some hosts can use this information to display the parameters in a tree structure.
-/// Parameter IDs and persisting keys still need to be **unique** when using nested parameter
-/// structs.
-///
-/// Take a look at the example gain example plugin to see how this is used.
-///
-/// ## `#[nested(id_prefix = "foo", group_name = "Foo")]`
-///
-/// Adding this attribute to a `Params` sub-object works similarly to the regular `#[nested]`
-/// attribute, but it also adds an ID to all parameters from the nested object. If a parameter in
-/// the nested nested object normally has parameter ID `bar`, the parameter's ID will now be renamed
-/// to `foo_bar`. The same thing happens with persistent field keys to support multiple copies of
-/// the field. _This makes it possible to reuse the same parameter struct with different names and
-/// parameter indices._
-///
-/// ## `#[nested(array, group_name = "Foo")]`
-///
-/// This can be applied to an array-like data structure and it works similar to a `nested` attribute
-/// with an `id_name`, except that it will iterate over the array and create unique indices for all
-/// nested parameters. If the nested parameters object has a parameter called `bar`, then that
-/// parameter will belong to the group `Foo {array_index + 1}`, and it will have the renamed
-/// parameter ID `bar_{array_index + 1}`. The same thing applies to persistent field keys.
-///
-/// # Safety
-///
-/// This implementation is safe when using from the wrapper because the plugin's returned `Params`
-/// object lives in an `Arc`, and the wrapper also holds a reference to this `Arc`.
-pub unsafe trait Params: 'static + Send + Sync {
-    /// Create a mapping from unique parameter IDs to parameter pointers along with the name of the
-    /// group/unit/module they are in, as a `(param_id, param_ptr, group)` triple. The order of the
-    /// `Vec` determines the display order in the (host's) generic UI. The group name is either an
-    /// empty string for top level parameters, or a slash/delimited `"group name 1/Group Name 2"` if
-    /// this `Params` object contains nested child objects. All components of a group path must
-    /// exist or you may encounter panics. The derive macro does this for every parameter field
-    /// marked with `#[id = "stable"]`, and it also inlines all fields from nested child `Params`
-    /// structs marked with `#[nested(...)]` while prefixing that group name before the parameter's
-    /// original group name. Dereferencing the pointers stored in the values is only valid as long
-    /// as this object is valid.
-    ///
-    /// # Note
-    ///
-    /// This uses `String` even though for the `Params` derive macro `&'static str` would have been
-    /// fine to be able to support custom reusable Params implementations.
-    fn param_map(&self) -> Vec<(String, ParamPtr, String)>;
-
-    /// Serialize all fields marked with `#[persist = "stable_name"]` into a hash map containing
-    /// JSON-representations of those fields so they can be written to the plugin's state and
-    /// recalled later. This uses [`persist::serialize_field()`] under the hood.
-    fn serialize_fields(&self) -> BTreeMap<String, String> {
-        BTreeMap::new()
-    }
-
-    /// Restore all fields marked with `#[persist = "stable_name"]` from a hashmap created by
-    /// [`serialize_fields()`][Self::serialize_fields()]. All of these fields should be wrapped in a
-    /// [`persist::PersistentField`] with thread safe interior mutability, like an `RwLock` or a
-    /// `Mutex`. This gets called when the plugin's state is being restored. This uses
-    /// [`persist::deserialize_field()`] under the hood.
-    #[allow(unused_variables)]
-    fn deserialize_fields(&self, serialized: &BTreeMap<String, String>) {}
+/// The host parameters: a fixed list of rows, in the order the host lists
+/// them. Each value is an atomic, so any thread reads and writes it without
+/// a lock.
+pub struct Table {
+    rows: Box<[Row]>,
 }
 
-/// This may be useful when building generic UIs using nested `Params` objects.
-unsafe impl<P: Params> Params for Arc<P> {
-    fn param_map(&self) -> Vec<(String, ParamPtr, String)> {
-        self.as_ref().param_map()
+impl Table {
+    /// The rows in host order. Ids, and the CLAP ids hashed from them, must be
+    /// unique.
+    pub fn new(specs: impl IntoIterator<Item = Spec>) -> Table {
+        let rows: Box<[Row]> = specs
+            .into_iter()
+            .map(|spec| Row {
+                hash: hash_param_id(spec.id),
+                plain: AtomicF32::new(spec.default),
+                offset: AtomicF32::new(0.0),
+                spec,
+            })
+            .collect();
+        for (index, row) in rows.iter().enumerate() {
+            assert!(
+                rows[..index].iter().all(|other| other.hash != row.hash),
+                "{}: a CLAP id another row has",
+                row.spec.id
+            );
+        }
+        Table { rows }
     }
 
-    fn serialize_fields(&self) -> BTreeMap<String, String> {
-        self.as_ref().serialize_fields()
+    /// A table with no rows.
+    pub fn empty() -> Table {
+        Table::new([])
     }
 
-    fn deserialize_fields(&self, serialized: &BTreeMap<String, String>) {
-        self.as_ref().deserialize_fields(serialized)
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// An integer or enumeration row's value, modulated.
+    pub fn int(&self, row: usize) -> i32 {
+        self.rows[row].modulated() as i32
+    }
+
+    /// A float row's value, modulated.
+    pub fn float(&self, row: usize) -> f32 {
+        self.rows[row].modulated()
+    }
+
+    pub fn spec(&self, row: usize) -> &Spec {
+        &self.rows[row].spec
+    }
+
+    /// The CLAP id of `row`.
+    pub(crate) fn hash(&self, row: usize) -> u32 {
+        self.rows[row].hash
+    }
+
+    /// The row the host knows by `hash`.
+    pub(crate) fn row(&self, hash: u32) -> Option<usize> {
+        self.rows.iter().position(|row| row.hash == hash)
+    }
+
+    /// What the host reads: the modulated value, scaled by the step count.
+    pub(crate) fn host_value(&self, row: usize) -> f64 {
+        let row = &self.rows[row];
+        row.normalized() as f64 * row.spec.scale() as f64
+    }
+
+    /// Take a value the host or the editor set, as a host value: the table's
+    /// one write, so a value the editor sets rounds as the host's does.
+    pub fn set_host(&self, row: usize, host: f64) {
+        let row = &self.rows[row];
+        let plain = row.spec.unnormalize(row.spec.host_to_normalized(host));
+        row.plain.store(plain, Ordering::Relaxed);
+    }
+
+    /// Take the host's mono modulation of `row`, by a host amount. False for a
+    /// row the host may not modulate, which keeps its offset.
+    pub(crate) fn modulate_host(&self, row: usize, amount: f64) -> bool {
+        let row = &self.rows[row];
+        if !row.spec.modulatable {
+            return false;
+        }
+        row.offset.store(row.spec.host_to_normalized(amount), Ordering::Relaxed);
+        true
+    }
+
+    /// Every row's unmodulated value, keyed by id, as a save stores them.
+    pub(crate) fn save(&self) -> BTreeMap<String, ParamValue> {
+        self.rows
+            .iter()
+            .map(|row| (row.spec.id.to_owned(), row.spec.save(row.plain.load(Ordering::Relaxed))))
+            .collect()
+    }
+
+    /// Set every row from a save, by [`Spec::restore`]'s rules, and write one
+    /// log line naming the ids the save holds that no row has. Leaves the
+    /// modulation as it is.
+    pub(crate) fn restore(&self, saved: &BTreeMap<String, ParamValue>) {
+        for row in &self.rows {
+            row.plain.store(row.spec.restore(saved.get(row.spec.id)), Ordering::Relaxed);
+        }
+        let unknown: Vec<&str> = saved
+            .keys()
+            .map(String::as_str)
+            .filter(|id| self.rows.iter().all(|row| row.spec.id != *id))
+            .collect();
+        if !unknown.is_empty() {
+            crate::nice_warn!("The saved state names parameters this build has not: {unknown:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A restore sets every row by one rule, whatever the save holds for it:
+    /// the default for a value that is missing, of the wrong type or an
+    /// unknown variant, and the nearest bound for one out of range.
+    #[test]
+    fn a_restore_takes_the_default_or_the_nearest_bound() {
+        let table = Table::new([
+            Spec::int("int", "Int", 1, -2, 2),
+            Spec::enumeration("enum", "Enum", 1, &["a", "b", "c"], &["A", "B", "C"]),
+            Spec::float("float", "Float", 0.5, 0.0, 1.0),
+        ]);
+        let restore = |saved: &[(&str, ParamValue)]| {
+            for row in 0..table.len() {
+                table.set_host(row, 0.0);
+            }
+            table.restore(&saved.iter().map(|(id, v)| (id.to_string(), v.clone())).collect());
+            (table.int(0), table.int(1), table.float(2))
+        };
+        assert_eq!(restore(&[]), (1, 1, 0.5), "missing");
+        assert_eq!(
+            restore(&[
+                ("int", ParamValue::F32(1.0)),
+                ("enum", ParamValue::I32(2)),
+                ("float", ParamValue::I32(1)),
+            ]),
+            (1, 1, 0.5),
+            "of the wrong type"
+        );
+        assert_eq!(restore(&[("enum", ParamValue::String("z".into()))]).1, 1, "unknown variant");
+        assert_eq!(
+            restore(&[("int", ParamValue::I32(9)), ("float", ParamValue::F32(3.0)),]),
+            (2, 1, 1.0),
+            "out of range"
+        );
+        assert_eq!(
+            restore(&[
+                ("int", ParamValue::I32(-1)),
+                ("enum", ParamValue::String("c".into())),
+                ("float", ParamValue::F32(0.25)),
+                ("retired", ParamValue::I32(3)),
+            ]),
+            (-1, 2, 0.25),
+            "in range, beside an id no row has"
+        );
+    }
+
+    /// Typed text far past an integer row's range clamps to the near end, and
+    /// a float row refuses `nan`, which a save could not hold.
+    #[test]
+    fn typed_text_out_of_range_clamps_and_nan_is_refused() {
+        let int = Spec::int("int", "Int", 0, -9, 9);
+        assert_eq!(int.parse("2147483600"), Some(18.0));
+        assert_eq!(int.parse("-2147483600"), Some(0.0));
+        let float = Spec::float("float", "Float", 0.0, -1.0, 1.0);
+        assert_eq!(float.parse("nan"), None);
+        assert_eq!(float.parse("inf"), Some(1.0));
+    }
+
+    /// A value the host sets while its modulation holds the row at a bound is
+    /// still the one saved, though the modulated value does not move.
+    #[test]
+    fn a_value_set_under_modulation_held_at_a_bound_is_saved() {
+        let table = Table::new([Spec::float("float", "Float", 0.5, 0.0, 1.0)]);
+        assert!(table.modulate_host(0, 1.0));
+        table.set_host(0, 0.2);
+        assert_eq!(table.float(0), 1.0, "held at the bound");
+        table.set_host(0, 0.3);
+        assert_eq!(table.float(0), 1.0);
+        assert!(matches!(table.save()["float"], ParamValue::F32(value) if value == 0.3));
     }
 }

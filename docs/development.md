@@ -262,7 +262,7 @@ harmonigraph-standalone  eframe development harness with MIDI input and a mock
                          progression and synth.
 
 harmonigraph-clap        The CLAP shell: nice-plug and nice-plug-core, owned,
-                         with nice-plug-derive as its member crate.
+                         with a parameter table of its own.
 
 harmonigraph-plugin      Plugin on the shell, lock-free audio-to-UI ingress,
                          custom editor and CLAP export.

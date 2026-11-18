@@ -136,15 +136,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fb5dfbc6d8d2675589ccbe4d0fd61df2419075625f8c1a62325e718e2b0049f9"
 
 [[package]]
-name = "approx"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
 name = "arboard"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1467,15 +1458,12 @@ version = "0.6.1"
 dependencies = [
  "anyhow",
  "anymap3",
- "approx",
  "atomic_float",
  "atomic_refcell",
  "backtrace",
  "bitflags 2.13.2",
  "clap-sys",
  "crossbeam",
- "crossbeam-utils",
- "harmonigraph-clap-derive",
  "log",
  "midi-consts",
  "nice-assert-no-alloc",
@@ -1485,15 +1473,6 @@ dependencies = [
  "rtrb",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "harmonigraph-clap-derive"
-version = "0.6.1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
 ]
 
 [[package]]
@@ -3458,17 +3437,6 @@ name = "strength_reduce"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
-
-[[package]]
-name = "syn"
-version = "1.0.109"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
-dependencies = [
- "proc-macro2",
- "quote",
- "unicode-ident",
-]
 
 [[package]]
 name = "syn"

@@ -10,7 +10,7 @@ use editor::gestures::Gesture;
 use harmonigraph_core::lattice_map::{Follow, TuningEngine};
 use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, SourceId};
 use harmonigraph_record::TAKE_CHANNELS;
-use harmonigraph_ui::lattice_maps::{MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
+use harmonigraph_ui::lattice_maps::{MapDocument, MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
 use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
 use nice_plug::prelude::*;
 
@@ -19,6 +19,7 @@ mod background;
 mod configuration;
 mod editor;
 mod lattice_maps;
+mod saved_fields;
 mod tape;
 
 /// Identity of this plugin build, supplied to the shared performance overlay.
@@ -191,161 +192,201 @@ impl std::ops::DerefMut for RecorderSlot {
     }
 }
 
-#[derive(Params)]
 pub struct HarmonigraphParams {
-    #[persist = "lattice-maps"]
+    /// The host parameters, one row per [`Row`].
+    pub table: Arc<Table>,
+    /// Saved in the `lattice-maps` field (`saved_fields`).
     pub maps: Arc<parking_lot::RwLock<harmonigraph_ui::lattice_maps::MapDocument>>,
     pub map_editor: Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapEditor>>,
     pub map_playback: Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapPlayback>>,
-    #[id = "lattice-map"]
-    pub map: IntParam,
-    #[id = "map-fifths"]
-    pub map_fifths: IntParam,
-    #[id = "map-thirds"]
-    pub map_thirds: IntParam,
-    #[id = "map-sevenths"]
-    pub map_sevenths: IntParam,
-    #[id = "map-fifths-extension"]
-    pub map_fifths_extension: IntParam,
-    #[id = "map-thirds-extension"]
-    pub map_thirds_extension: IntParam,
-    #[id = "map-sevenths-extension"]
-    pub map_sevenths_extension: IntParam,
-    #[id = "tuning-engine"]
-    pub tuning_engine: IntParam,
-    /// Whether Lattice Map slides the map by itself (`Follow`), as an index.
-    #[id = "map-follow"]
-    pub map_follow: IntParam,
     /// Where following has moved the map, packed by [`lattice_maps::pack`]:
     /// written by the Hub on audio, read by the editor.
     pub map_followed: Arc<std::sync::atomic::AtomicU64>,
     /// The tuning axes, links, Learn and adaptive policy: plugin-owned
     /// settings rather than host parameters, saved in `musical-settings`.
     settings: Arc<configuration::Settings>,
-    /// Window size in logical pixels, persisted with the plugin state.
-    #[persist = "editor-state"]
+    /// Window size in logical pixels, saved in the `editor-state` field.
     pub editor_state: Arc<editor::EguiState>,
-
-    /// Serialized UI state (layout, camera, view settings), persisted with
-    /// the plugin state: a restore installs into the editor state and a save
+    /// Serialized UI state (layout, camera, view settings), saved in the
+    /// `ui-state` field: a restore installs into the editor state and a save
     /// serializes out of it (see `UiState`).
-    #[persist = "ui-state"]
     pub ui_state: editor::UiState,
+}
 
+/// Harmonigraph's host parameters, in the order the host lists them; each is
+/// its row in [`HarmonigraphParams::table`]. The order is the host's, so a
+/// new row goes at the end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Row {
+    /// The Lattice Map slot, numbered from 0 and labelled from 1.
+    LatticeMap,
+    MapFifths,
+    MapThirds,
+    MapSevenths,
+    MapFifthsExtension,
+    MapThirdsExtension,
+    MapSeventhsExtension,
+    /// Which engine retunes notes ([`TuningEngine`]), as an index.
+    TuningEngine,
+    /// Whether Lattice Map slides the map by itself ([`Follow`]), as an index.
+    MapFollow,
     /// Which input feeds the analyzer and the audio recorded with a take. This
     /// is a host parameter rather than part of `ui_state`, so the audio thread
     /// can read it directly and a restored project applies it before an editor
     /// has ever opened. It is deliberately not automatable: changing sources is
     /// an editing decision, not a signal to splice into the spectrogram.
-    #[id = "analysis-input"]
-    pub analysis_input: EnumParam<AnalysisInputParam>,
-
-    #[id = "camera-yaw"]
-    pub camera_yaw: FloatParam,
-    #[id = "camera-pitch"]
-    pub camera_pitch: FloatParam,
-    #[id = "camera-distance"]
-    pub camera_distance: FloatParam,
-    #[id = "camera-pan-x"]
-    pub camera_pan_x: FloatParam,
-    #[id = "camera-pan-y"]
-    pub camera_pan_y: FloatParam,
+    AnalysisInput,
+    CameraYaw,
+    CameraPitch,
+    CameraDistance,
+    CameraPanX,
+    CameraPanY,
 }
 
-/// Host-persisted form of the UI's analysis-input choice. Stable IDs make the
-/// saved value independent of declaration order; the UI-side enum stays free
-/// of a dependency on nice-plug.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Enum)]
-pub enum AnalysisInputParam {
-    #[id = "main"]
-    Main,
-    #[id = "sidechain"]
-    Sidechain,
-}
+impl Row {
+    /// Every row, in host order.
+    pub const ALL: [Row; 15] = [
+        Row::LatticeMap,
+        Row::MapFifths,
+        Row::MapThirds,
+        Row::MapSevenths,
+        Row::MapFifthsExtension,
+        Row::MapThirdsExtension,
+        Row::MapSeventhsExtension,
+        Row::TuningEngine,
+        Row::MapFollow,
+        Row::AnalysisInput,
+        Row::CameraYaw,
+        Row::CameraPitch,
+        Row::CameraDistance,
+        Row::CameraPanX,
+        Row::CameraPanY,
+    ];
 
-impl From<AnalysisInputParam> for AnalysisInput {
-    fn from(input: AnalysisInputParam) -> Self {
-        match input {
-            AnalysisInputParam::Main => AnalysisInput::Main,
-            AnalysisInputParam::Sidechain => AnalysisInput::Sidechain,
+    /// The row's index in the table.
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// The id a save stores the row under and the host knows it by: saved
+    /// projects and automation lanes hold these, so one never changes.
+    pub fn id(self) -> &'static str {
+        match self {
+            Row::LatticeMap => "lattice-map",
+            Row::MapFifths => "map-fifths",
+            Row::MapThirds => "map-thirds",
+            Row::MapSevenths => "map-sevenths",
+            Row::MapFifthsExtension => "map-fifths-extension",
+            Row::MapThirdsExtension => "map-thirds-extension",
+            Row::MapSeventhsExtension => "map-sevenths-extension",
+            Row::TuningEngine => "tuning-engine",
+            Row::MapFollow => "map-follow",
+            Row::AnalysisInput => "analysis-input",
+            Row::CameraYaw => ParamKey::CameraYaw.id(),
+            Row::CameraPitch => ParamKey::CameraPitch.id(),
+            Row::CameraDistance => ParamKey::CameraDistance.id(),
+            Row::CameraPanX => ParamKey::CameraPanX.id(),
+            Row::CameraPanY => ParamKey::CameraPanY.id(),
+        }
+    }
+
+    /// The row's declaration. The Lattice Map's label names the map in its
+    /// slot, which it reads from `maps`.
+    fn spec(self, maps: &Arc<parking_lot::RwLock<MapDocument>>) -> Spec {
+        let id = self.id();
+        let lane = |name, grain| {
+            let spec = Spec::int(id, name, 0, -OFFSET_LIMIT, OFFSET_LIMIT).non_modulatable();
+            match grain {
+                MapOffsetLane::Fine => spec,
+                // An extension lane reads and parses in steps of EXTENSION_STEP.
+                MapOffsetLane::Extension => spec
+                    .with_to_text(|value| (value * EXTENSION_STEP).to_string())
+                    .with_from_text(|text| {
+                        let steps: i32 = text.trim().parse().ok()?;
+                        (steps % EXTENSION_STEP == 0).then_some(steps / EXTENSION_STEP)
+                    }),
+            }
+        };
+        // Entirely from the ParamKey metadata (name, default and range), so the
+        // host-facing parameter can never drift from what the UI clamps and
+        // displays.
+        let camera = |key: ParamKey| {
+            let range = key.range();
+            Spec::float(id, key.host_name(), key.default_value(), *range.start(), *range.end())
+        };
+        match self {
+            Row::LatticeMap => {
+                let names = maps.clone();
+                Spec::int(id, "Lattice Map", 0, 0, lattice_maps::LAST_MAP)
+                    .non_modulatable()
+                    .with_to_text(move |slot| match names.read().name(slot as usize) {
+                        Some(name) => format!("{} · {name}", slot + 1),
+                        None => format!("{} · unavailable", slot + 1),
+                    })
+            }
+            Row::MapFifths => lane("Map Fifths", MapOffsetLane::Fine),
+            Row::MapThirds => lane("Map Thirds", MapOffsetLane::Fine),
+            Row::MapSevenths => lane("Map Sevenths", MapOffsetLane::Fine),
+            Row::MapFifthsExtension => lane("Map Fifths x10", MapOffsetLane::Extension),
+            Row::MapThirdsExtension => lane("Map Thirds x10", MapOffsetLane::Extension),
+            Row::MapSeventhsExtension => lane("Map Sevenths x10", MapOffsetLane::Extension),
+            Row::TuningEngine => Spec::int(
+                id,
+                "Note Retuning",
+                TuningEngine::default().index(),
+                0,
+                TuningEngine::HOST_MAX,
+            )
+            .with_to_text(|value| TuningEngine::from_index(value).label().into())
+            .non_automatable(),
+            Row::MapFollow => {
+                Spec::int(id, "Map Follow", Follow::default().index(), 0, Follow::HOST_MAX)
+                    .non_modulatable()
+                    .with_to_text(|value| Follow::from_index(value).label().into())
+            }
+            Row::AnalysisInput => Spec::enumeration(
+                id,
+                "Analyzer Audio Input",
+                0,
+                &["main", "sidechain"],
+                &["Main", "Sidechain"],
+            )
+            .non_automatable(),
+            Row::CameraYaw => camera(ParamKey::CameraYaw),
+            Row::CameraPitch => camera(ParamKey::CameraPitch),
+            Row::CameraDistance => camera(ParamKey::CameraDistance),
+            Row::CameraPanX => camera(ParamKey::CameraPanX),
+            Row::CameraPanY => camera(ParamKey::CameraPanY),
+        }
+    }
+
+    /// The row a camera key is saved and automated through.
+    pub fn camera(key: ParamKey) -> Row {
+        match key {
+            ParamKey::CameraYaw => Row::CameraYaw,
+            ParamKey::CameraPitch => Row::CameraPitch,
+            ParamKey::CameraDistance => Row::CameraDistance,
+            ParamKey::CameraPanX => Row::CameraPanX,
+            ParamKey::CameraPanY => Row::CameraPanY,
         }
     }
 }
 
-impl From<AnalysisInput> for AnalysisInputParam {
-    fn from(input: AnalysisInput) -> Self {
-        match input {
-            AnalysisInput::Main => AnalysisInputParam::Main,
-            AnalysisInput::Sidechain => AnalysisInputParam::Sidechain,
-        }
-    }
-}
-
-/// Build a FloatParam entirely from the ParamKey metadata (name, default and
-/// range) so the host-facing parameters can never drift from what the UI
-/// clamps and displays.
-fn param_for_key(key: ParamKey) -> FloatParam {
-    let range = key.range();
-    let range = FloatRange::Linear { min: *range.start(), max: *range.end() };
-    FloatParam::new(key.host_name(), key.default_value(), range)
-}
-
-/// A map offset lane: one lattice step per value, or [`EXTENSION_STEP`] on an
-/// extension lane, which reads and parses in steps.
-fn map_lane(name: &'static str, lane: MapOffsetLane) -> IntParam {
-    let param = IntParam::new(name, 0, IntRange::Linear { min: -OFFSET_LIMIT, max: OFFSET_LIMIT });
-    match lane {
-        MapOffsetLane::Fine => param,
-        MapOffsetLane::Extension => param
-            .with_value_to_string(Arc::new(|value| (value * EXTENSION_STEP).to_string()))
-            .with_string_to_value(Arc::new(|text| {
-                let steps: i32 = text.trim().parse().ok()?;
-                (steps % EXTENSION_STEP == 0).then_some(steps / EXTENSION_STEP)
-            })),
-    }
-}
+/// The Analyzer Audio Input row's variants, by index; [`Row::spec`] gives each
+/// its saved id and its name.
+const ANALYSIS_INPUTS: [AnalysisInput; 2] = [AnalysisInput::Main, AnalysisInput::Sidechain];
 
 impl Default for HarmonigraphParams {
     fn default() -> Self {
         let maps = Arc::new(parking_lot::RwLock::new(
             harmonigraph_ui::lattice_maps::MapDocument::default(),
         ));
-        let names = maps.clone();
+        let table = Table::new(Row::ALL.map(|row| row.spec(&maps)));
         HarmonigraphParams {
+            table: Arc::new(table),
             maps,
             map_editor: Default::default(),
             map_playback: Default::default(),
-            map: IntParam::new(
-                "Lattice Map",
-                0,
-                IntRange::Linear { min: 0, max: lattice_maps::LAST_MAP },
-            )
-            .with_value_to_string(Arc::new(move |id| {
-                let doc = names.read();
-                match doc.name(id as usize) {
-                    Some(name) => format!("{} · {name}", id + 1),
-                    None => format!("{} · unavailable", id + 1),
-                }
-            })),
-            map_fifths: map_lane("Map Fifths", MapOffsetLane::Fine),
-            map_thirds: map_lane("Map Thirds", MapOffsetLane::Fine),
-            map_sevenths: map_lane("Map Sevenths", MapOffsetLane::Fine),
-            map_fifths_extension: map_lane("Map Fifths x10", MapOffsetLane::Extension),
-            map_thirds_extension: map_lane("Map Thirds x10", MapOffsetLane::Extension),
-            map_sevenths_extension: map_lane("Map Sevenths x10", MapOffsetLane::Extension),
-            tuning_engine: IntParam::new(
-                "Note Retuning",
-                TuningEngine::default().index(),
-                IntRange::Linear { min: 0, max: TuningEngine::HOST_MAX },
-            )
-            .with_value_to_string(Arc::new(|value| TuningEngine::from_index(value).label().into()))
-            .non_automatable(),
-            map_follow: IntParam::new(
-                "Map Follow",
-                Follow::default().index(),
-                IntRange::Linear { min: 0, max: Follow::HOST_MAX },
-            )
-            .with_value_to_string(Arc::new(|value| Follow::from_index(value).label().into())),
             map_followed: Default::default(),
             settings: Default::default(),
             editor_state: editor::EguiState::from_size(
@@ -353,34 +394,47 @@ impl Default for HarmonigraphParams {
                 editor::DEFAULT_SIZE.1,
             ),
             ui_state: editor::UiState::new(),
-            analysis_input: EnumParam::new("Analyzer Audio Input", AnalysisInputParam::Main)
-                .non_automatable(),
-            camera_yaw: param_for_key(ParamKey::CameraYaw),
-            camera_pitch: param_for_key(ParamKey::CameraPitch),
-            camera_distance: param_for_key(ParamKey::CameraDistance),
-            camera_pan_x: param_for_key(ParamKey::CameraPanX),
-            camera_pan_y: param_for_key(ParamKey::CameraPanY),
         }
     }
 }
 
 impl HarmonigraphParams {
-    fn param_for(&self, key: ParamKey) -> &FloatParam {
-        match key {
-            ParamKey::CameraYaw => &self.camera_yaw,
-            ParamKey::CameraPitch => &self.camera_pitch,
-            ParamKey::CameraDistance => &self.camera_distance,
-            ParamKey::CameraPanX => &self.camera_pan_x,
-            ParamKey::CameraPanY => &self.camera_pan_y,
-        }
+    /// An integer row's value, modulated.
+    pub fn int(&self, row: Row) -> i32 {
+        self.table.int(row.index())
+    }
+
+    /// A camera row's value, modulated.
+    pub fn camera(&self, key: ParamKey) -> f32 {
+        self.table.float(Row::camera(key).index())
+    }
+
+    /// Which input feeds the analyzer.
+    pub fn analysis_input(&self) -> AnalysisInput {
+        ANALYSIS_INPUTS[self.int(Row::AnalysisInput) as usize]
+    }
+
+    /// What the host shows for `row`'s value.
+    #[cfg(test)]
+    pub(crate) fn label(&self, row: Row) -> String {
+        let spec = self.table.spec(row.index());
+        spec.text(spec.to_host(self.int(row) as f32))
+    }
+
+    /// Set `row` to `plain` as a host would, with no wrapper in between.
+    #[cfg(test)]
+    pub(crate) fn set(&self, row: Row, plain: f32) {
+        let spec = self.table.spec(row.index());
+        self.table.set_host(row.index(), spec.to_host(plain));
     }
 }
 
-/// Adapts nice-plug's parameter system to the UI's `ParamBackend`, so panes
-/// don't know they're running inside a plugin.
+/// Adapts the host parameters to the UI's `ParamBackend`, so panes don't
+/// know they're running inside a plugin.
 pub(crate) struct PluginParamBackend<'a> {
     pub params: &'a HarmonigraphParams,
-    pub setter: &'a ParamSetter<'a>,
+    /// Where the editor's writes go: the host, then the table.
+    pub host: &'a dyn GuiContext,
     /// The tuning configuration as this frame reads it, once, so every
     /// slider in the frame shows one coherent value.
     pub configuration: harmonigraph_ui::params::ConfigurationView,
@@ -405,9 +459,9 @@ impl ParamBackend for PluginParamBackend<'_> {
             MapEdit::EndOffset(axis, lane) => self.end(Gesture::Lane(axis, lane)),
             MapEdit::Offset(axis, lane, _) => {
                 self.begin(Gesture::Lane(axis, lane));
-                lattice_maps::edit(self.params, self.setter, edit);
+                lattice_maps::edit(self.params, self.host, edit);
             }
-            _ => lattice_maps::edit(self.params, self.setter, edit),
+            _ => lattice_maps::edit(self.params, self.host, edit),
         }
     }
     fn tuning_instances(&self) -> Vec<harmonigraph_ui::params::TuningInstance> {
@@ -428,31 +482,32 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn get(&self, key: ParamKey) -> f32 {
-        self.params.param_for(key).value()
+        self.params.camera(key)
     }
 
     fn set(&self, key: ParamKey, value: f32) {
-        let param = self.params.param_for(key);
+        let row = Row::camera(key).index();
         if self.gestures.get().is_open(Gesture::Param(key)) {
             // Inside an explicit gesture (drag): just set.
-            self.setter.set_parameter(param, value);
+            self.host.set_parameter(row, value);
         } else {
             // One-shot change: implicit single-value gesture.
-            self.setter.begin_set_parameter(param);
-            self.setter.set_parameter(param, value);
-            self.setter.end_set_parameter(param);
+            self.host.begin_set_parameter(row);
+            self.host.set_parameter(row, value);
+            self.host.end_set_parameter(row);
         }
     }
 
     fn analysis_input(&self) -> Option<AnalysisInput> {
-        Some(self.params.analysis_input.value().into())
+        Some(self.params.analysis_input())
     }
 
     fn set_analysis_input(&self, input: AnalysisInput) {
-        let param = &self.params.analysis_input;
-        self.setter.begin_set_parameter(param);
-        self.setter.set_parameter(param, input.into());
-        self.setter.end_set_parameter(param);
+        let row = Row::AnalysisInput.index();
+        let index = ANALYSIS_INPUTS.iter().position(|candidate| *candidate == input);
+        self.host.begin_set_parameter(row);
+        self.host.set_parameter(row, index.expect("an analysis input has a row value") as f32);
+        self.host.end_set_parameter(row);
     }
 
     fn begin_set(&self, key: ParamKey) {
@@ -470,12 +525,7 @@ impl PluginParamBackend<'_> {
         let mut gestures = self.gestures.get();
         if gestures.begin(gesture) {
             self.gestures.set(gestures);
-            match gesture {
-                Gesture::Param(key) => self.setter.begin_set_parameter(self.params.param_for(key)),
-                Gesture::Lane(axis, lane) => self
-                    .setter
-                    .begin_set_parameter(lattice_maps::lane_param(self.params, axis, lane)),
-            }
+            self.host.begin_set_parameter(gesture.row().index());
         }
     }
 
@@ -486,7 +536,7 @@ impl PluginParamBackend<'_> {
             self.gestures.set(gestures);
             let mut only = editor::gestures::Gestures::default();
             only.begin(gesture);
-            editor::gestures::end(only, self.params, self.setter);
+            editor::gestures::end(only, self.host);
         }
     }
 }
@@ -610,11 +660,11 @@ fn take_stereo_frame(input: &Buffer<'_>, frame: usize) -> [f32; TAKE_CHANNELS] {
 fn selected_analysis_input<'a, T>(
     main: &'a T,
     sidechain: Option<&'a T>,
-    input: AnalysisInputParam,
+    input: AnalysisInput,
 ) -> &'a T {
     match input {
-        AnalysisInputParam::Main => main,
-        AnalysisInputParam::Sidechain => sidechain.unwrap_or(main),
+        AnalysisInput::Main => main,
+        AnalysisInput::Sidechain => sidechain.unwrap_or(main),
     }
 }
 
@@ -674,40 +724,6 @@ impl Default for Harmonigraph {
 }
 
 impl Plugin for Harmonigraph {
-    fn filter_state(state: &mut nice_plug::plugin::PluginState) {
-        // Plain restore bypasses IntParam's range normalization, while the
-        // host's label clamps. Clamp all six lanes, Map Follow, the engine and
-        // the map index, so the value loaded is the value shown. Any of them
-        // absent takes its default so a previous preset cannot leak in: every
-        // state the plugin saves carries all of them, so only an older or
-        // hand-made one omits any. The retired `tuning-*` ids of a project
-        // saved before #1756 need nothing here: nice-plug drops an id it does
-        // not know, and the musical settings' restore says so.
-        use nice_plug::plugin::ParamValue;
-        for id in lattice_maps::HOST_LANE_IDS {
-            let value = match state.params.get(id) {
-                Some(ParamValue::I32(value)) => (*value).clamp(-OFFSET_LIMIT, OFFSET_LIMIT),
-                _ => 0,
-            };
-            state.params.insert(id.into(), ParamValue::I32(value));
-        }
-        let follow = match state.params.get("map-follow") {
-            Some(ParamValue::I32(value)) => Follow::from_index(*value),
-            _ => Follow::default(),
-        };
-        state.params.insert("map-follow".into(), ParamValue::I32(follow.index()));
-        let engine = match state.params.get("tuning-engine") {
-            Some(ParamValue::I32(value)) => TuningEngine::from_index(*value),
-            _ => TuningEngine::default(),
-        };
-        state.params.insert("tuning-engine".into(), ParamValue::I32(engine.index()));
-        let map = match state.params.get("lattice-map") {
-            Some(ParamValue::I32(value)) => (*value).clamp(0, lattice_maps::LAST_MAP),
-            _ => 0,
-        };
-        state.params.insert("lattice-map".into(), ParamValue::I32(map));
-    }
-
     const NAME: &'static str = "Harmonigraph";
     const VENDOR: &'static str = "Yan Han";
     const URL: &'static str = env!("CARGO_PKG_HOMEPAGE");
@@ -741,8 +757,8 @@ impl Plugin for Harmonigraph {
     type SysExMessage = ();
     type BackgroundTask = ();
 
-    fn params(&self) -> Arc<dyn Params> {
-        self.params.clone()
+    fn params(&self) -> Arc<Table> {
+        self.params.table.clone()
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
@@ -855,7 +871,7 @@ impl Plugin for Harmonigraph {
         // source position explicitly resets analysis across that gap.
         // Read the parameter and choose ONCE per block: the same buffer goes to
         // the live ring below and the take recorder after it.
-        let selected = self.params.analysis_input.value();
+        let selected = self.params.analysis_input();
         // The tape first, so the analyzer and anything after Harmonigraph hear
         // what is played: the live input plus an audition. It sounds only
         // while the transport is stopped, and records only while it rolls, so
@@ -867,7 +883,7 @@ impl Plugin for Harmonigraph {
                 playing: transport.playing,
                 frames: block_samples,
                 rate: self.sample_rate,
-                enabled: selected == AnalysisInputParam::Main && !self.offline,
+                enabled: selected == AnalysisInput::Main && !self.offline,
             },
             buffer.as_slice(),
         );
@@ -879,7 +895,7 @@ impl Plugin for Harmonigraph {
             audio_ingress::Format {
                 channels,
                 sample_rate: self.sample_rate as f32,
-                sidechain: selected == AnalysisInputParam::Sidechain,
+                sidechain: selected == AnalysisInput::Sidechain,
             },
             self.presentation_seconds,
             tape.song.map(|seconds| audio_ingress::Song { seconds, meter: tape_meter(transport) }),
@@ -894,7 +910,7 @@ impl Plugin for Harmonigraph {
         // timed on the take's own clock and placed by that run.
         let recorded = self.configuration.as_ref().filter(|_| self.take.recording());
         if let Some(at) = recorded.map(|owner| owner.take_time()) {
-            self.take.params(at, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
+            self.take.params(at, ParamKey::ALL.map(|key| self.params.camera(key)));
 
             // The take's own audio, when asked for: the selected analysis input
             // exactly as it arrives, so the render gets a spectrum and a
@@ -926,7 +942,7 @@ impl ClapPlugin for Harmonigraph {
     fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
         Some(Arc::new(configuration::HubSetup {
             instance: tuning::setup::Adapter(self.aggregation.as_ref().unwrap().shared.clone()),
-            settings: self.params.settings.clone(),
+            params: self.params.clone(),
         }))
     }
     fn clap_editor_host(&mut self, host: Arc<dyn nice_plug::wrapper::clap::EditorHost>) {
@@ -1025,16 +1041,6 @@ impl ClapPlugin for Harmonigraph {
         }
     }
     const CLAP_CONFIGURATION: bool = true;
-    const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] = &[
-        "lattice-map",
-        "map-fifths",
-        "map-thirds",
-        "map-sevenths",
-        "map-fifths-extension",
-        "map-thirds-extension",
-        "map-sevenths-extension",
-        "map-follow",
-    ];
     fn clap_configuration_begin(
         &mut self,
         boundary: nice_plug::wrapper::clap::configuration::ConfigurationBoundary,
@@ -1078,8 +1084,6 @@ nice_export_clap!(Harmonigraph, HarmonigraphTune);
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
-
-    use nice_plug::params::InternalParamMut;
 
     use super::*;
 
@@ -1337,15 +1341,23 @@ mod tests {
         );
     }
 
-    /// What a host save stores in `ui-state`: through the derived
-    /// `serialize_fields`, which is what a host save calls, on the real plugin
-    /// whose `Default` attaches the editor state — a `UiState` attached by
-    /// hand would pass these tests and reach nothing a host saves.
+    /// What a host save stores in `ui-state`: through `saved_fields::save`,
+    /// which is what a host save calls, on the real plugin whose `Default`
+    /// attaches the editor state — a `UiState` attached by hand would pass
+    /// these tests and reach nothing a host saves.
     fn saved(plugin: &Harmonigraph) -> String {
-        use nice_plug::params::Params;
-
-        let field = plugin.params.serialize_fields().remove("ui-state").expect("ui-state saved");
+        let mut state = empty_state();
+        saved_fields::save(&plugin.params, &mut state);
+        let field = state.fields.remove("ui-state").expect("ui-state saved");
         serde_json::from_str(&field).expect("the field is a JSON string")
+    }
+
+    fn empty_state() -> nice_plug::plugin::PluginState {
+        nice_plug::plugin::PluginState {
+            version: String::new(),
+            params: Default::default(),
+            fields: Default::default(),
+        }
     }
 
     /// [`saved`], read back as the camera yaw.
@@ -1355,17 +1367,15 @@ mod tests {
         state.picture.appearance.camera.yaw
     }
 
-    /// A host restore of `blob`: through the derived `deserialize_fields`,
-    /// which is what a host's state load calls, so it reaches `UiState::set`
-    /// the way a project or preset load does.
+    /// A host restore of `blob`: through `saved_fields`' prepare and commit,
+    /// which is what a host's state load calls, so it reaches
+    /// `UiState::restore` the way a project or preset load does.
     fn restore(plugin: &Harmonigraph, blob: &str) {
-        use nice_plug::params::Params;
+        use nice_plug::wrapper::clap::setup::Prepared;
 
-        let field = serde_json::to_string(blob).expect("a string serializes");
-        plugin.params.deserialize_fields(&std::collections::BTreeMap::from([(
-            "ui-state".to_string(),
-            field,
-        )]));
+        let mut state = empty_state();
+        state.fields.insert("ui-state".into(), serde_json::to_string(blob).unwrap());
+        Box::new(saved_fields::prepare(&plugin.params, &state)).commit();
     }
 
     /// A host restore of a project whose camera yaw is `yaw`, and its blob.
@@ -1548,37 +1558,18 @@ mod tests {
     }
 
     /// `ParamKey::id` is what a recorded take names its automation by, and
-    /// what the host names its automation lanes by. They are declared in
-    /// two places — the enum's `id()` and the `#[id = "..."]` attributes
-    /// here — and if they drift, takes silently replay with default
-    /// parameters and projects silently lose their automation. The one
-    /// operational parameter is named separately: it selects which audio is
-    /// recorded rather than describing a value the replay must reconstruct.
+    /// what the host names its automation lanes by. If a key's row drifts from
+    /// its id, takes silently replay with default parameters and projects
+    /// silently lose their automation.
     #[test]
     fn every_param_key_id_matches_the_host_facing_id() {
         let params = HarmonigraphParams::default();
-        let host_ids: Vec<String> = params.param_map().into_iter().map(|(id, _, _)| id).collect();
         for key in ParamKey::ALL {
-            assert!(
-                host_ids.iter().any(|id| id == key.id()),
-                "ParamKey::{key:?} claims id {:?}, which no #[id] attribute declares; \
-                 the host exposes {host_ids:?}",
-                key.id(),
-            );
+            assert_eq!(params.table.spec(Row::camera(key).index()).id, key.id(), "{key:?}");
         }
-        let operational: Vec<&str> =
-            ["analysis-input", "lattice-map", "tuning-engine", "map-follow"]
-                .into_iter()
-                .chain(lattice_maps::HOST_LANE_IDS)
-                .collect();
-        for &id in &operational {
-            assert!(host_ids.iter().any(|host| host == id), "missing operational parameter {id}");
+        for (index, row) in Row::ALL.into_iter().enumerate() {
+            assert_eq!(row.index(), index, "{row:?} is not at its own index");
         }
-        assert_eq!(
-            host_ids.len(),
-            ParamKey::ALL.len() + operational.len(),
-            "the plugin exposes an unnamed operational parameter: {host_ids:?}"
-        );
     }
 
     /// Saved projects and automation hold these integers and hosts show these
@@ -1588,31 +1579,31 @@ mod tests {
     #[test]
     fn map_and_engine_parameters_keep_their_host_contract() {
         let params = HarmonigraphParams::default();
-        let contract = |param: &IntParam| {
-            let range = param.preview_plain(0.0)..=param.preview_plain(1.0);
-            let labels: Vec<String> = range
-                .clone()
-                .map(|value| {
-                    param.normalized_value_to_string(param.preview_normalized(value), false)
-                })
-                .collect();
-            (param.name().to_owned(), param.default_plain_value(), range, labels)
+        let contract = |row: Row| {
+            let spec = params.table.spec(row.index());
+            let (low, high) = (spec.unnormalize(0.0) as i32, spec.unnormalize(1.0) as i32);
+            let labels: Vec<String> =
+                (low..=high).map(|value| spec.text(spec.to_host(value as f32))).collect();
+            (spec.name.to_owned(), spec.default as i32, low..=high, labels)
         };
         let words = |labels: &[&str]| labels.iter().map(|&label| label.to_owned()).collect();
         assert_eq!(
-            contract(&params.tuning_engine),
+            contract(Row::TuningEngine),
             ("Note Retuning".into(), 0, 0..=2, words(&["Pass through", "Adaptive", "Lattice Map"]))
         );
         assert_eq!(
-            contract(&params.map_follow),
+            contract(Row::MapFollow),
             ("Map Follow".into(), 0, 0..=2, words(&["Off", "Thirds", "Thirds and fifths"]))
         );
-        let (name, default, range, _) = contract(&params.map);
+        let (name, default, range, _) = contract(Row::LatticeMap);
         assert_eq!((name.as_str(), default, range), ("Lattice Map", 0, 0..=127));
         let fine: Vec<String> = (-9..=9).map(|value: i32| value.to_string()).collect();
         let extension: Vec<String> = (-9..=9).map(|value: i32| (value * 10).to_string()).collect();
+        // Each lane in `LANES` is the row of its id.
+        let lane_ids = harmonigraph_ui::lattice_maps::LANES
+            .map(|(axis, grain)| params.table.spec(lattice_maps::lane_row(axis, grain).index()).id);
         assert_eq!(
-            lattice_maps::HOST_LANE_IDS,
+            lane_ids,
             [
                 "map-fifths",
                 "map-thirds",
@@ -1622,36 +1613,27 @@ mod tests {
                 "map-sevenths-extension",
             ]
         );
-        // Each id is the parameter its lane in `LANES` names.
-        let host = params.param_map();
-        let lanes = harmonigraph_ui::lattice_maps::LANES;
-        for (id, (axis, grain)) in lattice_maps::HOST_LANE_IDS.into_iter().zip(lanes) {
-            let lane = lattice_maps::lane_param(&params, axis, grain);
-            assert!(
-                host.iter().any(|(host_id, ptr, _)| host_id == id
-                    && matches!(ptr, ParamPtr::IntParam(p) if std::ptr::eq(*p, lane))),
-                "{id} is not the {axis:?} {grain:?} lane"
-            );
-        }
-        let non_modulatable: Vec<&str> = ["lattice-map"]
-            .into_iter()
-            .chain(lattice_maps::HOST_LANE_IDS)
-            .chain(["map-follow"])
+        let non_modulatable: Vec<&str> = (0..params.table.len())
+            .map(|row| params.table.spec(row))
+            .filter(|spec| spec.automatable && !spec.modulatable)
+            .map(|spec| spec.id)
             .collect();
-        assert_eq!(Harmonigraph::CLAP_NON_MODULATABLE_PARAMS, non_modulatable);
-        for (param, name, labels) in [
-            (&params.map_fifths, "Map Fifths", &fine),
-            (&params.map_thirds, "Map Thirds", &fine),
-            (&params.map_sevenths, "Map Sevenths", &fine),
-            (&params.map_fifths_extension, "Map Fifths x10", &extension),
-            (&params.map_thirds_extension, "Map Thirds x10", &extension),
-            (&params.map_sevenths_extension, "Map Sevenths x10", &extension),
+        let expected: Vec<&str> =
+            ["lattice-map"].into_iter().chain(lane_ids).chain(["map-follow"]).collect();
+        assert_eq!(non_modulatable, expected);
+        for (row, name, labels) in [
+            (Row::MapFifths, "Map Fifths", &fine),
+            (Row::MapThirds, "Map Thirds", &fine),
+            (Row::MapSevenths, "Map Sevenths", &fine),
+            (Row::MapFifthsExtension, "Map Fifths x10", &extension),
+            (Row::MapThirdsExtension, "Map Thirds x10", &extension),
+            (Row::MapSeventhsExtension, "Map Sevenths x10", &extension),
         ] {
-            assert_eq!(contract(param), (name.into(), 0, -9..=9, labels.clone()));
+            assert_eq!(contract(row), (name.into(), 0, -9..=9, labels.clone()));
         }
-        let parse = |text| params.map_fifths_extension.string_to_normalized_value(text);
-        assert_eq!(parse("-90"), Some(params.map_fifths_extension.preview_normalized(-9)));
-        assert_eq!(parse("95"), None, "an extension lane takes whole tens");
+        let spec = params.table.spec(Row::MapFifthsExtension.index());
+        assert_eq!(spec.parse("-90"), Some(spec.to_host(-9.0)));
+        assert_eq!(spec.parse("95"), None, "an extension lane takes whole tens");
     }
 
     /// The source choice belongs to the host's project state and is read on the
@@ -1662,9 +1644,13 @@ mod tests {
     #[test]
     fn analysis_input_is_a_stable_non_automatable_main_default() {
         let params = HarmonigraphParams::default();
-        assert_eq!(params.analysis_input.value(), AnalysisInputParam::Main);
-        assert!(params.analysis_input.flags().contains(ParamFlags::NON_AUTOMATABLE));
-        assert_eq!(AnalysisInputParam::ids(), Some(["main", "sidechain"].as_slice()));
+        assert_eq!(params.analysis_input(), AnalysisInput::Main);
+        let spec = params.table.spec(Row::AnalysisInput.index());
+        assert!(!spec.automatable);
+        assert!(matches!(
+            spec.kind,
+            nice_plug::params::Kind::Enum { ids: &["main", "sidechain"], .. }
+        ));
     }
 
     /// The descriptor is what makes the host show its sidechain routing control.
@@ -1693,11 +1679,8 @@ mod tests {
     #[test]
     fn a_sidechain_process_block_feeds_analysis_and_leaves_main_untouched() {
         let mut plugin = Harmonigraph::default();
-        // SAFETY: this emulates the host wrapper setting a parameter while the
-        // owned parameter object remains alive for the whole process call.
-        assert!(unsafe {
-            plugin.params.analysis_input._internal_set_plain_value(AnalysisInputParam::Sidechain)
-        });
+        plugin.params.set(Row::AnalysisInput, 1.0);
+        assert_eq!(plugin.params.analysis_input(), AnalysisInput::Sidechain);
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
         let shared = &mut *shared;
@@ -1737,17 +1720,14 @@ mod tests {
     #[test]
     fn analysis_input_selection_never_falls_back_on_signal_content() {
         let (main, sidechain) = (11, 0);
+        assert_eq!(*selected_analysis_input(&main, Some(&sidechain), AnalysisInput::Main), main,);
         assert_eq!(
-            *selected_analysis_input(&main, Some(&sidechain), AnalysisInputParam::Main),
-            main,
-        );
-        assert_eq!(
-            *selected_analysis_input(&main, Some(&sidechain), AnalysisInputParam::Sidechain),
+            *selected_analysis_input(&main, Some(&sidechain), AnalysisInput::Sidechain),
             sidechain,
             "a silent sidechain fell back to the main input",
         );
         assert_eq!(
-            *selected_analysis_input(&main, None, AnalysisInputParam::Sidechain),
+            *selected_analysis_input(&main, None, AnalysisInput::Sidechain),
             main,
             "a missing auxiliary buffer has no safe source except Main",
         );
