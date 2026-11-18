@@ -432,7 +432,7 @@ impl MapView {
             && self.playback.map.is_some()
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MapAxis {
     Fifths,
     Thirds,

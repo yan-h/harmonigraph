@@ -218,7 +218,7 @@ dependencies = [
 [[package]]
 name = "baseview"
 version = "0.1.4"
-source = "git+https://github.com/yan-h/egui-plugin-window?rev=52e3e73ad805f20672798b03fc6f9b5ba2f4b479#52e3e73ad805f20672798b03fc6f9b5ba2f4b479"
+source = "git+https://github.com/yan-h/egui-plugin-window?rev=d8ae9969b022735405a327e1b32928e4965ee020#d8ae9969b022735405a327e1b32928e4965ee020"
 dependencies = [
  "block2 0.6.2",
  "keyboard-types",
@@ -931,7 +931,7 @@ dependencies = [
 [[package]]
 name = "egui-baseview"
 version = "0.3.0"
-source = "git+https://github.com/yan-h/egui-plugin-window?rev=52e3e73ad805f20672798b03fc6f9b5ba2f4b479#52e3e73ad805f20672798b03fc6f9b5ba2f4b479"
+source = "git+https://github.com/yan-h/egui-plugin-window?rev=d8ae9969b022735405a327e1b32928e4965ee020#d8ae9969b022735405a327e1b32928e4965ee020"
 dependencies = [
  "baseview",
  "block2 0.6.2",
@@ -2470,7 +2470,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
  "bitflags 2.13.2",
- "block2 0.6.2",
  "dispatch2",
  "objc2 0.6.4",
 ]

@@ -6,6 +6,7 @@
 
 mod clock;
 mod frame;
+pub(crate) mod gestures;
 pub(crate) mod input;
 mod lock;
 mod persist;

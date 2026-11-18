@@ -736,10 +736,11 @@ impl SharedState {
         self.picture.appearance.spectrum.atmosphere.stars.star_solo = Default::default();
     }
 
-    /// The window is closing: an appearance edit still open, a drag the close
-    /// cut off, becomes one undo entry. The plugin's close calls this before
-    /// it refreshes a save's fallback, so the fallback holds the session.
-    pub fn end_window_session(&mut self) {
+    /// The editor is closing, or has stopped being seen: an appearance edit
+    /// still open, a drag that cut off, becomes one undo entry. The plugin's
+    /// close calls this before it refreshes a save's fallback, so the fallback
+    /// holds the session.
+    pub fn finish_open_edit(&mut self) {
         self.workspace.interaction.appearance_editor.end_window_session(&self.picture.appearance);
     }
 }

@@ -7,10 +7,10 @@ The log comes from the plugin's `--features frame-log` build
 
 The run is split into phases at every change of the chosen Editor frame rate
 (the `chosen` column) and at every frame the display link did not ask for, so
-frames an unseen editor draws, and the silence around them, count in no phase.
-A log recorded on an egui-plugin-window pin from before an unseen editor
-stopped running frames carries a 10 Hz watchdog's frames there; one recorded
-after carries none, and either splits the same way. A log written before the `chosen` column existed is read as chosen at
+the time an unseen editor runs no frames, and the reveal's frame after it,
+count in no phase. A log recorded before an unseen editor stopped running
+frames (egui-plugin-window #4) carries a 10 Hz watchdog's frames there
+instead, and splits the same way. A log written before the `chosen` column existed is read as chosen at
 its `divisor`, which holds for one recorded before #1692 slowed a still
 editor's link; one recorded between the two cannot be told apart, so record
 it again. A log written before the `divisor` column existed is read as all
@@ -284,10 +284,10 @@ def stretch(frames, start, end):
     ms = [m for m in map(measure, runs) if m['refreshes']]
     drawn = sum(1 for fr in inside if fr['submitted'])
     # Visible: the time the display link paced frames, less every gap of
-    # over UNSHOWN_GAP between drawn ones. A minimized editor draws no frames
-    # (in an older log, only the watchdog's), and a covered one draws none or
-    # refuses every present, so neither says how often it asks to draw while
-    # it is seen.
+    # over UNSHOWN_GAP between drawn ones. A minimized or covered editor runs
+    # no frames (in an older log, only the watchdog's, and a covered one's
+    # presents refused), so neither says how often it asks to draw while it is
+    # seen.
     visible, paced = 0.0, 0
     for p in runs:
         edges = [p[0]['t']] + [fr['t'] for fr in p if fr['submitted']] + [p[-1]['t']]

@@ -256,8 +256,9 @@ impl AppearanceEditor {
                 ctx.request_repaint();
             }
         } else {
-            // Read by the text edit, and kept from the host by its focus: claimed
-            // as well for a frame that ends the edit, which the next one undoes on.
+            // Read by the text edit, the editor's by the shell's text-field rule:
+            // claimed as well for a frame that ends the edit, which the next one
+            // undoes on.
             crate::keys::claim(ctx, APPEARANCE_SHORTCUTS);
         }
         if let Some(command) = self.command.take() {

@@ -51,7 +51,7 @@ pub(super) fn frame(
     let shared = &mut *guard;
 
     // The display link's timing for this frame, or `None` for one it did not ask
-    // for (an occlusion repaint, or the watchdog's where the window keeps one).
+    // for (the reveal's, run from the occlusion notification).
     let timing = queue.frame_timing();
     // A stalled run loop (run-loop mode issues, a host blocking its main
     // thread), so freezes stay attributable: measured by the window on every
@@ -76,7 +76,7 @@ pub(super) fn frame(
     shared.ui.picture.appearance.sync_camera(&PluginParamBackend {
         params: &state.params,
         setter: &setter,
-        gesture: &shared.gesture,
+        gestures: &shared.gestures,
         configuration,
     });
     // Last frame's costs that the shell measures and the UI cannot: they
@@ -120,7 +120,7 @@ pub(super) fn frame(
         let backend = PluginParamBackend {
             params: &state.params,
             setter: &setter,
-            gesture: &shared.gesture,
+            gestures: &shared.gestures,
             configuration,
         };
         let drawn = Instant::now();
@@ -162,12 +162,12 @@ pub(super) fn frame(
     // AFTER the UI has run, so a rate picked this frame takes effect on the
     // next refresh rather than the one after it.
     queue.set_frame_divisor(shared.ui.workspace.interaction.prefs.frame_rate.divisor());
-    queue.set_focus_takes_only_arrows(harmonigraph_ui::plot_handle_focused(ui.ctx()));
-    // What this frame took, kept from the host until the next frame says
+    // What this frame claimed, the editor's until the next frame says
     // otherwise: a key arrives between frames (see `harmonigraph_ui::keys`).
-    queue.set_key_capture(egui_baseview::KeyCapture::CaptureShortcuts(
-        harmonigraph_ui::keys::claimed(ui.ctx()),
-    ));
+    // A focused text field's own keys, and the shell's own Escape and Cmd-C
+    // claims (a drag, a popup, a selected label), are the editor's too; every
+    // other key goes to the host.
+    queue.set_shortcuts(&harmonigraph_ui::keys::claimed(ui.ctx()));
 }
 
 /// The gap between display frames, in seconds, past which a pass logs a stall:

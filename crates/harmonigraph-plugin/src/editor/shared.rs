@@ -20,8 +20,8 @@ pub struct EditorShared {
     /// [`EditorLock`](super::EditorLock)) — and it logs a failure to start
     /// into the same console. Its tests read back the history it filled.
     pub(crate) ui: SharedState,
-    /// Active begin_set/end_set automation gestures, including simultaneous camera axes.
-    pub(super) gesture: std::cell::Cell<[bool; harmonigraph_ui::params::ParamKey::ALL.len()]>,
+    /// The host gestures the editor holds open ([`super::gestures`]).
+    pub(crate) gestures: std::cell::Cell<super::gestures::Gestures>,
     /// Take recording, driven from the Video pane's toggle.
     ///
     /// `pub(crate)` for the same reason [`ui`](Self::ui) is: the input worker
@@ -68,7 +68,7 @@ impl EditorShared {
                 recorder: Default::default(),
             },
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
-            gesture: std::cell::Cell::new([false; harmonigraph_ui::params::ParamKey::ALL.len()]),
+            gestures: Default::default(),
             take,
             take_rolling: false,
             take_last_count: 0,

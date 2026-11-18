@@ -80,8 +80,6 @@ pub(crate) use timing::{fade, response};
 #[cfg(test)]
 mod direct_tests;
 
-pub use plot::handle_focused as plot_handle_focused;
-
 /// Whether `response`'s widget holds egui's keyboard focus, whether or not the
 /// window has the keyboard. `Response::has_focus` also asks the window, which
 /// both shells report, so state kept on it (an open entry, a draft) would let

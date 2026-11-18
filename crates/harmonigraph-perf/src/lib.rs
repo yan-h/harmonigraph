@@ -143,9 +143,8 @@ pub struct ShellTimings {
     pub submit_ms: f32,
     /// The frame rate the display link was asked for this frame (see
     /// [`link_target_fps`]), or `None` for a frame the link did not ask for —
-    /// the occlusion repaint's, and on window pins that keep one the
-    /// watchdog's — and wherever no link drives
-    /// the window at all. The overlay keeps the last `Some` it saw
+    /// the one a window back from occlusion runs from the notification — and
+    /// wherever no link drives the window at all. The overlay keeps the last `Some` it saw
     /// ([`PerfStats::target_fps`]).
     pub target_fps: Option<f32>,
 }
@@ -585,8 +584,8 @@ pub struct PerfStats {
     pub spec_uploads: f32,
     /// The frame rate the display link was last asked for, which the headline
     /// rate is judged against. Kept across the frames the link did not ask for
-    /// (the occlusion repaint's, and the watchdog's where the window keeps
-    /// one, which carry none), so one
+    /// (a reveal's, run from the occlusion notification, which carries
+    /// none), so one
     /// of them does not drop the colour back to the fixed thresholds. `None`
     /// where no link ever paced the window: the standalone.
     pub target_fps: Option<f32>,
@@ -742,6 +741,11 @@ impl PerfStats {
     pub fn record(&mut self, costs: FrameCosts, now: f64, workload: Workload) {
         let dt = self.last_frame.map_or(0.0, |last| (now - last) as f32);
         self.last_frame = Some(now);
+        // A frame the link did not ask for, where a link paces the window, is
+        // the reveal's after the editor was unseen, when no frame runs: its
+        // interval is the time unseen, no frame interval, so it is dropped.
+        // The standalone, which no link paces, keeps every interval.
+        let unpaced = costs.target_fps.is_none() && self.target_fps.is_some();
         // A frame the link did not ask for carries no target; keep the last.
         self.target_fps = costs.target_fps.or(self.target_fps);
         // Every stage the frame's costs answer for, off the table — so a stage
@@ -757,7 +761,7 @@ impl PerfStats {
         //
         // The first frame has nothing to measure an interval against, so it
         // contributes no sample rather than a zero that would drag the mean.
-        if dt > 0.0 {
+        if dt > 0.0 && !unpaced {
             self.windows[Stage::Frame as usize].record(dt * 1000.0);
         }
         if let Some(ms) = costs.draw_gpu_ms {
@@ -992,8 +996,8 @@ mod tests {
         assert_eq!(link_target_fps(0.0, 1), None, "a refresh period of nothing is no target");
     }
 
-    /// The occlusion repaint, and the watchdog where the window keeps one, run
-    /// frames the display link did not ask for, and those carry no target. The overlay keeps the last one
+    /// A window back from occlusion runs a frame from the notification, which
+    /// the display link did not ask for, and that carries no target. The overlay keeps the last one
     /// it was given rather than judging such a frame against the fixed
     /// thresholds, which would flip a divided rate's colour for a tick.
     #[test]
@@ -1008,6 +1012,30 @@ mod tests {
         assert_eq!(perf.target_fps, Some(36.0), "a frame without link timing keeps the target");
         perf.record(costs(Some(72.0)), 3.0, workload);
         assert_eq!(perf.target_fps, Some(72.0), "a new target replaces it");
+    }
+
+    /// The reveal's frame after the editor was unseen, which the link did not
+    /// ask for, ends no frame interval: the time unseen would read as a stall.
+    #[test]
+    fn the_time_unseen_is_no_frame_interval() {
+        let mut perf = PerfStats::default();
+        let workload = Workload::default();
+        let costs = |target_fps| FrameCosts { target_fps, ..Default::default() };
+        let mut now = 0.0;
+        for _ in 0..30 {
+            now += 1.0 / 60.0;
+            perf.record(costs(Some(60.0)), now, workload);
+        }
+        // Ten seconds unseen, then the reveal's frame and link frames again,
+        // long enough for the readout to close a window over them.
+        now += 10.0;
+        perf.record(costs(None), now, workload);
+        for _ in 0..30 {
+            now += 1.0 / 60.0;
+            perf.record(costs(Some(60.0)), now, workload);
+        }
+        let worst = perf.window(Stage::Frame).shown_peak;
+        assert!(worst < 20.0, "the readout shows a {worst:.0} ms frame after a reveal");
     }
 
     #[test]

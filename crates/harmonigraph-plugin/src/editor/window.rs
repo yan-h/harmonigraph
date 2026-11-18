@@ -241,6 +241,24 @@ impl Editor for LatticeEditor {
             Some(Size::new(f64::from(width), f64::from(height)))
         });
 
+        // The editor stopped being seen (covered, minimized, ordered out, on
+        // another Space, or its view hidden or moved into a window not yet on
+        // screen): no frame runs until it is seen again, so what a frame would
+        // end is ended here. An open look edit becomes one undo entry, and
+        // every host gesture the editor holds is ended, with the editor lock
+        // free (`EditorLock::end_unseen`). baseview calls this on the main
+        // thread, outside its handler's borrow; it can come inside this
+        // editor's own moves of its view (`PopOut`'s pop and dock), none of
+        // which holds the editor lock or the pop-out's state borrow.
+        let unseen = {
+            let (shared, params, context) =
+                (self.shared.clone(), self.params.clone(), context.clone());
+            egui_baseview::baseview::UnseenNotice::new(move || {
+                let Some(open) = shared.end_unseen() else { return };
+                let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
+                super::gestures::end(open, &params, &setter);
+            })
+        };
         let mut graphics = graphics_config();
         graphics.shared_context = Some(self.shared.lock().gpu_context.clone());
         let closing_context = context.clone();
@@ -255,6 +273,7 @@ impl Editor for LatticeEditor {
                 )
                 .with_graphics_config(graphics)
                 .with_size_source(size_source)
+                .with_unseen_notice(unseen)
                 .with_pass_request(self.egui_state.pass_request.clone()),
             WindowState::new(self.shared.clone(), self.params.clone(), Arc::downgrade(&pop_out)),
             |egui_ctx: &Context, _queue, state: &mut WindowState| {
@@ -368,19 +387,14 @@ unsafe impl Send for LatticeEditorHandle {}
 
 impl Drop for LatticeEditorHandle {
     fn drop(&mut self) {
-        // The session ends, and the host's gestures with it, under the lock
-        // (see `EditorLock::end_window_session` on why in that order). The
+        // The session ends under the lock, and the host's gestures once it is
+        // let go (see `EditorLock::end_window_session`). The
         // input worker ages the picture whether or not the window is open, so
         // where `open` is cleared below sets only its poll rate and whether
         // the tape treats its roll as drawn (`tape::Worker::exchange`).
+        let open = self.shared.end_window_session();
         let setter = nice_plug::prelude::ParamSetter::new(self.context.as_ref());
-        self.shared.end_window_session(|gestures| {
-            for (key, active) in harmonigraph_ui::params::ParamKey::ALL.into_iter().zip(gestures) {
-                if active {
-                    setter.end_set_parameter(self.params.param_for(key));
-                }
-            }
-        });
+        super::gestures::end(open, &self.params, &setter);
         // The editor's own window closes with the editor rather than
         // outliving it empty, and the host's is shown again.
         self.pop_out.close();
