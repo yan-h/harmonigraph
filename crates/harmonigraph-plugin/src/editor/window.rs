@@ -170,7 +170,8 @@ impl Editor for LatticeEditor {
         // macOS is also why there is nothing to listen to instead: baseview
         // raises `Resized` there for the initial size and for backing-property
         // changes, and for nothing else — a host resizing the parent view
-        // reaches the plugin only as `Editor::set_size`, on another thread.
+        // reaches the plugin only as `Editor::set_size`, a CLAP `gui` call and
+        // so on the main thread, outside this window's callbacks.
         let resized = self.egui_state.clone();
         let logging = self.shared.clone();
         let asking = context.clone();
@@ -312,7 +313,9 @@ impl Editor for LatticeEditor {
         // it: what arrives from there is mostly its echo of the editor's own.
         // Stored, it would be what a save keeps until the own window next
         // resized, however long the editor went unseen. Accepted all the
-        // same, as the host's window may be sized as the host likes.
+        // same, as the host's window may be sized as the host likes. CLAP
+        // makes this call on the main thread, where `PopOut` moves the view
+        // and sets the flag, so the two cannot interleave.
         if self.egui_state.in_own_window() {
             return true;
         }
@@ -368,7 +371,8 @@ impl Drop for LatticeEditorHandle {
         // The session ends, and the host's gestures with it, under the lock
         // (see `EditorLock::end_window_session` on why in that order). The
         // input worker ages the picture whether or not the window is open, so
-        // where `open` is cleared below sets only its poll rate.
+        // where `open` is cleared below sets only its poll rate and whether
+        // the tape treats its roll as drawn (`tape::Worker::exchange`).
         let setter = nice_plug::prelude::ParamSetter::new(self.context.as_ref());
         self.shared.end_window_session(|gestures| {
             for (key, active) in harmonigraph_ui::params::ParamKey::ALL.into_iter().zip(gestures) {

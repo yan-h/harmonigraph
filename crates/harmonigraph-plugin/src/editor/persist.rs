@@ -38,11 +38,12 @@ pub struct EguiState {
     #[serde(default)]
     docked: AtomicBool,
     /// The editor's view is in its own window right now, which then has the
-    /// say over its size (see `PopOut`). Set as the view moves, so a host
-    /// `set_size`, which arrives outside the window's callbacks, can tell
-    /// without reaching for the window; not [`Self::docked`], the setting,
-    /// which the move follows a run-loop turn later, and which reads "own
-    /// window" on a platform that offers none.
+    /// say over its size (see `PopOut`). Set as the view moves, on the main
+    /// thread, where a host `set_size` also arrives (a CLAP `gui` call), so
+    /// the two are ordered. Here because the editor that receives `set_size`
+    /// does not hold the window, whose state is bound to the main thread; not
+    /// [`Self::docked`], the setting, which the move follows a run-loop turn
+    /// later, and which reads "own window" on a platform that offers none.
     #[serde(skip)]
     in_own_window: AtomicBool,
 }
