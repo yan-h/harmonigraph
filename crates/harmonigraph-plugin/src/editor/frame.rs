@@ -61,13 +61,9 @@ pub(super) fn frame(
         shared.ui.picture.runtime.console.log(format!("frame stall: {ms:.0} ms between updates"));
     }
 
-    // The input worker ([`crate::background`]) drains the rings and runs the
-    // analysis, and a frame reads what it left — unless it never started.
+    // The input worker ([`crate::background`]) drains the rings, runs the
+    // analysis and polls the take's end; a frame reads what it left.
     let now = shared.input.now();
-    if shared.frame_drains {
-        let runtime = &mut shared.ui.picture.runtime;
-        shared.input.drain(runtime, &shared.ui.picture.appearance, now);
-    }
     // Drained on the clock it arrived by, drawn at the refresh it is for.
     let wall = shared.input.frame_wall(timing, now);
     let now = shared.input.display_now(wall);

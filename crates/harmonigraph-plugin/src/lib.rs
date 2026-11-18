@@ -1203,48 +1203,34 @@ mod tests {
         plugin.take.publish_clock(plugin.presentation_seconds);
     }
 
-    /// The running input worker ages the picture with no frame running, with
-    /// the editor open as well as shut: a frame runs only while the editor
-    /// can be seen, so an open editor that is covered or minimized would
-    /// otherwise keep every released voice. The flag the editor sets decides
-    /// only how often the worker polls.
+    /// The input worker and the editor share one `EguiState`, and nothing but
+    /// this says so: `Default` hands one to [`background::InputWorker::spawn`]
+    /// and `editor` hands the same field to `editor::create`. A second one on
+    /// either side compiles and passes every other test, and leaves a still
+    /// editor drawing the first note after silence at its next idle poll,
+    /// since the worker would ask a state no window reads for the pass.
     ///
     /// Driven through the REAL spawned thread rather than by calling `step`,
     /// because the wiring is precisely what a direct call would bypass.
     #[test]
-    fn the_input_worker_ages_the_picture_with_the_editor_open_or_shut() {
-        let voices = |plugin: &Harmonigraph| {
-            plugin.editor_shared.lock().ui.picture.runtime.tracker.voices().count()
-        };
-        for open in [true, false] {
-            let mut plugin = Harmonigraph::default();
-            plugin.params.editor_state.set_open(open);
-            {
-                // Under the lock, so one take gets all three. A note played
-                // and released far behind one still held, whose onset pins the
-                // batch's clock: a voice whose fade ended long ago, which only
-                // ageing removes. The step that takes them ages them, so the
-                // count goes from none to one.
-                let _batch = plugin.editor_shared.lock();
-                for event in [
-                    CoreNoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0),
-                    CoreNoteEvent::off(0.1, SourceId::DIRECT, 0, 60),
-                    CoreNoteEvent::on(100.0, SourceId::DIRECT, 0, 64, 1.0),
-                ] {
-                    plugin.take.publish_clock(event.time);
-                    plugin.take.publish_note(event.into()).expect_both();
-                }
-            }
-            let started = Instant::now();
-            while voices(&plugin) != 1 {
-                assert!(
-                    started.elapsed() < ANALYSIS_DEADLINE,
-                    "editor open: {open}. The released voice was never aged out in \
-                     {ANALYSIS_DEADLINE:?}: either the worker leaves ageing to a frame, or \
-                     this runner never scheduled it",
-                );
-                std::thread::sleep(background::POLL);
-            }
+    fn the_input_worker_asks_the_editors_own_state_for_a_pass() {
+        let mut plugin = Harmonigraph::default();
+        let state = plugin.params.editor_state.clone();
+        state.set_open(true);
+        state.pass_request.take();
+        plugin.take.publish_clock(1.0);
+        plugin
+            .take
+            .publish_note(CoreNoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0).into())
+            .expect_both();
+        let started = Instant::now();
+        while !state.pass_request.take() {
+            assert!(
+                started.elapsed() < ANALYSIS_DEADLINE,
+                "no pass asked of the editor's state in {ANALYSIS_DEADLINE:?} after a strike: \
+                 the worker asks another EguiState, or this runner never scheduled it",
+            );
+            std::thread::sleep(background::POLL);
         }
     }
 

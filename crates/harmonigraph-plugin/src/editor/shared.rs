@@ -24,12 +24,13 @@ pub struct EditorShared {
     pub(super) gesture: std::cell::Cell<[bool; harmonigraph_ui::params::ParamKey::ALL.len()]>,
     /// Take recording, driven from the Video pane's toggle.
     ///
-    /// `pub(crate)` for the same reason [`ui`](Self::ui) is: the background
-    /// analyzer polls the end of a take through this state while the window is
-    /// shut, and its tests read back what that round decided.
+    /// `pub(crate)` for the same reason [`ui`](Self::ui) is: the input worker
+    /// polls the end of a take through this state, and its tests read back
+    /// what that round decided.
     pub(crate) take: harmonigraph_record::Control,
-    /// Whether the transport was rolling as of the last recorded event,
-    /// for the status line. Derived, not authoritative.
+    /// Whether the transport was rolling as of the last
+    /// [`poll_take_end`](Self::poll_take_end), for the status line. Derived,
+    /// not authoritative.
     take_rolling: bool,
     /// The recorder's note count for the current take, as of the last
     /// [`poll_take_end`](Self::poll_take_end), for the status line.
@@ -39,9 +40,6 @@ pub struct EditorShared {
     /// it has stayed stopped since. Debounces the OnTransportStop trigger: a
     /// host reporting one still block mid-playback must not end a take.
     take_still_since: Option<f64>,
-    /// The input worker could not be started, so the window's frames drain
-    /// the rings themselves, as they did before it existed.
-    pub(crate) frame_drains: bool,
     /// The device every window of this editor opens on (#698). Here rather
     /// than on the editor because activation creates it, before any window,
     /// and starts compiling on it ([`super::start_graphics`]).
@@ -75,7 +73,6 @@ impl EditorShared {
             take_rolling: false,
             take_last_count: 0,
             take_still_since: None,
-            frame_drains: false,
             gpu_context: egui_baseview::SharedGpuContext::default(),
         }
     }
@@ -86,13 +83,12 @@ impl EditorShared {
     /// feels immediate.
     ///
     /// Counted in seconds rather than in calls to
-    /// [`poll_take_end`](Self::poll_take_end), because who calls it decides
-    /// how often: a frame at 144 Hz or at a quarter of 60 Hz, and the input
-    /// worker every [`POLL`](crate::background::POLL) with the window open or
-    /// [`SHUT_POLL`](crate::background::SHUT_POLL) with it shut. Counted in
-    /// calls, the same debounce ran from 139 ms to 1.3 s (#1567). It starts at
-    /// the first poll to find the transport still, so a take ends up to one
-    /// poll interval after this.
+    /// [`poll_take_end`](Self::poll_take_end), because its one caller, the
+    /// input worker, calls it every [`POLL`](crate::background::POLL) with the
+    /// window open and every [`SHUT_POLL`](crate::background::SHUT_POLL) with
+    /// it shut. Counted in calls, as when frames polled too, the same debounce
+    /// ran from 139 ms to 1.3 s (#1567). It starts at the first poll to find
+    /// the transport still, so a take ends up to one poll interval after this.
     pub(crate) const STOP_SECONDS: f64 = 0.4;
 
     /// One editor pass's share of the take, around `draw`, the pass's UI:
@@ -149,7 +145,7 @@ impl EditorShared {
         // can't (the standalone uses an env var instead).
         self.ui.workspace.interaction.take.supported = true;
         self.ui.workspace.interaction.take.last_take = self.take.last_take();
-        self.poll_take_end();
+        // As the input worker's last step left them: it alone polls the end.
         self.take.tick(self.take_rolling, self.take_last_count);
         self.ui.workspace.interaction.take.status = self.take.status();
         self.ui.workspace.interaction.take.exports = self.take.export_jobs();
@@ -164,18 +160,18 @@ impl EditorShared {
     /// the two settings the audio thread decides on, then act on whichever
     /// signal came back.
     ///
-    /// **Split out of [`take_pass`](Self::take_pass) so it can also run with
-    /// no frame running.** Every trigger but `OnDisarm` decides here, which
-    /// meant a take armed and then left with the window closed — a Bitwig
-    /// audio export is exactly that — never ended itself and never rendered, no
-    /// matter which trigger was chosen; and a frame runs only while the editor
-    /// can be seen. The input worker calls this every step, window open or
-    /// shut, so the decision does not depend on anyone watching.
+    /// **The input worker's alone, called every step, window open or shut.**
+    /// Every trigger but `OnDisarm` decides here, and a frame runs only while
+    /// the editor can be seen: polled from frames, a take armed and then left
+    /// with the window closed — a Bitwig audio export is exactly that — or
+    /// with it unseen never ended itself and never rendered, whichever
+    /// trigger was chosen. It is also the one publisher of the two settings,
+    /// so they reach the audio thread within a step of changing.
     ///
     /// Nothing here draws or reads a widget, which is what makes it callable
     /// from that thread: it moves settings out to the recorder and take state
     /// back into `Interaction`, and the next frame — whenever there is one —
-    /// draws what it left.
+    /// mirrors and draws what it left ([`take_pass`](Self::take_pass)).
     pub(crate) fn poll_take_end(&mut self) {
         self.poll_take_end_at(self.input.now());
     }
@@ -319,39 +315,6 @@ mod tests {
         assert_eq!(shared.take_still_since, Some(first_still));
         shared.poll_take_end_at(first_still + EditorShared::STOP_SECONDS);
         assert!(!shared.take.is_recording(), "still for the whole debounce, the take ends");
-        drop(shared);
-        drop(recorder);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !probe.finished() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(probe.finished());
-        let _ = std::fs::remove_dir_all(directory);
-    }
-
-    /// A Record click is applied by the pass that received it, after the UI
-    /// that took it has run: the editor may go unseen before another pass.
-    #[test]
-    fn a_record_click_arms_the_take_in_the_pass_that_received_it() {
-        let (_notes, consumer) = harmonigraph_record::publication::channel();
-        let (_audio, audio_consumer) = crate::audio_ingress::channel(64);
-        let (recorder, control) = harmonigraph_record::channel();
-        let directory =
-            std::env::temp_dir().join(format!("record-click-pass-{}", std::process::id()));
-        let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
-        let mut shared = EditorShared::new(
-            consumer,
-            audio_consumer,
-            Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            control,
-        );
-        harmonigraph_record::testing::set_renderer_program(
-            &shared.take,
-            directory.join("absent-renderer"),
-        );
-        // The click, as the Video pane's toggle makes it, inside the pass.
-        shared.take_pass(48_000.0, |shared| shared.ui.workspace.interaction.take.recording = true);
-        assert!(shared.take.is_recording(), "the click waited for another pass");
         drop(shared);
         drop(recorder);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

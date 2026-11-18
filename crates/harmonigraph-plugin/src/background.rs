@@ -115,10 +115,11 @@ pub(crate) struct InputWorker {
     /// boundary after changing the editor-open flag.
     #[cfg(test)]
     rounds: Arc<AtomicU64>,
-    /// `None` when the thread could not be spawned. The window's frames then
-    /// drain both rings themselves, on the host's main thread as before #1559
-    /// (see [`frame_drains`](crate::editor::EditorShared::frame_drains)), and
-    /// an editor that runs no frames, shut or unseen, loses its input.
+    /// `None` when the thread could not be spawned. Nothing else reads the
+    /// rings, ages the picture or ends a take, so the editor then shows no
+    /// input until the plug-in is reloaded: a case outside the use, with a
+    /// Console line rather than a fallback that would run the analysis on
+    /// the host's main thread.
     thread: Option<JoinHandle<()>>,
 }
 
@@ -148,16 +149,12 @@ impl InputWorker {
         let thread = match thread {
             Ok(thread) => Some(thread),
             // Audible rather than silent, on the same argument as a refused
-            // persist blob: what is lost is the spectrogram over every stretch
-            // the window was shut, and a heatmap with holes in it looks exactly
-            // like one nobody was playing into.
+            // persist blob: an empty picture looks exactly like one nobody
+            // was playing into.
             Err(err) => {
-                let mut shared = shared.lock();
-                shared.frame_drains = true;
-                shared.ui.picture.runtime.console.log(format!(
-                    "input worker not started ({err}) — the editor window drains \
-                     its own input, and the spectrogram will only cover time it \
-                     was on screen",
+                shared.lock().ui.picture.runtime.console.log(format!(
+                    "input worker not started ({err}) — no input is read until the \
+                     plug-in is reloaded",
                 ));
                 None
             }
@@ -233,8 +230,10 @@ thread_local! {
 /// **The lock is waited for, not tried**: this thread never runs on the
 /// host's main thread, so waiting out a frame costs the host nothing, and a
 /// frame or a window opening waits on this thread only for a take (a copy of
-/// what the ring holds) or a give (folding its columns into every level of the
-/// spectrogram's history, 11 µs a column): a few tens of microseconds for the
+/// what the ring holds, then the ageing, a pass over the fading voices, and
+/// the take's poll, a few atomics) or a give (folding its columns into every
+/// level of the spectrogram's history, 11 µs a column): a few tens of
+/// microseconds for the
 /// two or three columns a step usually brings, and a few milliseconds for a
 /// catch-up's: the ring's 131,072 samples are 341 mono columns at 48 kHz,
 /// after this thread was starved for 2.7 s, and 371 at 44.1 kHz after 3 s

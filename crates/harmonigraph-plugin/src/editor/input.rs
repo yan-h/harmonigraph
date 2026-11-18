@@ -273,9 +273,8 @@ impl LiveInput {
     /// The locked half of a step: the notes into the tracker, then the
     /// audio out of its ring with the analysis alongside, for
     /// [`Self::analyze`] then [`Self::give`].
-    /// Input feeding does not prune against stale parameters: callers advance
-    /// time after observing their parameters, or retain the last mirrors while
-    /// closed.
+    /// Input feeding does not prune: its callers age the picture after it,
+    /// the input worker in the same hold and a frame in `begin_frame`.
     pub(crate) fn take(
         &mut self,
         runtime: &mut harmonigraph_ui::VisualRuntime,
@@ -287,8 +286,7 @@ impl LiveInput {
     }
     /// A whole step with the lock held throughout: take, analyze, give. The
     /// input worker splits the same three around its lock; this is them in
-    /// one, for its final drain, for the frames of a window whose worker never
-    /// started (`frame_drains`), and for tests.
+    /// one, for its final drain and for tests.
     pub(crate) fn drain(
         &mut self,
         runtime: &mut harmonigraph_ui::VisualRuntime,
