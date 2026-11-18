@@ -6,9 +6,11 @@ The log comes from the plugin's `--features frame-log` build
 `~/Library/Logs/Harmonigraph/`. With no path, the newest log there is read.
 
 The run is split into phases at every change of the chosen Editor frame rate
-(the `chosen` column) and at every frame the display link did not ask for, so a
-minimized editor's watchdog frames and the silence around them count in no
-phase. A log written before the `chosen` column existed is read as chosen at
+(the `chosen` column) and at every frame the display link did not ask for, so
+frames an unseen editor draws, and the silence around them, count in no phase.
+A log recorded on an egui-plugin-window pin from before an unseen editor
+stopped running frames carries a 10 Hz watchdog's frames there; one recorded
+after carries none, and either splits the same way. A log written before the `chosen` column existed is read as chosen at
 its `divisor`, which holds for one recorded before #1692 slowed a still
 editor's link; one recorded between the two cannot be told apart, so record
 it again. A log written before the `divisor` column existed is read as all
@@ -71,7 +73,9 @@ import statistics
 import sys
 from collections import Counter
 
-# baseview's `LINK_SILENCE`: past this, the watchdog draws instead of the link.
+# A gap past this between link-paced frames ends a phase: baseview's
+# `LINK_SILENCE`, past which its watchdog drew in logs from before an unseen
+# editor stopped running frames.
 LINK_SILENCE = 0.1
 # A still stretch shorter than this says little about idling.
 SILENCE_MIN = 60.0
@@ -144,7 +148,8 @@ def phases(frames):
     out, current = [], []
     for fr in frames:
         if fr['timestamp'] == 0.0:
-            # The watchdog's frame, or the one painted as the window is revealed.
+            # A frame the link did not ask for: one painted as the window is
+            # revealed, or in an older log the watchdog's.
             if current:
                 out.append(current)
             current = []
@@ -279,9 +284,10 @@ def stretch(frames, start, end):
     ms = [m for m in map(measure, runs) if m['refreshes']]
     drawn = sum(1 for fr in inside if fr['submitted'])
     # Visible: the time the display link paced frames, less every gap of
-    # over UNSHOWN_GAP between drawn ones. A minimized editor draws only the
-    # watchdog's frames, and a covered one keeps its link but refuses every
-    # present, so neither says how often it asks to draw while it is seen.
+    # over UNSHOWN_GAP between drawn ones. A minimized editor draws no frames
+    # (in an older log, only the watchdog's), and a covered one draws none or
+    # refuses every present, so neither says how often it asks to draw while
+    # it is seen.
     visible, paced = 0.0, 0
     for p in runs:
         edges = [p[0]['t']] + [fr['t'] for fr in p if fr['submitted']] + [p[-1]['t']]
@@ -496,8 +502,8 @@ def main():
     t0 = frames[0]['t']
     frames = [fr for fr in frames if args.start <= fr['t'] - t0 <= args.end]
     measured = [measure(p) for p in phases(frames)]
-    # A phase with no two consecutive presents (a lone frame between watchdog
-    # frames) has no glass gap to measure.
+    # A phase with no two consecutive presents (a lone frame, such as one
+    # between an older log's watchdog frames) has no glass gap to measure.
     measured = [m for m in measured if m['refreshes']]
     print(f'window {window}: {len(frames)} frames, {len(measured)} phases\n')
 

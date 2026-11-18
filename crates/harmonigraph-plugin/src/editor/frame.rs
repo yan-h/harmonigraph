@@ -49,7 +49,7 @@ pub(super) fn frame(
     let shared = &mut *guard;
 
     // The display link's timing for this frame, or `None` for one it did not ask
-    // for (the watchdog's, an occlusion repaint).
+    // for (an occlusion repaint, or the watchdog's where the window keeps one).
     let timing = queue.frame_timing();
     // A stalled run loop (run-loop mode issues, a host blocking its main
     // thread), so freezes stay attributable: measured by the window on every
