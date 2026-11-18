@@ -207,16 +207,11 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             let undone = params.map_editor.lock().undo(selected);
             undone.is_some_and(|map| document.reshape(selected, map))
         }
-        MapEdit::BeginOffset(axis, lane) => {
-            setter.begin_set_parameter(lane_param(params, axis, lane));
-            false
-        }
+        // A lane's gesture is the editor's registry's (`editor::gestures`),
+        // which the parameter backend opens and closes around this edit.
+        MapEdit::BeginOffset(..) | MapEdit::EndOffset(..) => false,
         MapEdit::Offset(axis, lane, value) => {
             setter.set_parameter(lane_param(params, axis, lane), value);
-            false
-        }
-        MapEdit::EndOffset(axis, lane) => {
-            setter.end_set_parameter(lane_param(params, axis, lane));
             false
         }
         MapEdit::Translate(step, lane) => {

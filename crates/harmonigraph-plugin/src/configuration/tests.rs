@@ -238,12 +238,14 @@ impl Device {
         }
     }
     fn id(&self, key: ParamKey) -> u32 {
+        self.id_named(key.host_name())
+    }
+    /// The host id of the parameter the host names `name`.
+    fn id_named(&self, name: &str) -> u32 {
         for index in 0..unsafe { (self.params().count.unwrap())(self.plugin) } {
             let mut info: clap_sys::ext::params::clap_param_info = unsafe { std::mem::zeroed() };
             assert!(unsafe { (self.params().get_info.unwrap())(self.plugin, index, &mut info) });
-            if unsafe { CStr::from_ptr(info.name.as_ptr()) }.to_bytes()
-                == key.host_name().as_bytes()
-            {
+            if unsafe { CStr::from_ptr(info.name.as_ptr()) }.to_bytes() == name.as_bytes() {
                 return info.id;
             }
         }
@@ -2372,12 +2374,12 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
     let (context, _) = device.wrapper().test_gui_context("camera-yaw");
     let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
     let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
-    let gesture = std::cell::Cell::new([false; ParamKey::ALL.len()]);
+    let gestures = std::cell::Cell::default();
     let backend = crate::PluginParamBackend {
         params: &params,
         setter: &setter,
         configuration: params.settings.view(),
-        gesture: &gesture,
+        gestures: &gestures,
     };
     let mut events = Vec::new();
     for frame in 0..3 {
@@ -2403,7 +2405,81 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
             3
         );
     }
-    assert!(gesture.get().iter().all(|active| !active));
+    assert_eq!(gestures.get().open().count(), 0);
+    drop(context);
+}
+
+/// Every host gesture the editor holds open, a map-offset lane's as well as a
+/// camera axis's, is ended once when the editor stops being seen, and the
+/// close after that ends nothing more; a lane's gesture alone is ended by the
+/// close. Through the plug-in's CLAP events, so what is counted is what the
+/// host receives.
+#[test]
+fn the_editors_gestures_end_once_when_it_stops_being_seen_or_closes() {
+    use harmonigraph_ui::lattice_maps::{MapAxis, MapEdit, MapOffsetLane};
+    use harmonigraph_ui::params::ParamBackend;
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    let (context, _) = device.wrapper().test_gui_context("camera-yaw");
+    let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
+    let (params, lock) = device
+        .wrapper()
+        .test_inspect_plugin(|plugin| (plugin.params.clone(), plugin.editor_shared.clone()));
+    let (axis, lane) = (MapAxis::Thirds, MapOffsetLane::Extension);
+    let with_backend = |act: &dyn Fn(&crate::PluginParamBackend)| {
+        let shared = lock.lock();
+        act(&crate::PluginParamBackend {
+            params: &params,
+            setter: &setter,
+            configuration: params.settings.view(),
+            gestures: &shared.gestures,
+        });
+    };
+    let lane_id = device.id_named(crate::lattice_maps::lane_param(&params, axis, lane).name());
+    let yaw_id = device.id(ParamKey::CameraYaw);
+    let count = |events: &[_], kind, id| {
+        events.iter().filter(|e: &&(u16, _, u32, bool)| e.0 == kind && e.2 == id && e.3).count()
+    };
+    let (begins, ends) = (CLAP_EVENT_PARAM_GESTURE_BEGIN, CLAP_EVENT_PARAM_GESTURE_END);
+
+    // A camera drag and a lane drag, then the editor unseen, then closed.
+    with_backend(&|backend| {
+        backend.begin_set(ParamKey::CameraYaw);
+        backend.set(ParamKey::CameraYaw, 0.2);
+        backend.edit_lattice_map(MapEdit::BeginOffset(axis, lane));
+        backend.edit_lattice_map(MapEdit::Offset(axis, lane, 1));
+    });
+    let mut events = device.run(0, vec![], false).attempts;
+    let open = lock.end_unseen().expect("the editor lock is free");
+    crate::editor::gestures::end(open, &params, &setter);
+    events.extend(device.run(64, vec![], false).attempts);
+    for id in [yaw_id, lane_id] {
+        assert_eq!(count(&events, begins, id), 1, "param {id}");
+        assert_eq!(count(&events, ends, id), 1, "unseen left {id} open");
+    }
+    let open = lock.end_window_session();
+    crate::editor::gestures::end(open, &params, &setter);
+    events.extend(device.run(128, vec![], false).attempts);
+    for id in [yaw_id, lane_id] {
+        assert_eq!(count(&events, ends, id), 1, "the close ended {id} again");
+    }
+
+    // The lane's drag still held at the reveal: its next value begins a new
+    // gesture, which the drag's end ends.
+    with_backend(&|backend| backend.edit_lattice_map(MapEdit::Offset(axis, lane, 2)));
+    with_backend(&|backend| backend.edit_lattice_map(MapEdit::EndOffset(axis, lane)));
+    events.extend(device.run(192, vec![], false).attempts);
+    assert_eq!(count(&events, begins, lane_id), 2, "a value set with no gesture open");
+    assert_eq!(count(&events, ends, lane_id), 2);
+
+    // A lane's gesture alone, begun and never moved, ended by the close.
+    with_backend(&|backend| backend.edit_lattice_map(MapEdit::BeginOffset(axis, lane)));
+    let open = lock.end_window_session();
+    crate::editor::gestures::end(open, &params, &setter);
+    events.extend(device.run(256, vec![], false).attempts);
+    assert_eq!(count(&events, begins, lane_id), 3, "a lane's begin bypassed the registry");
+    assert_eq!(count(&events, ends, lane_id), 3, "the close left a lane open");
     drop(context);
 }
 

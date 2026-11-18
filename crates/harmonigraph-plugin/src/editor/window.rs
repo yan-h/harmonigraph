@@ -368,19 +368,14 @@ unsafe impl Send for LatticeEditorHandle {}
 
 impl Drop for LatticeEditorHandle {
     fn drop(&mut self) {
-        // The session ends, and the host's gestures with it, under the lock
-        // (see `EditorLock::end_window_session` on why in that order). The
+        // The session ends under the lock, and the host's gestures once it is
+        // let go (see `EditorLock::end_window_session`). The
         // input worker ages the picture whether or not the window is open, so
         // where `open` is cleared below sets only its poll rate and whether
         // the tape treats its roll as drawn (`tape::Worker::exchange`).
+        let open = self.shared.end_window_session();
         let setter = nice_plug::prelude::ParamSetter::new(self.context.as_ref());
-        self.shared.end_window_session(|gestures| {
-            for (key, active) in harmonigraph_ui::params::ParamKey::ALL.into_iter().zip(gestures) {
-                if active {
-                    setter.end_set_parameter(self.params.param_for(key));
-                }
-            }
-        });
+        super::gestures::end(open, &self.params, &setter);
         // The editor's own window closes with the editor rather than
         // outliving it empty, and the host's is shown again.
         self.pop_out.close();

@@ -6,6 +6,7 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
+use editor::gestures::Gesture;
 use harmonigraph_core::lattice_map::{Follow, TuningEngine};
 use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, SourceId};
 use harmonigraph_record::TAKE_CHANNELS;
@@ -382,10 +383,11 @@ pub(crate) struct PluginParamBackend<'a> {
     /// The tuning configuration as this frame reads it, once, so every
     /// slider in the frame shows one coherent value.
     pub configuration: harmonigraph_ui::params::ConfigurationView,
-    /// Keys inside explicit begin_set/end_set gestures. Lives in
-    /// EditorShared so simultaneous axes survive across frames (this
-    /// adapter is rebuilt every frame).
-    pub gesture: &'a std::cell::Cell<[bool; ParamKey::ALL.len()]>,
+    /// The host gestures the editor holds open (`editor::gestures`). Lives
+    /// in EditorShared so simultaneous axes survive across frames (this
+    /// adapter is rebuilt every frame), and so a close or a loss of sight
+    /// ends every one.
+    pub gestures: &'a std::cell::Cell<editor::gestures::Gestures>,
 }
 
 impl ParamBackend for PluginParamBackend<'_> {
@@ -393,7 +395,19 @@ impl ParamBackend for PluginParamBackend<'_> {
         Some(lattice_maps::view(self.params))
     }
     fn edit_lattice_map(&self, edit: harmonigraph_ui::lattice_maps::MapEdit) {
-        lattice_maps::edit(self.params, self.setter, edit);
+        use harmonigraph_ui::lattice_maps::MapEdit;
+        // A lane's gesture is the registry's, as the camera's is: a value set
+        // with none open (a drag still held after the editor was unseen)
+        // begins one first.
+        match edit {
+            MapEdit::BeginOffset(axis, lane) => self.begin(Gesture::Lane(axis, lane)),
+            MapEdit::EndOffset(axis, lane) => self.end(Gesture::Lane(axis, lane)),
+            MapEdit::Offset(axis, lane, _) => {
+                self.begin(Gesture::Lane(axis, lane));
+                lattice_maps::edit(self.params, self.setter, edit);
+            }
+            _ => lattice_maps::edit(self.params, self.setter, edit),
+        }
     }
     fn tuning_instances(&self) -> Vec<harmonigraph_ui::params::TuningInstance> {
         tuning::instances::snapshots()
@@ -418,7 +432,7 @@ impl ParamBackend for PluginParamBackend<'_> {
 
     fn set(&self, key: ParamKey, value: f32) {
         let param = self.params.param_for(key);
-        if self.gesture.get()[key as usize] {
+        if self.gestures.get().is_open(Gesture::Param(key)) {
             // Inside an explicit gesture (drag): just set.
             self.setter.set_parameter(param, value);
         } else {
@@ -441,20 +455,37 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn begin_set(&self, key: ParamKey) {
-        let mut active = self.gesture.get();
-        if !active[key as usize] {
-            self.setter.begin_set_parameter(self.params.param_for(key));
-            active[key as usize] = true;
-            self.gesture.set(active);
-        }
+        self.begin(Gesture::Param(key));
     }
 
     fn end_set(&self, key: ParamKey) {
-        if self.gesture.get()[key as usize] {
-            self.setter.end_set_parameter(self.params.param_for(key));
-            let mut active = self.gesture.get();
-            active[key as usize] = false;
-            self.gesture.set(active);
+        self.end(Gesture::Param(key));
+    }
+}
+
+impl PluginParamBackend<'_> {
+    /// Open `gesture` in the registry, and send its begin if it was closed.
+    fn begin(&self, gesture: Gesture) {
+        let mut gestures = self.gestures.get();
+        if gestures.begin(gesture) {
+            self.gestures.set(gestures);
+            match gesture {
+                Gesture::Param(key) => self.setter.begin_set_parameter(self.params.param_for(key)),
+                Gesture::Lane(axis, lane) => self
+                    .setter
+                    .begin_set_parameter(lattice_maps::lane_param(self.params, axis, lane)),
+            }
+        }
+    }
+
+    /// Close `gesture` in the registry, and send its end if it was open.
+    fn end(&self, gesture: Gesture) {
+        let mut gestures = self.gestures.get();
+        if gestures.end(gesture) {
+            self.gestures.set(gestures);
+            let mut only = editor::gestures::Gestures::default();
+            only.begin(gesture);
+            editor::gestures::end(only, self.params, self.setter);
         }
     }
 }
@@ -1433,25 +1464,56 @@ mod tests {
         drop(held);
     }
 
-    /// The close ends the window session and refreshes the fallback BEFORE it
-    /// ends the host's gestures. `end_set_parameter` is a host callback made
-    /// under the editor lock, and a save the host makes from inside it answers
-    /// with the fallback, which must already hold the session; a restore made
-    /// there is newer than the session, and survives the close.
+    /// The close ends the window session and refreshes the fallback, then
+    /// hands back the host's gestures to end with the editor lock free:
+    /// `end_set_parameter` is a host callback, and a save the host makes from
+    /// inside it takes the lock and answers with the session; a restore made
+    /// there survives the close.
     #[test]
-    fn the_close_refreshes_the_fallback_before_ending_gestures() {
+    fn the_close_ends_the_host_gestures_with_the_lock_free() {
         let plugin = Harmonigraph::default();
         restore_yaw(&plugin, 0.5);
         editor::open_window_session(&plugin.editor_shared, &egui::Context::default());
         turn_live_yaw(&plugin, 1.25);
+        {
+            let shared = plugin.editor_shared.lock();
+            let mut gestures = shared.gestures.get();
+            gestures.begin(Gesture::Param(ParamKey::CameraYaw));
+            shared.gestures.set(gestures);
+        }
 
+        let open = plugin.editor_shared.end_window_session();
         let mut reentered = None;
-        plugin.editor_shared.end_window_session(|_| {
+        // What `editor::gestures::end` does for each, with a host that saves
+        // and restores from inside the call.
+        for _ in open.open() {
+            assert!(plugin.editor_shared.try_lock().is_some(), "ended under the editor lock");
             reentered = Some(saved_yaw(&plugin));
             restore_yaw(&plugin, 0.75);
-        });
-        assert_eq!(reentered, Some(1.25), "a save from the close's callback lost the session");
-        assert_eq!(saved_yaw(&plugin), 0.75, "the restore made from the close's callback was lost");
+        }
+        assert_eq!(reentered, Some(1.25), "a save from the end of a gesture lost the session");
+        assert_eq!(saved_yaw(&plugin), 0.75, "the restore made from the end was lost");
+    }
+
+    /// A look edit a drag left open when the editor stops being seen becomes
+    /// one undo entry then, as at a close, and no save answer is made for it.
+    #[test]
+    fn going_unseen_finishes_an_open_look_edit() {
+        use harmonigraph_ui::testing::{edit_look, undo_depth};
+
+        let plugin = Harmonigraph::default();
+        editor::open_window_session(&plugin.editor_shared, &egui::Context::default());
+        edit_look(&mut plugin.editor_shared.lock().ui, true);
+        assert_eq!(undo_depth(&plugin.editor_shared.lock().ui), 0, "the drag is still open");
+        let fallback = plugin.params.ui_state.inbox().fallback();
+
+        assert!(plugin.editor_shared.end_unseen().is_some(), "the editor lock is free");
+        assert_eq!(
+            undo_depth(&plugin.editor_shared.lock().ui),
+            1,
+            "the open edit was not finished"
+        );
+        assert_eq!(plugin.params.ui_state.inbox().fallback(), fallback, "a save answer was made");
     }
 
     /// Issue #1740: closing and reopening the editor window keeps the look
@@ -1470,7 +1532,7 @@ mod tests {
         edit_look(&mut plugin.editor_shared.lock().ui, true);
         assert_eq!(undo_depth(&plugin.editor_shared.lock().ui), 1, "the drag is still open");
 
-        plugin.editor_shared.end_window_session(|_| {});
+        let _ = plugin.editor_shared.end_window_session();
         plugin.params.editor_state.set_open(false);
         let rounds = plugin._input_worker.completed_rounds();
         assert!(

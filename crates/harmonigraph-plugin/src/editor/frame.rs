@@ -76,7 +76,7 @@ pub(super) fn frame(
     shared.ui.picture.appearance.sync_camera(&PluginParamBackend {
         params: &state.params,
         setter: &setter,
-        gesture: &shared.gesture,
+        gestures: &shared.gestures,
         configuration,
     });
     // Last frame's costs that the shell measures and the UI cannot: they
@@ -120,7 +120,7 @@ pub(super) fn frame(
         let backend = PluginParamBackend {
             params: &state.params,
             setter: &setter,
-            gesture: &shared.gesture,
+            gestures: &shared.gestures,
             configuration,
         };
         let drawn = Instant::now();

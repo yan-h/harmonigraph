@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use parking_lot::{Mutex, MutexGuard};
 
+use super::gestures::Gestures;
 use super::shared::EditorShared;
 
 /// The editor state behind a lock that delivers host restores by construction.
@@ -66,24 +67,44 @@ impl EditorLock {
     }
 
     /// The window is closing: the plugin's close, as one call a test reaches.
-    ///
-    /// The order is the point. `end_gestures` is a host callback made under
-    /// this lock (`end_set_parameter`), and a host may save from inside it; a
-    /// save there cannot take the lock, so it answers with the inbox's
-    /// fallback, which must already hold the session. So the session ends and
-    /// the fallback is refreshed before the gestures end.
-    pub(crate) fn end_window_session(
-        &self,
-        end_gestures: impl FnOnce([bool; harmonigraph_ui::params::ParamKey::ALL.len()]),
-    ) {
+    /// An edit still open becomes one undo entry, the fallback a save answers
+    /// with when it cannot take this lock is refreshed with the session, and
+    /// the open host gestures are handed back, cleared, for the caller to end
+    /// ([`gestures::end`](super::gestures::end)) once this lock is let go: a
+    /// host may save from inside `end_set_parameter`, and that save then
+    /// takes the lock and answers with the live settings.
+    pub(crate) fn end_window_session(&self) -> Gestures {
         let mut shared = self.lock();
-        shared.ui.end_window_session();
+        shared.ui.finish_open_edit();
         self.inbox.settle(shared.ui.save_answer());
-        let gestures =
-            shared.gesture.replace([false; harmonigraph_ui::params::ParamKey::ALL.len()]);
-        end_gestures(gestures);
+        shared.gestures.get_mut().take()
+    }
+
+    /// The editor has stopped being seen, and runs no frames until it is
+    /// seen again: what its frames would have ended is ended here. An edit
+    /// still open becomes one undo entry, and the open host gestures are
+    /// handed back, cleared, for the caller to end once this lock is let go,
+    /// as at a close. No save answer is made: a loss of sight is no session's
+    /// end, and serializing the settings on every hide buys nothing.
+    ///
+    /// `None` if the lock is not free within [`UNSEEN_WAIT`]. The notice that
+    /// calls this comes on the main thread, outside any frame, so the only
+    /// holder it can meet is the input worker, for a take or a give (at most a
+    /// few milliseconds); the host's saves, the window's build and its close
+    /// hold the lock on the main thread but hide or move no view while they
+    /// do. Should one ever, the gestures stay open, as before this existed,
+    /// until the reveal's pass ends them or the close does.
+    pub(crate) fn end_unseen(&self) -> Option<Gestures> {
+        let mut shared = self.try_lock_for(UNSEEN_WAIT)?;
+        shared.ui.finish_open_edit();
+        Some(shared.gestures.get_mut().take())
     }
 }
+
+/// How long [`EditorLock::end_unseen`] waits for the editor lock: past any
+/// hold the input worker makes, short of a wait the host's main thread
+/// would feel.
+const UNSEEN_WAIT: Duration = Duration::from_millis(20);
 
 /// The state half of a window's build: the lock (which delivers a waiting
 /// restore), [`Opening`](harmonigraph_ui::shell::Opening), and the loading
