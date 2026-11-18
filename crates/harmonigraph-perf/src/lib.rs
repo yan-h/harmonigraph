@@ -101,12 +101,13 @@ pub struct ShellTimings {
     /// shown separately to help attribute 3D cost. Do not add the two.
     /// None means no new completion; the metric window retains its mean.
     pub draw_gpu_ms: Option<f32>,
-    /// Milliseconds the shell spent on its own per-frame work before the UI
-    /// ran — draining the event rings and reconciling the take.
+    /// Milliseconds the shell spent on its own per-frame work outside the
+    /// UI: before it ran (the lock, a host restore, the camera), and the last
+    /// pass's take work around its UI (the status mirror, and the Record, Stop
+    /// and export commands after it).
     ///
     /// Separate from the frame's CPU time because that starts at the dock
-    /// build: this stretch scales with events ARRIVING rather than with what
-    /// is drawn, and there was no reading it could show up in.
+    /// build, and there was no reading this could show up in.
     pub shell_ms: f32,
     /// Milliseconds blocked acquiring the surface — waiting for the display
     /// to free a drawable. Large here with every cost small means the frame
@@ -167,7 +168,7 @@ pub fn link_target_fps(refresh_s: f64, divisor: u32) -> Option<f32> {
 /// compile error.
 #[derive(Clone, Copy, Default)]
 pub struct FrameCosts {
-    /// Shell work before the UI ran: draining the event rings.
+    /// Shell work outside the UI (see [`ShellTimings::shell_ms`]).
     pub shell_ms: f32,
     /// Building the UI — the dock and its panes.
     pub cpu_ms: f32,
