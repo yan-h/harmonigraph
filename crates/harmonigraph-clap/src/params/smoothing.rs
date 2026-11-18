@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 // Re-exported here because it's sued in `SmoothingStyle`.
 // TODO: This re-export has been moved in the `util` module. Remove the
 // `pub` in the next breaking version release.
-pub use crate::util::AtomicF32;
+pub use atomic_float::AtomicF32;
 
 use crate::{nice_debug_assert, nice_debug_assert_ne};
 

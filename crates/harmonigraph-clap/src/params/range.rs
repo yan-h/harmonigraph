@@ -1,6 +1,6 @@
 //! Different ranges for numeric parameters.
 
-use crate::{nice_debug_assert, util};
+use crate::nice_debug_assert;
 
 /// A distribution for a floating point parameter's range. All range endpoints are inclusive.
 #[derive(Debug, Clone, Copy)]
@@ -38,21 +38,6 @@ impl FloatRange {
     /// wider.
     pub fn skew_factor(factor: f32) -> f32 {
         2.0f32.powf(factor)
-    }
-
-    /// Calculate a skew factor for [`FloatRange::Skewed`] that makes a linear gain parameter range
-    /// appear as if it was linear when formatted as decibels.
-    pub fn gain_skew_factor(min_db: f32, max_db: f32) -> f32 {
-        nice_debug_assert!(min_db < max_db);
-
-        let min_gain = util::db_to_gain(min_db);
-        let max_gain = util::db_to_gain(max_db);
-        let middle_db = (max_db + min_db) / 2.0;
-        let middle_gain = util::db_to_gain(middle_db);
-
-        // Check the Skewed equation in the normalized function below, we need to solve the factor
-        // such that the a normalized value of 0.5 resolves to the middle of the range
-        0.5f32.log((middle_gain - min_gain) / (max_gain - min_gain))
     }
 
     /// Normalize a plain, unnormalized value. Will be clamped to the bounds of the range if the

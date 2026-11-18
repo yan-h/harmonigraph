@@ -6,7 +6,6 @@ pub use crate::debug::*;
 
 pub use crate::nice_export_clap;
 
-pub use crate::formatters;
 pub use crate::util;
 
 pub use crate::audio_setup::{
