@@ -255,6 +255,9 @@ enum Leave {
     /// Cmd-click on a bar above, which opens a typed entry that takes the
     /// keyboard before the name field is drawn.
     TypeIntoBar,
+    /// More typing in the frame the host takes the keyboard, then Enter once
+    /// it is given back: the late keystroke is part of the name.
+    EnterAfterHostTookKeyboard,
 }
 
 /// The name field renames when it is left — by Enter, or by a click on
@@ -269,22 +272,26 @@ fn the_name_field_renames_when_left_and_not_while_typing() {
         (Leave::Key(egui::Key::Escape), None),
         (Leave::Number, renamed),
         (Leave::TypeIntoBar, renamed),
+        (Leave::EnterAfterHostTookKeyboard, Some("Rename(0, \"C · 3×4 BC\")")),
     ] {
         let ctx = themed();
         let params = Edits::new(TuningEngine::LatticeMap, Follow::Off, 1);
         let mut state = fresh_picture();
         let size = egui::vec2(420.0, 2000.0);
+        let focused = std::cell::Cell::new(true);
         let mut frame = |modifiers, events| {
-            crate::tests::probe::held_into(
-                &ctx,
-                size,
-                egui::Rect::from_min_size(egui::Pos2::ZERO, size),
-                modifiers,
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
                 events,
-                |ui| {
-                    tuning_pane(ui, &mut state, &params, 0.0);
-                },
-            )
+                modifiers,
+                focused: focused.get(),
+                ..Default::default()
+            };
+            ctx.run_ui(raw, |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(screen));
+                tuning_pane(&mut child, &mut state, &params, 0.0);
+            })
         };
         let none = egui::Modifiers::NONE;
         frame(none, vec![]);
@@ -327,6 +334,14 @@ fn the_name_field_renames_when_left_and_not_while_typing() {
             }
             Leave::Number => click(&mut frame, none, number),
             Leave::TypeIntoBar => click(&mut frame, egui::Modifiers::COMMAND, bar),
+            Leave::EnterAfterHostTookKeyboard => {
+                focused.set(false);
+                frame(none, vec![egui::Event::Text("C".into()), egui::Event::WindowFocused(false)]);
+                frame(none, vec![]);
+                focused.set(true);
+                frame(none, vec![egui::Event::WindowFocused(true)]);
+                frame(none, vec![key_event(egui::Key::Enter)]);
+            }
         }
         frame(none, vec![]);
         let sent = params.edits.borrow().first().map(|edit| format!("{edit:?}"));
