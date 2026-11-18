@@ -9,9 +9,7 @@
 //! is open or a label holds a selection, and bare Cmd-C on a selected label.
 //! Every other key goes to the host and never reaches egui. A focused widget
 //! of another kind gets no key by its focus: Space or Enter on a focused
-//! button and a slider's arrows go to the host unless listed. So a widget
-//! that reads keys while focused lists them ([`claim`]), as a plot handle
-//! lists its arrows.
+//! button and a slider's arrows go to the host unless listed.
 //!
 //! Taking a shortcut and claiming it are one call, [`take`]: a shortcut read
 //! here is a shortcut kept from the host. The shell hands [`claimed`] to
