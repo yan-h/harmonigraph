@@ -94,7 +94,8 @@ No tuning or sequencing policy belongs in this framework patch.
 ## baseview and egui-baseview — pinned from egui-plugin-window
 
 The editor window's two crates are shared with otonal and live in their own public repository, [egui-plugin-window](https://github.com/yan-h/egui-plugin-window), whose `PATCHES.md` now holds the patches they carry and how they are upgraded.
-The root `Cargo.toml` pins both by commit in `[patch.crates-io]`.
+The root `Cargo.toml` pins egui-baseview by commit in `[patch.crates-io]`, and egui-baseview brings baseview by path from the same commit.
+Harmonigraph names baseview only as `egui_baseview::baseview`, so it carries no baseview pin of its own that could drift to a second copy.
 A change to them lands there first and reaches Harmonigraph as a bump of that `rev`, together with `plugin-own-window`'s below, which moves only the three packages' `source` lines in `Cargo.lock`.
 
 The editor's own window comes from the same repository and commit:
@@ -106,21 +107,17 @@ that file is now the adapter, which gives the window its name, its size limits, 
 Harmonigraph keeps proving the one build that repository's CI cannot:
 the plugin's `frame-log` feature, which reaches into egui-baseview and needs the patched wgpu-hal above (`cargo build -p harmonigraph-plugin --features frame-log`).
 
-To try a windowing change against Harmonigraph before pushing it there, point the three crates at a local checkout:
+To try a windowing change against Harmonigraph before pushing it there, point the two pinned crates at a local checkout (egui-baseview then brings that checkout's baseview by path):
 
 ```
 cargo build -p harmonigraph-plugin \
-  --config 'patch.crates-io.baseview.path="<checkout>/baseview"' \
   --config 'patch.crates-io.egui-baseview.path="<checkout>/egui-baseview"' \
   --config 'patch."https://github.com/yan-h/egui-plugin-window".plugin-own-window.path="<checkout>/plugin-own-window"'
 ```
 
-The override rewrites the packages' `source` lines in `Cargo.lock`;
-restore it with `git checkout Cargo.lock` afterwards, and do not commit it.
-
 A patch in configuration takes precedence over the manifest's, so this builds the checkout rather than the pin.
-It also rewrites the two packages' `source` lines in `Cargo.lock`;
-restore that file with `git checkout Cargo.lock` rather than commit it.
+It rewrites the packages' `source` lines in `Cargo.lock`;
+restore that file with `git checkout Cargo.lock` afterwards rather than commit it.
 
 ## Historical: nih-plug fork (retired)
 

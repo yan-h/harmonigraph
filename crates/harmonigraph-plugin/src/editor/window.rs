@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use baseview::{Size, WindowHandle, WindowScalePolicy};
 use crossbeam::atomic::AtomicCell;
 use egui::Context;
+use egui_baseview::baseview::{Size, WindowHandle, WindowScalePolicy};
 use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, SizeSource};
 use nice_plug::prelude::{Editor, GuiContext, ParentWindowHandle, ResizeHint};
 use nice_plug::wrapper::clap::EditorHost;
@@ -204,10 +204,8 @@ impl Editor for LatticeEditor {
             // frame stretched across the old window.
             if let Some(size) = resized.requested_size.load() {
                 // In its own window, the ask is that window's to grant, at
-                // the size it applies.
-                // Within the window's limits, which AppKit does not hold a
-                // frame set by code to.
-                if let Some(applied) = popping.resize(pop_out::LIMITS.clamp(size)) {
+                // the size it applies (within its limits, which it holds).
+                if let Some(applied) = popping.resize(size) {
                     resized.requested_size.store(None);
                     resized.size.store(applied);
                     return as_size(applied);
