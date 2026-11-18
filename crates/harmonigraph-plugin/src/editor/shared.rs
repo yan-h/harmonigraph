@@ -95,13 +95,25 @@ impl EditorShared {
     /// poll interval after this.
     pub(crate) const STOP_SECONDS: f64 = 0.4;
 
-    /// Reflect the Video pane's toggle into the recorder, and the
-    /// recorder's progress back into the pane. Called once per frame,
-    /// before `root_ui` reads the state it draws.
-    pub(super) fn sync_take(&mut self, sample_rate: f32) {
-        // The plugin can record; the control is hidden in shells that
-        // can't (the standalone uses an env var instead).
-        self.ui.workspace.interaction.take.supported = true;
+    /// One editor pass's share of the take, around `draw`, the pass's UI:
+    /// the recorder's progress mirrored into the Video pane before it draws,
+    /// and what the pane asked for (Record, Stop, the export actions)
+    /// applied after, in the pass that received the click. Applied at the
+    /// next pass instead, a click followed by the editor going unseen would
+    /// wait for it to be seen again, since an unseen editor runs no passes.
+    pub(super) fn take_pass<R>(
+        &mut self,
+        sample_rate: f32,
+        draw: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.mirror_take();
+        let drawn = draw(self);
+        self.apply_take_commands(sample_rate);
+        drawn
+    }
+
+    /// Reflect the Video pane's toggle and export actions into the recorder.
+    fn apply_take_commands(&mut self, sample_rate: f32) {
         let recording = self.take.is_recording();
         if self.ui.workspace.interaction.take.recording && !recording {
             // Start from the CURRENT look, not the last-saved one: what
@@ -115,8 +127,6 @@ impl EditorShared {
         } else if !self.ui.workspace.interaction.take.recording && recording {
             self.take.stop();
         }
-
-        self.ui.workspace.interaction.take.last_take = self.take.last_take();
         for action in std::mem::take(&mut self.ui.workspace.interaction.take.export_actions) {
             match action {
                 harmonigraph_ui::ExportAction::Queue { take, appearance, size } => {
@@ -131,7 +141,14 @@ impl EditorShared {
                 harmonigraph_ui::ExportAction::Reveal(video) => reveal_file(&video),
             }
         }
+    }
 
+    /// Reflect the recorder's progress into the Video pane, before it draws.
+    fn mirror_take(&mut self) {
+        // The plugin can record; the control is hidden in shells that
+        // can't (the standalone uses an env var instead).
+        self.ui.workspace.interaction.take.supported = true;
+        self.ui.workspace.interaction.take.last_take = self.take.last_take();
         self.poll_take_end();
         self.take.tick(self.take_rolling, self.take_last_count);
         self.ui.workspace.interaction.take.status = self.take.status();
@@ -147,7 +164,7 @@ impl EditorShared {
     /// the two settings the audio thread decides on, then act on whichever
     /// signal came back.
     ///
-    /// **Split out of [`sync_take`](Self::sync_take) so it can also run with
+    /// **Split out of [`take_pass`](Self::take_pass) so it can also run with
     /// no frame running.** Every trigger but `OnDisarm` decides here, which
     /// meant a take armed and then left with the window closed — a Bitwig
     /// audio export is exactly that — never ended itself and never rendered, no
@@ -284,8 +301,7 @@ mod tests {
             &shared.take,
             directory.join("absent-renderer"),
         );
-        shared.ui.workspace.interaction.take.recording = true;
-        shared.sync_take(48_000.0);
+        shared.take_pass(48_000.0, |shared| shared.ui.workspace.interaction.take.recording = true);
         assert!(shared.take.is_recording());
         // One note captured, as the Hub publishes one into the take's first run.
         recorder.is_armed();
@@ -303,6 +319,39 @@ mod tests {
         assert_eq!(shared.take_still_since, Some(first_still));
         shared.poll_take_end_at(first_still + EditorShared::STOP_SECONDS);
         assert!(!shared.take.is_recording(), "still for the whole debounce, the take ends");
+        drop(shared);
+        drop(recorder);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !probe.finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(probe.finished());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// A Record click is applied by the pass that received it, after the UI
+    /// that took it has run: the editor may go unseen before another pass.
+    #[test]
+    fn a_record_click_arms_the_take_in_the_pass_that_received_it() {
+        let (_notes, consumer) = harmonigraph_record::publication::channel();
+        let (_audio, audio_consumer) = crate::audio_ingress::channel(64);
+        let (recorder, control) = harmonigraph_record::channel();
+        let directory =
+            std::env::temp_dir().join(format!("record-click-pass-{}", std::process::id()));
+        let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+        let mut shared = EditorShared::new(
+            consumer,
+            audio_consumer,
+            Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+            control,
+        );
+        harmonigraph_record::testing::set_renderer_program(
+            &shared.take,
+            directory.join("absent-renderer"),
+        );
+        // The click, as the Video pane's toggle makes it, inside the pass.
+        shared.take_pass(48_000.0, |shared| shared.ui.workspace.interaction.take.recording = true);
+        assert!(shared.take.is_recording(), "the click waited for another pass");
         drop(shared);
         drop(recorder);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -335,8 +384,7 @@ mod tests {
         shared.ui.picture.appearance.render.short_edge = 2160;
         shared.ui.workspace.interaction.prefs.ui_scale = 1.25;
         let expected = shared.ui.picture.appearance.serialize();
-        shared.ui.workspace.interaction.take.recording = true;
-        shared.sync_take(44_100.0);
+        shared.take_pass(44_100.0, |shared| shared.ui.workspace.interaction.take.recording = true);
         assert!(shared.take.is_recording(), "{}", shared.take.status());
         shared.ui.picture.appearance = Default::default();
         // Closing the producer finalizes the writer without launching an export.

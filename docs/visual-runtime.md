@@ -44,7 +44,9 @@ A host restore is installed by whichever holder of the editor lock comes first,
 and the worker's first hold of a step comes before its take,
 so a restored analysis window affects the first consumed audio.
 
-Full recording control synchronization remains once per GUI callback in [`EditorShared::sync_take`](../crates/harmonigraph-plugin/src/editor/shared.rs).
+The recording commands (Record, Stop and the export actions) are applied once per GUI callback,
+after the UI has drawn, in the pass that received them,
+and the recorder's status is mirrored into the Video pane before it draws ([`EditorShared::take_pass`](../crates/harmonigraph-plugin/src/editor/shared.rs)).
 Every [`background::step`](../crates/harmonigraph-plugin/src/background.rs) separately calls `EditorShared::poll_take_end`,
 so a completed take can finish and render with no frame running.
 Both paths share one stopped-transport debounce, timed in seconds on `LiveInput::now`'s clock (`EditorShared::STOP_SECONDS`),

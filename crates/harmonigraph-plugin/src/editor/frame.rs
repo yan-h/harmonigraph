@@ -11,9 +11,10 @@ use super::persist::EguiState;
 use super::pop_out::PopOut;
 
 /// The plugin's per-frame GUI work: take the frame's lock, close out the note
-/// frame, reconcile the take — and then hand the state the input worker has
-/// fed to [`harmonigraph_ui::shell::Frame`], which draws it and answers with
-/// whatever the folds it settled leave the window needing.
+/// frame — and then hand the state the input worker has fed to
+/// [`harmonigraph_ui::shell::Frame`], which draws it and answers with
+/// whatever the folds it settled leave the window needing, with the take
+/// reconciled around it ([`EditorShared::take_pass`](super::EditorShared::take_pass)).
 ///
 /// What stays here is what only this shell can do: the take and the params
 /// are its own, and so is the frame rate at the end, since it is the only
@@ -31,9 +32,10 @@ pub(super) fn frame(
     // must be able to release the view and its callbacks.
     let Some(pop_out) = state.pop_out.upgrade() else { return };
 
-    // Everything the shell does before the UI runs: the lock, a restore,
-    // the camera and the take. Timed separately because `ui cpu` starts at
-    // the dock build, so this stretch sits outside every other CPU reading.
+    // Everything the shell does before the UI runs: the lock, a restore and
+    // the camera; the take's mirror, a few loads and copies, runs just after.
+    // Timed separately because `ui cpu` starts at the dock build, so this
+    // stretch sits outside every other CPU reading.
     // The rings and their FFTs are the input worker's, off this thread.
     let shell_start = Instant::now();
     let setter = ParamSetter::new(context);
@@ -81,14 +83,6 @@ pub(super) fn frame(
         gesture: &shared.gesture,
         configuration,
     });
-    shared.sync_take(sample_rate);
-
-    let backend = PluginParamBackend {
-        params: &state.params,
-        setter: &setter,
-        gesture: &shared.gesture,
-        configuration,
-    };
     // Last frame's costs that the shell measures and the UI cannot: they
     // happen after `root_ui` returns.
     //
@@ -123,15 +117,23 @@ pub(super) fn frame(
     // Offered only where the shell can give the editor its own window, and
     // read back after the UI has had the chance to flip it.
     shared.ui.workspace.interaction.own_window = pop_out.offered().then(|| !egui_state.docked());
-    let ask = harmonigraph_ui::shell::Frame {
-        ui,
-        state: &mut shared.ui,
-        params: &backend,
-        now,
-        build_tag: crate::BUILD_TAG,
-        window_size: egui::vec2(window_width as f32, window_height as f32),
-    }
-    .draw();
+    let ask = shared.take_pass(sample_rate, |shared| {
+        let backend = PluginParamBackend {
+            params: &state.params,
+            setter: &setter,
+            gesture: &shared.gesture,
+            configuration,
+        };
+        harmonigraph_ui::shell::Frame {
+            ui,
+            state: &mut shared.ui,
+            params: &backend,
+            now,
+            build_tag: crate::BUILD_TAG,
+            window_size: egui::vec2(window_width as f32, window_height as f32),
+        }
+        .draw()
+    });
     #[cfg(all(feature = "frame-log", target_os = "macos"))]
     state.logged.note(&shared.ui);
 
