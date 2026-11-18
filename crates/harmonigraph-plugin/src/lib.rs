@@ -57,9 +57,8 @@ pub use editor::startup_probe::run as editor_startup_probe;
 // about `debug_assertions`, and that is an agreement BETWEEN two profiles
 // rather than a property of one: a `cargo test` lib-test unit compiles under
 // `test` while harmonigraph-clap compiles under `dev`. They agree by default, and this
-// workspace already customises `dev`, `dev.package."*"` and
-// `release.package.*`, so both ways of breaking it are reachable from
-// `Cargo.toml`:
+// workspace already customises `dev` and `dev.package."*"`, so both ways of
+// breaking it are reachable from `Cargo.toml`:
 //
 //   * `[profile.test] debug-assertions = false` leaves harmonigraph-clap's on
 //     and turns this one on too — two `#[global_allocator]`s in one binary,
