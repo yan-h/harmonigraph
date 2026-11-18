@@ -61,7 +61,7 @@ signalsmith-stretch = "0.1.3"
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"] }
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSView", "NSResponder", "NSControl", "NSButton", "NSButtonCell", "NSTextField", "NSCell"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSTimer", "NSGeometry", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSTimer", "NSDate", "NSGeometry", "objc2-core-foundation"] }
 
 [dev-dependencies]
 nice-plug = { workspace = true, features = ["clap-boundary-tests", "assert_process_allocs"] }
