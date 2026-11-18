@@ -32,6 +32,11 @@ repository = "https://codeberg.org/RustAudio/nice-plug"
 name = "nice_plug_derive"
 path = "src/lib.rs"
 proc-macro = true
+# It has no tests of its own (harmonigraph-clap's derive_* tests cover it), and
+# a proc-macro's test binary links libstd dynamically, which the workspace's
+# test runner cannot load on macOS: `/usr/bin/env` drops the DYLD_ path.
+test = false
+doctest = false
 
 [dependencies.proc-macro2]
 version = "1.0"

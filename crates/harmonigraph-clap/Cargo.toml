@@ -47,7 +47,9 @@ simd = []
 [lib]
 name = "nice_plug"
 path = "src/lib.rs"
-# The upstream doc examples were never run here, and do not build as written.
+# No doc-tests, as in harmonigraph-plugin (#1181). The vendored tree never ran
+# them, and of the five upstream examples four are `ignore`d and the fifth
+# (`Plugin::AUDIO_IO_LAYOUTS`) names `nice_plug_core`, which is gone.
 doctest = false
 
 [[test]]

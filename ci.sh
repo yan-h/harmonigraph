@@ -156,7 +156,10 @@ run python3 -B .claude/tests/frame-log-summary.py
 quick run cargo clippy --workspace --all-targets -- -D warnings
 # Guard the existing production performance scenarios at their exported
 # callbacks, and the CLAP configuration owner's allocation-free paths
-# (`configuration::tests`), which this is the only run of.
+# (`configuration::tests`), which this is the only run of. It is also the only
+# run of harmonigraph-clap's own tests: nice-plug-core's unit tests, the derive
+# tests, and the CLAP boundary and auxiliary fixtures, the first of which
+# `required-features` skips silently without both features named here.
 #
 # harmonigraph-render is EXCLUDED because this run was the SECOND of two copies
 # of its tests and the wrong one to keep: 282 of them here in 47.7s, 284 of them
@@ -173,7 +176,7 @@ quick run cargo clippy --workspace --all-targets -- -D warnings
 # fails here; what is given up is a hot-reload-only RUNTIME failure inside a
 # render test, in a feature that is standalone-harness-only.
 run cargo test --no-fail-fast --workspace --exclude harmonigraph-render \
-  --features nice-plug/assert_process_allocs
+  --features harmonigraph-clap/assert_process_allocs,harmonigraph-clap/clap-boundary-tests
 
 group isolated
 
@@ -205,7 +208,8 @@ run cargo check -p harmonigraph-plugin --features frame-log
 
 # Every other gate here runs the dev profile, and the profile hides a class of
 # break by itself. `nice-assert-no-alloc` compiles its allocation guard out when
-# debug assertions are off, so #805 was a test target that could not compile
+# debug assertions are off and its default `disable_release` is on (the root
+# Cargo.toml keeps it off), so #805 was a test target that could not compile
 # under `--release` while everything above stayed green — the same shape as a
 # guard that passes without guarding, one level up. `check` rather than `test`
 # because the compile break is the half that regresses silently; that the guard
@@ -275,21 +279,12 @@ golden_diff() {
 }
 run golden_diff
 
-# The vendored crates are `exclude`d from the workspace (the `[workspace]`
-# table's own key, in Cargo.toml), so `--workspace` compiles them as
-# dependencies and runs none of their tests. nice-plug's upstream tests exercise
-# macros and serialization; its patched CLAP boundary is exercised by the
-# exported-CLAP fixture above, including activation latency and allocation
-# guards. The editor window's crates (baseview, egui-baseview) and the editor's
-# own window (plugin-own-window) are pinned from egui-plugin-window, whose own
-# CI runs their tests.
-#
-# nice-plug is its own workspace root, so keep its target under `target/debug`:
-# the idle-worktree reclaimer owns that whole subtree.
-# Production opt-in CLAP performance boundary and CLAP auxiliary bounds.
-run cargo test --no-fail-fast --manifest-path vendor/nice-plug/Cargo.toml \
-  --target-dir target/debug/vendor-nice-plug --features assert_process_allocs,clap-boundary-tests \
-  --test clap_boundary --test clap_auxiliary
+# The vendored wgpu-hal is `exclude`d from the workspace (the `[workspace]`
+# table's own key, in Cargo.toml), so `--workspace` compiles it as a dependency
+# and runs none of its tests. harmonigraph-clap is a member, so its tests run in
+# the workspace gate. The editor window's crates (baseview, egui-baseview) and
+# the editor's own window (plugin-own-window) are pinned from
+# egui-plugin-window, whose own CI runs their tests.
 
 group workspace
 
