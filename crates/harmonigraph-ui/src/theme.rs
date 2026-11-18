@@ -278,8 +278,9 @@ pub(crate) const TAB_BAR_HEIGHT: f32 = 26.0;
 // Deliberately not egui's `zoom_factor`, which is the obvious tool and the
 // wrong one here, though the plugin's shell (egui-baseview, from
 // egui-plugin-window) honours it in every points conversion. Nothing here sets
-// one, and egui's keyboard zoom cannot fire in the plugin, whose key table
-// produces no `Plus`, `Equals` or `Minus`.
+// one. egui's keyboard zoom cannot zoom in the plugin, whose key table
+// produces no `Plus`, `Equals` or `Minus`; Cmd-0 does reach it, as `Num0`, and
+// resets the factor to 1, where it already is.
 //
 // Scaling the style leaves the picture alone, which zoom would not: the
 // lattice, the roll and the spectrogram size themselves off their pane rect, so
