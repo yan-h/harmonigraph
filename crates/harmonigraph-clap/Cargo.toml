@@ -40,9 +40,6 @@ all-features = true
 # Enables deterministic scheduling observations only in the boundary fixtures.
 clap-boundary-tests = []
 assert_process_allocs = ["dep:nice-assert-no-alloc"]
-# nice-plug-core's `std::simd` buffer adapters, which need a nightly compiler.
-# Nothing enables it; it is declared so the code behind it is not an unknown cfg.
-simd = []
 
 [lib]
 name = "nice_plug"

@@ -19,7 +19,7 @@ The later steps of #1814 collapse these layers into a shell written on `clap-sys
 - **Pruned to the CLAP wrapper** (#1810):
   the VST3 and standalone wrappers, the macOS, Linux and Windows event loops only they constructed, the Win32 window-API branches, and the `zstd` and `unsafe_flush_denormals` features with the code behind them are gone, with the dependencies only they used.
   The flush-to-zero guard went too: every effect it had sat behind `unsafe_flush_denormals`, so on macOS it was a no-op.
-  nice-plug-core's `simd` feature is still declared and enabled by nothing.
+  nice-plug-core's nightly-only `simd` feature and its buffer adapters went when the crate became a workspace member, where `--all-features` would select them.
   The local VST3 fixes (#741's bus arrangements, #1128's note-expression lanes) had already been reverted with the VST3 export (#1185).
 - **Not re-vendored.** An upgrade is a port of what a newer nice-plug changed in the CLAP wrapper, the state glue and the tests, taking only what is wanted (Yan, 2026-11-17); nothing the prune deleted comes back with it.
   Upstreaming was declined on 2026-07-19.

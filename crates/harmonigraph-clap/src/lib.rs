@@ -79,7 +79,6 @@
 //! There's a whole lot more to discuss, but once you understand the above you should be able to
 //! figure out the rest by reading through the examples and the API documentation. Good luck!
 
-#![cfg_attr(feature = "simd", feature(portable_simd))]
 #![allow(clippy::type_complexity)]
 
 // nice-plug-core's root, merged in: its modules sit at this crate's root, where

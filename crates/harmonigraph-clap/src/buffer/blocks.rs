@@ -2,9 +2,6 @@
 
 use std::marker::PhantomData;
 
-#[cfg(feature = "simd")]
-use std::simd::Simd;
-
 use super::SamplesIter;
 
 /// An iterator over all samples in the buffer, slicing over the sample-dimension with a maximum
@@ -217,113 +214,6 @@ impl<'slice, 'sample> Block<'slice, 'sample> {
             (&mut (*self.buffers))
                 .get_unchecked_mut(channel_index)
                 .get_unchecked_mut(self.current_block_start..self.current_block_end)
-        }
-    }
-
-    /// Get a SIMD vector containing the channel data for a specific sample in this block. If `LANES
-    /// > channels.len()` then this will be padded with zeroes. If `LANES < channels.len()` then
-    /// this won't contain all values.
-    ///
-    /// Returns a `None` value if `sample_index` is out of bounds.
-    #[cfg(feature = "simd")]
-    #[inline]
-    pub fn to_channel_simd<const LANES: usize>(
-        &self,
-        sample_index: usize,
-    ) -> Option<Simd<f32, LANES>> {
-        if sample_index > self.samples() {
-            return None;
-        }
-
-        let used_lanes = self.samples().max(LANES);
-        let mut values = [0.0; LANES];
-        for (channel_idx, value) in values.iter_mut().enumerate().take(used_lanes) {
-            *value = unsafe {
-                *(&(*self.buffers))
-                    .get_unchecked(channel_idx)
-                    .get_unchecked(self.current_block_start + sample_index)
-            };
-        }
-
-        Some(Simd::from_array(values))
-    }
-
-    /// Get a SIMD vector containing the channel data for a specific sample in this block. Will
-    /// always read exactly `LANES` channels, and does not perform bounds checks on `sample_index`.
-    ///
-    /// # Safety
-    ///
-    /// Undefined behavior if `LANES > block.len()` or if `sample_index > block.len()`.
-    #[cfg(feature = "simd")]
-    #[inline]
-    pub unsafe fn to_channel_simd_unchecked<const LANES: usize>(
-        &self,
-        sample_index: usize,
-    ) -> Simd<f32, LANES> {
-        let mut values = [0.0; LANES];
-        for (channel_idx, value) in values.iter_mut().enumerate() {
-            *value = unsafe {
-                *(&(*self.buffers))
-                    .get_unchecked(channel_idx)
-                    .get_unchecked(self.current_block_start + sample_index)
-            };
-        }
-
-        Simd::from_array(values)
-    }
-
-    /// Write data from a SIMD vector to this sample's channel data for a specific sample in this
-    /// block. This takes the padding added by [`to_channel_simd()`][Self::to_channel_simd()] into
-    /// account.
-    ///
-    /// Returns `false` if `sample_index` is out of bounds.
-    #[cfg(feature = "simd")]
-    #[allow(clippy::wrong_self_convention)]
-    #[inline]
-    pub fn from_channel_simd<const LANES: usize>(
-        &mut self,
-        sample_index: usize,
-        vector: Simd<f32, LANES>,
-    ) -> bool {
-        if sample_index > self.samples() {
-            return false;
-        }
-
-        let used_lanes = self.samples().max(LANES);
-        let values = vector.to_array();
-        for (channel_idx, value) in values.into_iter().enumerate().take(used_lanes) {
-            *unsafe {
-                (&mut (*self.buffers))
-                    .get_unchecked_mut(channel_idx)
-                    .get_unchecked_mut(self.current_block_start + sample_index)
-            } = value;
-        }
-
-        true
-    }
-
-    /// Write data from a SIMD vector to this sample's channel data for a specific sample in this
-    /// block.. This assumes `LANES` matches exactly with the number of channels in the buffer, and
-    /// does not perform bounds checks on `sample_index`.
-    ///
-    /// # Safety
-    ///
-    /// Undefined behavior if `LANES > block.len()` or if `sample_index > block.len()`.
-    #[cfg(feature = "simd")]
-    #[allow(clippy::wrong_self_convention)]
-    #[inline]
-    pub unsafe fn from_channel_simd_unchecked<const LANES: usize>(
-        &mut self,
-        sample_index: usize,
-        vector: Simd<f32, LANES>,
-    ) {
-        let values = vector.to_array();
-        for (channel_idx, value) in values.into_iter().enumerate() {
-            unsafe {
-                *(&mut (*self.buffers))
-                    .get_unchecked_mut(channel_idx)
-                    .get_unchecked_mut(self.current_block_start + sample_index) = value;
-            }
         }
     }
 }
