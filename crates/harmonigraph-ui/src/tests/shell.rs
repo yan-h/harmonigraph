@@ -426,10 +426,10 @@ fn a_voice_in_an_idle_editor_asks_for_the_next_tick() {
     assert_eq!(delay(&sounding), std::time::Duration::ZERO, "a voice repaints at once");
 }
 
-/// Tab with a modifier goes to the host, so it must not also run egui's focus
-/// traversal: Shift-Tab would focus the last widget, and from then on the
-/// editor claims every key, so Space presses that widget instead of reaching
-/// the DAW.
+/// Tab with a modifier is not the chrome toggle and moves no focus. In the
+/// plug-in it goes to the host and never reaches egui unless a text field has
+/// the keyboard; this drives the UI directly, where it does reach egui, so
+/// the UI itself must not run egui's focus traversal on it.
 #[test]
 fn a_tab_with_a_modifier_moves_no_focus_and_keeps_the_chrome() {
     let tab = |modifiers| egui::Event::Key {

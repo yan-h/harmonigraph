@@ -164,7 +164,9 @@ pub(super) fn frame(
     queue.set_frame_divisor(shared.ui.workspace.interaction.prefs.frame_rate.divisor());
     // What this frame claimed, the editor's until the next frame says
     // otherwise: a key arrives between frames (see `harmonigraph_ui::keys`).
-    // Every other key goes to the host, unless a text field has the keyboard.
+    // A focused text field's own keys, and the shell's own Escape and Cmd-C
+    // claims (a drag, a popup, a selected label), are the editor's too; every
+    // other key goes to the host.
     queue.set_shortcuts(&harmonigraph_ui::keys::claimed(ui.ctx()));
 }
 

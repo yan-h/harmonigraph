@@ -289,9 +289,11 @@ pub fn root_ui(
     // It takes precedence over keyboard focus traversal outside text edits;
     // cancelling the queued focus move keeps the toggle from moving focus too.
     // Bare Tab alone, as the shell reserves it. A Tab with a modifier goes to
-    // the host, so it moves no focus here either. A text edit moves focus on
-    // Tab, which the shell gives it by the text-field rule; claimed here as
-    // well for a frame that ends the edit, whose Tab the next frame toggles on.
+    // the host, so it moves no focus here either. A focused text field, a
+    // value being typed included, owns bare Tab and Shift-Tab by the shell's
+    // text-field rule, and egui moves the focus on them to the next or the
+    // previous control; claimed here as well for a frame that ends the edit,
+    // whose Tab the next frame toggles on.
     if ui.ctx().text_edit_focused() {
         keys::claim(ui.ctx(), &[FRAMELESS_SHORTCUT]);
     } else {
