@@ -1,819 +1,100 @@
 //! The editor's own window, so the picture stays on screen when the host is
-//! not the frontmost app.
+//! not the frontmost app: egui-plugin-window's `plugin-own-window`, which
+//! otonal shares. What the window does and why (its level and stacking, the
+//! host's window concealed, moves deferred out of a frame, the close button
+//! telling the host, where it reopens) is in that crate's documentation; this
+//! is the adapter: the window's name and limits, whom its close button tells,
+//! and what each move writes into [`EguiState`].
 //!
-//! Bitwig takes every plugin window off screen while another app is in front:
-//! the window it gives the editor sits at the floating level and is ordered
-//! out on deactivation, while the plugin-host process stays un-hidden. A window
-//! the plugin creates itself is one Bitwig does not know about, and it stays up
-//! (checked in Bitwig: #1580). So on macOS the editor lives in one unless the
-//! System tab docks it, and the host's window is then left open but invisible
-//! and click-through. Hiding it outright would be undone: Bitwig orders it back
-//! to the front whenever it is itself brought forward.
-//!
-//! The live view moves rather than a second one opening, which keeps the
-//! renderer and the egui context; baseview already follows its view to a new
-//! window (tracking area, first responder, occlusion, and the display link,
-//! which follows the screen). A move is never made inside a frame: making a
-//! window key sends baseview a focus event on the spot, and baseview's handler
-//! is borrowed for the whole frame, so a move from a frame panics across AppKit
-//! and takes the host process down. The one at open is made from
-//! `Editor::spawn`; one the System tab asks for is performed on the run loop's
-//! next turn ([`PopOut::want`]).
-//!
-//! What the host's window did for the editor, this one does in its place. It
-//! floats above the host's windows while the host is in front, as Bitwig's
-//! did, and drops to the normal level while another app is, which is where
-//! Bitwig's would have vanished.
-//!
-//! A key the editor leaves unclaimed, Space among them, goes to the host's view
-//! from either window: baseview sends it to the view it was opened in, held
-//! weakly, rather than up the responder chain, which in this window ends at the
-//! window itself, where AppKit beeps (egui-plugin-window's baseview Patch 8).
-//! Bitwig's view posts it to the main app, which works concealed: its forward
-//! asks nothing of the window but that it be theirs.
-//!
-//! Its close button does not close it: the editor is the host's to destroy,
-//! and the host's show/hide control would otherwise still think it open. The
-//! button tells the host the user closed it ([`EditorHost::closed`]), for the
-//! host to destroy the editor as its own control does. Asking Bitwig to hide
-//! it instead (`request_hide`) hid it, but left Bitwig's control showing it
-//! open (#1609). The telling waits for the run loop's next turn, since the
-//! host may destroy the editor during it, and the window must not go while
-//! AppKit is still closing it. Without a host to tell, the window is
-//! minimized.
-//!
-//! The view's size is the size source's to set, as for a host resize: the
-//! size source asks [`PopOut::take_size`] first, at the top of the frame it
-//! will be laid out in. Every AppKit call here is on the main thread, which is
-//! where egui-baseview runs its size source and its frames, and where the CLAP
-//! host creates and destroys the editor.
+//! The window is one per open editor, made in `Editor::spawn` on the main
+//! thread its every method requires, owned by the editor handle and closed
+//! there before baseview closes the view; the size source and the frame hold
+//! it weakly.
 
 use std::sync::Arc;
 
+use baseview::WindowHandle;
 use nice_plug::prelude::ParentWindowHandle;
 use nice_plug::wrapper::clap::EditorHost;
+use plugin_own_window::{Limits, Move};
+use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
+
+pub(super) use plugin_own_window::{OwnSize, OwnWindow};
 
 use super::persist::EguiState;
+use super::{MAX_SIZE, MIN_SIZE};
 
-#[cfg(target_os = "macos")]
-pub(super) use macos::PopOut;
+/// The window's title, and the name AppKit remembers its place under, in the
+/// defaults of the process the plugin runs in: a new name would forget where
+/// the player put it.
+pub(super) const NAME: &str = "Harmonigraph";
 
-#[cfg(not(target_os = "macos"))]
-pub(super) use elsewhere::PopOut;
+/// The sizes the player may give the own window, which are the editor's.
+pub(super) const LIMITS: Limits = Limits { min: MIN_SIZE, max: MAX_SIZE };
 
-/// What the size source owes the view this frame, from [`PopOut::take_size`].
-pub(super) enum Sized {
-    /// The editor's own window was resized: the editor takes its size.
-    Own((u32, u32)),
-    /// The editor is back in the host's window, which should be brought to
-    /// the editor's size.
-    Docked,
+/// Learn the editor's views once it has opened in the host's, and move it into
+/// its own window unless the project keeps it `docked`. Called from
+/// `Editor::spawn`, outside any frame, holding no lock that `moving` or the
+/// unseen notice takes. Under a parent that is no AppKit view the window is
+/// never offered.
+pub(super) fn open(
+    own: &Arc<OwnWindow>,
+    parent: ParentWindowHandle,
+    window: &WindowHandle,
+    editor: Arc<EguiState>,
+    host: Option<Arc<dyn EditorHost>>,
+) {
+    let (ParentWindowHandle::AppKitNsView(host_view), RawWindowHandle::AppKit(view)) =
+        (parent, window.raw_window_handle())
+    else {
+        return;
+    };
+    let out = !editor.docked();
+    // Without a host to tell, the window has no close button.
+    let closed = host.map(|host| Box::new(move || host.closed()) as Box<dyn Fn() -> bool>);
+    // SAFETY: the host's view the editor opened in, and baseview's inside it,
+    // both alive for the call.
+    unsafe { own.open(host_view, view.ns_view, out, LIMITS, closed, Box::new(moving(editor))) };
 }
 
-#[cfg(target_os = "macos")]
-mod macos {
-    use super::*;
-
-    use std::cell::RefCell;
-    use std::path::{Path, PathBuf};
-    use std::sync::Weak;
-
-    use baseview::WindowHandle;
-    use dispatch2::MainThreadBound;
-    use objc2::rc::Retained;
-    use objc2::runtime::{AnyObject, ProtocolObject};
-    use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly};
-    use objc2_app_kit::{
-        NSBackingStoreType, NSView, NSWindow, NSWindowCollectionBehavior, NSWindowDelegate,
-        NSWindowLevel, NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
-        NSWorkspaceDidActivateApplicationNotification,
-    };
-    use objc2_foundation::{
-        MainThreadMarker, NSArray, NSDictionary, NSNotification, NSNumber, NSObject,
-        NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
-    };
-    use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
-
-    /// The level Bitwig gives its plugin windows, measured (CG layer 3), and
-    /// `kCGFloatingWindowLevel`: above the host's own windows.
-    const FLOATING: NSWindowLevel = 3;
-    /// `kCGNormalWindowLevel`.
-    const NORMAL: NSWindowLevel = 0;
-
-    /// Where AppKit keeps the window's frame between opens, in the defaults of
-    /// the process the plugin runs in.
-    const AUTOSAVE: &str = "Harmonigraph";
-
-    /// The editor handle owns this; view callbacks and the agent hold weak
-    /// references. The framework requires a sendable handle, but AppKit state
-    /// is accessible only with a main-thread marker.
-    ///
-    /// Normal teardown stays on main. A final off-main drop would synchronously
-    /// dispatch there, so this is not an arbitrary-thread shutdown protocol.
-    pub(in crate::editor) struct PopOut(MainThreadBound<LocalPopOut>);
-
-    struct LocalPopOut {
-        state: RefCell<State>,
-        /// Told whether the view is in its own window as it moves
-        /// ([`EguiState::in_own_window`]).
-        editor: Arc<EguiState>,
-    }
-
-    #[derive(Default)]
-    struct State {
-        /// The host's view, which the editor's view lives in while docked.
-        host: Option<Retained<NSView>>,
-        /// baseview's view, the one that moves.
-        view: Option<Retained<NSView>>,
-        /// Hears which app comes to the front, and performs deferred moves.
-        agent: Option<Retained<Agent>>,
-        /// The editor's own window, while the view is in it.
-        window: Option<Retained<NSWindow>>,
-        /// The content size last given to the view in its own window, in
-        /// logical points.
-        size: (u32, u32),
-        /// A move asked for and not yet performed: out if true.
-        wanted: Option<bool>,
-        /// Docked since the last size source.
-        redocked: bool,
-        /// An app that came forward and has not yet raised its windows, and
-        /// how many more times to look ([`SETTLE_TRIES`]). Kept at zero once
-        /// the looks run out with the window still raised over everything,
-        /// so the next app to come forward tucks it instead.
-        settling: Option<(i32, u8)>,
-        /// Whom the close button tells, absent where there is no CLAP host.
-        editor_host: Option<Arc<dyn EditorHost>>,
-        /// Already told the host to destroy this editor. The callback may
-        /// return before destruction; docking does not make it a new editor.
-        closing: bool,
-    }
-
-    fn main_thread() -> MainThreadMarker {
-        MainThreadMarker::new().expect("the editor window is only reached from the main thread")
-    }
-
-    fn ns_view(handle: RawWindowHandle) -> Option<Retained<NSView>> {
-        let RawWindowHandle::AppKit(handle) = handle else { return None };
-        // SAFETY: an AppKit handle's `ns_view` is an NSView, alive for the
-        // duration of this call; retaining it keeps it alive after.
-        unsafe { Retained::retain(handle.ns_view.cast::<NSView>()) }
-    }
-
-    fn logical(size: NSSize) -> (u32, u32) {
-        (size.width.round().max(1.0) as u32, size.height.round().max(1.0) as u32)
-    }
-
-    /// Whether the frontmost app is the host: the app whose bundle this
-    /// process runs from. That is the DAW itself for a host that loads
-    /// plugins in-process, and still the DAW for Bitwig's sandboxed plugin
-    /// host, which runs from inside `Bitwig Studio.app`; the editor's own
-    /// process counts too, since it is in front while its window is clicked.
-    ///
-    /// `None` when it is the host, or else the frontmost app's process.
-    fn other_in_front(exe: &Path) -> Option<i32> {
-        let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
-        // SAFETY: `processIdentifier` is a `pid_t` property of every running
-        // application, read by hand to spare the binding its `libc` feature.
-        let pid: i32 = unsafe { msg_send![&*app, processIdentifier] };
-        // This process by its pid, since a plugin host need not be a bundle.
-        if pid as u32 == std::process::id() {
-            return None;
-        }
-        let bundle = app.bundleURL().and_then(|url| url.path());
-        if bundle.is_some_and(|bundle| exe.starts_with(PathBuf::from(bundle.to_string()))) {
-            return None;
-        }
-        Some(pid)
-    }
-
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        /// Returns a +1 `CFArrayRef` of `CFDictionaryRef`, toll-free
-        /// bridged to their Foundation counterparts.
-        fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> *mut NSArray;
-    }
-
-    /// The window to put the editor's just below when `pid` comes to the
-    /// front: the last of the run of its windows at the front of the normal
-    /// level (this one's own excepted), so the app that came forward covers
-    /// it and nothing that was behind it does. `None` while that app's windows
-    /// are not at the front yet.
-    ///
-    /// Only the owner, layer and number of each window are read, which need
-    /// no screen-recording permission.
-    fn below_front_of(pid: i32, own: isize) -> Option<isize> {
-        const ON_SCREEN_ONLY: u32 = 1 << 0;
-        const EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
-        // SAFETY: a Copy-rule CoreFoundation array, owned from here.
-        let list = unsafe {
-            Retained::from_raw(CGWindowListCopyWindowInfo(
-                ON_SCREEN_ONLY | EXCLUDE_DESKTOP_ELEMENTS,
-                0,
-            ))
-        }?;
-        let value = |info: &AnyObject, key: &str| -> Option<Retained<NSNumber>> {
-            let info = info.downcast_ref::<NSDictionary>()?;
-            info.objectForKey(&*NSString::from_str(key))?.downcast::<NSNumber>().ok()
-        };
-        let number = |info: &AnyObject, key: &str| value(info, key).map(|n| n.as_isize());
-        let mut front_run = None;
-        for info in list.iter() {
-            if number(&info, "kCGWindowLayer") != Some(NORMAL) {
-                continue;
-            }
-            // An invisible window (an overlay, or Bitwig's concealed one) is
-            // in front of nothing.
-            if value(&info, "kCGWindowAlpha").is_some_and(|alpha| alpha.as_f64() == 0.0) {
-                continue;
-            }
-            let Some(window) = number(&info, "kCGWindowNumber") else { continue };
-            if window == own {
-                continue;
-            }
-            if number(&info, "kCGWindowOwnerPID") != Some(pid as isize) {
-                break;
-            }
-            front_run = Some(window);
-        }
-        front_run
-    }
-
-    /// Put the window just behind the windows `pid` brought forward, if they
-    /// are at the front yet. Returns whether they were.
-    fn tuck(window: &NSWindow, pid: i32) -> bool {
-        let Some(other) = below_front_of(pid, window.windowNumber()) else { return false };
-        window.orderWindow_relativeTo(NSWindowOrderingMode::Below, other);
-        true
-    }
-
-    /// How often, and how many times, to look again for the windows of an
-    /// app that came forward. The activation is announced before that app has
-    /// raised them, at least when it was clicked in the Dock (seen in Bitwig,
-    /// #1580): looked for at once, they are still wherever they were, and the
-    /// editor tucked behind them would land behind whatever covered them.
-    const SETTLE_DELAY: f64 = 0.05;
-    const SETTLE_TRIES: u8 = 10;
-
-    /// Keep the host's window out of sight and out of the way, but open:
-    /// closing or hiding it is the host's to undo, and Bitwig does.
-    fn conceal(window: &NSWindow) {
-        if window.alphaValue() != 0.0 {
-            window.setAlphaValue(0.0);
-        }
-        if !window.ignoresMouseEvents() {
-            window.setIgnoresMouseEvents(true);
-        }
-    }
-
-    fn reveal(window: &NSWindow) {
-        window.setIgnoresMouseEvents(false);
-        window.setAlphaValue(1.0);
-    }
-
-    impl PopOut {
-        pub(in crate::editor) fn new(editor: Arc<EguiState>) -> Arc<Self> {
-            Arc::new(Self(MainThreadBound::new(
-                LocalPopOut { state: RefCell::new(State::default()), editor },
-                main_thread(),
-            )))
-        }
-
-        fn state(&self) -> &RefCell<State> {
-            &self.0.get(main_thread()).state
-        }
-
-        /// Learn the editor's views once it has opened in the host's, and
-        /// move it into its own window unless it is to stay `docked`. Called
-        /// from `Editor::spawn`, which is outside any frame (see the module
-        /// documentation).
-        pub(in crate::editor) fn open(
-            self: &Arc<Self>,
-            parent: ParentWindowHandle,
-            window: &WindowHandle,
-            docked: bool,
-            editor_host: Option<Arc<dyn EditorHost>>,
-        ) {
-            let mtm = main_thread();
-            let ParentWindowHandle::AppKitNsView(host) = parent else { return };
-            let mut handle = raw_window_handle::AppKitWindowHandle::empty();
-            handle.ns_view = host;
-            let (Some(host), Some(view)) =
-                (ns_view(RawWindowHandle::AppKit(handle)), ns_view(window.raw_window_handle()))
-            else {
-                return;
-            };
-            let exe = std::env::current_exe().unwrap_or_default();
-            let agent = Agent::alloc(mtm).set_ivars(Ivars { pop_out: Arc::downgrade(self), exe });
-            // SAFETY: NSObject's init on a freshly allocated subclass instance.
-            let agent: Retained<Agent> = unsafe { msg_send![super(agent), init] };
-            // SAFETY: `activated:` takes the notification; the agent is
-            // removed in `close`, before it can be freed.
-            unsafe {
-                NSWorkspace::sharedWorkspace()
-                    .notificationCenter()
-                    .addObserver_selector_name_object(
-                        &agent,
-                        sel!(activated:),
-                        Some(NSWorkspaceDidActivateApplicationNotification),
-                        None,
-                    );
-            }
-            *self.state().borrow_mut() = State {
-                host: Some(host),
-                view: Some(view),
-                agent: Some(agent),
-                editor_host,
-                ..State::default()
-            };
-            if !docked {
-                self.pop(mtm);
-            }
-        }
-
-        /// Whether the editor can have a window of its own here.
-        pub(in crate::editor) fn offered(&self) -> bool {
-            self.state().borrow().agent.is_some()
-        }
-
-        /// Ask for the editor in its own window or in the host's, performed
-        /// on the run loop's next turn if it is not there already: asked from
-        /// a frame, which is no place to move it (see the module
-        /// documentation).
-        pub(in crate::editor) fn want(&self, out: bool) {
-            let agent = {
-                let mut state = self.state().borrow_mut();
-                if state.window.is_some() == out {
-                    // There already, which also calls off a move the other
-                    // way that has not happened yet.
-                    state.wanted = None;
-                    return;
-                }
-                if state.wanted.replace(out).is_some() {
-                    return;
-                }
-                state.agent.clone()
-            };
-            let Some(agent) = agent else { return };
-            // SAFETY: `apply:` is the agent's own method, taking an object it
-            // ignores; the run loop retains the target until then.
-            let () = unsafe {
-                msg_send![
-                    &*agent,
-                    performSelector: sel!(apply:),
-                    withObject: None::<&AnyObject>,
-                    afterDelay: 0.0f64
-                ]
-            };
-        }
-
-        /// The move [`Self::want`] deferred, off the run loop.
-        fn apply(&self) {
-            let mtm = main_thread();
-            let wanted = self.state().borrow_mut().wanted.take();
-            match wanted {
-                Some(true) => self.pop(mtm),
-                Some(false) => self.dock(),
-                None => {}
-            }
-        }
-
-        /// The size source's question, asked before the host's: what the
-        /// view's size owes to where it now is.
-        ///
-        /// Also where the host's window is kept concealed while the editor is
-        /// out of it, should the host have put it back, or have shown it only
-        /// after the editor opened.
-        pub(in crate::editor) fn take_size(&self) -> Option<Sized> {
-            let (window, host) = {
-                let mut state = self.state().borrow_mut();
-                if std::mem::take(&mut state.redocked) {
-                    return Some(Sized::Docked);
-                }
-                (state.window.clone()?, state.host.clone())
-            };
-            if let Some(host_window) = host.and_then(|host| host.window()) {
-                conceal(&host_window);
-            }
-            let size = logical(window.contentView()?.frame().size);
-            let mut state = self.state().borrow_mut();
-            (size != state.size).then(|| {
-                state.size = size;
-                Sized::Own(size)
-            })
-        }
-
-        /// A size the editor asked for itself (a pane folding sideways),
-        /// given to its own window instead of to the host. Returns whether it
-        /// was.
-        pub(in crate::editor) fn resize(&self, size: (u32, u32)) -> bool {
-            let window = {
-                let mut state = self.state().borrow_mut();
-                let Some(window) = state.window.clone() else { return false };
-                state.size = size;
-                window
-            };
-            window.setContentSize(NSSize::new(f64::from(size.0), f64::from(size.1)));
-            true
-        }
-
-        fn pop(&self, mtm: MainThreadMarker) {
-            let (host, view, agent, closable) = {
-                let state = self.state().borrow();
-                let (None, Some(host), Some(view), Some(agent)) =
-                    (&state.window, &state.host, &state.view, &state.agent)
-                else {
-                    return;
-                };
-                (host.clone(), view.clone(), agent.clone(), state.editor_host.is_some())
-            };
-            let exe = agent.ivars().exe.clone();
-
-            let content = view.frame().size;
-            let mut style = NSWindowStyleMask::Titled
-                | NSWindowStyleMask::Miniaturizable
-                | NSWindowStyleMask::Resizable;
-            if closable {
-                style |= NSWindowStyleMask::Closable;
-            }
-            // SAFETY: a plain window, created and owned on the main thread.
-            let own = unsafe {
-                NSWindow::initWithContentRect_styleMask_backing_defer(
-                    NSWindow::alloc(mtm),
-                    NSRect::new(NSPoint::ZERO, content),
-                    style,
-                    NSBackingStoreType::Buffered,
-                    false,
-                )
-            };
-            // SAFETY: `State` owns the window, so AppKit must not release it
-            // on close as well.
-            unsafe { own.setReleasedWhenClosed(false) };
-            // Already NO for a plain NSWindow; said anyway, since it is the
-            // whole difference from the host's window.
-            own.setHidesOnDeactivate(false);
-            // Left to AppKit's default, a window that floats joins the Spaces
-            // it is carried through (measured in otonal, which ports this
-            // window: in both the desktop's and a fullscreen game's, shown
-            // over the game as it came forward).
-            own.setCollectionBehavior(NSWindowCollectionBehavior::Managed);
-            // The close button asks the agent, which refuses it and tells the
-            // host. The window keeps the delegate weakly; `State` owns both.
-            own.setDelegate(Some(ProtocolObject::from_ref(&*agent)));
-            own.setTitle(&NSString::from_str("Harmonigraph"));
-            let min = super::super::MIN_SIZE;
-            own.setContentMinSize(NSSize::new(f64::from(min.0), f64::from(min.1)));
-            own.setLevel(if other_in_front(&exe).is_some() { NORMAL } else { FLOATING });
-
-            // Where it was last time, at the editor's size. The first time,
-            // where the host's window is.
-            let name = NSString::from_str(AUTOSAVE);
-            if own.setFrameUsingName(&name) {
-                let frame = own.frame();
-                let top_left = NSPoint::new(frame.origin.x, frame.origin.y + frame.size.height);
-                own.setContentSize(content);
-                own.setFrameTopLeftPoint(top_left);
-            } else if let Some(host_window) = host.window() {
-                let frame = host_window.frame();
-                own.setFrameTopLeftPoint(NSPoint::new(
-                    frame.origin.x,
-                    frame.origin.y + frame.size.height,
-                ));
-            } else {
-                own.center();
-            }
-            // Refused for a second open editor in the same process, which then
-            // just goes unremembered.
-            own.setFrameAutosaveName(&name);
-
-            // The move. Made without a state borrow, as every move here is:
-            // attaching a view can draw a frame on the spot, and its size
-            // source borrows the state.
-            let Some(own_content) = own.contentView() else { return };
-            // From here the editor's size is this window's, which takes the
-            // view's: a host resize not yet taken is dropped, as is any the
-            // host makes from now on (`Editor::set_size`). Before the move,
-            // whose frame on the spot must not take the host's size either.
-            let editor = &self.0.get(mtm).editor;
+/// What a move writes into the editor's saved state, before the view moves:
+/// from a move out the editor's size is the own window's, which the project
+/// saves, and a host size not yet taken is not the editor's; a host
+/// `set_size` from then until the move back sizes the host's empty window
+/// (`Editor::set_size`). Only `EguiState`'s atomics, and no lock, so it cannot
+/// deadlock the main thread it runs on inside `open`, the deferred moves,
+/// `close` and the last drop.
+pub(super) fn moving(editor: Arc<EguiState>) -> impl Fn(Move) {
+    move |moved| match moved {
+        Move::Out(size) => {
             editor.host_resized.store(None);
-            editor.size.store(logical(content));
+            editor.size.store(size);
             editor.set_in_own_window(true);
-            view.removeFromSuperview();
-            own_content.addSubview(&view);
-            view.setFrameOrigin(NSPoint::ZERO);
-            if let Some(host_window) = host.window() {
-                conceal(&host_window);
-            }
-            own.makeKeyAndOrderFront(None);
-
-            let mut state = self.state().borrow_mut();
-            state.window = Some(own);
-            state.size = logical(content);
         }
-
-        /// Back into the host's window, shown again, and the editor's own
-        /// closed. The view keeps its size; the size source asks the host for
-        /// the same ([`Sized::Docked`]).
-        fn dock(&self) {
-            let (window, host, view, agent) = {
-                let mut state = self.state().borrow_mut();
-                let Some(window) = state.window.take() else { return };
-                // Before the move, which can draw a frame on the spot: that
-                // frame's size source must already find it docked.
-                state.redocked = true;
-                self.0.get(main_thread()).editor.set_in_own_window(false);
-                (window, state.host.clone(), state.view.clone(), state.agent.clone())
-            };
-            if let Some(agent) = agent {
-                // A close belongs to the window being removed, not to the
-                // docked editor or a window opened again before the next turn.
-                agent.cancel_host_close();
-            }
-            window.setDelegate(None);
-            if let (Some(host), Some(view)) = (host, view) {
-                view.removeFromSuperview();
-                host.addSubview(&view);
-                view.setFrameOrigin(NSPoint::ZERO);
-                if let Some(host_window) = host.window() {
-                    reveal(&host_window);
-                }
-            }
-            window.close();
-        }
-
-        /// The editor closing, called before baseview closes the view, which
-        /// takes it out of whichever window it is in: show the host's window
-        /// again, should the host reuse it, close the editor's own, and let go
-        /// of everything. Repeated calls are harmless; local destruction uses
-        /// the same cleanup if construction or teardown exits early.
-        pub(in crate::editor) fn close(&self) {
-            self.0.get(main_thread()).close();
-        }
-
-        /// The close button, deferred from the window's asking: the host is
-        /// told once for this editor, even when destruction comes on a later
-        /// turn. No state borrow is held across the call, which may run
-        /// [`Self::close`] synchronously.
-        fn ask_host_close(&self) {
-            let (host, window) = {
-                let mut state = self.state().borrow_mut();
-                if state.closing {
-                    return;
-                }
-                let Some(window) = state.window.clone() else { return };
-                state.closing = true;
-                (state.editor_host.clone(), window)
-            };
-            if host.is_some_and(|host| host.closed()) {
-                return;
-            }
-            // No usable host GUI extension: minimizing is reversible, so a
-            // later close may try again. A delivered close stays latched.
-            self.state().borrow_mut().closing = false;
-            window.miniaturize(None);
-        }
-
-        /// Another app came to the front, or the host did: float above the
-        /// host's windows while the host is. Leaving the host, sit among the
-        /// normal windows, just behind the app that came forward and above
-        /// everything else; and from one other app to the next, stay put, as
-        /// any window would, under whatever had already covered it.
-        fn front_changed(&self, exe: &Path) {
-            let (window, agent, host, unplaced) = {
-                let mut state = self.state().borrow_mut();
-                let unplaced = state.settling.take().is_some();
-                (state.window.clone(), state.agent.clone(), state.host.clone(), unplaced)
-            };
-            let Some(window) = window else { return };
-            let Some(pid) = other_in_front(exe) else {
-                // Bitwig puts its window back in front as it comes forward:
-                // hidden again now rather than at the next frame.
-                if let Some(host_window) = host.and_then(|host| host.window()) {
-                    conceal(&host_window);
-                }
-                window.setLevel(FLOATING);
-                return;
-            };
-            // Minimized: nothing to stack, which ordering it would undo.
-            if !window.isVisible() {
-                window.setLevel(NORMAL);
-                return;
-            }
-            // Still raised from leaving the host, and never tucked: placed
-            // behind this app instead, as it would have been behind that one.
-            if window.level() != FLOATING && !unplaced {
-                return;
-            }
-            window.setLevel(NORMAL);
-            if tuck(&window, pid) {
-                return;
-            }
-            // Above everything it covered, until that app's windows arrive in
-            // front of it.
-            window.orderFront(None);
-            self.state().borrow_mut().settling = Some((pid, SETTLE_TRIES));
-            if let Some(agent) = agent {
-                agent.settle_later();
-            }
-        }
-
-        /// Look again for the windows of the app that came forward.
-        fn settle(&self) {
-            let (window, agent, pid, tries) = {
-                let mut state = self.state().borrow_mut();
-                let (Some((pid, tries @ 1..)), Some(window)) =
-                    (state.settling, state.window.clone())
-                else {
-                    return;
-                };
-                state.settling = None;
-                (window, state.agent.clone(), pid, tries)
-            };
-            if !window.isVisible() {
-                return;
-            }
-            if tuck(&window, pid) {
-                return;
-            }
-            self.state().borrow_mut().settling = Some((pid, tries - 1));
-            if tries == 1 {
-                return;
-            }
-            if let Some(agent) = agent {
-                agent.settle_later();
-            }
-        }
-    }
-
-    impl LocalPopOut {
-        fn close(&self) {
-            // Release the borrow before native calls, which may reenter a
-            // size source or frame. Those callbacks find the empty state.
-            let state = std::mem::take(&mut *self.state.borrow_mut());
-            self.editor.set_in_own_window(false);
-            if let Some(agent) = &state.agent {
-                agent.cancel_host_close();
-                // SAFETY: removing an observer this added, still alive.
-                unsafe {
-                    NSWorkspace::sharedWorkspace().notificationCenter().removeObserver(agent)
-                };
-            }
-            if let Some(window) = &state.window {
-                if let Some(host_window) = state.host.as_ref().and_then(|host| host.window()) {
-                    reveal(&host_window);
-                }
-                window.setDelegate(None);
-                window.close();
-            }
-        }
-    }
-
-    impl Drop for LocalPopOut {
-        fn drop(&mut self) {
-            self.close();
-        }
-    }
-
-    struct Ivars {
-        pop_out: Weak<PopOut>,
-        exe: PathBuf,
-    }
-
-    define_class!(
-        // NSObject adds no subclass invariants; the agent is main-thread only,
-        // as workspace notifications and run-loop performs are delivered there.
-        #[unsafe(super = NSObject)]
-        #[thread_kind = MainThreadOnly]
-        #[ivars = Ivars]
-        struct Agent;
-
-        unsafe impl NSObjectProtocol for Agent {}
-
-        unsafe impl NSWindowDelegate for Agent {
-            /// The close button: refused, and the host told instead on the
-            /// run loop's next turn, once however often it is clicked before
-            /// then.
-            #[unsafe(method(windowShouldClose:))]
-            fn window_should_close(&self, _: &NSWindow) -> bool {
-                self.cancel_host_close();
-                // SAFETY: `hostClose:` is the agent's own method, taking an
-                // object it ignores; the run loop retains the target until
-                // then, so the host destroying the editor cannot free it
-                // mid-call.
-                let () = unsafe {
-                    msg_send![
-                        self,
-                        performSelector: sel!(hostClose:),
-                        withObject: None::<&AnyObject>,
-                        afterDelay: 0.0f64
-                    ]
-                };
-                false
-            }
-        }
-
-        impl Agent {
-            /// Another app came to the front, or the host did.
-            #[unsafe(method(activated:))]
-            fn activated(&self, _: &NSNotification) {
-                let ivars = self.ivars();
-                if let Some(pop_out) = ivars.pop_out.upgrade() {
-                    pop_out.front_changed(&ivars.exe);
-                }
-            }
-
-            /// A move [`PopOut::want`] deferred to here.
-            #[unsafe(method(apply:))]
-            fn apply(&self, _: Option<&AnyObject>) {
-                if let Some(pop_out) = self.ivars().pop_out.upgrade() {
-                    pop_out.apply();
-                }
-            }
-
-            #[unsafe(method(hostClose:))]
-            fn host_close(&self, _: Option<&AnyObject>) {
-                if let Some(pop_out) = self.ivars().pop_out.upgrade() {
-                    pop_out.ask_host_close();
-                }
-            }
-
-            #[unsafe(method(settle:))]
-            fn settle(&self, _: Option<&AnyObject>) {
-                if let Some(pop_out) = self.ivars().pop_out.upgrade() {
-                    pop_out.settle();
-                }
-            }
-        }
-    );
-
-    impl Agent {
-        fn cancel_host_close(&self) {
-            // SAFETY: cancelling this object's own pending `hostClose:`.
-            let () = unsafe {
-                msg_send![
-                    NSObject::class(),
-                    cancelPreviousPerformRequestsWithTarget: self,
-                    selector: sel!(hostClose:),
-                    object: None::<&AnyObject>
-                ]
-            };
-        }
-
-        fn settle_later(&self) {
-            // One chain of looks at a time: a switch mid-chain starts afresh.
-            // SAFETY: cancelling this object's own pending `settle:`, then
-            // scheduling it; the method takes an object it ignores, and the
-            // run loop retains the target until then.
-            let () = unsafe {
-                msg_send![
-                    NSObject::class(),
-                    cancelPreviousPerformRequestsWithTarget: self,
-                    selector: sel!(settle:),
-                    object: None::<&AnyObject>
-                ]
-            };
-            let () = unsafe {
-                msg_send![
-                    self,
-                    performSelector: sel!(settle:),
-                    withObject: None::<&AnyObject>,
-                    afterDelay: SETTLE_DELAY
-                ]
-            };
-        }
+        Move::Back => editor.set_in_own_window(false),
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-mod elsewhere {
+#[cfg(test)]
+mod tests {
     use super::*;
 
-    /// Off macOS the editor stays in the host's window: the hosts there have
-    /// not been seen hiding their plugin windows, and nothing here has been
-    /// tried on them.
-    pub(in crate::editor) struct PopOut;
+    /// A move out gives the editor its own window's size and drops a host
+    /// size not yet taken; a move back hands `set_size` back to the host and
+    /// keeps the size.
+    #[test]
+    fn a_move_out_saves_the_own_windows_size_and_a_move_back_returns_the_say_to_the_host() {
+        let editor = EguiState::from_size(800, 600);
+        editor.host_resized.store(Some((900, 650)));
+        let moving = moving(editor.clone());
 
-    impl PopOut {
-        pub(in crate::editor) fn new(_: Arc<EguiState>) -> Arc<Self> {
-            Arc::new(Self)
-        }
-        pub(in crate::editor) fn open(
-            self: &Arc<Self>,
-            _: ParentWindowHandle,
-            _: &baseview::WindowHandle,
-            _: bool,
-            _: Option<Arc<dyn EditorHost>>,
-        ) {
-        }
-        pub(in crate::editor) fn offered(&self) -> bool {
-            false
-        }
-        pub(in crate::editor) fn want(&self, _: bool) {}
-        pub(in crate::editor) fn take_size(&self) -> Option<Sized> {
-            None
-        }
-        pub(in crate::editor) fn resize(&self, _: (u32, u32)) -> bool {
-            false
-        }
-        pub(in crate::editor) fn close(&self) {}
+        moving(Move::Out((1000, 700)));
+        assert_eq!(editor.host_resized.load(), None, "a host size outlived the move out");
+        assert_eq!(editor.size(), (1000, 700), "the project does not save the own window's size");
+        assert!(editor.in_own_window(), "a host resize would replace the own window's size");
+
+        moving(Move::Back);
+        assert!(!editor.in_own_window(), "docked, a host resize would be refused");
+        assert_eq!(editor.size(), (1000, 700), "the move back changed the editor's size");
     }
 }

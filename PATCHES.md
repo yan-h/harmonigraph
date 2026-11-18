@@ -97,6 +97,12 @@ The editor window's two crates are shared with otonal and live in their own publ
 The root `Cargo.toml` pins both by commit in `[patch.crates-io]`.
 A change to them lands there first and reaches Harmonigraph as a bump of that `rev`, which moves only the two packages' `source` lines in `Cargo.lock`.
 
+The editor's own window comes from the same repository and commit:
+its crate `plugin-own-window`, shared with otonal, which carries no patch since it has no upstream.
+Its `rev`, under `[workspace.dependencies]` in the same file, moves with the two above.
+What it took from Harmonigraph's former copy, `crates/harmonigraph-plugin/src/editor/pop_out.rs`, is in that repository's `PATCHES.md`;
+that file is now the adapter, which gives the window its name, its size limits, the host to tell of its close button, and what a move writes into the editor's saved size.
+
 Harmonigraph keeps proving the one build that repository's CI cannot:
 the plugin's `frame-log` feature, which reaches into egui-baseview and needs the patched wgpu-hal above (`cargo build -p harmonigraph-plugin --features frame-log`).
 

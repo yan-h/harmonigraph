@@ -201,6 +201,7 @@ The window floats above the host while the host is in front.
 When another app comes forward, it goes just behind that app's windows and stays above the rest.
 It stays in its own Space, so an app in a fullscreen Space does not show it.
 It remembers where it was; its size is the editor size the project saves.
+It grows to at most 8192 points a side, where the picture would stop following it.
 Its close button closes the editor as the host's own control does.
 
 ## Folding the Analyzer

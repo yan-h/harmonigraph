@@ -32,13 +32,13 @@ pub struct EguiState {
     #[serde(skip)]
     pub(crate) pass_request: egui_baseview::PassRequest,
     /// The editor kept in the host's window rather than its own (see
-    /// `PopOut`), from the System tab. Saved with the project; a project
+    /// `pop_out`), from the System tab. Saved with the project; a project
     /// from before it was opens in the editor's own window, which is the
     /// default.
     #[serde(default)]
     docked: AtomicBool,
     /// The editor's view is in its own window right now, which then has the
-    /// say over its size (see `PopOut`). Set as the view moves, on the main
+    /// say over its size (see `pop_out`). Set as the view moves, on the main
     /// thread, where a host `set_size` also arrives (a CLAP `gui` call), so
     /// the two are ordered. Here because the editor that receives `set_size`
     /// does not hold the window, whose state is bound to the main thread; not

@@ -1512,6 +1512,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "parking_lot",
+ "plugin-own-window",
  "pollster",
  "raw-window-handle 0.5.2",
  "rtrb",
@@ -2824,6 +2825,17 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "plugin-own-window"
+version = "0.1.0"
+source = "git+https://github.com/yan-h/egui-plugin-window?rev=d8ae9969b022735405a327e1b32928e4965ee020#d8ae9969b022735405a327e1b32928e4965ee020"
+dependencies = [
+ "dispatch2",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+]
 
 [[package]]
 name = "png"

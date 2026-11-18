@@ -325,7 +325,7 @@ The workspace [`Cargo.toml`](../Cargo.toml) centralizes these versions;
 bump the cluster together.
 
 The workspace carries local dependency patches under [`vendor/`](../vendor),
-and pins the editor window's two patched crates from [egui-plugin-window](https://github.com/yan-h/egui-plugin-window).
+and pins the editor window's two patched crates, and the editor's own window (`plugin-own-window`), from [egui-plugin-window](https://github.com/yan-h/egui-plugin-window).
 Their provenance,
 platform scope and upgrade notes live in [`PATCHES.md`](../PATCHES.md).
 
