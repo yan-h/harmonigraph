@@ -17,7 +17,7 @@ use crate::theme;
 /// reads. One glyph for both made an open pane's arrow and an open section's
 /// look like they disagreed.
 pub(crate) fn paint_fold(ui: &egui::Ui, response: &Response, cell: Rect, direction: Vec2) {
-    let hot = response.hovered() || super::holds_focus(response);
+    let hot = response.hovered() || response.has_focus();
     let painter = ui.painter_at(cell);
     let scale = theme::ui_scale(ui.ctx());
     let radius = egui::CornerRadius::same(theme::control_radius(scale));

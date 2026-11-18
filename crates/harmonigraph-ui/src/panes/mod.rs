@@ -686,7 +686,7 @@ fn fold_header(
             title,
         )
     });
-    let hot = response.hovered() || crate::widgets::holds_focus(&response);
+    let hot = response.hovered() || response.has_focus();
     let text = egui::pos2(rect.left() + indent + lead, rect.top() + pad - top);
     ui.painter().galley(text, galley, crate::theme::text());
     if let Some(open) = open {
