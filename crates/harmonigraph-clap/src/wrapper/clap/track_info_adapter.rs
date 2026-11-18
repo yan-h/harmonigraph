@@ -1,4 +1,10 @@
 //! Host track metadata is read only on the main thread, outside the audio lock.
+//!
+//! A plugin with a `Setup` answers `CLAP_EXT_TRACK_INFO` and its draft-era id.
+//! `init` and every host `changed` callback read the track name and pass it to
+//! `Setup::track_name_changed` (`None` when the host supplies none); the read
+//! stops at the first NUL or the end of the host's fixed buffer. The name is not
+//! saved state: tuning sources follow it unless the user named them (#1426).
 use super::*;
 use clap_sys::ext::track_info::{
     CLAP_TRACK_INFO_HAS_TRACK_NAME, clap_host_track_info, clap_track_info,

@@ -1,211 +1,58 @@
-<div align="center">
-<img src="https://codeberg.org/RustAudio/nice-plug/raw/branch/main/branding/logo.svg" width="84px" height="84px"/>
-<h1>nice-plug</h1>
+# harmonigraph-clap
 
-[![Documentation](https://docs.rs/nice-plug/badge.svg)](https://docs.rs/nice_plug)
-[![Crates.io](https://img.shields.io/crates/v/nice_plug.svg)](https://crates.io/crates/nice_plug)
-[![License](https://img.shields.io/crates/l/nice_plug.svg)](https://codeberg.org/RustAudio/nice-plug/src/branch/main/LICENSE)
+Harmonigraph's CLAP shell:
+the plugin framework nice-plug, which harmonigraph used to vendor, together with the two registry crates it built on, now owned here (#1814 step 4).
 
-A [Rust](https://rust-lang.org/) audio plugin development framework that is nice to
-use :)
+- **`src/`** is nice-plug 0.1.10 (its CLAP wrapper, state glue and background-thread executor) and nice-plug-core 0.1.5 (parameters, buffers, contexts, the `Plugin` trait, the debug macros), merged into one crate.
+  nice-plug-core's modules sit at the crate root, where nice-plug's `pub use nice_plug_core::*` used to put them.
+- **`derive/`** is nice-plug-derive 0.1.2, the `Params` and `Enum` derives, a member crate until the parameter layer replaces them.
+- **`tests/`** are nice-plug's: two derive tests, and the CLAP boundary and auxiliary fixtures that drive an exported plugin through `clap-sys`.
+  They run in `ci.sh`'s workspace test gate, which names both fixture features (`assert_process_allocs`, `clap-boundary-tests`).
 
-</div>
+The libraries keep the names `nice_plug` and `nice_plug_derive`, so harmonigraph-plugin's paths and the derive's generated `::nice_plug::` paths did not change with the move.
+The later steps of #1814 collapse these layers into a shell written on `clap-sys`, and rename them as they go.
 
----
+## Where it came from
 
-The idea is to have a stateful yet simple plugin API that gets rid of as much
-unnecessary ceremony wherever possible, while also keeping the amount of magic to
-a minimum and making it easy to experiment with different approaches to things.
+- **Upstream base:** crates.io nice-plug 0.1.10, nice-plug-core 0.1.5 and nice-plug-derive 0.1.2, with the ISC `LICENSE` from pinned upstream commit `a80e0e267e52027be4bc07480bef77e798d3342c`, which covers all three.
+  The upstream README is at that commit.
+- **Pruned to the CLAP wrapper** (#1810):
+  the VST3 and standalone wrappers, the macOS, Linux and Windows event loops only they constructed, the Win32 window-API branches, and the `zstd` and `unsafe_flush_denormals` features with the code behind them are gone, with the dependencies only they used.
+  The flush-to-zero guard went too: every effect it had sat behind `unsafe_flush_denormals`, so on macOS it was a no-op.
+  nice-plug-core's `simd` feature is still declared and enabled by nothing.
+  The local VST3 fixes (#741's bus arrangements, #1128's note-expression lanes) had already been reverted with the VST3 export (#1185).
+- **Not re-vendored.** An upgrade is a port of what a newer nice-plug changed in the CLAP wrapper, the state glue and the tests, taking only what is wanted (Yan, 2026-11-17); nothing the prune deleted comes back with it.
+  Upstreaming was declined on 2026-07-19.
+  No tuning or sequencing policy belongs in this crate.
 
----
+## What harmonigraph changed
 
-> nice-plug started out as a fork of the awesome [NIH-plug](https://github.com/robbert-vdh/nih-plug)
-> framework authored by Robbert van der Helm. It has since become its own separate
-> community-led project, and is now the recommended toolkit for Rust audio plugin
-> developers.
+Each change's reason is a comment at the code it explains; this is the map.
 
-### Table of contents
+- **Production CLAP ownership** (`src/wrapper/clap/{configuration,configuration_adapter,context,input_adapter,performance,performance_adapter,setup,wrapper}.rs`, `src/wrapper/clap.rs`, `src/wrapper/{state,util}.rs`, `src/wrapper.rs`).
+  The configuration-walk and performance opt-ins (`ClapPlugin::CLAP_CONFIGURATION`, `CLAP_PERFORMANCE`) share one host-input pool.
+  The ordinary processing walker, the configuration walk and the performance owner each keep a progress cursor over it, and an owned cell is reused only once all three have passed.
+  - The configuration walk hands the plugin each callback's boundary (`begin`, where it applies its queued edits and fixes the block's configuration), every owned input in order with its exact sample (`observe`), the end of the walk (`group_end`), the actual sub-blocks (`segment`) and lost input (`fault`).
+    The plugin owns its configuration and how edits reach it;
+    the owned-parameter mailbox that once carried the tuning axes as host parameters is gone (#1756).
+    A plugin that cannot take an input reports a bounded failure instead of holding it.
+  - The output side allocates nothing: `Output` borrows the host's `clap_output_events`, and its one `push(value, time)` calls `try_push` and returns the host's answer, which legacy `send_event` cannot give.
+    Keeping the list sorted is the caller's contract:
+    both halves raise a per-callback high-water mark, and the wrapper puts its own parameter output at it, so that traffic follows the plugin's rather than interleaving with it.
+    `PARAMETER_OUTPUT_ATTEMPTS` bounds that half at 512 pushes per callback; the plugin bounds its own.
+  - A prepared `Setup` validates before the parameters and fields restore, and commits after; the plugin adopts what it commits at its next input boundary.
+    Its `service` reports what it changed as `Serviced`: a modified project is marked dirty, and changed parameter values or text are rescanned, each only when reported.
+  - Main-thread registration, setup service and the joined lifecycle hooks (`clap_main_*`) keep registry locking and endpoint reclamation outside audio callbacks.
+    Joined destruction runs `clap_main_destroy`, which transfers recording ownership.
+  - The seams also expose the parameter hash (`wrapper::hash_param_id`), reject legacy sends from a performance owner, serialize the setup's saved fields beside the parameters, and give tests `Wrapper::test_inspect_plugin`.
+    `wrapper::allocation_probe` instruments the debug allocation guard on the calling thread, deallocation included, for the exported-factory fixtures; it measures neither RSS nor other threads.
 
-- [Getting Started](#getting-started)
-- [Features](#features)
-- [GUI](#gui)
-- [Example plugins](#example-plugins)
-- [Get Involved](#get-involved)
-  - [Contributing](#contributing)
-  - [AI Policy](#ai-policy)
-- [Licensing](#licensing)
-
----
-
-# Getting Started
-
-See [Getting Started with nice-plug](https://codeberg.org/RustAudio/nice-plug/src/branch/main/GETTING_STARTED.md)
-for a quick guide on getting started with using nice-plug to develop your own plugins.
-
-# Features
-
-> For a list of available crate flags, see
-> [crates/nice-plug/Cargo.toml](https://codeberg.org/RustAudio/nice-plug/src/branch/main/crates/nice-plug/Cargo.toml).
-
-- Supports both VST3 and [CLAP](https://github.com/free-audio/clap) by simply
-  adding the corresponding `nice_export_<api>!(Foo)` macro to your plugin's
-  library.
-- Standalone binaries can be made by calling `nice_export_standalone(Foo)` from
-  your `main()` function. Standalones come with a CLI for configuration and full
-  JACK audio, MIDI, and transport support.
-- Rich declarative parameter system without any boilerplate.
-  - Define parameters for your plugin by adding `FloatParam`, `IntParam`,
-    `BoolParam`, and `EnumParam<T>` fields to your parameter struct, assign
-    stable IDs to them with the `#[id = "foobar"]`, and a `#[derive(Params)]`
-    does all of the boring work for you.
-  - Parameters can have complex value distributions and the parameter objects
-    come with built-in smoothers and callbacks.
-  - Use simple enums deriving the `Enum` trait with the `EnumParam<T>` parameter
-    type for parameters that allow the user to choose between multiple discrete
-    options. That way you can use regular Rust pattern matching when working
-    with these values without having to do any conversions yourself.
-  - Store additional non-parameter state for your plugin by adding any field
-    that can be serialized with [Serde](https://serde.rs/) to your plugin's
-    `Params` object and annotating them with `#[persist = "key"]`.
-  - Optional support for state migrations, for handling breaking changes in
-    plugin parameters.
-  - Group your parameters into logical groups by nesting `Params` objects using
-    the `#[nested(group = "...")]`attribute.
-  - The `#[nested]` attribute also enables you to use multiple copies of the
-    same parameter, either as regular object fields or through arrays.
-  - When needed, you can also provide your own implementation for the `Params`
-    trait to enable compile time generated parameters and other bespoke
-    functionality.
-- Stateful. Behaves mostly like JUCE, just without all of the boilerplate.
-- Comes with a simple yet powerful way to asynchronously run background tasks
-  from a plugin that's both type-safe and realtime-safe.
-- Does not make any assumptions on how you want to process audio, but does come
-  with utilities and adapters to help with common access patterns.
-  - Efficiently iterate over an audio buffer either per-sample per-channel,
-    per-block per-channel, or even per-block per-sample-per-channel with the
-    option to manually index the buffer or get access to a channel slice at any
-    time.
-  - Easily leverage per-channel SIMD using the SIMD adapters on the buffer and
-    block iterators.
-  - Comes with bring-your-own-FFT adapters for common (inverse) short-time
-    Fourier Transform operations. More to come.
-- Optional sample accurate automation support for VST3 and CLAP that can be
-  enabled by setting the `Plugin::SAMPLE_ACCURATE_AUTOMATION` constant to
-  `true`.
-- Optional support for compressing the human readable JSON state files using
-  [Zstandard](https://en.wikipedia.org/wiki/Zstd).
-- Modular GUI/Editor API that lets you use any GUI library that can run on
-  [baseview](https://github.com/RustAudio/baseview). By extension, this allows
-  for rendering with OpenGL, [wgpu](wgpu.rs), and/or
-  [softbuffer](https://github.com/rust-windowing/softbuffer).
-- Full support for receiving and outputting both modern polyphonic note
-  expression events as well as MIDI CCs, channel pressure, and pitch bend for
-  CLAP and VST3.
-  - MIDI SysEx is also supported. Plugins can define their own structs or sum
-    types to wrap around those messages so they don't need to interact with raw
-    byte buffers in the process function.
-- Support for flexible dynamic buffer configurations, including variable numbers
-  of input and output ports.
-- First-class support several more exotic CLAP features:
-  - Both monophonic and polyphonic parameter modulation are supported.
-  - Plugins can declaratively define pages of remote controls that DAWs can bind
-    to hardware controllers.
-- A plugin bundler accessible with the [cargo-nice-plug](https://codeberg.org/RustAudio/nice-plug/src/branch/main/crates/cargo-nice-plug)
-  package or via a [custom xtask command](https://codeberg.org/RustAudio/nice-plug/src/branch/main/crates/nice-plug-xtask).
-- Tested on Linux and Windows, with limited testing on macOS.
-- See the [`Plugin`](https://codeberg.org/RustAudio/nice-plug/src/branch/main/crates/nice-plug-core/src/plugin.rs)
-  trait's documentation for a more complete overview of the core API.
-
-# GUI
-
-Any GUI library that can run on [baseview](https://github.com/RustAudio/baseview)
-can be used for nice-plug.
-
-At this early stage, there is no single GUI framework that is being focused on.
-For now, integrations for the following GUI libraries are provided:
-
-- [nice-plug-egui](https://codeberg.org/RustAudio/nice-plug/src/branch/main/crates/nice-plug-egui) - Adapter for [egui](https://github.com/emilk/egui).
-- [nice-plug-iced](https://codeberg.org/RustAudio/nice-plug/src/branch/main/crates/nice-plug-iced) - Adapter for [Iced](https://iced.rs/).
-  - [iced_audio](https://github.com/iced-rs/iced_audio) - Extra audio-related widgets for Iced.
-- nice-plug-slint (WIP) - Adapter for [Slint](https://slint.dev/).
-- [vizia-plug](https://github.com/vizia/vizia-plug) (3rd party) - Adapter for [Vizia](https://github.com/vizia/vizia).
-
-Some of these options may or may not have first-party support in the future. The
-plan is to see which options the community gravitates towards, and then officially
-support one or two of the most popular ones.
-
-Also, keep in mind that none of these options currently have good documentation
-for how to create plugin GUIs with them. For now, take a look at the examples
-to get started. (Feel free to contribute any guides, documentation, and or
-example plugins!)
-
-# Example plugins
-
-The best way to get an idea for what the API looks like is to look at the
-examples.
-
-- [**gain**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/gain/src/lib.rs)
-  is a simple smoothed gain plugin that shows off a couple other parts of the API,
-  like support for storing arbitrary serializable state.
-- **gain_\<gui\>** are the same plugins as gain, but with a GUI to control the
-  parameter and a digital peak meter.
-    - [**gain_egui**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/gain_egui)
-    - [**gain_iced**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/gain_iced)
-- [**iced_audio_widget**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/iced_audio_widget) is an example of how to use the
-  [iced_audio](https://github.com/iced-rs/iced_audio) widget library for [Iced](https://iced.rs/) in nice-plug.
-- Examples for adding your own custom GUI framework on top of raw rendering APIs:
-  - [**byo_gui_gl**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/byo_gui_gl) - for rendering with OpenGL
-  - [**byo_gui_wgpu**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/byo_gui_wgpu) - for rendering with [wgpu](wgpu.rs)
-  - [**byo_gui_softbuffer**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/byo_gui_softbuffer) - for rendering with
-  [softbuffer](https://github.com/rust-windowing/softbuffer) (software rendering)
-- [**midi_inverter**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/midi_inverter/src/lib.rs) takes note/MIDI events and
-  flips around the note, channel, expression, pressure, and CC values. This
-  example demonstrates how to receive and output those events.
-- [**poly_mod_synth**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/poly_mod_synth/src/lib.rs) is a simple polyphonic
-  synthesizer with support for polyphonic modulation in supported CLAP hosts.
-  This demonstrates how polyphonic modulation can be used in nice-plug.
-- [**sine**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/sine/src/lib.rs) is a simple test tone generator plugin with
-  frequency smoothing that can also make use of MIDI input instead of generating
-  a static signal based on the plugin's parameters.
-- [**stft**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/stft/src/lib.rs) shows off some of nice-plug's other optional
-  higher level helper features, such as an adapter to process audio with a
-  short-term Fourier transform using the overlap-add method, all using the
-  compositional `Buffer` interfaces.
-- [**sysex**](https://codeberg.org/RustAudio/nice-plug/src/branch/main/examples/sysex/src/lib.rs) is a simple example of how to send and
-  receive SysEx messages by defining custom message types.
-
-The example plugins can be built using:
-
-```shell
-cargo xtask bundle <package_name> --release
-```
-
-# Get Involved
-
-If you have any questions or you wish to get involved in the project, feel free
-to join us in the [Rust Audio Discord Server](https://discord.gg/Qs2Zwtf9Gf)
-in the `#nice-plug` channel!
-
-### Contributing
-
-Contributions are very much welcomed! As long as they comply to the policy and
-licensing requirements below.
-
-> nice-plug uses optional nightly features. To make rust analyzer happy, you can
-> enable the nightly compiler for your local repository with `rustup override add
-nightly`.
-
-### AI policy
-
-The general AI policy of the RustAudio Community applies to this repository. Please
-ensure compliance to these rules before submitting your contribution to this project.
-
-Please refer to the Rust Audio community's policy an AI usage:
-https://rust.audio/community/ai/
-
-# Licensing
-
-The nice-plug framework and all of the example plugins are licensed under the
-[ISC license](https://www.isc.org/licenses/).
-
-The logos in `branding/` are licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+  [The adaptive tuning design](../../docs/adaptive-tuning.md#the-framework-boundary) says what the plugin asks of this boundary.
+- **Activation notification ordering** (`Wrapper::activate`, #615).
+- **Auxiliary descriptor bounds and storage sizing** (the process loop in `src/wrapper/clap/wrapper.rs` and `BufferManager::create_buffers`, #638), reached by `tests/clap_auxiliary.rs`.
+- **Scalar tail publication** (`Wrapper::last_tail_samples`), checked by `tests/clap_boundary.rs`.
+- **Track info** (`src/wrapper/clap/track_info_adapter.rs`, #1426).
+- **Editor host** (`ClapPlugin::clap_editor_host`, #1607, #1609), and `gui.show`/`gui.hide` refused as upstream does (`Wrapper::ext_gui_show`).
+- **`nice-assert-no-alloc` without default features**, from the workspace's single entry.
+  Its default `disable_release` would delete the allocation guard from any build without debug assertions;
+  while nice-plug-core was a registry crate that declared it with defaults, a `[profile.release.package]` override in the root `Cargo.toml` forced the package's debug assertions on instead.

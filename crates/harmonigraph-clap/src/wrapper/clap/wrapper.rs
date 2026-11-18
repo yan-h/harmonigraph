@@ -2108,8 +2108,10 @@ impl<P: ClapPlugin> Wrapper<P> {
 
             // Run initialize's deferred latency request while `is_activated` is still
             // clear. Letting the context drop after this flag instead requests an
-            // unnecessary restart, which can stall Bitwig's next offline export.
-            // Release the plugin lock before host callbacks.
+            // unnecessary restart, which can stall Bitwig's next offline export
+            // (#615): the CLAP latency contract wants the initial latency published
+            // while activation is still in progress. Release the plugin lock before
+            // host callbacks.
             drop(plugin);
             drop(init_context);
             // The one place the reported latency moves and the one place the host
@@ -2358,6 +2360,9 @@ impl<P: ClapPlugin> Wrapper<P> {
                                 buffer_source.aux_input_channel_pointers.iter_mut().enumerate()
                             {
                                 let aux_input_idx = aux_input_no + aux_input_start_idx;
+                                // Stop at the host's declared count, before reading the
+                                // one-past descriptor (#638). An omitted input keeps
+                                // the silent-buffer fallback in `create_buffers`.
                                 if aux_input_idx >= process.audio_inputs_count as usize {
                                     break;
                                 }
@@ -2380,6 +2385,8 @@ impl<P: ClapPlugin> Wrapper<P> {
                                 buffer_source.aux_output_channel_pointers.iter_mut().enumerate()
                             {
                                 let aux_output_idx = aux_output_no + aux_output_start_idx;
+                                // As for the inputs (#638). An omitted output keeps the
+                                // skip-processing behaviour and its storage is untouched.
                                 if aux_output_idx >= process.audio_outputs_count as usize {
                                     break;
                                 }

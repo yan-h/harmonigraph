@@ -82,8 +82,8 @@ It comes without warranty;
 see the license for the full terms.
 
 The reusable [`harmonigraph-core`](crates/harmonigraph-core) and [`harmonigraph-analysis`](crates/harmonigraph-analysis) crates are instead licensed under `MIT OR Apache-2.0`.
-The vendored forks under [`vendor/`](vendor) retain their upstream terms:
-`baseview`, `egui-baseview` and `wgpu-hal` are `MIT OR Apache-2.0`,
-while `nice-plug` is ISC.
+The vendored and pinned forks retain their upstream terms:
+`baseview`, `egui-baseview` and `wgpu-hal` (the last under [`vendor/`](vendor)) are `MIT OR Apache-2.0`,
+while [`harmonigraph-clap`](crates/harmonigraph-clap), harmonigraph's copy of `nice-plug`, is ISC.
 Each keeps its own license files;
 [`PATCHES.md`](PATCHES.md) records the local changes.

@@ -8,7 +8,7 @@ This is a source and exported-factory audit, not a Bitwig scheduling measurement
 
 ## Finding and fix
 
-**The configuration command drain had no finite callback budget.** `vendor/nice-plug/src/wrapper/clap/configuration_adapter.rs:210` repeatedly peeked and popped until the producer was empty.
+**The configuration command drain had no finite callback budget.** `crates/harmonigraph-clap/src/wrapper/clap/configuration_adapter.rs:210` repeatedly peeked and popped until the producer was empty.
 A concurrent producer could refill freed slots throughout the callback.
 The 16 notification cells limit UI/Learning commands, but Restore commands bypass them;
 the production `Owner::apply` (`crates/harmonigraph-plugin/src/configuration.rs:276`) has no command-count limit either.
@@ -31,11 +31,11 @@ it now distinguishes wrapper parameter notification attempts from plugin musical
 
 ## Lock table
 
-`W` denotes [wrapper.rs](../../vendor/nice-plug/src/wrapper/clap/wrapper.rs),
-`CA` [configuration_adapter.rs](../../vendor/nice-plug/src/wrapper/clap/configuration_adapter.rs),
-`IA` [input_adapter.rs](../../vendor/nice-plug/src/wrapper/clap/input_adapter.rs),
-`PA` [performance_adapter.rs](../../vendor/nice-plug/src/wrapper/clap/performance_adapter.rs),
-and `C` [configuration.rs](../../vendor/nice-plug/src/wrapper/clap/configuration.rs).
+`W` denotes [wrapper.rs](../../crates/harmonigraph-clap/src/wrapper/clap/wrapper.rs),
+`CA` [configuration_adapter.rs](../../crates/harmonigraph-clap/src/wrapper/clap/configuration_adapter.rs),
+`IA` [input_adapter.rs](../../crates/harmonigraph-clap/src/wrapper/clap/input_adapter.rs),
+`PA` [performance_adapter.rs](../../crates/harmonigraph-clap/src/wrapper/clap/performance_adapter.rs),
+and `C` [configuration.rs](../../crates/harmonigraph-clap/src/wrapper/clap/configuration.rs).
 An arrow means guards are held together, not merely acquired in that order at different times.
 `AtomicRefCell` borrow conflicts panic rather than wait;
 shared immutable borrows may overlap.

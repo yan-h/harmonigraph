@@ -50,7 +50,7 @@ Against the baseview obligations:
 
 ### nice-plug coupling: not required
 
-`ParentWindowHandle` is nice-plug-core's own enum of raw pointers, and the CLAP path builds it without raw-window-handle (`vendor/nice-plug/src/wrapper/clap/wrapper.rs:3160-3164`).
+`ParentWindowHandle` is nice-plug-core's own enum of raw pointers, and the CLAP path builds it without raw-window-handle ([`vendor/nice-plug/src/wrapper/clap/wrapper.rs:3160-3164`](https://github.com/yan-h/harmonigraph/blob/d53244ad/vendor/nice-plug/src/wrapper/clap/wrapper.rs)).
 nice-plug reaches raw-window-handle 0.5 only from its standalone wrapper, which Harmonigraph does not enable.
 The bridge to baseview 0.4 is the plugin's own `ParentWindowHandleAdapter` (`crates/harmonigraph-plugin/src/editor/window.rs:71`), rewritten against raw-window-handle 0.6.
 That settles the narrower route above: a move is GUI-only, and patched nice-plug 0.1.10 stays.

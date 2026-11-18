@@ -261,7 +261,10 @@ harmonigraph-golden      The golden-frame gate shared by the renderer's and
 harmonigraph-standalone  eframe development harness with MIDI input and a mock
                          progression and synth.
 
-harmonigraph-plugin      nice-plug shell, lock-free audio-to-UI ingress,
+harmonigraph-clap        The CLAP shell: nice-plug and nice-plug-core, owned,
+                         with nice-plug-derive as its member crate.
+
+harmonigraph-plugin      Plugin on the shell, lock-free audio-to-UI ingress,
                          custom editor and CLAP export.
 ```
 

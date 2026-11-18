@@ -260,7 +260,9 @@ impl BufferManager {
             .zip(self.aux_input_storage.iter_mut().zip(self.aux_input_buffers.iter_mut()))
         {
             // Both copied input and silence must expose this callback's length,
-            // even when a preceding callback shrank the backing slices.
+            // even when a preceding callback shrank the backing slices. Sizing every
+            // input before the presence check is what keeps #638's silent-input
+            // fallback safe across callbacks of varying length.
             for channel in input_storage.iter_mut() {
                 crate::nice_debug_assert!(num_samples <= channel.capacity());
                 channel.resize(num_samples, 0.0);

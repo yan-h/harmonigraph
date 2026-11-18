@@ -50,7 +50,9 @@ pub trait ClapPlugin: Plugin {
 
     /// Called once, before the editor is created, with the host's side of
     /// it: the editor is the host's to destroy, so an editor with a close
-    /// button of its own tells the host through this.
+    /// button of its own tells the host through this. `EditorHost::closed`
+    /// calls `clap_host_gui::closed(true)` (#1607, #1609); harmonigraph-plugin's
+    /// `the_close_button_tells_the_host_to_destroy_the_editor` checks it.
     fn clap_editor_host(&mut self, host: std::sync::Arc<dyn EditorHost>) {}
 
     /// All following hooks are inside the process allocation guard.
