@@ -52,8 +52,9 @@ impl Console {
 /// is a deliberate act, so nothing else here is ever resumed on load — an
 /// editor that reopened armed would record a session nobody asked it to.
 ///
-/// The plugin owns the recorder separately. `sync_take` exchanges its status
-/// and explicit actions with this workspace interaction state once per GUI callback.
+/// The plugin owns the recorder separately. `take_pass` exchanges its status
+/// and explicit actions with this workspace interaction state once per GUI
+/// callback: the status before the UI draws, the actions after.
 #[derive(Default)]
 pub struct TakeState {
     /// Whether this shell can record at all. Gates the control: a shell that
