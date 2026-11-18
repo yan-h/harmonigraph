@@ -642,7 +642,7 @@ failing to mark an affected one is not.
 
 ## The framework boundary
 
-The vendored `nice-plug` wrapper supplies what the plugin cannot get for itself:
+The CLAP wrapper in `crates/harmonigraph-clap` (formerly vendored nice-plug) supplies what the plugin cannot get for itself:
 
 - **Provenance.** Every input carries absolute sample, enclosing callback start and length, sub-block, flush and batch flags — because the wrapper splits a host callback on transport and automation, and two sub-blocks can both report offset zero.
 - **Steady time**, which nice-plug-core's `Transport` did not expose.

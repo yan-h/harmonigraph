@@ -13,10 +13,12 @@ members = [
     "crates/harmonigraph-offline",
     "crates/harmonigraph-standalone",
     "crates/harmonigraph-plugin",
+    "crates/harmonigraph-clap",
+    "crates/harmonigraph-clap/derive",
     "xtask",
 ]
-# The vendored crates are their own workspaces, only referenced via [patch].
-exclude = ["vendor/nice-plug", "vendor/wgpu-hal"]
+# The vendored crate is its own workspace, only referenced via [patch].
+exclude = ["vendor/wgpu-hal"]
 
 [workspace.package]
 version = "0.6.1"
@@ -36,6 +38,9 @@ harmonigraph-perf = { path = "crates/harmonigraph-perf" }
 harmonigraph-ui = { path = "crates/harmonigraph-ui" }
 harmonigraph-take = { path = "crates/harmonigraph-take" }
 harmonigraph-record = { path = "crates/harmonigraph-record" }
+# The CLAP shell: nice-plug and nice-plug-core, owned (its README.md). Its
+# library is still named `nice_plug`.
+harmonigraph-clap = { path = "crates/harmonigraph-clap" }
 
 # GUI stack. These versions are coupled:
 #   egui-baseview 0.3 -> egui 0.35 / egui-wgpu 0.35 / wgpu 29 / baseview 0.1
@@ -61,12 +66,6 @@ egui-baseview = { version = "0.3", default-features = false, features = [
 # A plain git dependency, since it is no crates.io crate.
 plugin-own-window = { git = "https://github.com/yan-h/egui-plugin-window", rev = "3c838ddf642cb160929a22beff171c7e9994b1cb" }
 
-# Plugin framework: the community continuation of nih-plug. Host->plugin
-# window resizing is supported natively (ResizeHint / Editor::set_size).
-# The vendored fork is pruned to its CLAP wrapper, since Harmonigraph ships
-# only as a CLAP (#1185, #1810), and declares no default features.
-nice-plug = { version = "0.1.10", default-features = false }
-
 # Math / utility
 glam = { version = "0.34", features = ["serde"] }
 # LCH color math, same crate v1 used so channel colors match exactly.
@@ -78,10 +77,6 @@ bytemuck = { version = "1", features = ["derive"] }
 # nothing outside the plugin chooses: SipHash's flooding resistance buys
 # nothing there and costs it every frame. Already in the graph via wgpu.
 foldhash = "0.2"
-# Held at 0.3 because vendored nice-plug pins it, and two copies buy nothing;
-# the fork is no longer re-vendored (PATCHES.md), so move both together. A
-# GUI-stack move would not move it: nice-plug can stay put under baseview 0.4
-# (#1529).
 rtrb = "0.3"
 crossbeam = "0.8"
 parking_lot = "0.12"
@@ -91,6 +86,21 @@ ron = "0.12"
 # Hardware MIDI input for the standalone dev harness.
 midir = "0.11"
 raw-window-handle = "0.5"
+# The audio-thread allocation guard, which has to survive `--release`: always
+# without default features. `nice-assert-no-alloc` gates its whole
+# implementation, `AllocDisabler` and the enforcing `assert_no_alloc` alike, on
+# `not(all(feature = "disable_release", not(debug_assertions)))`, and ships
+# `disable_release` in its defaults. Under `--release` that deletes the type
+# `harmonigraph-record`'s audio tests name as their global allocator, so
+# `cargo test --release --workspace` does not compile (#805), and every
+# `assert_no_alloc` call elsewhere compiles against the no-op arm and guards
+# nothing. Features unify across a build, so one declaration with defaults on
+# brings it back for all: every declarer names this entry. Until
+# harmonigraph-clap was owned, one declarer was a registry crate, and a
+# `[profile.release.package]` override forced debug assertions on instead.
+# Reachable only through dev-dependencies and harmonigraph-clap's optional
+# `assert_process_allocs`: a plugin or offline release build never compiles it.
+nice-assert-no-alloc = { version = "1.0", default-features = false }
 
 # Crates with local patches, vendored or pinned. PATCHES.md lists what each
 # one carries, or where that is listed, and how each is upgraded.
@@ -102,7 +112,6 @@ raw-window-handle = "0.5"
 # Harmonigraph as a bump of this rev, and of plugin-own-window's above;
 # PATCHES.md says how to try one locally.
 egui-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "3c838ddf642cb160929a22beff171c7e9994b1cb" }
-nice-plug = { path = "vendor/nice-plug" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
 
 [profile.release]
@@ -133,35 +142,6 @@ lto = false
 # release build in every worktree, which is a real cost against a stack trace
 # that already names the function.
 strip = "debuginfo"
-
-# The audio-thread allocation guard has to survive `--release`, and the only
-# lever that reaches it is this one.
-#
-# `nice-assert-no-alloc` gates its whole implementation — `AllocDisabler` and
-# the enforcing `assert_no_alloc` alike — on
-# `not(all(feature = "disable_release", not(debug_assertions)))`, and ships
-# `disable_release` in its default features. Under `--release` that deletes the
-# type `harmonigraph-record`'s audio tests name as their global allocator, so
-# `cargo test --release --workspace` does not compile (#805); worse, every
-# `assert_no_alloc` call elsewhere in the tree keeps compiling against the
-# crate's release no-op arm and passes without guarding anything.
-#
-# Turning the feature off is not reachable from here. FOUR manifests declare
-# this dependency and only three are ours: `crates/harmonigraph-record`,
-# `crates/harmonigraph-plugin` and `vendor/nice-plug`. The fourth is
-# `nice-plug-core` 0.1.5, a registry crate that declares it with default
-# features on, and under `resolver = "2"` features unify across the graph for
-# one build — so `default`, and with it `disable_release`, comes back however
-# the three we own are written. Verified with
-# `cargo tree -e features -i nice-assert-no-alloc`.
-#
-# Compiling that one package with debug assertions on satisfies the gate
-# directly. The override is scoped to the package, so nothing else in the graph
-# changes codegen, and the crate is reachable only through dev-dependencies and
-# nice-plug's optional `assert_process_allocs` — a plugin or offline release
-# build never compiles it at all, and the shipped bundle is byte-unaffected.
-[profile.release.package.nice-assert-no-alloc]
-debug-assertions = true
 
 # Plugin GUIs are unusable in unoptimized debug builds; opt-level 2 keeps
 # dev iteration usable while still compiling fast-ish.

@@ -1,0 +1,128 @@
+# nice-plug 0.1.10's normalized manifest, edited in place since the fork was
+# pruned to what harmonigraph compiles on macOS, with nice-plug-core 0.1.5's
+# dependencies and features merged in now that its sources live here too
+# (README.md). The library keeps the name `nice_plug`, so the plugin's paths and
+# the derive's generated `::nice_plug::` paths are unchanged.
+
+[package]
+edition = "2024"
+rust-version = "1.87"
+name = "harmonigraph-clap"
+version.workspace = true
+authors = [
+    "Robbert van der Helm <mail@robbertvanderhelm.nl>",
+    "Billy Messenger <billydm@noreply.codeberg.org>",
+]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "Harmonigraph's CLAP shell: nice-plug and nice-plug-core, owned"
+publish = false
+readme = "README.md"
+keywords = [
+    "audio",
+    "plugin",
+    "clap",
+]
+categories = ["multimedia::audio"]
+license = "ISC"
+
+[features]
+# Enables deterministic scheduling observations only in the boundary fixtures.
+clap-boundary-tests = []
+assert_process_allocs = ["dep:nice-assert-no-alloc"]
+
+[lib]
+name = "nice_plug"
+path = "src/lib.rs"
+# No doc-tests, as in harmonigraph-plugin (#1181). The vendored tree never ran
+# them, and of the five upstream examples four are `ignore`d and the fifth
+# (`Plugin::AUDIO_IO_LAYOUTS`) names `nice_plug_core`, which is gone.
+doctest = false
+
+[[test]]
+name = "derive_params"
+path = "tests/derive_params.rs"
+
+[[test]]
+name = "derive_persist"
+path = "tests/derive_persist.rs"
+
+[[test]]
+name = "clap_boundary"
+path = "tests/clap_boundary.rs"
+required-features = ["assert_process_allocs", "clap-boundary-tests"]
+
+[[test]]
+name = "clap_auxiliary"
+path = "tests/clap_auxiliary.rs"
+
+[dependencies.anyhow]
+version = "1.0"
+
+[dependencies.anymap3]
+version = "1.0.1"
+
+[dependencies.atomic_float]
+version = "1.1"
+
+[dependencies.atomic_refcell]
+version = "0.1"
+
+[dependencies.backtrace]
+version = "0.3.76"
+
+[dependencies.bitflags]
+version = "2"
+
+[dependencies.clap-sys]
+version = "0.5.0"
+
+[dependencies.crossbeam]
+workspace = true
+
+[dependencies.crossbeam-utils]
+version = "0.8.21"
+
+[dependencies.log]
+version = "0.4"
+
+# Without default features, as the workspace entry says why.
+[dependencies.nice-assert-no-alloc]
+workspace = true
+features = [
+    "backtrace",
+    "log",
+]
+optional = true
+
+[dependencies.nice-log]
+version = "0.2.4"
+
+[dependencies.midi-consts]
+version = "0.1"
+
+# nice-plug-derive 0.1.2, as a member crate until the parameter layer replaces it.
+[dependencies.harmonigraph-clap-derive]
+path = "derive"
+
+[dependencies.parking_lot]
+workspace = true
+
+[dependencies.raw-window-handle]
+workspace = true
+
+[dependencies.rtrb]
+workspace = true
+
+[dependencies.serde]
+workspace = true
+
+[dependencies.serde_json]
+version = "1.0"
+
+[dev-dependencies.approx]
+version = "0.5.1"

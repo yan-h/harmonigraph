@@ -36,11 +36,11 @@ pub use editor::startup_probe::run as editor_startup_probe;
 // (`harmonigraph_perf::heap`, #1512) in every release build, and in a release
 // TEST binary the allocation guard under it as well.
 //
-// Release only, because in a debug build nice-plug may already have installed
-// one, and two `#[global_allocator]`s cannot link. nice-plug declares its own
+// Release only, because in a debug build harmonigraph-clap may already have
+// installed one, and two `#[global_allocator]`s cannot link. It declares its own
 // (`MeasuredAllocator` over `AllocDisabler`) under `#[cfg(debug_assertions)]`
 // plus its `assert_process_allocs` feature — see
-// `vendor/nice-plug/src/wrapper/util.rs`. That feature arrives through this
+// `crates/harmonigraph-clap/src/wrapper/util.rs`. That feature arrives through this
 // crate's dev-dependency, and cargo unifies it into every unit of a build that
 // has dev-dependencies, so a debug `cargo test` that links the cdylib would
 // carry both. Keyed on `debug_assertions` alone, the two are complements: the
@@ -56,29 +56,30 @@ pub use editor::startup_probe::run as editor_startup_probe;
 // The two declarations are complements only while the profiles they read agree
 // about `debug_assertions`, and that is an agreement BETWEEN two profiles
 // rather than a property of one: a `cargo test` lib-test unit compiles under
-// `test` while nice-plug compiles under `dev`. They agree by default, and this
-// workspace already customises `dev`, `dev.package."*"` and
-// `release.package.*`, so both ways of breaking it are reachable from
-// `Cargo.toml`:
+// `test` while harmonigraph-clap compiles under `dev`. They agree by default, and this
+// workspace already customises `dev` and `dev.package."*"`, so both ways of
+// breaking it are reachable from `Cargo.toml`:
 //
-//   * `[profile.test] debug-assertions = false` leaves nice-plug's on and turns
-//     this one on too — two `#[global_allocator]`s in one binary, which is a
-//     hard "cannot define multiple global allocators" and therefore audible.
-//   * `[profile.dev.package."*"] debug-assertions = false`, the usual
-//     build-speed trick, reaches nice-plug (not a workspace member) and not
-//     this crate, so NEITHER is installed and the guard silently goes back to
-//     passing without guarding. `tests::exactly_one_global_allocator_is_installed`
+//   * `[profile.test] debug-assertions = false` leaves harmonigraph-clap's on
+//     and turns this one on too — two `#[global_allocator]`s in one binary,
+//     which is a hard "cannot define multiple global allocators" and therefore
+//     audible.
+//   * `[profile.dev.package.harmonigraph-clap] debug-assertions = false`
+//     reaches the shell and not this crate, so NEITHER is installed and the
+//     guard silently goes back to passing without guarding. (Before the shell
+//     was a workspace member, the usual build-speed trick
+//     `[profile.dev.package."*"]` reached it the same way.) `tests::exactly_one_global_allocator_is_installed`
 //     stops compiling on that one: the probe it reads is gated the same way.
 //
 // If a guarded block here ever needs an escape hatch, it must call
 // `nice_assert_no_alloc::permit_alloc` and NOT `nice_plug::util::permit_alloc`,
-// which is what the rest of the tree and all of `vendor/nice-plug` reach for.
-// nice-plug-core gates its helper on
+// which is what the rest of the tree and all of harmonigraph-clap reach for.
+// harmonigraph-clap gates its helper on
 // `all(debug_assertions, feature = "assert_process_allocs")`, so under
 // `--release` it is an identity function and the allocation it was supposed to
 // permit aborts the WHOLE test binary, taking every other test's result with
-// it. The `nice_assert_no_alloc` one is live in both profiles, because the
-// workspace `Cargo.toml` compiles that package with debug assertions on.
+// it. The `nice_assert_no_alloc` one is live in both profiles, because no
+// manifest turns on its `disable_release` (the workspace `Cargo.toml` entry).
 #[cfg(all(not(test), not(debug_assertions)))]
 #[global_allocator]
 static ALLOCATOR: harmonigraph_perf::heap::Counting<std::alloc::System> =
