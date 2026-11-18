@@ -55,7 +55,7 @@ bitflags::bitflags! {
 
 // See https://rust-lang.github.io/api-guidelines/future-proofing.html for more information
 mod sealed {
-    /// Dummy trait to prevent [`Param`] from being implemented outside of nice-plug. This is not
+    /// Dummy trait to prevent [`Param`][super::Param] from being implemented outside of nice-plug. This is not
     /// possible because of the way `ParamPtr` works, so it's best to just make it flat out impossible.
     pub trait Sealed {}
 }

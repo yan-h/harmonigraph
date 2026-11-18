@@ -1,3 +1,8 @@
+//! nice-plug-derive 0.1.2: the `Params` and `Enum` derives harmonigraph-clap re-exports.
+//!
+//! Their expansions name `::nice_plug::`, the library name harmonigraph-clap keeps.
+//! A member crate only until the parameter layer replaces the derives (#1814).
+
 use proc_macro::TokenStream;
 
 mod enums;

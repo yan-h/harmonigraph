@@ -151,7 +151,7 @@ pub struct Wrapper<P: ClapPlugin> {
     /// A handle for the currently active editor instance. The plugin should implement `Drop` on
     /// this handle for its closing behavior.
     editor_handle: Mutex<Option<Box<dyn Any + Send>>>,
-    /// The DPI scaling factor as passed to the [IPlugViewContentScaleSupport::set_scale_factor()]
+    /// The DPI scaling factor as passed to the `IPlugViewContentScaleSupport::set_scale_factor()`
     /// function. Defaults to 1.0, and will be kept there on macOS. When reporting and handling size
     /// the sizes communicated to and from the DAW should be scaled by this factor since nice-plug's
     /// APIs only deal in logical pixels.
@@ -202,7 +202,7 @@ pub struct Wrapper<P: ClapPlugin> {
     /// thread acts as a receiver and then as a sender. That way deallocation can happen on the GUI
     /// thread. All of this happens without any blocking on the audio thread.
     updated_state_sender: channel::Sender<PluginState>,
-    /// The receiver belonging to [`new_state_sender`][Self::new_state_sender].
+    /// The receiver belonging to `new_state_sender`.
     updated_state_receiver: channel::Receiver<PluginState>,
 
     // We'll query all of the host's extensions upfront
@@ -299,7 +299,7 @@ pub struct Wrapper<P: ClapPlugin> {
 
 /// Tasks that can be sent from the plugin to be executed on the main thread in a non-blocking
 /// realtime-safe way. Instead of using a random thread or the OS' event loop like in the Linux
-/// implementation, this uses [`clap_host::request_callback()`] instead.
+/// implementation, this uses [`clap_host::request_callback`] instead.
 #[allow(clippy::enum_variant_names)]
 pub enum Task<P: Plugin> {
     /// Execute one of the plugin's background tasks.
@@ -335,7 +335,7 @@ pub enum ClapParamUpdate {
 /// written to the host either at the end of the process function or during a flush.
 #[derive(Debug, Clone, Copy)]
 pub enum OutputParamEvent {
-    /// Begin an automation gesture. This must always be sent before sending [`SetValue`].
+    /// Begin an automation gesture. This must always be sent before sending [`SetValue`][Self::SetValue].
     BeginGesture { param_hash: u32 },
     /// Change the value of a parameter using a plain CLAP value, aka the normalized value
     /// multiplied by the number of steps.
@@ -343,10 +343,10 @@ pub enum OutputParamEvent {
         /// The internal hash for the parameter.
         param_hash: u32,
         /// The 'plain' value as reported to CLAP. This is the normalized value multiplied by
-        /// [`params::step_size()`][crate::params::step_size()].
+        /// `params::step_size()`.
         clap_plain_value: f64,
     },
-    /// Begin an automation gesture. This must always be sent after sending one or more [`SetValue`]
+    /// Begin an automation gesture. This must always be sent after sending one or more [`SetValue`][Self::SetValue]
     /// events.
     EndGesture { param_hash: u32 },
 }
@@ -388,7 +388,7 @@ const _: () = {
     assert!(mem::size_of::<rtrb::RingBuffer<OutputParamEvent>>() <= 384);
 };
 
-/// Because CLAP has this [`clap_host::request_host_callback()`] function, we don't need a platform
+/// Because CLAP has this [`clap_host::request_callback`] function, we don't need a platform
 /// event loop and can instead just request a main thread callback directly.
 impl<P: ClapPlugin> EventLoop<Task<P>, Wrapper<P>> for Wrapper<P> {
     fn new_and_spawn(_executor: Weak<Self>) -> Self {

@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 use crate::audio_setup::AudioIOLayout;
 use crate::buffer::Buffer;
 
-/// Buffers created using [`create_buffers`]. At some point the main `Plugin::process()` should
+/// Buffers created using `create_buffers`. At some point the main `Plugin::process()` should
 /// probably also take an argument like this instead of main+aux buffers if we also want to provide
 /// access to overflowing input channels for e.g. stereo to mono plugins.
 pub struct Buffers<'a, 'buffer: 'a> {

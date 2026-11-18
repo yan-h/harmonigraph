@@ -134,7 +134,7 @@ where
     }
 }
 
-/// The worker thread used in [`EventLoop`] that executes incoming tasks on the event loop's
+/// The worker thread used in [`EventLoop`][crate::event_loop::EventLoop] that executes incoming tasks on the event loop's
 /// executor.
 fn worker_thread<T, E>(tasks_receiver: crossbeam::channel::Receiver<Message<T, E>>)
 where

@@ -193,11 +193,7 @@ mod miri {
             }
         }
 
-        for i in 0..32 {
-            assert_eq!(real_buffers[0][i], 0.001);
-        }
-        for i in 32..48 {
-            assert_eq!(real_buffers[0][i], 0.0);
-        }
+        assert!(real_buffers[0][..32].iter().all(|&sample| sample == 0.001));
+        assert!(real_buffers[0][32..48].iter().all(|&sample| sample == 0.0));
     }
 }

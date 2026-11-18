@@ -26,7 +26,7 @@ impl Drop for ParamGestureChecker {
 
 impl ParamGestureChecker {
     /// Called for
-    /// [`GuiContext::begin_set_parameter()`][crate::prelude::GuiContext::begin_set_parameter()].
+    /// [`ParamSetter::begin_set_parameter()`][crate::prelude::ParamSetter::begin_set_parameter()].
     /// Triggers a debug assertion failure if the state is inconsistent.
     pub fn begin_set_parameter(&mut self, param_id: &str) {
         crate::nice_debug_assert!(
@@ -37,7 +37,7 @@ impl ParamGestureChecker {
         self.active_params.insert(param_id.to_owned());
     }
 
-    /// Called for [`GuiContext::set_parameter()`][crate::prelude::GuiContext::set_parameter()].
+    /// Called for [`ParamSetter::set_parameter()`][crate::prelude::ParamSetter::set_parameter()].
     /// Triggers a debug assertion failure if the state is inconsistent.
     pub fn set_parameter(&self, param_id: &str) {
         crate::nice_debug_assert!(
@@ -49,7 +49,7 @@ impl ParamGestureChecker {
     }
 
     /// Called for
-    /// [`GuiContext::end_set_parameter()`][crate::prelude::GuiContext::end_set_parameter()].
+    /// [`ParamSetter::end_set_parameter()`][crate::prelude::ParamSetter::end_set_parameter()].
     /// Triggers a debug assertion failure if the state is inconsistent.
     pub fn end_set_parameter(&mut self, param_id: &str) {
         crate::nice_debug_assert!(
