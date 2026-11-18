@@ -5,7 +5,7 @@
 [package]
 edition = "2024"
 name = "harmonigraph-clap-derive"
-version = "0.1.2"
+version.workspace = true
 authors = [
     "Robbert van der Helm <mail@robbertvanderhelm.nl>",
     "Billy Messenger <billydm@noreply.codeberg.org>",
@@ -22,11 +22,8 @@ readme = false
 keywords = [
     "audio",
     "plugin",
-    "vst",
-    "vst3",
 ]
 license = "ISC"
-repository = "https://codeberg.org/RustAudio/nice-plug"
 
 [lib]
 name = "nice_plug_derive"

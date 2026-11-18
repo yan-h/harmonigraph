@@ -8,7 +8,7 @@
 edition = "2024"
 rust-version = "1.87"
 name = "harmonigraph-clap"
-version = "0.1.10"
+version.workspace = true
 authors = [
     "Robbert van der Helm <mail@robbertvanderhelm.nl>",
     "Billy Messenger <billydm@noreply.codeberg.org>",
@@ -26,15 +26,9 @@ keywords = [
     "audio",
     "plugin",
     "clap",
-    "vst",
-    "vst3",
 ]
 categories = ["multimedia::audio"]
 license = "ISC"
-repository = "https://codeberg.org/RustAudio/nice-plug"
-
-[package.metadata.docs.rs]
-all-features = true
 
 [features]
 # Enables deterministic scheduling observations only in the boundary fixtures.
@@ -88,7 +82,7 @@ version = "2"
 version = "0.5.0"
 
 [dependencies.crossbeam]
-version = "0.8"
+workspace = true
 
 [dependencies.crossbeam-utils]
 version = "0.8.21"
@@ -116,17 +110,16 @@ version = "0.1"
 path = "derive"
 
 [dependencies.parking_lot]
-version = "0.12"
+workspace = true
 
 [dependencies.raw-window-handle]
-version = "0.5"
+workspace = true
 
 [dependencies.rtrb]
-version = "0.3.3"
+workspace = true
 
 [dependencies.serde]
-version = "1.0"
-features = ["derive"]
+workspace = true
 
 [dependencies.serde_json]
 version = "1.0"

@@ -1463,7 +1463,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-clap"
-version = "0.1.10"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "anymap3",
@@ -1489,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-clap-derive"
-version = "0.1.2"
+version = "0.6.1"
 dependencies = [
  "proc-macro2",
  "quote",

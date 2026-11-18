@@ -77,9 +77,6 @@ bytemuck = { version = "1", features = ["derive"] }
 # nothing outside the plugin chooses: SipHash's flooding resistance buys
 # nothing there and costs it every frame. Already in the graph via wgpu.
 foldhash = "0.2"
-# Held at 0.3 because harmonigraph-clap pins it, and two copies buy nothing;
-# move both together. A GUI-stack move would not move it: the shell can stay
-# put under baseview 0.4 (#1529).
 rtrb = "0.3"
 crossbeam = "0.8"
 parking_lot = "0.12"
