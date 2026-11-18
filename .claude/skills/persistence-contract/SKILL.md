@@ -69,8 +69,11 @@ An empty restore installs the fresh look and leaves that flag as it was.
 A restore therefore resets what it installs and nothing else, and a window session resets only what belongs to the window (`start_window_session`).
 A new persisted field needs no step at either:
 `UiPersist::capture` and `apply_persist` are two of its three sites.
-The third is `UiPersist::stores`, the key an edit is compared on to mark the project modified (#1813), which destructures the document so a new field does not compile until it is there.
-A `#[serde(skip)]` field added to any saved type is copied in there too, or its `PartialEq` marks the project at every change to it.
+The third is `UiPersist::stores`, the key an edit is compared on to mark the project modified (#1813).
+It destructures the document, so a new top-level field of `UiPersist` does not compile until it is compared there;
+each member compares whole by its derived `PartialEq`, so a field added inside one is in the key with nothing to do.
+What no compiler catches: a `#[serde(skip)]` field added to any saved type is compared all the same, and marks the project at every change to it until `stores` copies it in from the live state, as it does the Stars solos.
+A value the editor writes by itself rather than by an edit is settled where it is written or copied in there likewise.
 
 ## Appearance and editor workspace have separate boundaries
 

@@ -315,6 +315,7 @@ pub fn root_ui(
     if let Some(change) = workspace::show(
         ui,
         &mut workspace.layout,
+        &mut state.reported.layout,
         &mut workspace.layout_runtime,
         &mut panes::Viewer {
             state: &mut state.picture,

@@ -184,8 +184,9 @@ pub(crate) struct Settings {
     /// Taken once, by the audio owner.
     commands: Mutex<Option<rtrb::Consumer<Command>>>,
     published: Published,
-    /// A UI or Learn edit applied, or a lattice-map document edited, since the
-    /// host last asked: it marks the project modified.
+    /// A UI or Learn edit applied, a lattice-map document edited, or an edit
+    /// to what the editor saves in `ui-state` (#1813), since the host last
+    /// asked: it marks the project modified.
     modified: AtomicBool,
     /// A lattice-map document edit since the host last asked: the Lattice
     /// Map's label names its maps, so the host reads its text again.

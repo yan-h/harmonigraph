@@ -859,18 +859,21 @@ fn a_ui_state_edit_marks_the_project_once_and_its_restore_does_not() {
     let lock = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone());
     let before = device.service();
     let mut project = harmonigraph_ui::SharedState::new(crate::editor::ASSUMED_SURFACE_FORMAT);
-    project.picture.appearance.view.max_sevens = 3;
+    let restored = project.picture.appearance.view.max_sevens + 1;
+    project.picture.appearance.view.max_sevens = restored;
     let mut state = device.wrapper().get_state_object();
     let blob = harmonigraph_ui::shell::close(&project);
     state.fields.insert("ui-state".into(), serde_json::to_string(&blob).unwrap());
     device.load(state, false);
-    assert_eq!(lock.lock().ui.picture.appearance.view.max_sevens, 3, "the restore installed");
+    let installed = lock.lock().ui.picture.appearance.view.max_sevens;
+    assert_eq!(installed, restored, "the restore installed");
     let _ = lock.end_window_session();
     assert_eq!(device.service(), before, "a restore is not an edit");
 
-    lock.lock().ui.picture.appearance.view.max_sevens = 4;
+    lock.lock().ui.picture.appearance.view.max_sevens = restored + 1;
     let _ = lock.end_window_session();
     assert_eq!(device.service(), before + 1, "the edit marks the project modified");
+    let _ = lock.end_window_session();
     assert_eq!(device.service(), before + 1, "once");
 }
 

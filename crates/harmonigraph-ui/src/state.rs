@@ -109,13 +109,14 @@ pub struct SharedState {
     /// empty restore leaves it as it was, so one into an editor that has held
     /// settings never turns its later saves into `""`.
     untouched: bool,
-    /// What a host save stored as of the last restore, window layout or edit
-    /// the host was told of: the key [`report_edit`](Self::report_edit)
-    /// compares the live settings against.
-    reported: UiPersist,
-    /// The next frame that draws lays out a new window, and what that writes
-    /// (a layout never sized before, fitted to it) is no edit.
-    laying_out: bool,
+    /// What a save stores as of the last restore or edit the host was told
+    /// of, with every automatic write since settled into it as it was made
+    /// (the layout fitted to the window, in `workspace::show`): the key
+    /// [`report_edit`](Self::report_edit) compares the live settings against.
+    pub(crate) reported: UiPersist,
+    /// A frame of the gesture still open differed from
+    /// [`reported`](Self::reported), so its end reports even if it came back.
+    moved: bool,
     /// Told, under the editor lock, when an edit changes what a save stores:
     /// the plugin has the host mark its project modified (#1813).
     on_edit: Option<Box<dyn Fn() + Send>>,
@@ -590,7 +591,7 @@ impl SharedState {
         let picture = PictureState::new(target_format);
         let workspace = Workspace::default();
         let reported = UiPersist::capture(&workspace, &picture.appearance);
-        Self { picture, workspace, untouched: true, reported, laying_out: false, on_edit: None }
+        Self { picture, workspace, untouched: true, reported, moved: false, on_edit: None }
     }
 
     /// Call `notice` whenever an edit changes what a host save stores.
@@ -599,17 +600,16 @@ impl SharedState {
     }
 
     /// Tell the edit notice if what a save stores has moved since it was last
-    /// told, a restore or a new window's layout. Every frame that holds no
-    /// drag, scroll or pinch open, and each close, so a gesture is one
-    /// notice, at its end.
+    /// told, now or at any frame of the gesture this ends. Every frame that
+    /// holds no drag, scroll or pinch open, and each close, so a gesture is
+    /// one notice, at its end, even one that came back to where it started.
     ///
-    /// The key is everything [`UiPersist`] saves but the camera the host's
-    /// parameters own (automation moves it every frame), what serde skips and
-    /// the Analyzer's region depths (see [`UiPersist::stores`]). A field
-    /// compare rather than a serialization, so a frame pays a fraction of a
-    /// microsecond; the copy is taken only when it moved.
+    /// The key is everything [`UiPersist`] saves but what the editor writes
+    /// by itself or the host learns otherwise (see [`UiPersist::stores`]).
+    /// A field compare rather than a serialization, so a frame pays a
+    /// fraction of a microsecond; the copy is taken only when it moved.
     pub(crate) fn report_edit(&mut self) {
-        if self.reported.stores(&self.workspace, &self.picture.appearance) {
+        if !self.moved && self.reported.stores(&self.workspace, &self.picture.appearance) {
             return;
         }
         self.settle();
@@ -618,19 +618,20 @@ impl SharedState {
         }
     }
 
-    /// Take what a save stores now as told: a restore, or a new window's
-    /// layout.
+    /// Take what a save stores now as told, with nothing of a gesture still
+    /// to report.
     fn settle(&mut self) {
         self.reported = UiPersist::capture(&self.workspace, &self.picture.appearance);
+        self.moved = false;
     }
 
-    /// The end of a frame: a new window's first layout settles the key, and
-    /// any other frame with no gesture open reports what moved.
+    /// The end of a frame: one with no gesture open reports what moved, and
+    /// one inside a gesture notes whether it differs.
     pub(crate) fn end_frame(&mut self, ctx: &egui::Context) {
-        if std::mem::take(&mut self.laying_out) {
-            self.settle();
-        } else if !crate::gesture_open(ctx) {
+        if !crate::gesture_open(ctx) {
             self.report_edit();
+        } else if !self.moved {
+            self.moved = !self.reported.stores(&self.workspace, &self.picture.appearance);
         }
     }
 
@@ -680,7 +681,7 @@ impl SharedState {
     ///
     /// Whether the document's settings were installed, whole or in part.
     /// Installed or refused, it is no edit: what a save stores now is taken as
-    /// told.
+    /// told, and a gesture it lands in reports only what moves after it.
     pub fn install_document(&mut self, serialized: &str) -> bool {
         let installed = self.install(serialized);
         self.settle();
@@ -784,7 +785,6 @@ impl SharedState {
     /// From the first window on, a save stores the settings it shows.
     pub(crate) fn start_window_session(&mut self) {
         self.untouched = false;
-        self.laying_out = true;
         self.workspace.layout_runtime = workspace::Runtime::default();
         self.workspace.window_size_change = egui::Vec2::ZERO;
         self.workspace.interaction.appearance_editor.start_window_session();
@@ -871,24 +871,30 @@ impl UiPersist {
     }
 
     /// Whether this document holds what a save of `workspace` and `appearance`
-    /// stores, but for what no edit moves alone or what the host learns
-    /// otherwise or never:
+    /// stores, but for what the editor writes by itself or the host learns
+    /// otherwise or never, which is copied in from the live state first so
+    /// that this document takes it on:
     ///
     /// - the host-owned camera ([`AppearanceDocument::copy_host_owned`]),
-    ///   which reaches it as parameters;
-    /// - what serde skips: the Stars solo, and the Analyzer regions' relayout
-    ///   flag. A `#[serde(skip)]` field added to a saved type is copied in here
-    ///   too, or `PartialEq` marks the project at every change to it;
-    /// - the Analyzer regions' depths, which follow the pane's size: the
-    ///   window, the Tape tab and the spectrum hold, none of them saved here.
-    ///   An edit that moves them moves the layout, a preference or the
-    ///   spectrum settings too.
+    ///   which reaches it as parameters and which automation moves;
+    /// - the Stars solos of the live look and the stored ones, which serde
+    ///   skips ([`appearance_edit::copy_solo`]);
+    /// - what the Analyzer's regions lay out by themselves
+    ///   ([`Regions::copy_layout`]).
     ///
-    /// The camera and the solo are copied in from the live state first, so
-    /// this document takes them on. Destructured, so a field added to the
-    /// document is a compile error here until it is in the key.
+    /// The layout `workspace::show` fits to the window is settled where it is
+    /// written instead, since the layout is also edited.
+    ///
+    /// What the compiler holds: the destructure fails to build until a new
+    /// top-level field of this document is compared, and each member compares
+    /// whole by its derived `PartialEq`, so a field added inside one is in the
+    /// key by itself. What it does not: a `#[serde(skip)]` field added to any
+    /// of them is compared all the same, and marks the project at every change
+    /// until it is copied in here.
     ///
     /// [`AppearanceDocument::copy_host_owned`]: crate::AppearanceDocument::copy_host_owned
+    /// [`appearance_edit::copy_solo`]: crate::appearance_edit::copy_solo
+    /// [`Regions::copy_layout`]: crate::panes::spectral::collapse::Regions::copy_layout
     fn stores(&mut self, workspace: &Workspace, appearance: &crate::AppearanceDocument) -> bool {
         let UiPersist {
             version: _,
@@ -899,16 +905,20 @@ impl UiPersist {
             look_slots,
             prefs,
         } = self;
+        let interaction = &workspace.interaction;
         crate::AppearanceDocument::copy_host_owned(
             (&mut own.camera, &mut own.view),
             (&appearance.camera, &appearance.view),
         );
-        own.view.atmosphere.stars.star_solo = appearance.view.atmosphere.stars.star_solo;
-        own.spectrum.atmosphere.stars.star_solo = appearance.spectrum.atmosphere.stars.star_solo;
-        let interaction = &workspace.interaction;
+        crate::appearance_edit::copy_solo(
+            (&mut own.view, &mut own.spectrum),
+            (&appearance.view, &appearance.spectrum),
+        );
+        look_slots.copy_solo(&interaction.appearance_editor.slots);
+        analyzer_regions.copy_layout(&interaction.analyzer_regions);
         *own == *appearance
             && *layout == workspace.layout
-            && analyzer_regions.collapsed == interaction.analyzer_regions.collapsed
+            && *analyzer_regions == interaction.analyzer_regions
             && *camera_presets == interaction.camera_presets
             && *look_slots == interaction.appearance_editor.slots
             && *prefs == interaction.prefs
