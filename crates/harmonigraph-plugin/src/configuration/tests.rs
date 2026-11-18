@@ -21,6 +21,9 @@ use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+mod host_surface;
+mod state_goldens;
+
 #[derive(Default)]
 struct Host {
     dirty: AtomicUsize,
@@ -86,11 +89,13 @@ enum Input {
     Note(clap_event_note),
     Tuning(clap_event_note_expression),
     Transport(clap_event_transport),
+    Mod(clap_event_param_mod),
 }
 impl Input {
     fn header(&self) -> &clap_event_header {
         match self {
             Self::Param(e) => &e.header,
+            Self::Mod(e) => &e.header,
             Self::Note(e) => &e.header,
             Self::Tuning(e) => &e.header,
             Self::Transport(e) => &e.header,
