@@ -738,12 +738,7 @@ impl Default for Harmonigraph {
         let aggregation = tuning::hub::Hub::new();
         let wake = aggregation.shared.clone();
         take_control.set_stop_wakeup(move || wake.request_main());
-        let mut editor = editor::EditorShared::new(
-            consumer,
-            audio_consumer,
-            sample_rate_bits.clone(),
-            take_control,
-        );
+        let mut editor = editor::EditorShared::new(sample_rate_bits.clone(), take_control);
         // An edit to what `ui-state` saves marks the project modified, as a
         // musical setting's does (#1813).
         let settings = params.settings.clone();
@@ -759,6 +754,7 @@ impl Default for Harmonigraph {
             editor_shared.clone(),
             params.editor_state.clone(),
             tape_worker,
+            editor::input::LiveInput::new(consumer, audio_consumer),
         );
         params.ui_state.attach(&editor_shared);
         Harmonigraph {
@@ -1161,6 +1157,13 @@ mod tests {
         }
     }
 
+    /// Stop the plugin's input worker and take the input it owned, after
+    /// its final drain: for a test that drains by hand at times it chooses,
+    /// or reads what the worker's analysis ran at.
+    fn stop_input_worker(plugin: &mut Harmonigraph) -> editor::input::LiveInput {
+        plugin._input_worker.join().expect("the input worker ran and ended")
+    }
+
     fn publish_test_audio(plugin: &mut Harmonigraph, frames: usize) {
         plugin.audio_producer.publish(
             frames,
@@ -1251,21 +1254,10 @@ mod tests {
              analyzer",
         );
 
-        // The worker has the analysis out while it analyzes, so wait for a
-        // moment it has given it back.
-        let started = Instant::now();
-        let (shared, lag) = loop {
-            let shared = plugin.editor_shared.lock();
-            if let Some(lag) = shared.input.analysis_lag() {
-                break (shared, lag);
-            }
-            drop(shared);
-            assert!(
-                started.elapsed() < ANALYSIS_DEADLINE,
-                "the input worker held the analysis out for {ANALYSIS_DEADLINE:?}",
-            );
-            std::thread::sleep(background::POLL);
-        };
+        // The analysis is the worker's own, so read it once the worker has
+        // stopped and handed it back.
+        let lag = stop_input_worker(&mut plugin).analysis_lag();
+        let shared = plugin.editor_shared.lock();
         assert_eq!(shared.ui.picture.appearance.camera.yaw, 1.23);
         assert_eq!(shared.ui.picture.appearance.view.max_sevens, 3);
         assert_eq!(shared.ui.picture.appearance.render.short_edge, 2160);
@@ -1600,11 +1592,9 @@ mod tests {
     #[test]
     fn a_sidechain_process_block_feeds_analysis_and_leaves_main_untouched() {
         let mut plugin = Harmonigraph::default();
+        let mut input = stop_input_worker(&mut plugin);
         plugin.params.set(Row::AnalysisInput, 1.0);
         assert_eq!(plugin.params.analysis_input(), AnalysisInput::Sidechain);
-        let shared = plugin.editor_shared.clone();
-        let mut shared = shared.lock();
-        let shared = &mut *shared;
         let mut main_left = [1.0, 2.0, 3.0, 4.0];
         let mut main_right = [5.0, 6.0, 7.0, 8.0];
         let expected_main_left = main_left;
@@ -1623,7 +1613,7 @@ mod tests {
         assert_eq!(main_left, expected_main_left, "process changed the main left pass-through");
         assert_eq!(main_right, expected_main_right, "process changed the main right pass-through");
         assert_eq!(
-            shared.input.drain_analysis_audio_for_test().as_slice(),
+            input.drain_analysis_audio_for_test().as_slice(),
             &expected_sidechain,
             "the live analyzer received Main instead of Sidechain",
         );
@@ -1748,6 +1738,7 @@ mod tests {
     #[test]
     fn queued_history_keeps_its_clock_across_the_actual_plugin_reset() {
         let mut plugin = Harmonigraph::default();
+        let mut input = stop_input_worker(&mut plugin);
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
         let shared = &mut *shared;
@@ -1770,7 +1761,7 @@ mod tests {
         while shared.ui.picture.runtime.tracker.roll().notes().count() < 2
             && Instant::now() < deadline
         {
-            shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, 22.0);
+            input.drain(shared, &mut Vec::new(), 22.0);
             std::thread::yield_now();
         }
         let notes: Vec<_> =
@@ -1781,6 +1772,7 @@ mod tests {
     #[test]
     fn analyzer_source_time_ignores_transport_loops_stops_and_missing_positions() {
         let mut plugin = Harmonigraph::default();
+        let mut input = stop_input_worker(&mut plugin);
         plugin.sample_rate = 48_000.0;
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
@@ -1794,11 +1786,7 @@ mod tests {
             let mut main = [&mut left[..], &mut right[..]];
             plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
         }
-        let columns = shared.input.drain_columns(
-            &mut shared.ui.picture.runtime,
-            &shared.ui.picture.appearance,
-            plugin.presentation_seconds,
-        );
+        let columns = input.drain_columns(shared, plugin.presentation_seconds);
         assert!(columns.len() > 40, "all three callbacks must reach the analyzer");
         let before = shared.ui.picture.runtime.spectrum.columns_taken();
         let times: Vec<_> = columns.iter().map(|(time, _)| *time).collect();
@@ -1812,11 +1800,7 @@ mod tests {
         let mut right = [0.0; 384];
         let mut main = [&mut left[..], &mut right[..]];
         plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
-        shared.input.drain(
-            &mut shared.ui.picture.runtime,
-            &shared.ui.picture.appearance,
-            plugin.presentation_seconds,
-        );
+        input.drain(shared, &mut Vec::new(), plugin.presentation_seconds);
         assert_eq!(shared.ui.picture.runtime.spectrum.columns_taken(), before);
     }
 

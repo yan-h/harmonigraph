@@ -380,12 +380,8 @@ mod tests {
     /// is the editor's size.
     #[test]
     fn a_host_resize_leaves_the_saved_size_while_the_editor_is_in_its_own_window() {
-        let (_notes, consumer) = harmonigraph_record::publication::channel();
-        let (_audio, audio_consumer) = crate::audio_ingress::channel(64);
         let (_recorder, control) = harmonigraph_record::channel();
         let shared = super::super::EditorShared::new(
-            consumer,
-            audio_consumer,
             Arc::new(std::sync::atomic::AtomicU32::new(48_000.0f32.to_bits())),
             control,
         );
