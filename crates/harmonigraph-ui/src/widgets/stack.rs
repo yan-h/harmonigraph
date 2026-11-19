@@ -9,7 +9,7 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    bar_radius, bar_width, drag, grip_radius, paint_thumbs, poised, track_fill, with_gestures,
+    allocate_row, bar_radius, drag, grip_radius, paint_thumbs, poised, track_fill, with_gestures,
     BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
 };
 use super::text_at;
@@ -441,11 +441,7 @@ impl<'a> StackBar<'a> {
 
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
-        let width = bar_width(ui);
-        let (rect, mut response) = ui.allocate_exact_size(
-            Vec2::new(width, theme::row_height(scale)),
-            Sense::click_and_drag(),
-        );
+        let (rect, mut response) = allocate_row(ui, "StackBar", Sense::click_and_drag());
         // The axis is inset the way every two-handle bar's is, so a boundary at
         // either limit still seats a whole thumb inside the bar. It matters more
         // here than on a range: a node with nothing but its middle parks three

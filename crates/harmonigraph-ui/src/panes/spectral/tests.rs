@@ -30,7 +30,16 @@ const BODY_ALPHA: u8 = profile::FILL_ALPHA_U8;
 /// context of its own.
 fn painted_pane(rect: egui::Rect, state: &mut PictureState, now: f64) -> egui::FullOutput {
     painted_into(SCREEN, rect, |ui| {
-        spectral_pane(ui, state, now, 0, 1.0, Navigation::Docked, crate::panes::lattice::NO_SOLO)
+        spectral_pane(
+            ui,
+            state,
+            now,
+            0,
+            1.0,
+            Navigation::Docked,
+            state.shown(),
+            crate::panes::lattice::NO_SOLO,
+        )
     })
 }
 
@@ -859,6 +868,7 @@ fn drag_pane_with_navigation(
                     surface,
                     1.0,
                     navigation,
+                    state.shown(),
                     crate::panes::lattice::NO_SOLO,
                 );
             },
@@ -938,6 +948,7 @@ fn preview_wheel_zooms_pitch_with_or_without_shift_and_consumes_both_axes() {
                 },
                 |ui| {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    let shown = state.shown();
                     spectral_pane(
                         &mut child,
                         &mut state,
@@ -945,6 +956,7 @@ fn preview_wheel_zooms_pitch_with_or_without_shift_and_consumes_both_axes() {
                         1,
                         1.0,
                         Navigation::Preview,
+                        shown,
                         crate::panes::lattice::NO_SOLO,
                     );
                     remaining_scroll.set(ui.input(|input| input.smooth_scroll_delta));
@@ -1829,6 +1841,7 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     // not hold, and this fixture is about what the curve reaches inside the
     // pane rather than about anything at the window's edge.
     let output = painted_into(egui::vec2(2000.0, 2000.0), rect, |ui| {
+        let shown = state.shown();
         spectral_pane(
             ui,
             &mut state,
@@ -1836,6 +1849,7 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
             0,
             1.0,
             Navigation::Docked,
+            shown,
             crate::panes::lattice::NO_SOLO,
         );
     });
@@ -3276,6 +3290,7 @@ fn tape_frames(
                 0,
                 1.0,
                 navigation,
+                state.shown(),
                 crate::panes::lattice::NO_SOLO,
             );
         });
@@ -3495,6 +3510,7 @@ fn overview_frames(ctx: &egui::Context, state: &mut PictureState, frames: Vec<Ve
                 0,
                 1.0,
                 Navigation::Docked,
+                state.shown(),
                 crate::panes::lattice::NO_SOLO,
             );
         });

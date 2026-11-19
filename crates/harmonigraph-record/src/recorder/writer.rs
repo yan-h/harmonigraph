@@ -37,28 +37,57 @@ const FIXTURE_SPEC: AudioSpec = AudioSpec { sample_rate: 48_000.0, channels: TAK
 /// How long the writer thread sleeps when it finds the rings empty.
 const DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(20);
 
+/// What the writer thread drains: the far end of every ring the [`Recorder`]
+/// pushes into, and of the [`Control`]'s commands. A test that holds these
+/// instead reads exactly what was pushed, with no thread racing it.
+struct Ends {
+    records: rtrb::Consumer<Entry>,
+    audio: rtrb::Consumer<f32>,
+    publications: publication::Consumer,
+    orders: mpsc::Receiver<Command>,
+}
+
+/// Both endpoints over rings of these capacities, wired to each other and to
+/// [`Ends`], with no writer thread. The one place a [`Control`] is spelled:
+/// [`channel`] starts the writer on the ends, and tests and the in-memory
+/// fixtures keep them.
+fn endpoints(records: usize, audio: usize) -> (Recorder, Control, Ends) {
+    let (producer, record_consumer) = rtrb::RingBuffer::new(records);
+    let (publication, publications) = publication::channel();
+    let (display, display_consumer) = publication::channel();
+    let (audio_producer, audio_consumer) = rtrb::RingBuffer::new(audio);
+    let (commands, orders) = mpsc::channel::<Command>();
+    let recorder = Recorder::new(producer, audio_producer, publication, display, commands.clone());
+    let control = Control {
+        stop_wakeup: None,
+        display: Arc::new(Mutex::new(Some(display_consumer))),
+        fence: recorder.fence.clone(),
+        commands,
+        dropped: recorder.dropped.clone(),
+        status: Arc::default(),
+        last_take: Arc::default(),
+        recording: Arc::default(),
+        rolling: recorder.rolling.clone(),
+        end_at_rewind: recorder.end_at_rewind.clone(),
+        latches: recorder.latches.clone(),
+        progress: Arc::default(),
+        render: Arc::default(),
+    };
+    let ends = Ends { records: record_consumer, audio: audio_consumer, publications, orders };
+    (recorder, control, ends)
+}
+
 /// Build the ring and start the writer thread. Called once, from the
 /// plugin's `Default`, so neither arming nor disarming ever has to touch
 /// the audio thread's producer.
 pub fn channel() -> (Recorder, Control) {
-    let (producer, mut consumer) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
-    let (publication, mut publications) = publication::channel();
-    let (display, display_consumer) = publication::channel();
-    let (audio_producer, mut audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
-    let (commands, orders) = mpsc::channel::<Command>();
-    let recorder =
-        Recorder::new(producer, audio_producer, publication, display, Some(commands.clone()));
-    let recording = Arc::new(AtomicBool::new(false));
-    let status = Arc::new(Mutex::new(String::new()));
-    let last_take = Arc::new(Mutex::new(None));
-    let progress = Arc::new(Progress::default());
-    let render = Arc::new(RenderControl::default());
-
-    let thread_fence = recorder.fence.clone();
-    let thread_status = status.clone();
-    let thread_last_take = last_take.clone();
-    let thread_progress = progress.clone();
-    let thread_render = render.clone();
+    let (recorder, control, ends) = endpoints(TAKE_RING_CAPACITY, AUDIO_RING_CAPACITY);
+    let Ends { records: mut consumer, audio: mut audio_consumer, mut publications, orders } = ends;
+    let thread_fence = control.fence.clone();
+    let thread_status = control.status.clone();
+    let thread_last_take = control.last_take.clone();
+    let thread_progress = control.progress.clone();
+    let thread_render = control.render.clone();
     let _ = std::thread::Builder::new().name("harmonigraph-take-writer".into()).spawn(move || {
         let mut pump = Pump::default();
         loop {
@@ -111,8 +140,8 @@ pub fn channel() -> (Recorder, Control) {
             // rather than going with the thread.
             if let Some(path) = pumped.finished {
                 *thread_last_take.lock() = Some(path.clone());
-                let render = RenderRequest { appearance: None };
-                spawn_render(render, path, None, thread_progress.clone(), thread_render.clone());
+                // The take's own look: the renderer reads it from the file.
+                spawn_render(None, path, None, thread_progress.clone(), thread_render.clone());
             }
             #[cfg(all(test, feature = "test-support"))]
             if processed_stop {
@@ -128,22 +157,6 @@ pub fn channel() -> (Recorder, Control) {
             }
         }
     });
-
-    let control = Control {
-        stop_wakeup: None,
-        display: Arc::new(Mutex::new(Some(display_consumer))),
-        fence: recorder.fence.clone(),
-        commands,
-        dropped: recorder.dropped.clone(),
-        status,
-        last_take,
-        recording,
-        rolling: recorder.rolling.clone(),
-        end_at_rewind: recorder.end_at_rewind.clone(),
-        latches: recorder.latches.clone(),
-        progress,
-        render,
-    };
     (recorder, control)
 }
 
@@ -184,10 +197,22 @@ impl Pump {
         fence: &RecordFence,
     ) {
         if self.open.is_some() {
-            fence.fail();
+            fail_with(fence, status, "a take started before the last one sealed".into());
             return;
         }
-        self.open = Recording::create(header, path, spec, status);
+        self.open = match Recording::create(header, path, spec) {
+            Ok(recording) => {
+                let mut message = status.lock();
+                if !matches!(message.as_str(), FINISHING | FINISHING_PREVIOUS) {
+                    *message = format!("recording to {}", recording.path.display());
+                }
+                Some(recording)
+            }
+            Err(cause) => {
+                fail_with(fence, status, cause);
+                None
+            }
+        };
         #[cfg(feature = "test-support")]
         if let Some(audio) = self.open.as_mut().and_then(|o| o.audio.as_mut()) {
             if let Some(limit) = *fence.test_wav_limit.lock() {
@@ -196,9 +221,6 @@ impl Pump {
             if fence.test_wav_finish_failure.load(Ordering::Acquire) {
                 audio.fail_finish_for_test();
             }
-        }
-        if self.open.is_none() {
-            fence.fail_with_message(status.lock().clone());
         }
     }
 
@@ -219,7 +241,7 @@ impl Pump {
     ) -> Pumped {
         let mut pumped = Pumped::default();
         let had_records = drain_records(consumer, records, audio, &mut self.open, status, fence);
-        let had_publications = self.drain_publications(publications, items, fence) != 0;
+        let had_publications = self.drain_publications(publications, items, status, fence) != 0;
         pumped.worked = had_records || had_publications;
         let failed = fence.failed.load(Ordering::Acquire);
         if let Some(recording) = self.open.as_mut() {
@@ -229,7 +251,7 @@ impl Pump {
             let marked = if failed { recording.mark_incomplete() } else { Ok(()) };
             let written = marked.and_then(|()| recording.flush());
             if let Err(error) = written {
-                fence.fail_with_message(error.to_string());
+                fail_with(fence, status, error.to_string());
             }
         }
         let sealable = self.open.as_ref().is_none_or(|o| !o.run_open);
@@ -274,6 +296,7 @@ impl Pump {
         &mut self,
         publications: &mut publication::Consumer,
         items: usize,
+        status: &Mutex<String>,
         fence: &RecordFence,
     ) -> usize {
         let open = &mut self.open;
@@ -281,12 +304,22 @@ impl Pump {
             // A gap is NOT a failure (#712): the reader warns if it overlaps
             // a run.
             let record = harmonigraph_take::CanonicalRecord::from_event(event);
-            if open.as_mut().is_some_and(|open| open.writer.canonical(record).is_err()) {
-                fence.fail();
+            if let Some(Err(error)) = open.as_mut().map(|open| open.writer.canonical(record)) {
+                fail_with(fence, status, error.to_string());
             }
             true
         })
     }
+}
+
+/// A failure the writer found: keep its cause, and point the status line at
+/// it, so [`Control::status`] reads the whole failure ("recording incomplete:
+/// `<cause>`; no render started") from the pass that found it. Writing the bare
+/// cause there instead showed it without the rest until the next GUI refresh,
+/// or, after a Stop, until the take sealed (#1843).
+fn fail_with(fence: &RecordFence, status: &Mutex<String>, cause: String) {
+    fence.fail_with_message(cause);
+    *status.lock() = CONFIGURATION_FAILURE.into();
 }
 
 /// In-memory endpoints for dependent crates that need to reach their real
@@ -315,13 +348,13 @@ struct Recording {
 
 impl Recording {
     /// Acquire the take file and its WAV beside it, both exclusively, so a
-    /// take never writes into another recorder's files or an orphan.
+    /// take never writes into another recorder's files or an orphan. A
+    /// failure is its cause, for the status line.
     fn create(
         mut header: harmonigraph_take::Header,
         base: std::path::PathBuf,
         spec: AudioSpec,
-        status: &Mutex<String>,
-    ) -> Option<Recording> {
+    ) -> Result<Recording, String> {
         let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("take").to_owned();
         for suffix in 0u64.. {
             let path = if suffix == 0 {
@@ -333,10 +366,7 @@ impl Recording {
             let take_file = match std::fs::File::create_new(&path) {
                 Ok(file) => file,
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(err) => {
-                    *status.lock() = format!("cannot create {}: {err}", path.display());
-                    return None;
-                }
+                Err(err) => return Err(format!("cannot create {}: {err}", path.display())),
             };
             let wav_file = match std::fs::File::create_new(&wav) {
                 Ok(file) => file,
@@ -345,15 +375,12 @@ impl Recording {
                     // Only the take was acquired by this attempt; never
                     // remove the companion whose creation just failed.
                     if let Err(cleanup) = std::fs::remove_file(&path) {
-                        *status.lock() =
-                            format!("cannot remove unused {}: {cleanup}", path.display());
-                        return None;
+                        return Err(format!("cannot remove unused {}: {cleanup}", path.display()));
                     }
                     if err.kind() == std::io::ErrorKind::AlreadyExists {
                         continue;
                     }
-                    *status.lock() = format!("cannot create {}: {err}", wav.display());
-                    return None;
+                    return Err(format!("cannot create {}: {err}", wav.display()));
                 }
             };
             let initialized = (|| {
@@ -372,20 +399,15 @@ impl Recording {
                     // Both handles have closed and both paths belong to us.
                     let cleanup_take = std::fs::remove_file(&path);
                     let cleanup_wav = std::fs::remove_file(&wav);
-                    *status.lock() = format!(
+                    return Err(format!(
                         "cannot initialize {}: {err}; cleanup: {:?}, {:?}",
                         path.display(),
                         cleanup_take.err(),
                         cleanup_wav.err()
-                    );
-                    return None;
+                    ));
                 }
             };
-            let mut message = status.lock();
-            if !matches!(message.as_str(), FINISHING | FINISHING_PREVIOUS) {
-                *message = format!("recording to {}", path.display());
-            }
-            return Some(Recording {
+            return Ok(Recording {
                 audio_file: header.audio_file.clone(),
                 path,
                 writer,
@@ -394,8 +416,7 @@ impl Recording {
                 marked: false,
             });
         }
-        *status.lock() = "recording filename suffix exhausted".into();
-        None
+        Err("recording filename suffix exhausted".into())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -485,17 +506,17 @@ fn drain_records(
     status: &Mutex<String>,
     fence: &RecordFence,
 ) -> bool {
-    let io_failure = |error: std::io::Error| {
-        fence.fail_with_message(error.to_string());
-        *status.lock() = error.to_string();
-    };
+    let io_failure = |error: std::io::Error| fail_with(fence, status, error.to_string());
     let mut any = false;
     for _ in 0..count {
         let Ok(entry) = consumer.pop() else { break };
         any = true;
         if let Entry::AudioSamples(count) = entry {
+            // The audio thread commits a block's samples before the entry
+            // that counts them, so this holds them all unless the two rings
+            // have fallen out of step.
             let Ok(chunk) = audio.read_chunk(count) else {
-                fence.fail();
+                fail_with(fence, status, format!("audio ring short of {count} samples"));
                 continue;
             };
             if let Some(recording) = open.as_mut() {

@@ -655,13 +655,15 @@ pub(super) fn drag_zoom(
                     let window = (cfg.ceiling_db - cfg.floor_db).max(crate::LEVEL_RANGE_MIN_SPAN);
                     let window = (window * (-outward * DEPTH_ZOOM_PER_DRAG_POINT).exp())
                         .max(crate::LEVEL_RANGE_MIN_SPAN);
-                    // `min` then `max` rather than a clamp: a hand-edited floor can
-                    // sit within the minimum span of the domain's top, and clamp
-                    // panics on bounds that cross. The minimum span wins there,
-                    // which is the answer `loudness_raw` gives the same pair.
-                    cfg.ceiling_db = (cfg.floor_db + window)
-                        .min(crate::LEVEL_MAX_DB)
-                        .max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
+                    // Held to the axis and the minimum span by the rule every
+                    // writer of the pair shares, so the drag writes the pair
+                    // `SpectrumConfig::sanitize` keeps.
+                    (cfg.floor_db, cfg.ceiling_db) = harmonigraph_scene::clamp_span(
+                        cfg.floor_db,
+                        cfg.floor_db + window,
+                        (crate::LEVEL_MIN_DB, crate::LEVEL_MAX_DB),
+                        crate::LEVEL_RANGE_MIN_SPAN,
+                    );
                 }
             }
             ui.ctx().set_cursor_icon(axes.resize_cursor());
@@ -688,6 +690,13 @@ pub(super) fn drag_zoom(
     // because at the full span the two ends meet, and float rounding is enough
     // to cross them — which `clamp` answers with a panic.
     let span = span.clamp(crate::PITCH_RANGE_MIN_SPAN, widest_span());
-    cfg.low_midi = low.clamp(SPECTRUM_MIN_MIDI, (SPECTRUM_MAX_MIDI - span).max(SPECTRUM_MIN_MIDI));
-    cfg.high_midi = cfg.low_midi + span;
+    let low = low.clamp(SPECTRUM_MIN_MIDI, (SPECTRUM_MAX_MIDI - span).max(SPECTRUM_MIN_MIDI));
+    // The span is kept above; this holds the pair to the rule every writer of
+    // it shares, so rounding cannot leave it a pair `sanitize` would move.
+    (cfg.low_midi, cfg.high_midi) = harmonigraph_scene::clamp_span(
+        low,
+        low + span,
+        (SPECTRUM_MIN_MIDI, SPECTRUM_MAX_MIDI),
+        crate::PITCH_RANGE_MIN_SPAN,
+    );
 }

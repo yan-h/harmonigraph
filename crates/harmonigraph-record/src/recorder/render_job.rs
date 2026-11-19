@@ -2,7 +2,7 @@
 use super::home_dir;
 use harmonigraph_take::{
     render::{archive_path, ExportJob, ExportStatus},
-    RenderProgress,
+    RenderProgress, WARNING_PREFIX,
 };
 use parking_lot::Mutex;
 use std::{
@@ -14,22 +14,6 @@ use std::{
 };
 #[cfg(test)]
 mod tests;
-
-/// What one export asks of the renderer.
-///
-/// The plugin does not render video; `harmonigraph-offline` does, with a
-/// headless GPU device and an ffmpeg pipe, neither of which belongs in a
-/// real-time audio plugin. This just launches it, off the audio thread
-/// and off the GUI thread, so a long render never touches the DAW.
-#[derive(Clone)]
-pub(super) struct RenderRequest {
-    /// The appearance document passed as `--appearance`. An Exports queue job
-    /// sets it at queue time, so post-record settings reach the video; an
-    /// automatic render starts with `None`, and `spawn_render` fills it from
-    /// the take's header before queueing, so the job keeps the look the take
-    /// carried then. It stays `None` only for a take whose header has none.
-    pub(super) appearance: Option<String>,
-}
 
 /// Where `load-plugin.sh` installs the renderer, and where the plugin
 /// finds its paired renderer. A fixed location beats
@@ -63,8 +47,13 @@ impl Progress {
 }
 struct Job {
     snapshot: ExportJob,
-    request: RenderRequest,
-    capture_failed: bool,
+    /// The appearance document passed as `--appearance`, which replaces the
+    /// take's own. An Exports queue job sets it at queue time, so post-record
+    /// settings reach the video. An automatic render has none: the renderer
+    /// reads the look the take recorded, which no one rewrites once the
+    /// writer has sealed it (each take file is created new and closed at its
+    /// seal), so reading it at render time reads what it held at enqueue.
+    appearance: Option<String>,
 }
 #[derive(Default)]
 struct Queue {
@@ -164,20 +153,6 @@ impl RenderControl {
             j.snapshot.id == id
                 && matches!(j.snapshot.state, ExportStatus::Failed | ExportStatus::Cancelled)
         }) {
-            let job = &mut queue.jobs[index];
-            if job.capture_failed {
-                match harmonigraph_take::Header::read(&job.snapshot.take) {
-                    Ok(header) => {
-                        job.request.appearance = header.appearance;
-                        job.capture_failed = false;
-                    }
-                    Err(error) => {
-                        job.snapshot.detail =
-                            format!("could not capture recorded appearance: {error}");
-                        return;
-                    }
-                }
-            }
             let mut job = queue.jobs.remove(index);
             job.snapshot.state = ExportStatus::Pending;
             job.snapshot.detail.clear();
@@ -188,24 +163,20 @@ impl RenderControl {
     }
 }
 
+/// Queue an export of `take`, rendered with `appearance` in place of the
+/// look the take recorded, or with that look when `None`.
+///
+/// The plugin does not render video; `harmonigraph-offline` does, with a
+/// headless GPU device and an ffmpeg pipe, neither of which belongs in a
+/// real-time audio plugin. This just launches it, off the audio thread
+/// and off the GUI thread, so a long render never touches the DAW.
 pub(super) fn spawn_render(
-    mut request: RenderRequest,
+    appearance: Option<String>,
     take: PathBuf,
     size: Option<[u32; 2]>,
     progress: Arc<Progress>,
     control: Arc<RenderControl>,
 ) {
-    let error = if request.appearance.is_none() {
-        match harmonigraph_take::Header::read(&take) {
-            Ok(header) => {
-                request.appearance = header.appearance;
-                None
-            }
-            Err(error) => Some(format!("could not capture recorded appearance: {error}")),
-        }
-    } else {
-        None
-    };
     let mut queue = control.queue.lock();
     if queue.closed {
         return;
@@ -216,17 +187,16 @@ pub(super) fn spawn_render(
         candidate.symlink_metadata().is_ok() || held(&queue.jobs, id, candidate)
     });
     queue.jobs.push(Job {
-        capture_failed: error.is_some(),
         snapshot: ExportJob {
             id,
             take,
             output,
             size,
-            state: if error.is_some() { ExportStatus::Failed } else { ExportStatus::Pending },
+            state: ExportStatus::Pending,
             progress: RenderProgress::default(),
-            detail: error.unwrap_or_default(),
+            detail: String::new(),
         },
-        request,
+        appearance,
     });
     start_worker(&control, &mut queue, progress);
 }
@@ -240,7 +210,7 @@ fn start_worker(control: &Arc<RenderControl>, queue: &mut Queue, progress: Arc<P
     match std::thread::Builder::new().name("harmonigraph-export-queue".into()).spawn(move || loop {
         #[cfg(test)]
         let _gate = control.running.lock();
-        let (snapshot, request) = {
+        let (snapshot, appearance) = {
             let mut queue = control.queue.lock();
             let Some(job) =
                 queue.jobs.iter_mut().find(|job| job.snapshot.state == ExportStatus::Pending)
@@ -250,9 +220,9 @@ fn start_worker(control: &Arc<RenderControl>, queue: &mut Queue, progress: Arc<P
             };
             progress.begin();
             job.snapshot.state = ExportStatus::Running;
-            (job.snapshot.clone(), job.request.clone())
+            (job.snapshot.clone(), job.appearance.clone())
         };
-        let result = run_job(&control, &snapshot, &request, &progress);
+        let result = run_job(&control, &snapshot, appearance.as_deref(), &progress);
         let mut queue = control.queue.lock();
         let final_progress = progress.read().unwrap_or_default();
         progress.end();
@@ -344,17 +314,12 @@ impl Drop for Staging {
 fn run_job(
     control: &RenderControl,
     job: &ExportJob,
-    request: &RenderRequest,
+    appearance: Option<&str>,
     progress: &Progress,
 ) -> Result<(PathBuf, String), String> {
     let stage = Staging::create(&job.take, job.id)
         .map_err(|e| format!("could not create export scratch directory: {e}"))?;
     let partial = stage.0.join("video.mp4");
-    let appearance = stage.0.join("appearance.ron");
-    if let Some(blob) = &request.appearance {
-        std::fs::write(&appearance, blob)
-            .map_err(|e| format!("could not save queued appearance: {e}"))?;
-    }
     let mut command = std::process::Command::new(control.program());
     #[cfg(unix)]
     {
@@ -362,8 +327,11 @@ fn run_job(
         command.process_group(0);
     }
     command.arg(&job.take).arg("--out").arg(&partial);
-    if request.appearance.is_some() {
-        command.arg("--appearance").arg(&appearance);
+    if let Some(blob) = appearance {
+        let file = stage.0.join("appearance.ron");
+        std::fs::write(&file, blob)
+            .map_err(|e| format!("could not save queued appearance: {e}"))?;
+        command.arg("--appearance").arg(&file);
     }
     command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
     let mut child = command.spawn().map_err(|e| format!("could not run paired renderer: {e}"))?;
@@ -522,7 +490,7 @@ fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> Tail {
             // among them is kept, because success discards the last and a
             // warned-about export still needs to say so.
             None if !text.is_empty() && !text.starts_with(RenderProgress::PREFIX) => {
-                if text.starts_with("warning:") && !tail.warnings.iter().any(|w| w == text) {
+                if text.starts_with(WARNING_PREFIX) && !tail.warnings.iter().any(|w| w == text) {
                     tail.warnings.push(text.to_owned());
                 }
                 tail.last = text.to_owned();

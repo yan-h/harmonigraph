@@ -56,12 +56,11 @@ Detail folds such as **Source details** reopen closed with the editor.
 
 ## Combined controls
 
-Related settings can be edited directly in diagrams.
-Drag a round handle,
-or focus it and use the arrow keys;
-Shift makes keyboard adjustments finer.
+Related settings can be edited directly in diagrams:
+drag a round handle.
+The arrow keys leave a handle where it is;
+the sliders beside the picture take exact values.
 A fixed-width picture sits beside compact sliders with labels and value readouts.
-Very narrow panes stack the values below the picture.
 The sliders remain independently editable:
 drag a bar, double-click it to reset, or Cmd-click it (Ctrl-click on Windows and Linux) to type in the displayed units.
 

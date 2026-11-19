@@ -8,6 +8,29 @@ use crate::params::{AnalysisInput, ParamBackend};
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::PictureState;
 
+/// The Texture block's Style options, which the settings sweeps also iterate,
+/// so a texture added here is drawn by them without a list of their own.
+pub(crate) const TEXTURE_CHOICES: [(harmonigraph_scene::CloudStyle, &str, &str); 3] = [
+    (
+        harmonigraph_scene::CloudStyle::Stars,
+        "Stars",
+        "Pinpoint stars at several depths, each taking the color and brightness \
+             of the sound under it as it drifts. Each layer has its own size, \
+             spacing and speed",
+    ),
+    (
+        harmonigraph_scene::CloudStyle::Watercolor,
+        "Watercolor",
+        "A field of overlapping patches, each reading the sound near its own \
+             centre. Fine layer mix blends their levels before the palette",
+    ),
+    (
+        harmonigraph_scene::CloudStyle::VelvetScales,
+        "Scales",
+        "Soft overlapping scallops, each carrying the light sampled at its center",
+    ),
+];
+
 /// A MIDI note as the frequency an analyzer would label it: whole hertz down
 /// low, kHz to one decimal above 1000, each carrying its unit so the number
 /// says what it is. Three or four significant figures is all a range readout
@@ -73,31 +96,7 @@ pub(crate) fn spectrogram_section(
             });
             use harmonigraph_scene::CloudStyle;
             block(ui, "Texture", |ui| {
-                choice_row(
-                    ui,
-                    "Style",
-                    &mut atmosphere.cloud_style,
-                    &[
-                        (
-                            CloudStyle::Stars,
-                            "Stars",
-                            "Pinpoint stars at several depths, each taking the color and brightness \
-                                 of the sound under it as it drifts. Each layer has its own size, \
-                                 spacing and speed",
-                        ),
-                        (
-                            CloudStyle::Watercolor,
-                            "Watercolor",
-                            "A field of overlapping patches, each reading the sound near its own \
-                                 centre. Fine layer mix blends their levels before the palette",
-                        ),
-                        (
-                            CloudStyle::VelvetScales,
-                            "Scales",
-                            "Soft overlapping scallops, each carrying the light sampled at its center",
-                        ),
-                    ],
-                );
+                choice_row(ui, "Style", &mut atmosphere.cloud_style, &TEXTURE_CHOICES);
                 ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
                     .default_value(crate::panes::fresh_spectrum().atmosphere.cloud_depth)
                     .percent()

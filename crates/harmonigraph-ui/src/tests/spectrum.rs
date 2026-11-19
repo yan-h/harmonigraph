@@ -475,19 +475,11 @@ fn two_placements_of_one_pane_fold_a_grid_each() {
         }
         state
     };
-    let draw = |state: &mut SharedState, placements: &[(usize, egui::Rect)]| {
-        let placements = placements.to_vec();
+    // Each rect a Spectral placement, its surface its index.
+    let draw = |state: &mut SharedState, rects: &[egui::Rect]| {
+        let placements: Vec<_> = rects.iter().map(|&rect| (crate::Pane::Spectral, rect)).collect();
         super::probe::painted_full(screen, |ui| {
-            for (surface, rect) in &placements {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                crate::draw_pane(
-                    &mut child,
-                    crate::Pane::Spectral,
-                    &mut state.picture,
-                    100.0,
-                    *surface,
-                );
-            }
+            crate::draw_panes(ui, &placements, &mut state.picture, 100.0);
         });
     };
     let slabs = |state: &mut SharedState, surface| {
@@ -495,10 +487,10 @@ fn two_placements_of_one_pane_fold_a_grid_each() {
     };
 
     let mut alone = seeded();
-    draw(&mut alone, &[(0, narrow)]);
+    draw(&mut alone, &[narrow]);
     let want_narrow = slabs(&mut alone, 0);
     let mut alone = seeded();
-    draw(&mut alone, &[(0, wide)]);
+    draw(&mut alone, &[wide]);
     let want_wide = slabs(&mut alone, 0);
     assert!(want_narrow > 0, "the fixture drew no heatmap, so it never reached a fold at all");
     assert_ne!(
@@ -507,7 +499,7 @@ fn two_placements_of_one_pane_fold_a_grid_each() {
     );
 
     let mut both = seeded();
-    draw(&mut both, &[(0, narrow), (1, wide)]);
+    draw(&mut both, &[narrow, wide]);
     assert_eq!(slabs(&mut both, 0), want_narrow, "the first placement is drawing the second's run");
     assert_eq!(slabs(&mut both, 1), want_wide, "the second placement has no grid of its own");
 }

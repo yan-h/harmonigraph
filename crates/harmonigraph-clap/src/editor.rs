@@ -27,6 +27,14 @@ pub trait Editor: Send + Sync {
         false
     }
 
+    /// The nearest size to `width` by `height` logical points the editor
+    /// would take, for the host to size its window to as the player drags
+    /// its border: CLAP's `gui.adjust_size`. A host asks only a resizable
+    /// editor; by default every size is.
+    fn adjust_size(&self, width: u32, height: u32) -> (u32, u32) {
+        (width, height)
+    }
+
     /// The host sized the editor's window to `width` by `height` logical
     /// points: whether the editor took it. A fixed editor refuses.
     fn set_size(&self, _width: u32, _height: u32) -> bool {

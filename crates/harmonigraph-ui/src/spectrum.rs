@@ -153,7 +153,7 @@ impl AnalyzedColumn {
 /// Every drawing surface's heatmap state, indexed by the surface id its copy of
 /// the pane was drawn with: 0 the docked Spectral pane, 1 the Video pane's
 /// preview, and offline the placement's index in the layout (see
-/// [`draw_pane`](crate::draw_pane)).
+/// [`draw_panes`](crate::draw_panes)).
 ///
 /// Each surface reads a run of its own: the slab width comes off the pane's
 /// own depth in points, so two placements at different sizes sharing one

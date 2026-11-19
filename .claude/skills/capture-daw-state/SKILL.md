@@ -58,7 +58,7 @@ That is the intended trade, not an accident.
 defaults.
 - A capture moves no golden frame:
 all three sets draw from the pinned `crates/harmonigraph-golden/look.ron`, not from these defaults,
-and `the_pinned_look_pins_every_field` keeps every saved field pinned there.
+and `the_pinned_look_pins_every_drawn_field` keeps every saved field a frame reads pinned there.
 A golden that moves anyway is a fixture still reading a default, so pin that fixture rather than stating a picture change (the `pr-hygiene` skill).
 
 ## Using `--appearance`
