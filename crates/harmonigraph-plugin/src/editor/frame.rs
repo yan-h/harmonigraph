@@ -2,7 +2,7 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use egui_baseview::Queue;
-use nice_plug::prelude::GuiContext;
+use harmonigraph_clap::prelude::GuiContext;
 
 use crate::{HarmonigraphParams, PluginParamBackend};
 

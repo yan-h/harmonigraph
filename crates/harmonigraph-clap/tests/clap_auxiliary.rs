@@ -7,7 +7,7 @@ use clap_sys::{
     process::{CLAP_PROCESS_CONTINUE, clap_process},
     version::CLAP_VERSION,
 };
-use nice_plug::prelude::*;
+use harmonigraph_clap::prelude::*;
 use std::{
     ffi::{c_char, c_void},
     ptr,
@@ -50,7 +50,7 @@ impl Plugin for AuxiliaryFixture {
     }
 }
 
-nice_export_clap!(AuxiliaryFixture);
+export_clap!(AuxiliaryFixture);
 
 unsafe extern "C" fn extension(_: *const clap_host, _: *const c_char) -> *const c_void {
     ptr::null()

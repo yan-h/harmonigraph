@@ -12,11 +12,11 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::*;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
+use harmonigraph_clap::plugin::ParamValue;
 use harmonigraph_core::configuration::TuningAxis;
 use harmonigraph_core::tuning::microcents;
 use harmonigraph_core::SourceId;
 use harmonigraph_ui::params::ParamKey;
-use nice_plug::plugin::ParamValue;
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -188,7 +188,7 @@ impl Device {
         });
         device
     }
-    fn wrapper(&self) -> &nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph> {
+    fn wrapper(&self) -> &harmonigraph_clap::wrapper::clap::Wrapper<crate::Harmonigraph> {
         unsafe { &*((*self.plugin).plugin_data.cast()) }
     }
     /// Run the host's main-thread callback, and count the times the project
@@ -534,7 +534,7 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
     });
     let mut state = device.wrapper().get_state_object();
     let engine = if pass_through { 0 } else { 1 };
-    state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(engine));
+    state.params.insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(engine));
     device.load(state, false);
     device.activate();
     let settings = device.settings();
@@ -1753,7 +1753,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         device.run_transport(0, events, false, None, Some(transport(5.0, 0)));
         assert!(shared.lock().take.has_rolled());
         if let Some(source) = &mut source {
-            source.begin(&nice_plug::plugin::Boundary {
+            source.begin(&harmonigraph_clap::plugin::Boundary {
                 steady_time: 0,
                 frames: 64,
                 transport: None,
@@ -1824,9 +1824,9 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         assert_eq!(&wav[44..], expected);
         if let Some(source) = &mut source {
             if source_state == 2 {
-                source.input(nice_plug::events::Input {
+                source.input(harmonigraph_clap::events::Input {
                     sample: 10,
-                    value: nice_plug::events::InputValue::Note {
+                    value: harmonigraph_clap::events::InputValue::Note {
                         kind: CLAP_EVENT_NOTE_ON,
                         note_id: 1,
                         port: 0,
@@ -2096,7 +2096,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     map.position = harmonigraph_core::LatticePos::new(50, -2, 1);
     let mut state = restored(&device, 696.5);
     state.fields.insert("lattice-maps".into(), serde_json::to_string(&document).unwrap());
-    state.params.insert("lattice-map".into(), nice_plug::plugin::ParamValue::I32(1));
+    state.params.insert("lattice-map".into(), harmonigraph_clap::plugin::ParamValue::I32(1));
     for (id, value) in [
         ("map-fifths", 0),
         ("map-thirds", 8),
@@ -2105,9 +2105,9 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         ("map-thirds-extension", -1),
         ("map-sevenths-extension", 1),
     ] {
-        state.params.insert(id.into(), nice_plug::plugin::ParamValue::I32(value));
+        state.params.insert(id.into(), harmonigraph_clap::plugin::ParamValue::I32(value));
     }
-    state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(2));
+    state.params.insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(2));
     device.load(state, false);
     device.wrapper().test_inspect_plugin(|plugin| {
         let preview = crate::lattice_maps::view(&plugin.params);
@@ -2136,7 +2136,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         ("map-sevenths-extension", 1),
     ] {
         assert!(
-            matches!(saved.params[id], nice_plug::plugin::ParamValue::I32(actual) if actual == value)
+            matches!(saved.params[id], harmonigraph_clap::plugin::ParamValue::I32(actual) if actual == value)
         );
     }
     device.run(0, vec![], false);
@@ -2246,9 +2246,9 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     // Old or partial presets must not retain lanes from the current preset,
     // and repaired plain values must agree with host and editor readback.
     let mut partial = device.save();
-    partial.params.insert("map-fifths".into(), nice_plug::plugin::ParamValue::I32(50));
-    partial.params.insert("map-thirds".into(), nice_plug::plugin::ParamValue::I32(-50));
-    partial.params.insert("map-follow".into(), nice_plug::plugin::ParamValue::I32(1));
+    partial.params.insert("map-fifths".into(), harmonigraph_clap::plugin::ParamValue::I32(50));
+    partial.params.insert("map-thirds".into(), harmonigraph_clap::plugin::ParamValue::I32(-50));
+    partial.params.insert("map-follow".into(), harmonigraph_clap::plugin::ParamValue::I32(1));
     for id in [
         "map-fifths-extension",
         "map-thirds-extension",
@@ -2271,9 +2271,12 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(preview.playback.follow, harmonigraph_core::lattice_map::Follow::Thirds);
     });
     let repaired = device.save();
-    assert!(matches!(repaired.params["map-follow"], nice_plug::plugin::ParamValue::I32(1)));
-    assert!(matches!(repaired.params["map-fifths"], nice_plug::plugin::ParamValue::I32(9)));
-    assert!(matches!(repaired.params["map-thirds"], nice_plug::plugin::ParamValue::I32(-9)));
+    assert!(matches!(repaired.params["map-follow"], harmonigraph_clap::plugin::ParamValue::I32(1)));
+    assert!(matches!(repaired.params["map-fifths"], harmonigraph_clap::plugin::ParamValue::I32(9)));
+    assert!(matches!(
+        repaired.params["map-thirds"],
+        harmonigraph_clap::plugin::ParamValue::I32(-9)
+    ));
 }
 
 /// A restore once stored an integer parameter's value unclamped, while the
@@ -2298,8 +2301,10 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
     .enumerate()
     {
         let mut state = device.save();
-        state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(engine));
-        state.params.insert("lattice-map".into(), nice_plug::plugin::ParamValue::I32(map));
+        state
+            .params
+            .insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(engine));
+        state.params.insert("lattice-map".into(), harmonigraph_clap::plugin::ParamValue::I32(map));
         device.load(state, false);
         device.run(64 * round as i64, vec![], false);
         device.wrapper().test_inspect_plugin(|plugin| {
@@ -2315,7 +2320,7 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
         let repaired = device.save();
         assert!(matches!(
             (&repaired.params["tuning-engine"], &repaired.params["lattice-map"]),
-            (nice_plug::plugin::ParamValue::I32(e), nice_plug::plugin::ParamValue::I32(m))
+            (harmonigraph_clap::plugin::ParamValue::I32(e), harmonigraph_clap::plugin::ParamValue::I32(m))
                 if (*e, *m as usize) == (decoded.index(), slot)
         ));
     }
@@ -2329,7 +2334,9 @@ fn every_engine_records_a_tuning_edit_at_the_callback_that_applies_it() {
         let (mut device, mut capture) = recorded_device();
         device.activate();
         let mut state = restored(&device, 696.0);
-        state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(engine));
+        state
+            .params
+            .insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(engine));
         device.load(state, false);
         device.run(0, vec![], false);
         capture.arm();

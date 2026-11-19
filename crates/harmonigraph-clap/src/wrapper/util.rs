@@ -56,7 +56,7 @@ pub fn strlcpy(dest: &mut [c_char], src: &str) {
     dest[copy_len] = 0;
 }
 
-/// Set up the logger so that the `nice_*!()` logging and assertion macros log output to a
+/// Set up the logger so that the `shell_*!()` logging and assertion macros log output to a
 /// centralized location and panics also get written there. By default this logs to STDERR. If a
 /// Windows debugger is attached, then messages will be sent there instead. This uses
 /// [nice-log](https://github.com/BillyDM/nice-log). See the readme there for more information.
@@ -99,7 +99,7 @@ fn log_panics() {
     std::panic::set_hook(Box::new(|info| {
         permit_alloc(|| {
             // All of this is directly copied from `permit_no_alloc`, except that `error!()` became
-            // `nice_error!()` and `Shim` has been inlined
+            // `shell_error!()` and `Shim` has been inlined
             let backtrace = Backtrace::new();
 
             let thread = std::thread::current();
@@ -115,7 +115,7 @@ fn log_panics() {
 
             match info.location() {
                 Some(location) => {
-                    crate::nice_error!(
+                    crate::shell_error!(
                         target: "panic", "thread '{}' panicked at '{}': {}:{}\n{:?}",
                         thread,
                         msg,
@@ -125,7 +125,7 @@ fn log_panics() {
                     );
                 }
                 None => {
-                    crate::nice_error!(
+                    crate::shell_error!(
                         target: "panic",
                         "thread '{}' panicked at '{}'\n{:?}",
                         thread,

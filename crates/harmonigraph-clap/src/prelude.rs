@@ -1,7 +1,7 @@
 // Re-export the macros, derive macros are already re-exported from their respective modules
 pub use crate::debug::*;
 
-pub use crate::nice_export_clap;
+pub use crate::export_clap;
 
 pub use crate::util;
 

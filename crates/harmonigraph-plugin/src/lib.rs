@@ -1,17 +1,17 @@
-//! The nice-plug shell: parameters, MIDI ingestion, and plugin-format
-//! exports. All interesting logic lives in the `harmonigraph-*` crates; this
+//! The two plugins on harmonigraph-clap's shell: parameters, MIDI ingestion,
+//! and the CLAP export. All interesting logic lives in the `harmonigraph-*` crates; this
 //! crate only adapts them to the plugin world.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use editor::gestures::Gesture;
+use harmonigraph_clap::prelude::*;
 use harmonigraph_core::lattice_map::{Follow, TuningEngine};
 use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, SourceId};
 use harmonigraph_record::TAKE_CHANNELS;
 use harmonigraph_ui::lattice_maps::{MapDocument, MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
 use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
-use nice_plug::prelude::*;
 
 mod audio_ingress;
 mod background;
@@ -72,7 +72,7 @@ pub use editor::startup_probe::run as editor_startup_probe;
 //     stops compiling on that one: the probe it reads is gated the same way.
 //
 // If a guarded block here ever needs an escape hatch, it must call
-// `nice_assert_no_alloc::permit_alloc` and NOT `nice_plug::util::permit_alloc`,
+// `nice_assert_no_alloc::permit_alloc` and NOT `harmonigraph_clap::util::permit_alloc`,
 // which is what the rest of the tree and all of harmonigraph-clap reach for.
 // harmonigraph-clap gates its helper on
 // `all(debug_assertions, feature = "assert_process_allocs")`, so under
@@ -144,7 +144,7 @@ pub struct Harmonigraph {
     editor_shared: Arc<editor::EditorLock>,
     /// The host's side of the editor, given before the editor is made, which
     /// its own window's close button tells.
-    editor_host: Option<Arc<dyn nice_plug::wrapper::clap::EditorHost>>,
+    editor_host: Option<Arc<dyn harmonigraph_clap::wrapper::clap::EditorHost>>,
     sample_rate: f64,
     samples_processed: u64,
     /// Continuous presentation seconds across raw sample-clock resets/rate changes.
@@ -603,7 +603,7 @@ pub(crate) struct Transport {
 
 impl Transport {
     /// No transport is one that reports nothing and is not playing.
-    fn read(transport: Option<&nice_plug::events::Transport>) -> Self {
+    fn read(transport: Option<&harmonigraph_clap::events::Transport>) -> Self {
         let Some(t) = transport else { return Self::default() };
         let signature = t.time_signature();
         // The bar is always given: see `bar_position` for one that is zero.
@@ -919,14 +919,14 @@ impl Plugin for Harmonigraph {
         self.params.table.clone()
     }
 
-    fn setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
+    fn setup(&self) -> Option<Arc<dyn harmonigraph_clap::wrapper::clap::setup::Setup>> {
         Some(Arc::new(configuration::HubSetup {
             instance: tuning::setup::Adapter(self.aggregation.as_ref().unwrap().shared.clone()),
             params: self.params.clone(),
         }))
     }
 
-    fn editor_host(&mut self, host: Arc<dyn nice_plug::wrapper::clap::EditorHost>) {
+    fn editor_host(&mut self, host: Arc<dyn harmonigraph_clap::wrapper::clap::EditorHost>) {
         self.editor_host = Some(host);
     }
 
@@ -1059,7 +1059,7 @@ impl Plugin for Harmonigraph {
     }
 }
 
-nice_export_clap!(Harmonigraph, HarmonigraphTune);
+export_clap!(Harmonigraph, HarmonigraphTune);
 
 #[cfg(test)]
 mod tests {
@@ -1097,9 +1097,10 @@ mod tests {
         );
         #[cfg(debug_assertions)]
         {
-            let (_, measured) = nice_plug::wrapper::allocation_probe::measure_allocations(|| {
-                std::hint::black_box(Box::new(0u64))
-            });
+            let (_, measured) =
+                harmonigraph_clap::wrapper::allocation_probe::measure_allocations(|| {
+                    std::hint::black_box(Box::new(0u64))
+                });
             assert!(measured.allocations > 0, "a debug build runs without nice-plug's allocator");
         }
     }
@@ -1286,8 +1287,8 @@ mod tests {
         serde_json::from_str(&field).expect("the field is a JSON string")
     }
 
-    fn empty_state() -> nice_plug::plugin::PluginState {
-        nice_plug::plugin::PluginState {
+    fn empty_state() -> harmonigraph_clap::plugin::PluginState {
+        harmonigraph_clap::plugin::PluginState {
             version: String::new(),
             params: Default::default(),
             fields: Default::default(),
@@ -1305,7 +1306,7 @@ mod tests {
     /// which is what a host's state load calls, so it reaches
     /// `UiState::restore` the way a project or preset load does.
     fn restore(plugin: &Harmonigraph, blob: &str) {
-        use nice_plug::wrapper::clap::setup::Prepared;
+        use harmonigraph_clap::wrapper::clap::setup::Prepared;
 
         let mut state = empty_state();
         state.fields.insert("ui-state".into(), serde_json::to_string(blob).unwrap());
@@ -1583,7 +1584,7 @@ mod tests {
         assert!(!spec.automatable);
         assert!(matches!(
             spec.kind,
-            nice_plug::params::Kind::Enum { ids: &["main", "sidechain"], .. }
+            harmonigraph_clap::params::Kind::Enum { ids: &["main", "sidechain"], .. }
         ));
     }
 

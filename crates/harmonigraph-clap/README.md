@@ -9,8 +9,8 @@ the plugin framework nice-plug, which harmonigraph used to vendor, together with
 - **`tests/`** drive an exported fixture plugin through `clap-sys`: the process callback, flush and editor writes (`clap_boundary.rs`), and the auxiliary bounds (`clap_auxiliary.rs`).
   They run in `ci.sh`'s workspace test gate, which names both fixture features (`assert_process_allocs`, `clap-boundary-tests`).
 
-The library keeps the name `nice_plug`, so harmonigraph-plugin's paths did not change with the move.
-The later steps of #1814 collapse these layers into a shell written on `clap-sys`, and rename them as they go.
+The library is `harmonigraph_clap`, the package's own name, and its logging and assertion macros are `shell_*!` (#1814 step 7); step 4 had kept nice-plug's names so the plugin's source moved untouched.
+The later steps of #1814 collapsed these layers into a shell written on `clap-sys`.
 
 ## Where it came from
 

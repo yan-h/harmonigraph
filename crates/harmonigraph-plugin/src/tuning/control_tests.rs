@@ -157,10 +157,10 @@ fn central_edits_include_harmonigraph_and_use_each_tuners_host_latency() {
 
 #[test]
 fn instance_settings_restore_independently_and_default_missing_fields() {
-    use nice_plug::wrapper::clap::setup::Setup;
+    use harmonigraph_clap::wrapper::clap::setup::Setup;
     let shared = setup::Shared::source();
     let adapter = setup::Adapter(shared.clone());
-    let mut state = nice_plug::plugin::PluginState {
+    let mut state = harmonigraph_clap::plugin::PluginState {
         version: String::new(),
         params: Default::default(),
         fields: Default::default(),

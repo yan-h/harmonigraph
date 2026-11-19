@@ -377,7 +377,7 @@ impl<P: Plugin> Wrapper<P> {
                 unsafe_clap_call! { host_params=>request_flush(&*self.host_callback) }
             }
             None => {
-                crate::nice_debug_assert_failure!("The host does not support parameters? What?")
+                crate::shell_debug_assert_failure!("The host does not support parameters? What?")
             }
         }
     }
@@ -420,7 +420,7 @@ impl<P: Plugin> Wrapper<P> {
     /// tests call this.
     pub fn set_state_object_from_gui(&self, state: PluginState) {
         if !self.restore(&state) {
-            crate::nice_error!("Prepared setup restore refused: invalid or full");
+            crate::shell_error!("Prepared setup restore refused: invalid or full");
         }
     }
 
@@ -447,7 +447,7 @@ impl<P: Plugin> Wrapper<P> {
     fn restore(&self, state: &PluginState) -> bool {
         let prepared = match self.setup.as_ref().map(|setup| setup.prepare(state)) {
             Some(Err(reason)) => {
-                crate::nice_error!("Prepared setup restore refused: {reason}");
+                crate::shell_error!("Prepared setup restore refused: {reason}");
                 return false;
             }
             Some(Ok(prepared)) => Some(prepared),
@@ -525,7 +525,7 @@ impl<P: Plugin> Wrapper<P> {
     unsafe extern "C" fn destroy(plugin: *const clap_plugin) {
         assert!(!plugin.is_null() && unsafe { !(*plugin).plugin_data.is_null() });
         let this = unsafe { Arc::from_raw((*plugin).plugin_data as *mut Self) };
-        crate::nice_debug_assert_eq!(Arc::strong_count(&this), 1);
+        crate::shell_debug_assert_eq!(Arc::strong_count(&this), 1);
 
         this.plugin.lock().destroy();
         drop(this);
@@ -757,7 +757,7 @@ impl<P: Plugin> Wrapper<P> {
         } else if id == CLAP_EXT_TAIL {
             &wrapper.clap_plugin_tail as *const _ as *const c_void
         } else {
-            crate::nice_trace!("Host tried to query unknown extension {:?}", id);
+            crate::shell_trace!("Host tried to query unknown extension {:?}", id);
             std::ptr::null()
         }
     }
@@ -797,13 +797,13 @@ impl<P: Plugin> Wrapper<P> {
             if wrapper.host_latency.borrow().is_some() {
                 unsafe_clap_call! { &*wrapper.host_callback=>request_restart(&*wrapper.host_callback) };
             } else {
-                crate::nice_debug_assert_failure!("Host does not support the latency extension");
+                crate::shell_debug_assert_failure!("Host does not support the latency extension");
             }
         }
         if wrapper.transport_event.swap(false, Ordering::AcqRel)
             && !wrapper.transport_logged.swap(true, Ordering::AcqRel)
         {
-            crate::nice_warn!("{TRANSPORT_EVENT}");
+            crate::shell_warn!("{TRANSPORT_EVENT}");
             if let Some(setup) = &wrapper.setup {
                 setup.notice(TRANSPORT_EVENT);
             }
@@ -826,7 +826,7 @@ impl<P: Plugin> Wrapper<P> {
     ) -> bool {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, config);
         if index != 0 {
-            crate::nice_debug_assert_failure!(
+            crate::shell_debug_assert_failure!(
                 "Host tried to query out of bounds audio port config {}",
                 index
             );
@@ -971,7 +971,7 @@ impl<P: Plugin> Wrapper<P> {
         if editor_handle.is_none() {
             true
         } else {
-            crate::nice_debug_assert_failure!(
+            crate::shell_debug_assert_failure!(
                 "Tried creating editor while the editor was already active"
             );
             false
@@ -986,7 +986,7 @@ impl<P: Plugin> Wrapper<P> {
         if editor_handle.is_some() {
             *editor_handle = None;
         } else {
-            crate::nice_debug_assert_failure!(
+            crate::shell_debug_assert_failure!(
                 "Tried destroying editor while the editor was not active"
             );
         }
@@ -998,7 +998,7 @@ impl<P: Plugin> Wrapper<P> {
 
         // On macOS scaling is done by the OS, and all window sizes are in logical pixels
         if cfg!(target_os = "macos") {
-            crate::nice_debug_assert_failure!(
+            crate::shell_debug_assert_failure!(
                 "Ignoring host request to set explicit DPI scaling factor"
             );
             return false;
@@ -1129,7 +1129,7 @@ impl<P: Plugin> Wrapper<P> {
                     } else if api == CLAP_WINDOW_API_WIN32 {
                         ParentWindowHandle::Win32Hwnd(window.specific.win32)
                     } else {
-                        crate::nice_debug_assert_failure!("Host passed an invalid API");
+                        crate::shell_debug_assert_failure!("Host passed an invalid API");
                         return false;
                     }
                 };
@@ -1147,7 +1147,7 @@ impl<P: Plugin> Wrapper<P> {
 
                 true
             } else {
-                crate::nice_debug_assert_failure!(
+                crate::shell_debug_assert_failure!(
                     "Host tried to attach editor while the editor is already attached"
                 );
 
@@ -1406,7 +1406,7 @@ impl<P: Plugin> Wrapper<P> {
             // Even if the plugin has a hard realtime requirement, we'll still honor this
             CLAP_RENDER_OFFLINE => ProcessMode::Offline,
             n => {
-                crate::nice_debug_assert_failure!(
+                crate::shell_debug_assert_failure!(
                     "Unknown rendering mode '{}', defaulting to realtime",
                     n
                 );
@@ -1438,24 +1438,24 @@ impl<P: Plugin> Wrapper<P> {
                 // we need to prepend it to our actual state data.
                 let length_bytes = (serialized.len() as u64).to_le_bytes();
                 if !write_stream(unsafe { &*stream }, &length_bytes) {
-                    crate::nice_debug_assert_failure!(
+                    crate::shell_debug_assert_failure!(
                         "Error or end of stream while writing the state length to the stream."
                     );
                     return false;
                 }
                 if !write_stream(unsafe { &*stream }, &serialized) {
-                    crate::nice_debug_assert_failure!(
+                    crate::shell_debug_assert_failure!(
                         "Error or end of stream while writing the state buffer to the stream."
                     );
                     return false;
                 }
 
-                crate::nice_trace!("Saved state ({} bytes)", serialized.len());
+                crate::shell_trace!("Saved state ({} bytes)", serialized.len());
 
                 true
             }
             Err(err) => {
-                crate::nice_debug_assert_failure!("Could not save state: {:#}", err);
+                crate::shell_debug_assert_failure!("Could not save state: {:#}", err);
                 false
             }
         }
@@ -1472,7 +1472,7 @@ impl<P: Plugin> Wrapper<P> {
         // prepended the size in front of our JSON state
         let mut length_bytes = [0u8; 8];
         if !read_stream(unsafe { &*stream }, length_bytes.as_mut_slice()) {
-            crate::nice_debug_assert_failure!(
+            crate::shell_debug_assert_failure!(
                 "Error or end of stream while reading the state length from the stream."
             );
             return false;
@@ -1481,7 +1481,7 @@ impl<P: Plugin> Wrapper<P> {
 
         let mut read_buffer: Vec<u8> = Vec::with_capacity(length as usize);
         if !read_stream(unsafe { &*stream }, read_buffer.spare_capacity_mut()) {
-            crate::nice_debug_assert_failure!(
+            crate::shell_debug_assert_failure!(
                 "Error or end of stream while reading the state buffer from the stream."
             );
             return false;
@@ -1494,7 +1494,7 @@ impl<P: Plugin> Wrapper<P> {
             Some(state) => {
                 let success = wrapper.restore(&state);
                 if success {
-                    crate::nice_trace!("Loaded state ({} bytes)", read_buffer.len());
+                    crate::shell_trace!("Loaded state ({} bytes)", read_buffer.len());
                 }
 
                 success

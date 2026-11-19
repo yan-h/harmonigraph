@@ -1,11 +1,11 @@
 //! Editor-owned musical document, bounded audio snapshot and sample-indexed
 //! next-attack state. No editor window is needed for restore or automation.
 use crate::Row;
+use harmonigraph_clap::prelude::*;
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine};
 use harmonigraph_core::LatticePos;
 use harmonigraph_ui::lattice_maps::*;
-use nice_plug::prelude::*;
 use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -566,7 +566,7 @@ mod tests {
         let params = crate::HarmonigraphParams::default();
         let mut maps = AudioMaps::new(&params);
         let config = ConfigReducer::default().resolved();
-        let id = nice_plug::wrapper::hash_param_id(Row::LatticeMap.id());
+        let id = harmonigraph_clap::wrapper::hash_param_id(Row::LatticeMap.id());
         let value: f64 = 2.4999999;
         assert_eq!(value.round(), 2.0);
         assert_eq!(params.table.decode(id, value), Some((Row::LatticeMap.index(), 3.0)));

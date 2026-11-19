@@ -1,7 +1,7 @@
 //! A track endpoint: identity, participation, visibility and connection status.
 //! Ensemble controls and timing live in Harmonigraph's Tuning pane.
 use super::{session, setup};
-use nice_plug::prelude::*;
+use harmonigraph_clap::prelude::*;
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{NSButton, NSButtonType, NSTextField, NSView};

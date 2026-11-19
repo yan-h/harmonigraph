@@ -5,8 +5,8 @@ use clap_sys::{
     audio_buffer::clap_audio_buffer, events::*, ext::params::*, host::clap_host,
     plugin::clap_plugin, process::*, version::CLAP_VERSION,
 };
-use nice_plug::prelude::*;
-use nice_plug::wrapper::clap::setup::{Prepared, Serviced, Setup};
+use harmonigraph_clap::prelude::*;
+use harmonigraph_clap::wrapper::clap::setup::{Prepared, Serviced, Setup};
 use std::{
     ffi::{CStr, c_char, c_void},
     ptr,
@@ -138,7 +138,7 @@ impl Plugin for Fixture {
         observed.pushes.push(pushed);
     }
 }
-nice_export_clap!(Fixture);
+export_clap!(Fixture);
 
 fn header<T>(kind: u16, time: u32) -> clap_event_header {
     clap_event_header {
@@ -183,7 +183,7 @@ fn note(kind: u16, time: u32) -> Event {
 fn param(value: f64, time: u32) -> Event {
     Event::Param(clap_event_param_value {
         header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, time),
-        param_id: nice_plug::wrapper::hash_param_id("axis"),
+        param_id: harmonigraph_clap::wrapper::hash_param_id("axis"),
         cookie: ptr::null_mut(),
         note_id: -1,
         port_index: -1,
@@ -341,7 +341,7 @@ impl Device {
     }
     fn value(&self) -> f64 {
         let mut value = f64::NAN;
-        let id = nice_plug::wrapper::hash_param_id("axis");
+        let id = harmonigraph_clap::wrapper::hash_param_id("axis");
         assert!(unsafe { (self.params().get_value.unwrap())(self.plugin, id, &mut value) });
         value
     }
@@ -402,7 +402,9 @@ impl Device {
     /// The editor's side of the fixture's one parameter.
     fn editor(&self) -> (Arc<dyn GuiContext>, usize) {
         let wrapper = unsafe {
-            &*((*self.plugin).plugin_data.cast::<nice_plug::wrapper::clap::Wrapper<Fixture>>())
+            &*((*self.plugin)
+                .plugin_data
+                .cast::<harmonigraph_clap::wrapper::clap::Wrapper<Fixture>>())
         };
         wrapper.test_gui_context("axis")
     }
@@ -554,8 +556,9 @@ fn a_flush_applies_at_once_and_a_failed_one_loses_the_next_input() {
 fn an_editor_edit_applies_at_once_and_reaches_the_host_at_offset_zero() {
     let _serial = serial();
     let mut d = Device::new();
-    let wrapper =
-        unsafe { &*((*d.plugin).plugin_data.cast::<nice_plug::wrapper::clap::Wrapper<Fixture>>()) };
+    let wrapper = unsafe {
+        &*((*d.plugin).plugin_data.cast::<harmonigraph_clap::wrapper::clap::Wrapper<Fixture>>())
+    };
     let (context, row) = wrapper.test_gui_context("axis");
     let edit = |value| {
         context.begin_set_parameter(row);

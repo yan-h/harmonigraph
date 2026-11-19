@@ -10,14 +10,14 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use harmonigraph_clap::events::{Input, InputValue, Output, Transport};
+use harmonigraph_clap::plugin::Boundary;
 use harmonigraph_core::canonical::{NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
 use harmonigraph_core::tuning::PitchClass;
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
-use nice_plug::events::{Input, InputValue, Output, Transport};
-use nice_plug::plugin::Boundary;
 
 use super::event::Event;
 use super::session::{self, Copied, HubEnds, Reply};

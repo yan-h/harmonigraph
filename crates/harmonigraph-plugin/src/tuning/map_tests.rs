@@ -267,7 +267,9 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
     for index in 0..count {
         let mut info: clap_sys::ext::params::clap_param_info = unsafe { std::mem::zeroed() };
         assert!(unsafe { params.get_info.unwrap()(hub.plugin, index, &mut info) });
-        if let Some(id) = ids.iter().find(|id| info.id == nice_plug::wrapper::hash_param_id(id)) {
+        if let Some(id) =
+            ids.iter().find(|id| info.id == harmonigraph_clap::wrapper::hash_param_id(id))
+        {
             use clap_sys::ext::params::*;
             assert_ne!(info.flags & CLAP_PARAM_IS_STEPPED, 0);
             assert_ne!(info.flags & CLAP_PARAM_IS_AUTOMATABLE, 0);

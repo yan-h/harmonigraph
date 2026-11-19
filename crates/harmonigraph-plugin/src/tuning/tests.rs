@@ -175,7 +175,7 @@ fn raw_midi(data: [u8; 3], time: u32) -> Input {
         data,
     })
 }
-fn hub_wrapper(device: &Device) -> &nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph> {
+fn hub_wrapper(device: &Device) -> &harmonigraph_clap::wrapper::clap::Wrapper<crate::Harmonigraph> {
     assert!(!device.tuner);
     unsafe { &*((*device.plugin).plugin_data.cast()) }
 }
@@ -191,7 +191,7 @@ fn inspect_tune<R>(device: &Device, f: impl FnOnce(&tune::Tune) -> R) -> R {
     let wrapper = unsafe {
         &*((*device.plugin)
             .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<plugin::HarmonigraphTune>>())
+            .cast::<harmonigraph_clap::wrapper::clap::Wrapper<plugin::HarmonigraphTune>>())
     };
     wrapper.test_inspect_plugin(|plugin| f(plugin.tune.as_ref().unwrap()))
 }
@@ -303,7 +303,7 @@ unsafe extern "C" fn push(
 fn parameter(id: &str, value: f64, time: u32) -> Input {
     Input::Param(clap_event_param_value {
         header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, time),
-        param_id: nice_plug::wrapper::hash_param_id(id),
+        param_id: harmonigraph_clap::wrapper::hash_param_id(id),
         cookie: ptr::null_mut(),
         note_id: -1,
         port_index: -1,
@@ -427,7 +427,7 @@ impl Device {
     fn latency(&self) -> u32 {
         latency_of(self.plugin)
     }
-    fn tune_wrapper(&self) -> &nice_plug::wrapper::clap::Wrapper<plugin::HarmonigraphTune> {
+    fn tune_wrapper(&self) -> &harmonigraph_clap::wrapper::clap::Wrapper<plugin::HarmonigraphTune> {
         assert!(self.tuner);
         unsafe { &*((*self.plugin).plugin_data.cast()) }
     }
@@ -438,7 +438,7 @@ impl Device {
             let wrapper = unsafe {
                 &*((*self.plugin)
                     .plugin_data
-                    .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+                    .cast::<harmonigraph_clap::wrapper::clap::Wrapper<crate::Harmonigraph>>())
             };
             wrapper
                 .test_inspect_plugin(|plugin| plugin.aggregation.as_ref().unwrap().shared.clone())

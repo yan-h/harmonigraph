@@ -437,7 +437,7 @@ fn report() -> String {
         .unwrap();
         let string_id = PARAM_IDS
             .iter()
-            .find(|s| nice_plug::wrapper::hash_param_id(s) == id)
+            .find(|s| harmonigraph_clap::wrapper::hash_param_id(s) == id)
             .expect("a known id");
         let stepped = info.flags & CLAP_PARAM_IS_STEPPED != 0;
         let probes: Vec<f64> = if stepped {

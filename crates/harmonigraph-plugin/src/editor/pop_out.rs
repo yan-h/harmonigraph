@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use egui_baseview::baseview::WindowHandle;
-use nice_plug::prelude::ParentWindowHandle;
-use nice_plug::wrapper::clap::EditorHost;
+use harmonigraph_clap::prelude::ParentWindowHandle;
+use harmonigraph_clap::wrapper::clap::EditorHost;
 use plugin_own_window::{Limits, Move};
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 

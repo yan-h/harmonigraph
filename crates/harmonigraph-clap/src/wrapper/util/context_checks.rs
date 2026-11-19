@@ -14,7 +14,7 @@ pub struct ParamGestureChecker {
 
 impl Drop for ParamGestureChecker {
     fn drop(&mut self) {
-        crate::nice_debug_assert!(
+        crate::shell_debug_assert!(
             self.active_params.is_empty(),
             "GuiContext::end_set_parameter() was never called for {} {} {:?}",
             self.active_params.len(),
@@ -29,7 +29,7 @@ impl ParamGestureChecker {
     /// [`GuiContext::begin_set_parameter()`][crate::prelude::GuiContext::begin_set_parameter()].
     /// Triggers a debug assertion failure if the state is inconsistent.
     pub fn begin_set_parameter(&mut self, param_id: &str) {
-        crate::nice_debug_assert!(
+        crate::shell_debug_assert!(
             !self.active_params.contains(param_id),
             "GuiContext::begin_set_parameter() was called twice for parameter '{}'",
             param_id
@@ -40,7 +40,7 @@ impl ParamGestureChecker {
     /// Called for [`GuiContext::set_parameter()`][crate::prelude::GuiContext::set_parameter()].
     /// Triggers a debug assertion failure if the state is inconsistent.
     pub fn set_parameter(&self, param_id: &str) {
-        crate::nice_debug_assert!(
+        crate::shell_debug_assert!(
             self.active_params.contains(param_id),
             "GuiContext::set_parameter() was called for parameter '{}' without a preceding \
              begin_set_parameter() call",
@@ -52,7 +52,7 @@ impl ParamGestureChecker {
     /// [`GuiContext::end_set_parameter()`][crate::prelude::GuiContext::end_set_parameter()].
     /// Triggers a debug assertion failure if the state is inconsistent.
     pub fn end_set_parameter(&mut self, param_id: &str) {
-        crate::nice_debug_assert!(
+        crate::shell_debug_assert!(
             self.active_params.contains(param_id),
             "GuiContext::end_set_parameter() was called for parameter '{}' without a preceding \
              begin_set_parameter() call",

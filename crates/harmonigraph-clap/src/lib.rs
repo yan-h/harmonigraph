@@ -1,5 +1,5 @@
 //! Harmonigraph's CLAP shell: one [`Plugin`][prelude::Plugin] behind a CLAP
-//! entry point, [`nice_export_clap!()`]. The trait states the order of every
+//! entry point, [`export_clap!()`]. The trait states the order of every
 //! call into the plugin; the crate's `README.md` maps what harmonigraph
 //! changed of the nice-plug it grew from.
 //!
@@ -21,13 +21,13 @@ pub mod params;
 pub mod plugin;
 pub mod util;
 
-/// Everything you'll need to use nice-plug. Import this with `use nice_plug::prelude::*;`.
+/// Everything a plugin needs from the shell. Import this with `use harmonigraph_clap::prelude::*;`.
 pub mod prelude;
 pub mod wrapper;
 
 // Last, as in nice-plug-core, so the `#[macro_use]` scope reaches no module above.
 // These macros are also in the crate root and in the prelude, but having the module itself be pub
-// as well makes it easy to import _just_ the macros without using `#[macro_use] extern crate nice-plug-core;`
+// as well makes it easy to import _just_ the macros without using `#[macro_use] extern crate harmonigraph_clap;`
 #[macro_use]
 pub mod debug;
 

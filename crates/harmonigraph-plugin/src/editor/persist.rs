@@ -263,7 +263,7 @@ impl UiState {
             answer
         });
         answer.unwrap_or_else(|| {
-            nice_plug::nice_warn!(
+            harmonigraph_clap::shell_warn!(
                 "editor state busy for {SAVE_WAIT:?}; saving the settings of the last restore, \
                  close or save instead of the editor's"
             );

@@ -5,8 +5,8 @@ use crossbeam::atomic::AtomicCell;
 use egui::Context;
 use egui_baseview::baseview::{Size, WindowHandle, WindowScalePolicy};
 use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, SizeSource};
-use nice_plug::prelude::{Editor, GuiContext, ParentWindowHandle, ResizeHint};
-use nice_plug::wrapper::clap::EditorHost;
+use harmonigraph_clap::prelude::{Editor, GuiContext, ParentWindowHandle, ResizeHint};
+use harmonigraph_clap::wrapper::clap::EditorHost;
 
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 
