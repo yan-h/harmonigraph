@@ -24,3 +24,7 @@ Every resolution draws stars in their own pass into one image, so Uniform's larg
 ## 2026-11-10 (maintainability audit, #1677)
 
 - No further background texture is expected to be added or dropped, so the lattice and the spectrogram keep their own texture enums (`LatticeMaterial`, `CloudStyle`) and their own control stacks; one shared enum and control function (R5) is declined. #1677 area 7 Q1
+
+## 2026-11-18 (#1828, in chat)
+
+- The Stars solo leaves the saved look for the editor window's own state (option A): a slot switch, an undo and a restore leave it as set, and it goes when switched off or when the editor closes. No save, slot or export holds it, and a toggle is no undo entry. #1828

@@ -95,10 +95,12 @@ pub(super) fn edge_pooling(
 /// the lattice's start from his controls captured from the DAW on 2026-09-26,
 /// the spectrogram's from the 2026-10-07 capture (#1475), retuned since
 /// (#1624, #1627).
-/// The `pane` says how its sizes and speeds read ([`crate::widgets::star_layers`]).
+/// The `pane` says how its sizes and speeds read ([`crate::widgets::star_layers`]),
+/// and `solo` is which of its depths it solos (`SurfaceState::star_solo`).
 pub(super) fn stars(
     ui: &mut egui::Ui,
     atmosphere: &mut harmonigraph_scene::StarSettings,
+    solo: &mut [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
     fresh: &harmonigraph_scene::StarSettings,
     pane: harmonigraph_scene::StarPane,
 ) {
@@ -115,11 +117,11 @@ pub(super) fn stars(
     // Solo is held per depth, and a solo left on a layer the count takes away
     // would come back on, unseen, when the count brings it back.
     if layers as u32 != atmosphere.star_layers {
-        atmosphere.star_solo = Default::default();
+        *solo = Default::default();
     }
     atmosphere.star_layers = layers as u32;
     crate::widgets::star_layers(ui, atmosphere, pane);
-    star_solo(ui, atmosphere);
+    star_solo(ui, atmosphere.star_layers, solo);
     let drawn = harmonigraph_scene::star_plan::star_layer_depths(atmosphere.star_layers);
     let (back, front) =
         (drawn.iter().position(Option::is_some), drawn.iter().rposition(Option::is_some));
@@ -163,8 +165,12 @@ pub(super) fn stars(
 /// One toggle per drawn layer, numbered back to front as `Star layers` counts
 /// them, between a `back` and a `front` caption. While any is on, only the
 /// soloed layers are drawn.
-fn star_solo(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
-    let layers = harmonigraph_scene::star_plan::star_layer_depths(stars.star_layers);
+fn star_solo(
+    ui: &mut egui::Ui,
+    layers: u32,
+    solo: &mut [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
+) {
+    let layers = harmonigraph_scene::star_plan::star_layer_depths(layers);
     ui.horizontal_wrapped(|ui| {
         crate::widgets::label(ui, "Solo");
         ui.spacing_mut().item_spacing.x = crate::theme::button_gap(crate::theme::ui_scale(ui.ctx()));
@@ -172,9 +178,9 @@ fn star_solo(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
         crate::widgets::label(ui, "back");
         for (n, k) in drawn.enumerate() {
             let name = (n + 1).to_string();
-            ui.toggle_value(&mut stars.star_solo[k], &name)
+            ui.toggle_value(&mut solo[k], &name)
                 .on_hover_text(format!(
-                    "Draw only the soloed layers, to see what layer {name} looks like on its own (1 is drawn at the back). Not saved: every project opens with all layers drawn."
+                    "Draw only the soloed layers, to see what layer {name} looks like on its own (1 is drawn at the back). Not part of the look: a slot switch or an undo keeps it, and it is not saved or exported, so every window opens with all layers drawn."
                 ));
         }
         crate::widgets::label(ui, "front");

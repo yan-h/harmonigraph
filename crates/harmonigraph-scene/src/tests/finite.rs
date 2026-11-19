@@ -122,7 +122,6 @@ fn poisoned_view() -> ViewConfig {
                 star_cover: nan,
                 star_glow_falloff: nan,
                 star_resolution: nan,
-                star_solo: base.atmosphere.stars.star_solo,
             },
             material_settings: crate::MaterialSettings {
                 velvet_size: nan,
@@ -229,6 +228,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         pitch_lut_spacing,
         marker_unit,
         glow_clock,
+        star_solo: _,
     } = scene;
     f.one("edge_softness_points", *edge_softness_points);
 

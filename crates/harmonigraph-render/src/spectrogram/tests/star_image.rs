@@ -236,6 +236,7 @@ fn a_drawn_star_follows_the_cpu_profile() {
     cb.grid.fill(230);
     let width = (540.0 * PPP).ceil() as usize + 1;
     let mut resources = CallbackResources::default();
+    cb.atmosphere.as_mut().unwrap().star_solo = [false, false, false, false, true];
     for (solid, falloff) in
         [0.0, 0.5, 0.9].into_iter().flat_map(|solid| [0.0, 0.5, 1.0].map(|f| (solid, f)))
     {
@@ -244,7 +245,6 @@ fn a_drawn_star_follows_the_cpu_profile() {
         // smaller image is filtered up), each star its full size at its
         // cell's centre in a cell twice its diameter: a 1x1 read, so no
         // neighbour's light adds in.
-        stars.star_solo = [false, false, false, false, true];
         stars.star_resolution = 1.0;
         (stars.star_size, stars.star_spacing_ratio) = ([64.0; 5], [2.0; 5]);
         stars.star_speed = [0.0; 5];
@@ -347,9 +347,9 @@ fn a_capped_depth_draws_what_a_wide_read_draws() {
     let Some((device, queue)) = headless_device() else { return };
     let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
     cb.grid.fill(200);
+    cb.atmosphere.as_mut().unwrap().star_solo = [false, false, false, false, true];
     let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
     (stars.star_jitter, stars.star_size_variation) = (1.0, 0.0);
-    stars.star_solo = [false, false, false, false, true];
     stars.star_spacing_ratio = [0.5 / 0.9; 5];
     // Wider than a texel of the 75% image (6 star pixels), or the texel
     // floor would decide the read.
@@ -401,8 +401,8 @@ fn a_layer_that_does_not_twinkle_never_shows_a_gap() {
     // Even light under every star, and every star the same brightness and
     // size, so a pixel below the stars' level is the floor showing through.
     cb.grid.fill(220);
+    cb.atmosphere.as_mut().unwrap().star_solo = [false, false, false, false, true];
     let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
-    stars.star_solo = [false, false, false, false, true];
     stars.star_resolution = 1.0;
     stars.star_size = [30.0; 5];
     stars.star_spacing_ratio = [harmonigraph_scene::STAR_SPACING_MIN; 5];
@@ -469,8 +469,8 @@ fn cover_decides_whether_a_dim_near_star_blacks_out_a_far_one() {
         0.2126 * f32::from(px[0]) + 0.7152 * f32::from(px[1]) + 0.0722 * f32::from(px[2])
     };
     let mut frame = |solo, cover| {
-        let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
-        (stars.star_solo, stars.star_cover) = (solo, cover);
+        let atmosphere = cb.atmosphere.as_mut().unwrap();
+        (atmosphere.star_solo, atmosphere.settings.stars.star_cover) = (solo, cover);
         let frame = frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.0);
         let side = width as usize + 1;
         let pixels = frame.as_chunks::<4>().0;
@@ -517,7 +517,7 @@ fn a_bright_blue_near_star_shows_over_a_dim_green_far_one() {
     (stars.star_jitter, stars.star_size_variation, stars.star_randomness) = (0.0, 0.0, 1.0);
     (stars.star_solid, stars.star_glow_falloff) = ([0.9; 5], 0.0);
     let mut frame = |solo| {
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_solo = solo;
+        cb.atmosphere.as_mut().unwrap().star_solo = solo;
         let frame = frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.0);
         let side = width as usize + 1;
         let pixels = frame.as_chunks::<4>().0;
@@ -562,8 +562,8 @@ fn stars_narrower_than_a_texel_all_show() {
     {
         let mut cb = star_fixture([width, height], egui::Pos2::ZERO);
         cb.grid.fill(220);
+        cb.atmosphere.as_mut().unwrap().star_solo = [true, false, false, false, false];
         let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
-        stars.star_solo = [true, false, false, false, false];
         stars.star_resolution = 0.25;
         (stars.star_size[0], stars.star_spacing_ratio[0], stars.star_jitter) =
             (4.0, spacing, jitter);
@@ -578,12 +578,7 @@ fn stars_narrower_than_a_texel_all_show() {
             atmosphere::star_slices(*stars, [[0.0; 2]; atmosphere::STAR_SLICES], &layout, image)[0];
         let texel = crate::stars::STAR_PANE / image[1] as f32;
         assert!(slice.radius < 0.5 * texel && slice.inverse_floor == 1.0 / texel);
-        let mut plan = *stars;
-        plan.star_solo = [false; 5];
-        let read =
-            atmosphere::star_slices(plan, [[0.0; 2]; atmosphere::STAR_SLICES], &layout, image)[0]
-                .gather;
-        assert_eq!(read, gather, "spacing {spacing}");
+        assert_eq!(slice.gather, gather, "spacing {spacing}");
         // The read holds the floor even for the worst-placed star, though
         // 2x2 would hold it at a cell's centre.
         let half_width = 0.5 * gather as f32;

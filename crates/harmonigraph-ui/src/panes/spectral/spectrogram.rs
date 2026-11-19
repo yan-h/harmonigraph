@@ -309,6 +309,7 @@ pub(crate) fn draw_spectrogram(
             now,
             history_epoch: spectrum.history_epoch(),
             light_hold,
+            star_solo: state.surfaces.star_solo.spectrogram,
         }),
     ));
 }

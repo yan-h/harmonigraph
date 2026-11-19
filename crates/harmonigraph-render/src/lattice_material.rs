@@ -20,6 +20,8 @@ pub(super) struct Material {
     pub(super) speed: f32,
     pub(super) settings: harmonigraph_scene::MaterialSettings,
     pub(super) stars: harmonigraph_scene::StarSettings,
+    /// The editor's Stars solo ([`harmonigraph_scene::Scene::star_solo`]).
+    pub(super) solo: [bool; crate::stars::STAR_SLICES],
     pub(super) direction: f32,
 }
 
@@ -458,6 +460,7 @@ pub(super) fn prepare(
             offscreen.size,
             lattice_stars::Frame {
                 settings: material.stars,
+                solo: material.solo,
                 layout: layout.expect("drawn stars have a pane layout"),
                 motion,
                 amount: material.amount,
@@ -606,6 +609,7 @@ mod tests {
                     speed: a.material_speed,
                     settings: a.material_settings,
                     stars: a.stars.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
+                    solo: Default::default(),
                     direction: a.material_direction,
                 };
                 let motion_rate = |a: AtmosphereSettings| {

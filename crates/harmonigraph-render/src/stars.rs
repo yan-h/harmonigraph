@@ -243,6 +243,25 @@ pub(crate) fn star_layout(settings: harmonigraph_scene::StarSettings, aspect: f3
     at(high)
 }
 
+/// `slices` as the editor's Stars `Solo` composites them: while any drawn
+/// depth is soloed, only the soloed ones are. A hidden slice keeps baking and
+/// updating its colour history, so a toggle keeps the look and costs the
+/// whole field, and a flag on a depth `Star layers` leaves out counts for
+/// nothing. The solo is no part of the look (#1828): an export draws none.
+pub(crate) fn soloed(
+    mut slices: [StarSlice; STAR_SLICES],
+    solo: [bool; STAR_SLICES],
+) -> [StarSlice; STAR_SLICES] {
+    if slices.iter().zip(solo).any(|(slice, solo)| solo && slice.gather != 0) {
+        for (slice, solo) in slices.iter_mut().zip(solo) {
+            if !solo {
+                slice.gather = 0;
+            }
+        }
+    }
+    slices
+}
+
 /// The atlas to allocate for `needed` texels, keeping the one `held` while it
 /// still holds them and has not more than twice the rows, so a dial drag steps
 /// through a handful of sizes rather than one per frame.
@@ -289,11 +308,6 @@ pub(crate) fn star_slices(
     let texel =
         (0..2).map(|axis| layout.pane[axis] / image[axis].max(1) as f32).fold(0.0, f32::max);
     let plan = settings.plan();
-    let solo = plan
-        .depths
-        .iter()
-        .enumerate()
-        .any(|(k, depth)| depth.gather != StarGather::Off && settings.star_solo[k]);
     let (jitter, bend) = (settings.star_jitter, star_falloff_bend(settings.star_glow_falloff));
     std::array::from_fn(|k| {
         let depth = plan.depths[k];
@@ -331,7 +345,7 @@ pub(crate) fn star_slices(
             grid: Int2(grid.map(|side| side as i32)),
             width: star_jitter_width(jitter),
             inverse_floor: 1.0 / floor,
-            gather: if solo && !settings.star_solo[k] { 0 } else { star_gather_code(gather) },
+            gather: star_gather_code(gather),
             _pad: 0,
         }
     })

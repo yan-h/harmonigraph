@@ -226,6 +226,7 @@ pub(crate) fn compose_scene(
     // node's MIDI layers say. Per surface, because each surface carries the
     // lights of the window it draws.
     super::glow_fade::apply(&mut scene, state, surface, now);
+    scene.star_solo = state.surfaces.star_solo.lattice;
     scene
 }
 

@@ -75,6 +75,9 @@ pub struct SpectrogramAtmosphere {
     /// star centred past the divider darken the newest edge — the Stars seam.
     /// `None` where the strip does not reach the now-line.
     pub light_hold: Option<[SpectrogramVertex; 6]>,
+    /// Which Stars depths the editor solos ([`soloed`]): a viewing aid of the
+    /// editor's window and no part of the look (#1828), so none in an export.
+    pub star_solo: [bool; STAR_SLICES],
 }
 
 #[cfg(test)]
@@ -93,6 +96,7 @@ impl SpectrogramAtmosphere {
             now: 0.0,
             history_epoch: 0,
             light_hold: None,
+            star_solo: [false; STAR_SLICES],
         }
     }
 }
@@ -881,7 +885,6 @@ fn memory_key(
                 star_solid: _,          // response/coverage changes do not change material identity
                 star_cover: _,          // composition only
                 star_glow_falloff: _,   // response/coverage changes do not change material identity
-                star_solo: _,           // composition only; hidden slices keep their history
             },
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -1802,7 +1805,12 @@ impl Targets {
             crate::material_cells::drift(velvet, &settings.material_settings, motion.drift, period);
         let image = self.shape.stars.map_or([1, 1], |stars| stars.image);
         let slices = stars
-            .map(|layout| star_slices(settings.stars, motion.stars, &layout, image))
+            .map(|layout| {
+                soloed(
+                    star_slices(settings.stars, motion.stars, &layout, image),
+                    atmosphere.star_solo,
+                )
+            })
             .unwrap_or_default();
         let life = star_life(motion.life);
         let mut step = MemoryStep::fresh(slices, life);
@@ -1989,9 +1997,9 @@ fn source_group(
 #[cfg(test)]
 mod tests {
     use super::{
-        drift_at, retained_size, source_size, star_layout, star_slices, tile_key, tone_size,
-        SpectrogramAtmosphere, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE,
-        STAR_SLICES, TILE_MAX, TILE_STEP,
+        drift_at, retained_size, soloed, source_size, star_layout, star_slices, tile_key,
+        tone_size, SpectrogramAtmosphere, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD, STAR_LIFE_PERIOD,
+        STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP,
     };
 
     /// The blur's tap window is the reach the editor's frame loop holds a
@@ -2101,23 +2109,6 @@ mod tests {
         assert!(off.iter().zip(slices).all(|(&off, slice)| off == (slice.gather == 0)));
     }
 
-    /// Solo shows a layer as the whole field draws it. On a pane wide enough
-    /// that the atlas floors the finest cells, hiding the other layers
-    /// leaves the whole layout and each layer's cells in place.
-    #[test]
-    fn soloing_keeps_the_cells_the_whole_field_draws() {
-        use harmonigraph_scene::star_plan::STAR_DEPTHS;
-        let every = harmonigraph_scene::StarSettings::default();
-        let full = star_layout(every, 8.0);
-        assert_ne!(full.cells, crate::stars::star_cells(every), "the fixture must floor a cell");
-        for k in 0..STAR_DEPTHS {
-            let mut star_solo = [false; STAR_DEPTHS];
-            star_solo[k] = true;
-            let solo = harmonigraph_scene::StarSettings { star_solo, ..every };
-            assert_eq!(star_layout(solo, 8.0), full, "solo {k}");
-        }
-    }
-
     /// A star is drawn with a radius of at least a texel of the star image,
     /// the wider of its sides, and the cap at its read's window never takes
     /// it under that: a depth takes a read that holds the floor wherever
@@ -2188,10 +2179,9 @@ mod tests {
         let solo = [false, false, false, true, true];
         for layers in [3, 5] {
             let full = harmonigraph_scene::StarSettings { star_layers: layers, ..fresh };
-            let selected = harmonigraph_scene::StarSettings { star_solo: solo, ..full };
             let layout = star_layout(full, 16.0 / 9.0);
-            let slices = star_slices(selected, [[4.0, 3.0]; STAR_SLICES], &layout, [1920, 1080]);
             let baseline = star_slices(full, [[4.0, 3.0]; STAR_SLICES], &layout, [1920, 1080]);
+            let slices = soloed(baseline, solo);
             for (k, (got, mut expected)) in slices.into_iter().zip(baseline).enumerate() {
                 if layers == 5 && !solo[k] {
                     expected.gather = 0;
