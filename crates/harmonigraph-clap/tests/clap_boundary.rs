@@ -557,41 +557,19 @@ fn a_restarted_steady_counter_runs_on_and_is_noticed_once() {
 /// to every project.
 #[test]
 fn a_save_is_framed_json_of_the_version_the_parameters_and_the_fields() {
-    use clap_sys::ext::state::{CLAP_EXT_STATE, clap_plugin_state};
-    use clap_sys::stream::{clap_istream, clap_ostream};
-    unsafe extern "C" fn write(stream: *const clap_ostream, data: *const c_void, size: u64) -> i64 {
-        let bytes = unsafe { &mut *((*stream).ctx.cast::<Vec<u8>>()) };
-        bytes.extend_from_slice(unsafe { std::slice::from_raw_parts(data.cast(), size as usize) });
-        size as i64
-    }
-    unsafe extern "C" fn read(stream: *const clap_istream, data: *mut c_void, size: u64) -> i64 {
-        let bytes = unsafe { &mut *((*stream).ctx.cast::<&[u8]>()) };
-        let count = bytes.len().min(size as usize);
-        unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), data.cast(), count) };
-        *bytes = &bytes[count..];
-        count as i64
-    }
     let _serial = serial();
     let d = Device::new();
-    let state = unsafe {
-        &*(((*d.plugin).get_extension.unwrap())(d.plugin, CLAP_EXT_STATE.as_ptr())
-            .cast::<clap_plugin_state>())
-    };
     *FIELD.lock().unwrap() = r#"{"opaque":[1,2]}"#.into();
     d.flush(vec![param(0.5, 0)]);
     let json =
         br#"{"version":"1","params":{"axis":{"f32":0.5}},"fields":{"field":"{\"opaque\":[1,2]}"}}"#;
-    let mut saved = Vec::new();
-    let stream = clap_ostream { ctx: (&mut saved as *mut Vec<u8>).cast(), write: Some(write) };
-    assert!(unsafe { (state.save.unwrap())(d.plugin, &stream) });
+    let saved = d.device.save_framed();
     assert_eq!(saved[..8], (json.len() as u64).to_le_bytes());
     assert_eq!(std::str::from_utf8(&saved[8..]).unwrap(), std::str::from_utf8(json).unwrap());
 
     let json = br#"{"version":"0","params":{"axis":{"f32":0.25}},"fields":{"field":"x"}}"#;
     let framed = [&(json.len() as u64).to_le_bytes()[..], json].concat();
-    let mut unread = &framed[..];
-    let stream = clap_istream { ctx: (&mut unread as *mut &[u8]).cast(), read: Some(read) };
-    assert!(unsafe { (state.load.unwrap())(d.plugin, &stream) });
+    assert!(d.device.load_framed(&framed));
     assert_eq!(d.value(), 0.25);
     assert_eq!(*FIELD.lock().unwrap(), "x", "the field reached the setup as it was saved");
 }
