@@ -65,7 +65,7 @@ That a host-driven resize while the editor opens does not count, that a restore 
 
 Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
 
-- `read-plugin-state` may build and run Rust: it becomes a program beside the plugin that reads a project through the plugin's own restore code, `set_camera_movement` and `copy_host_owned`, keeping a raw dump, and the Python scrapers and the pre-#1685 Spiral fallback go. This supersedes the 2026-11-10 line that the extractor's overlay is tested against `copy_host_owned`: it calls the function instead. To be built. #1861 Q2, R2
+- `read-plugin-state` may build and run Rust: it becomes a program beside the plugin that reads a project through the plugin's own restore code, `set_camera_movement` and `copy_host_owned`, keeping a raw dump, and the Python scrapers and the pre-#1685 Spiral fallback go. This supersedes the 2026-11-10 line that the extractor's overlay is tested against `copy_host_owned`: it calls the function instead. #1861 Q2, R2, built in #1890 (through `sync_camera`, which calls `set_camera_movement`; a restore never calls `copy_host_owned`)
 - Unselected Curve channel toggles (Hue, Brightness, Saturation) and Stars Solo layer buttons wear the same filled button as every other option, and the plain egui toggle is disallowed in the UI crate. #1861 Q3
 
 ## 2026-11-18 (#1814, in chat, after step 7)
