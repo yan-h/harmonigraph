@@ -1,13 +1,8 @@
 //! Lattice's colored-light adapter for the shared star renderer.
 use super::*;
 use crate::stars::{self, StarUniforms};
-const SOURCE: &str = concat!(
-    include_str!("shaders/common.wgsl"),
-    "\n",
-    include_str!("shaders/stars.wgsl"),
-    "\n",
-    include_str!("shaders/lattice_stars.wgsl")
-);
+const SOURCE: &str =
+    concat!(include_str!("shaders/stars.wgsl"), "\n", include_str!("shaders/lattice_stars.wgsl"));
 
 uniform_group! {
     struct Settings {
