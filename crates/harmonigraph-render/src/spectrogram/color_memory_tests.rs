@@ -2,7 +2,7 @@
 //! carried star from a newly lit one or expose repeated subpixel diffusion.
 use super::*;
 use crate::gpu_harness::headless_device;
-use crate::spectrogram::tests::{cloud, prepare_once, refracted_fixture};
+use crate::spectrogram::tests::{cloud, pane, prepare_once, refracted_fixture};
 use crate::spectrogram::SpectrogramCallback;
 use egui_wgpu::CallbackResources;
 use harmonigraph_scene::CloudStyle;
@@ -682,10 +682,10 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
     close(answers[0], answers[1]);
 }
 
-/// With every effect off nothing is drawn, so no colour history is held for
-/// it; drawing the look again starts a fresh one.
+/// With every effect off nothing is drawn, so no cloud target is held for
+/// it, colour history included; drawing the look again starts a fresh one.
 #[test]
-fn a_look_turned_off_holds_no_color_history() {
+fn a_look_turned_off_holds_no_cloud() {
     let Some((device, queue)) = headless_device() else { return };
     let mut cb = fixture(CloudStyle::Watercolor);
     cb.atmosphere.as_mut().unwrap().settings.color_pickup = 5.0;
@@ -699,10 +699,49 @@ fn a_look_turned_off_holds_no_color_history() {
     s.pitch_softness = 0.0;
     s.time_softness = 0.0;
     prepare_once(&device, &queue, &mut resources, &cb);
-    assert!(!held(&resources), "history held for a look not drawn");
+    assert!(pane(&resources).cloud.is_none(), "targets held for a look not drawn");
     cb.atmosphere.as_mut().unwrap().settings = on;
     prepare_once(&device, &queue, &mut resources, &cb);
     assert!(held(&resources), "drawing again started no history");
+}
+
+/// A Stars resolution change resizes the starfield's image alone, so the
+/// atlas, the largest target a pane holds, is carried rather than rebuilt.
+/// The light and the image it does rebuild are dropped first, colour history
+/// and all: the history is carried, and the bindings it held named both.
+#[test]
+fn a_stars_resolution_change_carries_the_atlas() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Stars);
+    let resolution = |cb: &mut SpectrogramCallback, r| {
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_resolution = r;
+    };
+    let views = |resources: &CallbackResources| {
+        let stars = cloud(resources).stars.as_ref().expect("a starfield");
+        // The image by its size: a test holding the view would keep it alive.
+        (stars.atlas.clone(), stars.image.texture().size())
+    };
+    let mut resources = CallbackResources::default();
+    resolution(&mut cb, 0.5);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let (atlas, image) = views(&resources);
+    // The first frame done, so what the GPU still holds of it counts for
+    // nothing below.
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    resolution(&mut cb, 1.0);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let (carried, resized) = views(&resources);
+    assert_ne!(image, resized, "the fixture must resize the image");
+    assert_eq!(atlas, carried, "the atlas was rebuilt for a size it already had");
+    assert!(cloud(&resources).memory.is_some(), "the fixture must carry a colour history");
+    #[cfg(target_vendor = "apple")]
+    for label in ["spectral_cloud_source", "spectral_star_image"] {
+        assert_eq!(
+            crate::gpu_memory::most_copies_of(&device).get(label),
+            Some(&1),
+            "the old {label} was alive when its replacement was built"
+        );
+    }
 }
 
 /// The fresh Watercolor under the fresh colour response (Pickup 0.20 s,
