@@ -427,6 +427,30 @@ fn a_cleared_heatmap_holds_no_sound_for_a_span() {
     assert!(last - heard < 1.0, "a Clear held the full rate {} s past the sound", last - heard);
 }
 
+/// The armed Record button's breath and a running export's progress stripes
+/// are chrome, not picture motion: each asks for its next frame about 30 Hz
+/// out rather than holding the editor at the display rate (#1872).
+#[test]
+fn the_chrome_cues_animate_at_about_30_hz() {
+    let delay = |add: &mut dyn FnMut(&mut egui::Ui)| {
+        let ctx = super::probe::themed();
+        // Settled: a fresh context's opening passes ask to be redrawn.
+        let mut output = ctx.run_ui(Default::default(), |ui| add(ui));
+        for _ in 0..4 {
+            output = ctx.run_ui(Default::default(), |ui| add(ui));
+        }
+        output.viewport_output.values().map(|viewport| viewport.repaint_delay).min().unwrap()
+    };
+    let breath = delay(&mut |ui| {
+        crate::widgets::record_button(ui, &mut true, false, "Record");
+    });
+    assert_eq!(breath, crate::CHROME_REPAINT_INTERVAL, "the armed Record button's breath");
+    let stripes = delay(&mut |ui| {
+        crate::widgets::progress_bar(ui, Some(0.3), "Export", "30%");
+    });
+    assert_eq!(stripes, crate::CHROME_REPAINT_INTERVAL, "a running export's stripes");
+}
+
 /// A note arriving in an idle editor paints on the next tick, not at the idle
 /// poll: it makes a voice, and a voice is what `root_ui` paces by. The input
 /// worker's drain no longer reports an arrival, so this is what tells an idle
