@@ -67,12 +67,10 @@ fn simultaneous_recordings_own_distinct_pairs() {
                 let base = base.clone();
                 scope.spawn(move || {
                     barrier.wait();
-                    let status = Mutex::new(String::new());
                     let mut recording = Recording::create(
                         header_for(48_000.0, index.to_string()),
                         base,
                         FIXTURE_SPEC,
-                        &status,
                     )
                     .unwrap();
                     recording.audio.as_mut().unwrap().write(&[index as f32; 4]).unwrap();
@@ -100,18 +98,16 @@ fn collision_and_initialization_failure_remove_only_owned_files() {
     let dir = std::env::temp_dir().join(format!("harmonigraph-owned-pair-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let base = dir.join("same.take");
-    let status = Mutex::new(String::new());
     std::fs::write(base.with_extension("wav"), b"preexisting audio").unwrap();
     let recording =
-        Recording::create(header_for(48_000.0, String::new()), base.clone(), FIXTURE_SPEC, &status)
-            .unwrap();
+        Recording::create(header_for(48_000.0, String::new()), base.clone(), FIXTURE_SPEC).unwrap();
     assert_eq!(recording.path, dir.join("same_1.take"));
     assert!(!base.exists(), "failed companion acquisition removes our empty take");
     assert_eq!(std::fs::read(base.with_extension("wav")).unwrap(), b"preexisting audio");
     let failed = dir.join("failed.take");
     let invalid = AudioSpec { sample_rate: f32::MAX, channels: u16::MAX };
     let header = header_for(48_000.0, String::new());
-    assert!(Recording::create(header, failed.clone(), invalid, &status).is_none());
+    assert!(Recording::create(header, failed.clone(), invalid).is_err());
     assert!(!failed.exists());
     assert!(!failed.with_extension("wav").exists());
     drop(recording);
@@ -333,17 +329,19 @@ fn configuration_audio_exhaustion_marks_the_recording_incomplete() {
 }
 
 /// Only parameters that MOVED are recorded — a full set every block would
-/// bury the take — after a full set at the arm.
+/// bury the take — after a full set as the run opens.
 #[test]
 fn params_record_only_changes() {
     let mut b = Bench::new();
     b.arm();
+    b.rec.record(0.0, Some(0.0));
+    assert_eq!(b.pushed(), ["run @0"]);
     let mut values = [0.0f32; ParamKey::ALL.len()];
     b.rec.params(0.0, values);
     assert_eq!(
         b.pushed().len(),
         ParamKey::ALL.len(),
-        "arming resets to NaN, so a take's first block writes a full set"
+        "a run opens with every parameter unwritten, so its first block writes a full set"
     );
 
     b.rec.params(1.0, values);
@@ -355,12 +353,14 @@ fn params_record_only_changes() {
     assert_eq!(b.pushed(), ["param 0=0.5 @2"], "only the one that moved");
 }
 
-/// A configuration is written only when it changes, and each take writes the
-/// one in force at its first block however unchanged since the take before:
+/// A configuration is written only when it changes, and each run writes the
+/// one in force at its first block however unchanged since the run before:
 /// an export opens at its take's first configuration, so a take without one
-/// opens at the fresh tuning (#1832).
+/// opens at the fresh tuning, and a run the reader cannot join to the one
+/// before it replays from its own. Nothing is written, or remembered as
+/// written, while no run is open, since the reader would drop it (#1832).
 #[test]
-fn each_take_opens_with_its_configuration_and_records_only_changes() {
+fn each_run_opens_with_its_configuration_and_records_only_changes() {
     use harmonigraph_core::configuration::{ConfigEdit, ConfigMutation, ConfigReducer, TuningAxis};
     let mut reducer = ConfigReducer::default();
     let held = reducer.resolved();
@@ -368,16 +368,19 @@ fn each_take_opens_with_its_configuration_and_records_only_changes() {
     let edited = reducer.resolved();
     assert_ne!(held, edited, "the fixture's edit must change the configuration");
     let mut b = Bench::new();
-    // Each take ends on the configuration the next opens with.
-    for take in 0..2 {
-        b.arm();
+    b.arm();
+    b.rec.configuration(0.0, held);
+    assert!(b.pushed().is_empty(), "no run is open");
+    // Each run ends on the configuration the next opens with.
+    for run in 0..2 {
+        let opens = f64::from(run) * 10.0;
+        b.rec.record(opens, Some(opens));
         for (t, config) in [(0.0, held), (1.0, held), (2.0, edited), (3.0, edited), (4.0, held)] {
-            b.rec.configuration(t, config);
+            b.rec.configuration(opens + t, config);
         }
+        b.rec.run_end(opens + 5.0);
         let written = b.pushed().iter().filter(|e| *e == "configuration").count();
-        assert_eq!(written, 3, "take {take}: its opening configuration, then each change");
-        b.ctrl.fence.disarm();
-        assert!(!b.rec.is_armed());
+        assert_eq!(written, 3, "run {run}: its opening configuration, then each change");
     }
 }
 
@@ -506,12 +509,16 @@ fn stopping_a_take_that_is_not_running_does_nothing() {
 /// and a silently empty video, and nothing else here reads them.
 #[test]
 fn the_shipped_rings_have_room_for_what_the_audio_thread_pushes() {
-    let Bench { mut rec, ctrl, .. } = Bench::with_rings(TAKE_RING_CAPACITY, AUDIO_RING_CAPACITY);
-    ctrl.recording.store(true, Ordering::Relaxed);
-    rec.params(0.0, [0.5; ParamKey::ALL.len()]);
-    rec.audio(&mut std::iter::repeat_n(0.0f32, 512), 512);
-    ctrl.tick(true, 1);
-    assert!(!ctrl.status().contains("DROPPED"), "a shipped ring dropped: {}", ctrl.status());
+    let mut b = Bench::with_rings(TAKE_RING_CAPACITY, AUDIO_RING_CAPACITY);
+    b.arm();
+    b.rec.record(0.0, Some(0.0));
+    b.rec.params(0.0, [0.5; ParamKey::ALL.len()]);
+    b.rec.audio(&mut std::iter::repeat_n(0.0f32, 512), 512);
+    let pushed = b.pushed();
+    assert_eq!(pushed.len(), ParamKey::ALL.len() + 2, "the run, every parameter, the audio");
+    assert_eq!(pushed.last().map(String::as_str), Some("audio 512"), "{pushed:?}");
+    assert_eq!(b.written().len(), 512, "every sample");
+    assert_eq!(b.ctrl.dropped.load(Ordering::Relaxed), 0);
 }
 
 /// What the audio thread saw is what the GUI reads back.

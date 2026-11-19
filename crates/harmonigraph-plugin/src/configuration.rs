@@ -501,9 +501,17 @@ impl Owner {
         self.recording.reset(recorder);
         self.publish();
     }
-    /// Host input was lost: a take refuses its configuration until a reset.
-    pub fn fault(&mut self) {
+    /// Host input was lost in this callback. A take armed at it fails here,
+    /// whatever the host does next: this callback records nothing (it runs no
+    /// `play`), so judging at a later one missed a take disarmed before it, or
+    /// a loss the host's reset cleared first, and refused a take whose Stop
+    /// had landed before the loss. A take armed later refuses its
+    /// configuration until the host's reset clears the loss (#1832).
+    pub fn fault(&mut self, recorder: &harmonigraph_record::Recorder) {
         self.status |= ConfigurationView::INPUT_LOST;
+        if recorder.capture_recording_intent().is_armed() {
+            recorder.fail_configuration();
+        }
         self.publish();
     }
     pub fn recording_intent(&self) -> harmonigraph_record::configuration::RecordIntent {
@@ -517,14 +525,11 @@ impl Owner {
     }
 
     pub fn record(&mut self, recorder: &mut harmonigraph_record::Recorder, origin: Option<f64>) {
-        // After lost input, a take this callback can still write to refuses
-        // its configuration: one armed at this callback's boundary, or one
-        // whose run a lost armed callback left open for this one to close. A
-        // loss while no take can be written fails nothing, as one before the
-        // first take never did; a take armed later still refuses until a host
-        // reset clears the loss (#1832).
-        let writable = self.recording.captured_intent.is_armed() || recorder.recording();
-        if self.status & ConfigurationView::INPUT_LOST != 0 && writable {
+        // A take armed after lost input, before the host's reset clears it,
+        // refuses its configuration. One armed at the loss failed there
+        // (`fault`), and a loss while none is armed fails nothing (#1832).
+        let armed = self.recording.captured_intent.is_armed();
+        if self.status & ConfigurationView::INPUT_LOST != 0 && armed {
             recorder.fail_configuration();
         }
         let start = self.recording.block_start;

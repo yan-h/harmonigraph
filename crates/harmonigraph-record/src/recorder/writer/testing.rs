@@ -88,10 +88,6 @@ impl Capture {
         self.fence.disarm();
         self.fence.finishing.store(true, Ordering::Release);
     }
-    /// Whether the take has failed, as the writer and `Control::start` read it.
-    pub fn failed(&self) -> bool {
-        self.fence.failed.load(Ordering::Acquire)
-    }
     pub fn drain_entries(&mut self) -> Vec<Entry> {
         std::iter::from_fn(|| self._records.pop().ok()).collect()
     }
@@ -130,15 +126,13 @@ pub struct FileWriter {
 impl FileWriter {
     /// Opens `path` and the WAV beside it, as every `Start` does.
     pub fn new(capture: &Capture, path: std::path::PathBuf) -> Self {
-        let status = Mutex::new(String::new());
         let open =
-            Recording::create(harmonigraph_take::Header::default(), path, FIXTURE_SPEC, &status)
-                .unwrap();
-        assert!(open.audio.is_some(), "{}", status.lock());
+            Recording::create(harmonigraph_take::Header::default(), path, FIXTURE_SPEC).unwrap();
+        assert!(open.audio.is_some());
         Self {
             pump: Pump { open: Some(open), ..Default::default() },
             fence: capture.fence.clone(),
-            status,
+            status: Mutex::default(),
             finished: None,
         }
     }

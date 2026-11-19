@@ -197,10 +197,22 @@ impl Pump {
         fence: &RecordFence,
     ) {
         if self.open.is_some() {
-            fence.fail();
+            fail_with(fence, status, "a take started before the last one sealed".into());
             return;
         }
-        self.open = Recording::create(header, path, spec, status);
+        self.open = match Recording::create(header, path, spec) {
+            Ok(recording) => {
+                let mut message = status.lock();
+                if !matches!(message.as_str(), FINISHING | FINISHING_PREVIOUS) {
+                    *message = format!("recording to {}", recording.path.display());
+                }
+                Some(recording)
+            }
+            Err(cause) => {
+                fail_with(fence, status, cause);
+                None
+            }
+        };
         #[cfg(feature = "test-support")]
         if let Some(audio) = self.open.as_mut().and_then(|o| o.audio.as_mut()) {
             if let Some(limit) = *fence.test_wav_limit.lock() {
@@ -209,10 +221,6 @@ impl Pump {
             if fence.test_wav_finish_failure.load(Ordering::Acquire) {
                 audio.fail_finish_for_test();
             }
-        }
-        if self.open.is_none() {
-            let cause = status.lock().clone();
-            fail_with(fence, status, cause);
         }
     }
 
@@ -340,13 +348,13 @@ struct Recording {
 
 impl Recording {
     /// Acquire the take file and its WAV beside it, both exclusively, so a
-    /// take never writes into another recorder's files or an orphan.
+    /// take never writes into another recorder's files or an orphan. A
+    /// failure is its cause, for the status line.
     fn create(
         mut header: harmonigraph_take::Header,
         base: std::path::PathBuf,
         spec: AudioSpec,
-        status: &Mutex<String>,
-    ) -> Option<Recording> {
+    ) -> Result<Recording, String> {
         let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("take").to_owned();
         for suffix in 0u64.. {
             let path = if suffix == 0 {
@@ -358,10 +366,7 @@ impl Recording {
             let take_file = match std::fs::File::create_new(&path) {
                 Ok(file) => file,
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(err) => {
-                    *status.lock() = format!("cannot create {}: {err}", path.display());
-                    return None;
-                }
+                Err(err) => return Err(format!("cannot create {}: {err}", path.display())),
             };
             let wav_file = match std::fs::File::create_new(&wav) {
                 Ok(file) => file,
@@ -370,15 +375,12 @@ impl Recording {
                     // Only the take was acquired by this attempt; never
                     // remove the companion whose creation just failed.
                     if let Err(cleanup) = std::fs::remove_file(&path) {
-                        *status.lock() =
-                            format!("cannot remove unused {}: {cleanup}", path.display());
-                        return None;
+                        return Err(format!("cannot remove unused {}: {cleanup}", path.display()));
                     }
                     if err.kind() == std::io::ErrorKind::AlreadyExists {
                         continue;
                     }
-                    *status.lock() = format!("cannot create {}: {err}", wav.display());
-                    return None;
+                    return Err(format!("cannot create {}: {err}", wav.display()));
                 }
             };
             let initialized = (|| {
@@ -397,20 +399,15 @@ impl Recording {
                     // Both handles have closed and both paths belong to us.
                     let cleanup_take = std::fs::remove_file(&path);
                     let cleanup_wav = std::fs::remove_file(&wav);
-                    *status.lock() = format!(
+                    return Err(format!(
                         "cannot initialize {}: {err}; cleanup: {:?}, {:?}",
                         path.display(),
                         cleanup_take.err(),
                         cleanup_wav.err()
-                    );
-                    return None;
+                    ));
                 }
             };
-            let mut message = status.lock();
-            if !matches!(message.as_str(), FINISHING | FINISHING_PREVIOUS) {
-                *message = format!("recording to {}", path.display());
-            }
-            return Some(Recording {
+            return Ok(Recording {
                 audio_file: header.audio_file.clone(),
                 path,
                 writer,
@@ -419,8 +416,7 @@ impl Recording {
                 marked: false,
             });
         }
-        *status.lock() = "recording filename suffix exhausted".into();
-        None
+        Err("recording filename suffix exhausted".into())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -516,8 +512,11 @@ fn drain_records(
         let Ok(entry) = consumer.pop() else { break };
         any = true;
         if let Entry::AudioSamples(count) = entry {
+            // The audio thread commits a block's samples before the entry
+            // that counts them, so this holds them all unless the two rings
+            // have fallen out of step.
             let Ok(chunk) = audio.read_chunk(count) else {
-                fence.fail();
+                fail_with(fence, status, format!("audio ring short of {count} samples"));
                 continue;
             };
             if let Some(recording) = open.as_mut() {
