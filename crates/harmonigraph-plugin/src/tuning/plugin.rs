@@ -112,7 +112,7 @@ impl Plugin for HarmonigraphTune {
         // compensate for a delay no note is being given. Repeating the same
         // number costs one atomic swap and asks for nothing.
         block.request_latency(self.requested_latency());
-        self.tune().schedule_callback(&mut block.output);
+        self.tune().schedule(&mut block.output);
     }
     fn end(&mut self) {
         self.tune().end();

@@ -525,7 +525,7 @@ impl Hub {
         self.tune.input(input);
     }
     pub fn schedule(&mut self, output: &mut Output<'_>) {
-        self.tune.schedule_callback(output);
+        self.tune.schedule(output);
     }
 
     /// The audio engine stopping, or a host reset. Both are a session cut,

@@ -87,8 +87,8 @@ pub struct Tune {
     status: u32,
     /// The last offset emitted in this callback. A CLAP output list is sorted
     /// by time and the shell holds no floor for us, so this is the whole of
-    /// what keeps it sorted: every emission takes `max(self.cursor, start)`
-    /// and moves it.
+    /// what keeps it sorted: every emission takes at least `self.cursor` and
+    /// moves it.
     cursor: u32,
     /// Events put on the wire in this callback, against [`EMIT_PER_CALLBACK`].
     emitted: u32,
@@ -484,22 +484,19 @@ impl Tune {
         self.line.position(offset).and_then(|position| self.line.at(position)).map(|p| p.serial)
     }
 
-    /// Emit everything whose time has come. An onset with a correction gets its
-    /// tuning expression; one without emits uncorrected and counts the miss.
-    ///
-    /// `start` and `frames` are the stretch of the callback this pass covers:
-    /// the whole of it, then its last sample again as the remaining horizon
-    /// (`schedule_callback`).
-    pub fn schedule(&mut self, start: u32, frames: u32, output: &mut Output<'_>) {
+    /// Emit everything due in this callback, once. An onset with a correction
+    /// gets its tuning expression; one without emits uncorrected and counts
+    /// the miss. What the host refuses stays, for the next callback.
+    pub fn schedule(&mut self, output: &mut Output<'_>) {
         self.drain_replies();
         let Some(callback) = self.callback else { return };
         let base = callback.steady_time;
-        let end = base.saturating_add(i64::from(start)).saturating_add(i64::from(frames));
+        let end = base.saturating_add(i64::from(callback.frames));
         while let Some(event) = self.cut.front() {
             if self.emitted >= EMIT_PER_CALLBACK {
                 return;
             }
-            let time = self.cursor.max(start).min(callback.frames.saturating_sub(1));
+            let time = self.cursor.min(callback.frames.saturating_sub(1));
             if !self.emit(output, time, event, None, 0) {
                 return;
             }
@@ -510,7 +507,7 @@ impl Tune {
                 break;
             }
             let offset = pending.due.saturating_sub(base).clamp(0, i64::from(u32::MAX)) as u32;
-            let time = offset.max(self.cursor).max(start);
+            let time = offset.max(self.cursor);
             if time >= callback.frames {
                 break;
             }
@@ -540,16 +537,6 @@ impl Tune {
             }
             self.line.pop();
         }
-    }
-
-    /// Emit over the whole callback, then once more at its last sample: what
-    /// the host refused in the first pass gets a second offer in the same
-    /// callback, as the final pass after the last sub-block gave it before
-    /// the shell stopped splitting blocks (#1814).
-    pub fn schedule_callback(&mut self, output: &mut Output<'_>) {
-        let frames = self.callback.map_or(0, |callback| callback.frames);
-        self.schedule(0, frames, output);
-        self.schedule(frames.saturating_sub(1), 1, output);
     }
 
     /// What actually goes on the wire for one retained input: the frozen
