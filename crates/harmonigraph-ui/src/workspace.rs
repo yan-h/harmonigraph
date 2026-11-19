@@ -128,7 +128,7 @@ impl Layout {
         if Section::of(self.analyzer_tab) != Section::Analyzer {
             self.analyzer_tab = Tab::Spectral;
         }
-        if self.settings_tab.is_picture() {
+        if Section::of(self.settings_tab) != Section::Settings {
             self.settings_tab = Tab::Tuning;
         }
     }
@@ -520,10 +520,16 @@ fn section_ui(
     pane.painter().rect_filled(rect, 0.0, theme::panel());
     if folded {
         if rail > 0.0 {
-            use crate::widgets::{paint_rail, Rail};
-            let (run, direction) =
-                if vertical_rail { (Rail::Column, Vec2::X) } else { (Rail::Row, Vec2::Y) };
-            if paint_rail(&pane, rect, pane.id().with("unfold"), run, direction, title) {
+            use crate::widgets::{paint_rail, Rail, RailLook};
+            // A section's own look: the title 8 points under the button on a
+            // column, 4 after it on a row, at every scale, and no hover.
+            let (run, direction, gap) = if vertical_rail {
+                (Rail::Column, Vec2::X, 8.0)
+            } else {
+                (Rail::Row, Vec2::Y, 4.0)
+            };
+            let look = RailLook { button: rail, gap, named: false };
+            if paint_rail(&pane, rect, pane.id().with("unfold"), run, direction, title, look) {
                 layout.folded[index] = false;
             }
         }

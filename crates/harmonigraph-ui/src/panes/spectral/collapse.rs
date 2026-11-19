@@ -4,7 +4,12 @@
 use egui::{Rect, Sense, Vec2};
 
 use super::{axes::Axes, gestures, Navigation, RegionView};
-use crate::{panes::DOCKED_SURFACE, theme, widgets::Rail, PictureState};
+use crate::{
+    panes::DOCKED_SURFACE,
+    theme,
+    widgets::{Rail, RailLook},
+    PictureState,
+};
 
 #[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -251,7 +256,11 @@ fn control(
         // Time down the pane stacks the regions, so a folded one is a row
         // across it; time across stands them side by side, each a column.
         let run = if vertical { Rail::Row } else { Rail::Column };
-        return crate::widgets::paint_rail(ui, rect, id, run, direction, name);
+        // A region's own look: a tab bar's button even on a rail squeezed
+        // thinner, the title 6 points from it at every scale, named.
+        let button = theme::tab_bar_height(theme::ui_scale(ui.ctx()));
+        let look = RailLook { button, gap: 6.0, named: true };
+        return crate::widgets::paint_rail(ui, rect, id, run, direction, name, look);
     }
     let response = ui.interact(rect, id, Sense::click());
     let collapse = format!("Collapse {name}");
