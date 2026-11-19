@@ -24,12 +24,12 @@ fn lattice_map_automation_precedes_coincident_attacks_in_both_callback_orders() 
     let _scope = crate::test_scope::enter();
     for frames in [32, 128, 512] {
         for hub_first in [false, true] {
-            let mut hub = Device::new(false);
+            let mut hub = hub().with_adaptive();
             hub.activate_format(48000.0, frames);
             let (first, mut second) = install(&hub);
             // Rotation is zero, so MIDI E still reaches the substituted base E slot.
             second.position = LatticePos::new(48, -4, 4);
-            let mut tune = Device::new(true);
+            let mut tune = tune();
             tune.activate_format(48000.0, frames);
             // 2x tolerates Hub-first callbacks without changing input timestamps.
             tune.shared().request_delay(2);
@@ -119,7 +119,7 @@ fn lattice_map_automation_precedes_coincident_attacks_in_both_callback_orders() 
 #[test]
 fn lattice_map_held_notes_keep_onset_while_chased_notes_and_off_use_current_state() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     let (first, second) = install(&hub);
     hub.run(0, vec![note(1, 0, 64, 0, true), parameter("tuning-engine", 2.0, 0)], None);
@@ -153,7 +153,7 @@ fn lattice_map_held_notes_keep_onset_while_chased_notes_and_off_use_current_stat
 #[test]
 fn an_engine_or_follow_event_past_the_top_step_selects_the_top_step() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     hub.run(0, vec![parameter("tuning-engine", 5.0, 0), parameter("map-follow", 4.0, 0)], None);
     let playback =
@@ -165,7 +165,7 @@ fn an_engine_or_follow_event_past_the_top_step_selects_the_top_step() {
 #[test]
 fn lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     let (first, _) = install(&hub);
     hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
@@ -203,7 +203,7 @@ fn lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice()
 #[test]
 fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     let (first, second) = install(&hub);
     hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
@@ -320,10 +320,10 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
 #[test]
 fn a_held_over_onset_keeps_its_own_blocks_configuration_across_an_editor_edit() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate_format(44100.0, 512);
     install(&hub);
-    let mut source = Device::new(true);
+    let mut source = tune();
     source.activate_format(44100.0, 512);
     hub.run_format(0, vec![parameter("tuning-engine", 1.0, 0)], None, None, 512);
     for raw in [512, 1024] {
@@ -363,10 +363,10 @@ fn a_retained_onset_the_history_does_not_reach_is_assigned_from_the_live_state()
         let mut landed: [(Option<LatticePos>, i64, bool); 2] = Default::default();
         for (slot, ahead) in [false, true].into_iter().enumerate() {
             let _scope = crate::test_scope::enter();
-            let mut hub = Device::new(false);
+            let mut hub = hub().with_adaptive();
             hub.activate_format(44100.0, 512);
             install(&hub);
-            let mut source = Device::new(true);
+            let mut source = tune();
             source.activate_format(44100.0, 512);
             let selected = if engine == TuningEngine::LatticeMap { 2.0 } else { 1.0 };
             hub.run_format(0, vec![parameter("tuning-engine", selected, 0)], None, None, 512);
@@ -396,7 +396,7 @@ fn a_retained_onset_the_history_does_not_reach_is_assigned_from_the_live_state()
 #[test]
 fn lattice_map_follow_moves_the_map_for_a_chord_and_drifts_with_what_it_heard() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     install(&hub);
     let map = LatticeMap::default();
@@ -459,7 +459,7 @@ fn lattice_map_follow_moves_the_map_for_a_chord_and_drifts_with_what_it_heard() 
 #[test]
 fn lattice_map_follow_keeps_a_just_released_note_at_its_pitch() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     install(&hub);
     let map = LatticeMap::default();
@@ -491,7 +491,7 @@ fn lattice_map_follow_keeps_a_just_released_note_at_its_pitch() {
 #[test]
 fn lattice_map_follow_scores_a_retriggered_note_without_its_predecessor() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     install(&hub);
     let map = LatticeMap::default();
@@ -517,7 +517,7 @@ fn lattice_map_follow_scores_a_retriggered_note_without_its_predecessor() {
 #[test]
 fn lattice_map_follow_does_not_strand_a_note_replayed_over_what_is_held() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     install(&hub);
     let node = |hub: &Device, key| voice(hub, crate::tuning::DIRECT, key).attack_node;
@@ -545,7 +545,7 @@ fn lattice_map_follow_does_not_strand_a_note_replayed_over_what_is_held() {
 #[test]
 fn map_follow_changes_leave_adaptive_context_alone() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     install(&hub);
     // Adaptive, with a note held; Map Follow decides nothing here, so moving
