@@ -70,4 +70,4 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 
 Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
 
-- The spectrogram surfaces move from `spectrum.rs` into `spectrogram.rs`, so the dependency runs one way. The Tape heatmap's memo is built only keyed on a Tape revision count bumped when slabs settle, since Tape replaces slabs mid-history and the live check assumes an append-only pyramid. To be built. #1861 R4
+- The spectrogram surfaces move from `spectrum.rs` into `spectrogram.rs`, so the dependency runs one way. The Tape heatmap's memo is built only keyed on a Tape revision count bumped when slabs settle, since Tape replaces slabs mid-history and the live check assumes an append-only pyramid. #1861 R4 (Built in #1892: the revision advances on every write to a copy, `put` and `clear`, not when slabs settle, since the copy the pane draws is written only by the sync and never settled.)
