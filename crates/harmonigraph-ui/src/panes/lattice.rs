@@ -58,11 +58,6 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
     });
     if map_mode && response.hovered() && !ui.ctx().text_edit_focused() {
         state.runtime.map_translation = arrow_translation(ui, &state.appearance.camera, rect);
-        // egui reads a bare arrow as a move of the focus to the neighbouring
-        // control when anything holds the focus, settled at the end of the
-        // pass; the arrows are the map's here, so none moves it, as the
-        // shell cancels Tab's (`lib.rs`).
-        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
     if response.double_clicked()
         && !state.runtime.lattice_maps.as_ref().is_some_and(|m| m.editing())
@@ -139,6 +134,13 @@ fn arrow_translation(
         arrows.map(|(key, _)| crate::keys::take(ui.ctx(), KeyboardShortcut::new(modifiers, key)))
     };
     let (fine, shifted) = (count(Modifiers::NONE), count(Modifiers::SHIFT));
+    // egui reads a bare arrow as a move of the focus to the neighbouring
+    // control when anything holds the focus, settled at the end of the pass.
+    // An arrow the map took is the map's, so it moves no focus, as the shell
+    // cancels Tab's (`lib.rs`); any other focus move this pass still happens.
+    if fine != [0; 4] {
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    }
     let (presses, lane) = if shifted != [0; 4] {
         (shifted, MapOffsetLane::Extension)
     } else if fine != [0; 4] {
@@ -1112,6 +1114,18 @@ mod tests {
         assert!(frame(&mut state, vec![right.clone()]).is_some(), "a focused control held the map");
         frame(&mut state, vec![]);
         assert_eq!(ctx.memory(|m| m.focused()), Some(control), "the arrow moved the focus");
+        // Only an arrow the map takes keeps the focus where it is: a focus
+        // move the map did not answer, a Tab here, still happens.
+        let tab = egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut state, vec![tab]);
+        frame(&mut state, vec![]);
+        assert_eq!(ctx.memory(|m| m.focused()), Some(beside), "hovering the map held the focus");
 
         ctx.memory_mut(|m| m.request_focus(field));
         frame(&mut state, vec![]);
