@@ -1,7 +1,7 @@
 //! Instance settings and diagnostics. Saved participation and visibility are
 //! independent; pairing remains automatic and has no persisted identity.
-use nice_plug::plugin::PluginState;
-use nice_plug::wrapper::clap::setup::{Prepared, Serviced, Setup};
+use harmonigraph_clap::plugin::PluginState;
+use harmonigraph_clap::wrapper::clap::setup::{Prepared, Serviced, Setup};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -257,11 +257,11 @@ impl Setup for Adapter {
         let settings = match state.fields.get("tuning-instance") {
             Some(json) => {
                 let settings: InstanceSettings = serde_json::from_str(json).map_err(|error| {
-                    nice_plug::nice_error!("Tuning instance settings refused: {error}");
+                    harmonigraph_clap::shell_error!("Tuning instance settings refused: {error}");
                     "invalid tuning instance settings"
                 })?;
                 if !self.0.is_hub() && settings.delay.is_none() {
-                    nice_plug::nice_warn!(
+                    harmonigraph_clap::shell_warn!(
                         "This Tune's settings hold no Tuning delay; it opens at 1x"
                     );
                 }

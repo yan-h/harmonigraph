@@ -488,7 +488,7 @@ impl Table {
             .filter(|id| self.rows.iter().all(|row| row.spec.id != *id))
             .collect();
         if !unknown.is_empty() {
-            crate::nice_warn!("The saved state names parameters this build has not: {unknown:?}");
+            crate::shell_warn!("The saved state names parameters this build has not: {unknown:?}");
         }
     }
 }

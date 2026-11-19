@@ -1,4 +1,4 @@
-//! A nice-plug `Editor` implementation running egui on egui-baseview's
+//! Harmonigraph's editor, the shell's `Editor`, running egui on egui-baseview's
 //! **wgpu** backend (nice-plug-egui defaults to OpenGL, which is deprecated
 //! on macOS and can't host our wgpu paint callbacks; it also doesn't opt in
 //! to host->plugin resizing). Adapted from nice-plug-egui's editor glue

@@ -2,7 +2,7 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use egui_baseview::Queue;
-use nice_plug::prelude::GuiContext;
+use harmonigraph_clap::prelude::EditorHost;
 
 use crate::{HarmonigraphParams, PluginParamBackend};
 
@@ -26,7 +26,7 @@ pub(super) fn frame(
     queue: &mut Queue,
     state: &mut WindowState,
     egui_state: &EguiState,
-    context: &dyn GuiContext,
+    context: &dyn EditorHost,
 ) {
     // The view does not own the native controller; closing its editor handle
     // must be able to release the view and its callbacks.

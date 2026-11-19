@@ -37,8 +37,7 @@ harmonigraph-perf = { path = "crates/harmonigraph-perf" }
 harmonigraph-ui = { path = "crates/harmonigraph-ui" }
 harmonigraph-take = { path = "crates/harmonigraph-take" }
 harmonigraph-record = { path = "crates/harmonigraph-record" }
-# The CLAP shell: nice-plug and nice-plug-core, owned (its README.md). Its
-# library is still named `nice_plug`.
+# The CLAP shell: nice-plug and nice-plug-core, owned (its README.md).
 harmonigraph-clap = { path = "crates/harmonigraph-clap" }
 
 # GUI stack. These versions are coupled:

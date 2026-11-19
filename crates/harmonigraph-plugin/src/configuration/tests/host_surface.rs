@@ -437,7 +437,7 @@ fn report() -> String {
         .unwrap();
         let string_id = PARAM_IDS
             .iter()
-            .find(|s| nice_plug::wrapper::hash_param_id(s) == id)
+            .find(|s| harmonigraph_clap::wrapper::hash_param_id(s) == id)
             .expect("a known id");
         let stepped = info.flags & CLAP_PARAM_IS_STEPPED != 0;
         let probes: Vec<f64> = if stepped {
@@ -503,7 +503,7 @@ fn report() -> String {
     writeln!(out, "\neditor writes, read after one process callback").unwrap();
     {
         use harmonigraph_ui::params::ParamBackend;
-        let (context, _) = device.wrapper().test_gui_context("camera-yaw");
+        let context = device.editor_host();
         let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
         let gestures = std::cell::Cell::default();
         let backend = crate::PluginParamBackend {
@@ -525,7 +525,6 @@ fn report() -> String {
             )
             .unwrap();
         }
-        drop(context);
     }
     out
 }

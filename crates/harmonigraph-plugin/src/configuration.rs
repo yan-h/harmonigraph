@@ -3,15 +3,15 @@
 //! through one queue the audio owner drains at each callback's start, and
 //! published through one seqlock. Learn over the held pitch classes the Hub in
 //! `tuning` reads from its rows applies on the audio thread directly.
+use harmonigraph_clap::plugin::PluginState;
+use harmonigraph_clap::prelude::*;
+use harmonigraph_clap::wrapper::clap::setup::{Prepared, Serviced, Setup};
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
 };
 use harmonigraph_core::tuning::{LearningState, PitchClass, TooManyClasses};
 use harmonigraph_core::{Tempered, Tuning};
 use harmonigraph_ui::params::ConfigurationView;
-use nice_plug::plugin::PluginState;
-use nice_plug::prelude::*;
-use nice_plug::wrapper::clap::setup::{Prepared, Serviced, Setup};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -316,7 +316,7 @@ impl Settings {
     fn prepare(self: &Arc<Self>, state: &PluginState) -> Result<Restore, &'static str> {
         let value: MusicalSettings = match state.fields.get(MUSICAL_SETTINGS) {
             Some(json) => serde_json::from_str(json).map_err(|error| {
-                nice_error!("Musical settings refused: {error}");
+                shell_error!("Musical settings refused: {error}");
                 "invalid musical settings"
             })?,
             None => MusicalSettings::default(),
@@ -356,7 +356,7 @@ impl Prepared for Restore {
         settings.restored.fetch_add(1, Ordering::AcqRel);
         if self.legacy {
             // The log keeps it for a project saved before an editor opens.
-            nice_error!("{LEGACY_AXES}");
+            shell_error!("{LEGACY_AXES}");
             settings.notify(LEGACY_AXES);
         }
     }

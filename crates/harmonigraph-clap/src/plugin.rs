@@ -7,10 +7,9 @@ mod state;
 pub use state::*;
 
 use crate::audio_setup::{Audio, BufferConfig, Ports};
-use crate::editor::Editor;
+use crate::editor::{Editor, EditorHost};
 use crate::events::{Input, InputValue, List, Output, Transport};
 use crate::params::Table;
-use crate::wrapper::clap::EditorHost;
 use crate::wrapper::clap::features::ClapFeature;
 use crate::wrapper::clap::setup::Setup;
 
@@ -62,8 +61,9 @@ pub trait Plugin: Default + Send + 'static {
         None
     }
     /// Called once, before [`Plugin::editor`], with the host's side of the
-    /// editor: the editor is the host's to destroy, so an editor with a close
-    /// button of its own tells the host through this (#1607, #1609).
+    /// editor: what the editor's parameter edits and resize requests go
+    /// through, and, as the editor is the host's to destroy, what an editor
+    /// with a close button of its own tells (#1607, #1609).
     fn editor_host(&mut self, host: Arc<dyn EditorHost>) {}
     /// The editor, if the plugin has one. Queried once, after creation.
     fn editor(&mut self) -> Option<Box<dyn Editor>> {

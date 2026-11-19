@@ -188,7 +188,7 @@ impl Shared {
         }
         let value = self.report(shared);
         if value != logged.value {
-            nice_plug::nice_log!("HG-TUNING {value}");
+            harmonigraph_clap::shell_log!("HG-TUNING {value}");
             logged.value = value;
         }
         logged.at = Some(now);
