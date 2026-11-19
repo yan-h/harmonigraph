@@ -109,6 +109,13 @@ impl Camera {
     const ZOOM_RATE: f32 = 0.002;
     /// Keep pitch shy of the poles so look_at's up vector stays valid.
     pub const PITCH_LIMIT: f32 = 1.5;
+    /// The cabinet depth axis's angle, in radians: what its "Depth angle" bar
+    /// offers, 0 to 90 degrees, and what a load holds a saved one to.
+    pub const CABINET_ANGLE_RANGE: std::ops::RangeInclusive<f32> =
+        0.0..=std::f32::consts::FRAC_PI_2;
+    /// The cabinet depth axis's step length: what its "Depth step scale" bar
+    /// offers, and what a load holds a saved one to.
+    pub const CABINET_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.1..=1.0;
     /// Zoom clamp; CLIP_NEAR/CLIP_FAR must bracket it with margin.
     pub const MIN_DISTANCE: f32 = 2.0;
     /// The far end is what bounds the lattice, the lattice itself being
@@ -411,9 +418,11 @@ impl Camera {
 
         // The two cabinet knobs, ranged to what their own bars offer
         // ("Depth angle" 0..=90°, "Depth step scale" 0.1..=1.0).
-        self.cabinet_angle = finite_or(self.cabinet_angle, fresh.cabinet_angle)
-            .clamp(0.0, std::f32::consts::FRAC_PI_2);
-        self.cabinet_scale = finite_or(self.cabinet_scale, fresh.cabinet_scale).clamp(0.1, 1.0);
+        let (angle, scale) = (Self::CABINET_ANGLE_RANGE, Self::CABINET_SCALE_RANGE);
+        self.cabinet_angle =
+            finite_or(self.cabinet_angle, fresh.cabinet_angle).clamp(*angle.start(), *angle.end());
+        self.cabinet_scale =
+            finite_or(self.cabinet_scale, fresh.cabinet_scale).clamp(*scale.start(), *scale.end());
     }
 }
 

@@ -1571,6 +1571,7 @@ dependencies = [
  "foldhash 0.2.0",
  "glam",
  "harmonigraph-core",
+ "ron",
  "serde",
 ]
 

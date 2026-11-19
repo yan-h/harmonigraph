@@ -72,8 +72,8 @@ A new persisted field needs no step at either:
 The third is `UiPersist::stores`, the key an edit is compared on to mark the project modified (#1813).
 It destructures the document, so a new top-level field of `UiPersist` does not compile until it is compared there;
 each member compares whole by its derived `PartialEq`, so a field added inside one is in the key with nothing to do.
-What no compiler catches: a `#[serde(skip)]` field added to any saved type is compared all the same, and marks the project at every change to it until `stores` copies it in from the live state, as it does the Analyzer regions' relayout flag (`Regions::copy_layout`).
-State that belongs to the window rather than to the look, such as the Stars solo (#1828), lives outside the saved types instead.
+What no compiler catches: a `#[serde(skip)]` field added to any saved type is compared all the same, and marks the project at every change to it until `stores` copies it in from the live state.
+State that belongs to the window rather than to the look, such as the Stars solo (#1828) and the Analyzer's relayout flag (`SpectrumHold`), lives outside the saved types instead.
 A value the editor writes by itself rather than by an edit is settled where it is written or copied in there likewise.
 
 ## Appearance and editor workspace have separate boundaries

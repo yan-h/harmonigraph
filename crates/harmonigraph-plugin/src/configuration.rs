@@ -584,13 +584,4 @@ impl Owner {
 }
 
 #[cfg(test)]
-pub(crate) fn injected_recorder() -> Option<harmonigraph_record::Recorder> {
-    tests::take_recorder()
-}
-#[cfg(test)]
-pub(crate) fn inject_recorder(recorder: harmonigraph_record::Recorder) {
-    tests::install_recorder(recorder);
-}
-
-#[cfg(test)]
 mod tests;

@@ -60,21 +60,25 @@ pub(crate) fn drift(
 
 /// `fresh` is where a double-click puts the angle and the length back.
 pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32, fresh: (f32, f32)) {
+    use harmonigraph_scene::Camera;
+    let (angles, lengths) = (Camera::CABINET_ANGLE_RANGE, Camera::CABINET_SCALE_RANGE);
     ui.push_id("cabinet", |ui| {
         let plot = Plot::square_with_fields(ui, "Depth axis", 2);
         let (_, next) = plot.handle(ui, "Depth axis", *length * angle.cos(), *length * angle.sin());
         if let Some(p) = next {
             if p.length() > 0.001 {
-                *angle = p.y.atan2(p.x);
+                // The plot already keeps the handle in its quadrant; the bounds
+                // are the bar's and the load's, so all three read one range.
+                *angle = p.y.atan2(p.x).clamp(*angles.start(), *angles.end());
             }
-            *length = p.length().clamp(0.1, 1.0);
+            *length = p.length().clamp(*lengths.start(), *lengths.end());
         }
         plot.fields(ui, |ui| {
             let mut deg = angle.to_degrees();
             if value_bar(
                 ui,
                 (&mut deg, fresh.0.to_degrees()),
-                0.0..=90.0,
+                angles.start().to_degrees()..=angles.end().to_degrees(),
                 ["Depth angle", "Angle"],
                 1.0,
                 "°",
@@ -83,7 +87,7 @@ pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32, fresh: (f3
             {
                 *angle = deg.to_radians();
             }
-            value_bar(ui, (length, fresh.1), 0.1..=1.0, ["Depth step scale", "Length"], 1.0, "×");
+            value_bar(ui, (length, fresh.1), lengths, ["Depth step scale", "Length"], 1.0, "×");
         });
         plot.line(
             ui,

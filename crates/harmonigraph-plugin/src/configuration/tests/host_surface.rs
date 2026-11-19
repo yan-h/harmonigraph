@@ -299,20 +299,7 @@ fn mod_event(id: u32, amount: f64) -> Input {
 /// What the plugin's own save holds for parameter `id`, through the CLAP
 /// state extension, with the length prefix checked.
 fn saved_value(device: &Device, id: &str) -> serde_json::Value {
-    let bytes = raw_save(device.plugin);
-    let json: serde_json::Value = serde_json::from_slice(&bytes[8..]).unwrap();
-    json["params"][id].clone()
-}
-/// The bytes the CLAP state extension writes, its 8-byte length prefix
-/// checked against what follows it.
-pub(super) fn raw_save(plugin: *const clap_plugin) -> Vec<u8> {
-    let mut bytes = Vec::<u8>::new();
-    let stream = clap_ostream { ctx: (&mut bytes as *mut Vec<u8>).cast(), write: Some(write) };
-    let state = plugin_extension::<clap_plugin_state>(plugin, CLAP_EXT_STATE).unwrap();
-    assert!(unsafe { (state.save.unwrap())(plugin, &stream) });
-    let length = u64::from_le_bytes(bytes[..8].try_into().unwrap());
-    assert_eq!(length as usize, bytes.len() - 8, "the length prefix counts what follows it");
-    bytes
+    device.saved_json()["params"][id].clone()
 }
 /// Exact `f32` bits beside the decimal, so a last-digit change shows.
 fn float_value(value: &serde_json::Value) -> String {
@@ -330,47 +317,19 @@ fn editor_host_value(index: i32, steps: f64) -> f64 {
     f64::from((index as f32) / (steps as f32)) * steps
 }
 
-/// A plugin from the exported factory by id, initialized and nothing more.
-pub(super) struct Instance {
-    pub(super) plugin: *const clap_plugin,
-    _host: Box<clap_host>,
-    _stats: Box<Host>,
-}
-impl Instance {
-    pub(super) fn new(id: &CStr) -> Self {
-        let mut stats = Box::<Host>::default();
-        let host = Box::new(clap_host {
-            clap_version: CLAP_VERSION,
-            host_data: (&mut *stats as *mut Host).cast(),
-            name: c"Host surface fixture".as_ptr(),
-            vendor: c"test".as_ptr(),
-            url: c"".as_ptr(),
-            version: c"1".as_ptr(),
-            get_extension: Some(extension),
-            request_restart: Some(request),
-            request_process: Some(request),
-            request_callback: Some(callback),
-        });
-        let factory =
-            unsafe { (crate::clap_entry.get_factory.unwrap())(CLAP_PLUGIN_FACTORY_ID.as_ptr()) }
-                .cast::<clap_plugin_factory>();
-        let plugin = unsafe { ((*factory).create_plugin.unwrap())(factory, &*host, id.as_ptr()) };
-        assert!(!plugin.is_null());
-        assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
-        Self { plugin, _host: host, _stats: stats }
-    }
-}
-impl Drop for Instance {
-    fn drop(&mut self) {
-        unsafe { ((*self.plugin).destroy.unwrap())(self.plugin) };
-    }
+/// A Tune on the configuration suites' host, initialized and nothing more.
+fn tune() -> Device {
+    Device::tune(Host::new().params().state().gui())
 }
 
 fn report() -> String {
     let mut out = String::new();
-    let factory =
-        unsafe { (crate::clap_entry.get_factory.unwrap())(CLAP_PLUGIN_FACTORY_ID.as_ptr()) }
-            .cast::<clap_plugin_factory>();
+    let factory = unsafe {
+        (crate::clap_entry.get_factory.unwrap())(
+            clap_sys::factory::plugin_factory::CLAP_PLUGIN_FACTORY_ID.as_ptr(),
+        )
+    }
+    .cast::<clap_sys::factory::plugin_factory::clap_plugin_factory>();
     let count = unsafe { ((*factory).get_plugin_count.unwrap())(factory) };
     writeln!(out, "factory: {count} plugins").unwrap();
     for index in 0..count {
@@ -398,11 +357,11 @@ fn report() -> String {
         .unwrap();
     }
 
-    let mut device = Device::new();
+    let mut device = hub().with_retune();
     writeln!(out, "\ncom.yan-h.harmonigraph").unwrap();
     describe_plugin(&mut out, device.plugin);
     describe_activated(&mut out, device.plugin, 512);
-    let tune = Instance::new(c"com.yan-h.harmonigraph-tune");
+    let tune = tune();
     writeln!(out, "\ncom.yan-h.harmonigraph-tune").unwrap();
     describe_plugin(&mut out, tune.plugin);
     describe_activated(&mut out, tune.plugin, 512);
@@ -420,7 +379,7 @@ fn report() -> String {
     device.activate();
     let mut steady = 0;
     let mut apply = |device: &Device, events: Vec<Input>| {
-        device.run(steady, events, false);
+        device.run(steady, events, None);
         steady += 64;
     };
     for info in infos(&device) {
@@ -561,10 +520,10 @@ fn the_host_surface_matches_its_snapshot() {
 #[test]
 fn a_modulated_camera_is_recorded_modulated_and_saved_unmodulated() {
     let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
+    let mut device = hub().with_retune();
     device.activate();
     let yaw = device.id(ParamKey::CameraYaw);
-    device.run(0, vec![value_event(yaw, 0.5), mod_event(yaw, 0.1)], false);
+    device.run(0, vec![value_event(yaw, 0.5), mod_event(yaw, 0.1)], None);
     let shared = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone());
     let dir = std::env::temp_dir().join(format!("harmonigraph-modulated-{}", std::process::id()));
     let probe = {
@@ -604,8 +563,7 @@ fn a_modulated_camera_is_recorded_modulated_and_saved_unmodulated() {
 #[test]
 fn a_parameter_index_past_the_last_is_refused() {
     let _scope = crate::test_scope::enter();
-    for id in [c"com.yan-h.harmonigraph", c"com.yan-h.harmonigraph-tune"] {
-        let instance = Instance::new(id);
+    for instance in [hub(), tune()] {
         let params = unsafe {
             &*(((*instance.plugin).get_extension.unwrap())(
                 instance.plugin,
@@ -617,7 +575,8 @@ fn a_parameter_index_past_the_last_is_refused() {
         let mut info: clap_param_info = unsafe { std::mem::zeroed() };
         assert!(
             !unsafe { (params.get_info.unwrap())(instance.plugin, count, &mut info) },
-            "{id:?}"
+            "tuner={}",
+            instance.tuner
         );
     }
 }

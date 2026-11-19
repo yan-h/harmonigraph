@@ -8,6 +8,7 @@ the plugin framework nice-plug, which harmonigraph used to vendor, together with
 - **`src/params.rs`** is harmonigraph's own (#1814 step 5): one fixed table of host parameters, which replaced nice-plug-core's parameter types and nice-plug-derive's `Params` and `Enum` derives.
 - **`tests/`** drive an exported fixture plugin through `clap-sys`: the process callback, flush and editor writes (`clap_boundary.rs`), and the auxiliary bounds (`clap_auxiliary.rs`).
   They run in `ci.sh`'s workspace test gate, which names both fixture features (`assert_process_allocs`, `clap-boundary-tests`).
+- **`src/testing.rs`**, behind `clap-boundary-tests`, is the one CLAP host those fixtures and harmonigraph-plugin's entry-point suites run on (#1868): it answers only the extensions a suite turns on, and drives a plugin through the C ABI.
 
 The library is `harmonigraph_clap`, the package's own name, and its logging and assertion macros are `shell_*!` (#1814 step 7); step 4 had kept nice-plug's names so the plugin's source moved untouched.
 The later steps of #1814 collapsed these layers into a shell written on `clap-sys`.
