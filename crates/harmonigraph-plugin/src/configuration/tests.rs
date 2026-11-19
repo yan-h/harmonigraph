@@ -965,7 +965,11 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     frame();
     assert_eq!(device.service(), before + 2, "a restore");
 
+    // Closed, then reopened: a frame the own window draws as the view moves
+    // into it comes before the opening is recorded.
     state.set_open(false);
+    resize(20);
+    frame();
     state.set_open(true);
     resize(20);
     frame();

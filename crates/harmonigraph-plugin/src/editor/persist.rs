@@ -48,7 +48,7 @@ pub struct EguiState {
     in_own_window: AtomicBool,
     /// The size and the Own window choice as the host was last told a save
     /// holds them, by a report or a restore ([`Self::report_edit`]); `None`
-    /// while an editor window opens, until its first frame ends (#1824).
+    /// from a close or an opening until the next frame ends (#1824).
     #[serde(skip)]
     told: AtomicCell<Option<Saved>>,
 }
@@ -117,12 +117,13 @@ impl EguiState {
     /// and the tape whether its roll is drawn, so the two transitions are a
     /// seam between threads and not just a bit.
     ///
-    /// An opening also starts a window's settle: what the host and the own
-    /// window size while it opens is no edit ([`Self::report_edit`]).
+    /// Either starts the next window's settle, so that what the host and the
+    /// own window size while it opens is no edit ([`Self::report_edit`]): from
+    /// the close, for a frame the own window draws on the spot as the view
+    /// moves into it, inside `Editor::spawn` before the opening is recorded;
+    /// and again at the opening, for the frames after.
     pub(crate) fn set_open(&self, open: bool) {
-        if open {
-            self.told.store(None);
-        }
+        self.told.store(None);
         self.open.store(open, Ordering::Release);
     }
 
@@ -141,8 +142,8 @@ impl EguiState {
 impl EguiState {
     /// Take what a restore saved: the size and the docked choice, the two
     /// fields the `editor-state` save holds.
-    /// A restore is no edit: it is what the host was told, unless a window
-    /// is still opening and takes it as told at its first frame's end.
+    /// A restore is no edit: it is what the host was told, unless no frame has
+    /// ended since a close or an opening, whose next frame takes it as told.
     pub(crate) fn restore(&self, saved: EguiState) {
         self.size.store(saved.size.load());
         self.set_docked(saved.docked());
@@ -157,10 +158,11 @@ impl EguiState {
     /// host was last told what a save holds of them, and take them as told:
     /// at the end of every editor frame, so that a resize or an Own window
     /// switch marks the project modified as an edit to `ui-state` does
-    /// (#1824), once per frame that moved them. The first frame of a window
-    /// only takes them as told, so what the host and the own window set while
-    /// the editor opens, such as a host's `set_size` before or after it
-    /// attaches the editor and the own window's move out, marks nothing.
+    /// (#1824), once per frame that moved them. The first frame after a close
+    /// or an opening only takes them as told, so what the host and the own
+    /// window set while the editor opens, such as a host's `set_size` before
+    /// or after it attaches the editor and the own window's move out, marks
+    /// nothing.
     pub(crate) fn report_edit(&self, notice: impl FnOnce()) {
         let now = self.saved();
         if self.told.swap(Some(now)).is_some_and(|told| told != now) {

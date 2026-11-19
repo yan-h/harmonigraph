@@ -27,4 +27,5 @@ Every resolution draws stars in their own pass into one image, so Uniform's larg
 
 ## 2026-11-18 (#1828, in chat)
 
-- The Stars solo leaves the saved look for the editor window's own state (option A): a slot switch, an undo and a restore leave it as set, and it goes when switched off or when the editor closes. No save, slot or export holds it, and a toggle is no undo entry. #1828
+- The Stars solo leaves the saved look for the editor window's own state (option A): a slot switch and an undo leave it as set, and it goes when switched off or when the editor closes. No save, slot or export holds it. #1828
+That a restore into an open editor keeps it too, and that a toggle is no longer an undo entry, follow from the move; they are the implementer's reading, not Yan's answer.
