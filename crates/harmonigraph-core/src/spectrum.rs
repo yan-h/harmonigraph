@@ -32,6 +32,10 @@ pub const BINS_PER_SEMITONE: usize = 32;
 pub const SPECTRUM_BINS: usize =
     ((SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as usize + 2;
 
+/// One power value per bucket of the axis: the array an analyzer fills, the
+/// curve draws and the spectrogram's history folds.
+pub type SpectrumBuckets = [f32; SPECTRUM_BINS];
+
 /// The MIDI pitch bucket `bucket` of the axis is centred on.
 ///
 /// A bucket stands for its own CENTRE rather than its low edge — the half

@@ -7,9 +7,7 @@
 
 use crate::SpectrumConfig;
 
-/// One power value per pitch-spectrum bucket, the array the analyzer fills
-/// and the pane draws. See [`harmonigraph_core::spectrum::SPECTRUM_BINS`].
-pub(crate) type SpectrumBuckets = [f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
+use harmonigraph_core::spectrum::SpectrumBuckets;
 
 /// Audio-derived pitch spectrum shown in the Spectral pane: what the columns
 /// a feeder's [`SpectrumAnalysis`] makes become. Each shell owns the analysis
@@ -180,7 +178,7 @@ impl Default for AudioSpectrum {
 
 impl SpectrumAnalysis {
     /// Analyze interleaved samples, `channels` to a frame, one spectrum per
-    /// [`FFT_INTERVAL`](AudioSpectrum::FFT_INTERVAL) of audio in them, handing
+    /// [`FFT_INTERVAL`](crate::spectrogram::FFT_INTERVAL) of audio in them, handing
     /// `deliver` the batch's arrival and then each column it completes.
     ///
     /// `origin` is frame zero of this run on the shell clock, which the
@@ -240,7 +238,7 @@ impl SpectrumAnalysis {
         let sr = f64::from(sample_rate.max(1.0));
         let newest = origin + (self.frames_seen + batch as u64 - 1) as f64 / sr;
         deliver(Delivery::Arrival { newest });
-        let hop = ((AudioSpectrum::FFT_INTERVAL * sr).round() as u64).max(1);
+        let hop = ((crate::spectrogram::FFT_INTERVAL * sr).round() as u64).max(1);
         // Columns fall on multiples of `hop` frames from the start of the
         // stream. Left at zero the first boundary would be frame 1 and every one
         // after it a frame early, which is harmless but makes the grid
@@ -403,28 +401,6 @@ pub(crate) fn hop_alpha(seconds: f32, dt: f64) -> f32 {
 }
 
 impl AudioSpectrum {
-    /// Seconds of AUDIO between FFTs (125 columns a second), measured in
-    /// samples rather than on the shell clock — see
-    /// [`feed_source`](SpectrumAnalysis::feed_source).
-    ///
-    /// A column is folded into every level of the slab pyramid, into the one
-    /// slab it lands in at each, so the rate buys smoothness at the newest
-    /// edge for a fold per level, and no REACH: each level keeps slabs, not
-    /// columns.
-    ///
-    /// At 8 ms this is a picture setting and not an analysis one: the window
-    /// is untouched, so what a column RESOLVES is unchanged, and overlapping
-    /// that same window more finely just draws the time axis at 2.5x the
-    /// resolution 20 ms reaches (via
-    /// [`live_slab`](crate::spectrogram::live_slab), whose ladder is
-    /// rungs of THIS interval, so the picture's grid tracks it).
-    /// A column costs about 30 µs per channel through Fast at 48 kHz and 106
-    /// through Precise (#1597's measurement) — up to 2.7% of a core in stereo,
-    /// against 1.1% at 20 ms. The frame is a length of time
-    /// ([`SpectrumWindow::frame`](crate::SpectrumWindow::frame)), so a column
-    /// costs about twice that at 88.2 and 96 kHz and four times at 176.4 and
-    /// 192.
-    pub(crate) const FFT_INTERVAL: f64 = 0.008;
     /// How long after the last samples the curve keeps drawing.
     pub(crate) const HOLD_SECONDS: f64 = 0.5;
 
@@ -479,12 +455,6 @@ impl AudioSpectrum {
     pub fn display(&self, now: f64) -> Option<&SpectrumBuckets> {
         self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS).then_some(&self.display)
     }
-
-    /// The most history ever kept, span-independent: the longest span the
-    /// roll offers. Each rung of the slab pyramid keeps this much and three
-    /// slabs more, or its ring, whichever is fewer; see
-    /// [`SlabPyramid`](crate::spectrogram::SlabPyramid).
-    pub(crate) const HISTORY_MAX_SECONDS: f64 = crate::ROLL_SECONDS_MAX as f64;
 
     /// A column straight into the history, for a test that needs history
     /// without analyzing audio. See [`AudioSpectrum::keep`].

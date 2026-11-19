@@ -27,6 +27,33 @@ use crate::panes::spectral::axes::{spectrogram_level_raw, PitchScale};
 use crate::SpectrumConfig;
 use harmonigraph_scene::Gradient;
 
+/// Seconds of AUDIO between FFTs (125 columns a second), measured in
+/// samples rather than on the shell clock — see
+/// [`feed_source`](crate::SpectrumAnalysis::feed_source).
+///
+/// A column is folded into every level of the slab pyramid, into the one
+/// slab it lands in at each, so the rate buys smoothness at the newest
+/// edge for a fold per level, and no REACH: each level keeps slabs, not
+/// columns.
+///
+/// At 8 ms this is a picture setting and not an analysis one: the window
+/// is untouched, so what a column RESOLVES is unchanged, and overlapping
+/// that same window more finely just draws the time axis at 2.5x the
+/// resolution 20 ms reaches (via [`live_slab`], whose ladder is rungs of THIS
+/// interval, so the picture's grid tracks it).
+/// A column costs about 30 µs per channel through Fast at 48 kHz and 106
+/// through Precise (#1597's measurement) — up to 2.7% of a core in stereo,
+/// against 1.1% at 20 ms. The frame is a length of time
+/// ([`SpectrumWindow::frame`](crate::SpectrumWindow::frame)), so a column
+/// costs about twice that at 88.2 and 96 kHz and four times at 176.4 and
+/// 192.
+pub(crate) const FFT_INTERVAL: f64 = 0.008;
+
+/// The most history ever kept, span-independent: the longest span the
+/// roll offers. Each rung of the slab pyramid keeps this much and three
+/// slabs more, or its ring, whichever is fewer; see [`SlabPyramid`].
+pub(crate) const HISTORY_MAX_SECONDS: f64 = crate::ROLL_SECONDS_MAX as f64;
+
 /// Most time slabs a live window is ever cut into, whatever the pane's size —
 /// and so, with the window, the FINEST slab any given moment can be drawn into.
 /// It also sizes the slab pyramid: each of the finest levels keeps a ring this
@@ -92,7 +119,7 @@ const LADDER_FLOOR_COLUMNS: f64 = 2.0;
 /// shape of a piece instead of the grain of a phrase — and zooming in is what
 /// asks for the grain back.
 pub(crate) fn live_slab(window: f64, target_cols: usize) -> f64 {
-    let mut bucket = crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
+    let mut bucket = crate::spectrogram::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
     // The Span reaches ten minutes and the pane can be a sliver, so walk the
     // ladder under a bound rather than trusting the ratio to be sane.
     for _ in 0..64 {

@@ -150,7 +150,7 @@ fn a_bucket_rises_on_the_attack_and_falls_on_the_release() {
     // much audio plus ten hops — enough for a 10 ms time to land and for a 1 s
     // one to have moved a few percent.
     let window = SpectrumConfig::default().window.frame(48_000.0);
-    let phase = window + 10 * (AudioSpectrum::FFT_INTERVAL * f64::from(sr)) as usize;
+    let phase = window + 10 * (crate::spectrogram::FFT_INTERVAL * f64::from(sr)) as usize;
     let tone: Vec<f32> =
         (0..phase).map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin()).collect();
     let silence = vec![0.0; phase];
@@ -196,7 +196,7 @@ fn a_live_column_is_stamped_at_the_centre_of_its_window() {
     // FFT_INTERVAL of audio (see `feed_source`), so a batch ending mid-hop
     // leaves its newest column up to one hop further back than this — correctly,
     // since that is where the window it measured ends.
-    let hop = (AudioSpectrum::FFT_INTERVAL * 48_000.0).round() as usize;
+    let hop = (crate::spectrogram::FFT_INTERVAL * 48_000.0).round() as usize;
     let samples = hop * (config.window.frame(48_000.0) / hop + 1); // enough to fill the frame
     let sine: Vec<f32> = (0..samples)
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
@@ -266,7 +266,7 @@ fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
     // and waits only for the rest of itself (#1584).
     let carried = initial.min(config.window.frame(48_000.0));
     let config = SpectrumConfig { window: SpectrumWindow::Balanced, ..config };
-    let hop = (AudioSpectrum::FFT_INTERVAL * f64::from(sample_rate)).round() as usize;
+    let hop = (crate::spectrogram::FFT_INTERVAL * f64::from(sample_rate)).round() as usize;
     let first_ready = (initial + config.window.frame(48_000.0) - carried).div_ceil(hop) * hop;
     let rest = vec![0.2; first_ready - initial - 1];
     feed(&mut spectrum, &mut analysis, &rest, &config);
@@ -525,7 +525,7 @@ fn runtime_advances_histories_without_a_surface() {
     let columns = runtime.spectrum.columns_taken();
     runtime.advance_time(10.0, &appearance);
     assert_eq!(runtime.spectrum.columns_taken(), columns, "advancement must not repeat analysis");
-    runtime.advance_time(1.0 + AudioSpectrum::HISTORY_MAX_SECONDS + 1.0, &appearance);
+    runtime.advance_time(1.0 + crate::spectrogram::HISTORY_MAX_SECONDS + 1.0, &appearance);
     assert!(
         runtime.spectrum.newest_column().is_some(),
         "the history is bounded by its rings, not trimmed by the clock",
@@ -601,7 +601,7 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
     assert_ne!(wide, first, "a changed width must change this fixture's measurement");
     // More audio while the frame's time stands still, so only the display
     // revision can tell the memo it is stale.
-    let batch = AudioSpectrum::FFT_INTERVAL * 48_000.0 * 3.0;
+    let batch = crate::spectrogram::FFT_INTERVAL * 48_000.0 * 3.0;
     let short: Vec<f32> = tone(660.0)[..batch as usize].to_vec();
     feed.feed(&mut spectrum, &short, 1, 48_000.0, 1.0 + batch / 48_000.0, &cfg);
     let next = spectrum.folded(1.0, 50.0).unwrap().to_vec();
@@ -704,7 +704,7 @@ fn batch(newest: f64, power: f32) -> [Delivery; 2] {
         Delivery::Column(Box::new(crate::spectrum::AnalyzedColumn {
             time: newest,
             power: [power; harmonigraph_core::spectrum::SPECTRUM_BINS],
-            step: AudioSpectrum::FFT_INTERVAL,
+            step: crate::spectrogram::FFT_INTERVAL,
         })),
     ]
 }
@@ -717,7 +717,7 @@ fn batch(newest: f64, power: f32) -> [Delivery; 2] {
 fn a_hand_over_says_when_sound_comes_back() {
     let cfg = SpectrumConfig::default();
     let mut spectrum = AudioSpectrum::default();
-    let step = AudioSpectrum::FFT_INTERVAL;
+    let step = crate::spectrogram::FFT_INTERVAL;
     assert!(!spectrum.give(batch(100.0, 0.0), &cfg), "silence");
     assert!(spectrum.give(batch(100.0 + step, 1.0), &cfg), "the first sound");
     assert!(!spectrum.give(batch(100.0 + 2.0 * step, 1.0), &cfg), "sound going on");

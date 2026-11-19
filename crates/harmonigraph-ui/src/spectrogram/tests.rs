@@ -4,7 +4,7 @@ use egui::Color32;
 use harmonigraph_core::spectrum::SPECTRUM_BINS;
 
 /// One column: its date and its raw power per bucket.
-type Col = (f64, Box<crate::spectrum::SpectrumBuckets>);
+type Col = (f64, Box<harmonigraph_core::spectrum::SpectrumBuckets>);
 
 /// A column at `time` with the given (bin, power) energy, rest silent.
 fn col(time: f64, energy: &[(usize, f32)]) -> Col {
@@ -367,7 +367,7 @@ fn the_plan_decides_the_layout_without_a_frame() {
     // the uniform time axis then stretches the edge columns into flat
     // streaks. Two columns to a slab, since the grids share the ladder's
     // period but not its phase.
-    let floor = crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
+    let floor = crate::spectrogram::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
     let dense = plan(&view(2.0, 300.0, 4000.0, 1.0));
     assert!(dense.bucket() >= floor, "slab {} is finer than the data", dense.bucket());
     // And it is always ON the ladder, so it reads a level the pyramid keeps.
@@ -606,7 +606,7 @@ fn a_slow_drag_with_tremor_crosses_a_rung_once() {
 /// with extra steps.
 #[test]
 fn the_held_width_survives_a_frame_through_the_surface() {
-    let interval = crate::AudioSpectrum::FFT_INTERVAL;
+    let interval = crate::spectrogram::FFT_INTERVAL;
     let mut spectrum = crate::AudioSpectrum::default();
     let mut surfaces = crate::spectrogram::SpectrogramSurfaces::default();
     let mut bins = [0.0f32; SPECTRUM_BINS];
@@ -685,7 +685,7 @@ fn unchanged_columns_reuse_the_folded_snapshot() {
 #[test]
 fn a_streaming_run_shares_every_slab_but_the_ones_it_is_filling() {
     // Level 1: 32 ms slabs, four columns each.
-    let (level, bucket) = (1, 4.0 * crate::AudioSpectrum::FFT_INTERVAL);
+    let (level, bucket) = (1, 4.0 * crate::spectrogram::FFT_INTERVAL);
     assert_eq!(pyramid::width(level), bucket);
     let window = 64.0 * bucket;
     let mut pyramid = SlabPyramid::default();
@@ -697,7 +697,7 @@ fn a_streaming_run_shares_every_slab_but_the_ones_it_is_filling() {
         if (600..606).contains(&i) {
             continue;
         }
-        let time = i as f64 * crate::AudioSpectrum::FFT_INTERVAL;
+        let time = i as f64 * crate::spectrogram::FFT_INTERVAL;
         let (t, power) = col(time, &[(5, 0.1 + (i % 7) as f32 * 0.1)]);
         pyramid.push(t, &power);
         let Some(run) = pyramid.run(level, time - window) else { continue };
@@ -1065,7 +1065,7 @@ fn the_shade_table_matches_the_mapping_it_replaces() {
 /// palette all read the same bytes a different way.
 #[test]
 fn the_snapshot_follows_the_fold_and_not_the_read() {
-    let interval = crate::AudioSpectrum::FFT_INTERVAL;
+    let interval = crate::spectrogram::FFT_INTERVAL;
     let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
     let base_view = PaneView {
         ppp: 2.0,
@@ -1153,7 +1153,7 @@ fn the_leading_sliver_holds_the_newest_slabs_centre() {
     // A live window at the settings that make the sliver widest: a short
     // span, so slabs sit on the ladder's lowest rung and the analyzer's lag
     // spans several of them.
-    let bucket = crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
+    let bucket = crate::spectrogram::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
     let window = 2.0;
     let visible = (window / bucket) as usize; // 62 slabs
     let layout = TexLayout { bucket, t_origin: 400.0, tex_span: visible as f64 * bucket };
@@ -1468,7 +1468,7 @@ mod gpu {
             return;
         };
         const SIZE: [u32; 2] = [128, 64];
-        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let interval = crate::spectrogram::FFT_INTERVAL;
         let cfg = SpectrumConfig::default();
         let mut spectrum = crate::AudioSpectrum::default();
         let mut surfaces = crate::spectrogram::SpectrogramSurfaces::default();
@@ -1620,7 +1620,7 @@ mod gpu {
             return;
         };
         const SIZE: [u32; 2] = [64, 4];
-        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let interval = crate::spectrogram::FFT_INTERVAL;
         let cfg = SpectrumConfig::default();
         let view = pane(0.3, 24.0, 24.0);
         let bucket = live_slab(view.window, 24);
@@ -2078,7 +2078,7 @@ mod gpu {
             return;
         };
         const SIZE: [u32; 2] = [64, 64];
-        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let interval = crate::spectrogram::FFT_INTERVAL;
         let cfg = SpectrumConfig::default();
         // A Span deep enough to sit well up the ladder. Both ladders step
         // on the travel below — `live_slab` reads `target_cols` too — and

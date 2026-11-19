@@ -845,7 +845,7 @@ pub(crate) fn sane_scale(scale: f32) -> f32 {
 /// controls now set it — the Analyzer section's History duration bar and the drag across the
 /// picture — and a gesture that clamped to its own idea of the limits would
 /// push the bar past its own ends. The maximum is also
-/// [`AudioSpectrum::HISTORY_MAX_SECONDS`](crate::AudioSpectrum::HISTORY_MAX_SECONDS),
+/// [`HISTORY_MAX_SECONDS`](crate::spectrogram::HISTORY_MAX_SECONDS),
 /// the history's reach, so the heatmap can fill the widest span the axis
 /// offers.
 pub(crate) const ROLL_SECONDS_MIN: f32 = 1.0;

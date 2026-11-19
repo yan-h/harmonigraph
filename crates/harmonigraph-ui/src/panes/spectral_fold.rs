@@ -173,8 +173,8 @@ use harmonigraph_core::spectrum::{midi_to_bucket_x, SPECTRUM_MAX_MIDI, SPECTRUM_
 use harmonigraph_scene::{Scene, SpectralPaint, SpectralReading, ViewConfig};
 
 use super::spectral::axes::{loudness, power_db, spectrogram_level_db};
-use crate::spectrum::SpectrumBuckets;
 use crate::PictureState;
+use harmonigraph_core::spectrum::SpectrumBuckets;
 
 /// Cents one analyzer bucket spans: 3.125, the grid everything below counts in.
 const CENTS_PER_BUCKET: f32 = 1200.0 / (12 * BINS_PER_SEMITONE) as f32;
