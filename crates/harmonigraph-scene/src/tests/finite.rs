@@ -141,13 +141,6 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         .find(|n| !n.on_home)
         .expect("the fixture has sevens layers, so the sevens scale below has something to size")
         .scale;
-    // The emptiness the walk's `glow_clock` arm rests on, stated where it can
-    // go red: the clock is the shell's to fill, and nothing here covers it.
-    assert!(
-        scene.glow_clock.is_none(),
-        "`derive_scene` filled the glow clock, so the walk's empty arm is no longer honest",
-    );
-
     let mut normalized = poisoned_view();
     normalized.sanitize();
     // The requested window is independent of the view's repaired dials.

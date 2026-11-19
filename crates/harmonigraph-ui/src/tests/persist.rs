@@ -29,9 +29,16 @@ fn dialled() -> SharedState {
     appearance.view.note_animation.radial_start = -0.5;
     appearance.view.note_animation.stagger_spread = 0.63;
     appearance.view.atmosphere.texture_depth = 0.0;
+    // Off, where a fresh view has them on, so a loader that restores them on
+    // regardless fails the round trips.
+    appearance.view.show_map_indicators = false;
+    appearance.spectrum.show_spectrogram = false;
     appearance.spectrum.orientation = crate::SpectralOrientation::Left;
     appearance.spectrum.roll_thickness = 1.75;
     appearance.spectrum.low_midi = 40.5;
+    // Inside the axis and off the fresh range, so an end kept is told apart
+    // from an end reset.
+    appearance.spectrum.high_midi = 132.0;
     appearance.render.short_edge = 2160;
     appearance.render.frame.split = 0.37;
     appearance.render.spectrogram = crate::SpectrogramRender::Scrolling;
@@ -183,6 +190,20 @@ fn filled() -> SharedState {
     });
     let mut stored = AppearanceDocument::default();
     stored.spectrum.attack = 0.2;
+    // Every intensity weight filled, here and in the stored look: an empty
+    // one holds no number for a sweep to reach.
+    for view in [&mut state.picture.appearance.view, &mut stored.view] {
+        let intensity = &mut view.intensity;
+        for source in [
+            &mut intensity.velocity,
+            &mut intensity.gain,
+            &mut intensity.pressure,
+            &mut intensity.timbre,
+        ] {
+            *source =
+                harmonigraph_scene::IntensitySource { opacity: Some(0.4), thickness: Some(0.6) };
+        }
+    }
     let look = ron::to_string(&Look::capture(&stored)).expect("a look serializes");
     let slots: Slots = ron::from_str(&format!("(stored:(None,Some({look}),None,None),active:0)"))
         .expect("a slot holding a look parses");
@@ -741,8 +762,11 @@ fn nested_defaults() -> [(&'static str, String, &'static str); 11] {
 /// — or, inside one of [`nested_defaults`], at its group's bare default. A
 /// struct without its container-level `#[serde(default)]` fails the parse, and
 /// one whose fields carry their own defaults loads the key at 0 or `false`.
-/// Exempt from the value check is the editor's `version`, which reads as 0
-/// for the floor to refuse.
+/// Exempt from the value check are the editor's `version`, which reads as 0
+/// for the floor to refuse, and the Analyzer's geometry, which a fresh save
+/// holds none of and whose type is private to its pane. Any other path with
+/// neither a fresh value nor a group default to come back at fails, so a new
+/// one is not skipped by default.
 ///
 /// The fixture is `dialled`, which moves a few values in the camera, view,
 /// spectrum, render and workspace off fresh, plus a camera preset, a stored
@@ -827,7 +851,11 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
                 }
                 Some(bare)
             }
-            (None, fresh) if !refused => fresh,
+            (None, Some(fresh)) if !refused => Some(fresh),
+            (None, None) if !refused && !path.starts_with("analyzer_regions.geometry") => {
+                stale_values.push(format!("{path}: nothing to check what it loads at against"));
+                None
+            }
             _ => None,
         };
         if let Some(want) = want.filter(|want| came_back != *want) {
@@ -871,7 +899,11 @@ pub(super) fn is_float(text: &str) -> bool {
 /// anywhere the editor saves is poisoned without an edit here.
 #[test]
 fn a_document_naming_any_non_finite_float_opens_on_real_numbers() {
-    let saved = filled().save_persist();
+    let mut state = filled();
+    // The performance overlay's position, empty until the overlay is dragged.
+    state.workspace.interaction.prefs.perf_pos = Some(egui::pos2(40.0, 60.0));
+    let pitch = state.picture.appearance.spectrum;
+    let saved = state.save_persist();
     let (_, nested) = nested_pairs(&saved)
         .into_iter()
         .find(|(path, _)| path == "appearance")
@@ -890,7 +922,9 @@ fn a_document_naming_any_non_finite_float_opens_on_real_numbers() {
         "appearance.render.",
         "camera_presets[0].",
         "look_slots.stored[1].",
-        "prefs.",
+        "prefs.perf_pos.",
+        "appearance.view.intensity.timbre.thickness",
+        "look_slots.stored[1].view.intensity.velocity.opacity",
     ] {
         assert!(floats.iter().any(|(path, _)| path.starts_with(owner)), "no float under {owner}");
     }
@@ -911,6 +945,19 @@ fn a_document_naming_any_non_finite_float_opens_on_real_numbers() {
             if !opened.install_document(&splice(&saved, at.clone())) {
                 wrong.push(format!("{path} = {poison}: the editor refused the document"));
                 continue;
+            }
+            // An end of the pitch range is repaired alone: the other keeps
+            // what the blob says.
+            let loaded = &opened.picture.appearance.spectrum;
+            let other = match path.as_str() {
+                "appearance.spectrum.low_midi" => Some((loaded.high_midi, pitch.high_midi)),
+                "appearance.spectrum.high_midi" => Some((loaded.low_midi, pitch.low_midi)),
+                _ => None,
+            };
+            if let Some((other, kept)) = other.filter(|(other, kept)| other != kept) {
+                wrong.push(format!(
+                    "{path} = {poison}: the other end opened at {other}, not {kept}"
+                ));
             }
             let again = opened.save_persist();
             let left = non_finite(&again);
@@ -1019,6 +1066,9 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     state.workspace.interaction.prefs.folded_sections.insert("System/Performance".into());
     state.workspace.interaction.prefs.ui_scale = 1.25;
     state.workspace.interaction.prefs.frame_rate = crate::FrameRate::Half;
+    // Tab visibility belongs to the editor, so a look neither carries it nor
+    // moves it.
+    state.workspace.interaction.prefs.frameless = true;
     assert_ne!(state.save_persist(), editor);
     assert_eq!(state.picture.appearance.serialize(), appearance);
     let mut restored = fresh();

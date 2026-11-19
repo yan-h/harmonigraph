@@ -127,8 +127,16 @@ fn loaded(edge: Edge) -> SharedState {
     let mut normalized = state.picture.appearance.view.clone();
     normalized.sanitize();
     assert_eq!(state.picture.appearance.view, normalized);
-    // The floats no bar shows, held to the range [`EXEMPT`] gives each.
+    // Not a number anywhere in what the next save stores, the floats no bar
+    // reads included.
     let saved = state.save_persist();
+    let left: Vec<_> = nested_scalars(&saved)
+        .into_iter()
+        .filter(|(_, at)| ["NaN", "inf", "-inf"].contains(&&saved[at.clone()]))
+        .map(|(path, _)| path)
+        .collect();
+    assert!(left.is_empty(), "{edge:?}: the load left {left:?} non-finite");
+    // The floats no bar shows, held to the range [`EXEMPT`] gives each.
     for (path, range) in nested_scalars(&saved) {
         if let Some((_, Held::Range(low, high), _)) = exemption(&path) {
             // In the f32 every one of these is stored in, so an edge reads as
