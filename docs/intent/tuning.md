@@ -55,3 +55,10 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 ## 2026-11-18 (CLAP-shell rework, #1814)
 
 - Restored host parameters follow one rule per row in harmonigraph-clap's parameter table: missing, wrong-typed or an unknown variant takes the default, and out of range is clamped. This supersedes the 2026-11-10 `filter_state` line: its reason, a patch carried across every wrapper upgrade, ended when harmonigraph took the wrapper as its own crate (#1827). #1814 step 5
+
+## 2026-11-18 (maintainability audit, #1861)
+
+Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
+
+- "Waiting for host activation" keeps the fault colour: it is a status to inspect, shown only before the first activation. The status-string check (#1841) is fixed without changing it. #1861
+- One CLAP test host serves all five suites that now carry their own, in `harmonigraph-clap` behind its test feature, with Retune or Adaptive chosen explicitly; the take suites move out of `configuration/tests.rs`. To be built after #1814 step 7. #1861 R3
