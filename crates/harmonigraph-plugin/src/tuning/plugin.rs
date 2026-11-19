@@ -77,14 +77,21 @@ impl Plugin for HarmonigraphTune {
     /// activation is still in progress, which is what makes it the host's
     /// number. Nothing about pairing is consulted: a Tune that has never seen
     /// a Hub still reports the latency its own saved multiplier implies.
-    fn activate(&mut self, config: &BufferConfig, latency: &Latency<'_>) -> bool {
+    fn activate(&mut self, config: &BufferConfig) -> bool {
         self.frames = config.max_buffer_size;
         let multiplier = self.multiplier();
         self.shared.active_multiplier.store(multiplier, Ordering::Release);
         self.shared.publish_format(f64::from(config.sample_rate), config.max_buffer_size);
         self.tune().activate(f64::from(config.sample_rate), config.max_buffer_size, multiplier);
-        latency.request(self.requested_latency());
         true
+    }
+    /// A changed multiplier is a changed latency, which the shell turns into
+    /// a host restart request WITHOUT changing what the host reads: the
+    /// delay is adopted at that reactivation and never mid-activation, so a
+    /// reported latency that ran ahead of it would ask the host to
+    /// compensate for a delay no note is being given.
+    fn latency(&self) -> u32 {
+        self.requested_latency()
     }
     /// Destruction gives the row back. The records this Tune left in its ring
     /// carry an epoch the attach that follows has already moved past, so the
@@ -105,13 +112,6 @@ impl Plugin for HarmonigraphTune {
         for input in block.events() {
             self.tune().input(input);
         }
-        // A changed multiplier is a changed latency, which the shell turns
-        // into a host restart request WITHOUT changing what the host reads:
-        // the delay is adopted at that reactivation and never mid-activation,
-        // so a reported latency that ran ahead of it would ask the host to
-        // compensate for a delay no note is being given. Repeating the same
-        // number costs one atomic swap and asks for nothing.
-        block.request_latency(self.requested_latency());
         self.tune().schedule(&mut block.output);
     }
     fn end(&mut self) {

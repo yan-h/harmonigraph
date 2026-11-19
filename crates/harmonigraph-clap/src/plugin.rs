@@ -2,7 +2,6 @@
 //! makes into it, on the main thread and per process callback.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 mod state;
 pub use state::*;
@@ -80,10 +79,17 @@ pub trait Plugin: Default + Send + 'static {
     fn init(&mut self) -> bool {
         true
     }
-    /// The host activates the plugin at `config`. A latency asked for here is
-    /// the one the shell tells the host, before the activation returns.
-    fn activate(&mut self, config: &BufferConfig, latency: &Latency<'_>) -> bool {
+    /// The host activates the plugin at `config`.
+    fn activate(&mut self, config: &BufferConfig) -> bool {
         true
+    }
+    /// The latency the plugin wants, in samples. The shell reads it after
+    /// `activate`, and tells the host before the activation returns, and
+    /// after each `process`: a change while active asks the host for the
+    /// restart that adopts it, since CLAP publishes a latency only across an
+    /// activation (#615).
+    fn latency(&self) -> u32 {
+        0
     }
     fn deactivate(&mut self) {}
     /// Main-thread service while deactivated, also just before activation.
@@ -135,7 +141,6 @@ pub struct Block<'a> {
     /// when there is no main output to write the audio to: the plugin
     /// declares none, or the host gave fewer channels than it declares.
     pub audio: Option<Audio<'a>>,
-    pub(crate) latency: Latency<'a>,
 }
 
 impl<'a> Block<'a> {
@@ -153,45 +158,5 @@ impl<'a> Block<'a> {
             .into_iter()
             .chain(self.events.values())
             .map(move |(offset, value)| Input { sample: start + i64::from(offset), value })
-    }
-
-    /// Ask the host for `samples` of latency. Published only across an
-    /// activation (#615): while one runs, a change asks the host for the
-    /// restart that adopts it.
-    pub fn request_latency(&self, samples: u32) {
-        self.latency.request(samples);
-    }
-}
-
-/// The latency the host reads, and the one the plugin last asked for.
-#[derive(Default)]
-pub(crate) struct LatencyState {
-    /// What the host reads: only an activation moves it.
-    pub current: AtomicU32,
-    pub pending: AtomicU32,
-    /// A running activation was asked for a latency it does not report.
-    pub changed: AtomicBool,
-}
-
-/// The plugin's handle for asking for a latency.
-#[derive(Clone, Copy)]
-pub struct Latency<'a> {
-    pub(crate) state: &'a LatencyState,
-    /// The plugin is active: a change waits for a restart, which the main
-    /// thread asks for. Clear during activation, which adopts the request.
-    pub(crate) active: bool,
-    /// Asks the host for the main-thread call that asks for the restart.
-    pub(crate) wake: Option<&'a AtomicBool>,
-}
-
-impl Latency<'_> {
-    pub fn request(&self, samples: u32) {
-        let previous = self.state.pending.swap(samples, Ordering::SeqCst);
-        if self.active && previous != samples {
-            self.state.changed.store(true, Ordering::Release);
-            if let Some(wake) = self.wake {
-                wake.store(true, Ordering::Release);
-            }
-        }
     }
 }

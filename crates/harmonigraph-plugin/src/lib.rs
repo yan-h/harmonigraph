@@ -946,7 +946,7 @@ impl Plugin for Harmonigraph {
         true
     }
 
-    fn activate(&mut self, config: &BufferConfig, _: &Latency<'_>) -> bool {
+    fn activate(&mut self, config: &BufferConfig) -> bool {
         self.aggregation
             .as_mut()
             .unwrap()

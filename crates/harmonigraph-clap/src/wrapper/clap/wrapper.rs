@@ -16,7 +16,7 @@ use crate::editor::{Editor, ParentWindowHandle};
 use crate::events::{self, InputValue, List, Output};
 use crate::midi::MidiConfig;
 use crate::params::{Report, Table};
-use crate::plugin::{Block, Boundary, Latency, LatencyState, Plugin, PluginState};
+use crate::plugin::{Block, Boundary, Plugin, PluginState};
 use atomic_float::AtomicF32;
 use atomic_refcell::AtomicRefCell;
 use clap_sys::events::{clap_input_events, clap_output_events};
@@ -69,7 +69,7 @@ use std::any::Any;
 use std::ffi::{CStr, c_void};
 use std::mem;
 use std::os::raw::c_char;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Weak};
 
 use super::context::WrapperGuiContext;
@@ -80,6 +80,16 @@ use crate::wrapper::clap::EditorHost;
 use crate::wrapper::clap::util::{read_stream, write_stream};
 use crate::wrapper::state::{self};
 use crate::wrapper::util::{process_wrapper, strlcpy};
+
+/// The latency the host reads, and the one the plugin last wanted.
+#[derive(Default)]
+struct LatencyState {
+    /// What the host reads: only an activation moves it.
+    current: AtomicU32,
+    pending: AtomicU32,
+    /// A running activation's plugin wants a latency it does not report.
+    changed: AtomicBool,
+}
 
 /// The line a transport event in the host's list leaves, once per instance.
 const TRANSPORT_EVENT: &str = "The host sent a transport event inside a block. Harmonigraph reads \
@@ -540,13 +550,13 @@ impl<P: Plugin> Wrapper<P> {
 
         let mut plugin = wrapper.plugin.lock();
         plugin.inactive();
-        // Not active yet, so a latency asked for here waits for nothing: it
-        // is what this activation publishes below, while the host still has
-        // the activation in progress, and it asks for no restart (#615).
-        let latency = Latency { state: &wrapper.latency, active: false, wake: None };
-        if !plugin.activate(&buffer_config, &latency) {
+        if !plugin.activate(&buffer_config) {
             return false;
         }
+        // Not active yet, so the latency wanted now waits for nothing: it is
+        // what this activation publishes below, while the host still has the
+        // activation in progress, and it asks for no restart (#615).
+        wrapper.latency.pending.store(plugin.latency(), Ordering::SeqCst);
         // Release the plugin lock before host callbacks.
         drop(plugin);
 
@@ -669,11 +679,13 @@ impl<P: Plugin> Wrapper<P> {
         if valid && input_lost {
             // A lost callback's audio is left as the host gave it.
             plugin.process(&mut unsafe { self.block(boundary, list, process, None) });
+            self.poll_latency(&plugin);
         } else if valid {
             let mut storage = self.aux_storage.borrow_mut();
             let mut slices = Slices::default();
             let audio = unsafe { audio(&P::PORTS, process, &mut storage, &mut slices) };
             plugin.process(&mut unsafe { self.block(boundary, list, process, audio) });
+            self.poll_latency(&plugin);
         }
         plugin.end();
         drop(plugin);
@@ -703,11 +715,16 @@ impl<P: Plugin> Wrapper<P> {
             events,
             output: unsafe { Output::new(process.out_events, !boundary.input_lost) },
             audio,
-            latency: Latency {
-                state: &self.latency,
-                active: true,
-                wake: Some(&self.deferred_host_callback),
-            },
+        }
+    }
+
+    /// Read the latency an active plugin wants after its `process`: a change
+    /// waits for a restart, which the main thread asks for (#615).
+    fn poll_latency(&self, plugin: &P) {
+        let wanted = plugin.latency();
+        if self.latency.pending.swap(wanted, Ordering::SeqCst) != wanted {
+            self.latency.changed.store(true, Ordering::Release);
+            self.deferred_host_callback.store(true, Ordering::Release);
         }
     }
 

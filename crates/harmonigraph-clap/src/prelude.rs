@@ -13,5 +13,5 @@ pub use crate::events::{Input, InputValue, Output};
 pub use crate::midi::MidiConfig;
 pub use crate::params::{Spec, Table};
 pub use crate::plugin::PluginState;
-pub use crate::plugin::{Block, Boundary, Latency, Plugin};
+pub use crate::plugin::{Block, Boundary, Plugin};
 pub use crate::wrapper::clap::features::ClapFeature;
