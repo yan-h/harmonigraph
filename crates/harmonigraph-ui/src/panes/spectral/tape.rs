@@ -42,6 +42,13 @@ const MIN_SECONDS: f64 = 2.0;
 /// The space a label needs along the time axis, in points, before the ruler
 /// labels every bar or every few.
 const LABEL_SPACING: f32 = 44.0;
+/// How fast a playhead crosses the screen, in device pixels a second, before
+/// it holds the editor at full rate: one pixel a refresh of the 144 Hz display
+/// the editor runs on. Slower, the idle poll draws it moving under about seven
+/// pixels a step, and a playhead crawling across a fitted song (about 2 pt/s
+/// for three minutes) under one; that is left to the poll rather than paying
+/// a full redraw a refresh (#1673) for it (#1837).
+const PLAYHEAD_FULL_RATE_PX: f64 = 144.0;
 /// The thickness, in points, of the band along the low-pitch edge that marks
 /// what is recorded: the one place a gap reads apart from recorded silence.
 const COVERAGE_PT: f32 = 3.0;
@@ -260,6 +267,9 @@ pub(super) fn draw(
     coverage(painter, axes, view, &axis);
     let labels = ruler(painter, axes, view, &axis);
     marks(painter, axes, view, &axis);
+    let moving = playhead_moving(view, &axis, painter.ctx().pixels_per_point());
+    state.surfaces.moving_this_frame.playhead(moving);
+    let view = &mut state.runtime.tape;
     let pointer = response.hover_pos().filter(|&p| axes.depth_at(p) >= split);
     if let Some(pointer) = pointer {
         let at = axis.seconds_at(axes.depth_at(pointer)).max(0.0);
@@ -321,6 +331,26 @@ fn marks(painter: &egui::Painter, axes: &Axes, view: &TapeView, axis: &SongAxis)
     if let Some(heard) = view.heard {
         across(heard, Stroke::new(theme::LINE_WIDTH, theme::accent()));
     }
+}
+
+/// Whether a playhead [`marks`] draws over `axis` still moves visibly: the
+/// audition's, at its speed, or the host's position while the transport
+/// rolls, on the stretch shown and crossing it at [`PLAYHEAD_FULL_RATE_PX`] or
+/// faster. Not the transport rolling or an audition playing as such, which
+/// would hold the editor at the display rate with the playhead off the stretch
+/// shown or under a pixel a refresh (#1837).
+///
+/// From the rates the playheads run at rather than from where they were last
+/// frame: a measured step is larger at the idle poll than at full rate, and
+/// would wake the editor only to let it fall back to the poll.
+fn playhead_moving(view: &TapeView, axis: &SongAxis, pixels_per_point: f32) -> bool {
+    let heard = view.heard.map(|at| (at, view.speed.factor()));
+    let position = view.position.filter(|_| view.rolling).map(|at| (at, 1.0));
+    let px_per_second = f64::from(pixels_per_point) / axis.seconds_per_point();
+    [heard, position]
+        .into_iter()
+        .flatten()
+        .any(|(at, rate)| axis.shows(at) && rate * px_per_second >= PLAYHEAD_FULL_RATE_PX)
 }
 
 /// The tape's spectrogram over the far region, at the pyramid level whose
@@ -677,6 +707,9 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
     let view = &state.runtime.tape;
     coverage(&painter, &axes, view, &axis);
     marks(&painter, &axes, view, &axis);
+    let moving = playhead_moving(view, &axis, ui.ctx().pixels_per_point());
+    state.surfaces.moving_this_frame.playhead(moving);
+    let view = &state.runtime.tape;
     // The rest of the song dimmed, and the stretch shown outlined.
     let (a, b) = span_x(&axes, &axis, shown);
     let (lo, hi) = (a.min(b).max(rect.left()), a.max(b).min(rect.right()));

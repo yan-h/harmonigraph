@@ -518,6 +518,7 @@ pub struct Animating {
     pub roll: bool,
     pub releasing: bool,
     pub audible: bool,
+    pub playhead: bool,
 }
 
 impl Animating {
@@ -531,6 +532,7 @@ impl Animating {
             roll: moving.roll,
             releasing: moving.releasing,
             audible: moving.audible,
+            playhead: moving.playhead,
         }
     }
 
@@ -547,6 +549,7 @@ impl Animating {
             (self.roll, "roll"),
             (self.releasing, "releasing"),
             (self.audible, "audible"),
+            (self.playhead, "playhead"),
         ]
         .into_iter()
     }
@@ -618,6 +621,14 @@ pub(crate) struct Moving {
     /// or both panes out of sight — leaves a still picture to the idle poll
     /// (#1834).
     learn: bool,
+    /// A Tape mode playhead crossing the stretch of song shown fast enough to
+    /// see it step at the idle poll: an audition's, or the host's position
+    /// while the transport rolls
+    /// (`playhead_moving` in the Analyzer's Tape mode).
+    /// Not the transport rolling or an audition playing as such: a playhead
+    /// off the stretch shown, or crawling across a whole song, moves nothing
+    /// the poll does not draw as well (#1837).
+    playhead: bool,
 }
 
 impl Moving {
@@ -635,6 +646,10 @@ impl Moving {
 
     pub(crate) fn learn(&mut self, pulsing: bool) {
         self.learn |= pulsing;
+    }
+
+    pub(crate) fn playhead(&mut self, moving: bool) {
+        self.playhead |= moving;
     }
 }
 

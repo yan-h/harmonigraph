@@ -3539,6 +3539,39 @@ fn the_overview_box_moves_the_stretch_shown_and_its_ends_resize_it() {
     assert_eq!(state.runtime.tape.request, None, "a drag on the overview is not a cue");
 }
 
+/// A Tape mode playhead holds the editor at full rate only while it crosses
+/// the stretch shown fast enough to step visibly at the idle poll: not while
+/// it is off that stretch, parked, or crawling across the whole song (#1837).
+/// Nothing else in the fixture moves, so the frame's report is the playhead's.
+#[test]
+fn a_tape_playhead_holds_full_rate_only_while_it_visibly_crosses_the_stretch_shown() {
+    let moving = |zoomed: bool, heard: Option<f64>, rolling: bool| {
+        let ctx = themed();
+        // Fine pixels, as the Retina display is, so the zoomed stretch's
+        // playhead is well past a pixel a frame and the whole song's well
+        // under it.
+        ctx.set_pixels_per_point(4.0);
+        let mut state = on_tape();
+        state.runtime.tape.position = Some(1.0);
+        state.runtime.tape.rolling = rolling;
+        if zoomed {
+            // The box's late end pulled in to the 2 s the region zooms to.
+            overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(2.0)));
+            let (from, to) = shown(&ctx);
+            assert!(from == 0.0 && (to - 2.0).abs() < 0.3, "the fixture shows {from}..{to}");
+        }
+        state.runtime.tape.heard = heard;
+        state.surfaces.moving_this_frame = Default::default();
+        overview_frames(&ctx, &mut state, vec![vec![]]);
+        state.surfaces.moving_this_frame.playhead
+    };
+    assert!(moving(true, Some(1.0), false), "an audition crossing a zoomed stretch idled");
+    assert!(moving(true, None, true), "the rolling transport's playhead idled");
+    assert!(!moving(true, Some(30.0), false), "an audition off the stretch shown held it");
+    assert!(!moving(true, None, false), "a parked playhead held it");
+    assert!(!moving(false, Some(1.0), false), "a playhead crawling over the whole song held it");
+}
+
 /// The pane's sideways scroll pans the song only as far as the strip's end,
 /// its width kept, as the overview's moves do (#1722's scroll had no end).
 #[test]
