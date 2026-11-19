@@ -22,7 +22,6 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 mod host_surface;
-mod state_goldens;
 
 #[derive(Default)]
 struct Host {
