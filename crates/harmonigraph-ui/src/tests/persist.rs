@@ -1152,34 +1152,33 @@ fn an_impossible_ui_scale_is_clamped() {
 /// is [`a_document_naming_any_non_finite_float_opens_on_real_numbers`]'s.
 #[test]
 fn a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one() {
-    for (key, broken) in [("lightness", "5.0")] {
-        let mut state = fresh();
-        // A gradient off the defaults, and one sanitize leaves alone, so the
-        // splice has something to name and the untouched knobs prove they
-        // survived rather than matching a fresh install by luck.
-        state.picture.appearance.spectrum.spectrogram_gradient = harmonigraph_scene::Gradient {
-            hue_start: 137.5,
-            hue_span: -85.25,
-            lightness: 44.0,
-            lightness_ramp: 71.5,
-            chroma: 0.375,
-            chroma_ramp: -0.25,
-            ..Default::default()
-        };
-        let saved = state.save_persist();
-        let was = if key == "lightness" { "44.0" } else { "0.375" };
-        let spliced = saved.replacen(&format!("{key}:{was}"), &format!("{key}:{broken}"), 1);
-        assert_ne!(spliced, saved, "the {key} splice must land for this to test anything");
+    let (key, broken) = ("lightness", "5.0");
+    let mut state = fresh();
+    // A gradient off the defaults, and one sanitize leaves alone, so the
+    // splice has something to name and the untouched knobs prove they
+    // survived rather than matching a fresh install by luck.
+    state.picture.appearance.spectrum.spectrogram_gradient = harmonigraph_scene::Gradient {
+        hue_start: 137.5,
+        hue_span: -85.25,
+        lightness: 44.0,
+        lightness_ramp: 71.5,
+        chroma: 0.375,
+        chroma_ramp: -0.25,
+        ..Default::default()
+    };
+    let saved = state.save_persist();
+    let was = "44.0";
+    let spliced = saved.replacen(&format!("{key}:{was}"), &format!("{key}:{broken}"), 1);
+    assert_ne!(spliced, saved, "the {key} splice must land for this to test anything");
 
-        let mut restored = fresh();
-        restored.install_document(&spliced);
-        let g = restored.picture.appearance.spectrum.spectrogram_gradient;
-        assert_eq!(g.sanitized(), g, "{key}:{broken} left the file holding {g:?}");
-        // And the knobs the splice did not touch keep what the blob said, so
-        // the repair cannot pass by resetting the whole gradient.
-        assert_eq!(g.hue_start, 137.5, "{key}:{broken}: an untouched knob was reset");
-        assert_eq!(g.hue_span, -85.25, "{key}:{broken}: an untouched knob was reset");
-    }
+    let mut restored = fresh();
+    restored.install_document(&spliced);
+    let g = restored.picture.appearance.spectrum.spectrogram_gradient;
+    assert_eq!(g.sanitized(), g, "{key}:{broken} left the file holding {g:?}");
+    // And the knobs the splice did not touch keep what the blob said, so
+    // the repair cannot pass by resetting the whole gradient.
+    assert_eq!(g.hue_start, 137.5, "{key}:{broken}: an untouched knob was reset");
+    assert_eq!(g.hue_span, -85.25, "{key}:{broken}: an untouched knob was reset");
 }
 
 #[test]

@@ -637,8 +637,8 @@ pub const SPECTRAL_SHADOW_MAX: f32 = 3.0;
 #[serde(default)]
 pub struct ShadowStyle {
     /// How wide the shadow is, as a share of the caster group's reference size.
-    /// The upper limit is [`GLOW_SHADOW_MAX`](crate::GLOW_SHADOW_MAX) for lattice
-    /// groups and [`SPECTRAL_SHADOW_MAX`](crate::SPECTRAL_SHADOW_MAX) for spectral
+    /// The upper limit is [`GLOW_SHADOW_MAX`] for lattice
+    /// groups and [`SPECTRAL_SHADOW_MAX`] for spectral
     /// groups. Lattice groups use a
     /// node radius; spectral groups use the renderer's fixed four-point edge
     /// unit so their shadows stay screen-constant across pitch zoom and pane

@@ -266,7 +266,8 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 /// The longest attack or release the node glow offers, in seconds (see
 /// [`ViewConfig::glow_attack`]).
 ///
-/// Longer than the audio ring's own pair ([`SPECTRAL_BALLISTICS_MAX`]) because
+/// Longer than the audio ring's own pair
+/// ([`SPECTRAL_BALLISTICS_MAX`](crate::SPECTRAL_BALLISTICS_MAX)) because
 /// it is a different quantity: that one is how fast a measurement moves, and a
 /// third of a second is already a smear, where this is how long a halo hangs
 /// around after the note that lit it. Six seconds is a light that is plainly
