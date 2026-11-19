@@ -82,7 +82,10 @@ fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
     NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))
 }
 impl Editor for NativeEditor {
-    fn spawn(&self, parent: *mut c_void) -> Box<dyn Any + Send> {
+    /// # Safety
+    ///
+    /// `parent` is a live `NSView`, and the call is on the main thread.
+    unsafe fn spawn(&self, parent: *mut c_void) -> Box<dyn Any + Send> {
         let mtm = MainThreadMarker::new().expect("CLAP editor main thread");
         let actions = Actions::alloc(mtm)
             .set_ivars(Ivars { shared: self.shared.clone(), widgets: OnceCell::new() });
@@ -132,7 +135,9 @@ impl Editor for NativeEditor {
                 true,
             )
         };
-        Box::new(Handle { actions, timer })
+        // Bound to the main thread, where its drop touches AppKit: a drop
+        // anywhere else waits for the main thread to run it.
+        Box::new(dispatch2::MainThreadBound::new(Handle { actions, timer }, mtm))
     }
     fn size(&self) -> (u32, u32) {
         (460, 230)
@@ -142,9 +147,6 @@ struct Handle {
     actions: Retained<Actions>,
     timer: Retained<NSTimer>,
 }
-// The CLAP wrapper creates/destroys this editor handle only on its GUI thread.
-// Send carries ownership through the shell's erased handle, not AppKit access.
-unsafe impl Send for Handle {}
 impl Drop for Handle {
     fn drop(&mut self) {
         self.timer.invalidate();

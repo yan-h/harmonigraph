@@ -1012,7 +1012,10 @@ impl<P: Plugin> Wrapper<P> {
         }
         // Out of the lock: opening can draw a frame on the spot, which can
         // ask the host for a resize.
-        let handle = editor.spawn(unsafe { window.specific.cocoa });
+        // SAFETY: CLAP calls `set_parent` on the main thread, and a `cocoa`
+        // window carries the host's `NSView`, alive while the editor is
+        // attached to it.
+        let handle = unsafe { editor.spawn(window.specific.cocoa) };
         *wrapper.editor_handle.lock() = Some(handle);
         true
     }

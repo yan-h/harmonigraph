@@ -124,7 +124,10 @@ unsafe impl HasRawWindowHandle for HostView {
 }
 
 impl Editor for LatticeEditor {
-    fn spawn(&self, parent: *mut c_void) -> Box<dyn std::any::Any + Send> {
+    /// # Safety
+    ///
+    /// `parent` is a live `NSView`, and the call is on the main thread.
+    unsafe fn spawn(&self, parent: *mut c_void) -> Box<dyn std::any::Any + Send> {
         let context = self.host.clone();
         let egui_state = self.egui_state.clone();
         let (width, height) = self.egui_state.size();

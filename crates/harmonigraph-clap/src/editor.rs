@@ -13,7 +13,11 @@ pub trait Editor: Send + Sync {
     /// Open the editor under the host's `NSView` `parent`. The handle
     /// returned closes it when dropped, which the host's destroy does; the
     /// shell drops one before it asks for the next.
-    fn spawn(&self, parent: *mut c_void) -> Box<dyn Any + Send>;
+    ///
+    /// # Safety
+    ///
+    /// `parent` is a live `NSView`, and the call is on the main thread.
+    unsafe fn spawn(&self, parent: *mut c_void) -> Box<dyn Any + Send>;
 
     /// The size the host is told, in logical points.
     fn size(&self) -> (u32, u32);
