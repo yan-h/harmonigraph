@@ -36,7 +36,7 @@ pub(crate) const ENTRY_POINTS: &[&str] =
 /// dot_surround.wgsl after the surround's arithmetic it calls into. It names
 /// nothing in common.wgsl, so it takes none of it.
 pub(crate) fn source() -> String {
-    format!("{}\n{SRC}", crate::surround::SRC)
+    crate::module_source(crate::surround::SRC, SRC)
 }
 
 /// One sounding note's dot, as its surround needs it: where it stands, how big
@@ -371,8 +371,13 @@ mod tests {
 
     #[test]
     fn baked_dot_surround_shader_validates() {
-        crate::validate_wgsl("dot_surround.wgsl", &source(), 0, ENTRY_POINTS)
-            .expect("baked dot_surround.wgsl must parse and validate");
+        crate::validate_wgsl(
+            "dot_surround.wgsl",
+            &source(),
+            crate::Seam::after("surround.wgsl", crate::surround::SRC),
+            ENTRY_POINTS,
+        )
+        .expect("baked dot_surround.wgsl must parse and validate");
     }
 
     #[test]

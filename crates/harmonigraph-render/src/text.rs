@@ -1274,7 +1274,7 @@ pub(crate) mod tests {
     /// shot for the scene pass's glyph fill and shadow box).
     #[test]
     fn baked_text_shader_validates() {
-        let seam = crate::common_lines(crate::COMMON_SRC);
+        let seam = crate::Seam::after("common.wgsl", crate::COMMON_SRC);
         crate::validate_wgsl("text.wgsl", &crate::with_common(TEXT_SRC), seam, &[] as &[&str])
             .expect("baked text.wgsl must parse and validate");
     }

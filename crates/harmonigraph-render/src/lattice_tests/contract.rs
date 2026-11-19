@@ -11,7 +11,7 @@ fn baked_shader_validates() {
     validate_wgsl(
         "lattice.wgsl",
         &with_common(SHADER_SRC),
-        common_lines(COMMON_SRC),
+        Seam::after("common.wgsl", COMMON_SRC),
         &[] as &[&str],
     )
     .expect("baked lattice.wgsl must parse and validate");

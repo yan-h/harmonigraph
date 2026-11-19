@@ -173,18 +173,20 @@ const BLIT_SRC: &str = include_str!("shaders/blit.wgsl");
 /// what is allowed in there.
 pub(crate) const COMMON_SRC: &str = include_str!("shaders/common.wgsl");
 
-/// One module's WGSL: `common.wgsl` and the module's own source, concatenated.
+/// One module's WGSL: the shared half it calls into, then the module's own
+/// source, concatenated: `common.wgsl` for the lattice and text modules,
+/// `surround.wgsl` for the roll's, the dots' cut and the surround composite.
 ///
 /// WGSL has no include and naga takes a string, so this IS the linkage between
-/// the two files, and every `create_shader_module` for a module that names
-/// anything in common.wgsl is handed the result. Common goes first, so a module
-/// can call into it and it can call into no module.
+/// the two files, and every `create_shader_module` for a joined module is
+/// handed the result. The shared half goes first, so a module can call into it
+/// and it can call into no module.
 ///
-/// A module that names nothing in it is compiled as it stands. Handing one the
-/// common half anyway would redeclare `glow_tex` at blit.wgsl's own slot for
-/// it, which is a compile error rather than a tidy-up.
-pub(crate) fn module_source(common: &str, module: &str) -> String {
-    format!("{common}\n{module}")
+/// A module that names nothing in common.wgsl is not joined to it. Handing one
+/// the common half anyway would redeclare `glow_tex` at blit.wgsl's own slot
+/// for it, which is a compile error rather than a tidy-up.
+pub(crate) fn module_source(prefix: &str, module: &str) -> String {
+    format!("{prefix}\n{module}")
 }
 
 /// [`module_source`] against the common half baked into this build, which is
@@ -193,18 +195,37 @@ pub(crate) fn with_common(module: &str) -> String {
     module_source(COMMON_SRC, module)
 }
 
-/// How many lines of a concatenated module belong to the common half.
+/// How many lines of a concatenated module belong to its shared half,
+/// `prefix`.
 ///
 /// The offset every naga diagnostic carries: it counts lines in the string it
 /// was handed, and the module's own file starts after this many.
 ///
-/// Counted off the PREFIX [`module_source`] builds rather than off the common
+/// Counted off the PREFIX [`module_source`] builds rather than off the shared
 /// half alone, which makes it right by construction instead of by three cases:
-/// the separator adds a line where common already ends in a newline and ends
-/// common's last line where it does not.
+/// the separator adds a line where the half already ends in a newline and ends
+/// its last line where it does not.
 #[cfg(any(test, feature = "hot-reload"))]
-fn common_lines(common: &str) -> usize {
-    module_source(common, "").lines().count()
+fn prefix_lines(prefix: &str) -> usize {
+    module_source(prefix, "").lines().count()
+}
+
+/// Where a joined module's own file starts, as a diagnostic has to be read
+/// against it: the file [`module_source`] put ahead of it, and how many lines
+/// of the join that takes.
+#[cfg(any(test, feature = "hot-reload"))]
+#[derive(Clone, Copy, Debug)]
+struct Seam {
+    file: &'static str,
+    lines: usize,
+}
+
+#[cfg(any(test, feature = "hot-reload"))]
+impl Seam {
+    /// The seam of a module joined after `prefix`, which is read from `file`.
+    fn after(file: &'static str, prefix: &str) -> Self {
+        Seam { file, lines: prefix_lines(prefix) }
+    }
 }
 
 /// The whole text module as this build should compile it: baked, or — under
@@ -229,7 +250,7 @@ pub(crate) fn text_source() -> String {
 /// module. It names nothing in common.wgsl, so it takes none of it, and a
 /// common-shader reload leaves the roll's pipelines as they are.
 pub(crate) fn roll_module() -> String {
-    format!("{}\n{}", surround::SRC, roll::ROLL_SRC)
+    module_source(surround::SRC, roll::ROLL_SRC)
 }
 
 /// What a committed reload leaves for the pipelines it cannot reach itself.
@@ -335,7 +356,7 @@ struct ReloadedShaders {
     /// added or removed a line, the baked seam is wrong by that many for
     /// every message from then on, which is the failure the banner exists to
     /// prevent rather than to commit.
-    seam: usize,
+    seam: Seam,
 }
 
 /// Watches the three files those two modules are made of, on disk (dev builds
@@ -419,7 +440,7 @@ impl ShaderWatcher {
                 Some(ReloadedShaders {
                     lattice: module_source(&common, &lattice),
                     text: module_source(&common, &text),
-                    seam: common_lines(&common),
+                    seam: Seam::after("common.wgsl", &common),
                 })
             }
         }
@@ -443,7 +464,7 @@ impl ShaderWatcher {
 /// either file. Naga weaves those numbers through a rendered snippet, so the
 /// seam is stated rather than the numbers rewritten.
 ///
-/// `seam` is the caller's because it is a property of the common half THIS
+/// `seam` is the caller's because it is a property of the shared half THIS
 /// `source` was built from, and the hot-reload path's is read off disk: taking
 /// it from `COMMON_SRC` here would state the baked half's seam over a module
 /// joined to a different one, and be wrong by however many lines common.wgsl
@@ -452,13 +473,14 @@ impl ShaderWatcher {
 fn validate_wgsl(
     name: &str,
     source: &str,
-    seam: usize,
+    seam: Seam,
     required: &[impl AsRef<str>],
 ) -> Result<(), String> {
+    let Seam { file, lines } = seam;
     let banner = |body: String| {
         format!(
-            "in {name} (lines 1-{seam} below are common.wgsl; past that, \
-             subtract {seam} for the line in {name}):\n{body}"
+            "in {name} (lines 1-{lines} below are {file}; past that, \
+             subtract {lines} for the line in {name}):\n{body}"
         )
     };
     let module =

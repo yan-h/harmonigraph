@@ -27,7 +27,7 @@ pub(crate) const COMPOSITE_ENTRY_POINTS: &[&str] =
 
 /// The composite's module: the cut's arithmetic, then the draw that lays it.
 pub(crate) fn composite_source() -> String {
-    format!("{SRC}\n{COMPOSITE_SRC}")
+    crate::module_source(SRC, COMPOSITE_SRC)
 }
 
 /// The cut as the pane dials it: the notes' surround takes the picture away
@@ -431,7 +431,7 @@ mod tests {
         crate::validate_wgsl(
             "surround_composite.wgsl",
             &composite_source(),
-            0,
+            crate::Seam::after("surround.wgsl", SRC),
             COMPOSITE_ENTRY_POINTS,
         )
         .expect("baked surround_composite.wgsl must parse and validate");

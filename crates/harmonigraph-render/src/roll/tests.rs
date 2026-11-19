@@ -569,8 +569,13 @@ fn cuts_stay_on_their_notes_in_a_rect_off_the_surface_corner() {
 
 #[test]
 fn baked_roll_shader_validates() {
-    crate::validate_wgsl("roll.wgsl", &crate::roll_module(), 0, ROLL_ENTRY_POINTS)
-        .expect("baked roll.wgsl must parse and validate");
+    crate::validate_wgsl(
+        "roll.wgsl",
+        &crate::roll_module(),
+        crate::Seam::after("surround.wgsl", crate::surround::SRC),
+        ROLL_ENTRY_POINTS,
+    )
+    .expect("baked roll.wgsl must parse and validate");
 }
 
 /// The vertex-layout <-> shader-input contract (attribute locations,
