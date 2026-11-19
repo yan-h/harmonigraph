@@ -248,6 +248,14 @@ pub struct Recorder {
     /// take that inherited "no change since last time" would replay with the
     /// default camera.
     last_params: [f32; ParamKey::ALL.len()],
+    /// The configuration last written, cleared on arm for the same reason as
+    /// [`last_params`](Self::last_params): each take opens with the
+    /// configuration in force, and an unchanged one is not written again.
+    ///
+    /// Here rather than with the caller, keyed on the arming edge the take's
+    /// own blocks observed: keyed on the GUI's live epoch it could be stamped
+    /// with a take a Stop and Start had begun mid-callback (#1832).
+    last_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
     lifecycle: State,
     /// Independent position/duration and bar observations, including rejected scrubs.
     history: History,
@@ -299,6 +307,7 @@ impl Recorder {
             audio,
             dropped: Arc::default(),
             last_params: [f32::NAN; ParamKey::ALL.len()],
+            last_configuration: None,
             lifecycle: State::Disarmed,
             history: History::default(),
             rolling: Arc::default(),
@@ -428,6 +437,7 @@ impl Recorder {
         let (action, _) = self.advance(Observation::Armed(armed));
         if action == Action::Arm {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
+            self.last_configuration = None;
             self.run_opened = false;
             self.latches.clear();
         }
@@ -623,9 +633,6 @@ impl Recorder {
         self.fence.boundary_pause.reach();
         intent
     }
-    pub fn recording_epoch(&self) -> u64 {
-        self.fence.epoch()
-    }
     pub fn fail_configuration(&self) {
         self.fence.fail();
     }
@@ -644,12 +651,20 @@ impl Recorder {
             self.push(Entry::RunEnd { at });
         }
     }
+    /// The configuration in force from presentation time `t`, written when it
+    /// differs from the one this take last wrote. The caller writes only while
+    /// a run is open, so the take's first one lands in its first run.
     pub fn configuration(
         &mut self,
         t: f64,
         resolved: harmonigraph_core::configuration::ResolvedConfig,
     ) {
-        self.push(Entry::Configuration(harmonigraph_take::ConfigurationRecord::new(t, resolved)));
+        if self.last_configuration != Some(resolved) {
+            self.last_configuration = Some(resolved);
+            self.push(Entry::Configuration(harmonigraph_take::ConfigurationRecord::new(
+                t, resolved,
+            )));
+        }
     }
 
     /// Record raw parameter mirrors at plugin-block granularity.

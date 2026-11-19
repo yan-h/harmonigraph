@@ -517,7 +517,14 @@ impl Owner {
     }
 
     pub fn record(&mut self, recorder: &mut harmonigraph_record::Recorder, origin: Option<f64>) {
-        if self.status & ConfigurationView::INPUT_LOST != 0 && recorder.recording_epoch() != 0 {
+        // After lost input, a take this callback can still write to refuses
+        // its configuration: one armed at this callback's boundary, or one
+        // whose run a lost armed callback left open for this one to close. A
+        // loss while no take can be written fails nothing, as one before the
+        // first take never did; a take armed later still refuses until a host
+        // reset clears the loss (#1832).
+        let writable = self.recording.captured_intent.is_armed() || recorder.recording();
+        if self.status & ConfigurationView::INPUT_LOST != 0 && writable {
             recorder.fail_configuration();
         }
         let start = self.recording.block_start;
@@ -525,10 +532,11 @@ impl Owner {
         recorder.record(self.take_time(), origin);
         if recorder.recording() {
             // What the Hub assigned from, at the block's start and at each
-            // change inside it.
-            self.recording.configuration(recorder, start, self.in_force(start).config);
+            // change inside it. The recorder writes each only when it changed.
+            let clock = self.recording.presentation;
+            recorder.configuration(clock.at(start), self.in_force(start).config);
             for (sample, state) in self.maps.changes(start, end) {
-                self.recording.configuration(recorder, sample, state.config);
+                recorder.configuration(clock.at(sample), state.config);
             }
         }
         self.recording.registered(end);

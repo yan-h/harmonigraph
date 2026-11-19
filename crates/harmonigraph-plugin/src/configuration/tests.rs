@@ -1965,6 +1965,42 @@ fn a_configuration_applied_before_arming_records_once_as_the_takes_initial_value
     assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
 }
 
+/// Lost host input fails a take only where it can still reach one: the take
+/// armed at the loss, whose run the next callback closes, or one armed later
+/// before a host reset clears the loss. A loss after a take has closed fails
+/// nothing, rather than refusing every later take until the plugin reloads
+/// (#1832).
+#[test]
+fn lost_input_fails_only_a_take_it_can_still_reach() {
+    let _scope = crate::test_scope::enter();
+    let block = 64.0 / 48_000.0;
+    for armed_at_loss in [false, true] {
+        let (mut device, capture) = recorded_device();
+        device.activate();
+        capture.arm();
+        device.run_transport(0, vec![], false, None, Some(transport(0.0, 0)));
+        if !armed_at_loss {
+            capture.stop();
+            // The disarmed callback that closes the take's run.
+            device.run_transport(64, vec![], false, None, Some(transport(block, 0)));
+        }
+        // An event past the block's end: the host's input is lost.
+        let lost = vec![note(10, 60, 64, CLAP_EVENT_NOTE_ON)];
+        let (status, _) = device.run_transport(128, lost, false, None, None);
+        assert_eq!(status, CLAP_PROCESS_ERROR, "the fixture must lose the callback's input");
+        if armed_at_loss {
+            capture.stop();
+        }
+        device.run_transport(192, vec![], false, None, Some(transport(2.0 * block, 0)));
+        assert_eq!(capture.failed(), armed_at_loss, "armed at the loss: {armed_at_loss}");
+        if !armed_at_loss {
+            capture.arm();
+            device.run_transport(256, vec![], false, None, Some(transport(3.0 * block, 0)));
+            assert!(capture.failed(), "a take armed after the loss, before a reset, refuses");
+        }
+    }
+}
+
 #[test]
 fn canonical_publication_slots_and_loss_are_allocation_free() {
     let _scope = crate::test_scope::enter();

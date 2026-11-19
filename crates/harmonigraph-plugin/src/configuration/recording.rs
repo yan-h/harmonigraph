@@ -2,7 +2,6 @@
 //! each sits in the take's audio, and the configuration in force. Every record
 //! is timed where it sounds, and the take's reader places it by that time
 //! (#1760).
-use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_record::{configuration::RecordIntent, Recorder};
 
 /// The Hub's mapping from its samples to the take's presentation clock,
@@ -29,9 +28,6 @@ pub(crate) struct Recording {
     registered_through: i64,
     /// The intent captured at this callback's boundary.
     pub captured_intent: RecordIntent,
-    /// The configuration last written, and the take it was written in: a
-    /// stable block writes nothing, and a changed one writes once.
-    last: Option<(u64, ResolvedConfig)>,
     pub block_start: i64,
     pub block_frames: u32,
 }
@@ -41,25 +37,12 @@ impl Default for Recording {
             presentation: Presentation::default(),
             registered_through: i64::MIN,
             captured_intent: RecordIntent::default(),
-            last: None,
             block_start: 0,
             block_frames: 0,
         }
     }
 }
 impl Recording {
-    /// The configuration in force from `sample`, written when it changed.
-    pub fn configuration(&mut self, recorder: &mut Recorder, sample: i64, config: ResolvedConfig) {
-        if !recorder.recording() {
-            return;
-        }
-        let take = recorder.recording_epoch();
-        if self.last != Some((take, config)) {
-            recorder.configuration(self.presentation.at(sample), config);
-            self.last = Some((take, config));
-        }
-    }
-
     /// This block is registered through `end`.
     pub fn registered(&mut self, end: i64) {
         self.registered_through = end;
@@ -109,7 +92,8 @@ mod tests {
         recording.presentation = Presentation { anchor: Some((1000, 5.0)), rate: 48_000.0 };
         recorder.record(recording.presentation.at(recording.block_start), origin);
         for _ in 0..2 {
-            recording.configuration(&mut recorder, 1000, ConfigReducer::default().resolved());
+            let at = recording.presentation.at(1000);
+            recorder.configuration(at, ConfigReducer::default().resolved());
         }
         recording.registered(1040);
         let entries = capture.drain_entries();

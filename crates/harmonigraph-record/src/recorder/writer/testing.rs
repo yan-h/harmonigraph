@@ -88,6 +88,10 @@ impl Capture {
         self.fence.disarm();
         self.fence.finishing.store(true, Ordering::Release);
     }
+    /// Whether the take has failed, as the writer and `Control::start` read it.
+    pub fn failed(&self) -> bool {
+        self.fence.failed.load(Ordering::Acquire)
+    }
     pub fn drain_entries(&mut self) -> Vec<Entry> {
         std::iter::from_fn(|| self._records.pop().ok()).collect()
     }

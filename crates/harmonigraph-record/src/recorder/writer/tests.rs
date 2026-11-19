@@ -795,6 +795,32 @@ fn params_record_only_changes() {
     assert_eq!(b.pushed(), ["param 0=0.5 @2"], "only the one that moved");
 }
 
+/// A configuration is written only when it changes, and each take writes the
+/// one in force at its first block however unchanged since the take before:
+/// an export opens at its take's first configuration, so a take without one
+/// opens at the fresh tuning (#1832).
+#[test]
+fn each_take_opens_with_its_configuration_and_records_only_changes() {
+    use harmonigraph_core::configuration::{ConfigEdit, ConfigMutation, ConfigReducer, TuningAxis};
+    let mut reducer = ConfigReducer::default();
+    let held = reducer.resolved();
+    reducer.apply(ConfigMutation::Edit(ConfigEdit::axis(TuningAxis::Three, 690_000_000)));
+    let edited = reducer.resolved();
+    assert_ne!(held, edited, "the fixture's edit must change the configuration");
+    let mut b = Bench::new();
+    // Each take ends on the configuration the next opens with.
+    for take in 0..2 {
+        b.arm();
+        for (t, config) in [(0.0, held), (1.0, held), (2.0, edited), (3.0, edited), (4.0, held)] {
+            b.rec.configuration(t, config);
+        }
+        let written = b.pushed().iter().filter(|e| *e == "configuration-protocol").count();
+        assert_eq!(written, 3, "take {take}: its opening configuration, then each change");
+        b.rec.fence.disarm();
+        assert!(!b.rec.is_armed());
+    }
+}
+
 /// The reserved samples actually reach the ring.
 ///
 /// The counter beside them is a different claim: `audio` could reserve the
