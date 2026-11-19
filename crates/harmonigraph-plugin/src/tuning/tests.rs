@@ -384,7 +384,7 @@ fn initial_expression_order_and_identity_match_in_both_production_routes() {
             hub.activate();
             musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
             hub.shared().set_retune(true);
-            let mut tune = (!direct).then(|| tune());
+            let mut tune = (!direct).then(tune);
             let output = if let Some(tune) = &mut tune {
                 tune.activate();
                 tune.run(0, input, None);
