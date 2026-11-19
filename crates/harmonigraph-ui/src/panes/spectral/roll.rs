@@ -1867,31 +1867,6 @@ mod tests {
         assert_eq!(surround(&state, 1.0), 0.0, "a cut of nothing still made room for one");
     }
 
-    /// The renderer keeps its own copy of the cut's defaults
-    /// ([`SurroundCut::OFF`](harmonigraph_render::SurroundCut::OFF)), which its
-    /// timing probe draws a fresh look from; this keeps the two together.
-    #[test]
-    fn a_fresh_cut_is_the_renders_defaults_at_a_full_amount() {
-        assert_eq!(
-            fresh().appearance.spectrum.note_cut(),
-            harmonigraph_render::SurroundCut {
-                amount: 1.0,
-                ..harmonigraph_render::SurroundCut::OFF
-            },
-        );
-    }
-
-    /// The renderer's timing probe draws ribbons at the pane's default width,
-    /// which it cannot read from `SpectrumConfig`; this keeps the two together
-    /// ([`DEFAULT_RIBBON_SEMITONES`](harmonigraph_render::DEFAULT_RIBBON_SEMITONES)).
-    #[test]
-    fn a_fresh_ribbon_is_the_renders_probe_width() {
-        assert_eq!(
-            fresh().appearance.spectrum.roll_thickness,
-            harmonigraph_render::DEFAULT_RIBBON_SEMITONES,
-        );
-    }
-
     /// A cut of nothing is off upstream of the renderer too: the roll's
     /// far-edge cull keeps a note only for the ribbon's own pixel feather
     /// rather than for a reach-sized surround that will not paint.

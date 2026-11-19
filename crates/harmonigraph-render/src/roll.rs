@@ -40,12 +40,6 @@ use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
-/// The pane's default Ribbon width in semitones, which this crate cannot read
-/// from `SpectrumConfig`. Only the roll timing probe draws with it;
-/// `harmonigraph-ui` pins it to `roll_thickness`'s default
-/// (`a_fresh_ribbon_is_the_renders_probe_width`).
-pub const DEFAULT_RIBBON_SEMITONES: f32 = 0.551_037_2;
-
 pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 
 /// Entry points the roll shader must provide: the two vertex stages (the
@@ -187,6 +181,35 @@ impl RollInstance {
     pub const WHOLE: [f32; 2] = [f32::MIN, f32::MAX];
     /// A [`taper`](Self::taper) at full width all along.
     pub const UNTAPERED: [f32; 4] = [1.0; 4];
+    /// Every field at the value that leaves the box as it is: square, unbent,
+    /// whole, at full width and opacity, with no lead, no ornament and no cut,
+    /// and with no size or color. A caller fills in what it means and takes the
+    /// rest from here, so a ribbon-only field it never names cannot drop its
+    /// box by being left at zero.
+    pub const PLAIN: Self = Self {
+        center: [0.0; 2],
+        half_extent: [0.0; 2],
+        shear: 0.0,
+        rounding: 0.0,
+        lead_fade: 0.0,
+        lead_alpha: 1.0,
+        core: [0; 4],
+        aura: [0; 4],
+        span: Self::WHOLE,
+        ramp: [0.0; 2],
+        fade: [1.0; 2],
+        taper_depth: [0.0; 4],
+        taper: Self::UNTAPERED,
+        tremolo: [0.0; 2],
+    };
+
+    /// One of the Spiral's dots: a disc of `radius` points round `center`, in
+    /// `core`, premultiplied as [`core`](Self::core) is. It cuts nothing here:
+    /// the dots' cut is `dot_surround`'s.
+    pub fn dot(center: [f32; 2], radius: f32, core: [u8; 4]) -> Self {
+        Self { center, half_extent: [radius, radius], rounding: radius, core, ..Self::PLAIN }
+    }
+
     /// The fields in declaration order, which is what places each one: the
     /// macro lays the offsets out in the order listed. roll.wgsl's
     /// `NoteInput` reads them at the same contiguous locations. Several fields
@@ -288,6 +311,33 @@ pub fn roll_paint_callback(
             target_format,
             pane_id,
         },
+    )
+}
+
+/// Draw the Spiral's `dots` ([`RollInstance::dot`]) into `rect` through the
+/// roll's renderer, so they bloom through its chain at `bloom`: a
+/// [`roll_paint_callback`] with no cut of its own and no axis to turn, the
+/// whole of `rect` its clip and its bloom's owner. `pane_id` is as there.
+pub fn dots_paint_callback(
+    rect: egui::Rect,
+    dots: Vec<RollInstance>,
+    bloom: f32,
+    target_format: wgpu::TextureFormat,
+    pane_id: u64,
+) -> egui::PaintCallback {
+    roll_paint_callback(
+        rect,
+        rect.size(),
+        dots,
+        RollClip::whole(rect),
+        // A disc has no axis to turn: any pair the shader can read.
+        RollAxes { pitch_dir: [1.0, 0.0], depth_dir: [0.0, 1.0] },
+        bloom,
+        crate::SurroundCut::OFF,
+        target_format,
+        pane_id,
+        // The cut is off, and its reach is all this scales.
+        1.0,
     )
 }
 

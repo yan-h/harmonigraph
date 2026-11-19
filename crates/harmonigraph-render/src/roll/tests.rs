@@ -236,20 +236,11 @@ pub(crate) fn centered_note() -> RollInstance {
     RollInstance {
         center: [128.0, 128.0],
         half_extent: [12.0, 60.0],
-        shear: 0.0,
-        rounding: 0.0,
-        lead_fade: 0.0,
-        lead_alpha: 1.0,
         core: [255, 0, 0, 255],
         // Cutting whole, and filling with black, so the harness's cut takes
         // the backdrop toward black.
         aura: [0, 0, 0, 255],
-        span: RollInstance::WHOLE,
-        ramp: [0.0, 0.0],
-        fade: [1.0, 1.0],
-        taper_depth: [0.0; 4],
-        taper: RollInstance::UNTAPERED,
-        tremolo: [0.0; 2],
+        ..RollInstance::PLAIN
     }
 }
 
@@ -1042,13 +1033,7 @@ fn a_box_rounded_at_its_half_extent_is_a_disc() {
         return;
     };
     // White on black with no cut, so every byte is the disc's coverage.
-    let dot = RollInstance {
-        half_extent: [12.0, 12.0],
-        rounding: 12.0,
-        core: [255; 4],
-        aura: [0; 4],
-        ..centered_note()
-    };
+    let dot = RollInstance::dot([128.0, 128.0], 12.0, [255; 4]);
     let frame = draw(&device, &queue, vec![dot], wgpu::Color::BLACK);
     let ink: f32 = (0..SIZE[1])
         .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))

@@ -93,10 +93,9 @@ pub fn surround_fade(shape: f32, x: f32) -> f32 {
 }
 
 impl SurroundCut {
-    /// No surround: what a cut at its defaults but for its amount draws.
-    /// `harmonigraph-ui` pins the rest to `SpectrumConfig::default`
-    /// (`a_fresh_cut_is_the_renders_defaults_at_a_full_amount`), which the
-    /// timing probe leans on.
+    /// No surround, its other fields at representative values: what a
+    /// non-finite field falls back to, and what the timing probe dials a full
+    /// amount into.
     pub const OFF: Self = Self { amount: 0.0, reach: 15.0, shape: 0.0, tint_fade: 3.0 };
 
     /// Every field in its range, a non-finite one taken as [`Self::OFF`]'s.
