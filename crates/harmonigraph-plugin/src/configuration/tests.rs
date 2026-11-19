@@ -920,6 +920,8 @@ fn a_ui_state_edit_marks_the_project_once_and_its_restore_does_not() {
 /// editor opens marks nothing, nor does a restore (#1824). `frame` is what
 /// the end of each editor frame does, and the editor opens docked, where a
 /// host's `set_size` is the editor's size.
+/// A notice only sets a flag the host services, so the device is serviced
+/// after every frame: notices from two frames would otherwise read as one.
 #[test]
 fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not() {
     let _scope = crate::test_scope::enter();
@@ -950,11 +952,14 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     assert_eq!(device.service(), before, "a resize while the editor opens");
     resize(30);
     frame();
+    assert_eq!(device.service(), before + 1, "a resize");
     frame();
-    assert_eq!(device.service(), before + 1, "a resize, once");
+    assert_eq!(device.service(), before + 1, "once");
     state.set_docked(false);
     frame();
     assert_eq!(device.service(), before + 2, "an Own window switch");
+    frame();
+    assert_eq!(device.service(), before + 2, "once");
 
     let saved = crate::editor::EguiState::from_size(900, 700);
     saved.set_docked(true);
@@ -970,6 +975,7 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     state.set_open(false);
     resize(20);
     frame();
+    assert_eq!(device.service(), before + 2, "a resize while the view moves in");
     state.set_open(true);
     resize(20);
     frame();
