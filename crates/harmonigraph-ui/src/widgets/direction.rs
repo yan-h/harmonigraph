@@ -67,7 +67,9 @@ pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32, fresh: (f3
         let (_, next) = plot.handle(ui, "Depth axis", *length * angle.cos(), *length * angle.sin());
         if let Some(p) = next {
             if p.length() > 0.001 {
-                *angle = p.y.atan2(p.x);
+                // The plot already keeps the handle in its quadrant; the bounds
+                // are the bar's and the load's, so all three read one range.
+                *angle = p.y.atan2(p.x).clamp(*angles.start(), *angles.end());
             }
             *length = p.length().clamp(*lengths.start(), *lengths.end());
         }

@@ -10,12 +10,16 @@ pub(crate) fn threshold(
     hysteresis: &mut f32,
     fresh: (f32, f32),
 ) -> egui::Response {
-    use harmonigraph_scene::{SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX};
+    use harmonigraph_scene::{
+        closing_threshold, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
+    };
     let plot = Plot::with_fields(ui, "Ring threshold", 3);
-    // Include the full negative extent of the stored band. Clipping it at zero
-    // would silently discard hysteresis when the opening threshold is lowered.
-    let x = |v: f32| (v + SPECTRAL_HYSTERESIS_MAX) / (1.0 + SPECTRAL_HYSTERESIS_MAX);
-    let value = |x: f32| x * (1.0 + SPECTRAL_HYSTERESIS_MAX) - SPECTRAL_HYSTERESIS_MAX;
+    // Include the full negative extent of the stored band. Clipping it at the
+    // gate's floor would silently discard hysteresis when the opening threshold
+    // is lowered.
+    let (low, high) = (SPECTRAL_GATE_MIN - SPECTRAL_HYSTERESIS_MAX, SPECTRAL_GATE_MAX);
+    let x = |v: f32| (v - low) / (high - low);
+    let value = |x: f32| low + x * (high - low);
     let (_, next) = plot.handle(ui, "Turn on", x(*gate), 0.8);
     if let Some(p) = next {
         *gate = value(p.x).clamp(SPECTRAL_GATE_MIN, SPECTRAL_GATE_MAX);
@@ -41,8 +45,8 @@ pub(crate) fn threshold(
             100.0,
             " pp",
         );
-        let off = (*gate - *hysteresis).max(gate.min(1.0 / 255.0));
-        let status = if *gate == 0.0 {
+        let off = closing_threshold(*gate, *hysteresis);
+        let status = if *gate == SPECTRAL_GATE_MIN {
             "Includes silence".to_owned()
         } else {
             format!("Off < {:.2}%", off * 100.0)
@@ -63,10 +67,11 @@ pub(crate) fn threshold(
         vec![plot.point(x(*gate - *hysteresis), 0.2), plot.point(x(*gate), 0.8)],
         theme::accent(),
     );
-    plot.line(ui, vec![plot.point(x(0.0), 0.0), plot.point(x(0.0), 1.0)], theme::hairline());
-    // The level buffer has 255 steps. Match its anti-latching floor, including
-    // the distinct gate=0 state which deliberately shows silent rings.
-    let off = (*gate - *hysteresis).max(gate.min(1.0 / 255.0));
+    let floor = x(SPECTRAL_GATE_MIN);
+    plot.line(ui, vec![plot.point(floor, 0.0), plot.point(floor, 1.0)], theme::hairline());
+    // Where the scene's gate lets an open bucket go, its anti-latching floor
+    // and the gate's own floor, which deliberately shows silent rings, included.
+    let off = closing_threshold(*gate, *hysteresis);
     plot.line(ui, vec![plot.point(x(off), 0.0), plot.point(x(off), 0.45)], theme::text());
     plot.dot(ui, x(*gate), 0.8);
     plot.dot(ui, x(*gate - *hysteresis), 0.2);
