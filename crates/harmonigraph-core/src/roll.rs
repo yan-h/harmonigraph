@@ -502,9 +502,10 @@ impl NoteRoll {
     /// whether the rest of the fade is drawn and whether the trail picks the
     /// pitch up — a press hidden when it let go is neither, and one visible
     /// then is both, whatever its source does mid-fade (#905). So a hidden one
-    /// is retired at once: filed in `past`, where the timeline still follows
-    /// the CURRENT Show switch, or dropped if it is marked off the timeline.
-    /// The question was asked as it left the held set ([`depart`](Self::depart)).
+    /// is retired at once ([`retire`](Self::retire)): a timeline note is filed
+    /// in `past`, where the timeline still follows the CURRENT Show switch, and
+    /// a rule-1 pulse is dropped. The question was asked as it left the held
+    /// set ([`depart`](Self::depart)).
     fn release(&mut self, note: RollNote) {
         if note.left_hidden {
             self.retire(note);
@@ -540,10 +541,10 @@ impl NoteRoll {
     ///
     /// A note Clear took is dropped instead: it was a voice and nothing else.
     /// A rule-1 pulse is filed, off the timeline, so the lattice can replay a
-    /// departure that outlasts its voice's fade. The note cap applies as each
-    /// note is filed.
+    /// departure that outlasts its voice's fade, unless it left hidden (rule
+    /// 4), when nothing reads it. The note cap applies as each note is filed.
     fn retire(&mut self, note: RollNote) {
-        if note.cleared != Cleared::No {
+        if note.cleared != Cleared::No || (note.pulse && note.left_hidden) {
             return;
         }
         let at = note.departed();
@@ -568,8 +569,8 @@ impl NoteRoll {
     ///
     /// Rule 6: a fading note it lists that has an end — a factual off, a
     /// reset — is retired without a trail mark, since the source says the
-    /// note is sounding: filed in `past`, or dropped if it is marked off the
-    /// timeline, a rule-1 pulse or a note Clear took. A fresh entry starts at
+    /// note is sounding ([`retire`](Self::retire)): filed in `past`, a rule-1
+    /// pulse among them, or dropped if Clear took it. A fresh entry starts at
     /// the row's onset.
     ///
     /// A note Clear took off the timeline is REVIVED by a row that lists it:
@@ -695,9 +696,15 @@ impl NoteRoll {
         Self { uncapped: true, ..Self::default() }
     }
 
+    /// Rule-1 pulses go first, oldest first, since they are no timeline note
+    /// and the lattice reads only the last few seconds of them; then the
+    /// oldest releases. A scan for a pulse only once the cap is reached.
     fn enforce_cap(&mut self) {
         while !self.uncapped && self.past.len() > Self::MAX_NOTES {
-            self.past.pop_front();
+            match self.past.iter().position(|note| note.pulse) {
+                Some(index) => self.past.remove(index),
+                None => self.past.pop_front(),
+            };
         }
     }
 
@@ -713,7 +720,8 @@ impl NoteRoll {
     }
 
     /// End each fade that is over: the note records its pitch and moves to
-    /// `past`, or is dropped if it is off the timeline. Then the two bounds.
+    /// `past`, or is dropped if Clear took it ([`retire`](Self::retire)). Then
+    /// the two bounds.
     /// Called once per frame through
     /// [`NoteTracker::prune`](crate::NoteTracker::prune).
     pub(crate) fn prune(&mut self, now: Time, env: &Envelope, mut record: impl FnMut(&Voice)) {
@@ -826,9 +834,11 @@ impl NoteRoll {
     /// again. That is what "clear the roll" is asked for; the alternative (keep
     /// the held ones) leaves a stub whose start time is already off-screen.
     ///
-    /// The lattice keeps what is held and drops what is fading, as the glow
-    /// does its lights (`PictureState::clear_accumulated`), and the finished
-    /// presses in `past` go with the timeline.
+    /// The lattice's replay ([`voice_presses`](Self::voice_presses)) keeps
+    /// what is held and leaves out what is fading, as the glow drops released
+    /// notes' lights (`PictureState::clear_accumulated`); a surface already
+    /// drawing a departure finishes it. The finished presses in `past`, rule-1
+    /// pulses among them, go with the timeline.
     pub fn clear(&mut self) {
         self.past.clear();
         for note in self.live.values_mut() {
@@ -1084,6 +1094,27 @@ mod tests {
         assert!(
             roll.notes().all(|n| n.start >= 0.75),
             "the first eight presses should have been dropped"
+        );
+    }
+
+    /// A rule-1 pulse kept for the lattice's replay is no timeline note, so
+    /// the cap takes it before any timeline note, however recent it is.
+    #[test]
+    fn the_note_cap_takes_pulses_before_timeline_notes() {
+        let mut tracker = NoteTracker::new();
+        for i in 0..NoteRoll::MAX_NOTES {
+            let t = i as Time * 0.1;
+            tracker.handle_event(on(t, 60));
+            tracker.handle_event(off(t + 0.05, 60));
+        }
+        let late = NoteRoll::MAX_NOTES as Time * 0.1;
+        tracker.handle_event(on(late, 62));
+        tracker.handle_event(off(late, 62));
+        tracker.prune(late + 2.0, &Envelope::default());
+        assert_eq!(
+            tracker.roll().len(),
+            NoteRoll::MAX_NOTES,
+            "a pulse took a timeline note's place"
         );
     }
 

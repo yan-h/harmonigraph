@@ -20,8 +20,6 @@ type Identity = PressId;
 struct FactualTip {
     bend: (u64, u32),
     end: Option<u64>,
-    /// A rule-1 pulse's lattice off, fixed when the pulse is first seen.
-    pulse_off: Option<f64>,
 }
 #[derive(Clone, Copy)]
 struct Held {
@@ -488,12 +486,20 @@ impl NodeMotion {
         view: &ViewConfig,
         now: f64,
     ) -> Vec<PitchClass> {
+        let env = view.envelope();
         let floor = now - horizon(view.fade_time, view.mark_delay, view.note_animation);
         let mut classes: Vec<_> = tracker.voices().map(|voice| voice.pitch_class).collect();
-        let presses = tracker.roll().voice_presses(floor);
-        for note in presses.filter(|note| note.end.is_none_or(|at| at >= floor)) {
+        // A pulse is on the lattice until its off, which `step` puts where its
+        // release starts, once the attack has landed: sought and kept by that.
+        let attack = f64::from(env.attack_time.max(0.0));
+        let presses = tracker.roll().voice_presses(floor - attack);
+        for note in presses {
+            let off = |end| if note.is_pulse() { env.release_start(note.start, end) } else { end };
+            if note.end.is_some_and(|at| off(at) < floor) {
+                continue;
+            }
             for ((at, pitch), (end, next)) in note.segments(now) {
-                if at <= now && end >= floor {
+                if at <= now && off(end) >= floor {
                     classes.push(PitchClass::from_cents(pitch * 100.0));
                     classes.push(PitchClass::from_cents(next * 100.0));
                 }
@@ -742,14 +748,6 @@ impl NodeMotion {
         };
         let retained =
             now - horizon.max(self::horizon(crate::FADE_TIME_MAX, crate::MARK_DELAY_MAX, longest));
-        // Rule 1's pulse: a press released at or before its onset is a voice
-        // that still pulses in full, its release waiting out the attack
-        // (`Voice::release_level`), and the lattice's off for it waits the same.
-        // Only for it: any press with a length the lattice draws as far as its
-        // attack got. The off is fixed as the pulse is first seen and carried
-        // in its cursor, so a Fade drag after it neither moves an off already
-        // applied nor holds the pulse again.
-        let attack = f64::from(env.attack_time.max(0.0));
         // What the voices drew, and not the Roll's timeline: the timeline
         // leaves out a pulse, and follows the Show switch for a press that was
         // hidden as it left, which would replay a fade nobody saw. Sought from
@@ -772,10 +770,20 @@ impl NodeMotion {
         for note in notes {
             let id = note.id();
             let old = self.seen.get(&id);
-            let pulse_off = note
-                .is_pulse()
-                .then(|| old.and_then(|tip| tip.pulse_off).unwrap_or(note.start + attack));
-            let off = pulse_off.or(note.end);
+            // Rule 1's pulse: a voice that still pulses in full, its release
+            // waiting out the attack (`Envelope::release_start`), and the
+            // lattice's off for it waits the same. Only for it: any press with
+            // a length the lattice draws as far as its attack got.
+            let off =
+                note.end.map(
+                    |at| {
+                        if note.is_pulse() {
+                            env.release_start(note.start, at)
+                        } else {
+                            at
+                        }
+                    },
+                );
             if off.is_some_and(|at| at < retained) {
                 continue;
             }
@@ -794,7 +802,7 @@ impl NodeMotion {
                     (note.start, note.start_pitch()),
                     (note.start, note.start_pitch()),
                 ));
-                FactualTip { bend: (at.to_bits(), pitch.to_bits()), end, pulse_off }
+                FactualTip { bend: (at.to_bits(), pitch.to_bits()), end }
             };
             let behind = |at| self.at.is_some_and(|begin| at < begin) && at >= floor && at <= now;
             late |= old.is_none() && behind(note.start);
@@ -1709,27 +1717,32 @@ mod tests {
             assert!(lit || now == 1.0, "the tuned node is dark at {now}");
         }
     }
-    /// A Note fade dragged longer after a pulse has left does not hold it
-    /// again: its off is where the Fade put it when the pulse was seen.
+    /// A pulse's pitch stays a halo candidate for as long as its node departs,
+    /// which its off starts once the attack has landed: a surface opened late
+    /// in the departure (an export's first frame, a Video preview) chooses its
+    /// off-pane light owners from these.
     #[test]
-    fn a_fade_drag_after_a_pulse_left_does_not_bring_it_back() {
-        let view = view();
+    fn a_pulse_stays_a_halo_candidate_for_its_whole_departure() {
+        let mut view = view();
+        view.note_animation.stagger_spread = 0.9;
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
-        draw_duration(&mut motion, &mut tracker, &view, 0.95, false, 0.5);
         tracker.handle_event(on(1.0, 60));
         tracker.handle_event(off(1.0, 60));
-        let mut last = 1.0;
-        for k in 0..30 {
+        let mut departing = 0;
+        for k in 0..=80 {
             let now = 1.0 + f64::from(k) * 0.05;
-            // Past the off at 1.5, the bar dragged to 0.9: the off it would
-            // put the pulse at now is still to come.
-            let fade = if now < 1.6 { 0.5 } else { 0.9 };
-            let scene = draw_duration(&mut motion, &mut tracker, &view, now, false, fade);
-            let presence = origin(&scene).presence_with_opacity;
-            assert!(now < 1.55 || presence <= last, "the pulse arrived again at {now}: {presence}");
-            last = presence;
+            let scene = draw(&mut motion, &mut tracker, &view, now, false);
+            if origin(&scene).presence_with_opacity > 0.0 {
+                departing += usize::from(tracker.voices().count() == 0);
+                let classes = NodeMotion::light_classes(&tracker, &scene.view, now);
+                assert!(
+                    classes.contains(&PitchClass::from_midi_note(60)),
+                    "the pulse was no candidate at {now} while its node still drew"
+                );
+            }
         }
+        assert!(departing > 0, "the fixture's departure must outlast the pulse's voice");
     }
     /// A pulse's lattice departure outlasts its voice's fade by the fade-out
     /// delay: a surface opened after the voice is gone draws it as the surface

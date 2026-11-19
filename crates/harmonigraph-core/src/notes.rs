@@ -500,6 +500,15 @@ impl Envelope {
     pub fn release(&self, now: Time, at: Time) -> f32 {
         1.0 - self.approach(now - at, self.fade_time)
     }
+
+    /// Where the release of a press that sounded from `on` and let go at
+    /// `off` starts: at its off, or once its attack has landed if that is
+    /// later. The one statement that a release waits out the attack, which
+    /// every voice's does ([`Voice::release_level`]) and the lattice's for a
+    /// rule-1 pulse.
+    pub fn release_start(&self, on: Time, off: Time) -> Time {
+        off.max(on + f64::from(self.attack_time))
+    }
 }
 
 /// One sounding (or recently sounding) note: a held or fading press of the
@@ -567,9 +576,7 @@ impl Voice {
             // and an infinite one pushes the start past every clock, which
             // `release` reads as already over. Both END the voice, which is
             // the side `prune` can recover from (see `Envelope::approach`).
-            VoiceState::Released { at } => {
-                env.release(now, at.max(self.on_time + f64::from(env.attack_time)))
-            }
+            VoiceState::Released { at } => env.release(now, env.release_start(self.on_time, at)),
         }
     }
 
