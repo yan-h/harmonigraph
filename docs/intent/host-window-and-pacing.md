@@ -47,4 +47,4 @@ The 2026-10-22 section moved here from `editor-shell.md` when the 2026-11-02 dri
 Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
 
 - The armed Record button's breath and a running export's progress stripes animate at about 30 Hz, rather than holding the editor at the display rate, since a full redraw at 144 Hz costs Bitwig's main thread (#1673); the cues stay. #1861 Q1
-- The input worker owns the input state only it reads (the event and audio queues, the audio position and origin, the analysis, the Tape notes, the recorder handle) instead of keeping it under the editor lock; frames keep the clock, and the take's end debounce stays where it is. To be built. #1861 R1
+- The input worker owns the input state only it reads (the event and audio queues, the audio position and origin, the analysis, the Tape notes, the recorder handle) instead of keeping it under the editor lock; frames keep the clock, and the take's end debounce stays where it is. #1861 R1, built in #1887
