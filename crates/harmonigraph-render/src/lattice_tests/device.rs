@@ -38,7 +38,7 @@ fn installed(
 #[cfg(not(feature = "hot-reload"))]
 #[test]
 fn reopening_reuses_pipelines_with_fresh_window_resources() {
-    let Some(mut shooter) = Shooter::new([256, 256]) else {
+    let Some(mut shooter) = Shooter::fresh([256, 256]) else {
         return;
     };
     let instance = shooter.instance.clone();
@@ -101,7 +101,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
 #[test]
 fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
     use crate::startup::Status;
-    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let Some(mut shooter) = Shooter::fresh([256, 256]) else { return };
     let instance = shooter.instance.clone();
     let scene = parity_scene();
     let synchronous = shooter.shot(&scene);

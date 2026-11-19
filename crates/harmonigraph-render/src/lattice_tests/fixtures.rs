@@ -299,26 +299,74 @@ pub(super) struct Shooter {
     pub(super) font: wgpu::Texture,
 }
 
-impl Shooter {
-    /// `None` where the machine has no usable GPU — CI containers, mostly.
-    /// Every caller returns on it.
-    pub(super) fn new(size: [u32; 2]) -> Option<Shooter> {
+/// The device every [`Shooter::new`] draws on, and the programs a window
+/// installs compiled for it once, through production's own path
+/// ([`LatticePipelineCache::install`]), rather than a device and a compile
+/// per test: about 20 ms of compile apiece, for each of over a hundred
+/// shooters (#1871).
+struct SharedGpu {
+    instance: wgpu::Instance,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    programs: LatticePipelineCache,
+}
+
+fn shared_gpu() -> Option<&'static SharedGpu> {
+    static GPU: std::sync::OnceLock<Option<SharedGpu>> = std::sync::OnceLock::new();
+    GPU.get_or_init(|| {
         let (instance, adapter) = crate::test_gpu_adapter()?;
         let (device, queue) =
             pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter)))
                 .expect("headless device");
+        Some(SharedGpu { instance, device, queue, programs: LatticePipelineCache::default() })
+    })
+    .as_ref()
+}
+
+impl Shooter {
+    /// A shooter on the shared device, its programs already installed, as a
+    /// window's are. `None` where the machine has no usable GPU — CI
+    /// containers, mostly. Every caller returns on it.
+    pub(super) fn new(size: [u32; 2]) -> Option<Shooter> {
+        let gpu = shared_gpu()?;
+        let mut resources = CallbackResources::default();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        gpu.programs.install(&gpu.instance, &gpu.device, &gpu.queue, format, &mut resources);
+        Some(Self::on(gpu.instance.clone(), gpu.device.clone(), gpu.queue.clone(), resources, size))
+    }
+
+    /// A shooter on a device of its own, which compiles on its first frame:
+    /// for a test whose subject is the device or what is compiled on it, which
+    /// another test's validation error or leftovers must not reach. Those
+    /// tests are compiled out under `hot-reload`.
+    #[cfg_attr(feature = "hot-reload", allow(dead_code))]
+    pub(super) fn fresh(size: [u32; 2]) -> Option<Shooter> {
+        let (instance, adapter) = crate::test_gpu_adapter()?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter)))
+                .expect("headless device");
+        Some(Self::on(instance, device, queue, CallbackResources::default(), size))
+    }
+
+    fn on(
+        instance: wgpu::Instance,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        resources: CallbackResources,
+        size: [u32; 2],
+    ) -> Shooter {
         let font = crate::text::tests::font_texture(&device, &queue, &crate::text::tests::atlas());
-        Some(Shooter {
+        Shooter {
             font,
             instance,
             device,
             queue,
-            resources: CallbackResources::default(),
+            resources,
             format: wgpu::TextureFormat::Rgba8Unorm,
             size,
             pane: 1,
             clear: wgpu::Color::BLACK,
-        })
+        }
     }
 
     /// `scene` drawn to a fresh texture over black, read back as RGBA8.
