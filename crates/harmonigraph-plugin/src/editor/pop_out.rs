@@ -49,10 +49,13 @@ pub(super) fn open(
         return;
     };
     let out = !editor.docked();
-    let closed = Some(Box::new(move || host.closed()) as Box<dyn Fn() -> bool>);
+    // The window's close button tells the host, which destroys the editor.
+    let closed: Box<dyn Fn() -> bool> = Box::new(move || host.closed());
     // SAFETY: the host's view the editor opened in, and baseview's inside it,
     // both alive for the call.
-    unsafe { own.open(host_view, view.ns_view, out, LIMITS, closed, Box::new(moving(editor))) };
+    unsafe {
+        own.open(host_view, view.ns_view, out, LIMITS, Some(closed), Box::new(moving(editor)))
+    };
 }
 
 /// What a move writes into the editor's saved state, before the view moves:

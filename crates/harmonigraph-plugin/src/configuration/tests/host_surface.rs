@@ -525,7 +525,6 @@ fn report() -> String {
             )
             .unwrap();
         }
-        drop(context);
     }
     out
 }

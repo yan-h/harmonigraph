@@ -208,7 +208,8 @@ impl<P: Plugin> Wrapper<P> {
 
             params: plugin.params(),
             plugin: Mutex::new(plugin),
-            // Initialized later as it needs a reference to the wrapper
+            // Set below, once the plugin has its `EditorHost`, which needs
+            // the wrapper's `Arc`.
             editor: OnceLock::new(),
             editor_handle: Mutex::new(None),
 

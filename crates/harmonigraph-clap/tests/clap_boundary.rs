@@ -696,7 +696,6 @@ fn an_editor_edit_applies_at_once_and_reaches_the_host_at_offset_zero() {
     d.sink.script = vec![];
     d.run(128, vec![], None);
     assert_eq!(offers(&mut d.sink), (reported.to_vec(), vec![0.5]), "told again");
-    drop(context);
 }
 
 /// A transport event in the host's list reaches the plugin at its sample,
@@ -789,7 +788,6 @@ fn a_gesture_held_open_across_callbacks_ends_when_the_editor_ends_it() {
     context.end_set_parameter(row);
     d.run(128, vec![], None);
     assert_eq!(d.told(), ["end", "note"]);
-    drop(context);
 }
 
 /// Host automation of the row an editor edit is pending on takes effect in
@@ -812,7 +810,6 @@ fn the_editor_value_is_told_though_automation_wrote_the_row() {
     d.sink.script = vec![];
     d.run(64, vec![], None);
     assert_eq!(d.told(), ["begin", "0.25", "end", "note"]);
-    drop(context);
 }
 
 /// A flush tells the host what the editor did, the editor's value though the
@@ -831,7 +828,6 @@ fn a_flush_tells_the_editor_value_though_its_own_wrote_the_row() {
     assert_eq!(d.value(), 0.75);
     d.run(0, vec![], None);
     assert_eq!(d.told(), ["note"]);
-    drop(context);
 }
 
 /// A restore drops an edit the host was not told: the host reads the
@@ -848,7 +844,6 @@ fn a_restore_drops_an_edit_the_host_was_not_told() {
     d.run(0, vec![], None);
     assert_eq!(d.told(), ["note"]);
     assert_eq!(d.value(), 0.5);
-    drop(context);
 }
 
 /// The editor's open path, through `gui.set_parent`: a resize the editor

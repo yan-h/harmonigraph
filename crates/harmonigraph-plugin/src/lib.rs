@@ -142,8 +142,9 @@ pub struct Harmonigraph {
     /// State shared with the editor; created eagerly so the ring buffer's
     /// consumer end has somewhere to live before the GUI opens.
     editor_shared: Arc<editor::EditorLock>,
-    /// The host's side of the editor, given before the editor is made, which
-    /// its own window's close button tells.
+    /// The host's side of the editor, given before the editor is made: the
+    /// editor's parameter edits, its resize requests and its own window's
+    /// close go through it.
     editor_host: Option<Arc<dyn EditorHost>>,
     sample_rate: f64,
     samples_processed: u64,

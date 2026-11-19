@@ -2475,7 +2475,6 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
         );
     }
     assert_eq!(gestures.get().open().count(), 0);
-    drop(context);
 }
 
 /// Every host gesture the editor holds open, a map-offset lane's as well as a
@@ -2549,7 +2548,6 @@ fn the_editors_gestures_end_once_when_it_stops_being_seen_or_closes() {
     events.extend(device.run(256, vec![], false).attempts);
     assert_eq!(count(&events, begins, lane_id), 3, "a lane's begin bypassed the registry");
     assert_eq!(count(&events, ends, lane_id), 3, "the close left a lane open");
-    drop(context);
 }
 
 /// The own window's close button tells the host through `EditorHost::closed`,
