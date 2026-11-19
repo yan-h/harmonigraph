@@ -1,7 +1,6 @@
 #[macro_use]
 mod util;
 
-mod context;
 mod descriptor;
 pub mod features;
 pub mod setup;
@@ -15,15 +14,6 @@ pub use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_
 pub use clap_sys::host::clap_host;
 pub use clap_sys::plugin::{clap_plugin, clap_plugin_descriptor};
 pub use clap_sys::version::CLAP_VERSION;
-
-/// The host's side of the editor, for an editor with a window of its own
-/// (see [`Plugin::editor_host`](crate::plugin::Plugin::editor_host)). Main thread only.
-pub trait EditorHost: Send + Sync {
-    /// `clap_host_gui::closed(was_destroyed: true)`: tell the host the user
-    /// closed the editor's window, for the host to destroy the editor, which
-    /// it may do during the call. False where the host has no gui extension.
-    fn closed(&self) -> bool;
-}
 
 /// Export one or more CLAP plugins from this library using the provided plugin types.
 #[macro_export]

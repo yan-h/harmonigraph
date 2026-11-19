@@ -144,7 +144,7 @@ pub struct Harmonigraph {
     editor_shared: Arc<editor::EditorLock>,
     /// The host's side of the editor, given before the editor is made, which
     /// its own window's close button tells.
-    editor_host: Option<Arc<dyn harmonigraph_clap::wrapper::clap::EditorHost>>,
+    editor_host: Option<Arc<dyn EditorHost>>,
     sample_rate: f64,
     samples_processed: u64,
     /// Continuous presentation seconds across raw sample-clock resets/rate changes.
@@ -433,7 +433,7 @@ impl HarmonigraphParams {
 pub(crate) struct PluginParamBackend<'a> {
     pub params: &'a HarmonigraphParams,
     /// Where the editor's writes go: the host, then the table.
-    pub host: &'a dyn GuiContext,
+    pub host: &'a dyn EditorHost,
     /// The tuning configuration as this frame reads it, once, so every
     /// slider in the frame shows one coherent value.
     pub configuration: harmonigraph_ui::params::ConfigurationView,
@@ -926,12 +926,13 @@ impl Plugin for Harmonigraph {
         }))
     }
 
-    fn editor_host(&mut self, host: Arc<dyn harmonigraph_clap::wrapper::clap::EditorHost>) {
+    fn editor_host(&mut self, host: Arc<dyn EditorHost>) {
         self.editor_host = Some(host);
     }
 
     fn editor(&mut self) -> Option<Box<dyn Editor>> {
-        editor::create(self.params.clone(), self.editor_shared.clone(), self.editor_host.clone())
+        let host = self.editor_host.clone()?;
+        Some(editor::create(self.params.clone(), self.editor_shared.clone(), host))
     }
 
     fn init(&mut self) -> bool {

@@ -152,7 +152,7 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     }
 }
 
-pub fn edit(params: &crate::HarmonigraphParams, host: &dyn GuiContext, edit: MapEdit) {
+pub fn edit(params: &crate::HarmonigraphParams, host: &dyn EditorHost, edit: MapEdit) {
     let set = |row: Row, value: i32| {
         host.begin_set_parameter(row.index());
         host.set_parameter(row.index(), value as f32);

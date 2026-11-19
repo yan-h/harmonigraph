@@ -10,6 +10,7 @@ use objc2_foundation::{
 };
 use std::any::Any;
 use std::cell::OnceCell;
+use std::ffi::c_void;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -81,11 +82,8 @@ fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
     NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))
 }
 impl Editor for NativeEditor {
-    fn spawn(&self, parent: ParentWindowHandle, _: Arc<dyn GuiContext>) -> Box<dyn Any + Send> {
+    fn spawn(&self, parent: *mut c_void) -> Box<dyn Any + Send> {
         let mtm = MainThreadMarker::new().expect("CLAP editor main thread");
-        let ParentWindowHandle::AppKitNsView(parent) = parent else {
-            return Box::new(());
-        };
         let actions = Actions::alloc(mtm)
             .set_ivars(Ivars { shared: self.shared.clone(), widgets: OnceCell::new() });
         let actions: Retained<Actions> = unsafe { msg_send![super(actions), init] };
@@ -139,16 +137,13 @@ impl Editor for NativeEditor {
     fn size(&self) -> (u32, u32) {
         (460, 230)
     }
-    fn set_scale_factor(&self, _: f32) -> bool {
-        true
-    }
 }
 struct Handle {
     actions: Retained<Actions>,
     timer: Retained<NSTimer>,
 }
 // The CLAP wrapper creates/destroys this editor handle only on its GUI thread.
-// Send carries ownership through nice-plug's erased handle, not AppKit access.
+// Send carries ownership through the shell's erased handle, not AppKit access.
 unsafe impl Send for Handle {}
 impl Drop for Handle {
     fn drop(&mut self) {

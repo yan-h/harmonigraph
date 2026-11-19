@@ -62,10 +62,15 @@ fn observed() -> std::sync::MutexGuard<'static, Observed> {
 
 struct Fixture {
     params: Arc<Table>,
+    /// The editor's side of the host, as the shell gives it.
+    host: Option<Arc<dyn EditorHost>>,
 }
 impl Default for Fixture {
     fn default() -> Self {
-        Self { params: Arc::new(Table::new([Spec::float("axis", "Axis", 0.0, 0.0, 1.0)])) }
+        Self {
+            params: Arc::new(Table::new([Spec::float("axis", "Axis", 0.0, 0.0, 1.0)])),
+            host: None,
+        }
     }
 }
 
@@ -116,6 +121,9 @@ impl Plugin for Fixture {
     }
     fn setup(&self) -> Option<Arc<dyn Setup>> {
         Some(Arc::new(FixtureSetup))
+    }
+    fn editor_host(&mut self, host: Arc<dyn EditorHost>) {
+        self.host = Some(host);
     }
     fn begin(&mut self, boundary: &Boundary) {
         observed().begins.push((boundary.valid, boundary.input_lost, self.params.float(0)));
@@ -399,14 +407,14 @@ impl Device {
         self.sink.offers.clear();
         told
     }
-    /// The editor's side of the fixture's one parameter.
-    fn editor(&self) -> (Arc<dyn GuiContext>, usize) {
+    /// The editor's side of the host, and the fixture's one parameter's row.
+    fn editor(&self) -> (Arc<dyn EditorHost>, usize) {
         let wrapper = unsafe {
             &*((*self.plugin)
                 .plugin_data
                 .cast::<harmonigraph_clap::wrapper::clap::Wrapper<Fixture>>())
         };
-        wrapper.test_gui_context("axis")
+        (wrapper.test_inspect_plugin(|fixture| fixture.host.clone()).expect("a host"), 0)
     }
     fn main(&self) {
         unsafe { ((*self.plugin).on_main_thread.unwrap())(self.plugin) };
@@ -556,10 +564,7 @@ fn a_flush_applies_at_once_and_a_failed_one_loses_the_next_input() {
 fn an_editor_edit_applies_at_once_and_reaches_the_host_at_offset_zero() {
     let _serial = serial();
     let mut d = Device::new();
-    let wrapper = unsafe {
-        &*((*d.plugin).plugin_data.cast::<harmonigraph_clap::wrapper::clap::Wrapper<Fixture>>())
-    };
-    let (context, row) = wrapper.test_gui_context("axis");
+    let (context, row) = d.editor();
     let edit = |value| {
         context.begin_set_parameter(row);
         context.set_parameter(row, value);

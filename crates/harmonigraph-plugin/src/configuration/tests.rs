@@ -191,6 +191,10 @@ impl Device {
     fn wrapper(&self) -> &harmonigraph_clap::wrapper::clap::Wrapper<crate::Harmonigraph> {
         unsafe { &*((*self.plugin).plugin_data.cast()) }
     }
+    /// The host's side of the editor, as the shell gave it to the plugin.
+    fn editor_host(&self) -> std::sync::Arc<dyn harmonigraph_clap::prelude::EditorHost> {
+        self.wrapper().test_inspect_plugin(|plugin| plugin.editor_host.clone().expect("a host"))
+    }
     /// Run the host's main-thread callback, and count the times the project
     /// has been marked modified since the fixture began.
     fn service(&self) -> usize {
@@ -266,11 +270,7 @@ impl Device {
             value: values.table.spec(crate::Row::camera(key).index()).to_host(plain),
         })
     }
-    fn load(&self, state: PluginState, gui: bool) {
-        if gui {
-            self.wrapper().set_state_object_from_gui(state);
-            return;
-        }
+    fn load(&self, state: PluginState) {
         assert!(self.try_load(state));
     }
     fn try_load(&self, state: PluginState) -> bool {
@@ -425,28 +425,26 @@ fn plain(state: &PluginState, key: ParamKey) -> f32 {
 #[test]
 fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adoption() {
     let _scope = crate::test_scope::enter();
-    for gui in [false, true] {
-        let mut device = Device::new();
-        device.activate();
-        let settings = device.settings();
-        device.load(restored(&device, 690.0), gui);
-        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
-        device.load(restored(&device, 705.0), gui);
-        let now = shown(&settings);
-        assert!(now.view.unadopted.is_some());
-        assert_eq!(now.raw.three, microcents(705.0), "the newest restore is what shows");
-        assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
-        assert_eq!(saved(&device.wrapper().get_state_object()).axes[1], microcents(705.0));
-        device.run(1000, vec![], false);
-        let adopted = shown(&settings);
-        assert!(!adopted.view.unadopted.is_some());
-        assert_eq!(adopted.raw.three, microcents(705.0), "the queued UI edit came before it");
-        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
-        let marked = device.service();
-        device.run(1064, vec![], false);
-        assert_eq!(shown(&settings).raw.three, microcents(700.0));
-        assert!(device.service() > marked, "an applied UI edit marks the project modified");
-    }
+    let mut device = Device::new();
+    device.activate();
+    let settings = device.settings();
+    device.load(restored(&device, 690.0));
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
+    device.load(restored(&device, 705.0));
+    let now = shown(&settings);
+    assert!(now.view.unadopted.is_some());
+    assert_eq!(now.raw.three, microcents(705.0), "the newest restore is what shows");
+    assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
+    assert_eq!(saved(&device.wrapper().get_state_object()).axes[1], microcents(705.0));
+    device.run(1000, vec![], false);
+    let adopted = shown(&settings);
+    assert!(!adopted.view.unadopted.is_some());
+    assert_eq!(adopted.raw.three, microcents(705.0), "the queued UI edit came before it");
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
+    let marked = device.service();
+    device.run(1064, vec![], false);
+    assert_eq!(shown(&settings).raw.three, microcents(700.0));
+    assert!(device.service() > marked, "an applied UI edit marks the project modified");
 }
 
 /// The tuning pending label waits on the latest edit queued, not on the
@@ -535,7 +533,7 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
     let mut state = device.wrapper().get_state_object();
     let engine = if pass_through { 0 } else { 1 };
     state.params.insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(engine));
-    device.load(state, false);
+    device.load(state);
     device.activate();
     let settings = device.settings();
     assert!(settings.submit(ConfigEdit { learning: Some(true), ..Default::default() }));
@@ -616,8 +614,8 @@ fn a_full_command_queue_keeps_accepted_state() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     let settings = device.settings();
-    device.load(restored(&device, 690.0), false);
-    device.load(restored(&device, 695.0), false);
+    device.load(restored(&device, 690.0));
+    device.load(restored(&device, 695.0));
     for _ in 0..126 {
         assert!(settings.submit(ConfigEdit::default()));
     }
@@ -656,14 +654,14 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
         let mut device = Device::new();
         if commands {
             let settings = device.settings();
-            device.load(restored(&device, 690.0), false);
-            device.load(restored(&device, 695.0), false);
+            device.load(restored(&device, 690.0));
+            device.load(restored(&device, 695.0));
             for _ in 0..126 {
                 assert!(settings.submit(ConfigEdit::default()));
             }
             device.activate();
             device.run(0, vec![], false);
-            device.load(restored(&device, 705.0), false);
+            device.load(restored(&device, 705.0));
             assert!(
                 shown(&settings).view.unadopted.is_some(),
                 "an accepted restore is still queued"
@@ -701,10 +699,7 @@ unsafe impl Sync for Device {}
 #[test]
 fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
     let _scope = crate::test_scope::enter();
-    for (gui, (meantone, marvel, learning)) in [false, true]
-        .into_iter()
-        .flat_map(|gui| [(gui, (true, false, true)), (gui, (false, true, false))])
-    {
+    for (meantone, marvel, learning) in [(true, false, true), (false, true, false)] {
         let mut device = Device::new();
         device.activate();
         let settings = device.settings();
@@ -712,7 +707,7 @@ fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
         let mut restoring = saved(&state);
         (restoring.meantone, restoring.marvel, restoring.learning) = (meantone, marvel, learning);
         state.fields.insert(MUSICAL_SETTINGS.into(), serde_json::to_string(&restoring).unwrap());
-        device.load(state, gui);
+        device.load(state);
         let readback = shown(&settings).view;
         assert!(readback.unadopted.is_some());
         let readback = readback.resolved;
@@ -760,7 +755,7 @@ fn a_field_that_does_not_parse_is_skipped_with_a_console_line() {
     state.fields.insert("lattice-maps".into(), "{not json".into());
     state.fields.insert("editor-state".into(), r#"{"size":[901,702]}"#.into());
     state.params.insert("map-fifths".into(), ParamValue::I32(3));
-    device.load(state, false);
+    device.load(state);
     assert_eq!(maps(&device), before, "the maps the instance held");
     let (size, fifths) = device.wrapper().test_inspect_plugin(|plugin| {
         (plugin.params.editor_state.size(), plugin.params.int(crate::Row::MapFifths))
@@ -779,12 +774,12 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     let mut device = Device::new();
     let settings = device.settings();
     let mut state = device.wrapper().get_state_object();
-    device.load(state.clone(), false);
+    device.load(state.clone());
     assert_eq!(settings.take_notice(), None, "a project saved since opens quietly");
     state.params.insert("tuning-three".into(), ParamValue::F32(696.0));
     state.params.insert("tuning-tolerance".into(), ParamValue::F32(3.0));
     state.fields.insert(MUSICAL_SETTINGS.into(), r#"{"meantone":false,"marvel":true}"#.into());
-    device.load(state, false);
+    device.load(state);
     assert_eq!(
         settings.take_notice().as_deref(),
         Some(
@@ -810,7 +805,7 @@ fn a_pending_restore_keeps_fault_and_refusal_status_visible() {
     let _scope = crate::test_scope::enter();
     let device = Device::new();
     let settings = device.settings();
-    device.load(restored(&device, 690.0), false);
+    device.load(restored(&device, 690.0));
     let mut applied = settings.published.load();
     applied.status = 2;
     settings.published.publish(applied);
@@ -829,7 +824,7 @@ fn a_pending_restore_keeps_fault_and_refusal_status_visible() {
 fn a_save_before_any_audio_stores_the_restore() {
     let _scope = crate::test_scope::enter();
     let device = Device::new();
-    device.load(restored(&device, 690.0), false);
+    device.load(restored(&device, 690.0));
     let saved = saved(&device.save());
     assert_eq!(saved.axes[TuningAxis::Three.index()], microcents(690.0));
     assert!(!saved.meantone && !saved.marvel, "the restore's links, not the fresh ones");
@@ -870,7 +865,7 @@ fn a_restore_and_a_reset_leave_the_project_unmodified() {
     device.activate();
     device.run(1000, vec![], false);
     let before = device.service();
-    device.load(restored(&device, 700.0), false);
+    device.load(restored(&device, 700.0));
     device.run(1064, vec![], false);
     assert_eq!(device.service(), before, "a restore is not an edit");
     crate::tuning::instances::edit(0, harmonigraph_ui::params::InstanceEdit::Reset);
@@ -895,7 +890,7 @@ fn a_ui_state_edit_marks_the_project_once_and_its_restore_does_not() {
     let mut state = device.wrapper().get_state_object();
     let blob = harmonigraph_ui::shell::close(&project);
     state.fields.insert("ui-state".into(), serde_json::to_string(&blob).unwrap());
-    device.load(state, false);
+    device.load(state);
     let installed = lock.lock().ui.picture.appearance.view.max_sevens;
     assert_eq!(installed, restored, "the restore installed");
     let _ = lock.end_window_session();
@@ -958,7 +953,7 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     saved.set_docked(true);
     let mut project = device.wrapper().get_state_object();
     project.fields.insert("editor-state".into(), serde_json::to_string(&*saved).unwrap());
-    device.load(project, false);
+    device.load(project);
     assert_eq!(state.size(), (900, 700), "the restore installed");
     frame();
     assert_eq!(device.service(), before + 2, "a restore");
@@ -985,7 +980,7 @@ fn a_restore_queued_behind_an_edit_applies_after_it() {
     let settings = device.settings();
     assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
     assert!(settings.submit(ConfigEdit::axis(TuningAxis::COffset, microcents(5.0))));
-    device.load(restored(&device, 690.0), false);
+    device.load(restored(&device, 690.0));
     assert!(settings.submit(ConfigEdit::axis(TuningAxis::Seven, microcents(980.0))));
     device.run(0, vec![], false);
     let raw = shown(&settings).raw;
@@ -2027,7 +2022,7 @@ fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
         serde_json::to_string(&MusicalSettings { adaptive: policy.into(), ..Default::default() })
             .unwrap(),
     );
-    device.load(state, true);
+    device.load(state);
     let settings = device.settings();
     assert_eq!(shown(&settings).view.resolved.policy, policy);
     let saved: MusicalSettings =
@@ -2108,7 +2103,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         state.params.insert(id.into(), harmonigraph_clap::plugin::ParamValue::I32(value));
     }
     state.params.insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(2));
-    device.load(state, false);
+    device.load(state);
     device.wrapper().test_inspect_plugin(|plugin| {
         let preview = crate::lattice_maps::view(&plugin.params);
         assert_eq!(preview.playback.engine, TuningEngine::LatticeMap);
@@ -2147,7 +2142,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(playback.map, Some(map));
         assert_eq!(plugin.configuration.as_ref().unwrap().current().tuning.three, 696_500_000);
     });
-    let (context, _) = device.wrapper().test_gui_context("lattice-map");
+    let context = device.editor_host();
     let destination = map.position + harmonigraph_core::LatticePos::new(-3, 0, 0);
     let mut changed = map;
     assert!(changed.replace(destination), "the edit must change the captured geometry");
@@ -2229,7 +2224,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         let neighbour = LatticeMap { position: moved, ..changed };
         assert_eq!(playback.map, Some(neighbour), "new attacks are tuned by the neighbour");
     });
-    device.load(saved, false);
+    device.load(saved);
     device.wrapper().test_inspect_plugin(|plugin| {
         let preview = crate::lattice_maps::view(&plugin.params);
         assert!(!preview.editing() && !preview.can_undo, "undo never reaches a restored project");
@@ -2258,7 +2253,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     ] {
         partial.params.remove(id);
     }
-    device.load(partial, false);
+    device.load(partial);
     device.run(192, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {
         let preview = crate::lattice_maps::view(&plugin.params);
@@ -2305,7 +2300,7 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
             .params
             .insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(engine));
         state.params.insert("lattice-map".into(), harmonigraph_clap::plugin::ParamValue::I32(map));
-        device.load(state, false);
+        device.load(state);
         device.run(64 * round as i64, vec![], false);
         device.wrapper().test_inspect_plugin(|plugin| {
             let preview = crate::lattice_maps::view(&plugin.params);
@@ -2337,7 +2332,7 @@ fn every_engine_records_a_tuning_edit_at_the_callback_that_applies_it() {
         state
             .params
             .insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(engine));
-        device.load(state, false);
+        device.load(state);
         device.run(0, vec![], false);
         capture.arm();
         device.run(64, vec![], false);
@@ -2370,7 +2365,7 @@ fn camera_automation_is_captured_mid_song() {
     for (key, value) in ParamKey::CAMERA.into_iter().zip(initial) {
         saved.params.insert(key.id().into(), ParamValue::F32(value));
     }
-    device.load(saved, false);
+    device.load(saved);
     device.activate();
     let restored = device.save();
     for (key, value) in ParamKey::CAMERA.into_iter().zip(initial) {
@@ -2446,7 +2441,7 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
-    let (context, _) = device.wrapper().test_gui_context("camera-yaw");
+    let context = device.editor_host();
     let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
     let gestures = std::cell::Cell::default();
     let backend = crate::PluginParamBackend {
@@ -2495,7 +2490,7 @@ fn the_editors_gestures_end_once_when_it_stops_being_seen_or_closes() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
-    let (context, _) = device.wrapper().test_gui_context("camera-yaw");
+    let context = device.editor_host();
     let (params, lock) = device
         .wrapper()
         .test_inspect_plugin(|plugin| (plugin.params.clone(), plugin.editor_shared.clone()));
@@ -2565,7 +2560,7 @@ fn the_editors_gestures_end_once_when_it_stops_being_seen_or_closes() {
 fn the_close_button_tells_the_host_to_destroy_the_editor() {
     let _scope = crate::test_scope::enter();
     let device = Device::new();
-    let host = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_host.clone().unwrap());
+    let host = device.editor_host();
     assert!(host.closed(), "a host with a gui extension is told");
     assert_eq!(device.stats.closed.load(Ordering::Relaxed), 1);
     assert!(device.stats.closed_destroyed.load(Ordering::Relaxed));

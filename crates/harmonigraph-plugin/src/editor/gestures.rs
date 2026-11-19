@@ -92,7 +92,7 @@ impl Gestures {
 /// Send the host the end of each gesture in `open`. Called with the editor
 /// lock free: `end_set_parameter` is a host callback, and a host may save from
 /// inside it, which takes that lock.
-pub(crate) fn end(open: Gestures, host: &dyn harmonigraph_clap::prelude::GuiContext) {
+pub(crate) fn end(open: Gestures, host: &dyn harmonigraph_clap::prelude::EditorHost) {
     for gesture in open.open() {
         host.end_set_parameter(gesture.row().index());
     }

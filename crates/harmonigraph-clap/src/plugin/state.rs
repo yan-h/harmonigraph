@@ -1,11 +1,7 @@
-//! Utilities for saving a [`crate::plugin::Plugin`]'s state. The actual state object is also exposed
-//! to plugins through the [`GuiContext`][crate::prelude::GuiContext].
+//! A [`crate::plugin::Plugin`]'s saved state.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-
-// These state objects are also exposed directly to the plugin so it can do its own internal preset
-// management
 
 /// A plain, unnormalized value for a parameter.
 #[derive(Debug, Clone, Serialize, Deserialize)]

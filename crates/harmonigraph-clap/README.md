@@ -3,7 +3,7 @@
 Harmonigraph's CLAP shell:
 the plugin framework nice-plug, which harmonigraph used to vendor, together with the two registry crates it built on, now owned here (#1814 step 4).
 
-- **`src/`** is nice-plug 0.1.10 (its CLAP wrapper and state glue) and nice-plug-core 0.1.5 (the editor context, the debug macros), merged into one crate, with the layers #1814 has since replaced.
+- **`src/`** is nice-plug 0.1.10 (its CLAP wrapper and state glue) and nice-plug-core 0.1.5 (the debug macros), merged into one crate, with the layers #1814 has since replaced.
   nice-plug-core's modules sit at the crate root, where nice-plug's `pub use nice_plug_core::*` used to put them.
 - **`src/params.rs`** is harmonigraph's own (#1814 step 5): one fixed table of host parameters, which replaced nice-plug-core's parameter types and nice-plug-derive's `Params` and `Enum` derives.
 - **`tests/`** drive an exported fixture plugin through `clap-sys`: the process callback, flush and editor writes (`clap_boundary.rs`), and the auxiliary bounds (`clap_auxiliary.rs`).
@@ -49,7 +49,7 @@ Each change's reason is a comment at the code it explains; this is the map.
 - **The parameter table** (`src/params.rs`, #1814 step 5).
   Each row is an integer, an enumeration or a linear float; the host sees it from 0 to its step count, and the conversions repeat nice-plug's `f32` arithmetic step for step, so saves and automation read as before.
   A save stores each row's unmodulated value under its id; a restore sets every row by one rule (missing, wrong-typed or an unknown variant takes the default, out of range is clamped) and logs once the ids no row has.
-  The editor sets a row through `GuiContext` by its index.
+  The editor sets a row through its `EditorHost` by its index.
 - **Activation notification ordering** (`Wrapper::activate`, #615): a latency is published only during an activation, and a change while active asks for a restart.
 - **The audio** (`src/audio_setup.rs`, #1814 step 6).
   A plugin declares one fixed `Ports`: main input and output channels, and named auxiliary inputs.
@@ -58,7 +58,11 @@ Each change's reason is a comment at the code it explains; this is the map.
 - **Auxiliary descriptor bounds and storage sizing** (`audio_setup::audio`, #638), reached by `tests/clap_auxiliary.rs`.
 - **The tail**: none before a processed callback, infinite after (`Wrapper::ext_tail_get`), checked by `tests/clap_boundary.rs`.
 - **Track info** (`src/wrapper/clap/track_info_adapter.rs`, #1426).
-- **Editor host** (`Plugin::editor_host`, #1607, #1609), and `gui.show`/`gui.hide` refused as upstream does (`Wrapper::ext_gui_show`).
+- **The editor** (`src/editor.rs`, #1814 step 7).
+  A plugin's `Editor` opens under the host's `NSView`, reports its size in logical points, and says whether the host may resize it, freely on both axes; the shell embeds it only in an AppKit view and refuses `gui.set_scale`, since macOS scales.
+  The plugin is given its `EditorHost` before its editor (#1607, #1609): the editor's parameter edits by row, its resize requests and its own window's close go through it, and it holds the shell weakly, so a call after the plugin is destroyed does nothing.
+  nice-plug-core's `Editor`, `GuiContext`, `ParentWindowHandle`, `PluginApi`, its scale factor, resize hints and host key routing went, with the debug gesture checker; neither plugin used them.
+  `gui.show`/`gui.hide` are refused (`Wrapper::ext_gui_show`).
 - **`nice-assert-no-alloc` without default features**, from the workspace's single entry.
   Its default `disable_release` would delete the allocation guard from any build without debug assertions;
   while nice-plug-core was a registry crate that declared it with defaults, a `[profile.release.package]` override in the root `Cargo.toml` forced the package's debug assertions on instead.

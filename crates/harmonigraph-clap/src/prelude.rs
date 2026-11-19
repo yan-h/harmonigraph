@@ -6,9 +6,7 @@ pub use crate::export_clap;
 pub use crate::util;
 
 pub use crate::audio_setup::{Audio, BufferConfig, Ports, ProcessMode};
-pub use crate::context::PluginApi;
-pub use crate::context::gui::GuiContext;
-pub use crate::editor::{Editor, Modifiers, ParentWindowHandle, ResizeHint, VirtualKeyCode};
+pub use crate::editor::{Editor, EditorHost};
 pub use crate::events::{Input, InputValue, Output, Transport};
 pub use crate::params::{Spec, Table};
 pub use crate::plugin::PluginState;

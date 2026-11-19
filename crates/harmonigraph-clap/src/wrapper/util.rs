@@ -4,9 +4,6 @@ use std::os::raw::c_char;
 
 use crate::util::permit_alloc;
 
-#[cfg(debug_assertions)]
-pub(crate) mod context_checks;
-
 // `clap-boundary-tests` installs `MeasuredAllocator` in place of the guard
 // below, counting over the same `AllocDisabler`; the feature brings
 // `assert_process_allocs` with it, so the boundary fixtures are always guarded.

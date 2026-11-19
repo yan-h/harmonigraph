@@ -13,9 +13,10 @@
 
 use std::sync::Arc;
 
+use std::ffi::c_void;
+
 use egui_baseview::baseview::WindowHandle;
-use harmonigraph_clap::prelude::ParentWindowHandle;
-use harmonigraph_clap::wrapper::clap::EditorHost;
+use harmonigraph_clap::prelude::EditorHost;
 use plugin_own_window::{Limits, Move};
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 
@@ -32,26 +33,23 @@ pub(super) const NAME: &str = "Harmonigraph";
 /// The sizes the player may give the own window, which are the editor's.
 pub(super) const LIMITS: Limits = Limits { min: MIN_SIZE, max: MAX_SIZE };
 
-/// Learn the editor's views once it has opened in the host's, and move it into
-/// its own window unless the project keeps it `docked`. Called from
-/// `Editor::spawn`, outside any frame, holding no lock that `moving` or the
-/// unseen notice takes. Under a parent that is no AppKit view the window is
-/// never offered.
+/// Learn the editor's views once it has opened in the host's `NSView`
+/// `host_view`, and move it into its own window unless the project keeps it
+/// `docked`. Called from `Editor::spawn`, outside any frame, holding no lock
+/// that `moving` or the unseen notice takes. Where baseview opened no AppKit
+/// view, as off macOS, the window is never offered.
 pub(super) fn open(
     own: &Arc<OwnWindow>,
-    parent: ParentWindowHandle,
+    host_view: *mut c_void,
     window: &WindowHandle,
     editor: Arc<EguiState>,
-    host: Option<Arc<dyn EditorHost>>,
+    host: Arc<dyn EditorHost>,
 ) {
-    let (ParentWindowHandle::AppKitNsView(host_view), RawWindowHandle::AppKit(view)) =
-        (parent, window.raw_window_handle())
-    else {
+    let RawWindowHandle::AppKit(view) = window.raw_window_handle() else {
         return;
     };
     let out = !editor.docked();
-    // Without a host to tell, the window has no close button.
-    let closed = host.map(|host| Box::new(move || host.closed()) as Box<dyn Fn() -> bool>);
+    let closed = Some(Box::new(move || host.closed()) as Box<dyn Fn() -> bool>);
     // SAFETY: the host's view the editor opened in, and baseview's inside it,
     // both alive for the call.
     unsafe { own.open(host_view, view.ns_view, out, LIMITS, closed, Box::new(moving(editor))) };

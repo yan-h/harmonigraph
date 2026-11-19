@@ -503,7 +503,7 @@ fn report() -> String {
     writeln!(out, "\neditor writes, read after one process callback").unwrap();
     {
         use harmonigraph_ui::params::ParamBackend;
-        let (context, _) = device.wrapper().test_gui_context("camera-yaw");
+        let context = device.editor_host();
         let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
         let gestures = std::cell::Cell::default();
         let backend = crate::PluginParamBackend {
