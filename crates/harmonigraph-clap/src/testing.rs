@@ -39,7 +39,6 @@ use std::{
         Mutex,
         atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
 };
 
 /// A test host: the extensions it answers, and what the plugin asked of it.
@@ -549,9 +548,8 @@ impl Device {
         latency_of(self.plugin)
     }
 
-    /// One process callback, the host's output list `sink`: its status and
-    /// how long the plugin took.
-    pub fn process(&self, call: &Call<'_>, sink: &mut Sink) -> (clap_process_status, Duration) {
+    /// One process callback, the host's output list `sink`.
+    pub fn process(&self, call: &Call<'_>, sink: &mut Sink) -> clap_process_status {
         let length = (call.frames as usize).max(64);
         let mut main = [vec![0.0f32; length], vec![0.0f32; length]];
         let mut side = [vec![0.0f32; length], vec![0.0f32; length]];
@@ -591,9 +589,7 @@ impl Device {
             in_events: &input,
             out_events: &output_list,
         };
-        let started = Instant::now();
-        let status = self.process_raw(&process);
-        (status, started.elapsed())
+        self.process_raw(&process)
     }
     /// A process callback exactly as `process` has it.
     pub fn process_raw(&self, process: &clap_process) -> clap_process_status {

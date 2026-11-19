@@ -324,7 +324,7 @@ impl Device {
         let call = Call { steady: raw, frames, events: &events, transport, audio };
         // assert_process_allocs guards this entire exported callback, including
         // the wrapper. Nesting a second guard defeats its diagnostic permit.
-        let (status, _) = self.device.process(&call, &mut offers);
+        let status = self.device.process(&call, &mut offers);
         Sink::read(offers, status)
     }
 }

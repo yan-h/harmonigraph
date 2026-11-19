@@ -279,7 +279,7 @@ impl Device {
         transport: Option<clap_event_transport>,
     ) -> clap_process_status {
         let call = Call { steady, frames, events: &events, transport, audio: Audio::Main };
-        self.device.process(&call, &mut self.sink).0
+        self.device.process(&call, &mut self.sink)
     }
     fn value(&self) -> f64 {
         self.device.value(harmonigraph_clap::wrapper::hash_param_id("axis"))
