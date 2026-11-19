@@ -5,6 +5,19 @@ use harmonigraph_scene::{
     NEBULA_SPEED_MIN,
 };
 
+/// The Material row's options, which the settings sweeps also iterate, so a
+/// material added here is drawn by them without a list of their own.
+pub(crate) const MATERIAL_CHOICES: [(LatticeMaterial, &str, &str); 4] = [
+    (
+        LatticeMaterial::None,
+        "None",
+        "Keep the textured light as it is; preserves material settings",
+    ),
+    (LatticeMaterial::Watercolor, "Watercolor", "Overlapping washes of the textured note light"),
+    (LatticeMaterial::VelvetScales, "Scales", "Soft overlapping scallops carrying the note light"),
+    (LatticeMaterial::Stars, "Stars", "Drifting stars colored by the note light"),
+];
+
 pub(super) fn settings(
     ui: &mut egui::Ui,
     view: &mut harmonigraph_scene::ViewConfig,
@@ -56,12 +69,7 @@ pub(super) fn settings(
             );
         }
         ui.add_enabled_ui(glow_enabled, |ui| {
-        choice_row(ui, "Material", &mut settings.material_style, &[
-            (LatticeMaterial::None, "None", "Keep the textured light as it is; preserves material settings"),
-            (LatticeMaterial::Watercolor, "Watercolor", "Overlapping washes of the textured note light"),
-            (LatticeMaterial::VelvetScales, "Scales", "Soft overlapping scallops carrying the note light"),
-            (LatticeMaterial::Stars, "Stars", "Drifting stars colored by the note light"),
-        ]);
+        choice_row(ui, "Material", &mut settings.material_style, &MATERIAL_CHOICES);
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
                 .default_value(super::fresh_view().atmosphere.material_amount)

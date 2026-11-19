@@ -15,15 +15,7 @@ const PANE_WIDTH: f32 = 400.0;
 fn settings_pane_at_scale(case: SettingsCase, scale: f32) -> Vec<egui::epaint::ClippedShape> {
     let mut state = case.state();
     state.workspace.interaction.prefs.ui_scale = scale;
-    open_settings_pane(&super::probe::themed_scaled(scale), case, &mut state, PANE_WIDTH)
-}
-
-/// The cases of the pages that draw bars — every settings page but the two
-/// readouts, Video and Console.
-fn bar_cases() -> impl Iterator<Item = SettingsCase> {
-    settings_cases()
-        .into_iter()
-        .filter(|case| !matches!(case.pane, panes::Tab::Video | panes::Tab::Console))
+    open_settings_pane(&super::probe::themed_scaled(scale), case, &mut state, PANE_WIDTH).0
 }
 
 /// Every shape's bottom edge, ignoring the ones that carry no geometry (they
@@ -53,7 +45,11 @@ fn tallest_text(shapes: &[egui::epaint::ClippedShape]) -> f32 {
 /// control.
 #[test]
 fn the_ui_scale_shrinks_the_panel_chrome() {
-    for case in bar_cases() {
+    // Not the two readouts: Video's page runs to the pane's foot at any scale,
+    // so where its paint ends says nothing about its spacing, and the Console
+    // is a log.
+    let readouts = [panes::Tab::Video, panes::Tab::Console];
+    for case in settings_cases().into_iter().filter(|case| !readouts.contains(&case.pane)) {
         let (full, small) = (settings_pane_at_scale(case, 1.0), settings_pane_at_scale(case, 0.75));
 
         let (tall, short) = (tallest_text(&full), tallest_text(&small));
@@ -321,8 +317,9 @@ const ROUNDING: f32 = egui::emath::GUI_ROUNDING;
 /// wraps does not, so the headroom is not the same fraction twice. With no
 /// vertical padding it is at its narrowest at 0.75: 1.25pt.
 ///
-/// [`every_bar_has_its_declared_height`] covers the other half of a settings pane, the
-/// bars, which reach the height by allocating it rather than by any floor.
+/// The other half of a settings pane, the bars, reach the height by
+/// allocating it rather than by any floor, all through `bar::allocate_row`,
+/// whose own test holds it to the row at every scale.
 #[test]
 fn every_settings_row_is_one_row_high() {
     for kind in CONTROLS {
@@ -361,90 +358,6 @@ fn every_settings_row_is_one_row_high() {
                     );
                 }
             }
-        }
-    }
-}
-
-/// Every bar a settings pane draws is its declared height at every scale.
-///
-/// Bars occupy one [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT), reached by
-/// allocating it outright rather than by the `interact_size` floor that
-/// catches settings rows.
-///
-/// Sweeping the real panes makes every full-width well enter the census at the
-/// site where it is used. The `SpectrumBar` gives the right end of its row to
-/// a button, so its declared track width is recognised too.
-/// Video has no value bars now that its split is resized directly in the preview.
-#[test]
-fn every_bar_has_its_declared_height() {
-    for case in bar_cases() {
-        for step in 0..=17u8 {
-            let scale = 0.75 + 0.05 * f32::from(step);
-            let want = crate::theme::row_height(scale);
-            let shapes = settings_pane_at_scale(case, scale);
-            // Found by WIDTH, never by height: a bar fills the column (the
-            // spectrum's track gives its right end to the flip button and is
-            // the one exception), so that is a property this test does not
-            // depend on. Sniffing for row-high rects instead would drop a
-            // mis-sized bar out of the sweep rather than failing on it, which
-            // is a test that passes by finding nothing.
-            let track = crate::widgets::spectrum_track_width(PANE_WIDTH, scale);
-            // A bar in an open subsection or a block fills that column instead,
-            // starting one fold's or one block's indent in from the column's
-            // left edge.
-            let left = crate::theme::dock_pane_margin(scale).left_top().x;
-            let indents = [
-                fold_indent(&super::probe::themed_scaled(scale)),
-                crate::panes::BLOCK_INDENT * scale,
-            ];
-            let nested = |rect: egui::Rect| {
-                indents.iter().any(|&indent| {
-                    (rect.width() - (PANE_WIDTH - indent)).abs() <= 1.0
-                        && (rect.left() - (left + indent)).abs() <= 1.0
-                })
-            };
-            let fields = SettingsCase::text_fields(&shapes);
-            let mut found = 0;
-            for cs in &shapes {
-                let egui::Shape::Rect(r) = &cs.shape else { continue };
-                let width = r.rect.width();
-                // The curve plot is the one full-width well that is not a row
-                // high, and says so by its own declared height.
-                let plot = crate::widgets::bend_plot_height(scale);
-                if r.fill != crate::theme::well()
-                    || !r.rect.is_finite()
-                    || ((width - PANE_WIDTH).abs() > 1.0
-                        && (width - track).abs() > 1.0
-                        && !nested(r.rect))
-                    || (r.rect.height() - plot).abs() < ROUNDING
-                    || (r.rect.height() - crate::widgets::direct_plot_height(scale)).abs()
-                        < ROUNDING
-                {
-                    continue;
-                }
-                // A text field is held to its row as every control in a row
-                // is (see `every_settings_row_is_one_row_high`): never taller,
-                // and short of it by less than two points. `widgets::row_field`
-                // floors its margin to whole points on EACH side, so each side
-                // can lose up to a point: measured, 1.95pt short at 1.05 and
-                // 1.93 at 0.85. Shorter than that is a field that lost its
-                // margin, not one that rounded it.
-                if fields.iter().any(|&field| r.rect.contains(field)) {
-                    let height = r.rect.height();
-                    assert!(
-                        want - 2.0 < height && height <= want + ROUNDING,
-                        "{case:?} at scale {scale} drew a {height}pt text field in a {want}pt row",
-                    );
-                    continue;
-                }
-                found += 1;
-                assert!(
-                    (r.rect.height() - want).abs() < ROUNDING,
-                    "{case:?} at scale {scale} drew a {}pt bar, not its declared {want}pt",
-                    r.rect.height(),
-                );
-            }
-            assert!(found > 0, "{case:?} at scale {scale} drew no bar tracks to measure");
         }
     }
 }

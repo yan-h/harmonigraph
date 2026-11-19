@@ -30,10 +30,8 @@ mod stack;
 mod tabs;
 mod value;
 
-#[cfg(test)]
-pub(crate) use bend::bend_plot_height;
 pub use bend::BendPlot;
-pub(crate) use fold::{paint_chevron, paint_fold};
+pub(crate) use fold::{paint_chevron, paint_fold, paint_rail, Rail, RailLook};
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub use label::label;
 pub(crate) use label::{
@@ -45,15 +43,16 @@ pub use range::RangeBar;
 pub use rows::{button_row, checkbox, choice_row, record_button, row_field, toggle_switch};
 pub(crate) use rows::{
     checkbox_box, checkbox_indeterminate, choice_buttons, option_button, preset_row,
-    selected_combo, toggle_switch_width, CHECKBOX_BOX,
+    selected_combo, toggle_button, toggle_switch_width, CHECKBOX_BOX,
 };
 pub use stack::StackBar;
 pub(crate) use tabs::tab_strip;
 pub use value::{progress_bar, ValueBar};
 
 // The rest of the crate's own surface, and all of it is reached for from the
-// tests two directories up: two lengths the settings sweeps measure a bar
-// against, and three readers they pick a preview out of a frame with.
+// tests two directories up: three lengths the settings tests measure a
+// gradient group against, and three readers they pick a preview out of a
+// frame with.
 // Re-exported rather than reached for by module path, so which file a widget
 // lives in stays this module's business.
 #[cfg(test)]
@@ -88,5 +87,3 @@ mod direct_tests;
 pub(crate) fn holds_focus(response: &egui::Response) -> bool {
     response.ctx.memory(|m| m.has_focus(response.id))
 }
-#[cfg(test)]
-pub(crate) use plot::height as direct_plot_height;

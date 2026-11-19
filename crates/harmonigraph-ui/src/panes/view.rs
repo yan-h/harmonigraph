@@ -36,9 +36,8 @@ use harmonigraph_scene::SEVENS_SIZE_RANGE;
 /// so the field shrinks with the row on its own and a narrow column caps it
 /// well under this.
 const PRESET_NAME_WIDTH: f32 = 110.0;
-/// What the empty preset name field shows, which is also how a test tells
-/// that field from a bar: both are row-high wells.
-pub(crate) const PRESET_NAME_HINT: &str = "preset name";
+/// What the empty preset name field shows.
+const PRESET_NAME_HINT: &str = "preset name";
 
 /// Camera framing: projection, angle, and saved angles.
 pub(super) fn camera(
@@ -49,6 +48,22 @@ pub(super) fn camera(
     super::block(ui, "Camera", |ui| camera_rows(ui, appearance, interaction));
 }
 
+/// The Projection row's options, which the settings sweeps also iterate, so
+/// a projection added here is drawn by them without a list of their own.
+pub(crate) const PROJECTION_CHOICES: [(Projection, &str, &str); 3] = [
+    (Projection::Perspective, "Perspective", "Depth converges and shrinks, like a real camera"),
+    (
+        Projection::Orthographic,
+        "Orthographic",
+        "Uniform scale at every depth; parallel lines stay parallel",
+    ),
+    (
+        Projection::Cabinet,
+        "Cabinet",
+        "Fifths and thirds stay face-on; seventh layers are offset diagonally. Drag to pan; orbit is disabled.",
+    ),
+];
+
 fn camera_rows(
     ui: &mut egui::Ui,
     appearance: &mut AppearanceDocument,
@@ -57,28 +72,7 @@ fn camera_rows(
     // Projection: perspective converges with depth; orthographic keeps
     // equal intervals at equal screen offsets everywhere (isometric-style
     // reading — depth shows only through the node size cue and occlusion).
-    choice_row(
-        ui,
-        "Projection",
-        &mut appearance.camera.projection,
-        &[
-            (
-                Projection::Perspective,
-                "Perspective",
-                "Depth converges and shrinks, like a real camera",
-            ),
-            (
-                Projection::Orthographic,
-                "Orthographic",
-                "Uniform scale at every depth; parallel lines stay parallel",
-            ),
-            (
-                Projection::Cabinet,
-                "Cabinet",
-                "Fifths and thirds stay face-on; seventh layers are offset diagonally. Drag to pan; orbit is disabled.",
-            ),
-        ],
-    );
+    choice_row(ui, "Projection", &mut appearance.camera.projection, &PROJECTION_CHOICES);
     if appearance.camera.projection == Projection::Cabinet {
         crate::widgets::cabinet(
             ui,

@@ -51,9 +51,9 @@ pub(crate) fn drift(
         plot.dot(ui,x,y);
         // Stars set their own pace under Star speed and pass no speed here.
         plot.response.on_hover_text(if has_speed {
-            "Right 0° · Down 90° · Left 180° · Up 270°. Arrow keys adjust the handle; Shift gives finer steps. 1× moves the material about a pane-height every four minutes."
+            "Right 0° · Down 90° · Left 180° · Up 270°. 1× moves the material about a pane-height every four minutes."
         } else {
-            "Right 0° · Down 90° · Left 180° · Up 270°. Arrow keys adjust the handle; Shift gives finer steps."
+            "Right 0° · Down 90° · Left 180° · Up 270°."
         });
     });
 }

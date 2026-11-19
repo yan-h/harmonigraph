@@ -23,7 +23,7 @@ pub(crate) enum Section {
 }
 
 impl Section {
-    const ALL: [Self; 3] = [Self::Lattice, Self::Analyzer, Self::Settings];
+    pub(crate) const ALL: [Self; 3] = [Self::Lattice, Self::Analyzer, Self::Settings];
 
     /// The section's tabs, in strip order. The Settings tabs run from the
     /// pictures' own settings to the editor's, so the ones a narrow column
@@ -125,10 +125,10 @@ impl Layout {
                 *size = if size.is_finite() { size.clamp(1.0, 8192.0) } else { 300.0 };
             }
         }
-        if !matches!(self.analyzer_tab, Tab::Spectral | Tab::Spiral) {
+        if Section::of(self.analyzer_tab) != Section::Analyzer {
             self.analyzer_tab = Tab::Spectral;
         }
-        if self.settings_tab.is_picture() {
+        if Section::of(self.settings_tab) != Section::Settings {
             self.settings_tab = Tab::Tuning;
         }
     }
@@ -520,36 +520,16 @@ fn section_ui(
     pane.painter().rect_filled(rect, 0.0, theme::panel());
     if folded {
         if rail > 0.0 {
-            let response = pane.interact(rect, pane.id().with("unfold"), egui::Sense::click());
-            pane.painter().rect_filled(rect, 0.0, theme::header());
-            crate::widgets::paint_fold(
-                &pane,
-                &response,
-                Rect::from_min_size(rect.min, Vec2::splat(rail)),
-                if vertical_rail { Vec2::X } else { Vec2::Y },
-            );
-            let galley = pane.painter().layout_no_wrap(
-                title.into(),
-                egui::TextStyle::Heading.resolve(pane.style()),
-                theme::text(),
-            );
-            if vertical_rail {
-                let at = pos2(
-                    rect.center().x - galley.size().y * 0.5,
-                    rect.top() + rail + 8.0 + galley.size().x,
-                );
-                pane.painter().add(
-                    egui::epaint::TextShape::new(at, galley, theme::text())
-                        .with_angle(-std::f32::consts::FRAC_PI_2),
-                );
+            use crate::widgets::{paint_rail, Rail, RailLook};
+            // A section's own look: the title 8 points under the button on a
+            // column, 4 after it on a row, at every scale, and no hover.
+            let (run, direction, gap) = if vertical_rail {
+                (Rail::Column, Vec2::X, 8.0)
             } else {
-                pane.painter().galley(
-                    rect.min + vec2(rail + 4.0, (rail - galley.size().y) * 0.5),
-                    galley,
-                    theme::text(),
-                );
-            }
-            if response.clicked() {
+                (Rail::Row, Vec2::Y, 4.0)
+            };
+            let look = RailLook { button: rail, gap, named: false };
+            if paint_rail(&pane, rect, pane.id().with("unfold"), run, direction, title, look) {
                 layout.folded[index] = false;
             }
         }

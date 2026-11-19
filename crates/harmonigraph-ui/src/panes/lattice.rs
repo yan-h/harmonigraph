@@ -48,24 +48,15 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
         }
     }
     // Arrow keys move the map while the pointer is over the lattice, unless a
-    // control elsewhere has the keyboard (a focused handle steps on arrows too).
+    // text field has the keyboard: by the shell's one key rule (`keys.rs`) a
+    // focused control of any other kind owns no key, so a button Tab left
+    // the focus on must not hold the map's arrows (#1844). A number being
+    // typed into is a text field, the Stop at bar field's Up and Down
+    // included, so the map leaves those alone.
     let map_mode = state.runtime.lattice_maps.as_ref().is_some_and(|maps| {
         maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
     });
-    if map_mode
-        && response.hovered()
-        && ui.memory(|m| m.focused().is_none_or(|id| id == response.id))
-    {
-        // A focused lattice claims the arrows, or egui would spend each one
-        // moving focus to a neighbouring widget as well.
-        if response.has_focus() {
-            let arrows = egui::EventFilter {
-                horizontal_arrows: true,
-                vertical_arrows: true,
-                ..Default::default()
-            };
-            ui.memory_mut(|m| m.set_focus_lock_filter(response.id, arrows));
-        }
+    if map_mode && response.hovered() && !ui.ctx().text_edit_focused() {
         state.runtime.map_translation = arrow_translation(ui, &state.appearance.camera, rect);
     }
     if response.double_clicked()
@@ -143,6 +134,13 @@ fn arrow_translation(
         arrows.map(|(key, _)| crate::keys::take(ui.ctx(), KeyboardShortcut::new(modifiers, key)))
     };
     let (fine, shifted) = (count(Modifiers::NONE), count(Modifiers::SHIFT));
+    // egui reads a bare arrow as a move of the focus to the neighbouring
+    // control when anything holds the focus, settled at the end of the pass.
+    // An arrow the map took is the map's, so it moves no focus, as the shell
+    // cancels Tab's (`lib.rs`); any other focus move this pass still happens.
+    if fine != [0; 4] {
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    }
     let (presses, lane) = if shifted != [0; 4] {
         (shifted, MapOffsetLane::Extension)
     } else if fine != [0; 4] {
@@ -1059,6 +1057,80 @@ mod tests {
         press(&mut state, at, vec![]);
         assert_eq!(press(&mut state, at, vec![key(egui::Key::ArrowUp, none)]), None);
         assert_eq!(claimed.get(), 0, "and without a map to move");
+    }
+
+    /// A control holding the focus, as one does after Tab leaves a text field,
+    /// leaves the map its arrows, and the arrow moves no focus; a text field
+    /// holding it keeps them (#1844).
+    #[test]
+    fn the_map_takes_arrows_past_a_focused_control_but_not_a_text_field() {
+        use crate::lattice_maps::{MapPlayback, MapView};
+        use crate::tests::probe::events_into;
+        use harmonigraph_core::lattice_map::TuningEngine;
+        let mut state = fresh();
+        state.runtime.lattice_maps = Some(MapView {
+            playback: MapPlayback { engine: TuningEngine::LatticeMap, ..Default::default() },
+            offsets: Default::default(),
+            followed: harmonigraph_core::LatticePos::ORIGIN,
+            unadopted: None,
+            names: Default::default(),
+            edit_shape: false,
+            can_undo: false,
+            full: false,
+        });
+        let ctx = themed();
+        let screen = egui::vec2(400.0, 400.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen);
+        // A focusable control at the top left and one to its right, where a
+        // bare ArrowRight would move the focus, and a text field.
+        let (control, beside, field) =
+            (egui::Id::new("control"), egui::Id::new("beside"), egui::Id::new("field"));
+        let mut text = String::new();
+        let at = rect.center();
+        let mut frame = |state: &mut PictureState, events: Vec<egui::Event>| {
+            let mut all = vec![egui::Event::PointerMoved(at)];
+            all.extend(events);
+            events_into(&ctx, screen, rect, all, |ui| {
+                lattice_pane(ui, state, 0.0, 0);
+                let cell =
+                    |x: f32| egui::Rect::from_min_size(egui::pos2(x, 0.0), egui::vec2(20.0, 20.0));
+                ui.interact(cell(0.0), control, Sense::click());
+                ui.interact(cell(40.0), beside, Sense::click());
+                ui.put(cell(80.0), egui::TextEdit::singleline(&mut text).id(field));
+            });
+            state.runtime.map_translation.take()
+        };
+        let right = egui::Event::Key {
+            key: egui::Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut state, vec![]);
+        ctx.memory_mut(|m| m.request_focus(control));
+        frame(&mut state, vec![]);
+        assert_eq!(ctx.memory(|m| m.focused()), Some(control), "fixture must focus the control");
+        assert!(frame(&mut state, vec![right.clone()]).is_some(), "a focused control held the map");
+        frame(&mut state, vec![]);
+        assert_eq!(ctx.memory(|m| m.focused()), Some(control), "the arrow moved the focus");
+        // Only an arrow the map takes keeps the focus where it is: a focus
+        // move the map did not answer, a Tab here, still happens.
+        let tab = egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut state, vec![tab]);
+        frame(&mut state, vec![]);
+        assert_eq!(ctx.memory(|m| m.focused()), Some(beside), "hovering the map held the focus");
+
+        ctx.memory_mut(|m| m.request_focus(field));
+        frame(&mut state, vec![]);
+        assert!(ctx.text_edit_focused(), "fixture must focus the text field");
+        assert_eq!(frame(&mut state, vec![right]), None, "the map took a text field's arrow");
     }
 
     #[test]

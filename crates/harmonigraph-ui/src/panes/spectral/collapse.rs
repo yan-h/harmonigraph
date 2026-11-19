@@ -1,10 +1,15 @@
 //! Editor-only folds inside the Analyzer. Hidden regions keep their depth in
 //! points; a virtual full picture keeps the surviving region's calibration.
 
-use egui::{Pos2, Rect, Sense, Vec2};
+use egui::{Rect, Sense, Vec2};
 
 use super::{axes::Axes, gestures, Navigation, RegionView};
-use crate::{panes::DOCKED_SURFACE, theme, PictureState};
+use crate::{
+    panes::DOCKED_SURFACE,
+    theme,
+    widgets::{Rail, RailLook},
+    PictureState,
+};
 
 #[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -246,55 +251,22 @@ fn control(
     name: &str,
     index: usize,
 ) -> bool {
-    let response =
-        ui.interact(rect, egui::Id::new(("analyzer region fold", index)), Sense::click());
+    let id = egui::Id::new(("analyzer region fold", index));
+    if rail {
+        // Time down the pane stacks the regions, so a folded one is a row
+        // across it; time across stands them side by side, each a column.
+        let run = if vertical { Rail::Row } else { Rail::Column };
+        // A region's own look: a tab bar's button even on a rail squeezed
+        // thinner, the title 6 points from it at every scale, named.
+        let button = theme::tab_bar_height(theme::ui_scale(ui.ctx()));
+        let look = RailLook { button, gap: 6.0, named: true };
+        return crate::widgets::paint_rail(ui, rect, id, run, direction, name, look);
+    }
+    let response = ui.interact(rect, id, Sense::click());
+    let collapse = format!("Collapse {name}");
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
-            true,
-            format!("{} {name}", if rail { "Expand" } else { "Collapse" }),
-        )
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, collapse.clone())
     });
-    let painter = ui.painter_at(rect);
-    let scale = theme::ui_scale(ui.ctx());
-    let size = theme::tab_bar_height(scale);
-    let center = if rail {
-        rect.left_top()
-            + if vertical {
-                egui::vec2(size * 0.5, rect.height() * 0.5)
-            } else {
-                egui::vec2(rect.width() * 0.5, size * 0.5)
-            }
-    } else {
-        rect.center()
-    };
-    if rail {
-        painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::header());
-    }
-    let button = if rail { Rect::from_center_size(center, Vec2::splat(size)) } else { rect };
-    crate::widgets::paint_fold(ui, &response, button, direction);
-    if rail {
-        let galley = painter.layout_no_wrap(
-            name.to_owned(),
-            egui::TextStyle::Heading.resolve(ui.style()),
-            theme::text(),
-        );
-        let available = if vertical { rect.width() } else { rect.height() };
-        if galley.size().x + size + 12.0 <= available {
-            let (anchor, angle) = if vertical {
-                (Pos2::new(rect.left() + size + 6.0, rect.center().y - galley.size().y * 0.5), 0.0)
-            } else {
-                (
-                    Pos2::new(
-                        rect.center().x - galley.size().y * 0.5,
-                        rect.top() + size + 6.0 + galley.size().x,
-                    ),
-                    -std::f32::consts::FRAC_PI_2,
-                )
-            };
-            painter
-                .add(egui::epaint::TextShape::new(anchor, galley, theme::text()).with_angle(angle));
-        }
-    }
-    response.on_hover_text(format!("{} {name}", if rail { "Expand" } else { "Collapse" })).clicked()
+    crate::widgets::paint_fold(ui, &response, rect, direction);
+    response.on_hover_text(collapse).clicked()
 }
