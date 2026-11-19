@@ -86,8 +86,8 @@ impl<'a> BendPlot<'a> {
                 (&mut bend.lightness, "Brightness"),
                 (&mut bend.chroma, "Saturation"),
             ] {
-                ui.toggle_value(on, name)
-                    .on_hover_text(format!("Whether {} follows the curve", name.to_lowercase()));
+                let hint = format!("Whether {} follows the curve", name.to_lowercase());
+                super::toggle_button(ui, on, name, &hint);
             }
         });
 
@@ -219,6 +219,37 @@ mod tests {
         click(&mut g, home, (0.9, 0.15), 2);
         assert_eq!((g.bend.at, g.bend.share), (0.7, 0.4), "a double-click missed home");
         assert!(!g.bend.lightness, "a double-click switched a channel back on");
+    }
+
+    /// A channel switched off still stands on an option's button fill, as
+    /// every choice row's options do, rather than reading as more words after
+    /// "Curve" (#1873).
+    #[test]
+    fn a_channel_switched_off_stands_on_a_fill() {
+        let mut g = Gradient::default();
+        (g.bend.hue, g.bend.lightness, g.bend.chroma) = (false, false, false);
+        let shapes = super::super::probe::shapes(400.0, |ui| {
+            BendPlot::new(&mut g, Gradient::default()).show(ui);
+        });
+        let fills: Vec<egui::Rect> = shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Rect(r) if r.fill == theme::widget() => Some(r.rect),
+                _ => None,
+            })
+            .collect();
+        for name in ["Hue", "Brightness", "Saturation"] {
+            let at = shapes
+                .iter()
+                .find_map(|s| match s {
+                    egui::Shape::Text(t) if t.galley.text() == name => {
+                        Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no {name} drawn"));
+            assert!(fills.iter().any(|fill| fill.contains(at)), "{name} stands on no fill");
+        }
     }
 
     /// The plot's hover is its hint and then the gestures in the bars' one
