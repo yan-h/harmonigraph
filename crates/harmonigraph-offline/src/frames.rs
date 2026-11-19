@@ -1321,11 +1321,10 @@ mod tests {
             "spectral_shadow_atlas",
             "lattice_material_tile_a",
         ];
-        // B is tall enough that the Watercolor tile pinned below crosses one
-        // of its 128-texel steps (384 to 512 here), which a few hundred
-        // pixels of height does not: the tile is sized by the glow target's
-        // height, a quarter of the scene's. And wide enough that the lattice's
-        // shadow atlas, which follows the width, grows too.
+        // B is picked so that every target above crosses a step from A: the
+        // Watercolor tile pinned below goes from 384 to 512 texels, which a
+        // few hundred pixels more height does not reach, and the lattice's
+        // shadow atlas grows too. The first loop below checks each did.
         const A: [u32; 2] = [1600, 1000];
         const B: [u32; 2] = [2600, 1600];
         const RATE: f32 = 48_000.0;
