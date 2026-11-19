@@ -22,6 +22,9 @@ pub mod util;
 
 /// Everything a plugin needs from the shell. Import this with `use harmonigraph_clap::prelude::*;`.
 pub mod prelude;
+/// A CLAP host for the fixtures that drive a plugin through its entry point.
+#[cfg(feature = "clap-boundary-tests")]
+pub mod testing;
 pub mod wrapper;
 
 // Last, as in nice-plug-core, so the `#[macro_use]` scope reaches no module above.

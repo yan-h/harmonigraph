@@ -1,18 +1,15 @@
 //! The shell's process callback, flush and editor writes, through the real
 //! exported factory with a fixture plugin that records what it is handed.
-use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory};
-use clap_sys::{
-    audio_buffer::clap_audio_buffer, events::*, ext::gui::*, ext::params::*, host::clap_host,
-    plugin::clap_plugin, process::*, version::CLAP_VERSION,
-};
+use clap_sys::{events::*, ext::gui::*, plugin::clap_plugin, process::*};
 use harmonigraph_clap::prelude::*;
+use harmonigraph_clap::testing::{self, Audio, Call, Event, Host, Offer, Resize, Sink, header};
 use harmonigraph_clap::wrapper::clap::setup::{Prepared, Serviced, Setup};
 use std::{
-    ffi::{CStr, c_char, c_void},
+    ffi::c_void,
     ptr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicPtr, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -198,36 +195,6 @@ impl Editor for FixtureEditor {
     }
 }
 
-fn header<T>(kind: u16, time: u32) -> clap_event_header {
-    clap_event_header {
-        size: std::mem::size_of::<T>() as u32,
-        time,
-        space_id: 0,
-        type_: kind,
-        flags: 0,
-    }
-}
-#[derive(Clone, Copy)]
-enum Event {
-    Note(clap_event_note),
-    Param(clap_event_param_value),
-    Transport(clap_event_transport),
-    SysEx(clap_event_midi_sysex),
-    Header(clap_event_header),
-}
-impl Event {
-    /// A pointer to the whole event, as a host hands one over: a pointer
-    /// to only its header field could not read the rest (Miri).
-    fn header(&self) -> *const clap_event_header {
-        match self {
-            Self::Note(e) => (e as *const clap_event_note).cast(),
-            Self::Param(e) => (e as *const clap_event_param_value).cast(),
-            Self::Transport(e) => (e as *const clap_event_transport).cast(),
-            Self::SysEx(e) => (e as *const clap_event_midi_sysex).cast(),
-            Self::Header(e) => e,
-        }
-    }
-}
 fn note(kind: u16, time: u32) -> Event {
     Event::Note(clap_event_note {
         header: header::<clap_event_note>(kind, time),
@@ -257,81 +224,7 @@ fn transport(time: u32) -> clap_event_transport {
         ..unsafe { std::mem::zeroed() }
     }
 }
-unsafe extern "C" fn input_size(list: *const clap_input_events) -> u32 {
-    unsafe { &*((*list).ctx.cast::<Vec<Event>>()) }.len() as u32
-}
-unsafe extern "C" fn input_get(
-    list: *const clap_input_events,
-    index: u32,
-) -> *const clap_event_header {
-    (unsafe { &*((*list).ctx.cast::<Vec<Event>>()) })[index as usize].header()
-}
-fn list(events: &Vec<Event>) -> clap_input_events {
-    clap_input_events {
-        ctx: (events as *const Vec<Event>).cast_mut().cast(),
-        size: Some(input_size),
-        get: Some(input_get),
-    }
-}
 
-#[derive(Default)]
-struct Host {
-    callbacks: AtomicUsize,
-    /// The plugin, for a host callback that calls back into it.
-    plugin: AtomicPtr<clap_plugin>,
-    /// The last `request_resize`.
-    resize: Mutex<Option<Resize>>,
-}
-unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const c_void {
-    if unsafe { CStr::from_ptr(id) } == CLAP_EXT_PARAMS {
-        (&PARAMS as *const clap_host_params).cast()
-    } else if unsafe { CStr::from_ptr(id) } == CLAP_EXT_GUI {
-        (&GUI as *const clap_host_gui).cast()
-    } else {
-        ptr::null()
-    }
-}
-unsafe extern "C" fn host_callback(host: *const clap_host) {
-    unsafe { &*((*host).host_data.cast::<Host>()) }.callbacks.fetch_add(1, Ordering::Relaxed);
-}
-unsafe extern "C" fn rescan(_: *const clap_host, _: u32) {}
-unsafe extern "C" fn clear(_: *const clap_host, _: u32, _: u32) {}
-unsafe extern "C" fn request(_: *const clap_host) {}
-static PARAMS: clap_host_params =
-    clap_host_params { rescan: Some(rescan), clear: Some(clear), request_flush: Some(request) };
-
-/// A `request_resize` as the host heard it: the size asked for, and the
-/// plugin's answers to `gui.get_size` and `gui.set_size(asked)` made from
-/// inside it, as a host that resizes at once does.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Resize {
-    asked: (u32, u32),
-    reported: (u32, u32),
-    set: bool,
-}
-unsafe extern "C" fn request_resize(host: *const clap_host, width: u32, height: u32) -> bool {
-    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
-    let plugin = stats.plugin.load(Ordering::Acquire).cast_const();
-    let gui = unsafe { plugin_gui(plugin) };
-    let mut reported = (0, 0);
-    assert!(unsafe { (gui.get_size.unwrap())(plugin, &mut reported.0, &mut reported.1) });
-    let set = unsafe { (gui.set_size.unwrap())(plugin, width, height) };
-    let resize = Resize { asked: (width, height), reported, set };
-    *stats.resize.lock().unwrap_or_else(|e| e.into_inner()) = Some(resize);
-    true
-}
-unsafe extern "C" fn gui_noop(_: *const clap_host) {}
-unsafe extern "C" fn gui_refuse(_: *const clap_host) -> bool {
-    false
-}
-unsafe extern "C" fn gui_closed(_: *const clap_host, _: bool) {}
-static GUI: clap_host_gui = clap_host_gui {
-    resize_hints_changed: Some(gui_noop),
-    request_resize: Some(request_resize),
-    request_show: Some(gui_refuse),
-    request_hide: Some(gui_refuse),
-    closed: Some(gui_closed),
-};
 /// The plugin's gui extension.
 ///
 /// # Safety
@@ -344,70 +237,30 @@ unsafe fn plugin_gui(plugin: *const clap_plugin) -> &'static clap_plugin_gui {
     }
 }
 
-/// What the host's output list was offered, as (type, time, value), and
-/// whether it took each.
-struct Sink {
-    /// The answer to each offer in turn; past its end, yes.
-    script: Vec<bool>,
-    offers: Vec<(u16, u32, f64, bool)>,
-}
-unsafe extern "C" fn push(
-    list: *const clap_output_events,
-    event: *const clap_event_header,
-) -> bool {
-    let sink = unsafe { &mut *((*list).ctx.cast::<Sink>()) };
-    let header = unsafe { &*event };
-    let accepted = sink.script.get(sink.offers.len()).copied().unwrap_or(true);
-    let value = match header.type_ {
-        CLAP_EVENT_PARAM_VALUE => unsafe { (*event.cast::<clap_event_param_value>()).value },
+/// A value the host's list was offered, or NaN for an offer with none.
+fn offered_value(offer: &Offer) -> f64 {
+    match offer.event {
+        Event::Param(e) => e.value,
         _ => f64::NAN,
-    };
-    assert!(sink.offers.len() < sink.offers.capacity());
-    sink.offers.push((header.type_, header.time, value, accepted));
-    accepted
+    }
 }
 
-/// The host's structs are raw pointers the plugin holds on to, freed at the
-/// end: a `Box` moved after the plugin took its pointer would end that
-/// pointer's reach (Miri).
+/// The fixture on a host that answers params and gui, and re-enters the
+/// plugin from a resize request as Bitwig does, activated at 64 frames.
 struct Device {
+    device: testing::Device,
     plugin: *const clap_plugin,
-    host: *mut Host,
-    clap_host: *mut clap_host,
+    /// The host's output list, kept across callbacks with room for every
+    /// test's offers.
     sink: Sink,
 }
 impl Device {
     fn new() -> Self {
         observed().reset();
-        let host = Box::into_raw(Box::<Host>::default());
-        let clap_host = Box::into_raw(Box::new(clap_host {
-            clap_version: CLAP_VERSION,
-            host_data: host.cast(),
-            name: c"fixture".as_ptr(),
-            vendor: c"fixture".as_ptr(),
-            url: c"".as_ptr(),
-            version: c"1".as_ptr(),
-            get_extension: Some(extension),
-            request_restart: Some(request),
-            request_process: Some(request),
-            request_callback: Some(host_callback),
-        }));
-        let factory = unsafe { (clap_entry.get_factory.unwrap())(CLAP_PLUGIN_FACTORY_ID.as_ptr()) }
-            .cast::<clap_plugin_factory>();
-        let plugin = unsafe {
-            ((*factory).create_plugin.unwrap())(factory, clap_host, c"fixture.boundary".as_ptr())
-        };
-        assert!(!plugin.is_null());
-        unsafe { &*host }.plugin.store(plugin.cast_mut(), Ordering::Release);
-        assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
-        assert!(unsafe { ((*plugin).activate.unwrap())(plugin, 48000.0, 1, 64) });
-        assert!(unsafe { ((*plugin).start_processing.unwrap())(plugin) });
-        Self {
-            plugin,
-            host,
-            clap_host,
-            sink: Sink { script: vec![], offers: Vec::with_capacity(64) },
-        }
+        let host = Host::new().params().gui().reentering_resize();
+        let mut device = testing::Device::new(&clap_entry, c"fixture.boundary", host);
+        device.activate(48000.0, 64);
+        Self { plugin: device.plugin, device, sink: Sink::with_capacity(64) }
     }
     fn run(
         &mut self,
@@ -417,7 +270,7 @@ impl Device {
     ) -> clap_process_status {
         self.run_frames(steady, 64, events, transport)
     }
-    /// A callback of `frames`, at most the 64 the buffers hold.
+    /// A callback of `frames`.
     fn run_frames(
         &mut self,
         steady: i64,
@@ -425,79 +278,22 @@ impl Device {
         events: Vec<Event>,
         transport: Option<clap_event_transport>,
     ) -> clap_process_status {
-        let input = list(&events);
-        let output =
-            clap_output_events { ctx: (&mut self.sink as *mut Sink).cast(), try_push: Some(push) };
-        let mut audio = [[0.0f32; 64]; 4];
-        let mut pointers: Vec<_> = audio.iter_mut().map(|c| c.as_mut_ptr()).collect();
-        let inputs = clap_audio_buffer {
-            data32: pointers.as_mut_ptr(),
-            data64: ptr::null_mut(),
-            channel_count: 2,
-            latency: 0,
-            constant_mask: 0,
-        };
-        let mut outputs =
-            clap_audio_buffer { data32: unsafe { pointers.as_mut_ptr().add(2) }, ..inputs };
-        let process = clap_process {
-            steady_time: steady,
-            frames_count: frames,
-            transport: transport.as_ref().map_or(ptr::null(), |t| t),
-            audio_inputs: &inputs,
-            audio_outputs: &mut outputs,
-            audio_inputs_count: 1,
-            audio_outputs_count: 1,
-            in_events: &input,
-            out_events: &output,
-        };
-        unsafe { ((*self.plugin).process.unwrap())(self.plugin, &process) }
-    }
-    fn params(&self) -> &clap_plugin_params {
-        unsafe {
-            &*(((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_PARAMS.as_ptr())
-                .cast())
-        }
+        let call = Call { steady, frames, events: &events, transport, audio: Audio::Main };
+        self.device.process(&call, &mut self.sink).0
     }
     fn value(&self) -> f64 {
-        let mut value = f64::NAN;
-        let id = harmonigraph_clap::wrapper::hash_param_id("axis");
-        assert!(unsafe { (self.params().get_value.unwrap())(self.plugin, id, &mut value) });
-        value
+        self.device.value(harmonigraph_clap::wrapper::hash_param_id("axis"))
     }
     fn flush(&self, events: Vec<Event>) {
-        let input = list(&events);
-        unsafe { (self.params().flush.unwrap())(self.plugin, &input, ptr::null()) };
+        self.device.flush(&events, None);
     }
     /// A flush whose output is the device's sink.
     fn flush_to_sink(&mut self, events: Vec<Event>) {
-        let input = list(&events);
-        let output =
-            clap_output_events { ctx: (&mut self.sink as *mut Sink).cast(), try_push: Some(push) };
-        unsafe { (self.params().flush.unwrap())(self.plugin, &input, &output) };
+        self.device.flush(&events, Some(&mut self.sink));
     }
     /// Load `json` through the CLAP state extension, framed as a save is.
     fn load(&self, json: &[u8]) {
-        use clap_sys::ext::state::{CLAP_EXT_STATE, clap_plugin_state};
-        use clap_sys::stream::clap_istream;
-        unsafe extern "C" fn read(
-            stream: *const clap_istream,
-            data: *mut c_void,
-            size: u64,
-        ) -> i64 {
-            let bytes = unsafe { &mut *((*stream).ctx.cast::<&[u8]>()) };
-            let count = bytes.len().min(size as usize);
-            unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), data.cast(), count) };
-            *bytes = &bytes[count..];
-            count as i64
-        }
-        let framed = [&(json.len() as u64).to_le_bytes()[..], json].concat();
-        let mut unread = &framed[..];
-        let stream = clap_istream { ctx: (&mut unread as *mut &[u8]).cast(), read: Some(read) };
-        let state = unsafe {
-            &*(((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_STATE.as_ptr())
-                .cast::<clap_plugin_state>())
-        };
-        assert!(unsafe { (state.load.unwrap())(self.plugin, &stream) });
+        assert!(self.device.load(json));
     }
     /// What the host's list was offered since the last call, in order, each
     /// gesture or note by name and each value by its number.
@@ -508,10 +304,10 @@ impl Device {
             .sink
             .offers
             .iter()
-            .map(|&(kind, _, value, _)| match kind {
+            .map(|offer| match offer.kind {
                 CLAP_EVENT_PARAM_GESTURE_BEGIN => "begin".to_owned(),
                 CLAP_EVENT_PARAM_GESTURE_END => "end".to_owned(),
-                CLAP_EVENT_PARAM_VALUE => format!("{value}"),
+                CLAP_EVENT_PARAM_VALUE => format!("{}", offered_value(offer)),
                 _ => "note".to_owned(),
             })
             .collect();
@@ -520,37 +316,20 @@ impl Device {
     }
     /// The editor's side of the host, and the fixture's one parameter's row.
     fn editor(&self) -> (Arc<dyn EditorHost>, usize) {
-        let wrapper = unsafe {
-            &*((*self.plugin)
-                .plugin_data
-                .cast::<harmonigraph_clap::wrapper::clap::Wrapper<Fixture>>())
-        };
+        // SAFETY: created from the fixture's id.
+        let wrapper = unsafe { self.device.wrapper::<Fixture>() };
         let (host, table) =
             wrapper.test_inspect_plugin(|fixture| (fixture.host.clone(), fixture.params.clone()));
         let row = (0..table.len()).find(|&row| table.spec(row).id == "axis").expect("a row");
         (host.expect("a host"), row)
     }
     fn main(&self) {
-        unsafe { ((*self.plugin).on_main_thread.unwrap())(self.plugin) };
+        self.device.main();
     }
     fn tail(&self) -> u32 {
         use clap_sys::ext::tail::{CLAP_EXT_TAIL, clap_plugin_tail};
-        unsafe {
-            let tail = ((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_TAIL.as_ptr())
-                .cast::<clap_plugin_tail>();
-            ((*tail).get.unwrap())(self.plugin)
-        }
-    }
-}
-impl Drop for Device {
-    fn drop(&mut self) {
-        unsafe {
-            ((*self.plugin).stop_processing.unwrap())(self.plugin);
-            ((*self.plugin).deactivate.unwrap())(self.plugin);
-            ((*self.plugin).destroy.unwrap())(self.plugin);
-            drop(Box::from_raw(self.clap_host));
-            drop(Box::from_raw(self.host));
-        }
+        let tail = self.device.extension::<clap_plugin_tail>(CLAP_EXT_TAIL).unwrap();
+        unsafe { (tail.get.unwrap())(self.plugin) }
     }
 }
 
@@ -688,7 +467,8 @@ fn an_editor_edit_applies_at_once_and_reaches_the_host_at_offset_zero() {
     let offers = |sink: &mut Sink| -> (Vec<(u16, u32, bool)>, Vec<f64>) {
         // Cleared rather than taken: the sink keeps its room for the next
         // guarded callback.
-        let offers = sink.offers.clone();
+        let offers: Vec<_> =
+            sink.offers.iter().map(|o| (o.kind, o.time, offered_value(o), o.taken)).collect();
         sink.offers.clear();
         let values = offers.iter().map(|o| o.2).filter(|v| !v.is_nan()).collect();
         (offers.into_iter().map(|(kind, time, _, taken)| (kind, time, taken)).collect(), values)
@@ -733,7 +513,7 @@ fn a_transport_event_in_the_list_reaches_the_plugin_and_is_noticed_once() {
         })
         .collect();
     assert_eq!(samples, [64, 69]);
-    let callbacks = unsafe { &(*d.host).callbacks };
+    let callbacks = &d.device.host().callbacks;
     assert_eq!(callbacks.load(Ordering::Relaxed), 1, "the main thread is asked");
     d.main();
     assert_eq!(NOTICES.load(Ordering::Relaxed), 1);
@@ -911,7 +691,7 @@ fn a_resize_asked_as_the_editor_opens_reaches_the_host_which_may_reenter() {
         let window = clap_window { api, specific: clap_window_handle { cocoa: ptr::null_mut() } };
         assert!((gui.set_parent.unwrap())(d.plugin, &window));
     }
-    let resize = *unsafe { &*d.host }.resize.lock().unwrap_or_else(|e| e.into_inner());
+    let resize = *d.device.host().reentered.lock().unwrap_or_else(|e| e.into_inner());
     assert_eq!(resize, Some(Resize { asked: RESIZED, reported: OPENED, set: true }));
     let mut size = (0, 0);
     assert!(unsafe { (gui.get_size.unwrap())(d.plugin, &mut size.0, &mut size.1) });
