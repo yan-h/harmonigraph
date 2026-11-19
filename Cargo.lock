@@ -1511,7 +1511,6 @@ dependencies = [
  "egui",
  "egui-baseview",
  "egui-wgpu",
- "flate2",
  "harmonigraph-clap",
  "harmonigraph-core",
  "harmonigraph-perf",
@@ -1527,7 +1526,6 @@ dependencies = [
  "plugin-own-window",
  "pollster",
  "raw-window-handle 0.5.2",
- "ron",
  "rtrb",
  "serde",
  "serde_json",
@@ -1589,6 +1587,18 @@ dependencies = [
  "harmonigraph-ui",
  "image",
  "midir",
+]
+
+[[package]]
+name = "harmonigraph-state-reader"
+version = "0.6.1"
+dependencies = [
+ "flate2",
+ "harmonigraph-clap",
+ "harmonigraph-plugin",
+ "harmonigraph-ui",
+ "ron",
+ "serde_json",
 ]
 
 [[package]]

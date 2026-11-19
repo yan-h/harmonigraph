@@ -11,19 +11,22 @@
 //! ./read-plugin-state --raw               # what the file holds
 //! ```
 //!
-//! Every output but `--raw` is what the plugin loads, through its own
-//! restore ([`harmonigraph_plugin::saved_state`]): a value out of range is
-//! clamped, a key this build has no field for is gone, and the camera is the
-//! host's. `--raw` prints what the file holds instead, before any restore,
-//! which is what a persistence bug needs.
+//! Every output but `--raw` is what the plugin loads, through its own load
+//! ([`harmonigraph_plugin::saved_state`]): a value out of range is clamped, a
+//! key this build has no field for is gone, a state the plugin refuses is
+//! reported as refused, and the camera is the host's. `--raw` prints what the
+//! file holds instead, before any decoding a load does, which is what a
+//! persistence bug needs. `--rust` and `--appearance` print their artifact
+//! alone on stdout, and what the restore says on stderr.
 //!
 //! Where the bytes are: a `.bwproject` is Bitwig's own tagged binary
 //! container, and each plugin instance's state sits in a raw DEFLATE section
 //! of it (no zlib header), as the JSON every nice-plug plugin saves:
 //! `{"version":..,"params":{..},"fields":{..}}`. Each field is itself JSON,
 //! and `ui-state` is a JSON string holding the editor's RON. The scan reads
-//! the file as it is and every whole raw DEFLATE stream in it, starting at
-//! every offset, which takes in a zlib-wrapped section's stream too. A
+//! the file as it is and what inflates from every offset, which takes in a
+//! zlib-wrapped section's stream too, keeping a stream cut short up to where
+//! it stops. A state is ours by its keys (`saved_state::plugin_of`). A
 //! 650 KB project takes about 1.4 s.
 
 use std::collections::BTreeSet;
@@ -31,8 +34,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use harmonigraph_clap::plugin::PluginState;
 use harmonigraph_plugin::saved_state::{self, Look, Plugin, Reading};
+use serde_json::Value;
 
 /// The opening of every nice-plug state.
 const STATE_START: &[u8] = br#"{"version""#;
@@ -43,6 +46,14 @@ const INFLATE_LIMIT: u64 = 64 << 20;
 /// groups' own fields, and the layout's and preferences'.
 const LOOK_DEPTH: usize = 3;
 
+/// One state of ours as the file holds it.
+struct Instance {
+    plugin: Plugin,
+    /// The state's JSON, as stored.
+    json: Vec<u8>,
+    value: Value,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Output {
     Summary,
@@ -52,6 +63,9 @@ enum Output {
 }
 
 fn main() -> ExitCode {
+    // The shell's log lines (a parameter the save names and no row has, a
+    // field refused) go to stderr, as they go to the log in a plugin.
+    harmonigraph_clap::wrapper::setup_logger();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -92,22 +106,23 @@ fn run() -> Result<(), String> {
     };
     eprintln!("# {}", path.display());
     let data = std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let states = states(&data);
-    if states.is_empty() {
+    let instances = instances(&data);
+    if instances.is_empty() {
         return Err("No Harmonigraph state found in this project.".into());
     }
+    if output == Output::Raw {
+        raw(&instances);
+        return Ok(());
+    }
+    let readings: Vec<Reading> = instances
+        .iter()
+        .map(|instance| saved_state::read(instance.plugin, &instance.json))
+        .collect();
     match output {
-        Output::Summary => summary(&states),
-        Output::Raw => raw(&states),
-        Output::Rust => rust(&states)?,
-        Output::Appearance => {
-            let looks: Vec<_> =
-                states.iter().filter_map(|(_, reading)| installed(reading)).collect();
-            let [editor] = looks[..] else {
-                return Err(format!("Expected one editor look, found {}.", looks.len()));
-            };
-            println!("{}", editor.picture.appearance.serialize());
-        }
+        Output::Summary => summary(&readings),
+        Output::Rust => rust(&readings)?,
+        Output::Appearance => appearance(&readings)?,
+        Output::Raw => unreachable!("printed above"),
     }
     Ok(())
 }
@@ -152,35 +167,37 @@ fn walk(dir: &Path, paths: &mut Vec<PathBuf>) {
 }
 
 /// Every Harmonigraph and Tune state in a project's bytes, once each, in the
-/// order found, each with what the plugin loads of it. The whole file, not
-/// the first section that holds one: a project's Tunes sit in sections apart
-/// from the editor's.
-fn states(data: &[u8]) -> Vec<(PluginState, Reading)> {
+/// order found. The whole file, not the first section that holds one: a
+/// project's Tunes sit in sections apart from the editor's. A state is taken
+/// as JSON alone, so one the plugin would refuse is still found.
+fn instances(data: &[u8]) -> Vec<Instance> {
     let mut found = Vec::new();
     let mut seen = BTreeSet::new();
     for buffer in std::iter::once(data.to_vec()).chain(sections(data)) {
         for start in offsets(&buffer, STATE_START) {
             let mut stream =
-                serde_json::Deserializer::from_slice(&buffer[start..]).into_iter::<PluginState>();
-            let Some(Ok(state)) = stream.next() else { continue };
-            if !seen.insert(serde_json::to_string(&state).unwrap_or_default()) {
-                continue;
-            }
-            if let Some(reading) = saved_state::read(&state) {
-                found.push((state, reading));
+                serde_json::Deserializer::from_slice(&buffer[start..]).into_iter::<Value>();
+            let Some(Ok(value)) = stream.next() else { continue };
+            let Some(plugin) = saved_state::plugin_of(&value) else { continue };
+            // By content, so the same state in two sections, or in a section
+            // and plain, is one instance.
+            if seen.insert(value.to_string()) {
+                let json = buffer[start..start + stream.byte_offset()].to_vec();
+                found.push(Instance { plugin, json, value });
             }
         }
     }
     found
 }
 
-/// Every whole raw DEFLATE stream in `data` that holds a state's start. A
-/// zlib-wrapped stream is one of them, two bytes past its header.
+/// What inflates as raw DEFLATE from each offset of `data`, where it holds a
+/// state's start. A stream cut short keeps what inflated before the cut.
 fn sections(data: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
     (0..data.len()).filter_map(move |offset| {
         let mut out = Vec::new();
-        let decoder = flate2::read::DeflateDecoder::new(&data[offset..]);
-        decoder.take(INFLATE_LIMIT).read_to_end(&mut out).ok()?;
+        let decoder = flate2::bufread::DeflateDecoder::new(&data[offset..]);
+        // An error ends the stream; what came before it stays in `out`.
+        let _ = decoder.take(INFLATE_LIMIT).read_to_end(&mut out);
         let holds = out.windows(STATE_START.len()).any(|window| window == STATE_START);
         holds.then_some(out)
     })
@@ -198,21 +215,21 @@ fn installed(reading: &Reading) -> Option<&harmonigraph_ui::SharedState> {
     }
 }
 
-fn heading(n: usize, count: usize, reading: &Reading) {
-    let name = match reading.plugin {
+fn heading(n: usize, count: usize, plugin: Plugin) {
+    let name = match plugin {
         Plugin::Harmonigraph => "Harmonigraph",
         Plugin::Tune => "Harmonigraph Tune",
     };
     println!("=== instance {n} of {count}: {name} ===");
 }
 
-fn summary(states: &[(PluginState, Reading)]) {
-    for (n, (_, reading)) in states.iter().enumerate() {
+fn summary(readings: &[Reading]) {
+    for (n, reading) in readings.iter().enumerate() {
         if n > 0 {
             println!();
         }
-        heading(n + 1, states.len(), reading);
-        if let Some(reason) = reading.refused {
+        heading(n + 1, readings.len(), reading.plugin);
+        if let Some(reason) = &reading.refused {
             println!(
                 "\nThe plugin refuses this state whole ({reason}) and keeps what it held; \
                  --raw shows what it holds."
@@ -224,12 +241,6 @@ fn summary(states: &[(PluginState, Reading)]) {
             for (id, value) in &reading.params {
                 println!("  {id}: {value}");
             }
-        }
-        if !reading.ignored.is_empty() {
-            println!(
-                "  not parameters of this build, ignored on load: {}",
-                reading.ignored.join(", ")
-            );
         }
         println!("\n--- fields (as the plugin saves them after this restore) ---");
         for (key, value) in &reading.fields {
@@ -263,18 +274,49 @@ fn summary(states: &[(PluginState, Reading)]) {
     }
 }
 
+/// What the restore of instance `n` says, on stderr, so that stdout holds
+/// the artifact alone.
+fn report(n: usize, reading: &Reading) {
+    if let Some(reason) = &reading.refused {
+        eprintln!("# instance {n}: the plugin refuses this state whole ({reason})");
+    }
+    for note in &reading.notes {
+        eprintln!("# instance {n}: {note}");
+    }
+}
+
+/// The installed looks, by instance number, each instance's notes reported.
+fn looks(readings: &[Reading]) -> Vec<(usize, &harmonigraph_ui::SharedState)> {
+    let numbered = readings.iter().enumerate().map(|(index, reading)| (index + 1, reading));
+    numbered
+        .filter_map(|(n, reading)| {
+            report(n, reading);
+            Some((n, installed(reading)?))
+        })
+        .collect()
+}
+
+fn appearance(readings: &[Reading]) -> Result<(), String> {
+    let looks = looks(readings);
+    let [(_, editor)] = looks[..] else {
+        return Err(format!("Expected one editor look, found {}.", looks.len()));
+    };
+    println!("{}", editor.picture.appearance.serialize());
+    Ok(())
+}
+
 /// The view's fields as an `impl Default` body for `ViewConfig`. Its values
 /// are RON, so an enum or a nested struct needs its Rust path on paste.
-fn rust(states: &[(PluginState, Reading)]) -> Result<(), String> {
-    let looks: Vec<_> = states.iter().filter_map(|(_, reading)| installed(reading)).collect();
+fn rust(readings: &[Reading]) -> Result<(), String> {
+    let looks = looks(readings);
     if looks.is_empty() {
         return Err("No editor look in any instance.".into());
     }
     let config = ron::ser::PrettyConfig::new().depth_limit(1);
-    for (n, editor) in looks.iter().enumerate() {
-        // Numbered where there is more than one, so two runs of fields
-        // cannot be pasted as one.
-        let which = if looks.len() > 1 { format!(" instance {}", n + 1) } else { String::new() };
+    for (n, editor) in &looks {
+        // Labelled by instance where there is more than one look, so two runs
+        // of fields cannot be pasted as one.
+        let which = if looks.len() > 1 { format!(" instance {n}") } else { String::new() };
         println!("// From a live Bitwig session{which}; see read-plugin-state.");
         let view = ron::ser::to_string_pretty(&editor.picture.appearance.view, config.clone())
             .map_err(|error| error.to_string())?;
@@ -285,24 +327,29 @@ fn rust(states: &[(PluginState, Reading)]) -> Result<(), String> {
     Ok(())
 }
 
-/// What the file holds for each instance, before any restore: every field
-/// that is a JSON string decoded once (`ui-state` to its RON), the rest as
-/// stored.
-fn raw(states: &[(PluginState, Reading)]) {
-    for (n, (state, reading)) in states.iter().enumerate() {
+/// What the file holds for each instance, before any decoding a load does:
+/// every field that is a JSON string decoded once (`ui-state` to its RON),
+/// the rest as stored.
+fn raw(instances: &[Instance]) {
+    for (n, instance) in instances.iter().enumerate() {
         if n > 0 {
             println!();
         }
-        heading(n + 1, states.len(), reading);
-        println!("version: {}", state.version);
-        println!("\n--- params (as saved) ---");
-        for (id, value) in &state.params {
-            println!("  {id}: {}", serde_json::to_string(value).unwrap_or_default());
-        }
-        println!("\n--- fields (as saved) ---");
-        for (key, value) in &state.fields {
-            let decoded = serde_json::from_str::<String>(value);
-            println!("  {key}: {}", decoded.as_deref().unwrap_or(value));
+        heading(n + 1, instances.len(), instance.plugin);
+        let value = &instance.value;
+        println!("version: {}", value.get("version").unwrap_or(&Value::Null));
+        for (name, title) in [("params", "params"), ("fields", "fields")] {
+            println!("\n--- {title} (as saved) ---");
+            let Some(map) = value.get(name).and_then(Value::as_object) else {
+                println!("  (none: {})", value.get(name).unwrap_or(&Value::Null));
+                continue;
+            };
+            for (key, item) in map {
+                let decoded = item.as_str().map(|text| {
+                    serde_json::from_str::<String>(text).unwrap_or_else(|_| text.to_owned())
+                });
+                println!("  {key}: {}", decoded.unwrap_or_else(|| item.to_string()));
+            }
         }
     }
 }
@@ -315,20 +362,26 @@ mod tests {
     use std::io::Write;
 
     fn fixture(name: &str) -> Vec<u8> {
-        let path = format!("{}/fixtures/saved-state/{name}.json", env!("CARGO_MANIFEST_DIR"));
+        let path = format!(
+            "{}/../harmonigraph-plugin/fixtures/saved-state/{name}.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
         std::fs::read(path).unwrap()
     }
 
-    /// Each state of ours in a project is found once, from a raw DEFLATE
-    /// section, a zlib one or none, and another plugin's state is not:
-    /// every nice-plug plugin saves the same shape.
+    fn deflate(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    /// Each state of ours in a project is found once: plain, in a raw
+    /// DEFLATE section, in a zlib one, or in one cut short; two distinct
+    /// states of one plugin are two; one a load would refuse is found; and
+    /// another plugin's state is not, though every nice-plug plugin saves the
+    /// same shape.
     #[test]
     fn every_state_of_ours_is_found_once() {
-        let deflate = |bytes: &[u8]| {
-            let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
-            encoder.write_all(bytes).unwrap();
-            encoder.finish().unwrap()
-        };
         let zlib = |bytes: &[u8]| {
             let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
             encoder.write_all(bytes).unwrap();
@@ -337,10 +390,20 @@ mod tests {
         let other =
             br#"{"version":"1.0.0","params":{"gain":{"f32":0.25}},"fields":{"editor-state":"{}"}}"#;
         let (hub, tune) = (fixture("harmonigraph"), fixture("tune"));
-        // One state twice, in two sections or a section and plain, is one
-        // instance: real projects hold the same Tune in two sections.
+        let plain_tune =
+            br#"{"version":"0.6.1","params":{},"fields":{"tuning-instance":"{\"name\":\"Plain\"}"}}"#;
+        // Padded, so that the cut lands in the padding and leaves the state
+        // whole.
+        let cut = {
+            let padded = [&fixture("harmonigraph-rejected")[..], &[b' '; 4096]].concat();
+            let mut stream = deflate(&padded);
+            stream.truncate(stream.len() - 8);
+            stream
+        };
         let project = [
             &b"BtWg\0"[..],
+            plain_tune,
+            b"\0\xff",
             &deflate(&hub),
             b"\0\xff",
             &zlib(&tune),
@@ -349,11 +412,14 @@ mod tests {
             b"\0\xff",
             &deflate(&hub),
             b"\0\xff",
+            &cut,
+            b"\0\xff",
             other,
         ]
         .concat();
-        let found: Vec<Plugin> =
-            states(&project).iter().map(|(_, reading)| reading.plugin).collect();
-        assert_eq!(found, [Plugin::Harmonigraph, Plugin::Tune]);
+        let found = instances(&project);
+        let kinds: Vec<Plugin> = found.iter().map(|instance| instance.plugin).collect();
+        assert_eq!(kinds, [Plugin::Tune, Plugin::Harmonigraph, Plugin::Tune, Plugin::Harmonigraph]);
+        assert!(found[3].value["params"]["camera-yaw"]["f32"].is_null(), "the state cut short");
     }
 }

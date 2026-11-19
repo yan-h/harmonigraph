@@ -673,8 +673,7 @@ impl SharedState {
 
     /// [`save_persist`](Self::save_persist) laid out for a person to read,
     /// one field to a line down to `depth` levels of nesting: what the
-    /// plugin's `read-plugin-state` example prints a project's editor
-    /// settings as.
+    /// `read-plugin-state` tool prints a project's editor settings as.
     pub fn save_persist_pretty(&self, depth: usize) -> String {
         let config = ron::ser::PrettyConfig::new().depth_limit(depth);
         let persist = UiPersist::capture(&self.workspace, &self.picture.appearance);

@@ -19,7 +19,7 @@ mod configuration;
 mod editor;
 mod lattice_maps;
 mod saved_fields;
-/// What a saved state loads as, for the `read-plugin-state` example.
+/// What a saved state loads as, for the `read-plugin-state` tool.
 pub mod saved_state;
 mod tape;
 

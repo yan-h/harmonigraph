@@ -19,7 +19,7 @@ The display link and frame pacing decisions (#1551) are in `host-window-and-paci
 - Tail and the Tuning page's delay and map-offset fields are value bars, so they reset on double-click and type on Cmd-click like every other number; Stop at bar, ranging to 100,000, stays a drag value, the one a clippy rule lets through. #1677 area 3 Q1
 - A bar's hover ends with the gestures that bar answers to, supplied by the widget in one wording, so no hover hand-writes them and none promises a reset or typed entry its bar lacks. #1677 area 3 Q2
 - The tempered links (Meantone, Marvel) are tuning, not appearance: the runtime holds them, resolved from the configuration's owner, and the plugin saves them in its musical settings. The standalone app, with no such settings, no longer keeps its links across a restart and opens with both linked. #1677 area 2 Q1
-- One list of the appearance fields the host owns, `AppearanceDocument::copy_host_owned` beside `set_camera_movement`: a look resets them on capture and keeps the live document's on apply, and the state extractor's overlay is tested against it. #1677 R3
+- One list of the appearance fields the host owns, `AppearanceDocument::copy_host_owned` beside `set_camera_movement`: a look resets them on capture and keeps the live document's on apply, and the state extractor's overlay is tested against it. #1677 R3 Superseded by the 2026-11-18 line.
 - One call both takes an app shortcut and claims it from the host, so a shortcut is registered in one place each frame. #1675 Q2, built in #1690
 - The poison list in `tests/settings_ranges.rs` stays a hand list, not a walk of the serialized document: its completeness test already forces a row per float setting, and a walker would need its own list of the values that cannot be driven to ±1e6. Declined, not to be re-proposed unchanged. #1677 R6 (Superseded the same day by #1714, which derived the poison from the serialized blob, `settings_ranges.rs:3-8`; the hand list is gone. #1739)
 
@@ -65,7 +65,7 @@ That a host-driven resize while the editor opens does not count, that a restore 
 
 Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
 
-- `read-plugin-state` may build and run Rust: it becomes a program beside the plugin that reads a project through the plugin's own restore code, `set_camera_movement` and `copy_host_owned`, keeping a raw dump, and the Python scrapers and the pre-#1685 Spiral fallback go. This supersedes the 2026-11-10 line that the extractor's overlay is tested against `copy_host_owned`: it calls the function instead. #1861 Q2, R2, built in #1890 (through `sync_camera`, which calls `set_camera_movement`; a restore never calls `copy_host_owned`)
+- `read-plugin-state` may build and run Rust: it becomes a program beside the plugin that reads a project through the plugin's own restore code and applies the host camera as each editor frame does, through `sync_camera` (`set_camera_movement`), keeping a raw dump, and the Python scrapers and the pre-#1685 Spiral fallback go. This supersedes the 2026-11-10 line that the extractor's overlay is tested against `copy_host_owned`: no copy of the overlay is left to test. #1861 Q2, R2, built in #1890
 - Unselected Curve channel toggles (Hue, Brightness, Saturation) and Stars Solo layer buttons wear the same filled button as every other option, and the plain egui toggle is disallowed in the UI crate. #1861 Q3
 
 ## 2026-11-18 (#1814, in chat, after step 7)

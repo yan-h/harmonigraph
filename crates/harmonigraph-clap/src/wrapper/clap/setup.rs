@@ -1,6 +1,7 @@
 //! Optional plugin-owned saved settings, outside the host parameter list.
 //! The wrapper prepares before restoring any ordinary fields, commits only on
 //! success, and never calls these methods under its audio/plugin runtime lock.
+use crate::params::Table;
 use crate::plugin::PluginState;
 
 pub trait Prepared: Send {
@@ -37,4 +38,20 @@ pub struct Serviced {
     pub values: bool,
     /// A host parameter's text changed: the host rescans the text.
     pub text: bool,
+}
+
+/// The one restore, the wrapper's and the plugin's state reader's: the setup
+/// prepares and may refuse the whole state, then the parameters are restored,
+/// then the setup commits. Nothing reinitializes the plugin.
+pub fn restore(
+    setup: Option<&dyn Setup>,
+    params: &Table,
+    state: &PluginState,
+) -> Result<(), &'static str> {
+    let prepared = setup.map(|setup| setup.prepare(state)).transpose()?;
+    params.restore(&state.params);
+    if let Some(prepared) = prepared {
+        prepared.commit();
+    }
+    Ok(())
 }

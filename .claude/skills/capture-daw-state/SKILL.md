@@ -17,9 +17,10 @@ The exact values are recoverable:
 ./read-plugin-state --raw         # what the file holds, before any restore
 ```
 
-It is the `read-plugin-state` example in `crates/harmonigraph-plugin`, which reads each instance through the plugin's own restore (`harmonigraph_plugin::saved_state`),
-so everything but `--raw` is what the plugin loads: values clamped, retired keys gone, the camera the host's.
-The wrapper builds it in release first, a few minutes in a fresh worktree and seconds after, with the build's output on stderr.
+It is the `read-plugin-state` binary of `crates/harmonigraph-state-reader`, which reads each instance through the plugin's own load (`harmonigraph_plugin::saved_state`),
+so everything but `--raw` is what the plugin loads: values clamped, retired keys gone, a refused state reported as refused, the camera the host's.
+Cargo builds it in release and runs it, sharing the plugin's release build: a few minutes in a fresh worktree, seconds after.
+Cargo's output and, for `--rust` and `--appearance`, what the restore says go to stderr, so stdout holds the artifact alone.
 `--raw` prints the saved params and fields as stored, `ui-state` decoded to its RON, for a persistence bug, where what the file holds is the question.
 
 The UI state (`layout`, the editor preferences under `prefs` such as `folded_sections`, static camera geometry, ViewConfig) is saved as the editor shows it, window open or not (`UiState`, `crates/harmonigraph-plugin/src/editor/persist.rs`).
@@ -68,7 +69,7 @@ A golden that moves anyway is a fixture still reading a default, so pin that fix
 
 ## Using `--appearance`
 
-The example's header documents the `.bwproject` container format, for when the scan itself needs fixing.
+The reader's header (`crates/harmonigraph-state-reader/src/main.rs`) documents the `.bwproject` container format, for when the scan itself needs fixing.
 The version-7 editor save nests camera, view, spectrum and the whole video configuration under `appearance`;
 the Spiral's framing is an editor preference under `prefs` beside it, so `--appearance` leaves it out.
 `--appearance` writes that document, with the saved host camera parameters applied, for `harmonigraph-offline --appearance FILE`, and requires exactly one editor appearance in the project.
