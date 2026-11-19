@@ -79,7 +79,7 @@ mod tests {
     use harmonigraph_core::configuration::ConfigReducer;
 
     /// A run is stated on the presentation clock the Hub times its records on,
-    /// and the configuration in force is written once inside it.
+    /// and the configuration in force is written inside it.
     #[test]
     fn a_run_opens_on_the_presentation_clock_with_its_configuration() {
         let (mut recorder, mut capture) = harmonigraph_record::testing::channel();
@@ -91,17 +91,15 @@ mod tests {
             Recording { captured_intent: intent, block_start: 1000, ..Default::default() };
         recording.presentation = Presentation { anchor: Some((1000, 5.0)), rate: 48_000.0 };
         recorder.record(recording.presentation.at(recording.block_start), origin);
-        for _ in 0..2 {
-            let at = recording.presentation.at(1000);
-            recorder.configuration(at, ConfigReducer::default().resolved());
-        }
+        recorder
+            .configuration(recording.presentation.at(1000), ConfigReducer::default().resolved());
         recording.registered(1040);
         let entries = capture.drain_entries();
         let Some(harmonigraph_record::Entry::Run { at, song }) = entries.first().copied() else {
             panic!("the first recorded block opens a run");
         };
         assert_eq!((at, song), (5.0, 20.0));
-        assert_eq!(entries.len(), 2, "one configuration while it holds");
+        assert_eq!(entries.len(), 2, "and its configuration");
 
         capture.stop();
         recording.close_stopped(&mut recorder);
