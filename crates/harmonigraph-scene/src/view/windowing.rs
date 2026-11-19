@@ -273,7 +273,7 @@ impl ViewConfig {
     /// number a scroll without end would otherwise grow forever.
     ///
     /// Once a frame, from the docked lattice, and on each pan of the Video
-    /// preview's lattice: `draw_pane` reaches `draw_lattice` directly, and the
+    /// preview's lattice: `draw_panes` reaches `draw_lattice` directly, and the
     /// offline renderer needs none because `set_camera_movement` already
     /// re-centres a replayed camera. It is idempotent on a target already inside its cell.
     pub fn follow_camera(&mut self, camera: &mut Camera) {

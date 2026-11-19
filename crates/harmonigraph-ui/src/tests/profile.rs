@@ -440,7 +440,8 @@ fn profile_picture_panes() {
                 egui::Rect::from_min_size(egui::Pos2::ZERO, body),
                 |ui| {
                     crate::begin_frame(&mut state.picture, &backend, t);
-                    draw_pane(ui, pane, &mut state.picture, t, 0);
+                    let full = [(pane, ui.max_rect())];
+                    crate::draw_panes(ui, &full, &mut state.picture, t);
                 },
             );
             let ms = start.elapsed().as_secs_f64() * 1000.0;

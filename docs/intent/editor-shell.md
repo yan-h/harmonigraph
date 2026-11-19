@@ -67,3 +67,14 @@ Yan took the recommendations made after the audit was checked against the code (
 
 - `read-plugin-state` may build and run Rust: it becomes a program beside the plugin that reads a project through the plugin's own restore code, `set_camera_movement` and `copy_host_owned`, keeping a raw dump, and the Python scrapers and the pre-#1685 Spiral fallback go. This supersedes the 2026-11-10 line that the extractor's overlay is tested against `copy_host_owned`: it calls the function instead. To be built. #1861 Q2, R2
 - Unselected Curve channel toggles (Hue, Brightness, Saturation) and Stars Solo layer buttons wear the same filled button as every other option, and the plain egui toggle is disallowed in the UI crate. #1861 Q3
+
+## 2026-11-18 (#1814, in chat, after step 7)
+
+- The editor adopts egui-plugin-window's `EditorSize`, as its own PR after step 7 (#1865), retiring Harmonigraph's own copy of the resize negotiation. [#1814 comment](https://github.com/yan-h/harmonigraph/issues/1814#issuecomment-7002343121)
+- Bitwig's border drag stops at the editor's limits, the own window's 400 × 300 to 8192 × 8192 points, through `gui.adjust_size`, and a host `set_size` outside them is refused. Before, a size below the minimum was clamped to it and one above the maximum taken, so the host's window had no maximum. #1814
+- A restore while the editor is open (a preset, Bitwig's undo) resizes the window to the restored size at its next frame, rather than the project holding a size the window does not have. #1814
+
+## 2026-11-19 (#1875, in chat)
+
+- A restore marks the project modified neither by itself nor through the resize it makes at the next frame. This is now Yan's answer ("no", recommendation taken), replacing the coordinating session's reading recorded under 2026-11-18 (#1824) for the restore half. #1875
+- Closing the editor right after a section fold, before the window has resized, saves the fold's requested width, so the editor reopens as it was left. Yan's answer ("keep", recommendation taken). #1875
