@@ -103,13 +103,12 @@ pub struct Input {
     pub value: InputValue,
 }
 
-/// What validating a list found.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Checked {
-    pub count: u32,
-    /// The list holds a transport event. Bitwig sends none, at 44.1 or
-    /// 48 kHz, through loops, seeks, export and tempo automation (#1814):
-    /// it supplies the transport only as the callback's own.
+/// A list that passed validation, and what validating it found.
+#[derive(Clone, Copy)]
+pub(crate) struct Checked<'a> {
+    pub list: List<'a>,
+    /// The list holds a transport event. Bitwig sends none (#1814): it
+    /// supplies the transport only as the callback's own.
     pub transport: bool,
 }
 
@@ -135,19 +134,24 @@ fn required(header: &clap_event_header) -> Option<usize> {
 /// Check every event of `list`: present, long enough for the type it claims
 /// and, given the block's `frames`, inside the block and in time order. A
 /// flush passes `None`, since its events have no time. A null list is empty.
+/// What passes is the list the plugin reads.
 ///
 /// # Safety
-/// `list` must be null or a valid host input list.
-pub(crate) unsafe fn validate(
+/// `list` must be null or a valid host input list for `'a`.
+pub(crate) unsafe fn validate<'a>(
     list: *const clap_input_events,
     frames: Option<u32>,
-) -> Result<Checked, ()> {
-    let Some(list) = (unsafe { list.as_ref() }) else { return Ok(Checked::default()) };
+) -> Result<Checked<'a>, ()> {
+    let Some(list) = (unsafe { list.as_ref() }) else {
+        return Ok(Checked { list: List::EMPTY, transport: false });
+    };
     let (Some(size), Some(get)) = (list.size, list.get) else { return Err(()) };
     let count = unsafe { size(list) };
-    let mut checked = Checked { count, transport: false };
+    let mut checked = Checked { list: List { list: Some(list), count }, transport: false };
     let mut previous = 0;
     for index in 0..count {
+        // Only the header is borrowed here; the event is read later from the
+        // host's own pointer, whose reach covers all of it.
         let Some(header) = (unsafe { get(list, index).as_ref() }) else { return Err(()) };
         if let Some(frames) = frames {
             if header.time >= frames || header.time < previous {
@@ -165,14 +169,19 @@ pub(crate) unsafe fn validate(
 }
 
 /// The value of one validated event, or `None` for one the plugin skips.
+/// The header is borrowed only to read its kind; the event itself is read
+/// through the host's pointer, so it keeps the reach of the whole event.
 ///
 /// # Safety
-/// `header` must be an event [`validate`] accepted.
-pub(crate) unsafe fn decode(header: &clap_event_header) -> Option<InputValue> {
-    required(header)?;
-    let pointer = header as *const clap_event_header;
+/// `pointer` must be the host's pointer to an event [`validate`] accepted.
+unsafe fn decode(pointer: *const clap_event_header) -> Option<InputValue> {
+    let (kind, flags) = {
+        let header = unsafe { &*pointer };
+        required(header)?;
+        (header.type_, header.flags)
+    };
     let wildcard = |note_id, port, channel, key| (note_id, port, channel, key) == (-1, -1, -1, -1);
-    Some(match header.type_ {
+    Some(match kind {
         CLAP_EVENT_PARAM_VALUE => {
             let e = unsafe { &*pointer.cast::<clap_event_param_value>() };
             if !wildcard(e.note_id, e.port_index, e.channel, e.key) {
@@ -196,12 +205,12 @@ pub(crate) unsafe fn decode(header: &clap_event_header) -> Option<InputValue> {
                 channel: e.channel,
                 key: e.key,
                 value: e.value,
-                flags: header.flags,
+                flags,
             }
         }
         CLAP_EVENT_MIDI => {
             let e = unsafe { &*pointer.cast::<clap_event_midi>() };
-            InputValue::Midi { port: e.port_index, data: e.data, flags: header.flags }
+            InputValue::Midi { port: e.port_index, data: e.data, flags }
         }
         CLAP_EVENT_TRANSPORT => {
             InputValue::Transport(unsafe { *pointer.cast::<clap_event_transport>() }.into())
@@ -215,7 +224,7 @@ pub(crate) unsafe fn decode(header: &clap_event_header) -> Option<InputValue> {
                 channel: e.channel,
                 key: e.key,
                 velocity: e.velocity,
-                flags: header.flags,
+                flags,
             }
         }
     })
@@ -232,21 +241,15 @@ impl<'a> List<'a> {
     /// No events: a lost input, or a callback the host gave none.
     pub(crate) const EMPTY: List<'static> = List { list: None, count: 0 };
 
-    /// # Safety
-    /// `list` must be valid for `'a`, and [`validate`] must have counted
-    /// `count` events in it.
-    pub(crate) unsafe fn new(list: *const clap_input_events, count: u32) -> Self {
-        Self { list: unsafe { list.as_ref() }, count }
-    }
-
     /// Every event the plugin reads, with its block offset.
     pub(crate) fn values(self) -> impl Iterator<Item = (u32, InputValue)> + use<'a> {
         let list = self.list;
         (0..self.count).filter_map(move |index| {
             let list = list?;
             // SAFETY: validated, so `get` exists and the event is present.
-            let header = unsafe { &*(list.get.unwrap())(list, index) };
-            Some((header.time, unsafe { decode(header) }?))
+            let pointer = unsafe { (list.get.unwrap())(list, index) };
+            let time = unsafe { (*pointer).time };
+            Some((time, unsafe { decode(pointer) }?))
         })
     }
 }
@@ -294,7 +297,7 @@ impl<'a> Output<'a> {
                 header: header::<clap_event_param_gesture>(time, kind, CLAP_EVENT_IS_LIVE),
                 param_id: id,
             };
-            unsafe { (list.try_push.unwrap())(list, &event.header) }
+            unsafe { (list.try_push.unwrap())(list, whole(&event)) }
         })
     }
 
@@ -307,6 +310,12 @@ impl<'a> Output<'a> {
         }
         pushed
     }
+}
+
+/// A pointer to all of `event`, typed as its header, as CLAP passes events:
+/// a pointer to the header field alone could not reach the rest (Miri).
+fn whole<T>(event: &T) -> *const clap_event_header {
+    (event as *const T).cast()
 }
 
 /// The header of an output event of type `T`.
@@ -340,7 +349,7 @@ unsafe fn push_value(output: &clap_output_events, value: InputValue, time: u32) 
                 key,
                 velocity,
             };
-            unsafe { push(output, &event.header) }
+            unsafe { push(output, whole(&event)) }
         }
         InputValue::Expression { expression, note_id, port, channel, key, value, flags }
             if value.is_finite() =>
@@ -358,7 +367,7 @@ unsafe fn push_value(output: &clap_output_events, value: InputValue, time: u32) 
                 key,
                 value,
             };
-            unsafe { push(output, &event.header) }
+            unsafe { push(output, whole(&event)) }
         }
         InputValue::Midi { port, data, flags } => {
             let event = clap_event_midi {
@@ -366,7 +375,7 @@ unsafe fn push_value(output: &clap_output_events, value: InputValue, time: u32) 
                 port_index: port,
                 data,
             };
-            unsafe { push(output, &event.header) }
+            unsafe { push(output, whole(&event)) }
         }
         InputValue::Parameter { id, value, modulation: false } if value.is_finite() => {
             let event = clap_event_param_value {
@@ -383,7 +392,7 @@ unsafe fn push_value(output: &clap_output_events, value: InputValue, time: u32) 
                 key: -1,
                 value,
             };
-            unsafe { push(output, &event.header) }
+            unsafe { push(output, whole(&event)) }
         }
         // No output encoding. A caller that would retain on false owes itself
         // a check that the value can ever be sent, or it retains it forever.

@@ -644,7 +644,7 @@ impl<P: Plugin> Wrapper<P> {
                     self.transport_event.store(true, Ordering::Release);
                     self.deferred_host_callback.store(true, Ordering::Release);
                 }
-                unsafe { List::new(process.in_events, checked.count) }
+                checked.list
             }
             _ => List::EMPTY,
         };
@@ -1361,7 +1361,7 @@ impl<P: Plugin> Wrapper<P> {
 
         process_wrapper(|| {
             match unsafe { events::validate(in_, None) } {
-                Ok(checked) => wrapper.write_parameters(unsafe { List::new(in_, checked.count) }),
+                Ok(checked) => wrapper.write_parameters(checked.list),
                 Err(()) => wrapper.flush_fault.store(true, Ordering::Release),
             }
             unsafe { wrapper.report(out) };

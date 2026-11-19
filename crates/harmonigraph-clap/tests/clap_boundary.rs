@@ -149,12 +149,14 @@ enum Event {
     Header(clap_event_header),
 }
 impl Event {
-    fn header(&self) -> &clap_event_header {
+    /// A pointer to the whole event, as a host hands one over: a pointer
+    /// to only its header field could not read the rest (Miri).
+    fn header(&self) -> *const clap_event_header {
         match self {
-            Self::Note(e) => &e.header,
-            Self::Param(e) => &e.header,
-            Self::Transport(e) => &e.header,
-            Self::SysEx(e) => &e.header,
+            Self::Note(e) => (e as *const clap_event_note).cast(),
+            Self::Param(e) => (e as *const clap_event_param_value).cast(),
+            Self::Transport(e) => (e as *const clap_event_transport).cast(),
+            Self::SysEx(e) => (e as *const clap_event_midi_sysex).cast(),
             Self::Header(e) => e,
         }
     }
@@ -248,19 +250,22 @@ unsafe extern "C" fn push(
     accepted
 }
 
+/// The host's structs are raw pointers the plugin holds on to, freed at the
+/// end: a `Box` moved after the plugin took its pointer would end that
+/// pointer's reach (Miri).
 struct Device {
     plugin: *const clap_plugin,
-    host: Box<Host>,
-    _clap_host: Box<clap_host>,
+    host: *mut Host,
+    clap_host: *mut clap_host,
     sink: Sink,
 }
 impl Device {
     fn new() -> Self {
         observed().reset();
-        let host = Box::<Host>::default();
-        let clap_host = Box::new(clap_host {
+        let host = Box::into_raw(Box::<Host>::default());
+        let clap_host = Box::into_raw(Box::new(clap_host {
             clap_version: CLAP_VERSION,
-            host_data: (&*host as *const Host).cast_mut().cast(),
+            host_data: host.cast(),
             name: c"fixture".as_ptr(),
             vendor: c"fixture".as_ptr(),
             url: c"".as_ptr(),
@@ -269,11 +274,11 @@ impl Device {
             request_restart: Some(request),
             request_process: Some(request),
             request_callback: Some(host_callback),
-        });
+        }));
         let factory = unsafe { (clap_entry.get_factory.unwrap())(CLAP_PLUGIN_FACTORY_ID.as_ptr()) }
             .cast::<clap_plugin_factory>();
         let plugin = unsafe {
-            ((*factory).create_plugin.unwrap())(factory, &*clap_host, c"fixture.boundary".as_ptr())
+            ((*factory).create_plugin.unwrap())(factory, clap_host, c"fixture.boundary".as_ptr())
         };
         assert!(!plugin.is_null());
         assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
@@ -282,7 +287,7 @@ impl Device {
         Self {
             plugin,
             host,
-            _clap_host: clap_host,
+            clap_host,
             sink: Sink { script: vec![], offers: Vec::with_capacity(64) },
         }
     }
@@ -410,6 +415,8 @@ impl Drop for Device {
             ((*self.plugin).stop_processing.unwrap())(self.plugin);
             ((*self.plugin).deactivate.unwrap())(self.plugin);
             ((*self.plugin).destroy.unwrap())(self.plugin);
+            drop(Box::from_raw(self.clap_host));
+            drop(Box::from_raw(self.host));
         }
     }
 }
@@ -594,7 +601,8 @@ fn a_transport_event_in_the_list_reaches_the_plugin_and_is_noticed_once() {
         })
         .collect();
     assert_eq!(samples, [64, 69]);
-    assert_eq!(d.host.callbacks.load(Ordering::Relaxed), 1, "the main thread is asked");
+    let callbacks = unsafe { &(*d.host).callbacks };
+    assert_eq!(callbacks.load(Ordering::Relaxed), 1, "the main thread is asked");
     d.main();
     assert_eq!(NOTICES.load(Ordering::Relaxed), 1);
     d.run(128, events, Some(transport(0)));
