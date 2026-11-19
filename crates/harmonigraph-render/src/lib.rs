@@ -15,8 +15,6 @@
 //! makes the render-scale option (super/sub-sampling) possible, and gives
 //! post-processing (bloom etc.) a texture to read. Painter order supplies all
 //! occlusion; there is no depth attachment.
-//! `offscreen_composite_matches_direct_draw` in the tests pins
-//! down that this path matches drawing straight into the egui pass.
 //!
 //! The node NAMES are drawn in that same pass, each at its own node's place
 //! in the order (see [`LatticeLabels`]) — so a nearer node covers the name of
@@ -1082,12 +1080,11 @@ struct CompiledLatticeResources {
     /// A 1x1 transparent texture in [`filter_layout`](Self::filter_layout),
     /// standing in for the glow target at group 1 wherever there is not one.
     ///
-    /// Two places there is not, and neither is an error state: Background glow
-    /// reach or gain at 0 drops the target entirely (`Offscreen::ensure_glow`), and the
-    /// single-attachment `fs_main`/`fs_plus` path the parity test draws through
-    /// has no glow pass at all. Transparent light composites to the plain
-    /// ground, so `node_paint` needs no branch for either — which is the whole
-    /// reason this is a dummy texture rather than a second pipeline variant.
+    /// Not an error state: Background glow reach or gain at 0 drops the target
+    /// entirely (`Offscreen::ensure_glow`). Transparent light composites to the
+    /// plain ground, so `node_paint` needs no branch for it — which is the
+    /// whole reason this is a dummy texture rather than a second pipeline
+    /// variant.
     glow_dummy_bind_group: wgpu::BindGroup,
     /// The same transparent texel, held for the bloom-off composite binding.
     bloom_dummy: wgpu::TextureView,

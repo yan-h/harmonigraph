@@ -1631,7 +1631,7 @@ fn spectral_ring(
 
 // An unlit node's own billboard paints no trail mark and no placeholder.
 // What says the position is there is the MARKER standing at it, which is a
-// separate instance drawn under the home sheet (`fs_plus`) rather than
+// separate instance drawn under the home sheet (`plus_paint`) rather than
 // anything this node paints.
 //
 // The audio ring is the one thing an idle node does paint, and it is not the
@@ -1916,7 +1916,7 @@ fn node_geom(src: VsOut, analytic: bool) -> NodeGeom {
 
     // An idle node paints NOTHING but its audio ring — no glyphs (a ghost needs
     // presence), no mark rings (their own levels gate them), and no marker
-    // of its own — the cross at the position is its own instance (`fs_plus`),
+    // of its own — the cross at the position is its own instance (`plus_paint`),
     // not this node's to paint. Everything below still computes all of that and multiplies it away,
     // which on a lattice where most nodes are idle most of the time is most of
     // the fragment work in the frame. The three levels and the octave word are
@@ -2782,12 +2782,6 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     return out;
 }
 
-// The single-target path remains the reference for ink rasterization tests.
-@fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    return seen_of(node_paint(in));
-}
-
 // Receiver visibility fades both RGB and coverage before either component is
 // blended. The ink component then takes only foreground ink coverage, while
 // the other component still takes every ordinary shadow. This restores the
@@ -3530,11 +3524,6 @@ fn plus_paint(in: PlusVsOut) -> Painted {
 fn fs_plus_cell(in: PlusVsOut) -> @location(0) vec4<f32> {
     let aa = min(aa_width(fwidth(in.uv.x), in.shadow_at.w), PLUS_QUAD_MARGIN - 1.0);
     return vec4<f32>(plus_coverage(in.uv, aa), 0.0, 0.0, 0.0);
-}
-
-@fragment
-fn fs_plus(in: PlusVsOut) -> @location(0) vec4<f32> {
-    return seen_of(plus_paint(in));
 }
 
 @fragment

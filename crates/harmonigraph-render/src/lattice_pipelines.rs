@@ -61,8 +61,7 @@ pub(super) fn scene_targets(
 ///
 /// The scene writes two visible colors and scalar local transmission, plus
 /// the bloom input when enabled (see [`LatticeBloom::input_view`]).
-/// The single-attachment variant serves only direct rasterization references.
-/// Both rely on painter order and carry no depth state.
+/// It relies on painter order and carries no depth state.
 fn create_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
@@ -83,16 +82,7 @@ fn create_pipeline(
         ..Default::default()
     });
 
-    let color_target = wgpu::ColorTargetState {
-        format: target_format,
-        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-        write_mask: wgpu::ColorWrites::ALL,
-    };
-    let targets = if attachments == 1 {
-        vec![Some(color_target)]
-    } else {
-        scene_targets(target_format, attachments == 4)
-    };
+    let targets = scene_targets(target_format, attachments == 4);
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         // Name the pipeline after its vertex entry point, so a GPU capture
@@ -122,8 +112,8 @@ fn create_pipeline(
     })
 }
 
-/// One target for rasterization references, three for the visible scene plus
-/// local transmission, four when the label-free bloom input is also needed.
+/// Three targets for the visible scene plus local transmission, four when the
+/// label-free bloom input is also needed.
 pub(super) fn create_pipelines(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
@@ -132,7 +122,6 @@ pub(super) fn create_pipelines(
     attachments: usize,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     let (node, plus) = match attachments {
-        1 => ("fs_main", "fs_plus"),
         3 => ("fs_main_split", "fs_plus_split"),
         4 => ("fs_main_scene", "fs_plus_scene"),
         _ => unreachable!("scene attachment count"),

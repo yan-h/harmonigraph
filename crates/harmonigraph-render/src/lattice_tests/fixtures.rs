@@ -163,11 +163,11 @@ pub(super) fn parity_scene() -> Scene {
             note_animation: harmonigraph_scene::NoteAnimationConfig::default(),
             mark_thickness: 0.09,
             render_scale: 1.0,
-            // Parity with the direct-to-egui-pass reference requires bloom off.
+            // Bloom off, as the early-out comparison's pipelines are
+            // (`ships.rs`), and the tests written on this scene read it so.
             note_bloom: 0.0,
-            // And the node glow with it: it is a pass of its own into a target of
-            // its own, composited into the scene pass, which the
-            // single-attachment reference path has no pass to composite into.
+            // And the node glow with it: a pass of its own into a target of its
+            // own, which a fixture about the light turns on by name.
             glow_reach: 0.0,
             glow_strength: 1.0,
             glow_curve: harmonigraph_scene::GlowCurve::default(),
