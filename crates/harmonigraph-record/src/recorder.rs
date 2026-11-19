@@ -223,7 +223,7 @@ impl TakeLatches {
 pub struct Recorder {
     /// Pins the writer independently from all GUI Control clones, so a take
     /// still recording after editor teardown keeps its writer.
-    _writer_lifetime: Option<mpsc::Sender<Command>>,
+    _writer_lifetime: mpsc::Sender<Command>,
     fence: Arc<RecordFence>,
     publication: publication::Publisher,
     /// The display's own copy of every canonical report, published from here
@@ -279,13 +279,14 @@ impl Recorder {
     ///
     /// The one place the struct is spelled: the writer's `channel` and both
     /// test fixtures used to write it out whole, so each new field was three
-    /// edits (#1129, #901, #850, #849).
+    /// edits (#1129, #901, #850, #849). Its one caller is the writer's
+    /// `endpoints`.
     fn new(
         producer: rtrb::Producer<Entry>,
         audio: rtrb::Producer<f32>,
         publication: publication::Publisher,
         display: publication::Publisher,
-        writer_lifetime: Option<mpsc::Sender<Command>>,
+        writer_lifetime: mpsc::Sender<Command>,
     ) -> Recorder {
         Recorder {
             _writer_lifetime: writer_lifetime,

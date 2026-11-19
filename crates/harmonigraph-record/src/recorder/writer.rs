@@ -37,28 +37,57 @@ const FIXTURE_SPEC: AudioSpec = AudioSpec { sample_rate: 48_000.0, channels: TAK
 /// How long the writer thread sleeps when it finds the rings empty.
 const DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(20);
 
+/// What the writer thread drains: the far end of every ring the [`Recorder`]
+/// pushes into, and of the [`Control`]'s commands. A test that holds these
+/// instead reads exactly what was pushed, with no thread racing it.
+struct Ends {
+    records: rtrb::Consumer<Entry>,
+    audio: rtrb::Consumer<f32>,
+    publications: publication::Consumer,
+    orders: mpsc::Receiver<Command>,
+}
+
+/// Both endpoints over rings of these capacities, wired to each other and to
+/// [`Ends`], with no writer thread. The one place a [`Control`] is spelled:
+/// [`channel`] starts the writer on the ends, and tests and the in-memory
+/// fixtures keep them.
+fn endpoints(records: usize, audio: usize) -> (Recorder, Control, Ends) {
+    let (producer, record_consumer) = rtrb::RingBuffer::new(records);
+    let (publication, publications) = publication::channel();
+    let (display, display_consumer) = publication::channel();
+    let (audio_producer, audio_consumer) = rtrb::RingBuffer::new(audio);
+    let (commands, orders) = mpsc::channel::<Command>();
+    let recorder = Recorder::new(producer, audio_producer, publication, display, commands.clone());
+    let control = Control {
+        stop_wakeup: None,
+        display: Arc::new(Mutex::new(Some(display_consumer))),
+        fence: recorder.fence.clone(),
+        commands,
+        dropped: recorder.dropped.clone(),
+        status: Arc::default(),
+        last_take: Arc::default(),
+        recording: Arc::default(),
+        rolling: recorder.rolling.clone(),
+        end_at_rewind: recorder.end_at_rewind.clone(),
+        latches: recorder.latches.clone(),
+        progress: Arc::default(),
+        render: Arc::default(),
+    };
+    let ends = Ends { records: record_consumer, audio: audio_consumer, publications, orders };
+    (recorder, control, ends)
+}
+
 /// Build the ring and start the writer thread. Called once, from the
 /// plugin's `Default`, so neither arming nor disarming ever has to touch
 /// the audio thread's producer.
 pub fn channel() -> (Recorder, Control) {
-    let (producer, mut consumer) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
-    let (publication, mut publications) = publication::channel();
-    let (display, display_consumer) = publication::channel();
-    let (audio_producer, mut audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
-    let (commands, orders) = mpsc::channel::<Command>();
-    let recorder =
-        Recorder::new(producer, audio_producer, publication, display, Some(commands.clone()));
-    let recording = Arc::new(AtomicBool::new(false));
-    let status = Arc::new(Mutex::new(String::new()));
-    let last_take = Arc::new(Mutex::new(None));
-    let progress = Arc::new(Progress::default());
-    let render = Arc::new(RenderControl::default());
-
-    let thread_fence = recorder.fence.clone();
-    let thread_status = status.clone();
-    let thread_last_take = last_take.clone();
-    let thread_progress = progress.clone();
-    let thread_render = render.clone();
+    let (recorder, control, ends) = endpoints(TAKE_RING_CAPACITY, AUDIO_RING_CAPACITY);
+    let Ends { records: mut consumer, audio: mut audio_consumer, mut publications, orders } = ends;
+    let thread_fence = control.fence.clone();
+    let thread_status = control.status.clone();
+    let thread_last_take = control.last_take.clone();
+    let thread_progress = control.progress.clone();
+    let thread_render = control.render.clone();
     let _ = std::thread::Builder::new().name("harmonigraph-take-writer".into()).spawn(move || {
         let mut pump = Pump::default();
         loop {
@@ -128,22 +157,6 @@ pub fn channel() -> (Recorder, Control) {
             }
         }
     });
-
-    let control = Control {
-        stop_wakeup: None,
-        display: Arc::new(Mutex::new(Some(display_consumer))),
-        fence: recorder.fence.clone(),
-        commands,
-        dropped: recorder.dropped.clone(),
-        status,
-        last_take,
-        recording,
-        rolling: recorder.rolling.clone(),
-        end_at_rewind: recorder.end_at_rewind.clone(),
-        latches: recorder.latches.clone(),
-        progress,
-        render,
-    };
     (recorder, control)
 }
 

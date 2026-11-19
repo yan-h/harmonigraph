@@ -139,18 +139,15 @@ struct Bench {
 
 impl Bench {
     fn new() -> Bench {
-        let (producer, entries) = rtrb::RingBuffer::new(1024);
-        let (audio, samples) = rtrb::RingBuffer::new(1024);
-        let (take_lane, publications) = publication::channel();
-        let rec = Recorder::new(producer, audio, take_lane, publication::channel().0, None);
+        let (rec, _, ends) = endpoints(1024, 1024);
         Bench {
             end_at_rewind: rec.end_at_rewind.clone(),
             latches: rec.latches.clone(),
             dropped: rec.dropped.clone(),
             rec,
-            entries,
-            _publications: publications,
-            samples,
+            entries: ends.records,
+            _publications: ends.publications,
+            samples: ends.audio,
         }
     }
 

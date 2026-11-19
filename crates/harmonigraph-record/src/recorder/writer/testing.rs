@@ -167,19 +167,17 @@ impl FileWriter {
     }
 }
 
+/// The shipped rings with no writer thread, their far ends held by the
+/// [`Capture`] instead.
 pub fn channel() -> (Recorder, Capture) {
-    let (producer, records) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
-    let (publication, publications) = publication::channel();
-    let (display, displayed) = publication::channel();
-    let (audio, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
-    let recorder = Recorder::new(producer, audio, publication, display, None);
+    let (recorder, control, ends) = endpoints(TAKE_RING_CAPACITY, AUDIO_RING_CAPACITY);
     let capture = Capture {
-        fence: recorder.fence.clone(),
-        end_at_rewind: recorder.end_at_rewind.clone(),
-        publications,
-        displayed,
-        _records: records,
-        audio: audio_consumer,
+        fence: control.fence.clone(),
+        end_at_rewind: control.end_at_rewind.clone(),
+        publications: ends.publications,
+        displayed: control.take_display().expect("a fresh control holds its display lane"),
+        _records: ends.records,
+        audio: ends.audio,
     };
     (recorder, capture)
 }
