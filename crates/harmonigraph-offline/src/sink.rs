@@ -13,6 +13,7 @@
 //! - a **raw stream** (`.rgba` or `.raw`) — the escape hatch when ffmpeg
 //!   isn't there; pipe it in later with the geometry printed at the end.
 
+use harmonigraph_take::WARNING_PREFIX;
 use harmonigraph_ui::VideoEncoder;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
@@ -286,7 +287,7 @@ impl Sink {
         // render that succeeds, and the Encoder row still reads Hardware.
         if options.encoder() != options.encoder {
             eprintln!(
-                "warning: the hardware encoder takes at most {HARDWARE_MAX_SIDE} px a side; \
+                "{WARNING_PREFIX}the hardware encoder takes at most {HARDWARE_MAX_SIDE} px a side; \
                  exported {w}x{h} through x264"
             );
         }

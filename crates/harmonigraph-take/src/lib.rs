@@ -67,7 +67,7 @@ pub use configuration::ConfigurationRecord;
 pub mod render;
 
 pub use params::ParamKey;
-pub use render::RenderProgress;
+pub use render::{RenderProgress, WARNING_PREFIX};
 
 use std::io::{BufRead, Write};
 

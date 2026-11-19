@@ -213,7 +213,7 @@ const MAX_GLYPH_PX: f32 = 512.0;
 /// Every id here is a surface's block plus a SLOT inside it, because a surface
 /// is what a copy of a pane is: the dock's own tabs are surface 0, the Video
 /// panel's preview surface 1, and offline a layout hands each placement its
-/// index (see [`draw_pane`](crate::draw_pane)), so the space has to grow with
+/// index (see [`draw_panes`](crate::draw_panes)), so the space has to grow with
 /// the copies a layout draws rather than be renumbered for them. Adding a flush
 /// takes a slot and raises [`FLUSHES_PER_SURFACE`].
 ///

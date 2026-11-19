@@ -2,7 +2,7 @@
 use super::home_dir;
 use harmonigraph_take::{
     render::{archive_path, ExportJob, ExportStatus},
-    RenderProgress,
+    RenderProgress, WARNING_PREFIX,
 };
 use parking_lot::Mutex;
 use std::{
@@ -490,7 +490,7 @@ fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> Tail {
             // among them is kept, because success discards the last and a
             // warned-about export still needs to say so.
             None if !text.is_empty() && !text.starts_with(RenderProgress::PREFIX) => {
-                if text.starts_with("warning:") && !tail.warnings.iter().any(|w| w == text) {
+                if text.starts_with(WARNING_PREFIX) && !tail.warnings.iter().any(|w| w == text) {
                     tail.warnings.push(text.to_owned());
                 }
                 tail.last = text.to_owned();

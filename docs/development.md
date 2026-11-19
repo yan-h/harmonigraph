@@ -206,7 +206,8 @@ python3 -I tools/frame-log-summary.py --misses
 With no path it reads the newest log, and with no `--window` the window with most frames;
 `--from` and `--to` cut the run to seconds after that window's first frame.
 It splits the run into phases at each change of the chosen Editor frame rate and at each stretch the display link was silent (a minimized editor), and reports per phase:
-missed refreshes (each frame against the divisor that paced it, which a log from between #1692 and #1747 shows slowed to the poll while the editor is still) and jumps (the content stepping further than the glass did), each as a share of refreshes, the p99 present gap, how many refreshes after the link's target frames reached the glass, and how long the host's main thread waited for drawables.
+missed refreshes (each frame against the divisor that paced it; a frame drawn after link frames that ran no UI pass, as a still editor's do, was due one divisor after the last of them) and jumps (the content stepping further than the glass did), each as a share of refreshes, the p99 present gap, how many refreshes after the link's target frames reached the glass, and how long the host's main thread waited for drawables.
+It refuses a log written before #1747, which carried `chosen` and `woken` columns or a link slowed past the Quarter rate: record a fresh one.
 `--misses` lists every stall with what made it late.
 The method and the measured baseline are in #1551 and #1553.
 
@@ -216,7 +217,7 @@ That row names no encoder:
 an export runs the pane's Encoder, or the take's recorded one for an automatic export,
 except that a Hardware frame over 4096 px a side goes through x264, which the export's row shows as a warning.
 `--events` reads those instead of asking for the times by hand, across every window and opening in the log:
-each stretch where nothing kept it animating, so nothing on screen could move, with how often it drew then;
+each stretch where nothing kept it animating, so nothing on screen could move, with how often it drew then against the rate its phases offer (the log does not say which deadline paced a still editor: the 50 ms poll, or a chrome cue's 33 ms while Record waits armed or an export runs);
 the frames after each opening's first note;
 and missed refreshes in each export's first 30 s against the 30 s before it.
 So all three need only one session that includes them:

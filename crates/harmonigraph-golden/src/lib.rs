@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 /// worth knowing before a frame moves:
 ///
 /// - A NEW field is pinned here too, at its fresh value, or
-///   `harmonigraph-offline`'s `the_pinned_look_pins_every_field` fails: left
+///   `harmonigraph-offline`'s `the_pinned_look_pins_every_drawn_field` fails: left
 ///   out, it draws at its `Default`, and the next capture that moves that
 ///   default moves frames. A feature that ships on moves the frames that draw
 ///   it, which is a picture change and stated as one.

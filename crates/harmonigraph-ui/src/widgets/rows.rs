@@ -197,10 +197,11 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
 
     if ui.is_rect_visible(rect) {
         // Breathing while armed-and-waiting; solid once the transport rolls.
-        // Keep repainting so the breath animates even when nothing else moves.
+        // Kept repainting so the breath animates even when nothing else moves,
+        // at the chrome's 30 Hz rather than the display rate (#1872).
         let alpha = if *on && !rolling {
             let t = ui.ctx().input(|i| i.time);
-            ui.ctx().request_repaint();
+            crate::repaint_after(ui.ctx(), crate::CHROME_REPAINT_INTERVAL);
             0.4 + 0.6 * (0.5 + 0.5 * (t * std::f64::consts::TAU * 1.1).sin()) as f32
         } else {
             1.0

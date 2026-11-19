@@ -12,6 +12,8 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     state.picture.appearance.spectrum.show_roll = true;
     state.picture.appearance.spectrum.roll_fraction = 0.5;
     state.picture.appearance.spectrum.roll_seconds = 1.0;
+    // The extension is the lead's: with none, nothing is drawn past the window.
+    state.picture.appearance.spectrum.roll_lead = 0.3;
     state.picture.appearance.spectrum.roll_lead_release = 2.0;
     state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     state.picture.runtime.tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
@@ -19,11 +21,62 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
 
     // A roll that is not drawn holds nothing, though its note is in its window.
     draw_panes(&ctx, &mut state, 1.5, &[]);
-    assert!(!Animating::of(&state).roll, "an undrawn roll held the loop awake");
+    assert!(
+        !Animating::of(&state).holds(Reason::RollInSpan),
+        "an undrawn roll held the loop awake"
+    );
     draw_panes(&ctx, &mut state, 1.6, &[Pane::Spectral]);
-    assert!(Animating::of(&state).roll, "the extension past the window idled");
+    assert!(Animating::of(&state).holds(Reason::RollInSpan), "the extension past the window idled");
     draw_panes(&ctx, &mut state, 2.2, &[Pane::Spectral]);
-    assert!(!Animating::of(&state).roll, "the roll held the loop past its extension");
+    assert!(
+        !Animating::of(&state).holds(Reason::RollInSpan),
+        "the roll held the loop past its extension"
+    );
+}
+
+/// The roll holds the loop for a note it draws that is still inside its own
+/// Span, and for nothing else (#1835): not a note off the pitch zoom, which
+/// draws nothing, and not an older note's overhang sliding off the far edge
+/// because a newer, undrawn note is still inside the Span. The lone on-zoom
+/// note is the control.
+#[test]
+fn the_roll_holds_the_loop_only_for_a_drawn_note_inside_its_span() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    // Whether the roll holds the loop at `now`, and how many instances it drew.
+    let roll = |notes: &[(u8, f64, f64)], now: f64| {
+        let mut state = fresh();
+        let spectrum = &mut state.picture.appearance.spectrum;
+        spectrum.show_roll = true;
+        spectrum.note_names = false;
+        spectrum.roll_fraction = 0.5;
+        spectrum.roll_seconds = 10.0;
+        spectrum.roll_lead_release = 0.25;
+        spectrum.low_midi = 60.0;
+        spectrum.high_midi = 84.0;
+        let tracker = &mut state.picture.runtime.tracker;
+        for &(key, on, off) in notes {
+            tracker.handle_event(NoteEvent::on(on, SourceId::DIRECT, 0, key, 1.0));
+            tracker.handle_event(NoteEvent::off(off, SourceId::DIRECT, 0, key));
+        }
+        let ctx = super::probe::themed();
+        crate::panes::spectral::roll::take_roll_draw_probe();
+        draw_panes(&ctx, &mut state, now, &[Pane::Spectral]);
+        let drawn = crate::panes::spectral::roll::take_roll_draw_probe()
+            .map_or(0, |probe| probe.note_count);
+        (Animating::of(&state).holds(Reason::RollInSpan), drawn)
+    };
+    // Long after each note's own fade, so the roll is the only thing that
+    // could still be moving.
+    let (held, drawn) = roll(&[(72, 0.0, 0.1)], 5.0);
+    assert!(drawn > 0 && held, "a note scrolling on the zoom idled");
+    let (held, drawn) = roll(&[(36, 0.0, 0.1)], 5.0);
+    assert!(drawn == 0 && !held, "a note off the zoom held a still roll awake");
+    // The older note's body left the Span at 10.1 s; its outline still slides
+    // off the far edge. The newer note is inside the Span, off the zoom.
+    let (held, drawn) = roll(&[(72, 0.0, 0.1), (36, 5.0, 5.1)], 10.15);
+    assert!(drawn > 0, "the fixture's older note must still overhang the far edge");
+    assert!(!held, "an undrawn newer note held the older note's overhang at full rate");
 }
 
 /// Run one frame of `panes` at `t`, each filling a pass of its own, as a shell
@@ -48,7 +101,7 @@ fn draw_panes(ctx: &egui::Context, state: &mut SharedState, t: f64, panes: &[Pan
                 time: Some(t),
                 ..Default::default()
             },
-            |ui| crate::draw_pane(ui, pane, &mut state.picture, t, 0),
+            |ui| crate::draw_panes(ui, &[(pane, ui.max_rect())], &mut state.picture, t),
         );
     }
 }
@@ -106,10 +159,13 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
                 assert!(level > 0.5, "the held note's light never arrived ({level})");
             }
         } else if t >= 3.0 {
-            assert!(!Animating::of(&state).roll, "the roll must not be what keeps this awake");
+            assert!(
+                !Animating::of(&state).holds(Reason::RollInSpan),
+                "the roll must not be what keeps this awake"
+            );
             let visible = level * gain > 0.5 / 255.0;
             assert_eq!(
-                Animating::of(&state).releasing,
+                Animating::of(&state).holds(Reason::Releasing),
                 visible,
                 "at {t} s the light is {level} at gain {gain}"
             );
@@ -151,13 +207,22 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
         }
         draw(&mut abandoned, t);
     }
-    assert!(Animating::of(&abandoned).releasing, "the tail was over before the surface hid");
+    assert!(
+        Animating::of(&abandoned).holds(Reason::Releasing),
+        "the tail was over before the surface hid"
+    );
     draw_panes(&ctx, &mut abandoned, 4.05, &[]);
-    assert!(!Animating::of(&abandoned).releasing, "an undrawn surface held the loop awake");
+    assert!(
+        !Animating::of(&abandoned).holds(Reason::Releasing),
+        "an undrawn surface held the loop awake"
+    );
 
     state.picture.appearance.view.glow_strength = 0.0;
     draw(&mut state, 60.0);
-    assert!(!Animating::of(&state).releasing, "a glow that does not draw held the loop awake");
+    assert!(
+        !Animating::of(&state).holds(Reason::Releasing),
+        "a glow that does not draw held the loop awake"
+    );
 }
 
 /// A released note keeps the loop awake for its whole departure, the
@@ -195,9 +260,12 @@ fn a_released_note_keeps_repainting_through_its_staggered_departure() {
     // starting half a fade later: 1.15 s past the off.
     draw_panes(&ctx, &mut state, 1.0 + 1.1, &[Pane::Lattice]);
     assert!(state.picture.runtime.tracker.voices().next().is_none(), "the voice outlasted 1 s");
-    assert!(Animating::of(&state).releasing, "the departure was cut short");
+    assert!(Animating::of(&state).holds(Reason::Releasing), "the departure was cut short");
     draw_panes(&ctx, &mut state, 1.0 + 1.2, &[Pane::Lattice]);
-    assert!(!Animating::of(&state).releasing, "the loop stayed awake past the departure");
+    assert!(
+        !Animating::of(&state).holds(Reason::Releasing),
+        "the loop stayed awake past the departure"
+    );
 }
 
 /// Feeds `seconds` of audio from `t` in 10 ms blocks, a full-scale A4 while
@@ -232,7 +300,7 @@ fn stream(
         *t += 0.01;
         feed.feed(&mut state.picture.runtime.spectrum, &block, 1, RATE, *t, &cfg);
         draw_panes(ctx, state, *t, panes);
-        animated.push((*t, Animating::of(state).audible));
+        animated.push((*t, Animating::of(state).holds(Reason::Audible)));
     }
     animated
 }
@@ -288,12 +356,15 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     let cfg = &mut state.picture.appearance.spectrum;
     (cfg.tilt, cfg.volume_floor_db, cfg.high_midi) = (-6.0, -100.0, 135.0);
     draw_panes(&ctx, &mut state, t, &panes);
-    assert!(Animating::of(&state).audible, "silence drawn off the bed's colour idled");
+    assert!(
+        Animating::of(&state).holds(Reason::Audible),
+        "silence drawn off the bed's colour idled"
+    );
 
     // A heatmap switched off holds nothing, whatever it last said.
     state.picture.appearance.spectrum.show_spectrogram = false;
     draw_panes(&ctx, &mut state, t, &panes);
-    assert!(!Animating::of(&state).audible, "a hidden heatmap held the loop awake");
+    assert!(!Animating::of(&state).holds(Reason::Audible), "a hidden heatmap held the loop awake");
 }
 
 /// A heatmap whose pane stops being drawn — folded, hidden, the Video tab
@@ -390,6 +461,43 @@ fn a_cleared_heatmap_holds_no_sound_for_a_span() {
     let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
     let last = after.iter().rev().find(|&&(_, on)| on).expect("the curve settled at once").0;
     assert!(last - heard < 1.0, "a Clear held the full rate {} s past the sound", last - heard);
+}
+
+/// The armed Record button's breath and a running export's progress stripes
+/// are chrome, not picture motion: each asks for its next frame about 30 Hz
+/// out rather than holding the editor at the display rate (#1872), and only
+/// while some of it is in view: scrolled out of a settings page, it asks for
+/// nothing.
+#[test]
+fn the_chrome_cues_animate_at_about_30_hz_while_in_view() {
+    // The repaint delay a settled pass asks for, with the control `below`
+    // points down a 400-point screen.
+    let delay = |below: f32, add: &mut dyn FnMut(&mut egui::Ui)| {
+        let ctx = super::probe::themed();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
+        let input = || egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+        let mut pass = |ui: &mut egui::Ui| {
+            ui.add_space(below);
+            add(ui);
+        };
+        // Settled: a fresh context's opening passes ask to be redrawn.
+        let mut output = ctx.run_ui(input(), &mut pass);
+        for _ in 0..4 {
+            output = ctx.run_ui(input(), &mut pass);
+        }
+        output.viewport_output.values().map(|viewport| viewport.repaint_delay).min().unwrap()
+    };
+    let mut breath = |ui: &mut egui::Ui| {
+        crate::widgets::record_button(ui, &mut true, false, "Record");
+    };
+    let mut stripes = |ui: &mut egui::Ui| {
+        crate::widgets::progress_bar(ui, Some(0.3), "Export", "30%");
+    };
+    let chrome = crate::CHROME_REPAINT_INTERVAL;
+    assert_eq!(delay(0.0, &mut breath), chrome, "the armed Record button's breath");
+    assert_eq!(delay(0.0, &mut stripes), chrome, "a running export's stripes");
+    assert!(delay(1000.0, &mut breath) > chrome, "a breath out of view asked for frames");
+    assert!(delay(1000.0, &mut stripes) > chrome, "stripes out of view asked for frames");
 }
 
 /// A note arriving in an idle editor paints on the next tick, not at the idle

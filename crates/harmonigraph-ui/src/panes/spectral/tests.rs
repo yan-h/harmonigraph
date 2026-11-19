@@ -30,7 +30,16 @@ const BODY_ALPHA: u8 = profile::FILL_ALPHA_U8;
 /// context of its own.
 fn painted_pane(rect: egui::Rect, state: &mut PictureState, now: f64) -> egui::FullOutput {
     painted_into(SCREEN, rect, |ui| {
-        spectral_pane(ui, state, now, 0, 1.0, Navigation::Docked, crate::panes::lattice::NO_SOLO)
+        spectral_pane(
+            ui,
+            state,
+            now,
+            0,
+            1.0,
+            Navigation::Docked,
+            state.shown(),
+            crate::panes::lattice::NO_SOLO,
+        )
     })
 }
 
@@ -859,6 +868,7 @@ fn drag_pane_with_navigation(
                     surface,
                     1.0,
                     navigation,
+                    state.shown(),
                     crate::panes::lattice::NO_SOLO,
                 );
             },
@@ -938,6 +948,7 @@ fn preview_wheel_zooms_pitch_with_or_without_shift_and_consumes_both_axes() {
                 },
                 |ui| {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    let shown = state.shown();
                     spectral_pane(
                         &mut child,
                         &mut state,
@@ -945,6 +956,7 @@ fn preview_wheel_zooms_pitch_with_or_without_shift_and_consumes_both_axes() {
                         1,
                         1.0,
                         Navigation::Preview,
+                        shown,
                         crate::panes::lattice::NO_SOLO,
                     );
                     remaining_scroll.set(ui.input(|input| input.smooth_scroll_delta));
@@ -1829,6 +1841,7 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     // not hold, and this fixture is about what the curve reaches inside the
     // pane rather than about anything at the window's edge.
     let output = painted_into(egui::vec2(2000.0, 2000.0), rect, |ui| {
+        let shown = state.shown();
         spectral_pane(
             ui,
             &mut state,
@@ -1836,6 +1849,7 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
             0,
             1.0,
             Navigation::Docked,
+            shown,
             crate::panes::lattice::NO_SOLO,
         );
     });
@@ -2887,7 +2901,7 @@ fn the_rolls_ink_stops_at_the_now_line() {
             let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
             super::roll::take_roll_draw_probe();
             let output = painted_into(SCREEN, WIDE, |ui| {
-                roll::draw_roll(
+                let _ = roll::draw_live_roll(
                     ui.painter(),
                     &a,
                     &scale,
@@ -3276,6 +3290,7 @@ fn tape_frames(
                 0,
                 1.0,
                 navigation,
+                state.shown(),
                 crate::panes::lattice::NO_SOLO,
             );
         });
@@ -3322,6 +3337,35 @@ fn tape_mode_rolls_the_recording_and_what_was_played_over_the_audition() {
     tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT, 0, 64, 1.0));
     tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT.on_tape(), 0, 67, 1.0));
     assert_eq!(drawn(&mut state), Some(2));
+}
+
+/// Tape mode's roll holds no full-rate frames: its song axis stands still,
+/// so neither the recording's notes nor a note played over the audition and
+/// released moves once drawn, names included. A held one is its voice's to
+/// hold (#1835).
+#[test]
+fn tape_modes_roll_holds_nothing_once_its_notes_are_drawn() {
+    use harmonigraph_core::notes::{NoteEvent, SourceId};
+    use harmonigraph_core::{NoteRoll, VoiceKey};
+    let mut state = on_tape();
+    state.appearance.spectrum.show_roll = true;
+    state.appearance.spectrum.note_names = true;
+    let mut recorded = NoteRoll::uncapped();
+    let key = VoiceKey { source: SourceId(1), channel: 0, note: 60 };
+    recorded.note_on(key, 1.0, 60.0, 10.0);
+    recorded.note_off(key, 12.0);
+    state.runtime.tape.notes = std::sync::Arc::new(recorded);
+    state.runtime.tape.audition =
+        Some(crate::tape::Audition { clock: 98.0, song: 20.0, speed: 1.0, until: None });
+    let tracker = &mut state.runtime.tracker;
+    tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT, 0, 64, 1.0));
+    tracker.handle_event(NoteEvent::off(99.5, SourceId::DIRECT, 0, 64));
+    super::roll::take_roll_draw_probe();
+    state.surfaces.moving_this_frame = Default::default();
+    tape_frames(&mut state, Navigation::Docked, vec![vec![]]);
+    let drawn = super::roll::take_roll_draw_probe().map(|probe| probe.note_count);
+    assert_eq!(drawn, Some(2), "the fixture draws the recorded note and the one played over it");
+    assert!(!state.surfaces.moving_this_frame.holds(crate::Reason::RollInSpan));
 }
 
 /// Tape mode names the notes it rolls (#1728): the recording's in the window,
@@ -3495,6 +3539,7 @@ fn overview_frames(ctx: &egui::Context, state: &mut PictureState, frames: Vec<Ve
                 0,
                 1.0,
                 Navigation::Docked,
+                state.shown(),
                 crate::panes::lattice::NO_SOLO,
             );
         });
@@ -3537,6 +3582,131 @@ fn the_overview_box_moves_the_stretch_shown_and_its_ends_resize_it() {
     overview_frames(&ctx, &mut state, drag(on_overview(20.0), on_overview(0.0)));
     assert_eq!(shown(&ctx).0, 0.0);
     assert_eq!(state.runtime.tape.request, None, "a drag on the overview is not a cue");
+}
+
+/// Which parts of the Tape picture [`playhead_frames`] draws.
+#[derive(Clone, Copy)]
+enum Drawn {
+    Overview,
+    Pane,
+}
+
+/// `frames` frames of `part` alone, 1/60 s apart on `ctx`'s clock, each first
+/// moving the playheads on at the rates they run when `advance` (the
+/// audition's at its cue's speed, the position while the transport rolls).
+/// Whether the last frame held the loop for a playhead; nothing else in the
+/// fixture moves.
+fn playhead_frames(
+    ctx: &egui::Context,
+    state: &mut PictureState,
+    part: Drawn,
+    frames: usize,
+    advance: bool,
+) -> bool {
+    let dt = 1.0 / 60.0;
+    for _ in 0..frames {
+        let tape = &mut state.runtime.tape;
+        if advance {
+            let speed = tape.audition.map_or(1.0, |audition| audition.speed);
+            tape.heard = tape.heard.map(|at| at + speed * dt);
+            tape.position = tape.position.map(|at| if tape.rolling { at + dt } else { at });
+        }
+        state.surfaces.moving_this_frame = Default::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+            time: Some(ctx.input(|i| i.time) + dt),
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| match part {
+            Drawn::Overview => tape::overview(ui, STRIP, state, 0),
+            Drawn::Pane => {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                spectral_pane(
+                    &mut child,
+                    state,
+                    100.0,
+                    0,
+                    1.0,
+                    Navigation::Docked,
+                    state.shown(),
+                    crate::panes::lattice::NO_SOLO,
+                );
+            }
+        });
+    }
+    state.surfaces.moving_this_frame.holds(crate::Reason::Playhead)
+}
+
+/// [`on_tape`] auditioning from 1 s at `speed`, on fine pixels, as the
+/// Retina display is, with the region zoomed to its narrowest 2 s when
+/// `zoomed`: there a playhead at full speed is well past a pixel a refresh,
+/// and across the whole 42 s song well under it.
+fn auditioning(speed: f64, zoomed: bool) -> (egui::Context, PictureState) {
+    let ctx = themed();
+    ctx.set_pixels_per_point(4.0);
+    let mut state = on_tape();
+    state.runtime.tape.audition =
+        Some(crate::tape::Audition { clock: 0.0, song: 1.0, speed, until: None });
+    state.runtime.tape.heard = Some(1.0);
+    if zoomed {
+        overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(2.0)));
+        let (from, to) = shown(&ctx);
+        assert!(from == 0.0 && (to - 2.0).abs() < 0.3, "the fixture shows {from}..{to}");
+    }
+    (ctx, state)
+}
+
+/// A Tape mode playhead in the pane holds the editor at full rate only while
+/// it visibly crosses the stretch shown (#1837): advancing, on the stretch,
+/// and fast enough on screen at the speed its audition was cued at.
+#[test]
+fn a_tape_playhead_holds_full_rate_only_while_it_visibly_crosses_the_stretch_shown() {
+    let (ctx, mut state) = auditioning(1.0, true);
+    assert!(playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true), "the audition idled");
+    // Its value standing still, as a stalled input worker leaves it.
+    let stalled = playhead_frames(&ctx, &mut state, Drawn::Pane, 30, false);
+    assert!(!stalled, "a playhead that stopped advancing held the loop");
+
+    let (ctx, mut state) = auditioning(1.0, true);
+    state.runtime.tape.heard = Some(30.0);
+    let off = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
+    assert!(!off, "an audition off the stretch shown held the loop");
+
+    // Cued at a quarter speed, with Double chosen since: it plays on at a
+    // quarter until it is cued again.
+    let (ctx, mut state) = auditioning(0.25, true);
+    state.runtime.tape.speed = crate::tape::Speed::Double;
+    let slow = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
+    assert!(!slow, "the speed chosen, not the audition's, held the loop");
+
+    let (ctx, mut state) = auditioning(1.0, false);
+    let crawl = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
+    assert!(!crawl, "a playhead crawling over the whole song held the loop");
+
+    let (ctx, mut state) = auditioning(1.0, true);
+    state.runtime.tape.heard = None;
+    state.runtime.tape.rolling = true;
+    state.runtime.tape.position = Some(1.0);
+    assert!(playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true), "the transport idled");
+}
+
+/// The overview's playhead, drawn alone, by the same rule as the pane's: on a
+/// short recording its fitted strip moves a playhead visibly, and a recording
+/// whose end the position sets grows with it, so the mark stands still on
+/// screen while the song runs under it (#1837).
+#[test]
+fn the_overview_playhead_holds_full_rate_only_while_it_moves_on_screen() {
+    let short = |end: f64, position: f64| {
+        let ctx = themed();
+        ctx.set_pixels_per_point(8.0);
+        let mut state = on_tape();
+        state.runtime.tape.spans[0].end = end;
+        state.runtime.tape.rolling = true;
+        state.runtime.tape.position = Some(position);
+        playhead_frames(&ctx, &mut state, Drawn::Overview, 5, true)
+    };
+    assert!(short(9.0, 5.0), "the position crossing a short strip idled");
+    assert!(!short(9.0, 9.0), "a position standing at the end it sets held the loop");
 }
 
 /// The pane's sideways scroll pans the song only as far as the strip's end,
