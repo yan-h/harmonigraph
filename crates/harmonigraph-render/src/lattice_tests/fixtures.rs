@@ -295,6 +295,9 @@ pub(super) struct Shooter {
     /// egui's font texture as a shell publishes it before every frame: the
     /// stand-in sheet (`text::tests::atlas`) on the GPU.
     pub(super) font: wgpu::Texture,
+    /// The production linear blit the glow tests read the glow target back
+    /// through, built on the first read at `format` rather than on every one.
+    pub(super) blit: std::cell::OnceCell<wgpu::RenderPipeline>,
 }
 
 impl Shooter {
@@ -316,6 +319,7 @@ impl Shooter {
             size,
             pane: 1,
             clear: wgpu::Color::BLACK,
+            blit: std::cell::OnceCell::new(),
         })
     }
 

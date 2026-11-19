@@ -55,35 +55,13 @@ pub(super) fn read_glow(shooter: &Shooter) -> Vec<u8> {
     read_glow_binding(shooter, glow.binding())
 }
 
-/// The production linear blit, built once per device and format rather than
-/// on every read: a test reads the glow dozens of times.
-fn blit_pipeline(shooter: &Shooter) -> wgpu::RenderPipeline {
-    type Cached = (wgpu::Device, wgpu::TextureFormat, wgpu::RenderPipeline);
-    thread_local! {
-        static BLIT: std::cell::RefCell<Option<Cached>> = const { std::cell::RefCell::new(None) };
-    }
-    BLIT.with_borrow_mut(|cached| {
-        if let Some((device, format, pipeline)) = cached {
-            if *device == shooter.device && *format == shooter.format {
-                return pipeline.clone();
-            }
-        }
-        let resources = shooter.resources.get::<LatticeResources>().unwrap();
-        let pipeline = create_post_pipeline(
-            &shooter.device,
-            &blit_module(&shooter.device),
-            "fs_blit",
-            shooter.format,
-            &resources.compiled.filter_layout,
-            None,
-        );
-        *cached = Some((shooter.device.clone(), shooter.format, pipeline.clone()));
-        pipeline
-    })
-}
-
 pub(super) fn read_glow_binding(shooter: &Shooter, binding: &wgpu::BindGroup) -> Vec<u8> {
-    let pipeline = blit_pipeline(shooter);
+    let pipeline = shooter.blit.get_or_init(|| {
+        let resources = shooter.resources.get::<LatticeResources>().unwrap();
+        let shader = blit_module(&shooter.device);
+        let layout = &resources.compiled.filter_layout;
+        create_post_pipeline(&shooter.device, &shader, "fs_blit", shooter.format, layout, None)
+    });
     let texture = render_to_texture(
         &shooter.device,
         &shooter.queue,
@@ -91,7 +69,7 @@ pub(super) fn read_glow_binding(shooter: &Shooter, binding: &wgpu::BindGroup) ->
         shooter.format,
         wgpu::Color::TRANSPARENT,
         |pass| {
-            pass.set_pipeline(&pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, binding, &[]);
             pass.draw(0..4, 0..1);
         },
