@@ -1047,8 +1047,9 @@ fn a_restore_while_the_editor_is_open_resizes_its_window_at_the_next_frame() {
     state.set_docked(true);
     let opened = state.open();
     let frame = || {
-        crate::editor::next_size(&state, opened, host.as_ref(), &lock);
+        let laid_out = crate::editor::next_size(&state, opened, host.as_ref(), &lock);
         state.report_edit(|| settings.changed());
+        laid_out
     };
     frame();
     let kept = state.size();
@@ -1062,7 +1063,7 @@ fn a_restore_while_the_editor_is_open_resizes_its_window_at_the_next_frame() {
     device.load(project);
     assert_eq!(state.size(), kept, "resized before the window's next frame");
     assert!(device.stats.resizes.lock().unwrap().is_empty(), "the host asked before the frame");
-    frame();
+    assert_eq!(frame(), Some(restored), "the frame was not laid out at the restored size");
     assert_eq!(*device.stats.resizes.lock().unwrap(), [restored], "the host asked");
     assert_eq!(state.size(), restored, "the window took the restored size");
     assert_eq!(device.service(), marks, "a restore marked the project");
