@@ -39,9 +39,14 @@ fn surround_fade_at(surround: SurroundCut, d: f32) -> f32 {
     return surround_ramp(surround.cut.z, max(d, 0.0) / surround.cut.y);
 }
 
-/// The cut's reach past a note's edge, in points. 0 while the cut is off.
+/// The cut's reach past a note's edge, in points.
+///
+/// Above 0 wherever a shader reads it. Whether the cut draws is decided once,
+/// on the Rust side: a cut that draws nothing is uploaded as all 0, and no
+/// producer draws its surround pass for one (`SurroundUniform::draws`), so no
+/// fragment here ever sees a cut that is off.
 fn surround_reach(surround: SurroundCut) -> f32 {
-    return select(0.0, surround.cut.y, surround.cut.x > 0.0);
+    return surround.cut.y;
 }
 
 /// Coverage of everything on the near side of `edge`: how much of a window
@@ -77,9 +82,6 @@ fn surround_inside(d: f32, edge: f32, feather: f32) -> f32 {
 /// bit, and a regrouped product is a different last bit.
 fn surround_cut_coverage(surround: SurroundCut, strength: f32, d: f32, feather: f32) -> f32 {
     let reach = surround_reach(surround);
-    if reach <= 0.0 {
-        return 0.0;
-    }
     return strength * surround_fade_at(surround, d) * surround_inside(d, reach, feather);
 }
 
