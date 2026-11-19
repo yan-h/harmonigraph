@@ -337,14 +337,6 @@ pub(super) struct RollSource<'a> {
 }
 
 impl<'a> RollSource<'a> {
-    /// The notes run on past the region's near edge, which bounds what is
-    /// drawn as the far edge does: wherever the near edge is not the
-    /// now-line, past which nothing has sounded yet. A separate reading of
-    /// the same field, for the cull and the crop rather than the lead.
-    pub(super) fn near_bounded(&self) -> bool {
-        !self.now_line
-    }
-
     /// This source draws `note`. A recording keeps every source's notes, so
     /// the tracker's Show switches (`shown`) say which to draw, for Tape
     /// mode's roll as for the live one.
@@ -692,7 +684,8 @@ fn source_instances(
     // The same ink and band, mirrored: a note decides the ends of the one
     // before it only by starting within a cut and a floored length of that
     // one's stop, so one starting later changes nothing that is on the pane.
-    let near_edge = if source.near_bounded() { time.origin + ink_seconds } else { f64::INFINITY };
+    // Only where it is not the now-line, past which nothing has sounded yet.
+    let near_edge = if source.now_line { f64::INFINITY } else { time.origin + ink_seconds };
     let mut notes: Vec<&RollNote> = roll
         .notes()
         .filter(|note| source.plays(state.roll(), note))
@@ -782,26 +775,18 @@ fn source_instances(
             // contain: a detached dot a few points off the ribbon's own end,
             // wearing the full outline, which is all a box with no length is.
             //
+            // One starting past the near edge's ink is dropped the same way:
+            // none of it reaches the region.
             if t1 < edge || t0 > near_edge {
                 continue;
             }
-            // Cropped to the ink's reach at either edge, on the segment's own
-            // line, so what stays draws the pitch it sounded at.
-            let at = |t: f64| {
-                if t1 > t0 {
-                    p0 + (p1 - p0) * ((t - t0) / (t1 - t0)) as f32
-                } else {
-                    p0
-                }
+            let cropped_t0 = t0.max(edge);
+            let p0 = if cropped_t0 > t0 && t1 > t0 {
+                p0 + (p1 - p0) * ((cropped_t0 - t0) / (t1 - t0)) as f32
+            } else {
+                p0
             };
-            let (cropped_t0, cropped_t1) = (t0.max(edge), t1.min(near_edge));
-            let p0 = if cropped_t0 > t0 { at(cropped_t0) } else { p0 };
-            // The segment's flat colour, read at its middle as the far crop
-            // leaves it and before the near one: the near crop saves quads
-            // the pane never shows, and changes nothing that it does.
-            let pitch = (p0 + p1) * 0.5;
-            let p1 = if cropped_t1 < t1 { at(cropped_t1) } else { p1 };
-            let (t0, t1) = (cropped_t0, cropped_t1);
+            let t0 = cropped_t0;
             // Unclamped: `edge` already bounds how far past the region these
             // can reach, and clamping is what squashed the leaving ribbon
             // against the far end rather than letting it slide out.
@@ -866,6 +851,7 @@ fn source_instances(
             }
             // A flat, opaque pitch color; the Opacity mapping fades it (`Look::fade`).
             // Read it only for segments that survive the pitch cull.
+            let pitch = (p0 + p1) * 0.5;
             let core = note_color(state, pitch, 1.0);
             let segment = RollInstance {
                 center: [center.x, center.y],
@@ -892,7 +878,23 @@ fn source_instances(
             if points.iter().all(|(_, look)| look.width == 0.0) {
                 continue;
             }
+            let pieces = instances.len();
             push_pieces(&mut instances, segment, &points, offset);
+            // At a near edge that bounds the notes, the pieces past its ink
+            // are not drawn and the one crossing it draws only up to it: by
+            // its draw span, which leaves the segment's box, colour and
+            // intensity as they are, so nothing on the pane moves as the
+            // edge does (#1849). Cropping the segment itself, as the far edge
+            // does, would re-read its intensity at the crop.
+            if near_edge.is_finite() {
+                let bound = offset(near_edge);
+                instances.truncate(
+                    pieces + instances[pieces..].iter().take_while(|p| p.span[1] >= bound).count(),
+                );
+                for piece in &mut instances[pieces..] {
+                    piece.span[0] = piece.span[0].max(bound);
+                }
+            }
         }
         if ribbon.dense() {
             texture_run(&mut instances, first_instance, axes, &time, point_scale);
@@ -2425,89 +2427,83 @@ mod tests {
         }
     }
 
-    /// Where the near edge bounds the notes (Tape mode), a bend running on
-    /// past it is cropped there as at the far edge (#1849): its box stops an
-    /// ink overhang past the region rather than at the bend's own end, and
-    /// what stays draws as it did: on the bend's own pitch, in the colour of
-    /// the whole segment, and at the intensity it sounded with at the crop.
+    /// Where the near edge bounds the notes (Tape mode), a note running on
+    /// past it draws only up to the ink's reach (#1849), and what the region
+    /// shows of it does not move as the edge does: the pieces past the edge
+    /// are dropped and the one crossing it bounded by its draw span, its
+    /// intensity left as the whole note reads it. A pressure ramp capped by
+    /// Opacity is the case a crop of the note itself would move: the capped
+    /// reading at the crop is not the line between the capped breakpoints.
     #[test]
-    fn a_bend_crossing_the_near_edge_is_cropped_there_on_its_pitch() {
+    fn a_note_crossing_the_near_edge_draws_what_is_shown_as_the_edge_moves() {
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
-        state.appearance.spectrum.note_cut = 0.0;
         state.appearance.view.intensity = IntensitySettings {
             velocity: Default::default(),
             gain: Default::default(),
-            pressure: harmonigraph_scene::IntensitySource {
-                opacity: Some(1.0),
-                thickness: Some(2.0),
-            },
+            pressure: harmonigraph_scene::IntensitySource { opacity: Some(2.0), thickness: None },
             opacity_rest: 0.0,
-            thickness_base: 1.0,
-            thickness_max: 3.0,
             ..Default::default()
         };
-        // C4 glides an octave up from 2 s to 18 s and is released at 20 s,
-        // pressed at 0.25 from 6 s and at 0.9 from 14 s.
+        // C4 pressed from 0 to 1 over 9 ms, under one breakpoint spacing, so
+        // the roll keeps it as one line between two breakpoints; Opacity caps
+        // it halfway, at 2.0045 s. Shown on a window a few milliseconds long,
+        // so the ramp spans the region.
         let tracker = &mut state.runtime.tracker;
         tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
-        for (time, value) in [(6.0, 0.25), (14.0, 0.9)] {
-            tracker.handle_event(NoteEvent {
-                source: SourceId::DIRECT,
-                time,
-                channel: 0,
-                note: 60,
-                kind: NoteEventKind::Expression {
-                    expression: harmonigraph_core::Expression::Pressure,
-                    value,
-                },
-            });
-        }
         tracker.handle_event(NoteEvent {
             source: SourceId::DIRECT,
-            time: 18.0,
+            time: 2.009,
             channel: 0,
             note: 60,
-            kind: NoteEventKind::Tuning { semitones: 12.0 },
+            kind: NoteEventKind::Expression {
+                expression: harmonigraph_core::Expression::Pressure,
+                value: 1.0,
+            },
         });
-        tracker.handle_event(NoteEvent::off(20.0, SourceId::DIRECT, 0, 60));
+        tracker.handle_event(NoteEvent::off(2.05, SourceId::DIRECT, 0, 60));
+        let expressions = state.roll().notes().next().unwrap().expressions().len();
+        assert_eq!(expressions, 2, "fixture: the ramp is not one line");
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 400.0));
         let axes = Axes::new(rect, &state.appearance.spectrum);
         let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
-        // A stretch of song 0..10 s shown, with the glide running on 8 s past
-        // its near edge, and the second press past it.
-        let time = TimeAxis { split: 0.5, depth_span: 0.5, window: 10.0, origin: 10.0, now: 30.0 };
-        let source = RollSource { roll: state.roll(), time, now_line: false, live_during: None };
         let width = Width::of(&state, &axes, &scale, 1.0);
-        let pieces: Vec<_> = source_instances(&axes, &scale, &width, &state, &source, PPP, 1.0)
-            .notes
-            .into_iter()
-            .filter(|note| note.shear != 0.0)
-            .collect();
-        let newest = pieces
-            .iter()
-            .find(|piece| piece.span[0] == f32::MIN)
-            .expect("the glide crosses the near edge and is drawn");
-        // Every piece keeps the segment's box; its newer end along depth,
-        // toward the near edge, which runs against the depth axis.
-        let center = egui::pos2(newest.center[0], newest.center[1]);
-        let reach =
-            (center - axes.at(0.5, time.split)).dot(axes.dir_depth()) - newest.half_extent[1];
         let ink = Quad::new(surround(&state, 1.0), 1.0 / PPP).depth(0.5 * MIN_LENGTH_PT);
-        assert!(reach >= -ink - 0.01, "the box runs {reach} pt past the region, ink {ink}");
-        // On the glide's own pitch inside the region: 64.5 at 8 s.
-        let target = axes.at(scale.t_of(64.5), time.depth_of_unclamped(8.0));
-        let along = (target - center).dot(axes.dir_depth());
-        let drawn = center + axes.dir_depth() * along + axes.dir_pitch() * (newest.shear * along);
-        assert!(drawn.distance(target) < 0.01, "the crop draws {drawn:?}, not {target:?}");
-        // In the whole segment's colour, read at its middle pitch, 66.
-        let colour = note_color(&state, 66.0, 1.0).to_array();
-        assert!(pieces.iter().all(|piece| piece.core == colour), "the crop moved the colour");
-        // At the crop, the first press's opacity and thickness: the second,
-        // past the crop, leaves nothing on what is kept.
-        assert!((newest.fade[0] - 0.25).abs() < 1e-5, "{newest:?}");
-        let half_width = newest.half_extent[0] * newest.taper[1];
-        assert!((half_width - width.half_pitch * 1.5).abs() < 1e-4, "{newest:?}");
+        // The opacity drawn at song seconds `at` with the region's far edge at
+        // 1.995 s and its near edge at `near`, and how many pieces draw past
+        // the near edge's ink.
+        let read = |near: f64, at: f64| {
+            let window = near - 1.995;
+            let time = TimeAxis { split: 0.5, depth_span: 0.5, window, origin: near, now: 3.0 };
+            let source =
+                RollSource { roll: state.roll(), time, now_line: false, live_during: None };
+            let pieces = source_instances(&axes, &scale, &width, &state, &source, PPP, 1.0).notes;
+            let reach = near + f64::from(ink) * time.seconds_per_point(&axes);
+            let mut fade = None;
+            let mut past = 0;
+            for piece in &pieces {
+                let center = egui::pos2(piece.center[0], piece.center[1]);
+                let centre = (center - axes.at(0.5, 0.0)).dot(axes.dir_depth()) / axes.depth_len();
+                let offset = |t: f64| (time.depth_of_unclamped(t) - centre) * axes.depth_len();
+                past += usize::from(piece.span[0] < offset(reach) - 0.01);
+                let (off, [low, high]) = (offset(at), piece.ramp);
+                if (low..=high).contains(&off) && high > low {
+                    let s = (off - low) / (high - low);
+                    fade = Some(piece.fade[0] + (piece.fade[1] - piece.fade[0]) * s);
+                }
+            }
+            (fade.expect("a piece covers the point"), past)
+        };
+        // A third of the way up the ramp, read with the near edge past the
+        // cap at three places along the ramp, and with the whole ramp shown.
+        let at = 2.003;
+        let whole = read(2.02, at).0;
+        assert!((whole - 1.0 / 3.0).abs() < 1e-3, "fixture: the whole ramp reads {whole}");
+        for near in [2.0055, 2.0065, 2.0075] {
+            let (fade, past) = read(near, at);
+            assert_eq!(past, 0, "edge at {near}: {past} pieces draw past it");
+            assert!((fade - whole).abs() < 1e-4, "edge at {near}: {fade}, whole note {whole}");
+        }
     }
 
     /// A bend that FINISHED before the region begins leaves nothing at the
