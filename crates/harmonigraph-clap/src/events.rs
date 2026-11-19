@@ -276,14 +276,32 @@ impl<'a> Output<'a> {
         Self { list: list.filter(|list| writable && list.try_push.is_some()), last: 0 }
     }
 
-    /// Push `value` at `time` and return the host's answer. False also covers
-    /// an output that cannot be written and a value with no output encoding
-    /// (a parameter or a transport, or a non-finite magnitude), so the caller
+    /// Push `value` at `time` and return the host's answer. A parameter
+    /// value goes out as an edit the user made live; a modulation, a
+    /// transport and a non-finite magnitude have no output encoding. False
+    /// also covers those and an output that cannot be written, so the caller
     /// never has to tell a refusal from a value it cannot send.
     pub fn push(&mut self, value: InputValue, time: u32) -> bool {
+        self.push_with(time, |list| unsafe { push_value(list, value, time) })
+    }
+
+    /// Push the begin (`true`) or end of a gesture on parameter `id`.
+    pub fn push_gesture(&mut self, id: u32, begin: bool, time: u32) -> bool {
+        let kind =
+            if begin { CLAP_EVENT_PARAM_GESTURE_BEGIN } else { CLAP_EVENT_PARAM_GESTURE_END };
+        self.push_with(time, |list| {
+            let event = clap_event_param_gesture {
+                header: header::<clap_event_param_gesture>(time, kind, CLAP_EVENT_IS_LIVE),
+                param_id: id,
+            };
+            unsafe { (list.try_push.unwrap())(list, &event.header) }
+        })
+    }
+
+    fn push_with(&mut self, time: u32, push: impl FnOnce(&clap_output_events) -> bool) -> bool {
         debug_assert!(time >= self.last, "CLAP output must be sorted by time");
         let Some(list) = self.list else { return false };
-        let pushed = unsafe { push_value(list, value, time) };
+        let pushed = push(list);
         if pushed {
             self.last = time;
         }
@@ -291,14 +309,18 @@ impl<'a> Output<'a> {
     }
 }
 
-unsafe fn push_value(output: &clap_output_events, value: InputValue, time: u32) -> bool {
-    let header = |size: usize, kind, flags| clap_event_header {
-        size: size as u32,
+/// The header of an output event of type `T`.
+fn header<T>(time: u32, kind: u16, flags: u32) -> clap_event_header {
+    clap_event_header {
+        size: size_of::<T>() as u32,
         time,
         space_id: CLAP_CORE_EVENT_SPACE_ID,
         type_: kind,
         flags,
-    };
+    }
+}
+
+unsafe fn push_value(output: &clap_output_events, value: InputValue, time: u32) -> bool {
     let push = output.try_push.unwrap();
     match value {
         InputValue::Note { kind, note_id, port, channel, key, velocity, flags }
@@ -311,7 +333,7 @@ unsafe fn push_value(output: &clap_output_events, value: InputValue, time: u32) 
             ) && velocity.is_finite() =>
         {
             let event = clap_event_note {
-                header: header(size_of::<clap_event_note>(), kind, flags),
+                header: header::<clap_event_note>(time, kind, flags),
                 note_id,
                 port_index: port,
                 channel,
@@ -324,8 +346,8 @@ unsafe fn push_value(output: &clap_output_events, value: InputValue, time: u32) 
             if value.is_finite() =>
         {
             let event = clap_event_note_expression {
-                header: header(
-                    size_of::<clap_event_note_expression>(),
+                header: header::<clap_event_note_expression>(
+                    time,
                     CLAP_EVENT_NOTE_EXPRESSION,
                     flags,
                 ),
@@ -340,9 +362,26 @@ unsafe fn push_value(output: &clap_output_events, value: InputValue, time: u32) 
         }
         InputValue::Midi { port, data, flags } => {
             let event = clap_event_midi {
-                header: header(size_of::<clap_event_midi>(), CLAP_EVENT_MIDI, flags),
+                header: header::<clap_event_midi>(time, CLAP_EVENT_MIDI, flags),
                 port_index: port,
                 data,
+            };
+            unsafe { push(output, &event.header) }
+        }
+        InputValue::Parameter { id, value, modulation: false } if value.is_finite() => {
+            let event = clap_event_param_value {
+                header: header::<clap_event_param_value>(
+                    time,
+                    CLAP_EVENT_PARAM_VALUE,
+                    CLAP_EVENT_IS_LIVE,
+                ),
+                param_id: id,
+                cookie: std::ptr::null_mut(),
+                note_id: -1,
+                port_index: -1,
+                channel: -1,
+                key: -1,
+                value,
             };
             unsafe { push(output, &event.header) }
         }

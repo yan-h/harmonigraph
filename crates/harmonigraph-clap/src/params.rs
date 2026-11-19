@@ -14,13 +14,16 @@
 //!
 //! The editor writes a row at once, as the host's automation does, and the
 //! row remembers what the host has not yet been told of it: a gesture begun
-//! or ended, and a value set. The shell tells the host at its next process
-//! callback or flush, at offset 0 (#1814 Q1).
+//! or ended, and the value the editor set. The shell tells the host at its
+//! next process callback or flush, at offset 0 (#1814 Q1). The value told is
+//! the editor's even where host automation or a flush has since written the
+//! row: the host records what the editor supplied, and its own input takes
+//! effect in callback order (Yan, 2026-11-18).
 
 use std::collections::BTreeMap;
 
 use atomic_float::AtomicF32;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use crate::plugin::ParamValue;
 use crate::wrapper::hash_param_id;
@@ -230,8 +233,12 @@ struct Row {
     /// The host's mono modulation, normalized.
     offset: AtomicF32,
     /// The editor's side of the host's report, [`OPEN`], [`BEGUN`] and
-    /// [`DIRTY`]: the editor sets them, the shell's report clears them.
+    /// [`DIRTY`]: the editor sets them, and the shell's report claims
+    /// `BEGUN` and `DIRTY` in one step.
     report: AtomicU8,
+    /// The host value the editor last set, as `f64` bits: what [`DIRTY`]
+    /// says the host has not been told.
+    pending: AtomicU64,
     /// The host has been told a gesture began and not that it ended. Only the
     /// shell's report touches it, from process or flush, which the host never
     /// runs at once.
@@ -242,14 +249,14 @@ struct Row {
 const OPEN: u8 = 1;
 /// The editor began a gesture the host has not been told of.
 const BEGUN: u8 = 2;
-/// The editor set a value the host has not been told of.
+/// The editor set a value the host has not been told of, in `pending`.
 const DIRTY: u8 = 4;
 
 /// One thing the shell tells the host about a row.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Report {
     Begin,
-    /// The row's unmodulated value, as a host value.
+    /// The value the editor set, as a host value.
     Value(f64),
     End,
 }
@@ -288,6 +295,7 @@ impl Table {
                 plain: AtomicF32::new(spec.default),
                 offset: AtomicF32::new(0.0),
                 report: AtomicU8::new(0),
+                pending: AtomicU64::new(0),
                 told_open: AtomicBool::new(false),
                 spec,
             })
@@ -367,9 +375,13 @@ impl Table {
         self.rows[row].report.fetch_or(OPEN | BEGUN, Ordering::AcqRel);
     }
 
-    /// The editor sets `row` to the plain value `plain`, at once.
+    /// The editor sets `row` to the plain value `plain`, at once, and owes
+    /// the host that value.
     pub(crate) fn edit(&self, row: usize, plain: f32) {
-        self.set_host(row, self.rows[row].spec.to_host(plain));
+        let host = self.rows[row].spec.to_host(plain);
+        self.set_host(row, host);
+        self.rows[row].pending.store(host.to_bits(), Ordering::Release);
+        // After the value, so a report that claims the bit reads it.
         self.rows[row].report.fetch_or(DIRTY, Ordering::AcqRel);
     }
 
@@ -379,30 +391,33 @@ impl Table {
     }
 
     /// Tell the host, through `push`, what the editor did since the last
-    /// report: per row a gesture's begin, the row's value as it is now, and
-    /// the gesture's end. Edits between two reports share one gesture, so
-    /// the host is never told of an end without its begin. Stops at the
-    /// first refusal, which is told again at the next report; false then.
+    /// report: per row a gesture's begin, the value the editor last set, and
+    /// the gesture's end. Each row's edit is claimed in one step, so an edit
+    /// racing the report lands whole in this report or the next. Edits
+    /// between two reports share one gesture, and the host is never told of
+    /// an end without its begin. Stops at the first refusal, whose part is
+    /// told again at the next report; false then.
     pub(crate) fn report(&self, mut push: impl FnMut(u32, Report) -> bool) -> bool {
         for row in self.rows.iter() {
-            let bits = row.report.load(Ordering::Acquire);
-            let told_open = row.told_open.load(Ordering::Relaxed);
-            if bits & (BEGUN | DIRTY) != 0 && !told_open {
+            let claimed = row.report.fetch_and(!(BEGUN | DIRTY), Ordering::AcqRel);
+            let mut told_open = row.told_open.load(Ordering::Relaxed);
+            if claimed & (BEGUN | DIRTY) != 0 && !told_open {
                 if !push(row.hash, Report::Begin) {
+                    row.report.fetch_or(claimed & (BEGUN | DIRTY), Ordering::AcqRel);
                     return false;
                 }
+                told_open = true;
                 row.told_open.store(true, Ordering::Relaxed);
             }
-            row.report.fetch_and(!BEGUN, Ordering::AcqRel);
-            if row.report.fetch_and(!DIRTY, Ordering::AcqRel) & DIRTY != 0 {
-                let value = row.spec.to_host(row.plain.load(Ordering::Relaxed));
+            if claimed & DIRTY != 0 {
+                let value = f64::from_bits(row.pending.load(Ordering::Acquire));
                 if !push(row.hash, Report::Value(value)) {
                     row.report.fetch_or(DIRTY, Ordering::AcqRel);
                     return false;
                 }
             }
-            let open = row.report.load(Ordering::Acquire) & OPEN != 0;
-            if row.told_open.load(Ordering::Relaxed) && !open {
+            // A gesture still open at the claim is ended by a later report.
+            if told_open && claimed & OPEN == 0 {
                 if !push(row.hash, Report::End) {
                     return false;
                 }
@@ -445,9 +460,26 @@ impl Table {
 
     /// Set every row from a save, by [`Spec::restore`]'s rules, and write one
     /// log line naming the ids the save holds that no row has. Leaves the
-    /// modulation as it is.
+    /// modulation as it is. A value the editor set and the host has not been
+    /// told is dropped: the restore supersedes it, and the host reads the
+    /// restored state by rescanning (Yan, 2026-11-18).
     pub(crate) fn restore(&self, saved: &BTreeMap<String, ParamValue>) {
         for row in &self.rows {
+            // A finished click goes whole; a gesture still open keeps its
+            // begin, for the end the editor will send.
+            let mut bits = row.report.load(Ordering::Acquire);
+            loop {
+                let kept = if bits & OPEN == 0 { bits & !(BEGUN | DIRTY) } else { bits & !DIRTY };
+                match row.report.compare_exchange_weak(
+                    bits,
+                    kept,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(now) => bits = now,
+                }
+            }
             row.plain.store(row.spec.restore(saved.get(row.spec.id)), Ordering::Relaxed);
         }
         let unknown: Vec<&str> = saved
@@ -520,6 +552,37 @@ mod tests {
         let float = Spec::float("float", "Float", 0.0, -1.0, 1.0);
         assert_eq!(float.parse("nan"), None);
         assert_eq!(float.parse("inf"), Some(1.0));
+    }
+
+    /// An edit landing while a report runs, a value set while the host is
+    /// being told the last one, is told whole by the next report, inside the
+    /// gesture the host already holds open.
+    #[test]
+    fn an_edit_landing_inside_a_report_is_told_whole_by_the_next() {
+        let table = Table::new([Spec::float("float", "Float", 0.0, 0.0, 1.0)]);
+        let report = |during: &dyn Fn(Report)| {
+            let mut told = Vec::new();
+            table.report(|_, report| {
+                told.push(report);
+                during(report);
+                true
+            });
+            told
+        };
+        table.begin_edit(0);
+        table.edit(0, 0.25);
+        let told = report(&|report| {
+            if report == Report::Begin {
+                table.edit(0, 0.375);
+            } else if report == Report::Value(0.375) {
+                table.edit(0, 0.5);
+            }
+        });
+        assert_eq!(told, [Report::Begin, Report::Value(0.375)], "the gesture stays open");
+        assert_eq!(report(&|_| {}), [Report::Value(0.5)]);
+        table.end_edit(0);
+        assert_eq!(report(&|_| {}), [Report::End]);
+        assert!(report(&|_| {}).is_empty());
     }
 
     /// A value the host sets while its modulation holds the row at a bound is

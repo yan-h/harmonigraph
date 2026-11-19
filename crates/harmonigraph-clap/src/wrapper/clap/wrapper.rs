@@ -19,11 +19,7 @@ use crate::params::{Report, Table};
 use crate::plugin::{Block, Boundary, Latency, LatencyState, Plugin, PluginState};
 use atomic_float::AtomicF32;
 use atomic_refcell::AtomicRefCell;
-use clap_sys::events::{
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_IS_LIVE, CLAP_EVENT_PARAM_GESTURE_BEGIN,
-    CLAP_EVENT_PARAM_GESTURE_END, CLAP_EVENT_PARAM_VALUE, clap_event_header,
-    clap_event_param_gesture, clap_event_param_value, clap_input_events, clap_output_events,
-};
+use clap_sys::events::{clap_input_events, clap_output_events};
 use clap_sys::ext::audio_ports::{
     CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, CLAP_PORT_MONO, CLAP_PORT_STEREO,
     clap_audio_port_info, clap_plugin_audio_ports,
@@ -476,46 +472,13 @@ impl<P: Plugin> Wrapper<P> {
     /// # Safety
     /// `out` must be null or a valid host output list.
     unsafe fn report(&self, out: *const clap_output_events) {
-        let Some(out) = (unsafe { out.as_ref() }) else { return };
-        let Some(try_push) = out.try_push else { return };
-        self.params.report(|param_id, report| {
-            let header = |size: usize, type_| clap_event_header {
-                size: size as u32,
-                time: 0,
-                space_id: CLAP_CORE_EVENT_SPACE_ID,
-                type_,
-                flags: CLAP_EVENT_IS_LIVE,
-            };
-            let gesture = |type_| clap_event_param_gesture {
-                header: header(mem::size_of::<clap_event_param_gesture>(), type_),
-                param_id,
-            };
-            match report {
-                Report::Begin => {
-                    let event = gesture(CLAP_EVENT_PARAM_GESTURE_BEGIN);
-                    unsafe { try_push(out, &event.header) }
-                }
-                Report::End => {
-                    let event = gesture(CLAP_EVENT_PARAM_GESTURE_END);
-                    unsafe { try_push(out, &event.header) }
-                }
-                Report::Value(value) => {
-                    let event = clap_event_param_value {
-                        header: header(
-                            mem::size_of::<clap_event_param_value>(),
-                            CLAP_EVENT_PARAM_VALUE,
-                        ),
-                        param_id,
-                        cookie: std::ptr::null_mut(),
-                        note_id: -1,
-                        port_index: -1,
-                        channel: -1,
-                        key: -1,
-                        value,
-                    };
-                    unsafe { try_push(out, &event.header) }
-                }
+        let mut output = unsafe { Output::new(out, true) };
+        self.params.report(|id, report| match report {
+            Report::Begin => output.push_gesture(id, true, 0),
+            Report::Value(value) => {
+                output.push(InputValue::Parameter { id, value, modulation: false }, 0)
             }
+            Report::End => output.push_gesture(id, false, 0),
         });
     }
 

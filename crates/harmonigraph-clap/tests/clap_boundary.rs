@@ -335,6 +335,63 @@ impl Device {
         let input = list(&events);
         unsafe { (self.params().flush.unwrap())(self.plugin, &input, ptr::null()) };
     }
+    /// A flush whose output is the device's sink.
+    fn flush_to_sink(&mut self, events: Vec<Event>) {
+        let input = list(&events);
+        let output =
+            clap_output_events { ctx: (&mut self.sink as *mut Sink).cast(), try_push: Some(push) };
+        unsafe { (self.params().flush.unwrap())(self.plugin, &input, &output) };
+    }
+    /// Load `json` through the CLAP state extension, framed as a save is.
+    fn load(&self, json: &[u8]) {
+        use clap_sys::ext::state::{CLAP_EXT_STATE, clap_plugin_state};
+        use clap_sys::stream::clap_istream;
+        unsafe extern "C" fn read(
+            stream: *const clap_istream,
+            data: *mut c_void,
+            size: u64,
+        ) -> i64 {
+            let bytes = unsafe { &mut *((*stream).ctx.cast::<&[u8]>()) };
+            let count = bytes.len().min(size as usize);
+            unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), data.cast(), count) };
+            *bytes = &bytes[count..];
+            count as i64
+        }
+        let framed = [&(json.len() as u64).to_le_bytes()[..], json].concat();
+        let mut unread = &framed[..];
+        let stream = clap_istream { ctx: (&mut unread as *mut &[u8]).cast(), read: Some(read) };
+        let state = unsafe {
+            &*(((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_STATE.as_ptr())
+                .cast::<clap_plugin_state>())
+        };
+        assert!(unsafe { (state.load.unwrap())(self.plugin, &stream) });
+    }
+    /// What the host's list was offered since the last call, in order, each
+    /// gesture or note by name and each value by its number.
+    fn told(&mut self) -> Vec<String> {
+        // Cleared rather than taken: the sink keeps its room for the next
+        // guarded callback.
+        let told = self
+            .sink
+            .offers
+            .iter()
+            .map(|&(kind, _, value, _)| match kind {
+                CLAP_EVENT_PARAM_GESTURE_BEGIN => "begin".to_owned(),
+                CLAP_EVENT_PARAM_GESTURE_END => "end".to_owned(),
+                CLAP_EVENT_PARAM_VALUE => format!("{value}"),
+                _ => "note".to_owned(),
+            })
+            .collect();
+        self.sink.offers.clear();
+        told
+    }
+    /// The editor's side of the fixture's one parameter.
+    fn editor(&self) -> (Arc<dyn GuiContext>, usize) {
+        let wrapper = unsafe {
+            &*((*self.plugin).plugin_data.cast::<nice_plug::wrapper::clap::Wrapper<Fixture>>())
+        };
+        wrapper.test_gui_context("axis")
+    }
     fn main(&self) {
         unsafe { ((*self.plugin).on_main_thread.unwrap())(self.plugin) };
     }
@@ -589,4 +646,82 @@ fn a_save_is_framed_json_of_the_version_the_parameters_and_the_fields() {
     assert!(unsafe { (state.load.unwrap())(d.plugin, &stream) });
     assert_eq!(d.value(), 0.25);
     assert_eq!(*FIELD.lock().unwrap(), "x", "the field reached the setup as it was saved");
+}
+
+/// A gesture the editor holds open across callbacks is told once, and ends
+/// when the editor ends it.
+#[test]
+fn a_gesture_held_open_across_callbacks_ends_when_the_editor_ends_it() {
+    let _serial = serial();
+    let mut d = Device::new();
+    let (context, row) = d.editor();
+    context.begin_set_parameter(row);
+    context.set_parameter(row, 0.25);
+    d.run(0, vec![], None);
+    assert_eq!(d.told(), ["begin", "0.25", "note"]);
+    d.run(64, vec![], None);
+    assert_eq!(d.told(), ["note"], "still open");
+    context.end_set_parameter(row);
+    d.run(128, vec![], None);
+    assert_eq!(d.told(), ["end", "note"]);
+    drop(context);
+}
+
+/// Host automation of the row an editor edit is pending on takes effect in
+/// callback order, and the host is told the value the editor set, not its
+/// own (Yan, 2026-11-18): here the first callback's report is refused, so
+/// the automation writes the row before the report the host takes.
+#[test]
+fn the_editor_value_is_told_though_automation_wrote_the_row() {
+    let _serial = serial();
+    let mut d = Device::new();
+    let (context, row) = d.editor();
+    context.begin_set_parameter(row);
+    context.set_parameter(row, 0.25);
+    context.end_set_parameter(row);
+    d.sink.script = vec![false];
+    d.run(0, vec![param(0.75, 3)], None);
+    assert_eq!(d.told(), ["begin", "note"], "refused");
+    assert_eq!(d.value(), 0.75);
+    assert_eq!(observed().processed, [0.75]);
+    d.sink.script = vec![];
+    d.run(64, vec![], None);
+    assert_eq!(d.told(), ["begin", "0.25", "end", "note"]);
+    drop(context);
+}
+
+/// A flush tells the host what the editor did, the editor's value though the
+/// flush's own value wrote the row, and the next callback does not tell it
+/// again.
+#[test]
+fn a_flush_tells_the_editor_value_though_its_own_wrote_the_row() {
+    let _serial = serial();
+    let mut d = Device::new();
+    let (context, row) = d.editor();
+    context.begin_set_parameter(row);
+    context.set_parameter(row, 0.25);
+    context.end_set_parameter(row);
+    d.flush_to_sink(vec![param(0.75, 0)]);
+    assert_eq!(d.told(), ["begin", "0.25", "end"]);
+    assert_eq!(d.value(), 0.75);
+    d.run(0, vec![], None);
+    assert_eq!(d.told(), ["note"]);
+    drop(context);
+}
+
+/// A restore drops an edit the host was not told: the host reads the
+/// restored state by rescanning (Yan, 2026-11-18).
+#[test]
+fn a_restore_drops_an_edit_the_host_was_not_told() {
+    let _serial = serial();
+    let mut d = Device::new();
+    let (context, row) = d.editor();
+    context.begin_set_parameter(row);
+    context.set_parameter(row, 0.25);
+    context.end_set_parameter(row);
+    d.load(br#"{"version":"1","params":{"axis":{"f32":0.5}},"fields":{}}"#);
+    d.run(0, vec![], None);
+    assert_eq!(d.told(), ["note"]);
+    assert_eq!(d.value(), 0.5);
+    drop(context);
 }
