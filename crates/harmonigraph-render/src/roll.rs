@@ -213,7 +213,7 @@ impl RollInstance {
     /// The fields in declaration order, which is what places each one: the
     /// macro lays the offsets out in the order listed. roll.wgsl's
     /// `NoteInput` reads them at the same contiguous locations. Several fields
-    /// share a slot, so a struct of twelve locations carries all sixteen.
+    /// share a slot, so a struct of twelve locations carries all fourteen.
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<RollInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
