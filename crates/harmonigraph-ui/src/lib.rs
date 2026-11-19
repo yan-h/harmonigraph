@@ -37,7 +37,7 @@ pub mod tape;
 pub mod testing;
 /// The Video pane's settings, which the appearance document carries.
 mod video;
-pub use runtime::VisualRuntime;
+pub use runtime::{PendingLabel, VisualRuntime, PENDING_AFTER};
 
 pub use layout::{Layout, Placement};
 

@@ -404,13 +404,17 @@ pub enum MapOffsetLane {
 
 #[derive(Clone, Debug)]
 pub struct MapView {
-    /// Current host/document intent; pending distinguishes it from audio adoption.
+    /// Current host/document intent, moved by following; `unadopted` says
+    /// whether audio has adopted it.
     pub playback: MapPlayback,
     pub offsets: MapOffsets,
     /// Where following has moved the map beyond `offsets`, as the Hub last
     /// left it. Already included in `playback.map`, which is what sounds.
     pub followed: LatticePos,
-    pub pending: bool,
+    /// The map state the parameters request, before following moves it, when
+    /// the audio thread has not adopted it yet: the request the pending label
+    /// waits on. Following is the Hub's own movement, not a request.
+    pub unadopted: Option<MapPlayback>,
     /// Shared with the editor's memo (see [`MapEditor::names`]).
     pub names: MapNames,
     pub edit_shape: bool,

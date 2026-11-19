@@ -14,9 +14,11 @@ use std::time::{Duration, Instant};
 /// until audio adopts the edit.
 pub const PENDING_AFTER: Duration = Duration::from_millis(100);
 
-/// Whether one requested state has gone unadopted for [`PENDING_AFTER`]. The
-/// timer is keyed on the requested state, so a drag, which requests a new one
-/// every frame, never lights it.
+/// Whether one request has gone unadopted for [`PENDING_AFTER`]. The timer is
+/// keyed on the request as its source names it (the latest queued edit's id,
+/// or the map state the parameters ask for before following moves it), so a
+/// drag, which requests anew every frame, never lights it, and following,
+/// which is no request, never restarts it.
 #[derive(Debug)]
 pub struct PendingLabel<K> {
     since: Option<(K, Instant)>,
@@ -37,13 +39,13 @@ impl<K> PendingLabel<K> {
     }
 }
 impl<K: PartialEq + Copy> PendingLabel<K> {
-    /// Whether to show the label, given what is requested now and whether the
-    /// audio thread has adopted it.
-    pub fn shown(&mut self, requested: K, unadopted: bool, now: Instant) -> bool {
-        if !unadopted {
+    /// Whether to show the label, given the request the audio thread has not
+    /// adopted yet, `None` once it has adopted everything, which clears it.
+    pub fn shown(&mut self, unadopted: Option<K>, now: Instant) -> bool {
+        let Some(requested) = unadopted else {
             self.since = None;
             return false;
-        }
+        };
         match self.since {
             Some((key, since)) if key == requested => now.duration_since(since) >= PENDING_AFTER,
             _ => {
@@ -85,7 +87,7 @@ pub struct VisualRuntime {
     /// Show "Tuning change pending audio adoption": the configuration the
     /// editor requested has gone unadopted for [`PENDING_AFTER`].
     pub configuration_pending_shown: bool,
-    configuration_unadopted: PendingLabel<harmonigraph_core::configuration::ResolvedConfig>,
+    configuration_unadopted: PendingLabel<u64>,
     /// Show the map's "pending audio adoption": the map state the parameters
     /// request has gone unadopted for [`PENDING_AFTER`].
     pub maps_pending: bool,
@@ -176,7 +178,7 @@ impl VisualRuntime {
             self.apply_resolved(owned.resolved);
             self.configuration_status = owned.status;
             self.configuration_pending_shown =
-                self.configuration_unadopted.shown(owned.resolved, owned.pending, Instant::now());
+                self.configuration_unadopted.shown(owned.unadopted, Instant::now());
         } else if let Some(recorded) = self.replayed_configuration {
             self.apply_resolved(recorded);
         } else {
@@ -194,9 +196,9 @@ impl VisualRuntime {
 
     /// Keep this frame's map view, and decide its pending label.
     pub fn observe_maps(&mut self, maps: Option<crate::lattice_maps::MapView>) {
-        self.maps_pending = maps.as_ref().is_some_and(|view| {
-            self.maps_unadopted.shown(view.playback, view.pending, Instant::now())
-        });
+        self.maps_pending = maps
+            .as_ref()
+            .is_some_and(|view| self.maps_unadopted.shown(view.unadopted, Instant::now()));
         self.lattice_maps = maps;
     }
 
@@ -283,13 +285,13 @@ mod tests {
         let start = Instant::now();
         let at = |ms| start + Duration::from_millis(ms);
         let mut label = PendingLabel::default();
-        assert!(!label.shown(1, true, at(0)));
-        assert!(!label.shown(1, true, at(99)));
-        assert!(label.shown(1, true, at(100)), "unadopted for the whole wait");
-        assert!(!label.shown(1, false, at(150)), "adopted");
-        assert!(!label.shown(1, true, at(160)), "the wait starts again");
+        assert!(!label.shown(Some(1), at(0)));
+        assert!(!label.shown(Some(1), at(99)));
+        assert!(label.shown(Some(1), at(100)), "unadopted for the whole wait");
+        assert!(!label.shown(None, at(150)), "adopted");
+        assert!(!label.shown(Some(1), at(160)), "the wait starts again");
         for frame in 0..30 {
-            assert!(!label.shown(frame, true, at(200 + 16 * frame as u64)), "a drag");
+            assert!(!label.shown(Some(frame), at(200 + 16 * frame as u64)), "a drag");
         }
     }
 }

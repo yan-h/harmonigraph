@@ -40,17 +40,18 @@ impl ParamBackend for Edits {
         for n in 1..self.maps {
             document.capture(Default::default(), format!("Map {n}"));
         }
+        let playback = MapPlayback {
+            engine: self.engine,
+            follow: self.follow,
+            map: Some(Default::default()),
+            ..Default::default()
+        };
         Some(MapView {
-            playback: MapPlayback {
-                engine: self.engine,
-                follow: self.follow,
-                map: Some(Default::default()),
-                ..Default::default()
-            },
+            playback,
             names: document.names(),
             offsets: self.offsets,
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            pending: self.pending,
+            unadopted: self.pending.then_some(playback),
             edit_shape: false,
             can_undo: false,
             full: false,

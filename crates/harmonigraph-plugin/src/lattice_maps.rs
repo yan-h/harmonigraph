@@ -137,14 +137,14 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     };
     // Intent is compared before following is added: the Hub's own movement is
     // not host state waiting for audio to adopt it.
-    let pending = playback != adopted;
+    let unadopted = (playback != adopted).then_some(playback);
     let followed = followed(params);
     let shown = MapPlayback { map: requested.followed_by(followed).placed(&document), ..playback };
     MapView {
         playback: shown,
         offsets,
         followed,
-        pending,
+        unadopted,
         names: editor.names(&document),
         edit_shape: editor.edit_shape,
         can_undo: playback.map.is_some() && editor.can_undo(selected),
@@ -472,6 +472,7 @@ impl AudioMaps {
 mod tests {
     use super::*;
     use harmonigraph_core::configuration::ConfigReducer;
+    use harmonigraph_core::lattice_map::TuningEngine;
 
     /// A history filled to its `HISTORY` cap, one entry per sample. A window
     /// queried in the middle then has thousands of entries on either side of
@@ -572,6 +573,33 @@ mod tests {
         let parameter = InputValue::Parameter { id, value, modulation: false };
         maps.observe(Input { sample: 0, value: parameter }, config);
         assert_eq!(maps.playback.selected, 3);
+    }
+
+    /// The map's pending label waits on what the parameters request, not on
+    /// the map following moves: with following moving it every frame, an
+    /// unadopted request still lights the label after the wait (#1814 Q2).
+    #[test]
+    fn the_map_label_waits_on_the_request_while_following_moves_the_map() {
+        use harmonigraph_ui::{PendingLabel, PENDING_AFTER};
+        let params = crate::HarmonigraphParams::default();
+        params.set(Row::TuningEngine, TuningEngine::LatticeMap.index() as f32);
+        params.set(Row::MapFollow, Follow::Thirds.index() as f32);
+        params.set(Row::MapFifths, 3.0);
+        let start = std::time::Instant::now();
+        let mut label = PendingLabel::default();
+        let frames = 1 + (PENDING_AFTER.as_millis() / 16) as i32;
+        let shown: Vec<bool> = (0..=frames)
+            .map(|frame| {
+                // The Hub moves the map a third every frame.
+                let moved = LatticePos::new(0, frame, 0);
+                params.map_followed.store(pack(moved), std::sync::atomic::Ordering::Release);
+                let view = view(&params);
+                assert_eq!(view.followed, moved, "the fixture moves the map");
+                let at = start + std::time::Duration::from_millis(16 * frame as u64);
+                label.shown(view.unadopted, at)
+            })
+            .collect();
+        assert!(!shown[0] && shown[frames as usize], "{shown:?}");
     }
 
     #[test]

@@ -130,7 +130,10 @@ pub struct ConfigurationView {
     pub resolved: harmonigraph_core::configuration::ResolvedConfig,
     /// The bits below.
     pub status: u32,
-    pub pending: bool,
+    /// The id of the latest edit the audio owner has not applied yet, or
+    /// `None` when it has applied every one: the request the pending label
+    /// waits on.
+    pub unadopted: Option<u64>,
 }
 
 impl ConfigurationView {

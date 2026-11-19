@@ -577,7 +577,7 @@ fn silence_policy_edits_apply_before_expiry_without_note_input() {
         phrase.hub.run_format(phrase.raw, vec![], None, None, 512);
         let visible = settings(&phrase.hub).view();
         assert!(
-            !visible.pending,
+            visible.unadopted.is_none(),
             "the editor edit must already be reduced before the expiry callback"
         );
         assert_eq!(visible.resolved.policy.silence_ms, if enable { 1000 } else { 0 });

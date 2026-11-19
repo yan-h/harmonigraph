@@ -253,17 +253,19 @@ impl Settings {
         let applied = self.published.load();
         let status = applied.status
             | if self.rejected.load(Ordering::Acquire) { ConfigurationView::QUEUE_FULL } else { 0 };
+        // The latest edit queued, while the audio owner has not applied it.
+        let latest = producer.next_id - 1;
+        let unadopted = (latest > applied.applied).then_some(latest);
         if let Some((id, settings)) = producer.shadow {
             if applied.applied < id {
                 let reducer = settings.reducer();
                 let mut resolved = reducer.resolved();
                 resolved.revision = applied.resolved.revision;
-                return (reducer.raw(), ConfigurationView { resolved, status, pending: true });
+                return (reducer.raw(), ConfigurationView { resolved, status, unadopted });
             }
             producer.shadow = None;
         }
-        let pending = producer.next_id - 1 > applied.applied;
-        (applied.raw, ConfigurationView { resolved: applied.resolved, status, pending })
+        (applied.raw, ConfigurationView { resolved: applied.resolved, status, unadopted })
     }
 
     pub fn view(&self) -> ConfigurationView {

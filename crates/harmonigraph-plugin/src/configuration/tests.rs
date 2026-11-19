@@ -433,13 +433,13 @@ fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adopt
         assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
         device.load(restored(&device, 705.0), gui);
         let now = shown(&settings);
-        assert!(now.view.pending);
+        assert!(now.view.unadopted.is_some());
         assert_eq!(now.raw.three, microcents(705.0), "the newest restore is what shows");
         assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
         assert_eq!(saved(&device.wrapper().get_state_object()).axes[1], microcents(705.0));
         device.run(1000, vec![], false);
         let adopted = shown(&settings);
-        assert!(!adopted.view.pending);
+        assert!(!adopted.view.unadopted.is_some());
         assert_eq!(adopted.raw.three, microcents(705.0), "the queued UI edit came before it");
         assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
         let marked = device.service();
@@ -447,6 +447,26 @@ fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adopt
         assert_eq!(shown(&settings).raw.three, microcents(700.0));
         assert!(device.service() > marked, "an applied UI edit marks the project modified");
     }
+}
+
+/// The tuning pending label waits on the latest edit queued, not on the
+/// configuration audio last applied: with audio stopped, a second edit
+/// restarts the wait the first began (#1814 Q2).
+#[test]
+fn the_tuning_label_waits_on_the_latest_queued_edit() {
+    use harmonigraph_ui::{PendingLabel, PENDING_AFTER};
+    let settings = Settings::default();
+    let start = std::time::Instant::now();
+    let at = |ms: u64| start + std::time::Duration::from_millis(ms);
+    let mut label = PendingLabel::default();
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
+    assert!(!label.shown(settings.view().unadopted, at(0)));
+    let later = PENDING_AFTER.as_millis() as u64 / 2;
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(701.0))));
+    assert!(!label.shown(settings.view().unadopted, at(later)));
+    let first_wait = PENDING_AFTER.as_millis() as u64;
+    assert!(!label.shown(settings.view().unadopted, at(first_wait)), "the wait restarted");
+    assert!(label.shown(settings.view().unadopted, at(later + first_wait)));
 }
 
 #[test]
@@ -464,7 +484,10 @@ fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
         for comma in harmonigraph_core::Comma::ALL.into_iter().rev() {
             assert!(settings.submit(ConfigEdit::temper(comma, false, linked.tuning)));
         }
-        assert!(shown(&settings).view.pending, "the switches are one pending audio adoption");
+        assert!(
+            shown(&settings).view.unadopted.is_some(),
+            "the switches are one pending audio adoption"
+        );
         device.run(64, vec![], false);
         let released = shown(&settings);
         assert_eq!(released.view.resolved.modes.tempered, Tempered::default());
@@ -621,7 +644,7 @@ fn a_full_command_queue_keeps_accepted_state() {
     assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
     device.run(64, vec![], false);
     let now = shown(&settings);
-    assert!(!now.view.pending);
+    assert!(!now.view.unadopted.is_some());
     assert_eq!(now.raw.three, microcents(705.0));
     assert_eq!(now.view.status, 8, "the deliberately rejected submission remains visible");
 }
@@ -641,7 +664,10 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
             device.activate();
             device.run(0, vec![], false);
             device.load(restored(&device, 705.0), false);
-            assert!(shown(&settings).view.pending, "an accepted restore is still queued");
+            assert!(
+                shown(&settings).view.unadopted.is_some(),
+                "an accepted restore is still queued"
+            );
         } else {
             device.activate();
             device.run(0, vec![device.param(ParamKey::CameraDistance, 6.0, 0)], false);
@@ -688,7 +714,7 @@ fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
         state.fields.insert(MUSICAL_SETTINGS.into(), serde_json::to_string(&restoring).unwrap());
         device.load(state, gui);
         let readback = shown(&settings).view;
-        assert!(readback.pending);
+        assert!(readback.unadopted.is_some());
         let readback = readback.resolved;
         let restored_modes = TuningModes {
             tempered: Tempered { syntonic: meantone, septimal_kleisma: marvel },
@@ -2023,7 +2049,10 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(preview.playback.offset, preview.offsets.total());
         assert!(!Arc::ptr_eq(&original_names, &preview.names));
         assert_eq!(&preview.names[1], &(1, "Distant passage".into()));
-        assert!(preview.pending, "restored intent must be visible before audio adoption");
+        assert!(
+            preview.unadopted.is_some(),
+            "restored intent must be visible before audio adoption"
+        );
     });
     let saved = device.save();
     let recalled: MapDocument = serde_json::from_str(&saved.fields["lattice-maps"]).unwrap();
@@ -2056,7 +2085,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     let mut changed = map;
     assert!(changed.replace(destination), "the edit must change the captured geometry");
     device.wrapper().test_inspect_plugin(|plugin| {
-        assert!(!crate::lattice_maps::view(&plugin.params).pending);
+        assert!(!crate::lattice_maps::view(&plugin.params).unadopted.is_some());
         let edit = |action| crate::lattice_maps::edit(&plugin.params, context.as_ref(), action);
         let dirty = &plugin.params.settings.modified;
         dirty.store(false, std::sync::atomic::Ordering::Release);
@@ -2077,7 +2106,10 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
             Some(LatticeMap { position: harmonigraph_core::LatticePos::ORIGIN, ..changed }),
             "an edit is saved to the selected map itself"
         );
-        assert!(preview.pending, "editing follows intent before audio adopts the shape");
+        assert!(
+            preview.unadopted.is_some(),
+            "editing follows intent before audio adopts the shape"
+        );
         edit(MapEdit::Undo);
         let undone = crate::lattice_maps::view(&plugin.params);
         assert_eq!(undone.playback.map, Some(map));
@@ -2135,7 +2167,10 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         let preview = crate::lattice_maps::view(&plugin.params);
         assert!(!preview.editing() && !preview.can_undo, "undo never reaches a restored project");
         assert_eq!(preview.playback.map, Some(map));
-        assert!(preview.pending, "audio still holds the edited shape until its next callback");
+        assert!(
+            preview.unadopted.is_some(),
+            "audio still holds the edited shape until its next callback"
+        );
     });
     device.run(128, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {
