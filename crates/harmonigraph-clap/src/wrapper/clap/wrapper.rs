@@ -674,7 +674,6 @@ impl<P: Plugin> Wrapper<P> {
         if valid && input_lost {
             // A lost callback's audio is left as the host gave it.
             plugin.process(&mut unsafe { self.block(boundary, list, process, None) });
-            self.poll_latency(&plugin);
         } else if valid {
             let mut storage = self.aux_storage.borrow_mut();
             let mut slices = Slices::default();

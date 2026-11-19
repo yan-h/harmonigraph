@@ -634,6 +634,28 @@ fn an_input_emits_at_its_own_sample_plus_the_delay_with_its_correction() {
     assert_eq!(pair.misses(), 0);
 }
 
+/// A note the host refuses is kept, not lost: it goes out at the start of the
+/// next callback, with its tuning.
+#[test]
+fn a_refused_note_goes_out_at_the_start_of_the_next_callback() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    assert!(pair.step(vec![note(1, 0, 60, 17, true)]).is_empty(), "nothing emits before D");
+    let refused = pair.tune.run(pair.raw, vec![], Some(CLAP_EVENT_NOTE_ON));
+    pair.hub.run(pair.raw, vec![], None);
+    pair.raw += 512;
+    let onset =
+        |event: &Event| matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_ON, key: 60, .. });
+    assert!(refused.rejected.iter().any(|(_, event)| onset(event)), "the host refused it");
+    assert!(!refused.values.iter().any(|(_, event)| onset(event)));
+    let output = pair.idle();
+    assert!(
+        output.iter().any(|(time, event)| *time == 0 && onset(event)),
+        "the refused note goes out at offset 0 of the next callback: {output:?}"
+    );
+    assert!(tuning_of(&output).is_some(), "with its tuning");
+}
+
 /// An onset whose correction has not arrived by its own deadline emits at raw
 /// pitch and counts the miss. Nothing waits, and the next note is unaffected.
 #[test]

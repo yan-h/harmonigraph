@@ -554,11 +554,13 @@ mod tests {
         assert_eq!(float.parse("inf"), Some(1.0));
     }
 
-    /// An edit landing while a report runs, a value set while the host is
-    /// being told the last one, is told whole by the next report, inside the
-    /// gesture the host already holds open.
+    /// A value the editor sets while the host is being told the last one, from
+    /// inside the push, is told by the next report, inside the gesture the
+    /// host already holds open. The claim of a row's bits in one step, which
+    /// closes the window before the first push, is held by review: no test
+    /// can land an edit between a load and a claim without a hook.
     #[test]
-    fn an_edit_landing_inside_a_report_is_told_whole_by_the_next() {
+    fn an_edit_made_during_a_push_is_told_by_the_next_report() {
         let table = Table::new([Spec::float("float", "Float", 0.0, 0.0, 1.0)]);
         let report = |during: &dyn Fn(Report)| {
             let mut told = Vec::new();
