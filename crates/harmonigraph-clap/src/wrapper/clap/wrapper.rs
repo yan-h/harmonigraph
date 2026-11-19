@@ -25,8 +25,6 @@ use clap_sys::ext::audio_ports::{
 use clap_sys::ext::audio_ports_config::{
     CLAP_EXT_AUDIO_PORTS_CONFIG, clap_audio_ports_config, clap_plugin_audio_ports_config,
 };
-#[cfg(all(target_family = "unix", not(target_os = "macos")))]
-use clap_sys::ext::gui::CLAP_WINDOW_API_X11;
 use clap_sys::ext::gui::{
     CLAP_EXT_GUI, CLAP_WINDOW_API_COCOA, clap_gui_resize_hints, clap_host_gui, clap_plugin_gui,
     clap_window,
@@ -856,23 +854,9 @@ impl<P: Plugin> Wrapper<P> {
         api: *const c_char,
         is_floating: bool,
     ) -> bool {
-        // We don't do standalone floating windows
-        if is_floating {
-            return false;
-        }
-
-        unsafe {
-            #[cfg(all(target_family = "unix", not(target_os = "macos")))]
-            if CStr::from_ptr(api) == CLAP_WINDOW_API_X11 {
-                return true;
-            }
-            #[cfg(target_os = "macos")]
-            if CStr::from_ptr(api) == CLAP_WINDOW_API_COCOA {
-                return true;
-            }
-        }
-
-        false
+        // Embedded in an AppKit view, on every platform the shell builds on,
+        // so a host can only create the editor where it can attach it.
+        !is_floating && unsafe { CStr::from_ptr(api) } == CLAP_WINDOW_API_COCOA
     }
 
     unsafe extern "C" fn ext_gui_get_preferred_api(
@@ -883,16 +867,7 @@ impl<P: Plugin> Wrapper<P> {
         check_null_ptr!(false, api, is_floating);
 
         unsafe {
-            #[cfg(all(target_family = "unix", not(target_os = "macos")))]
-            {
-                *api = CLAP_WINDOW_API_X11.as_ptr();
-            }
-            #[cfg(target_os = "macos")]
-            {
-                *api = CLAP_WINDOW_API_COCOA.as_ptr();
-            }
-
-            // We don't do standalone floating windows yet
+            *api = CLAP_WINDOW_API_COCOA.as_ptr();
             *is_floating = false;
         }
 
@@ -1014,9 +989,8 @@ impl<P: Plugin> Wrapper<P> {
         wrapper.editor.get().is_some_and(|editor| editor.set_size(width, height))
     }
 
-    /// Opens the editor under an AppKit view. Under an X11 window, the API a
-    /// Linux host is offered so the shell's tests can create the editor
-    /// there, it opens nothing and refuses.
+    /// Opens the editor under an AppKit view, the one window API the shell
+    /// offers; any other is refused.
     unsafe extern "C" fn ext_gui_set_parent(
         plugin: *const clap_plugin,
         window: *const clap_window,
