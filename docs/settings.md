@@ -58,8 +58,8 @@ Detail folds such as **Source details** reopen closed with the editor.
 
 Related settings can be edited directly in diagrams:
 drag a round handle.
-A handle takes no keyboard focus, so the arrow keys stay the host's;
-exact values go in the sliders beside the picture.
+The arrow keys leave a handle where it is;
+the sliders beside the picture take exact values.
 A fixed-width picture sits beside compact sliders with labels and value readouts.
 The sliders remain independently editable:
 drag a bar, double-click it to reset, or Cmd-click it (Ctrl-click on Windows and Linux) to type in the displayed units.
