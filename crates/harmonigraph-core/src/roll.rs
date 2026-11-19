@@ -98,6 +98,11 @@ pub struct RollNote {
     /// 1), or held or fading when Clear roll took the timeline. Leaving the
     /// voices drops it rather than filing it in `past`.
     off_timeline: bool,
+    /// Its source was hidden when it left the held set (rule 4), stamped by
+    /// [`NoteRoll::depart`]: it was never drawn leaving, and the lattice, which
+    /// replays finished presses past their voices' fades, replays none of it
+    /// whatever the Show switch says later.
+    left_hidden: bool,
 }
 
 impl RollNote {
@@ -128,6 +133,7 @@ impl RollNote {
             expression_spacing: Self::EXPRESSION_SPACING,
             pitch_class: PitchClass::from_cents(pitch * 100.0),
             off_timeline: false,
+            left_hidden: false,
         }
     }
 
@@ -410,7 +416,7 @@ impl NoteRoll {
     /// instant is at or before the previous press's own onset, it is dropped
     /// instead, the note having never sounded.
     pub fn note_on(&mut self, key: VoiceKey, velocity: f32, pitch: f32, at: Time) {
-        if let Some(mut previous) = self.live.remove(&key) {
+        if let Some(mut previous) = self.depart(key) {
             if at > previous.start {
                 previous.end = Some(at);
                 self.retire(previous);
@@ -448,7 +454,7 @@ impl NoteRoll {
     /// one closes did sound — only its length is unknown, and clamping that to
     /// the onset must not erase it.
     pub fn note_off(&mut self, key: VoiceKey, at: Time) {
-        let Some(mut note) = self.live.remove(&key) else {
+        let Some(mut note) = self.depart(key) else {
             return;
         };
         note.end = Some(at);
@@ -465,8 +471,9 @@ impl NoteRoll {
     /// then is both, whatever its source does mid-fade (#905). So a hidden one
     /// is retired at once: filed in `past`, where the timeline still follows
     /// the CURRENT Show switch, or dropped if it is marked off the timeline.
+    /// The question was asked as it left the held set ([`depart`](Self::depart)).
     fn release(&mut self, note: RollNote) {
-        if self.hides(note.source) {
+        if note.left_hidden {
             self.retire(note);
         } else {
             self.fading.push(note);
@@ -477,6 +484,15 @@ impl NoteRoll {
         if let Some(note) = self.live.get_mut(&key) {
             note.lifetime = lifetime;
         }
+    }
+
+    /// Take the press held on `key` out of the held set, stamped with whether
+    /// its source shows as it leaves (rule 4). Every way out goes through here:
+    /// a release, a retrigger, a reset, a baseline that omits it.
+    fn depart(&mut self, key: VoiceKey) -> Option<RollNote> {
+        let mut note = self.live.remove(&key)?;
+        note.left_hidden = self.hides(note.source);
+        Some(note)
     }
 
     /// The press held on `key`, on the timeline or off it.
@@ -544,7 +560,7 @@ impl NoteRoll {
             .map(|(key, _)| *key)
             .collect();
         for key in omitted {
-            let mut note = self.live.remove(&key).unwrap();
+            let mut note = self.depart(key).unwrap();
             note.observed_until = Some(at.max(note.start));
             self.retire(note);
         }
@@ -615,7 +631,7 @@ impl NoteRoll {
     /// before its onset still sounded, its length unknown.
     fn end_all(&mut self, keys: Vec<VoiceKey>, at: Time) {
         for key in keys {
-            let mut note = self.live.remove(&key).expect("a live key");
+            let mut note = self.depart(key).expect("a live key");
             note.end = Some(at.max(note.start));
             self.release(note);
         }
@@ -701,6 +717,24 @@ impl NoteRoll {
     fn timeline(&self) -> impl Iterator<Item = &RollNote> {
         let on = |n: &&RollNote| !n.off_timeline;
         self.past.iter().chain(self.fading.iter().chain(self.live.values()).filter(on))
+    }
+
+    /// Every press the voices draw or drew, as the lattice replays them:
+    /// finished ones that left while their source showed, then every fading
+    /// one, then the held ones whose source shows now. Unlike
+    /// [`notes`](Self::notes) it keeps what is marked off the timeline while it
+    /// is a voice — a rule-1 pulse, a note Clear took — and asks of a finished
+    /// press whether it showed as it left (rule 4) rather than now, so the Show
+    /// switch turned on after a hidden release brings back no fade.
+    ///
+    /// A note marked off the timeline is gone from here once its voice's fade
+    /// ends, since `past` holds none. Two presses here can share a key and an
+    /// onset: a rule-1 pulse and the press a host sends at the same sample
+    /// after it, or a fade a baseline withdrew (rule 6) and the fresh press it
+    /// opened. The later one in this order is the one still sounding.
+    pub fn voice_presses(&self) -> impl Iterator<Item = &RollNote> {
+        let live = self.live.values().filter(|note| !self.hides(note.source));
+        self.past.iter().filter(|note| !note.left_hidden).chain(&self.fading).chain(live)
     }
 
     /// Every remembered note, finished ones first, then the fading ones and
