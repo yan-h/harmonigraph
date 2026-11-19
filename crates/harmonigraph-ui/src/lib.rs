@@ -609,7 +609,7 @@ pub(crate) struct Moving {
     /// stage it reads is still moving, that stage holds the loop, and each
     /// frame it holds steps the next one on what it reads now.
     audible: bool,
-    /// The piano roll still scrolling a note across its window
+    /// The piano roll still scrolling a note it draws across its window
     /// ([`roll::scrolling`](panes::spectral::roll::scrolling)).
     roll: bool,
     /// Learn's armed pulse, drawn: the lattice's badge and border, or the

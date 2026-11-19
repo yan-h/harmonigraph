@@ -12,6 +12,8 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     state.picture.appearance.spectrum.show_roll = true;
     state.picture.appearance.spectrum.roll_fraction = 0.5;
     state.picture.appearance.spectrum.roll_seconds = 1.0;
+    // The extension is the lead's: with none, nothing is drawn past the window.
+    state.picture.appearance.spectrum.roll_lead = 0.3;
     state.picture.appearance.spectrum.roll_lead_release = 2.0;
     state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     state.picture.runtime.tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
@@ -24,6 +26,39 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     assert!(Animating::of(&state).roll, "the extension past the window idled");
     draw_panes(&ctx, &mut state, 2.2, &[Pane::Spectral]);
     assert!(!Animating::of(&state).roll, "the roll held the loop past its extension");
+}
+
+/// A note inside the roll's Span but off its pitch zoom draws nothing, so it
+/// holds nothing: the roll stays awake for what it draws, not for every note
+/// its window reaches (#1835). The same note on the zoom is the control.
+#[test]
+fn a_roll_note_off_the_pitch_zoom_lets_the_editor_idle() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    let held = |key: u8| {
+        let mut state = fresh();
+        let spectrum = &mut state.picture.appearance.spectrum;
+        spectrum.show_roll = true;
+        spectrum.roll_fraction = 0.5;
+        spectrum.roll_seconds = 10.0;
+        spectrum.low_midi = 60.0;
+        spectrum.high_midi = 84.0;
+        state.picture.runtime.tracker.handle_event(NoteEvent::on(
+            0.0,
+            SourceId::DIRECT,
+            0,
+            key,
+            1.0,
+        ));
+        state.picture.runtime.tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, key));
+        let ctx = super::probe::themed();
+        // Long after the note's own fade, so the roll is the only thing that
+        // could still be moving.
+        draw_panes(&ctx, &mut state, 5.0, &[Pane::Spectral]);
+        Animating::of(&state).roll
+    };
+    assert!(held(72), "a note scrolling on the zoom idled");
+    assert!(!held(36), "a note off the zoom held a still roll awake");
 }
 
 /// Run one frame of `panes` at `t`, each filling a pass of its own, as a shell

@@ -384,7 +384,14 @@ pub(crate) fn take_roll_draw_probe() -> Option<RollDrawProbe> {
 /// back to a note that was sounding. Goes quiet once the last note has
 /// scrolled off the far edge, so an idle plugin still idles. Asked by the
 /// roll's draw, so a roll that is not drawn holds nothing
-/// ([`Moving`](crate::Moving)).
+/// ([`Moving`](crate::Moving)), and only of a roll that drew something: a note
+/// in the window but off the pitch zoom, or too thin to draw, moves nothing
+/// (#1835).
+///
+/// The deadline is the Span and not what is still drawn: a ribbon's surround
+/// and a name overhang the far edge and slide out under it for a few seconds
+/// more, and those finish at the idle poll, a step too small to see at the
+/// Spans that take that long (Yan, #1861 on #1835).
 pub(crate) fn scrolling(state: &PictureState, now: f64) -> bool {
     let cfg = &state.appearance.spectrum;
     state
@@ -402,12 +409,14 @@ pub(super) fn draw_roll(
     width: &Width,
     state: &PictureState,
     options: RollDrawOptions,
-) {
+) -> bool {
     let live = RollSource::live(state, options.split, options.now);
-    draw_rolls(painter, axes, scale, width, state, &options, &[live]);
+    draw_rolls(painter, axes, scale, width, state, &options, &[live])
 }
 
-/// Draw `sources` as one roll, in order, through one paint callback.
+/// Draw `sources` as one roll, in order, through one paint callback. Whether
+/// it drew anything: a roll whose every note is off the zoom or too thin
+/// draws nothing, and so moves nothing.
 pub(super) fn draw_rolls(
     painter: &egui::Painter,
     axes: &Axes,
@@ -416,7 +425,7 @@ pub(super) fn draw_rolls(
     state: &PictureState,
     options: &RollDrawOptions,
     sources: &[RollSource],
-) {
+) -> bool {
     let ppp = painter.ctx().pixels_per_point().max(1e-3);
     let (mut notes, mut tongues) = (Vec::new(), Vec::new());
     for source in sources {
@@ -485,7 +494,7 @@ pub(super) fn draw_rolls(
             .store((notes.len() + tongues.len()) as u32, std::sync::atomic::Ordering::Relaxed);
     }
     if notes.is_empty() && tongues.is_empty() {
-        return;
+        return false;
     }
     let axes_size = axes.rect.size();
     let dir = |v: egui::Vec2| [v.x, v.y];
@@ -507,6 +516,7 @@ pub(super) fn draw_rolls(
         pane,
         options.point_scale,
     ));
+    true
 }
 
 /// Every visible note segment as one GPU instance, in paint order.

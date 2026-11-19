@@ -513,7 +513,9 @@ pub(crate) fn spectral_pane(
     // `roll::lead`, and the divider below for what still draws over it).
     // The width it draws a body at is also where the names leave the pitch
     // zoom, so both take this one (computed above, for Tape mode's roll too).
-    if show_history && split < 1.0 && cfg.show_roll && song.is_none() {
+    // Whether the live roll drew anything, when it is drawn: what it says
+    // about its motion waits for its names, below.
+    let live_roll = (show_history && split < 1.0 && cfg.show_roll && song.is_none()).then(|| {
         roll::draw_roll(
             &painter,
             &axes,
@@ -521,10 +523,8 @@ pub(crate) fn spectral_pane(
             &width,
             state,
             roll::RollDrawOptions { split, now, surface, point_scale },
-        );
-        let moving = roll::scrolling(state, now);
-        state.surfaces.moving_this_frame.roll(moving);
-    }
+        )
+    });
 
     // The now-line, where the roll hands over to the spectrum — drawn after
     // all three things it divides rather than at the end of the roll. It marks
@@ -640,6 +640,7 @@ pub(crate) fn spectral_pane(
             theme::picture(),
         );
     }
+    let mut named = false;
     if show_history {
         let mut thinning = state.surfaces.note_names.remove(&surface).unwrap_or_default();
         let sources = match song {
@@ -660,8 +661,16 @@ pub(crate) fn spectral_pane(
         );
         state.surfaces.note_names.insert(surface, thinning);
         names::draw(&painter, &note_names, text.names.label, &mut labels);
+        named = !note_names.is_empty();
     } else {
         state.surfaces.note_names.remove(&surface);
+    }
+    // The live roll moves while its Span reaches a note it draws, as a ribbon
+    // or as a name: one off the zoom, or too thin to draw, leaves a still
+    // picture to the idle poll (#1835).
+    if let Some(drew) = live_roll {
+        let moving = (drew || named) && roll::scrolling(state, now);
+        state.surfaces.moving_this_frame.roll(moving);
     }
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.
