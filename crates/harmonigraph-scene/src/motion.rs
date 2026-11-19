@@ -746,9 +746,9 @@ impl NodeMotion {
         // Only for it: any press with a length the lattice draws as far as its
         // attack got.
         let attack = f64::from(env.attack_time.max(0.0));
-        let off = |note: &RollNote| {
-            note.end.map(|at| if at <= note.start { note.start + attack } else { at })
-        };
+        let pulse = |note: &RollNote| note.end.is_some_and(|at| at <= note.start);
+        let off =
+            |note: &RollNote| note.end.map(|at| if pulse(note) { note.start + attack } else { at });
         // What the voices drew, and not the Roll's timeline: the timeline
         // leaves out a pulse, and follows the Show switch for a press that was
         // hidden as it left, which would replay a fade nobody saw.
@@ -757,19 +757,22 @@ impl NodeMotion {
             .voice_presses()
             .filter(|note| off(note).is_none_or(|at| at >= retained))
             .collect();
-        // Of two presses sharing a key and an onset the later is the one
-        // sounding (`NoteRoll::voice_presses`). Replayed as one identity, the
-        // earlier's off would end the later, and their two tips would read as
-        // news on every frame.
+        // A pulse sharing its key and onset with a later press, which hosts
+        // send as on, off, on at one sample, yields to it
+        // (`NoteRoll::voice_presses`). Replayed as one identity, its off would
+        // end the press, and their two tips would read as news on every frame.
         let mut unique = HashSet::default();
         notes.reverse();
-        notes.retain(|note| unique.insert((note.key(), note.start.to_bits())));
+        notes.retain(|note| unique.insert((note.key(), note.start.to_bits())) || !pulse(note));
         let mut seen = HashMap::default();
         let mut late = false;
         for note in &notes {
             let id = (note.key(), note.start.to_bits());
             let old = self.seen.get(&id);
-            let end = off(note).map(f64::to_bits);
+            // The factual end, not the lattice's off: a pulse's off moves with
+            // the Fade, and a cursor keyed on it would read a Fade drag as a
+            // late delivery and reset the surface on every frame of it.
+            let end = note.end.map(f64::to_bits);
             // Completed old lifetimes cannot acquire more bends. Retain their
             // cursor even outside today's horizon, up to the longest the bar can
             // set, so a longer fade setting cannot mistake them for newly
