@@ -91,51 +91,61 @@ struct Locals {
 /// roll's rect, read only by the surround's passes.
 @group(1) @binding(0) var body_holdout: texture_2d<f32>;
 
+/// One `RollInstance`, as its vertex buffer hands it over: the fields in
+/// declaration order at contiguous locations, which `RollInstance::LAYOUT`
+/// states in the same order. Read by both vertex stages, which differ only in
+/// how far past the note's box their quad reaches.
+struct NoteInput {
+    @location(0) center: vec2<f32>,
+    @location(1) half_extent: vec2<f32>,
+    @location(2) shear: f32,
+    @location(3) rounding: f32,
+    /// Lead fade, then lead alpha.
+    @location(4) lead: vec2<f32>,
+    @location(5) core: vec4<f32>,
+    @location(6) aura: vec4<f32>,
+    /// The span, then the ramp.
+    @location(7) span_ramp: vec4<f32>,
+    @location(8) fade: vec2<f32>,
+    @location(9) taper_depth: vec4<f32>,
+    @location(10) taper: vec4<f32>,
+    @location(11) tremolo: vec2<f32>,
+};
+
+/// What every fragment stage reads of its note. It carries no offset from the
+/// note's center: [`local`] reads that off the fragment's own pixel.
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
-    /// Offset from the note's center in points, along (pitch, depth).
-    ///
-    /// Every pass REPLACES it with the offset of the fragment's own pixel
-    /// center ([`on_screen`]) before reading it: interpolated,
-    /// it moved with where the rasterizer's sub-pixel grid snapped the quad's
-    /// corners, so a layer's edges shifted by a fraction of a level whenever its
-    /// quad changed size, and a tremolo note's hard step at its leading end
-    /// flipped a whole tone.
-    @location(0) local: vec2<f32>,
-    /// Half extents of the note's solid body, same two axes.
-    @location(1) @interpolate(flat) half_extent: vec2<f32>,
+    /// Half extents of the note's solid body, along (pitch, depth).
+    @location(0) @interpolate(flat) half_extent: vec2<f32>,
     /// The center line's pitch drift per point of depth: 0 for a held note,
     /// non-zero for a glide, which shears the box into a parallelogram.
-    @location(2) @interpolate(flat) shear: f32,
+    @location(1) @interpolate(flat) shear: f32,
     /// How far the box's corners are rounded, in points: 0 for a note, the
     /// radius for a dot. See [`box_distance`].
-    @location(3) @interpolate(flat) rounding: f32,
+    @location(2) @interpolate(flat) rounding: f32,
     /// Two to a slot:
     /// - `x`: how much of the box's leading tip is spent fading out, in
     ///   points; 0 for a note. See [`lead_coverage`].
     /// - `y`: how much of a lead is still standing, 0..1; 1 for a note.
-    @location(4) @interpolate(flat) lead: vec2<f32>,
+    @location(3) @interpolate(flat) lead: vec2<f32>,
     /// Four depth offsets, ascending, and the ribbon's width at each as a share
     /// of its full `half_extent.x`. See [`taper_at`].
-    @location(5) @interpolate(flat) taper_depth: vec4<f32>,
-    @location(6) @interpolate(flat) taper: vec4<f32>,
+    @location(4) @interpolate(flat) taper_depth: vec4<f32>,
+    @location(5) @interpolate(flat) taper: vec4<f32>,
     /// Dense-repeat phase (composition points) and point scale; zero disables.
-    @location(7) @interpolate(flat) tremolo: vec2<f32>,
+    @location(6) @interpolate(flat) tremolo: vec2<f32>,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
-    @location(8) @interpolate(flat) core: vec4<f32>,
+    @location(7) @interpolate(flat) core: vec4<f32>,
     /// The surround's fill color, straight gamma-space RGB, and in `a` how
     /// strongly the note cuts at full coverage; the fade takes it from there.
-    @location(9) @interpolate(flat) aura: vec4<f32>,
-    /// The note's center in surface points, which [`on_screen`] measures
-    /// `local` from.
-    @location(10) @interpolate(flat) center: vec2<f32>,
-    /// Width of one coverage sample in points: one pixel of the target being
-    /// drawn into.
-    @location(12) @interpolate(flat) feather: f32,
+    @location(8) @interpolate(flat) aura: vec4<f32>,
+    /// The note's center in surface points, which [`local`] measures from.
+    @location(9) @interpolate(flat) center: vec2<f32>,
     /// The two depth offsets the readings below are given at. See [`along`].
-    @location(13) @interpolate(flat) ramp: vec2<f32>,
+    @location(10) @interpolate(flat) ramp: vec2<f32>,
     /// Opacity at those two depths.
-    @location(14) @interpolate(flat) fade: vec2<f32>,
+    @location(11) @interpolate(flat) fade: vec2<f32>,
 };
 
 /// The surround's quad ([`fs_note_surround`]): the note's box grown by the
@@ -143,82 +153,32 @@ struct VertexOut {
 /// that. The ink stops half a feather out, so the quad's outer half-feather
 /// holds none. The roll's culls in the UI ask `Quad` for this same reach.
 @vertex
-fn vs_note_cut(
-    @builtin(vertex_index) vertex: u32,
-    @location(0) center: vec2<f32>,
-    @location(1) half_extent: vec2<f32>,
-    @location(2) shear: f32,
-    @location(3) rounding: f32,
-    // Lead fade and lead alpha; span then ramp.
-    // Packed several to a slot.
-    @location(4) lead: vec2<f32>,
-    @location(8) core: vec4<f32>,
-    @location(9) aura: vec4<f32>,
-    @location(14) span_ramp: vec4<f32>,
-    @location(15) fade: vec2<f32>,
-    @location(5) taper_depth: vec4<f32>,
-    @location(6) taper: vec4<f32>,
-    @location(7) tremolo: vec2<f32>,
-) -> VertexOut {
-    return note_vertex(
-        vertex, center, half_extent, shear, rounding, lead, core, aura, span_ramp, fade,
-        taper_depth, taper, tremolo, cut_reach() + locals.feather,
-    );
+fn vs_note_cut(@builtin(vertex_index) vertex: u32, note: NoteInput) -> VertexOut {
+    return note_vertex(vertex, note, cut_reach() + locals.feather);
 }
 
 /// The BODY layers' quad — the core layer, the body holdout and the bloom's
 /// notes: the note's box grown by one feather. A body's ink is
-/// `inside(in, d, 0.0)`, which is 0 from half a feather past its edge, so the
+/// `inside(d, 0.0)`, which is 0 from half a feather past its edge, so the
 /// cut's reach would only be fragments that compute 0. At long spans that
 /// reach is most of the quad: a note a couple of points across drawn through a
 /// box some fifteen points wider.
 @vertex
-fn vs_note_body(
-    @builtin(vertex_index) vertex: u32,
-    @location(0) center: vec2<f32>,
-    @location(1) half_extent: vec2<f32>,
-    @location(2) shear: f32,
-    @location(3) rounding: f32,
-    @location(4) lead: vec2<f32>,
-    @location(8) core: vec4<f32>,
-    @location(9) aura: vec4<f32>,
-    @location(14) span_ramp: vec4<f32>,
-    @location(15) fade: vec2<f32>,
-    @location(5) taper_depth: vec4<f32>,
-    @location(6) taper: vec4<f32>,
-    @location(7) tremolo: vec2<f32>,
-) -> VertexOut {
-    return note_vertex(
-        vertex, center, half_extent, shear, rounding, lead, core, aura, span_ramp, fade,
-        taper_depth, taper, tremolo, locals.feather,
-    );
+fn vs_note_body(@builtin(vertex_index) vertex: u32, note: NoteInput) -> VertexOut {
+    return note_vertex(vertex, note, locals.feather);
 }
 
 /// One corner of a note's quad: its bounding box grown by `margin` points on
 /// both axes, which is what the layer drawing it can reach to.
-fn note_vertex(
-    vertex: u32,
-    center: vec2<f32>,
-    half_extent: vec2<f32>,
-    shear: f32,
-    rounding: f32,
-    lead: vec2<f32>,
-    core: vec4<f32>,
-    aura: vec4<f32>,
-    span_ramp: vec4<f32>,
-    fade: vec2<f32>,
-    taper_depth: vec4<f32>,
-    taper: vec4<f32>,
-    tremolo: vec2<f32>,
-    margin: f32,
-) -> VertexOut {
+fn note_vertex(vertex: u32, note: NoteInput, margin: f32) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
         select(-1.0, 1.0, (vertex & 1u) == 1u),
         select(-1.0, 1.0, (vertex & 2u) == 2u),
     );
 
-    let slope = shear;
+    let half_extent = note.half_extent;
+    let slope = note.shear;
     // A shortfall in the margin CLIPS ink rather than costing a little fill
     // rate, so each caller passes the exact reach of its own layer.
     //
@@ -235,10 +195,10 @@ fn note_vertex(
     // segment draws its stretch and no more, and neighbouring pieces share the
     // cut, so each pixel is drawn once. A whole box's span reaches past both
     // ends and cuts nothing.
-    var local = corner * extent;
-    let span = span_ramp.xy;
-    local.y = select(max(-extent.y, span.x), min(extent.y, span.y), corner.y > 0.0);
-    let pos = center + locals.pitch_dir * local.x + locals.depth_dir * local.y;
+    var at = corner * extent;
+    let span = note.span_ramp.xy;
+    at.y = select(max(-extent.y, span.x), min(extent.y, span.y), corner.y > 0.0);
+    let pos = note.center + locals.pitch_dir * at.x + locals.depth_dir * at.y;
 
     let in_viewport = pos - locals.origin_points;
     var out: VertexOut;
@@ -248,20 +208,18 @@ fn note_vertex(
         0.0,
         1.0,
     );
-    out.local = local;
     out.half_extent = half_extent;
-    out.shear = shear;
-    out.rounding = rounding;
-    out.lead = lead;
-    out.taper_depth = taper_depth;
-    out.taper = taper;
-    out.tremolo = tremolo;
-    out.core = core;
-    out.aura = aura;
-    out.center = center;
-    out.feather = locals.feather;
-    out.ramp = span_ramp.zw;
-    out.fade = fade;
+    out.shear = note.shear;
+    out.rounding = note.rounding;
+    out.lead = note.lead;
+    out.taper_depth = note.taper_depth;
+    out.taper = note.taper;
+    out.tremolo = note.tremolo;
+    out.core = note.core;
+    out.aura = note.aura;
+    out.center = note.center;
+    out.ramp = note.span_ramp.zw;
+    out.fade = note.fade;
     return out;
 }
 
@@ -277,23 +235,27 @@ fn surface_point(in: VertexOut) -> vec2<f32> {
     return (locals.origin_pixels + in.position.xy) * locals.pixel_points;
 }
 
-/// `in`, with `local` measured from the note's center to this fragment's own
-/// pixel center rather than interpolated from the quad's corners.
+/// This fragment's offset from its note's center in points, along (pitch,
+/// depth): measured to the fragment's own pixel center, and never
+/// interpolated from the quad's corners.
 ///
-/// So what a pixel draws depends on the note and the pixel alone, and not on
-/// how big a quad the layer drew it through: the body's quad is a feather wider
-/// than the body and the surround's a cut's reach wider, and interpolated
-/// across those two, one pixel read two slightly different coordinates. Every
-/// pass onto the surface or a texture over the roll goes through this, so the
-/// body, its holdout and its surround agree to the bit on where the note is
-/// ([`surface_point`]); the bloom's half-size notes read their own coarser
-/// pixels the same way. The axes are unit and perpendicular, so projecting onto
-/// them inverts `center + pitch_dir * local.x + depth_dir * local.y` exactly.
-fn on_screen(in: VertexOut) -> VertexOut {
-    var out = in;
+/// Interpolated, it moved with where the rasterizer's sub-pixel grid snapped
+/// the quad's corners, so a layer's edges shifted by a fraction of a level
+/// whenever its quad changed size, and a tremolo note's hard step at its
+/// leading end flipped a whole tone. Read off the pixel, what a pixel draws
+/// depends on the note and the pixel alone, and not on how big a quad the
+/// layer drew it through: the body's quad is a feather wider than the body and
+/// the surround's a cut's reach wider. So the body, its holdout and its
+/// surround agree to the bit on where the note is ([`surface_point`]); the
+/// bloom's half-size notes read their own coarser pixels the same way. The
+/// axes are unit and perpendicular, so projecting onto them inverts
+/// `center + pitch_dir * at.x + depth_dir * at.y` (`note_vertex`) exactly.
+///
+/// A function of the fragment rather than a field of [`VertexOut`], so no
+/// stage can read an interpolated one by forgetting to replace it.
+fn local(in: VertexOut) -> vec2<f32> {
     let delta = surface_point(in) - in.center;
-    out.local = vec2<f32>(dot(delta, locals.pitch_dir), dot(delta, locals.depth_dir));
-    return out;
+    return vec2<f32>(dot(delta, locals.pitch_dir), dot(delta, locals.depth_dir));
 }
 
 /// Coverage of everything on the near side of `edge`: how much of a
@@ -303,8 +265,8 @@ fn on_screen(in: VertexOut) -> VertexOut {
 /// edge and is what makes a shape thinner than a pixel come out FAINTER rather
 /// than snapping to a full pixel — the same bargain epaint's feathering makes,
 /// so a hairline ribbon reads the way it does through the tessellator.
-fn inside(in: VertexOut, d: f32, edge: f32) -> f32 {
-    let f = max(in.feather, 1e-6);
+fn inside(d: f32, edge: f32) -> f32 {
+    let f = max(locals.feather, 1e-6);
     return clamp((edge - d) / f + 0.5, 0.0, 1.0);
 }
 
@@ -330,7 +292,7 @@ fn cut_coverage(in: VertexOut, d: f32) -> f32 {
     if reach <= 0.0 {
         return 0.0;
     }
-    return surround_fade_at(locals.surround, d) * inside(in, d, reach);
+    return surround_fade_at(locals.surround, d) * inside(d, reach);
 }
 
 /// How much of the ribbon survives at this fragment: 1 across a NOTE, and
@@ -368,8 +330,8 @@ fn lead_coverage(in: VertexOut) -> f32 {
     if (lead_fade <= 0.0) {
         return lead_alpha;
     }
-    let u = in.local.y + in.half_extent.y;
-    return lead_alpha * clamp(u / max(lead_fade, in.feather), 0.0, 1.0);
+    let u = local(in).y + in.half_extent.y;
+    return lead_alpha * clamp(u / max(lead_fade, locals.feather), 0.0, 1.0);
 }
 
 /// Signed distance from this fragment to the note's own box, in points:
@@ -418,7 +380,7 @@ fn parallelogram_distance(in: VertexOut, half_pitch: f32, half_along: f32) -> f3
     // wrapped around it.
     // The center line's far end, from the center.
     let end = vec2<f32>(slope * half_along, half_along);
-    var p = in.local;
+    var p = local(in);
     // The box is point-symmetric: fold onto the far end's half.
     p = select(p, -p, p.y < 0.0);
     // Nearest point on that end, and whether `p` is short of it.
@@ -504,7 +466,7 @@ fn tapered_distance(in: VertexOut) -> f32 {
     let slope = in.shear;
     let lo = -in.half_extent.y;
     let hi = in.half_extent.y;
-    let p = in.local;
+    let p = local(in);
     let d = in.taper_depth;
     let w = in.taper;
     let start = vec2<f32>(lo, in.half_extent.x * taper_at(in, lo));
@@ -605,11 +567,11 @@ struct Rim {
 
 fn rim_of(in: VertexOut) -> Rim {
     var rim: Rim;
-    rim.live = taper_at(in, in.local.y) > 0.0;
+    rim.live = taper_at(in, local(in).y) > 0.0;
     if !rim.live { return rim; }
     rim.d = box_distance(in);
     let held = body_held(in);
-    rim.keep = 1.0 - max(inside(in, rim.d, 0.0), held);
+    rim.keep = 1.0 - max(inside(rim.d, 0.0), held);
     rim.lead = lead_coverage(in);
     return rim;
 }
@@ -617,10 +579,9 @@ fn rim_of(in: VertexOut) -> Rim {
 /// This note's share of `body_holdout`: its geometric coverage, as far as a
 /// lead still stands, without its fade. Blended into the union in `prepare`.
 @fragment
-fn fs_body_holdout(fragment: VertexOut) -> @location(0) vec4<f32> {
-    let in = on_screen(fragment);
-    if taper_at(in, in.local.y) <= 0.0 { return vec4<f32>(0.0); }
-    return vec4<f32>(inside(in, box_distance(in), 0.0) * lead_coverage(in), 0.0, 0.0, 1.0);
+fn fs_body_holdout(in: VertexOut) -> @location(0) vec4<f32> {
+    if taper_at(in, local(in).y) <= 0.0 { return vec4<f32>(0.0); }
+    return vec4<f32>(inside(box_distance(in), 0.0) * lead_coverage(in), 0.0, 0.0, 1.0);
 }
 
 /// Evenly spaced diagonal strokes every six composition points. The marks only
@@ -631,13 +592,14 @@ fn tremolo_tone(in: VertexOut) -> f32 {
     if scale <= 0.0 {
         return 1.0;
     }
-    let x = (in.local.x - in.shear * in.local.y) / scale;
-    let half_width = in.half_extent.x * taper_at(in, in.local.y) / scale;
+    let at = local(in);
+    let x = (at.x - in.shear * at.y) / scale;
+    let half_width = in.half_extent.x * taper_at(in, at.y) / scale;
     let reach = min(4.0, half_width * (2.0 / 3.0));
-    let diagonal = in.tremolo.x - in.local.y / scale - 0.7 * x;
+    let diagonal = in.tremolo.x - at.y / scale - 0.7 * x;
     let stroke_distance = (fract(diagonal / 6.0 + 0.5) - 0.5) * 6.0;
     let distance = max(abs(x) - reach, abs(stroke_distance) / 1.220656 - 0.75);
-    let ink = inside(in, distance * scale, 0.0);
+    let ink = inside(distance * scale, 0.0);
     // The AA ramp must also stay inside a thin ribbon's edges.
     let inset = clamp((half_width - abs(x)) / max(half_width * 0.5, 1e-6), 0.0, 1.0);
     return 1.0 - 0.75 * ink * inset;
@@ -650,9 +612,9 @@ fn tremolo_tone(in: VertexOut) -> f32 {
 /// The bloom pass draws the bodies through this too, so a note's halo is lit
 /// at the opacity the note is drawn at (#1289).
 fn core_color(in: VertexOut) -> vec4<f32> {
-    if taper_at(in, in.local.y) <= 0.0 { return vec4<f32>(0.0); }
+    if taper_at(in, local(in).y) <= 0.0 { return vec4<f32>(0.0); }
     let color = vec4<f32>(in.core.rgb * tremolo_tone(in), in.core.a);
-    return color * inside(in, box_distance(in), 0.0) * lead_coverage(in) * along(in, in.fade);
+    return color * inside(box_distance(in), 0.0) * lead_coverage(in) * along(in, in.fade);
 }
 
 // One of the note's intensity readings at this depth: `ends` is its value at
@@ -663,7 +625,7 @@ fn core_color(in: VertexOut) -> vec4<f32> {
 // lead.
 fn along(in: VertexOut, ends: vec2<f32>) -> f32 {
     let run = in.ramp.y - in.ramp.x;
-    let t = select(0.0, clamp((in.local.y - in.ramp.x) / run, 0.0, 1.0), abs(run) > 1e-6);
+    let t = select(0.0, clamp((local(in).y - in.ramp.x) / run, 0.0, 1.0), abs(run) > 1e-6);
     return mix(ends.x, ends.y, t);
 }
 
@@ -679,8 +641,7 @@ struct SurroundOut {
 /// to 1, so the strongest note's fragment is the one that lands and its color
 /// lands with it. A fragment of no cut leaves the target clear.
 @fragment
-fn fs_note_surround(fragment: VertexOut) -> SurroundOut {
-    let in = on_screen(fragment);
+fn fs_note_surround(in: VertexOut) -> SurroundOut {
     let note = cut_strength(in, rim_of(in));
     let cut = locals.surround.cut.x * note.strength;
     if cut <= 0.0 {
@@ -692,11 +653,11 @@ fn fs_note_surround(fragment: VertexOut) -> SurroundOut {
 
 @fragment
 fn fs_core_gamma(in: VertexOut) -> @location(0) vec4<f32> {
-    return core_color(on_screen(in));
+    return core_color(in);
 }
 
 @fragment
 fn fs_core_linear(in: VertexOut) -> @location(0) vec4<f32> {
-    let gamma = core_color(on_screen(in));
+    let gamma = core_color(in);
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), gamma.a);
 }

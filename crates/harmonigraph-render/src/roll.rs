@@ -187,25 +187,26 @@ impl RollInstance {
     pub const WHOLE: [f32; 2] = [f32::MIN, f32::MAX];
     /// A [`taper`](Self::taper) at full width all along.
     pub const UNTAPERED: [f32; 4] = [1.0; 4];
+    /// The fields in declaration order, which is what places each one: the
+    /// macro lays the offsets out in the order listed. roll.wgsl's
+    /// `NoteInput` reads them at the same contiguous locations. Several fields
+    /// share a slot, so a struct of twelve locations carries all sixteen.
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<RollInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x2, // center
-            1 => Float32x2, // half_extent
-            2 => Float32,   // shear
-            3 => Float32,   // rounding
-            // Several to a slot, packed when sixteen locations were taken for
-            // the limit; the device takes the adapter's own, 31 on Metal
-            // (`device_limits`).
-            4 => Float32x2, // lead_fade, lead_alpha
-            8 => Unorm8x4,  // core
-            9 => Unorm8x4,  // aura
-            14 => Float32x4, // span, ramp
-            15 => Float32x2, // fade
-            5 => Float32x4,  // taper_depth
-            6 => Float32x4,  // taper
-            7 => Float32x2,  // tremolo
+            0 => Float32x2,  // center
+            1 => Float32x2,  // half_extent
+            2 => Float32,    // shear
+            3 => Float32,    // rounding
+            4 => Float32x2,  // lead_fade, lead_alpha
+            5 => Unorm8x4,   // core
+            6 => Unorm8x4,   // aura
+            7 => Float32x4,  // span, ramp
+            8 => Float32x2,  // fade
+            9 => Float32x4,  // taper_depth
+            10 => Float32x4, // taper
+            11 => Float32x2, // tremolo
         ],
     };
 }
