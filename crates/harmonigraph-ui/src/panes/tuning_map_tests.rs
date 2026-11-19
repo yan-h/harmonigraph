@@ -225,13 +225,15 @@ fn map_status_lines_never_move_a_map_control() {
     let params = Edits { pending: true, ..Edits::new(TuningEngine::LatticeMap, Follow::Thirds, 1) };
     let mut state = fresh_picture();
     let size = egui::vec2(420.0, 2000.0);
-    let mut frame = || {
+    let frame = |state: &mut _| {
         events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), vec![], |ui| {
-            tuning_pane(ui, &mut state, &params, 0.0)
+            tuning_pane(ui, state, &params, 0.0)
         })
     };
-    frame();
-    let out = frame();
+    frame(&mut state);
+    // The notice waits for one requested state to go unadopted that long.
+    state.runtime.backdate_pending_labels();
+    let out = frame(&mut state);
     assert!(
         text_at(&out, "Moved: fifths +0, thirds +0").is_some(),
         "the follow readout must stand while following has not moved the map"

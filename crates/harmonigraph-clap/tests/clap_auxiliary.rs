@@ -4,7 +4,7 @@ use clap_sys::{
     factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory},
     host::clap_host,
     plugin::clap_plugin,
-    process::{CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, clap_process},
+    process::{CLAP_PROCESS_CONTINUE, clap_process},
     version::CLAP_VERSION,
 };
 use nice_plug::prelude::*;
@@ -21,8 +21,12 @@ impl Plugin for AuxiliaryFixture {
     const NAME: &'static str = "Auxiliary fixture";
     const VENDOR: &'static str = "fixture";
     const URL: &'static str = "";
-    const EMAIL: &'static str = "";
     const VERSION: &'static str = "1";
+    const CLAP_ID: &'static str = "fixture.auxiliary";
+    const CLAP_DESCRIPTION: Option<&'static str> = None;
+    const CLAP_MANUAL_URL: Option<&'static str> = None;
+    const CLAP_SUPPORT_URL: Option<&'static str> = None;
+    const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect];
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
         main_input_channels: Some(new_nonzero_u32(2)),
         main_output_channels: Some(new_nonzero_u32(2)),
@@ -30,47 +34,35 @@ impl Plugin for AuxiliaryFixture {
         aux_output_ports: &[new_nonzero_u32(2)],
         ..AudioIOLayout::const_default()
     }];
-    type SysExMessage = ();
-    type BackgroundTask = ();
 
     fn params(&self) -> Arc<Table> {
         Arc::new(Table::empty())
     }
 
-    fn process(
-        &mut self,
-        buffer: &mut Buffer,
-        auxiliary: &mut AuxiliaryBuffers,
-        _: &mut impl ProcessContext<Self>,
-    ) -> ProcessStatus {
+    fn process(&mut self, block: &mut Block<'_>) {
+        // Missing output storage leaves the block without audio, after the
+        // main input was copied to the output, just as for a missing main bus.
+        let Some(Audio { main, aux }) = block.audio.as_mut() else { return };
         // Report a malformed slice outside the FFI callback, before using any
         // iterator whose safety relies on samples() matching the slice length.
-        if auxiliary.inputs[0]
-            .as_slice_immutable()
-            .iter()
-            .any(|channel| channel.len() != buffer.samples())
-        {
-            return ProcessStatus::Error("auxiliary input length differs from callback length");
-        }
-        for (main, input) in buffer.as_slice().iter_mut().zip(auxiliary.inputs[0].as_slice()) {
+        assert!(
+            aux.inputs[0]
+                .as_slice_immutable()
+                .iter()
+                .all(|channel| channel.len() == main.samples()),
+            "auxiliary input length differs from callback length"
+        );
+        for (main, input) in main.as_slice().iter_mut().zip(aux.inputs[0].as_slice()) {
             for (sample, sidechain) in main.iter_mut().zip(input.iter()) {
                 *sample += sidechain;
             }
         }
-        for channel in auxiliary.outputs[0].as_slice() {
+        for channel in aux.outputs[0].as_slice() {
             channel.fill(0.75);
         }
-        ProcessStatus::Normal
     }
 }
 
-impl ClapPlugin for AuxiliaryFixture {
-    const CLAP_ID: &'static str = "fixture.auxiliary";
-    const CLAP_DESCRIPTION: Option<&'static str> = None;
-    const CLAP_MANUAL_URL: Option<&'static str> = None;
-    const CLAP_SUPPORT_URL: Option<&'static str> = None;
-    const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect];
-}
 nice_export_clap!(AuxiliaryFixture);
 
 unsafe extern "C" fn extension(_: *const clap_host, _: *const c_char) -> *const c_void {
@@ -170,10 +162,8 @@ fn omitted_auxiliary_descriptors_are_not_read_or_written() {
         };
         assert_eq!(
             unsafe { ((*device.plugin).process.unwrap())(device.plugin, &process) },
-            CLAP_PROCESS_CONTINUE_IF_NOT_QUIET,
+            CLAP_PROCESS_CONTINUE,
         );
-        // Missing output storage makes the wrapper skip Plugin::process(),
-        // after copying main input to output, just as for a missing main bus.
         let mut expected_main = [-1.0; 64];
         expected_main[..frames].fill(if input_present && output_present { 0.75 } else { 0.25 });
         assert_eq!(main_output, [expected_main; 2], "auxiliary input present={input_present}");

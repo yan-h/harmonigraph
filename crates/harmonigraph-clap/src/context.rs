@@ -3,8 +3,6 @@
 use std::fmt::Display;
 
 pub mod gui;
-pub mod init;
-pub mod process;
 
 /// The currently active plugin API. This may be useful to display in an about screen in the
 /// plugin's GUI for debugging purposes.

@@ -404,7 +404,7 @@ impl Device {
     }
     /// `clap_plugin::reset`, which a host calls on one instance when it wants
     /// that instance's state discarded. It reaches this module as
-    /// `clap_performance_reset`.
+    /// `Plugin::reset`.
     fn host_reset(&self) {
         unsafe {
             (*self.plugin).reset.unwrap()(self.plugin);

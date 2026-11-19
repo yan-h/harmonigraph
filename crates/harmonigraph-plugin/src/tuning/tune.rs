@@ -7,8 +7,8 @@
 //! draws it raw from then on (#1799); a late reply is dropped. That is the
 //! whole of the missed-deadline contract, and it is why this file has no
 //! settle, ready or coverage predicate in it.
-use nice_plug::wrapper::clap::configuration::OwnedInput;
-use nice_plug::wrapper::clap::performance as api;
+use nice_plug::events::{Input, InputValue, Output};
+use nice_plug::plugin::Boundary;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ use super::{
 /// outlive the note-offs beside them, so a cut that left one down would hold
 /// the very voices it just released.
 const PEDALS: [u8; 3] = [64, 66, 69];
-/// `CLAP_TRANSPORT_IS_PLAYING`, which the wrapper hands over as a bare flag
+/// `CLAP_TRANSPORT_IS_PLAYING`, which the shell hands over as a bare flag
 /// word rather than as a clap-sys type.
 const IS_PLAYING: u32 = 1 << 4;
 
@@ -75,7 +75,7 @@ pub struct Tune {
     delay: i64,
     rate: f64,
     frames: u32,
-    callback: Option<api::Callback>,
+    callback: Option<Boundary>,
     line: Queue<Pending, PENDING_EVENTS>,
     /// Note-offs and pedal neutralisations a cut left owing, emitted at the
     /// first output position the next callback offers.
@@ -86,9 +86,9 @@ pub struct Tune {
     pedals: [u8; 16],
     status: u32,
     /// The last offset emitted in this callback. A CLAP output list is sorted
-    /// by time and the wrapper no longer holds the floor for us, so this is the
-    /// whole of what keeps it sorted: every emission takes
-    /// `max(self.cursor, block.start)` and moves it.
+    /// by time and the shell holds no floor for us, so this is the whole of
+    /// what keeps it sorted: every emission takes `max(self.cursor, start)`
+    /// and moves it.
     cursor: u32,
     /// Events put on the wire in this callback, against [`EMIT_PER_CALLBACK`].
     emitted: u32,
@@ -292,8 +292,8 @@ impl Tune {
         self.publish_voices();
     }
 
-    pub fn begin(&mut self, callback: api::Callback) {
-        self.callback = Some(callback);
+    pub fn begin(&mut self, callback: &Boundary) {
+        self.callback = Some(*callback);
         self.cursor = 0;
         self.emitted = 0;
         self.claim();
@@ -306,13 +306,11 @@ impl Tune {
     /// Retain the input locally before exposing it to the Hub. A full local
     /// line refuses the event on both paths; a full copy ring costs only the
     /// correction, because the event already has its place in the line.
-    pub fn input(&mut self, input: OwnedInput) {
-        // `clap_performance_stop` is the audio engine stopping, not the
-        // transport. A transport Stop reaches a plugin only as this flag, so
-        // its falling edge is where the cut for one has to be taken.
-        if let nice_plug::wrapper::clap::configuration::InputValue::Transport(transport) =
-            input.value
-        {
+    pub fn input(&mut self, input: Input) {
+        // `Plugin::stop` is the audio engine stopping, not the transport. A
+        // transport Stop reaches a plugin only as this flag, so its falling
+        // edge is where the cut for one has to be taken.
+        if let InputValue::Transport(transport) = input.value {
             let playing = transport.flags & IS_PLAYING != 0;
             if self.playing && !playing {
                 // Every row sees the same falling edge in the same callback,
@@ -331,7 +329,8 @@ impl Tune {
             self.playing = playing;
             return;
         }
-        let (Some(sample), Some(event)) = (input.sample, Event::from_input(input.value)) else {
+        let sample = input.sample;
+        let Some(event) = Event::from_input(input.value) else {
             return;
         };
         // Admission may rely on a queued release freeing a cell. The output
@@ -487,17 +486,20 @@ impl Tune {
 
     /// Emit everything whose time has come. An onset with a correction gets its
     /// tuning expression; one without emits uncorrected and counts the miss.
-    pub fn schedule(&mut self, block: api::Block, output: &mut api::Output<'_>) {
+    ///
+    /// `start` and `frames` are the stretch of the callback this pass covers:
+    /// the whole of it, then its last sample again as the remaining horizon
+    /// (`schedule_callback`).
+    pub fn schedule(&mut self, start: u32, frames: u32, output: &mut Output<'_>) {
         self.drain_replies();
         let Some(callback) = self.callback else { return };
         let base = callback.steady_time;
-        let end =
-            base.saturating_add(i64::from(block.start)).saturating_add(i64::from(block.frames));
+        let end = base.saturating_add(i64::from(start)).saturating_add(i64::from(frames));
         while let Some(event) = self.cut.front() {
             if self.emitted >= EMIT_PER_CALLBACK {
                 return;
             }
-            let time = self.cursor.max(block.start).min(callback.frames.saturating_sub(1));
+            let time = self.cursor.max(start).min(callback.frames.saturating_sub(1));
             if !self.emit(output, time, event, None, 0) {
                 return;
             }
@@ -508,7 +510,7 @@ impl Tune {
                 break;
             }
             let offset = pending.due.saturating_sub(base).clamp(0, i64::from(u32::MAX)) as u32;
-            let time = offset.max(self.cursor).max(block.start);
+            let time = offset.max(self.cursor).max(start);
             if time >= callback.frames {
                 break;
             }
@@ -538,6 +540,16 @@ impl Tune {
             }
             self.line.pop();
         }
+    }
+
+    /// Emit over the whole callback, then once more at its last sample: what
+    /// the host refused in the first pass gets a second offer in the same
+    /// callback, as the final pass after the last sub-block gave it before
+    /// the shell stopped splitting blocks (#1814).
+    pub fn schedule_callback(&mut self, output: &mut Output<'_>) {
+        let frames = self.callback.map_or(0, |callback| callback.frames);
+        self.schedule(0, frames, output);
+        self.schedule(frames.saturating_sub(1), 1, output);
     }
 
     /// What actually goes on the wire for one retained input: the frozen
@@ -573,7 +585,7 @@ impl Tune {
 
     fn emit(
         &mut self,
-        output: &mut api::Output<'_>,
+        output: &mut Output<'_>,
         time: u32,
         event: Event,
         tuning: Option<Event>,

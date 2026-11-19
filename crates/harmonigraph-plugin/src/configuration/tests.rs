@@ -88,7 +88,6 @@ enum Input {
     Param(clap_event_param_value),
     Note(clap_event_note),
     Tuning(clap_event_note_expression),
-    Transport(clap_event_transport),
     Mod(clap_event_param_mod),
 }
 impl Input {
@@ -98,7 +97,6 @@ impl Input {
             Self::Mod(e) => &e.header,
             Self::Note(e) => &e.header,
             Self::Tuning(e) => &e.header,
-            Self::Transport(e) => &e.header,
         }
     }
 }
@@ -630,30 +628,6 @@ fn a_full_command_queue_keeps_accepted_state() {
 }
 
 #[test]
-fn one_owned_input_pool_reaches_2048_in_a_callback_and_refuses_growth_past_it() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    let events = (0..2048).map(|_| device.param(ParamKey::CameraDistance, 6.0, 0)).collect();
-    device.run(0, events, false);
-    assert_eq!(shown(&device.settings()).view.status, 0);
-    let (status, _) = device.run_status(
-        64,
-        (0..2049).map(|_| device.param(ParamKey::CameraDistance, 7.0, 0)).collect(),
-        false,
-    );
-    assert_eq!(status, CLAP_PROCESS_ERROR);
-    assert_eq!(shown(&device.settings()).view.status & 2, 2);
-    // Exercise the host's recovery boundary after proving capacity
-    // exhaustion, so this fixture does not leave an unresolved global owner.
-    unsafe {
-        ((*device.plugin).reset.unwrap())(device.plugin);
-    }
-    device.run(128, vec![], false);
-    assert_eq!(shown(&device.settings()).view.status, 0);
-}
-
-#[test]
 fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
     let _scope = crate::test_scope::enter();
     for commands in [false, true] {
@@ -671,16 +645,10 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
             assert!(shown(&settings).view.pending, "an accepted restore is still queued");
         } else {
             device.activate();
-            device.run(
-                0,
-                (0..2048).map(|_| device.param(ParamKey::CameraDistance, 6.0, 0)).collect(),
-                false,
-            );
-            let (status, _) = device.run_status(
-                64,
-                (0..2049).map(|_| device.param(ParamKey::CameraDistance, 7.0, 0)).collect(),
-                false,
-            );
+            device.run(0, vec![device.param(ParamKey::CameraDistance, 6.0, 0)], false);
+            // Timed past the block's end: the list is invalid, its input lost.
+            let lost = vec![device.param(ParamKey::CameraDistance, 7.0, 64)];
+            let (status, _) = device.run_status(64, lost, false);
             assert_eq!(status, CLAP_PROCESS_ERROR);
             assert_eq!(shown(&device.settings()).view.status & 2, 2);
         }
@@ -1693,12 +1661,13 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         device.run_transport(0, events, false, None, Some(transport(5.0, 0)));
         assert!(shared.lock().take.has_rolled());
         if let Some(source) = &mut source {
-            source.begin(nice_plug::wrapper::clap::performance::Callback {
+            source.begin(&nice_plug::plugin::Boundary {
                 steady_time: 0,
                 frames: 64,
+                sample_rate: 48_000.0,
                 transport: None,
-                input_status: nice_plug::wrapper::clap::performance::InputStatus::Complete,
-                output_available: true,
+                valid: true,
+                input_lost: false,
             });
             if source_state == 1 {
                 source.end();
@@ -1764,15 +1733,9 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         assert_eq!(&wav[44..], expected);
         if let Some(source) = &mut source {
             if source_state == 2 {
-                source.input(nice_plug::wrapper::clap::configuration::OwnedInput {
-                    sample: Some(10),
-                    event_index: 0,
-                    offset: 10,
-                    enclosing_start: Some(0),
-                    enclosing_frames: 64,
-                    flush: false,
-                    batch: 0,
-                    value: nice_plug::wrapper::clap::configuration::InputValue::Note {
+                source.input(nice_plug::events::Input {
+                    sample: 10,
+                    value: nice_plug::events::InputValue::Note {
                         kind: CLAP_EVENT_NOTE_ON,
                         note_id: 1,
                         port: 0,
@@ -1914,52 +1877,6 @@ fn a_configuration_applied_before_arming_records_once_as_the_takes_initial_value
     assert_eq!(configs.len(), 1, "only the take's initial value is recorded");
     assert_eq!(configs[0].axes[1], 698_000_000);
     assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
-}
-
-#[test]
-fn stop_during_parked_callback_cannot_close_its_later_playing_segment() {
-    let _scope = crate::test_scope::enter();
-    let (mut device, mut capture) = recorded_device();
-    device.activate();
-    capture.arm();
-    let dir = std::env::temp_dir()
-        .join(format!("harmonigraph-config-stop-segment-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
-    let mut parked = transport(0.0, 0);
-    parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
-    let mut events = vec![note(9, 48, 0, CLAP_EVENT_NOTE_ON), Input::Transport(transport(0.0, 32))];
-    events.extend((0..9).map(|i| device.param(ParamKey::CameraDistance, 6.0 + 0.1 * i as f32, 40)));
-    events.push(note(10, 60, 40, CLAP_EVENT_NOTE_ON));
-    capture.pause_boundary(true);
-    std::thread::scope(|scope| {
-        let callback = scope.spawn(|| device.run_transport(0, events, false, None, Some(parked)).0);
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !capture.boundary_entered()
-            && !callback.is_finished()
-            && std::time::Instant::now() < until
-        {
-            std::thread::yield_now();
-        }
-        let entered = capture.boundary_entered();
-        capture.stop();
-        writer.stop();
-        capture.pause_boundary(false);
-        assert_ne!(callback.join().unwrap(), CLAP_PROCESS_ERROR);
-        assert!(entered, "fixture must stop after the actual callback captures armed intent");
-    });
-    writer.drain(&mut capture);
-    assert!(writer.finished.is_none(), "the playing segment's run is still open");
-    device.run_transport(64, vec![], false, None, Some(transport(32.0 / 48000.0, 0)));
-    writer.drain(&mut capture);
-    assert!(!writer.failed());
-    assert!(writer.finished.is_some());
-    assert_eq!(std::fs::read(path.with_extension("wav")).unwrap().len(), 44 + 32 * 2 * 4);
-    drop(writer);
-    device.finish_notes(128, &[(9, 48), (10, 60)]);
-    drop(device);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

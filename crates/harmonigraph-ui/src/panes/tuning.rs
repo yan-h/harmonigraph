@@ -312,13 +312,13 @@ pub(super) fn tuning_pane(
     if !configuration_notice && state.runtime.configuration_pending {
         crate::widgets::label(ui, "Tuning change pending audio adoption");
     }
-    if maps.as_ref().is_some_and(|maps| maps.pending) {
-        crate::widgets::label(ui, "Map state pending audio adoption");
-    }
     // Kept for the rest of the editor — the lattice's dots and edits, and the
     // Learn ring above, next frame — which wants the same view.
     if maps.is_some() {
-        state.runtime.lattice_maps = maps;
+        state.runtime.observe_maps(maps);
+        if state.runtime.maps_pending {
+            crate::widgets::label(ui, "Map state pending audio adoption");
+        }
     }
 
     // Hovering a lattice node deliberately reports NOTHING here. Growing a

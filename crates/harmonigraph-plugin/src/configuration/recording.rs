@@ -60,7 +60,7 @@ impl Recording {
         }
     }
 
-    /// This sub-block is registered through `end`.
+    /// This block is registered through `end`.
     pub fn registered(&mut self, end: i64) {
         self.registered_through = end;
     }
@@ -75,7 +75,7 @@ impl Recording {
     }
 
     /// Close the open run where this owner last registered: a run is open
-    /// only after a sub-block that recorded, which registered.
+    /// only after a block that recorded, which registered.
     fn end_run(&self, recorder: &mut Recorder) {
         if recorder.recording() {
             recorder.run_end(self.presentation.at(self.registered_through));

@@ -11,11 +11,16 @@
 //! A row holds its unmodulated plain value and a mono modulation offset, in
 //! normalized units. Every read of the plain value the plugin acts on is
 //! modulated; a save stores the unmodulated value.
+//!
+//! The editor writes a row at once, as the host's automation does, and the
+//! row remembers what the host has not yet been told of it: a gesture begun
+//! or ended, and a value set. The shell tells the host at its next process
+//! callback or flush, at offset 0 (#1814 Q1).
 
 use std::collections::BTreeMap;
 
 use atomic_float::AtomicF32;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use crate::plugin::ParamValue;
 use crate::wrapper::hash_param_id;
@@ -157,9 +162,15 @@ impl Spec {
         host as f32 / self.scale() as f32
     }
 
+    /// The plain value a host value sets: normalized, then rounded for an
+    /// integer, all in `f32`.
+    fn plain_of_host(&self, host: f64) -> f32 {
+        self.unnormalize(self.host_to_normalized(host))
+    }
+
     /// The text for a host value.
     pub fn text(&self, host: f64) -> String {
-        let plain = self.unnormalize(self.host_to_normalized(host));
+        let plain = self.plain_of_host(host);
         match &self.kind {
             Kind::Int { to_text: Some(f), .. } => f(plain as i32),
             Kind::Int { to_text: None, .. } => (plain as i32).to_string(),
@@ -210,7 +221,7 @@ impl Spec {
     }
 }
 
-/// A row: its declaration and its values.
+/// A row: its declaration, its values, and what the host has not been told.
 struct Row {
     spec: Spec,
     hash: u32,
@@ -218,6 +229,29 @@ struct Row {
     plain: AtomicF32,
     /// The host's mono modulation, normalized.
     offset: AtomicF32,
+    /// The editor's side of the host's report, [`OPEN`], [`BEGUN`] and
+    /// [`DIRTY`]: the editor sets them, the shell's report clears them.
+    report: AtomicU8,
+    /// The host has been told a gesture began and not that it ended. Only the
+    /// shell's report touches it, from process or flush, which the host never
+    /// runs at once.
+    told_open: AtomicBool,
+}
+
+/// The editor holds a gesture open on the row.
+const OPEN: u8 = 1;
+/// The editor began a gesture the host has not been told of.
+const BEGUN: u8 = 2;
+/// The editor set a value the host has not been told of.
+const DIRTY: u8 = 4;
+
+/// One thing the shell tells the host about a row.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Report {
+    Begin,
+    /// The row's unmodulated value, as a host value.
+    Value(f64),
+    End,
 }
 
 impl Row {
@@ -253,6 +287,8 @@ impl Table {
                 hash: hash_param_id(spec.id),
                 plain: AtomicF32::new(spec.default),
                 offset: AtomicF32::new(0.0),
+                report: AtomicU8::new(0),
+                told_open: AtomicBool::new(false),
                 spec,
             })
             .collect();
@@ -309,12 +345,83 @@ impl Table {
         row.normalized() as f64 * row.spec.scale() as f64
     }
 
+    /// The row the host knows by `hash`, and the plain value a host value
+    /// sets it to: the table's own decoding, which the plugin's reading of an
+    /// automation event shares, so the timeline and the table agree on every
+    /// value (#1814). `None` for an id no row has, or a value that is not
+    /// finite, which the shell does not apply.
+    pub fn decode(&self, hash: u32, host: f64) -> Option<(usize, f32)> {
+        let row = self.row(hash)?;
+        host.is_finite().then(|| (row, self.rows[row].spec.plain_of_host(host)))
+    }
+
     /// Take a value the host or the editor set, as a host value: the table's
     /// one write, so a value the editor sets rounds as the host's does.
     pub fn set_host(&self, row: usize, host: f64) {
         let row = &self.rows[row];
-        let plain = row.spec.unnormalize(row.spec.host_to_normalized(host));
-        row.plain.store(plain, Ordering::Relaxed);
+        row.plain.store(row.spec.plain_of_host(host), Ordering::Relaxed);
+    }
+
+    /// The editor begins a gesture on `row`.
+    pub(crate) fn begin_edit(&self, row: usize) {
+        self.rows[row].report.fetch_or(OPEN | BEGUN, Ordering::AcqRel);
+    }
+
+    /// The editor sets `row` to the plain value `plain`, at once.
+    pub(crate) fn edit(&self, row: usize, plain: f32) {
+        self.set_host(row, self.rows[row].spec.to_host(plain));
+        self.rows[row].report.fetch_or(DIRTY, Ordering::AcqRel);
+    }
+
+    /// The editor ends its gesture on `row`.
+    pub(crate) fn end_edit(&self, row: usize) {
+        self.rows[row].report.fetch_and(!OPEN, Ordering::AcqRel);
+    }
+
+    /// Tell the host, through `push`, what the editor did since the last
+    /// report: per row a gesture's begin, the row's value as it is now, and
+    /// the gesture's end. Edits between two reports share one gesture, so
+    /// the host is never told of an end without its begin. Stops at the
+    /// first refusal, which is told again at the next report; false then.
+    pub(crate) fn report(&self, mut push: impl FnMut(u32, Report) -> bool) -> bool {
+        for row in self.rows.iter() {
+            let bits = row.report.load(Ordering::Acquire);
+            let told_open = row.told_open.load(Ordering::Relaxed);
+            if bits & (BEGUN | DIRTY) != 0 && !told_open {
+                if !push(row.hash, Report::Begin) {
+                    return false;
+                }
+                row.told_open.store(true, Ordering::Relaxed);
+            }
+            row.report.fetch_and(!BEGUN, Ordering::AcqRel);
+            if row.report.fetch_and(!DIRTY, Ordering::AcqRel) & DIRTY != 0 {
+                let value = row.spec.to_host(row.plain.load(Ordering::Relaxed));
+                if !push(row.hash, Report::Value(value)) {
+                    row.report.fetch_or(DIRTY, Ordering::AcqRel);
+                    return false;
+                }
+            }
+            let open = row.report.load(Ordering::Acquire) & OPEN != 0;
+            if row.told_open.load(Ordering::Relaxed) && !open {
+                if !push(row.hash, Report::End) {
+                    return false;
+                }
+                row.told_open.store(false, Ordering::Relaxed);
+            }
+        }
+        true
+    }
+
+    /// Apply a host parameter event to the row it names: a value, or a mono
+    /// modulation. An id no row has and a value that is not finite are
+    /// skipped, as [`Table::decode`] skips them.
+    pub(crate) fn apply(&self, id: u32, value: f64, modulation: bool) {
+        let Some(row) = self.row(id).filter(|_| value.is_finite()) else { return };
+        if modulation {
+            self.modulate_host(row, value);
+        } else {
+            self.set_host(row, value);
+        }
     }
 
     /// Take the host's mono modulation of `row`, by a host amount. False for a

@@ -56,9 +56,6 @@ path = "tests/clap_auxiliary.rs"
 [dependencies.anyhow]
 version = "1.0"
 
-[dependencies.anymap3]
-version = "1.0.1"
-
 [dependencies.atomic_float]
 version = "1.1"
 
@@ -92,16 +89,10 @@ optional = true
 [dependencies.nice-log]
 version = "0.2.4"
 
-[dependencies.midi-consts]
-version = "0.1"
-
 [dependencies.parking_lot]
 workspace = true
 
 [dependencies.raw-window-handle]
-workspace = true
-
-[dependencies.rtrb]
 workspace = true
 
 [dependencies.serde]

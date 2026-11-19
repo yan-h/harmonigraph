@@ -234,13 +234,6 @@ pub struct MapEditor {
     /// read. The editor's own `Mutex` is already held by the one caller that
     /// builds a [`MapView`], and the audio thread never reads this field.
     names: Option<(Revision, MapNames)>,
-    /// The offsets the last arrow press read and the ones it sent. A host
-    /// applies a set at its next process call, so a second press before then
-    /// still reads the first one's starting lanes; keyed on those lanes, it
-    /// builds on what was sent instead. The editor's view retires the entry
-    /// the first time the lanes read anything else — the press landing, or
-    /// automation — so a later return to the same lanes never revives it.
-    pub translated: Option<(MapOffsets, MapOffsets)>,
 }
 impl MapEditor {
     /// `document`'s names, rebuilt only when the document is a state this memo

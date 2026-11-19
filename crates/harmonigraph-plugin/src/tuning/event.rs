@@ -1,7 +1,7 @@
 //! Fixed performance values. These cannot contain full transport, a host
 //! pointer, or an allocation.
 use harmonigraph_core::Expression;
-use nice_plug::wrapper::clap::configuration::InputValue;
+use nice_plug::events::InputValue;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {

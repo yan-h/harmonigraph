@@ -474,7 +474,7 @@ fn draw_map_overlay(
     } else {
         String::new()
     };
-    let label = if maps.is_some_and(|maps| maps.pending) {
+    let label = if maps.is_some() && state.runtime.maps_pending {
         if label.is_empty() {
             "Pending audio adoption".into()
         } else {

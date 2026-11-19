@@ -584,6 +584,69 @@ fn origin_source(
     }
 }
 
+/// The host's transport at a block's start, as the tape, a take's origin and
+/// its stop bar read it: CLAP's fields behind their flags, with the position
+/// fallbacks nice-plug's `Transport` gave them, which moved here when the
+/// shell stopped building one (#1814).
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Transport {
+    pub playing: bool,
+    pub tempo: Option<f64>,
+    pub time_sig_numerator: Option<i32>,
+    pub time_sig_denominator: Option<i32>,
+    pub pos_seconds: Option<f64>,
+    /// In quarter notes.
+    pub pos_beats: Option<f64>,
+    pub bar_start_pos_beats: Option<f64>,
+    /// From 0 at the song's first bar.
+    pub bar_number: Option<i32>,
+}
+
+impl Transport {
+    /// No transport is one that reports nothing and is not playing.
+    fn read(transport: Option<&clap_sys::events::clap_event_transport>) -> Self {
+        use clap_sys::events::*;
+        use clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR};
+        let Some(t) = transport else { return Self::default() };
+        let has = |flag| t.flags & flag != 0;
+        let beats = |value: i64| value as f64 / CLAP_BEATTIME_FACTOR as f64;
+        let signature = has(CLAP_TRANSPORT_HAS_TIME_SIGNATURE);
+        Self {
+            playing: has(CLAP_TRANSPORT_IS_PLAYING),
+            tempo: has(CLAP_TRANSPORT_HAS_TEMPO).then_some(t.tempo),
+            time_sig_numerator: signature.then_some(i32::from(t.tsig_num)),
+            time_sig_denominator: signature.then_some(i32::from(t.tsig_denom)),
+            pos_seconds: has(CLAP_TRANSPORT_HAS_SECONDS_TIMELINE)
+                .then(|| t.song_pos_seconds as f64 / CLAP_SECTIME_FACTOR as f64),
+            pos_beats: has(CLAP_TRANSPORT_HAS_BEATS_TIMELINE).then(|| beats(t.song_pos_beats)),
+            // CLAP puts the bar behind no flag, so a host that fills in none
+            // of it reads as bar 0 starting at beat 0: see `bar_position`.
+            bar_start_pos_beats: Some(beats(t.bar_start)),
+            bar_number: Some(t.bar_number),
+        }
+    }
+
+    /// The position in seconds, from the beats and the tempo where the host
+    /// gives no seconds timeline.
+    fn pos_seconds(&self) -> Option<f64> {
+        match (self.pos_seconds, self.pos_beats, self.tempo) {
+            (Some(seconds), _, _) => Some(seconds),
+            (_, Some(beats), Some(tempo)) => Some(beats / tempo * 60.0),
+            _ => None,
+        }
+    }
+
+    /// The position in quarter notes, from the seconds and the tempo where
+    /// the host gives no beats timeline.
+    fn pos_beats(&self) -> Option<f64> {
+        match (self.pos_beats, self.pos_seconds, self.tempo) {
+            (Some(beats), _, _) => Some(beats),
+            (_, Some(seconds), Some(tempo)) => Some(seconds / 60.0 * tempo),
+            _ => None,
+        }
+    }
+}
+
 /// Where the transport sits in BARS, counted the way an arranger counts:
 /// bar 1 is the song's start, so this returns 0.0 there and 64.0 at bar 65.
 /// `None` when the host reports no beats timeline, which reads downstream as
@@ -723,110 +786,13 @@ impl Default for Harmonigraph {
     }
 }
 
-impl Plugin for Harmonigraph {
-    const NAME: &'static str = "Harmonigraph";
-    const VENDOR: &'static str = "Yan Han";
-    const URL: &'static str = env!("CARGO_PKG_HOMEPAGE");
-    // Empty because a personal address in a public tree is an address in a
-    // scraper's index. The trait requires it but CLAP has no email field, so
-    // nothing reads it; contact goes through the issue tracker that
-    // CLAP_SUPPORT_URL points hosts at.
-    const EMAIL: &'static str = "";
-    const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-
-    // Main audio passes through, untouched unless the tape is auditioning
-    // with the transport stopped (see `tape`). The selected input is tapped for
-    // the GUI's spectrum analyzer — INTERLEAVED, channel by channel, not as a
-    // mixdown (see `process`, and `interleaved_reservation` for what that
-    // costs). MIDI goes out through the Hub, which delays it by D and states
-    // each note's tuning (see `tuning`).
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
-        main_input_channels: NonZeroU32::new(2),
-        main_output_channels: NonZeroU32::new(2),
-        aux_input_ports: &[new_nonzero_u32(2)],
-        // nice-plug 0.1.5's `main_output_name` accidentally reads
-        // `main_input`, so leave both main names unset to get the distinct
-        // generated Input/Output pair. The sidechain name is unaffected.
-        names: PortNames { aux_inputs: &["Visualization Input"], ..PortNames::const_default() },
-        ..AudioIOLayout::const_default()
-    }];
-
-    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
-
-    type SysExMessage = ();
-    type BackgroundTask = ();
-
-    fn params(&self) -> Arc<Table> {
-        self.params.table.clone()
-    }
-
-    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create(self.params.clone(), self.editor_shared.clone(), self.editor_host.clone())
-    }
-
-    fn initialize(
-        &mut self,
-        _audio_io_layout: &AudioIOLayout,
-        buffer_config: &BufferConfig,
-        _context: &mut impl InitContext<Self>,
-    ) -> bool {
-        self.sample_rate = f64::from(buffer_config.sample_rate);
-        self.sample_rate_bits.store(buffer_config.sample_rate.to_bits(), Ordering::Relaxed);
-        self.offline = buffer_config.process_mode == ProcessMode::Offline;
-        // The editor's device and its loading job, started here so a first
-        // open finds them (#1746). On macOS, the one platform that ships; not
-        // for an export pass, which draws no editor; nor under test, where
-        // every activation would start a GPU compile beside the tests timing
-        // themselves.
-        if cfg!(target_os = "macos") && !cfg!(test) && !self.offline {
-            let (context, cache, format) = {
-                let shared = self.editor_shared.lock();
-                let picture = &shared.ui.picture;
-                (
-                    shared.gpu_context.clone(),
-                    picture.editor_graphics(),
-                    picture.surfaces.target_format,
-                )
-            };
-            editor::start_graphics(&context, &cache, &editor::graphics_config(), format);
-        }
-        true
-    }
-
-    fn reset(&mut self) {
-        if let Some(owner) = self.configuration.as_mut() {
-            // Stop may arrive after activation but before start_processing
-            // resets this owner. Close its run before forgetting routes.
-            owner.recording.close_stopped(&mut self.take);
-            owner.reset(&mut self.take);
-            if let Some(hub) = &mut self.aggregation {
-                hub.stop();
-            }
-        }
-        self.samples_processed = 0;
-        self.audio_producer.reset();
-        // Before anything else can render: an export may follow a reset.
-        self.tape.reset();
-        // Reset only observed direct input. The session owner must publish
-        // its own explicit source/session controls after lifecycle validation.
-        // Presentation time stays continuous across the reset, so history
-        // queued before it keeps its place.
-        self.take.publish_clock(self.presentation_seconds);
-        let _ = self.take.publish_note(
-            CoreNoteEvent::source_reset(self.presentation_seconds, SourceId::DIRECT).into(),
-        );
-    }
-
-    fn process(
-        &mut self,
-        buffer: &mut Buffer,
-        aux: &mut AuxiliaryBuffers,
-        context: &mut impl ProcessContext<Self>,
-    ) -> ProcessStatus {
+impl Harmonigraph {
+    /// The audio body of one callback, after the Hub has sequenced its input:
+    /// the take, the tape and the analyzer, all on the transport at the
+    /// block's start.
+    fn play(&mut self, transport: &Transport, buffer: &mut Buffer, aux: &mut AuxiliaryBuffers) {
         let block_start = self.samples_processed;
         let block_samples = buffer.samples();
-        let transport = context.transport();
         // EVERY block, armed or not. `is_armed` is an edge detector, not a
         // getter: it advances the lifecycle and clears the recorder's per-take
         // state on the arming edge. Skipping it on a disarmed block means the
@@ -929,147 +895,14 @@ impl Plugin for Harmonigraph {
         self.samples_processed += block_samples as u64;
         self.presentation_seconds += block_samples as f64 / self.sample_rate;
         self.take.publish_clock(self.presentation_seconds);
-        // Always, as every Tune does: `Normal` lets a host stop calling once
-        // the input is quiet, which would freeze an audition mid-phrase
-        // (#1719) and leave every Tune's notes uncorrected, including a Tune
-        // added while this track was already asleep.
-        ProcessStatus::KeepAlive
     }
 }
 
-impl ClapPlugin for Harmonigraph {
-    const CLAP_PERFORMANCE: bool = true;
-    fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
-        Some(Arc::new(configuration::HubSetup {
-            instance: tuning::setup::Adapter(self.aggregation.as_ref().unwrap().shared.clone()),
-            params: self.params.clone(),
-        }))
-    }
-    fn clap_editor_host(&mut self, host: Arc<dyn nice_plug::wrapper::clap::EditorHost>) {
-        self.editor_host = Some(host);
-    }
-    fn clap_main_init(&mut self) -> bool {
-        self.configuration = Some(Box::new(configuration::Owner::new(&self.params)));
-        self.aggregation.as_mut().unwrap().register();
-        true
-    }
-    fn clap_main_activate(&mut self, config: &BufferConfig) -> bool {
-        self.aggregation
-            .as_mut()
-            .unwrap()
-            .activate(f64::from(config.sample_rate), config.max_buffer_size);
-        true
-    }
-    /// For a host that stops calling the audio thread after a Stop: the
-    /// stopped take's run closes here, so the writer can seal it.
-    fn clap_main_inactive(&mut self) {
-        self.configuration.as_mut().unwrap().recording.close_stopped(&mut self.take);
-    }
-    /// Destruction gives the rings back. A take still recording fails, which
-    /// the recorder's own drop decides: a Tune learns the Hub is gone from the
-    /// same slot it learned the Hub was here.
-    fn clap_main_destroy(&mut self) {
-        let mut hub = self.aggregation.take().unwrap();
-        self.configuration.take();
-        self.take.0.take();
-        hub.retire();
-    }
-    fn clap_performance_stop(&mut self) {
-        self.aggregation.as_mut().unwrap().stop();
-    }
-    fn clap_performance_reset(&mut self) {
-        self.aggregation.as_mut().unwrap().stop();
-    }
-    fn clap_performance_begin(
-        &mut self,
-        callback: nice_plug::wrapper::clap::performance::Callback,
-        _output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
-    ) {
-        self.aggregation.as_mut().unwrap().begin(
-            callback,
-            self.configuration.as_mut().unwrap(),
-            self.presentation_seconds,
-        );
-    }
-    fn clap_performance_input(
-        &mut self,
-        input: nice_plug::wrapper::clap::configuration::OwnedInput,
-    ) {
-        self.aggregation.as_mut().unwrap().input(input);
-    }
-    fn clap_performance_input_boundary(&mut self) {
-        self.aggregation.as_mut().unwrap().input_boundary(self.configuration.as_mut().unwrap());
-    }
-    fn clap_performance_process(
-        &mut self,
-        buffer: &mut Buffer,
-        aux: &mut AuxiliaryBuffers,
-        context: &mut impl ProcessContext<Self>,
-        block: nice_plug::wrapper::clap::performance::Block,
-        output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
-    ) -> ProcessStatus {
-        self.aggregation.as_mut().unwrap().schedule(block, output);
-        self.process(buffer, aux, context)
-    }
-    /// The whole callback's remaining horizon, emitted at its final sample.
-    /// `start` is the chronological floor the sub-blocks already passed, not a
-    /// new interval: the wrapper's parameter output for the last sub-block is
-    /// pinned there too, so anything emitted before it would unsort the list.
-    fn clap_performance_finalize(
-        &mut self,
-        callback: nice_plug::wrapper::clap::performance::Callback,
-        _status: i32,
-        output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
-    ) {
-        self.aggregation.as_mut().unwrap().schedule(
-            nice_plug::wrapper::clap::performance::Block {
-                callback,
-                start: callback.frames.saturating_sub(1),
-                frames: 1,
-                transport: callback.transport,
-            },
-            output,
-        );
-    }
-    fn clap_performance_end(
-        &mut self,
-        _callback: nice_plug::wrapper::clap::performance::Callback,
-        _summary: nice_plug::wrapper::clap::performance::Summary,
-    ) {
-        if let Some(owner) = self.configuration.as_mut() {
-            self.aggregation.as_mut().unwrap().end(owner, &mut self.take);
-        }
-    }
-    const CLAP_CONFIGURATION: bool = true;
-    fn clap_configuration_begin(
-        &mut self,
-        boundary: nice_plug::wrapper::clap::configuration::ConfigurationBoundary,
-    ) {
-        let seed = lattice_maps::Seed::read(&self.params);
-        self.configuration.as_mut().unwrap().begin(boundary, seed, &self.take);
-    }
-    fn clap_configuration_segment(&mut self, start: u32, frames: u32) {
-        self.configuration.as_mut().unwrap().segment(start, frames);
-    }
-    /// The Hub's own notes reach learning through its own sequenced row, at
-    /// the time they are scheduled to sound, so there is nothing left for a
-    /// second observation of the same input to add.
-    fn clap_configuration_observe(
-        &mut self,
-        event: nice_plug::wrapper::clap::configuration::OwnedInput,
-    ) {
-        let owner = self.configuration.as_mut().unwrap();
-        owner.maps.observe(event, owner.current());
-    }
-    fn clap_configuration_group_end(&mut self, _sample: i64) {
-        let hub = self.aggregation.as_ref().unwrap();
-        let owner = self.configuration.as_mut().unwrap();
-        owner.group_end(hub.retuning(), |scratch| hub.held_classes(scratch));
-    }
-    fn clap_configuration_fault(&mut self) {
-        self.configuration.as_mut().unwrap().fault();
-    }
-
+impl Plugin for Harmonigraph {
+    const NAME: &'static str = "Harmonigraph";
+    const VENDOR: &'static str = "Yan Han";
+    const URL: &'static str = env!("CARGO_PKG_HOMEPAGE");
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const CLAP_ID: &'static str = "com.yan-h.harmonigraph";
     const CLAP_DESCRIPTION: Option<&'static str> = Some("Tonnetz harmony and spectrum visualizer");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
@@ -1077,6 +910,170 @@ impl ClapPlugin for Harmonigraph {
         Some("https://github.com/yan-h/harmonigraph/issues");
     const CLAP_FEATURES: &'static [ClapFeature] =
         &[ClapFeature::NoteEffect, ClapFeature::Analyzer, ClapFeature::Utility];
+
+    // Main audio passes through, untouched unless the tape is auditioning
+    // with the transport stopped (see `tape`). The selected input is tapped for
+    // the GUI's spectrum analyzer — INTERLEAVED, channel by channel, not as a
+    // mixdown (see `play`, and `interleaved_reservation` for what that
+    // costs). MIDI goes out through the Hub, which delays it by D and states
+    // each note's tuning (see `tuning`).
+    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
+        main_input_channels: NonZeroU32::new(2),
+        main_output_channels: NonZeroU32::new(2),
+        aux_input_ports: &[new_nonzero_u32(2)],
+        // nice-plug 0.1.5's `main_output_name` accidentally reads
+        // `main_input`, so leave both main names unset to get the distinct
+        // generated Input/Output pair. The sidechain name is unaffected.
+        names: PortNames { aux_inputs: &["Visualization Input"], ..PortNames::const_default() },
+        ..AudioIOLayout::const_default()
+    }];
+
+    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
+    const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
+
+    fn params(&self) -> Arc<Table> {
+        self.params.table.clone()
+    }
+
+    fn setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
+        Some(Arc::new(configuration::HubSetup {
+            instance: tuning::setup::Adapter(self.aggregation.as_ref().unwrap().shared.clone()),
+            params: self.params.clone(),
+        }))
+    }
+
+    fn editor_host(&mut self, host: Arc<dyn nice_plug::wrapper::clap::EditorHost>) {
+        self.editor_host = Some(host);
+    }
+
+    fn editor(&mut self) -> Option<Box<dyn Editor>> {
+        editor::create(self.params.clone(), self.editor_shared.clone(), self.editor_host.clone())
+    }
+
+    fn init(&mut self) -> bool {
+        self.configuration = Some(Box::new(configuration::Owner::new(&self.params)));
+        self.aggregation.as_mut().unwrap().register();
+        true
+    }
+
+    fn activate(&mut self, config: &BufferConfig, _: &Latency<'_>) -> bool {
+        self.aggregation
+            .as_mut()
+            .unwrap()
+            .activate(f64::from(config.sample_rate), config.max_buffer_size);
+        self.sample_rate = f64::from(config.sample_rate);
+        self.sample_rate_bits.store(config.sample_rate.to_bits(), Ordering::Relaxed);
+        self.offline = config.process_mode == ProcessMode::Offline;
+        // The editor's device and its loading job, started here so a first
+        // open finds them (#1746). On macOS, the one platform that ships; not
+        // for an export pass, which draws no editor; nor under test, where
+        // every activation would start a GPU compile beside the tests timing
+        // themselves.
+        if cfg!(target_os = "macos") && !cfg!(test) && !self.offline {
+            let (context, cache, format) = {
+                let shared = self.editor_shared.lock();
+                let picture = &shared.ui.picture;
+                (
+                    shared.gpu_context.clone(),
+                    picture.editor_graphics(),
+                    picture.surfaces.target_format,
+                )
+            };
+            editor::start_graphics(&context, &cache, &editor::graphics_config(), format);
+        }
+        true
+    }
+
+    /// For a host that stops calling the audio thread after a Stop: the
+    /// stopped take's run closes here, so the writer can seal it.
+    fn inactive(&mut self) {
+        self.configuration.as_mut().unwrap().recording.close_stopped(&mut self.take);
+    }
+
+    /// Destruction gives the rings back. A take still recording fails, which
+    /// the recorder's own drop decides: a Tune learns the Hub is gone from the
+    /// same slot it learned the Hub was here.
+    fn destroy(&mut self) {
+        let mut hub = self.aggregation.take().unwrap();
+        self.configuration.take();
+        self.take.0.take();
+        hub.retire();
+    }
+
+    fn stop(&mut self) {
+        self.aggregation.as_mut().unwrap().stop();
+    }
+
+    fn reset(&mut self) {
+        // The session's cut first, as the audio engine's own reset took it
+        // before the plugin's state was reset.
+        if let Some(hub) = &mut self.aggregation {
+            hub.stop();
+        }
+        if let Some(owner) = self.configuration.as_mut() {
+            // Stop may arrive after activation but before start_processing
+            // resets this owner. Close its run before forgetting routes.
+            owner.recording.close_stopped(&mut self.take);
+            owner.reset(&mut self.take);
+        }
+        self.samples_processed = 0;
+        self.audio_producer.reset();
+        // Before anything else can render: an export may follow a reset.
+        self.tape.reset();
+        // Reset only observed direct input. The session owner must publish
+        // its own explicit source/session controls after lifecycle validation.
+        // Presentation time stays continuous across the reset, so history
+        // queued before it keeps its place.
+        self.take.publish_clock(self.presentation_seconds);
+        let _ = self.take.publish_note(
+            CoreNoteEvent::source_reset(self.presentation_seconds, SourceId::DIRECT).into(),
+        );
+    }
+
+    /// The Hub first, which the configuration's `begin` relies on, then the
+    /// configuration's boundary: the edits queued before the callback, and
+    /// the map state the parameters held before its automation.
+    fn begin(&mut self, boundary: &Boundary) {
+        let owner = self.configuration.as_mut().unwrap();
+        self.aggregation.as_mut().unwrap().begin(boundary, owner, self.presentation_seconds);
+        if boundary.valid {
+            let seed = lattice_maps::Seed::read(&self.params);
+            owner.begin(boundary, seed, &self.take);
+        }
+        if boundary.input_lost {
+            owner.fault();
+        }
+    }
+
+    fn process(&mut self, block: &mut Block<'_>) {
+        let owner = self.configuration.as_mut().unwrap();
+        let hub = self.aggregation.as_mut().unwrap();
+        // The automation timeline, at each event's own sample. The Hub's own
+        // notes reach learning through its own sequenced row, at the time
+        // they are scheduled to sound, so there is nothing left for a second
+        // observation of the same input to add.
+        for input in block.events() {
+            owner.maps.observe(input, owner.current());
+        }
+        owner.group_end(hub.retuning(), |scratch| hub.held_classes(scratch));
+        for input in block.events() {
+            hub.input(input);
+        }
+        hub.input_boundary(owner);
+        hub.schedule(&mut block.output);
+        // A lost input has no audio: nothing records, and the host discards
+        // the callback.
+        if let Some(audio) = block.audio.as_mut() {
+            let transport = Transport::read(block.boundary.transport.as_ref());
+            self.play(&transport, audio.main, &mut audio.aux);
+        }
+    }
+
+    fn end(&mut self) {
+        if let Some(owner) = self.configuration.as_mut() {
+            self.aggregation.as_mut().unwrap().end(owner, &mut self.take);
+        }
+    }
 }
 
 nice_export_clap!(Harmonigraph, HarmonigraphTune);
@@ -1122,40 +1119,6 @@ mod tests {
             });
             assert!(measured.allocations > 0, "a debug build runs without nice-plug's allocator");
         }
-    }
-
-    struct EmptyProcessContext {
-        transport: Transport,
-    }
-
-    impl EmptyProcessContext {
-        fn new() -> Self {
-            Self { transport: Transport::new(DEFAULT_SAMPLE_RATE as f32) }
-        }
-    }
-
-    impl ProcessContext<Harmonigraph> for EmptyProcessContext {
-        fn plugin_api(&self) -> PluginApi {
-            PluginApi::Standalone
-        }
-
-        fn execute_background(&self, _task: ()) {}
-
-        fn execute_gui(&self, _task: ()) {}
-
-        fn transport(&self) -> &Transport {
-            &self.transport
-        }
-
-        fn next_event(&mut self) -> Option<PluginNoteEvent<Harmonigraph>> {
-            None
-        }
-
-        fn send_event(&mut self, _event: PluginNoteEvent<Harmonigraph>) {}
-
-        fn set_latency_samples(&self, _samples: u32) {}
-
-        fn set_current_voice_capacity(&self, _capacity: u32) {}
     }
 
     fn stereo_buffer<'a>(left: &'a mut [f32], right: &'a mut [f32]) -> Buffer<'a> {
@@ -1698,10 +1661,7 @@ mod tests {
             let mut inputs = [sidechain];
             let mut outputs = [];
             let mut aux = AuxiliaryBuffers { inputs: &mut inputs, outputs: &mut outputs };
-            assert!(matches!(
-                plugin.process(&mut main, &mut aux, &mut EmptyProcessContext::new()),
-                ProcessStatus::KeepAlive,
-            ));
+            plugin.play(&Transport::default(), &mut main, &mut aux);
         }
 
         assert_eq!(main_left, expected_main_left, "process changed the main left pass-through");
@@ -1763,7 +1723,7 @@ mod tests {
     /// along in every compound meter.
     #[test]
     fn a_bar_position_counts_from_the_songs_start_in_whatever_meter() {
-        let mut transport = Transport::new(48_000.0);
+        let mut transport = Transport::default();
         assert_eq!(bar_position(&transport), None, "no beats timeline, no bar");
 
         // 4/4, no bar fields: the beat count over the meter. Beat 258 is two
@@ -1806,10 +1766,12 @@ mod tests {
         };
         // Where Bitwig's arranger says bar 65 in 4/4: 64 bars of four quarter
         // notes behind it.
-        let mut transport = Transport::new(48_000.0);
-        transport.pos_beats = Some(64.0 * 4.0);
-        transport.time_sig_numerator = Some(4);
-        transport.time_sig_denominator = Some(4);
+        let transport = Transport {
+            pos_beats: Some(64.0 * 4.0),
+            time_sig_numerator: Some(4),
+            time_sig_denominator: Some(4),
+            ..Default::default()
+        };
         assert_eq!(
             bar_position(&transport),
             config.stop_at_bar(),
@@ -1870,12 +1832,12 @@ mod tests {
         let mut left = vec![0.5; 10_000];
         let mut right = vec![-0.5; 10_000];
         let mut audio = stereo_buffer(&mut left, &mut right);
-        let mut context = EmptyProcessContext::new();
+        let mut transport = Transport::default();
         let mut aux = AuxiliaryBuffers { inputs: &mut [], outputs: &mut [] };
-        for (playing, position) in [(true, Some(100_000)), (true, Some(0)), (false, None)] {
-            context.transport.playing = playing;
-            context.transport.pos_samples = position;
-            plugin.process(&mut audio, &mut aux, &mut context);
+        for (playing, position) in [(true, Some(100_000.0)), (true, Some(0.0)), (false, None)] {
+            transport.playing = playing;
+            transport.pos_seconds = position.map(|samples: f64| samples / 48_000.0);
+            plugin.play(&transport, &mut audio, &mut aux);
         }
         let columns = shared.input.drain_columns(
             &mut shared.ui.picture.runtime,
@@ -1894,7 +1856,7 @@ mod tests {
         let mut left = [0.0; 384];
         let mut right = [0.0; 384];
         let mut audio = stereo_buffer(&mut left, &mut right);
-        plugin.process(&mut audio, &mut aux, &mut context);
+        plugin.play(&transport, &mut audio, &mut aux);
         shared.input.drain(
             &mut shared.ui.picture.runtime,
             &shared.ui.picture.appearance,
@@ -1914,7 +1876,7 @@ mod tests {
         assert_eq!(take_right_channel(8), 1);
     }
 
-    /// One stereo block through `process`, at song seconds `position`.
+    /// One stereo block through `play`, at song seconds `position`.
     fn tape_block(
         plugin: &mut Harmonigraph,
         position: f64,
@@ -1922,17 +1884,12 @@ mod tests {
         left: &mut [f32],
         right: &mut [f32],
     ) {
-        let mut context = EmptyProcessContext::new();
-        context.transport.pos_seconds = Some(position);
-        context.transport.playing = playing;
+        let transport = Transport { pos_seconds: Some(position), playing, ..Default::default() };
         let mut main = stereo_buffer(left, right);
         let mut inputs: [Buffer; 0] = [];
         let mut outputs = [];
         let mut aux = AuxiliaryBuffers { inputs: &mut inputs, outputs: &mut outputs };
-        assert!(matches!(
-            plugin.process(&mut main, &mut aux, &mut context),
-            ProcessStatus::KeepAlive
-        ));
+        plugin.play(&transport, &mut main, &mut aux);
     }
 
     /// Click in Tape mode, and wait until the input worker has passed the
