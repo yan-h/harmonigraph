@@ -23,6 +23,8 @@ pub(crate) fn skin_color(
         egui::vec2(super::bar::bar_width(ui), theme::row_height(scale)),
         egui::Sense::click(),
     );
+    #[cfg(test)]
+    super::range_probe::record_placed(label, rect, ui);
     let visuals = ui.style().interact(&response);
     ui.painter().rect_filled(rect, super::bar::bar_radius(scale), visuals.bg_fill);
     let job = egui::text::LayoutJob::simple(

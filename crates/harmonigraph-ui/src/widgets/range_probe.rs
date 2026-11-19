@@ -17,10 +17,11 @@ pub(crate) struct Visit {
 }
 
 /// Where a bar was laid: the rect it allocated, and the `max_rect` of the `Ui`
-/// it was laid in, which is the column it was offered. Recorded by every bar
-/// that sizes itself from its column (`bar::bar_width`), so the settings sweeps
-/// read a bar's geometry from the bar rather than picking its well out of the
-/// paint.
+/// it was laid in, which is the column it was offered. Recorded by every
+/// row-high control that sizes itself from its column (`bar::bar_width`), the
+/// skin colour picker's row included, so the settings sweeps read a bar's
+/// geometry from the bar rather than picking its well out of the paint. The
+/// plots are several rows tall and not bars, and record nothing.
 #[derive(Clone, Debug)]
 pub(crate) struct Placed {
     /// The bar's label, or its kind where it carries none of its own.
