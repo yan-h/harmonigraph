@@ -412,9 +412,9 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, now: f64) {
     // What the drawn ring is still moving on: the display it reads, its own
     // levels and its wedges' fade.
     let moving = &mut state.surfaces.moving_this_frame;
-    moving.audible(state.runtime.spectrum.moving(now));
-    moving.audible(state.runtime.ring_levels.moving());
-    moving.audible(state.runtime.ring_fade.moving());
+    moving.hold_if(crate::Reason::Audible, state.runtime.spectrum.moving(now));
+    moving.hold_if(crate::Reason::Audible, state.runtime.ring_levels.moving());
+    moving.hold_if(crate::Reason::Audible, state.runtime.ring_fade.moving());
 }
 
 /// What the ring's wedges READ, carried across frames on the ring's own attack

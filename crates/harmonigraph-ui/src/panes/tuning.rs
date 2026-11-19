@@ -182,6 +182,11 @@ pub(super) fn tuning_pane(
     params: &dyn ParamBackend,
     now: f64,
 ) {
+    use harmonigraph_core::lattice_map::TuningEngine;
+    // Read once, ahead of everything that asks which engine plays: the Learn
+    // ring below and the retuning controls under it read this frame's engine,
+    // so the two never disagree about whether Learn acts (#1834).
+    let maps = params.lattice_maps();
     section(ui, "Tuning", |ui| {
         axis_bar(ui, state, params, TuningAxis::COffset);
         axis_bar(ui, state, params, TuningAxis::Three);
@@ -248,22 +253,19 @@ pub(super) fn tuning_pane(
                     ConfigEdit { learning: Some(learn_active), ..Default::default() },
                 );
             }
-            // Lattice Map learns nothing, so an armed ring there would
-            // announce an action that does not happen.
-            let learning = state.runtime.learn_active
-                && state
-                    .runtime
-                    .lattice_maps
-                    .as_ref()
-                    .is_none_or(|maps| maps.playback.engine.learns());
-            if learning {
-                // Pulsing armed ring so the engaged mode can't be missed. It
-                // stands `pad` out from the switch, so its corners are the
-                // switch's radius plus `pad` and the two round about one centre.
-                let scale = theme::ui_scale(ui.ctx());
-                let pad = theme::scaled_points(2, scale);
+            // Pulsing armed ring so the engaged mode can't be missed, where
+            // Learn acts: under Lattice Map an armed ring would announce an
+            // action that does not happen. It stands `pad` out from the switch,
+            // so its corners are the switch's radius plus `pad` and the two
+            // round about one centre. Only a ring in view pulses: one scrolled
+            // out of the settings page holds no full-rate frames.
+            let scale = theme::ui_scale(ui.ctx());
+            let pad = theme::scaled_points(2, scale);
+            let ring = learn.rect.expand(f32::from(pad));
+            let engine = maps.as_ref().map(|maps| maps.playback.engine);
+            if state.runtime.learn_acts(engine) && ui.is_rect_visible(ring) {
                 ui.painter().rect_stroke(
-                    learn.rect.expand(f32::from(pad)),
+                    ring,
                     egui::CornerRadius::same(theme::control_radius(scale) + pad),
                     egui::Stroke::new(
                         theme::LINE_WIDTH,
@@ -271,6 +273,7 @@ pub(super) fn tuning_pane(
                     ),
                     egui::StrokeKind::Outside,
                 );
+                state.surfaces.moving_this_frame.hold(crate::Reason::LearnPulse);
             }
         });
     });
@@ -300,8 +303,6 @@ pub(super) fn tuning_pane(
         axis_bar(ui, state, params, TuningAxis::Tolerance);
     });
 
-    use harmonigraph_core::lattice_map::TuningEngine;
-    let maps = params.lattice_maps();
     match (retuning_controls(ui, state, params, maps.as_ref()), &maps) {
         (TuningEngine::Adaptive, _) => adaptive_controls(ui, state, params),
         (TuningEngine::LatticeMap, Some(view)) => map_controls(ui, state, params, view),
@@ -312,8 +313,8 @@ pub(super) fn tuning_pane(
     if !configuration_notice && state.runtime.configuration_pending_shown {
         crate::widgets::label(ui, "Tuning change pending audio adoption");
     }
-    // Kept for the rest of the editor — the lattice's dots and edits, and the
-    // Learn ring above, next frame — which wants the same view.
+    // Kept for the rest of the editor — the lattice's dots and edits — which
+    // wants the same view.
     if maps.is_some() {
         state.runtime.observe_maps(maps);
         if state.runtime.maps_pending {
@@ -955,7 +956,7 @@ fn retuning_controls(
         if mode != engine {
             params.edit_lattice_map(MapEdit::Engine(mode));
         }
-        if state.runtime.learn_active && !mode.learns() {
+        if state.runtime.learn_active && !state.runtime.learn_acts(Some(mode)) {
             crate::widgets::label(
                 ui,
                 egui::RichText::new("Learn is suspended in Lattice Map.").color(theme::armed()),
