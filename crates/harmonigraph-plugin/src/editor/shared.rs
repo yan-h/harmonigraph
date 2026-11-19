@@ -5,14 +5,16 @@ use std::time::Instant;
 use harmonigraph_ui::SharedState;
 
 use super::clock::ClockMapper;
-use super::input::LiveInput;
+use super::input::DisplayClock;
 use super::ASSUMED_SURFACE_FORMAT;
 
 /// State shared between the plugin (which owns the ring buffer producer)
 /// and the GUI thread. Lives for the whole plugin lifetime; the editor
 /// window may open and close many times around it.
 pub struct EditorShared {
-    pub(crate) input: LiveInput,
+    /// The clock frames draw by. The input it maps is the input worker's
+    /// ([`LiveInput`](super::input::LiveInput)), out of this lock.
+    pub(crate) clock: DisplayClock,
     /// Crate-visible because [`crate::background`] shares this state with the
     /// frame, and shares more of it than a drainer would need: its holds of
     /// the editor lock install a host restore into this field WHOLE — dock,
@@ -36,7 +38,7 @@ pub struct EditorShared {
     /// [`poll_take_end`](Self::poll_take_end), for the status line.
     take_last_count: u64,
     /// When [`poll_take_end`](Self::poll_take_end) first found the transport
-    /// stopped, on [`LiveInput::now`]'s clock, while a take is recording and
+    /// stopped, on [`DisplayClock::now`]'s clock, while a take is recording and
     /// it has stayed stopped since. Debounces the OnTransportStop trigger: a
     /// host reporting one still block mid-playback must not end a take.
     take_still_since: Option<f64>,
@@ -47,25 +49,12 @@ pub struct EditorShared {
 }
 
 impl EditorShared {
-    pub fn new(
-        consumer: harmonigraph_record::publication::Consumer,
-        audio_consumer: crate::audio_ingress::Consumer,
-        sample_rate_bits: Arc<AtomicU32>,
-        take: harmonigraph_record::Control,
-    ) -> Self {
+    pub fn new(sample_rate_bits: Arc<AtomicU32>, take: harmonigraph_record::Control) -> Self {
         EditorShared {
-            input: LiveInput {
-                consumer,
-                audio_consumer,
+            clock: DisplayClock {
                 sample_rate_bits,
                 start: Instant::now(),
-                clock: ClockMapper::new(),
-                audio_position: None,
-                audio_origin: 0.0,
-                spare: Default::default(),
-                analysis: Some(Default::default()),
-                tape_notes: Vec::new(),
-                recorder: Default::default(),
+                mapper: ClockMapper::new(),
             },
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             gestures: Default::default(),
@@ -173,10 +162,10 @@ impl EditorShared {
     /// back into `Interaction`, and the next frame — whenever there is one —
     /// mirrors and draws what it left ([`take_pass`](Self::take_pass)).
     pub(crate) fn poll_take_end(&mut self) {
-        self.poll_take_end_at(self.input.now());
+        self.poll_take_end_at(self.clock.now());
     }
 
-    /// [`poll_take_end`](Self::poll_take_end) at `now` on [`LiveInput::now`]'s
+    /// [`poll_take_end`](Self::poll_take_end) at `now` on [`DisplayClock::now`]'s
     /// clock, which times the OnTransportStop debounce
     /// ([`STOP_SECONDS`](Self::STOP_SECONDS)): tests date polls rather than
     /// wait for them.
@@ -235,7 +224,7 @@ impl EditorShared {
     /// whose clock the debounce started on and leave this one short.
     #[cfg(test)]
     pub(crate) fn poll_through_stop_debounce(&mut self) {
-        let now = self.input.now();
+        let now = self.clock.now();
         self.poll_take_end_at(now);
         self.poll_take_end_at(now + Self::STOP_SECONDS);
     }
@@ -279,18 +268,12 @@ mod tests {
     /// here a 144 Hz window's worth, which counted in calls ended it at 139 ms.
     #[test]
     fn recording_stop_debounce_counts_seconds_not_calls() {
-        let (_notes, consumer) = harmonigraph_record::publication::channel();
-        let (_audio, audio_consumer) = crate::audio_ingress::channel(64);
         let (mut recorder, control) = harmonigraph_record::channel();
         let directory =
             std::env::temp_dir().join(format!("runtime-recording-cadence-{}", std::process::id()));
         let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
-        let mut shared = EditorShared::new(
-            consumer,
-            audio_consumer,
-            Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            control,
-        );
+        let mut shared =
+            EditorShared::new(Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())), control);
         shared.ui.picture.appearance.render.trigger =
             harmonigraph_ui::RenderTrigger::OnTransportStop;
         harmonigraph_record::testing::set_renderer_program(
@@ -329,18 +312,12 @@ mod tests {
     /// is unrelated, and later knob edits cannot rewrite the starting look.
     #[test]
     fn arming_captures_the_whole_live_appearance_without_workspace_state() {
-        let (_notes, consumer) = harmonigraph_record::publication::channel();
-        let (_audio, audio_consumer) = crate::audio_ingress::channel(64);
         let (recorder, control) = harmonigraph_record::channel();
         let directory =
             std::env::temp_dir().join(format!("appearance-capture-{}", std::process::id()));
         let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
-        let mut shared = EditorShared::new(
-            consumer,
-            audio_consumer,
-            Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            control,
-        );
+        let mut shared =
+            EditorShared::new(Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())), control);
         shared.ui.picture.appearance.camera.yaw = 1.23;
         shared.ui.picture.appearance.view.max_sevens = 3;
         shared.ui.picture.appearance.spectrum.low_midi = 40.5;
