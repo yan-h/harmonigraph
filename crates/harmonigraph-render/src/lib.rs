@@ -220,6 +220,11 @@ struct Seam {
 
 #[cfg(any(test, feature = "hot-reload"))]
 impl Seam {
+    /// A module compiled as its own file stands, joined to nothing: a
+    /// diagnostic's line is already the file's.
+    #[cfg(test)]
+    const NONE: Self = Seam { file: "", lines: 0 };
+
     /// The seam of a module joined after `prefix`, which is read from `file`.
     fn after(file: &'static str, prefix: &str) -> Self {
         Seam { file, lines: prefix_lines(prefix) }
@@ -476,6 +481,9 @@ fn validate_wgsl(
 ) -> Result<(), String> {
     let Seam { file, lines } = seam;
     let banner = |body: String| {
+        if lines == 0 {
+            return format!("in {name}:\n{body}");
+        }
         format!(
             "in {name} (lines 1-{lines} below are {file}; past that, \
              subtract {lines} for the line in {name}):\n{body}"
