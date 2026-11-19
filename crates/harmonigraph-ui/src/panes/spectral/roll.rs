@@ -300,7 +300,7 @@ impl Width {
 /// pitch range. `split` is the depth fraction the roll starts at; `now` is
 /// the shell clock, the same one the tracker's events are stamped with.
 /// `surface` names the roll — which live copy of the pane this is (see
-/// [`draw_pane`](crate::draw_pane)) — so two live copies get their own
+/// [`draw_panes`](crate::draw_panes)) — so two live copies get their own
 /// instance buffer.
 ///
 /// One paint callback for the whole roll, drawing one instanced quad per

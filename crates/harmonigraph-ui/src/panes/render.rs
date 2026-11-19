@@ -101,34 +101,8 @@ pub(crate) fn render_pane(
             .into_iter()
             .map(|(pane, rect)| (pane, rect.translate(box_rect.min.to_vec2())))
             .collect();
-        // The preview's own lattice window, handed to its spectral pane and
-        // published nowhere: the docked panes go on describing the docked
-        // lattice (see `PictureState::shown`).
-        let shown = crate::composed_window(state, &placements);
-        for &(pane, rect) in &placements {
-            match pane {
-                Pane::Spectral => {
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                    super::spectral::spectral_pane(
-                        &mut child,
-                        state,
-                        now,
-                        PREVIEW_SURFACE,
-                        preview_scale(box_rect.width(), &state.appearance.render),
-                        super::spectral::Navigation::Preview,
-                        shown,
-                        super::lattice::NO_SOLO,
-                    );
-                }
-                Pane::Lattice => preview_lattice(
-                    ui,
-                    rect,
-                    state,
-                    now,
-                    preview_scale(box_rect.width(), &state.appearance.render),
-                ),
-            }
-        }
+        let point_scale = preview_scale(box_rect.width(), &state.appearance.render);
+        preview_panes(ui, &placements, state, now, point_scale);
 
         // The seam between panes, exactly as the render bakes it.
         layout.paint_dividers(ui.painter(), &placements);
@@ -591,9 +565,9 @@ fn preview_lattice(
     state: &mut PictureState,
     now: f64,
     point_scale: f32,
-) {
+) -> Option<harmonigraph_scene::DrawnWindow> {
     if rect.width() < 1.0 || rect.height() < 1.0 {
-        return;
+        return None;
     }
     // The preview is a picture of the RENDER, so it stands on the render
     // layout's background rather than on the panel this preview happens to sit
@@ -615,7 +589,7 @@ fn preview_lattice(
             state.appearance.camera.zoom_by(zoom);
         }
     }
-    super::lattice::draw_lattice(
+    Some(super::lattice::draw_lattice(
         ui,
         rect,
         state,
@@ -626,7 +600,45 @@ fn preview_lattice(
         None,
         point_scale,
         super::lattice::NO_SOLO,
-    );
+    ))
+}
+
+/// The preview's panes at their placements, as [`crate::draw_panes`] draws an
+/// export: the lattice first, after its wheel and pinch have moved the camera,
+/// and the spectral pane describing the window it returns. That window is
+/// published nowhere, so the docked panes go on describing the docked lattice
+/// (see `PictureState::shown`).
+fn preview_panes(
+    ui: &mut egui::Ui,
+    placements: &[(Pane, egui::Rect)],
+    state: &mut PictureState,
+    now: f64,
+    point_scale: f32,
+) {
+    debug_assert!(crate::layout::lattice_first(placements), "{placements:?}");
+    let mut shown = None;
+    for &(pane, rect) in placements {
+        match pane {
+            Pane::Lattice => {
+                let window = preview_lattice(ui, rect, state, now, point_scale);
+                shown = shown.or(window);
+            }
+            Pane::Spectral => {
+                let shown = shown.unwrap_or_else(|| state.appearance.view.reach());
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                super::spectral::spectral_pane(
+                    &mut child,
+                    state,
+                    now,
+                    PREVIEW_SURFACE,
+                    point_scale,
+                    super::spectral::Navigation::Preview,
+                    shown,
+                    super::lattice::NO_SOLO,
+                );
+            }
+        }
+    }
 }
 
 /// Capturing a take: the switch, what it is doing, and the clear that gives it
@@ -1400,6 +1412,87 @@ mod tests {
         }
     }
 
+    /// A preview's state with every input the off-lattice band reads pinned
+    /// rather than fresh: the camera whole, a perspective one at `distance`;
+    /// just tuning, where distinct nodes are distinct pitches; and a spectral
+    /// pane with the Analyzer, where the band is drawn, at half its depth over
+    /// 55..73.
+    fn preview_state(distance: f32) -> PictureState {
+        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        let camera = &mut state.appearance.camera;
+        camera.projection = harmonigraph_scene::Projection::Perspective;
+        (camera.yaw, camera.pitch, camera.distance) = (0.4, 0.3, distance);
+        camera.target = Default::default();
+        state.runtime.tuning = harmonigraph_core::Tuning::just();
+        state.appearance.view.fade_time = 0.0;
+        let spectrum = &mut state.appearance.spectrum;
+        spectrum.orientation = SpectralOrientation::Left;
+        (spectrum.low_midi, spectrum.high_midi) = (55.0, 73.0);
+        (spectrum.show_roll, spectrum.roll_fraction) = (true, 0.5);
+        state
+    }
+
+    /// The off-lattice bands in a frame's shapes.
+    fn off_lattice_bands(output: &egui::FullOutput) -> usize {
+        let band = theme::picture_off_scale().gamma_multiply(0.3);
+        let shapes = output.shapes.iter();
+        shapes.filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == band)).count()
+    }
+
+    /// A pinch over the preview's lattice moves the camera before the lattice
+    /// draws, and the spectral pane describes the window drawn after it: a
+    /// zoom out that brings a held note's node into view stops flagging it on
+    /// that frame, not the next (#1833).
+    #[test]
+    fn a_preview_pinch_reaches_the_spectral_pane_in_its_own_frame() {
+        let mut state = preview_state(4.0);
+        let frame = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 450.0));
+        let placements = Layout::split(LatticeSide::Left, 0.5).resolve(frame.size());
+        let (_, lattice) = placements[0];
+        let aspect = lattice.width() / lattice.height();
+        const PINCH: f32 = 0.5;
+        let before = state.appearance.view.scrolled(&state.appearance.camera, aspect);
+        let mut zoomed = state.appearance.camera;
+        zoomed.zoom_by(PINCH);
+        let after = state.appearance.view.scrolled(&zoomed, aspect);
+        let node = (after.min.threes..=after.max.threes)
+            .flat_map(|threes| {
+                (after.min.fives..=after.max.fives)
+                    .map(move |fives| harmonigraph_core::LatticePos::new(threes, fives, 0))
+            })
+            .find(|&pos| after.contains(pos) && !before.contains(pos))
+            .expect("the pinch brings no node of the home sheet into view");
+        let semitones = state.runtime.tuning.pitch_class(node).to_cents() / 100.0;
+        let tracker = &mut state.runtime.tracker;
+        let on = |kind| harmonigraph_core::NoteEvent {
+            source: harmonigraph_core::SourceId::DIRECT,
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind,
+        };
+        tracker.handle_event(on(harmonigraph_core::NoteEventKind::On { velocity: 1.0 }));
+        tracker.handle_event(on(harmonigraph_core::NoteEventKind::Tuning { semitones }));
+
+        let ctx = crate::tests::probe::themed();
+        let pointer = lattice.center();
+        let mut bands = Vec::new();
+        for events in [
+            vec![egui::Event::PointerMoved(pointer)],
+            vec![egui::Event::PointerMoved(pointer)],
+            vec![egui::Event::PointerMoved(pointer), egui::Event::Zoom(PINCH)],
+        ] {
+            let output = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(frame), events, ..Default::default() },
+                |ui| preview_panes(ui, &placements, &mut state, 0.05, 1.0),
+            );
+            bands.push(off_lattice_bands(&output));
+        }
+        assert_eq!(state.appearance.camera.distance, zoomed.distance, "the pinch did not zoom");
+        assert_eq!(bands, [1, 1, 0], "the pinch's frame flags the node it brought into view");
+        assert_eq!(state.surfaces.drawn_this_frame, None, "the preview published its window");
+    }
+
     /// The preview's spectral pane describes the preview's own lattice, as the
     /// export it previews does, not the docked Lattice tab's (#1833): a docked
     /// tab panned elsewhere, folded, or at another aspect must not put an
@@ -1413,17 +1506,15 @@ mod tests {
     #[test]
     fn the_preview_describes_its_own_lattice_rather_than_the_docked_one() {
         use harmonigraph_core::LatticePos;
-        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
-        state.runtime.tuning = harmonigraph_core::Tuning::just();
-        state.appearance.view.fade_time = 0.0;
-        let spectrum = &mut state.appearance.spectrum;
-        spectrum.orientation = SpectralOrientation::Left;
-        (spectrum.low_midi, spectrum.high_midi) = (55.0, 73.0);
+        let mut state = preview_state(harmonigraph_scene::Camera::DEFAULT_DISTANCE);
         let docked = harmonigraph_scene::DrawnWindow {
             min: LatticePos::new(40, 40, 0),
             max: LatticePos::new(41, 41, 0),
         };
         state.surfaces.drawn = Some(docked);
+        let frame = &mut state.appearance.render.frame;
+        (frame.aspect_w, frame.aspect_h, frame.lattice, frame.split) =
+            (16, 9, LatticeSide::Left, 0.5);
         state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
             0.0,
             harmonigraph_core::SourceId::DIRECT,
@@ -1443,13 +1534,11 @@ mod tests {
             },
             |ui| render_pane(ui, &mut state, &mut crate::Interaction::default(), 0.05),
         );
-        let band = theme::picture_off_scale().gamma_multiply(0.3);
-        let bands = output
-            .shapes
-            .iter()
-            .filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == band))
-            .count();
-        assert_eq!(bands, 0, "the preview flagged a note its own lattice lights");
+        assert_eq!(
+            off_lattice_bands(&output),
+            0,
+            "the preview flagged a note its own lattice lights"
+        );
         assert_eq!(state.surfaces.drawn, Some(docked), "the preview published its window");
         assert_eq!(state.surfaces.drawn_this_frame, None, "the preview published its window");
     }

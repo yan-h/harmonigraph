@@ -16,7 +16,7 @@ use harmonigraph_scene::{derive_scene_with_extra, Camera, Projection, SevensLabe
 /// `surface` is which live copy of the pane this is, and every id it claims is
 /// derived from it — the GPU pane id ([`pane_id`]) and the badge's text batch.
 /// The docked tab is 0; offline a layout hands each placement its index (see
-/// [`draw_pane`](crate::draw_pane)), so a `.ron` naming the lattice twice draws
+/// [`draw_panes`](crate::draw_panes)), so a `.ron` naming the lattice twice draws
 /// two pictures instead of one picture twice.
 pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64, surface: usize) {
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
@@ -234,18 +234,6 @@ pub(crate) fn compose_scene(
 pub(crate) const NO_SOLO: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS] =
     [false; harmonigraph_scene::star_plan::STAR_DEPTHS];
 
-fn aspect_of(rect: egui::Rect) -> f32 {
-    rect.width() / rect.height().max(1.0)
-}
-
-/// The window a copy of the lattice drawn over `rect` shows, under the camera
-/// as it stands: what [`draw_lattice`] returns, known before it draws, which is
-/// what lets a composed frame hand it to the panes beside the lattice in the
-/// same frame (`crate::composed_window`).
-pub(crate) fn window_at(state: &PictureState, rect: egui::Rect) -> harmonigraph_scene::DrawnWindow {
-    state.appearance.view.scrolled(&state.appearance.camera, aspect_of(rect))
-}
-
 /// The scene one copy of the lattice draws over `rect`, and the window it
 /// shows: a different window from the one the pane beside it shows and from
 /// the one the names are chosen out of (see `ViewConfig::scrolled`), derived
@@ -263,8 +251,8 @@ fn copy_scene(
     point_scale: f32,
     star_solo: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
 ) -> (harmonigraph_scene::DrawnWindow, harmonigraph_scene::Scene) {
-    let aspect = aspect_of(rect);
-    let window = window_at(state, rect);
+    let aspect = rect.width() / rect.height().max(1.0);
+    let window = state.appearance.view.scrolled(&state.appearance.camera, aspect);
     let mut scene = compose_scene(state, &window, aspect, hovered, surface, now);
     scene.edge_softness_points *= point_scale;
     // The ground this pass is composited over. Only the shell knows it -- the
@@ -290,8 +278,9 @@ fn copy_scene(
 /// has none of its own — its camera is framed in the Lattice tab, not here
 /// — so all three are skipped together rather than by three flags that
 /// could disagree.
-/// Returns the drawn window so the dock/export can publish it for sibling
-/// panes, while the Video preview leaves their primary window alone.
+/// Returns the drawn window for the panes that describe it: the dock publishes
+/// it for the next frame, and a composed frame (an export, the Video preview)
+/// hands it to the spectral pane drawn after it, publishing nothing.
 ///
 /// `star_solo` is the Stars solo this copy draws: the window's for the
 /// working pane, and none for the Video preview and an export, so that what

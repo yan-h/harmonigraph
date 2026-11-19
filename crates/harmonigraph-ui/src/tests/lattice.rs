@@ -391,7 +391,7 @@ fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
         state.picture.appearance.view.reach().count(),
     );
     // A composed frame, an export or the Video preview, hands its spectral
-    // pane its own lattice's window instead (`crate::composed_window`), held
+    // pane the window its own lattice drew instead (`crate::draw_panes`), held
     // by `an_exported_frame_flags_nothing_its_own_lattice_draws` in
     // harmonigraph-offline and `the_preview_describes_its_own_lattice_rather_
     // than_the_docked_one`.
@@ -408,8 +408,8 @@ fn the_lattice_pane_paints_the_ground_it_hands_the_scene() {
     let mut state = fresh();
     let screen = egui::vec2(600.0, 500.0);
     let shapes = super::probe::painted_full(screen, |ui| {
-        let shown = state.picture.shown();
-        crate::draw_pane(ui, Pane::Lattice, &mut state.picture, 0.0, 0, shown);
+        let full = [(Pane::Lattice, ui.max_rect())];
+        crate::draw_panes(ui, &full, &mut state.picture, 0.0);
     })
     .shapes;
 
@@ -451,8 +451,8 @@ fn the_pane_paints_the_shells_ground_rather_than_the_skins() {
     state.picture.set_background((7, 9, 11));
     let screen = egui::vec2(600.0, 500.0);
     let shapes = super::probe::painted_full(screen, |ui| {
-        let shown = state.picture.shown();
-        crate::draw_pane(ui, Pane::Lattice, &mut state.picture, 0.0, 0, shown);
+        let full = [(Pane::Lattice, ui.max_rect())];
+        crate::draw_panes(ui, &full, &mut state.picture, 0.0);
     })
     .shapes;
 

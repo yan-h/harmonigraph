@@ -450,7 +450,7 @@ mod tests {
                 crate::render::frame_input(self.screen, now, self.renderer.max_texture_side());
             let placements = &self.placements;
             let output = self.context.run_ui(input, |ui| {
-                crate::render::draw_panes(ui, placements, state, now);
+                harmonigraph_ui::draw_panes(ui, placements, state, now);
             });
             let primitives = self.context.tessellate(output.shapes, self.pixels_per_point);
             self.renderer.render_to_vec(
@@ -798,7 +798,7 @@ mod tests {
                 let input =
                     crate::render::frame_input(screen, now, sheet.renderer.max_texture_side());
                 let output = sheet.context.run_ui(input, |ui| {
-                    crate::render::draw_panes(ui, &layout.resolve(points), &mut state, now);
+                    harmonigraph_ui::draw_panes(ui, &layout.resolve(points), &mut state, now);
                 });
                 let primitives = sheet.context.tessellate(output.shapes, 1.0);
                 let clear = egui::Color32::BLACK;
