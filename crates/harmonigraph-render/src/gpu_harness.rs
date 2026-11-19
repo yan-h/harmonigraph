@@ -78,34 +78,52 @@ pub(crate) fn render_to_texture(
     clear: wgpu::Color,
     draw: impl FnOnce(&mut wgpu::RenderPass<'static>),
 ) -> wgpu::Texture {
-    let texture = crate::gpu_memory::texture(
-        device,
-        &wgpu::TextureDescriptor {
-            label: Some("parity_target"),
-            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        },
-    );
-    let view = texture.create_view(&Default::default());
+    let [texture] = render_to_textures(device, queue, size, [(format, clear)], draw);
+    texture
+}
+
+/// [`render_to_texture`] into one pass's several attachments, each a fresh
+/// texture of its own format cleared to its own colour, in that order.
+pub(crate) fn render_to_textures<const N: usize>(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    size: [u32; 2],
+    targets: [(wgpu::TextureFormat, wgpu::Color); N],
+    draw: impl FnOnce(&mut wgpu::RenderPass<'static>),
+) -> [wgpu::Texture; N] {
+    let textures = targets.map(|(format, _)| {
+        crate::gpu_memory::texture(
+            device,
+            &wgpu::TextureDescriptor {
+                label: Some("parity_target"),
+                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            },
+        )
+    });
+    let views = textures.each_ref().map(|texture| texture.create_view(&Default::default()));
     let mut encoder = device.create_command_encoder(&Default::default());
     {
+        let attachments = std::array::from_fn::<_, N, _>(|i| {
+            Some(wgpu::RenderPassColorAttachment {
+                view: &views[i],
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(targets[i].1),
+                    store: wgpu::StoreOp::Store,
+                },
+            })
+        });
         let mut pass = encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("parity_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &attachments,
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -115,7 +133,7 @@ pub(crate) fn render_to_texture(
         draw(&mut pass);
     }
     queue.submit([encoder.finish()]);
-    texture
+    textures
 }
 
 /// The texture's texels, packed row after row, each as its format lays it
