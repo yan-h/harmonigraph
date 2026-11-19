@@ -41,11 +41,7 @@ fn star_image_at(uv: vec2<f32>) -> vec4<f32> {
 fn star_source(pt: vec2<f32>, rank: f32, index: i32) -> vec4<f32> {
     let light = textureSampleLevel(source, light_sampler, pt / settings.stars.size, 0.0);
     if light.a <= 0.0 { return vec4<f32>(0.0); }
-    let randomness = settings.stars.star_randomness;
-    let spread = (1.0 - randomness) + randomness * (0.35 + 0.65 * rank);
-    let lift = 0.5 * STAR_LIFT * rank * smoothstep(0.0, 0.15, light.a);
-    let level = clamp(light.a * spread + lift, 0.0, 1.0);
-    return vec4<f32>(light.rgb / light.a * level, 1.0);
+    return vec4<f32>(light.rgb / light.a * star_level(light.a, rank), 1.0);
 }
 @fragment
 fn fs_lattice_stars(in: TileVertex) -> @location(0) vec4<f32> {

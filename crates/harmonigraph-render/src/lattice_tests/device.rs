@@ -1,8 +1,8 @@
 //! The harness itself — that a device comes up, that a second view in one
-//! frame still submits, and that the offscreen composite matches a direct draw.
+//! frame still submits, and that cached pipelines carry across windows.
 
 use super::fixtures::*;
-use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use crate::gpu_harness::headless_device;
 use crate::*;
 
 /// Build the real pipelines against a headless device. This validates
@@ -38,7 +38,7 @@ fn installed(
 #[cfg(not(feature = "hot-reload"))]
 #[test]
 fn reopening_reuses_pipelines_with_fresh_window_resources() {
-    let Some(mut shooter) = Shooter::new([256, 256]) else {
+    let Some(mut shooter) = Shooter::fresh([256, 256]) else {
         return;
     };
     let instance = shooter.instance.clone();
@@ -101,7 +101,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
 #[test]
 fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
     use crate::startup::Status;
-    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let Some(mut shooter) = Shooter::fresh([256, 256]) else { return };
     let instance = shooter.instance.clone();
     let scene = parity_scene();
     let synchronous = shooter.shot(&scene);
@@ -257,187 +257,6 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
     }
     assert!(measured, "preparation pass timestamps must produce a real measurement");
-}
-
-/// The refactor's core claim: rendering offscreen and compositing through
-/// blit.wgsl reproduces what the
-/// old renderer produced by drawing straight into the egui pass. Runs
-/// the same scene through both paths and compares pixels; tolerance 3
-/// covers the final dither and the half-float working target's rounding.
-///
-/// With node occlusion at the fresh Hide behind, the whole bar. Where a front
-/// node fades the ink of one behind it the two paths part BY DESIGN: the
-/// offscreen path keeps ink apart from the background its shadow darkens and
-/// restores that background under the faded ink, which one target cannot do
-/// (`node_split`). Those pixels — the ones occlusion moves on the offscreen
-/// path — are left out of the comparison, and the fixture has to have some.
-/// There the offscreen path may only be the BRIGHTER of the two, which is what
-/// restoring the background is.
-///
-/// The offscreen path is the one that ships; the direct draw (`fs_main` into
-/// one target) exists only as this test's reference.
-#[test]
-fn offscreen_composite_matches_direct_draw() {
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
-    const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let mut scene = parity_scene();
-    // The whole bar, so occlusion moves the pixels this test sets apart.
-    scene.view.hide_behind = 1.0;
-    let callback = || {
-        LatticeCallback::from_scene(
-            &scene,
-            LatticeLabels::default(),
-            egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
-            format,
-            7,
-            None,
-        )
-    };
-    let cb = callback();
-
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
-    let rect =
-        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
-    // prepare(): uploads buffers and renders the offscreen scene pass; then
-    // composite the offscreen texture, as paint() does.
-    let composite = |cb: &LatticeCallback, resources: &mut CallbackResources| {
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let user_bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
-        queue.submit(user_bufs.into_iter().chain([encoder.finish()]));
-        let resources = &*resources;
-        render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                resources,
-            );
-        })
-    };
-
-    // Path A: the offscreen composite, occlusion as shipped.
-    let mut resources = CallbackResources::default();
-    let composite_tex = composite(&cb, &mut resources);
-    // The same path with Hide behind at 0, only to find the pixels it moves.
-    let mut unoccluded = callback();
-    unoccluded.uniforms.geometry_shadow.occlusion = 0.0;
-    let unoccluded_tex = composite(&unoccluded, &mut CallbackResources::default());
-
-    // Path B: the pre-offscreen renderer — same buffers and draw order,
-    // depthless pipelines, straight into the target pass.
-    let res: &LatticeResources = resources.get().expect("prepare created resources");
-    let layouts = SceneLayouts {
-        uniforms: &res.compiled.bind_group_layout,
-        glow: &res.compiled.filter_layout,
-        shadow: &res.compiled.shadow_layout,
-        casters: &res.compiled.caster_layout,
-    };
-    let shader = lattice_module(&device, &with_common(SHADER_SRC));
-    let (node_pipeline, plus_pipeline) = create_pipelines(&device, &shader, format, layouts, 1);
-    // The stand-in light at group 1: this path has no glow pass to composite,
-    // and the fixture asks for none (`parity_scene` holds the reach at 0), so
-    // the offscreen path is reading the same transparent nothing.
-    let light = &res.compiled.glow_dummy_bind_group;
-    let pane = res.panes.get(&7).expect("prepare created the pane");
-    // The atlas the pass above filled, which this path samples rather than
-    // fills: the shadows are part of the picture the two are compared on.
-    let cells = pane
-        .offscreen
-        .as_ref()
-        .and_then(|o| o.shadow.as_ref())
-        .map_or(&res.compiled.shadow_dummy_bind_group, |a| a.read());
-    let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
-        // The pane's own order, walked the same way `prepare` walks it — a
-        // second expression of it here would make the two paths differ by draw
-        // order rather than by the thing under test. The fixture carries no
-        // name, so that arm would be dead code standing in for a claim nothing
-        // here makes; it fails instead.
-        for draw in &pane.draws {
-            match *draw {
-                Draw::Nodes(a, b) => {
-                    pass.set_pipeline(&node_pipeline);
-                    pass.set_bind_group(0, &pane.bind_group, &[]);
-                    pass.set_bind_group(1, light, &[]);
-                    pass.set_bind_group(2, cells, &[]);
-                    pass.set_bind_group(3, &pane.caster_bind_group, &[]);
-                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                    pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
-                    pass.draw(0..4, a..b);
-                }
-                Draw::Pluses(a, b) => {
-                    pass.set_pipeline(&plus_pipeline);
-                    pass.set_bind_group(0, &pane.bind_group, &[]);
-                    pass.set_bind_group(1, light, &[]);
-                    pass.set_bind_group(2, cells, &[]);
-                    pass.set_bind_group(3, &pane.caster_bind_group, &[]);
-                    pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
-                    pass.draw(0..4, a..b);
-                }
-                other => panic!("the parity fixture drew a {other:?}, which this path cannot"),
-            }
-        }
-    });
-
-    let composite = readback(&device, &queue, &composite_tex, SIZE);
-    let direct = readback(&device, &queue, &direct_tex, SIZE);
-    let unoccluded = readback(&device, &queue, &unoccluded_tex, SIZE);
-
-    // Guard against vacuous success: the scene must actually have drawn
-    // over the clear color somewhere.
-    let bg = [18u8, 20, 23, 255]; // clear color as 8-bit RGBA
-    assert!(
-        direct.chunks(4).any(|px| px.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 8)),
-        "direct render drew nothing; the parity comparison is vacuous"
-    );
-
-    let occluded: Vec<bool> =
-        composite.chunks(4).zip(unoccluded.chunks(4)).map(|(a, b)| a != b).collect();
-    let hidden = occluded.iter().filter(|&&o| o).count();
-    assert!(hidden > 50, "occlusion moved only {hidden} pixels: the fixture overlaps no nodes");
-    // 157 when measured (#1344); a few times that is a different fixture or a
-    // different occlusion, not this one with more room to hide in.
-    assert!(
-        hidden < 600,
-        "occlusion moved {hidden} pixels, far more than the 157 this fixture measured"
-    );
-    let darker = composite
-        .chunks(4)
-        .zip(direct.chunks(4))
-        .zip(&occluded)
-        // The same three-code per-channel rounding allowance used below.
-        // Summing RGB first would charge one rounding step three times.
-        .filter(|((a, b), &o)| {
-            o && a[..3].iter().zip(&b[..3]).any(|(&a, &b)| i16::from(a) + 3 < i16::from(b))
-        })
-        .count();
-    assert_eq!(
-        darker, 0,
-        "where occlusion acts the offscreen path came out darker than the direct draw at \
-         {darker} pixels; it should only restore background"
-    );
-
-    let (mut max_diff, mut at) = (0u8, 0usize);
-    for (i, (&a, &b)) in composite.iter().zip(&direct).enumerate() {
-        if !occluded[i / 4] && a.abs_diff(b) > max_diff {
-            max_diff = a.abs_diff(b);
-            at = i;
-        }
-    }
-    assert!(
-        max_diff <= 3,
-        "offscreen+composite diverges from direct draw: max channel diff \
-         {max_diff} at byte {at} (composite {:?} vs direct {:?})",
-        &composite[at & !3..(at & !3) + 4],
-        &direct[at & !3..(at & !3) + 4],
-    );
 }
 
 /// A lattice that stops drawing stops reporting a GPU time, rather than

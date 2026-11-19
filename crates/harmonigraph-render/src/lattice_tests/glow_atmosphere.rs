@@ -330,7 +330,7 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
         shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
             .material_tile
             .as_ref()
-            .map(|tile| tile.geometry_binding())
+            .map(|tile| (tile.binding(), tile.bakes()))
     };
     let original_tile = geometry(&shooter).unwrap();
     scene.glow_clock = Some(8.0);
@@ -399,11 +399,11 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
         ..Default::default()
     };
     let tile = |shooter: &Shooter| {
-        shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
+        let tile = shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
             .material_tile
             .as_ref()
-            .unwrap()
-            .geometry_binding()
+            .unwrap();
+        (tile.binding(), tile.bakes())
     };
     type Turn = fn(&mut MaterialSettings);
     for (style, label, rebake, turn) in [
@@ -437,7 +437,9 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
                 "brightness must preserve premultiplied coverage"
             );
         }
-        assert_eq!(before_tile != tile(&shooter), rebake, "{style:?}/{label}: tile invalidation");
+        let (binding, bakes) = tile(&shooter);
+        assert_eq!(binding, before_tile.0, "{style:?}/{label}: a turn rebakes in place");
+        assert_eq!(bakes != before_tile.1, rebake, "{style:?}/{label}: tile invalidation");
         let changed = before
             .as_chunks::<4>()
             .0
@@ -672,4 +674,38 @@ fn the_clouds_detail_fades_where_it_is_finer_than_the_glow_texel() {
     assert!(count > 500, "only {count} halo texels to read");
     let curvature = curvature / count as f32;
     assert!(curvature < 0.39, "the detail still grains the light: curvature {curvature}");
+}
+
+/// A Stars resolution change resizes the star image alone: the pane's star
+/// light and the atlas keep their sizes and are carried, and the image is
+/// dropped before its replacement is built.
+#[test]
+fn a_stars_resolution_change_rebuilds_the_lattice_star_image_alone() {
+    use harmonigraph_scene::LatticeMaterial;
+    // A device of its own, as the allocation recorder counts per device.
+    let Some(mut shooter) = Shooter::fresh(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.view.atmosphere.material_style = LatticeMaterial::Stars;
+    scene.glow_clock = Some(3.0);
+    let targets = |shooter: &Shooter| {
+        let resources = shooter.resources.get::<LatticeResources>().unwrap();
+        let offscreen = resources.panes[&shooter.pane].offscreen.as_ref().unwrap();
+        let source = offscreen.glow.as_ref().unwrap().material_source.as_ref().unwrap();
+        source.stars().expect("a starfield").targets()
+    };
+    scene.view.atmosphere.stars.star_resolution = 0.5;
+    glow(&mut shooter, &scene);
+    let (light, atlas, image) = targets(&shooter);
+    scene.view.atmosphere.stars.star_resolution = 1.0;
+    shooter.shot_again(&scene);
+    let (carried_light, carried_atlas, resized) = targets(&shooter);
+    assert_ne!(image, resized, "the fixture must resize the image");
+    assert_eq!(light, carried_light, "the star light was rebuilt for a size it already had");
+    assert_eq!(atlas, carried_atlas, "the atlas was rebuilt for a size it already had");
+    #[cfg(target_vendor = "apple")]
+    assert_eq!(
+        crate::gpu_memory::most_copies_of(&shooter.device).get("star_image"),
+        Some(&1),
+        "the old star image was alive when its replacement was built"
+    );
 }
