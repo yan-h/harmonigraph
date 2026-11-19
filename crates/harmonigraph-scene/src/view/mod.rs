@@ -19,12 +19,7 @@ use ring_stack::{slot_start, Stack};
 
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, SevensLabel};
-use crate::{
-    AtmosphereSettings, Camera, ShadowSettings, COLOR_RANGE_MIN_SPAN, FADE_TIME_MAX, GAP_MAX,
-    GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX,
-    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PITCH_COLOR_MAX,
-    PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
-};
+use crate::{AtmosphereSettings, Camera, ShadowSettings, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR};
 use harmonigraph_core::{coords, Envelope, LatticePos};
 
 /// What every text-size bar offers, and so what a persisted scale is fit to.
@@ -118,6 +113,166 @@ pub const GLOW_ACCUMULATION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 
 /// Shared bar and load range for [`ViewConfig::hide_behind`].
 pub const HIDE_BEHIND_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+
+/// The longest wait the Delay bar offers before a melody/bass mark starts
+/// easing in ([`ViewConfig::mark_delay`]), and the clamps both load sanitation
+/// and `derive_scene` use. ONE constant for the bar, the stored value and the
+/// picture so those three boundaries cannot drift apart.
+///
+/// A second, because that is where the setting stops being about flicker and
+/// starts being about tempo: at 120bpm it marks only what is held for a whole
+/// beat, and the useful settings — a passing sixteenth is 125ms — sit in the
+/// first quarter of the bar. Past a second a chord would have to be held
+/// deliberately still before its ends read at all, which is a different
+/// instrument rather than more of this one.
+pub const MARK_DELAY_MAX: f32 = 1.0;
+
+/// The longest Note fade on offer ([`ViewConfig::fade_time`]): the bar's far
+/// end, and what load sanitation holds a saved one to.
+///
+/// A second, which is where a fade stops being a release and starts being a
+/// held image of a note that is already over: past it the lattice shows a
+/// chord the player has left, and the reading of what is DOWN goes with it.
+/// The same line the mark Delay is drawn on ([`MARK_DELAY_MAX`]), so the two
+/// note-wide times share one scale and can be read against each other.
+pub const FADE_TIME_MAX: f32 = 1.0;
+
+/// The top of the Pitch color range's axis ([`ViewConfig::darkest_pitch`] and
+/// [`ViewConfig::brightest_pitch`]), in MIDI notes; the floor is note 0. Both
+/// ends span the whole axis, so the pair reads as one two-handle control, and
+/// their order is kept by [`COLOR_RANGE_MIN_SPAN`] rather than by a split.
+pub const PITCH_COLOR_MAX: f32 = 120.0;
+
+/// Closest the two ends of the Pitch color range may come — the span the
+/// color gradient covers, which is a different bar from the analyzer's window
+/// on the same axis. An octave: a gradient aimed tighter than one has notes a
+/// semitone apart at opposite ends of the spectrum, and nothing about the
+/// analyzer's own floor (`PITCH_RANGE_MIN_SPAN` in harmonigraph-ui, which is
+/// about how small type may be drawn) says anything about that.
+pub const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
+
+/// The narrowest and widest the spectral kernel can be set to
+/// ([`ViewConfig::spectral_width`]), in cents — the bar's two ends, and what
+/// `sanitize` holds a hand-edited view to.
+///
+/// The floor is a third of an analyzer bucket (3.125¢), which is as narrow as
+/// asking is worth: at 1¢ the kernel already sits inside one bucket, reading a
+/// single 3.125¢ column of the spectrum — precisely the exposure the whole
+/// design avoids — and narrower buys nothing a column does not already give.
+/// The ceiling is a comfortable quarter-tone,
+/// wide enough to take in a tempered seventh's 31¢ miss with room over — past
+/// that the kernel starts admitting the NEXT lattice node's partials as well as
+/// this one's, and the constellation smears into a glow.
+pub const SPECTRAL_WIDTH_MIN: f32 = 1.0;
+
+/// See [`SPECTRAL_WIDTH_MIN`].
+pub const SPECTRAL_WIDTH_MAX: f32 = 50.0;
+
+/// The ends of the bars that size a node's layers, in quad UV units — the
+/// stack [`ViewConfig::rings`] reads outward from the center, and what it holds
+/// a hand-edited view to.
+///
+/// Every one of them has 0 for its low end, and on a WIDTH 0 is that layer's
+/// off position rather than a hairline of it: one way to turn a layer off, in
+/// the same place on every layer. What the high ends buy is a bar whose useful
+/// settings are spread over its whole travel — the quad is 1 across, so a ring
+/// bar reaching 1 would spend most of itself on stacks that are already off the
+/// node's edge.
+///
+/// [`RING_WIDTH_MAX`] is the same for the audio ring and the octave band,
+/// because they are read the same way: a wedge whose radial extent is a
+/// hairline says nothing about how loud it is, whichever ring it is on, and
+/// neither is worth more of the quad than the other.
+pub const RING_WIDTH_MAX: f32 = 0.6;
+
+/// See [`RING_WIDTH_MAX`].
+pub const MARK_THICKNESS_MAX: f32 = 0.3;
+
+/// See [`RING_WIDTH_MAX`]. The one bar of the stack that is a POSITION rather
+/// than a width — how far out the innermost layer begins
+/// ([`ViewConfig::ring_inner`]) — which is why its low end is not an off
+/// position: nothing is switched off there, the stack simply seats on the
+/// node's own center.
+///
+/// Short of the quad edge by a tenth, so the top of the bar is a node whose
+/// rings are being refused one at a time rather than one with nowhere at all to
+/// put them.
+pub const RING_INNER_MAX: f32 = 0.9;
+
+/// See [`RING_WIDTH_MAX`]. The ceiling on a node's shared radial and angular
+/// padding ([`ViewConfig::ring_gap`]).
+///
+/// It is the radial use the number is sized for, that being the one spent out
+/// of the quad, and spent twice over on one node
+/// (between the audio ring and the band, and between the band and the marks):
+/// at the top of the bar the gaps alone are two fifths of it. The angular use
+/// costs the stack nothing, but a gap of a whole sector's arc would erase every
+/// indicator, so the same ceiling is useful on both axes.
+pub const GAP_MAX: f32 = 0.2;
+
+/// How far a resting marker's arm may be asked to reach
+/// ([`ViewConfig::plus_arm`]), in the same quad UV units the layer sizes above
+/// are in, so a marker and a ring radius are two readings on one axis and can
+/// be compared by their numbers.
+///
+/// Sized against [`RING_INNER_MAX`] rather than under it: a marker is not part
+/// of the ring stack and owes it no room, so at the top of the arm bar it
+/// reaches past the middle a node's rings stand around, and the lattice at
+/// rest is a field of crosses rather than of points. That is the far end being
+/// a different picture, which is what a bar's far end is for.
+pub const PLUS_SIZE_MAX: f32 = 0.9;
+
+/// A resting marker's whole thickness across an arm, in the quad UV of
+/// [`PLUS_SIZE_MAX`], per unit of [`ViewConfig::label_scale`] — so a bigger
+/// label scale draws heavier crosses the way it draws heavier letters.
+///
+/// A letter's horizontal stroke: Iosevka Fixed Curly Medium's bars are about
+/// 0.080 em and its stems 0.090, and a letter's em is 0.77 uv at label scale 1,
+/// so 0.062 and 0.069 uv. The bar's weight rather than the stem's, since a
+/// cross is all bars.
+///
+/// The two part in one place: a label's type is clamped to 1–512 physical
+/// pixels and sized at the focus plane (`text.rs`'s ladder), and a cross is
+/// neither.
+pub const PLUS_WIDTH_PER_LABEL_SCALE: f32 = 0.062;
+
+/// How far past a node's outermost drawn edge its glow may be asked to reach
+/// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
+/// above are in.
+///
+/// Sized for the light that stops being an ACCENT. A uv of 1 is 0.45 of the
+/// step between two neighbouring nodes — the node's own radius is
+/// `NODE_RADIUS_FACTOR` of that step and its quad is 1.8 radii across at uv 1
+/// (`node_vertex`) — so a reach of about one covers the gap to a neighbour and
+/// no further, which is a halo on each node. Eight crosses three or four
+/// lattice steps: every node's light overlaps every node's light for a
+/// neighbourhood around it, so nothing in that layer is a node any more, and
+/// what the pane draws is a coloured field with the lattice sitting in it.
+/// That is a different picture rather than more of the same one, and it is the
+/// one the far end of this bar is for.
+pub const GLOW_REACH_MAX: f32 = 8.0;
+
+/// What the node glow scales its own skirt by
+/// (see [`ViewConfig::glow_strength`]).
+///
+/// Its own ceiling rather than the bloom's ([`ViewConfig::note_bloom`]), because it is
+/// a different light: the bloom's chain thresholds, so its strength acts on the
+/// bright end alone, where this one scales one node's own skirt. Two is where
+/// the travel stops being about the light and starts being about the clamp —
+/// the base (`GLOW_BASE` in common.wgsl) is picked so that 1 reads plainly,
+/// which puts the middle of a node at saturation somewhere short of this.
+pub const GLOW_STRENGTH_MAX: f32 = 2.0;
+
+/// The longest attack or release the node glow offers, in seconds (see
+/// [`ViewConfig::glow_attack`]).
+///
+/// Longer than the audio ring's own pair ([`SPECTRAL_BALLISTICS_MAX`]) because
+/// it is a different quantity: that one is how fast a measurement moves, and a
+/// third of a second is already a smear, where this is how long a halo hangs
+/// around after the note that lit it. Six seconds is a light that is plainly
+/// still leaving a bar later, which is the far end of the look rather than a
+/// guard rail on it.
+pub const GLOW_BALLISTICS_MAX: f32 = 6.0;
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.

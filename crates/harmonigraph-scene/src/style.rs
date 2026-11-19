@@ -597,6 +597,27 @@ pub enum NoteNames {
     Played,
 }
 
+/// How wide a lattice group's shadow may be asked to be (see [`ShadowStyle::width`]),
+/// in the quad UV units the layer sizes above are in.
+///
+/// One node radius, so the percentage printed on the bar is its literal share
+/// of the node and its far end is 100%. That still takes the blur well past the
+/// gaps between a node's layers while keeping the control about the shadow
+/// around the node rather than empty room beyond it.
+///
+/// It is the cheap direction of the two the bar moves in. A cell is drawn at
+/// `min(1, SIGMA_CELL_MAX / σ)` of the target's pixels (`shadow::pack_into`), so the
+/// atlas SHRINKS as this opens and the blur's tap count is flat; what grows is
+/// the quad every caster is billboarded onto, each one reaching
+/// `REACH_SIGMAS · σ` past its own ink (`shadow_reach_uv` in lattice.wgsl), and
+/// so the fill the scene pass pays. `timing.rs` is what reads that back.
+pub const GLOW_SHADOW_MAX: f32 = 1.0;
+
+/// Spectral notes and text can cast three four-point edge units (12 points).
+/// Keep the unit fixed so opening the range preserves saved widths. Wider
+/// shadows cover more pixels; the shared blur still caps its kernel radius.
+pub const SPECTRAL_SHADOW_MAX: f32 = 3.0;
+
 /// One GROUP of casters' shadow: how far it reaches, how far its caster grows
 /// first and how dark it lands.
 ///
