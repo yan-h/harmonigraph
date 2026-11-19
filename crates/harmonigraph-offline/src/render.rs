@@ -8,7 +8,8 @@
 
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_ui::{
-    begin_frame, draw_pane, AppearanceDocument, Layout, PictureState, SpectrogramRender,
+    begin_frame, composed_window, draw_pane, AppearanceDocument, Layout, Pane, PictureState,
+    SpectrogramRender,
 };
 
 use crate::wav::Audio;
@@ -231,10 +232,7 @@ pub fn render(
         // background is the render pass's clear color rather than a
         // painted rect.
         let output = context.run_ui(frame_input(screen, now, max_texture_side), |ui| {
-            for (surface, (pane, rect)) in placements.iter().enumerate() {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                draw_pane(&mut child, *pane, &mut state, now, surface);
-            }
+            draw_panes(ui, &placements, &mut state, now);
             // Last, over the gaps the panes left: the seam that keeps the
             // lattice and the spectral pane from reading as one field.
             settings.layout.paint_dividers(ui.painter(), &placements);
@@ -392,6 +390,22 @@ fn prepare_frame(
     }
     begin_frame(state, &replay.params, now);
     Ok(now)
+}
+
+/// Draw one frame's panes, each at its placement, after [`begin_frame`] has
+/// run for `now`. The spectral pane describes the window this frame's lattice
+/// draws, not the last frame's (`harmonigraph_ui::composed_window`).
+pub(crate) fn draw_panes(
+    ui: &mut egui::Ui,
+    placements: &[(Pane, egui::Rect)],
+    state: &mut PictureState,
+    now: f64,
+) {
+    let shown = composed_window(state, placements);
+    for (surface, &(pane, rect)) in placements.iter().enumerate() {
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        draw_pane(&mut child, pane, state, now, surface, shown);
+    }
 }
 
 #[cfg(test)]
@@ -1149,6 +1163,81 @@ mod tests {
                 "{style:?}, memory {memory}: the newest edge {edge} against {inside} further in"
             );
         }
+    }
+
+    /// An exported frame's spectral pane describes the lattice drawn beside it
+    /// in that frame, from the first frame on (#1833). Read from the frame
+    /// before, frame 0 had only the reach, which a zoomed-out perspective lattice
+    /// draws far past, so a note the lattice lit wore the off-lattice band.
+    ///
+    /// The note is bent onto a node at the far edge of the window the lattice's
+    /// own placement draws, outside the reach, under just tuning, where distinct
+    /// nodes are distinct pitches; the 12-TET default finds a match for any
+    /// pitch within six fifths.
+    #[test]
+    fn an_exported_frame_flags_nothing_its_own_lattice_draws() {
+        use harmonigraph_core::{LatticePos, NoteEvent, NoteEventKind, SourceId};
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
+        state.appearance.camera.projection = harmonigraph_scene::Projection::Perspective;
+        state.appearance.camera.distance = harmonigraph_scene::Camera::MAX_DISTANCE;
+        state.appearance.view.fade_time = 0.0;
+        let spectrum = &mut state.appearance.spectrum;
+        spectrum.orientation = harmonigraph_ui::SpectralOrientation::Left;
+        (spectrum.low_midi, spectrum.high_midi) = (55.0, 73.0);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 720.0));
+        let placements =
+            Layout::split(harmonigraph_ui::LatticeSide::Right, 0.36).resolve(screen.size());
+        let now = 0.05;
+        begin_frame(&mut state, &crate::replay::ReplayParams::default(), now);
+        state.runtime.tuning = harmonigraph_core::Tuning::just();
+
+        let (_, lattice) = *placements.iter().find(|(pane, _)| *pane == Pane::Lattice).unwrap();
+        let aspect = lattice.width() / lattice.height();
+        let window = state.appearance.view.scrolled(&state.appearance.camera, aspect);
+        let reach = state.appearance.view.reach();
+        let far = [
+            LatticePos::new(0, window.min.fives, 0),
+            LatticePos::new(0, window.max.fives, 0),
+            LatticePos::new(window.min.threes, 0, 0),
+            LatticePos::new(window.max.threes, 0, 0),
+        ]
+        .into_iter()
+        .find(|&pos| window.contains(pos) && !reach.contains(pos))
+        .expect("a zoomed-out perspective lattice draws nothing the reach cannot name");
+        let cents = state.runtime.tuning.pitch_class(far).to_cents();
+        let tracker = &mut state.runtime.tracker;
+        tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones: cents / 100.0 },
+        });
+
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        let band = harmonigraph_ui::theme::picture_off_scale().gamma_multiply(0.3);
+        let bands = |draw: &mut dyn FnMut(&mut egui::Ui)| {
+            let output = context.run_ui(frame_input(screen, now, 8192), |ui| draw(ui));
+            let shapes = output.shapes.iter();
+            shapes.filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == band)).count()
+        };
+        // The fixture reaches the band: asked of the reach, the pane flags it.
+        let (_, spectral) = *placements.iter().find(|(pane, _)| *pane == Pane::Spectral).unwrap();
+        let flagged = bands(&mut |ui| {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(spectral));
+            draw_pane(&mut child, Pane::Spectral, &mut state, now, 1, reach);
+        });
+        assert_eq!(flagged, 1, "the fixture's note is not off the reach");
+
+        let flagged = bands(&mut |ui| draw_panes(ui, &placements, &mut state, now));
+        assert_eq!(flagged, 0, "the lattice lights this note and frame 0 flags it as off it");
+        assert_eq!(
+            state.surfaces.drawn_this_frame,
+            Some(window),
+            "the lattice drew a window other than its placement's",
+        );
     }
 
     #[test]

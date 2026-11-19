@@ -480,12 +480,14 @@ fn two_placements_of_one_pane_fold_a_grid_each() {
         super::probe::painted_full(screen, |ui| {
             for (surface, rect) in &placements {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                let shown = state.picture.shown();
                 crate::draw_pane(
                     &mut child,
                     crate::Pane::Spectral,
                     &mut state.picture,
                     100.0,
                     *surface,
+                    shown,
                 );
             }
         });

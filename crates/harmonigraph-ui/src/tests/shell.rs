@@ -38,6 +38,7 @@ fn draw_panes(ctx: &egui::Context, state: &mut SharedState, t: f64, panes: &[Pan
         fn set(&self, _: params::ParamKey, _: f32) {}
     }
     begin_frame(&mut state.picture, &Host, t);
+    let shown = state.picture.shown();
     for &pane in panes {
         let _ = ctx.run_ui(
             egui::RawInput {
@@ -48,7 +49,7 @@ fn draw_panes(ctx: &egui::Context, state: &mut SharedState, t: f64, panes: &[Pan
                 time: Some(t),
                 ..Default::default()
             },
-            |ui| crate::draw_pane(ui, pane, &mut state.picture, t, 0),
+            |ui| crate::draw_pane(ui, pane, &mut state.picture, t, 0, shown),
         );
     }
 }

@@ -79,6 +79,7 @@ pub use video::{
 // the shell to the model, and routing it through the crate that only passes it
 // along is what made the UI look like its owner.
 use harmonigraph_perf::{FrameCosts, Workload};
+use harmonigraph_scene::DrawnWindow;
 use params::ParamBackend;
 
 /// End a drag whose release is never coming, because it is holding every
@@ -462,12 +463,17 @@ pub enum Pane {
 /// names. [`Layout::resolve`] drops a placement too small to draw, so the index
 /// is into what it returned rather than into the file — which is the same list
 /// every frame of a render, the size being fixed for the whole of one.
+///
+/// `shown` is the window of the lattice the spectral pane describes, from
+/// [`composed_window`] over the same placements; the lattice derives its own
+/// from its rect.
 pub fn draw_pane(
     ui: &mut egui::Ui,
     pane: Pane,
     state: &mut PictureState,
     now: f64,
     surface: usize,
+    shown: DrawnWindow,
 ) {
     match pane {
         Pane::Lattice => {
@@ -500,9 +506,28 @@ pub fn draw_pane(
             surface,
             1.0,
             panes::spectral::Navigation::None,
+            shown,
             panes::lattice::NO_SOLO,
         ),
     }
+}
+
+/// The window a composed frame's lattice draws this frame, for the panes that
+/// describe it: its first Lattice placement's, under the camera
+/// [`begin_frame`] has synced, or the reach when the layout has no lattice.
+///
+/// Known before anything draws, because the placements are: unlike the dock,
+/// whose panes draw in the order the user arranged them and so read the
+/// window of the frame before (see [`begin_frame`]), a composed frame — an
+/// export, the Video preview — has one answer for the frame it is drawing.
+/// Reading the frame before's instead put a false off-lattice band down an
+/// export's first frame, lagged camera automation by a frame, and had the
+/// preview describe the docked tab's lattice rather than its own (#1833).
+pub fn composed_window(state: &PictureState, placements: &[(Pane, egui::Rect)]) -> DrawnWindow {
+    placements.iter().find(|(pane, _)| *pane == Pane::Lattice).map_or_else(
+        || state.appearance.view.reach(),
+        |&(_, rect)| panes::lattice::window_at(state, rect),
+    )
 }
 
 /// Repaint cadence while nothing animates: newly arriving MIDI shows up

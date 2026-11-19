@@ -450,10 +450,7 @@ mod tests {
                 crate::render::frame_input(self.screen, now, self.renderer.max_texture_side());
             let placements = &self.placements;
             let output = self.context.run_ui(input, |ui| {
-                for (surface, (pane, rect)) in placements.iter().enumerate() {
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                    harmonigraph_ui::draw_pane(&mut child, *pane, state, now, surface);
-                }
+                crate::render::draw_panes(ui, placements, state, now);
             });
             let primitives = self.context.tessellate(output.shapes, self.pixels_per_point);
             self.renderer.render_to_vec(
@@ -801,10 +798,7 @@ mod tests {
                 let input =
                     crate::render::frame_input(screen, now, sheet.renderer.max_texture_side());
                 let output = sheet.context.run_ui(input, |ui| {
-                    for (surface, (pane, rect)) in layout.resolve(points).into_iter().enumerate() {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                        harmonigraph_ui::draw_pane(&mut child, pane, &mut state, now, surface);
-                    }
+                    crate::render::draw_panes(ui, &layout.resolve(points), &mut state, now);
                 });
                 let primitives = sheet.context.tessellate(output.shapes, 1.0);
                 let clear = egui::Color32::BLACK;

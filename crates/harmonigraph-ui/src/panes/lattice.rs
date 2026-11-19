@@ -234,6 +234,18 @@ pub(crate) fn compose_scene(
 pub(crate) const NO_SOLO: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS] =
     [false; harmonigraph_scene::star_plan::STAR_DEPTHS];
 
+fn aspect_of(rect: egui::Rect) -> f32 {
+    rect.width() / rect.height().max(1.0)
+}
+
+/// The window a copy of the lattice drawn over `rect` shows, under the camera
+/// as it stands: what [`draw_lattice`] returns, known before it draws, which is
+/// what lets a composed frame hand it to the panes beside the lattice in the
+/// same frame (`crate::composed_window`).
+pub(crate) fn window_at(state: &PictureState, rect: egui::Rect) -> harmonigraph_scene::DrawnWindow {
+    state.appearance.view.scrolled(&state.appearance.camera, aspect_of(rect))
+}
+
 /// The scene one copy of the lattice draws over `rect`, and the window it
 /// shows: a different window from the one the pane beside it shows and from
 /// the one the names are chosen out of (see `ViewConfig::scrolled`), derived
@@ -251,8 +263,8 @@ fn copy_scene(
     point_scale: f32,
     star_solo: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
 ) -> (harmonigraph_scene::DrawnWindow, harmonigraph_scene::Scene) {
-    let aspect = rect.width() / rect.height().max(1.0);
-    let window = state.appearance.view.scrolled(&state.appearance.camera, aspect);
+    let aspect = aspect_of(rect);
+    let window = window_at(state, rect);
     let mut scene = compose_scene(state, &window, aspect, hovered, surface, now);
     scene.edge_softness_points *= point_scale;
     // The ground this pass is composited over. Only the shell knows it -- the

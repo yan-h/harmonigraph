@@ -104,7 +104,8 @@ fn the_ui_scale_leaves_the_picture_alone() {
         let screen = egui::vec2(600.0, 400.0);
         let out = super::probe::frame_full(&super::probe::themed_scaled(scale), screen, |ui| {
             crate::begin_frame(&mut state.picture, &backend, 1.0);
-            crate::draw_pane(ui, crate::Pane::Spectral, &mut state.picture, 1.0, 0);
+            let shown = state.picture.shown();
+            crate::draw_pane(ui, crate::Pane::Spectral, &mut state.picture, 1.0, 0, shown);
         });
         // Debug rather than the shapes themselves: they hold floats and
         // texture handles and are not `PartialEq`, and a difference anywhere
