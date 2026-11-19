@@ -30,10 +30,18 @@ struct Observed {
     processed: Vec<f32>,
     /// The host's answer to each note the fixture pushed.
     pushes: Vec<bool>,
+    /// Whether each `process` had audio.
+    audio: Vec<bool>,
 }
 impl Observed {
     const fn new() -> Self {
-        Self { begins: Vec::new(), events: Vec::new(), processed: Vec::new(), pushes: Vec::new() }
+        Self {
+            begins: Vec::new(),
+            events: Vec::new(),
+            processed: Vec::new(),
+            pushes: Vec::new(),
+            audio: Vec::new(),
+        }
     }
     /// Room for every test's callbacks, so the guarded callback never
     /// allocates.
@@ -43,6 +51,7 @@ impl Observed {
             events: Vec::with_capacity(64),
             processed: Vec::with_capacity(64),
             pushes: Vec::with_capacity(64),
+            audio: Vec::with_capacity(64),
         };
     }
 }
@@ -115,6 +124,7 @@ impl Plugin for Fixture {
         let mut observed = observed();
         observed.events.extend(block.events());
         observed.processed.push(self.params.float(0));
+        observed.audio.push(block.audio.is_some());
         let note = InputValue::Note {
             kind: CLAP_EVENT_NOTE_ON,
             note_id: 1,
@@ -458,6 +468,7 @@ fn begin_reads_the_table_before_the_callbacks_automation() {
     let observed = observed();
     assert_eq!(observed.begins, [(true, false, 0.0)]);
     assert_eq!(observed.processed, [0.75]);
+    assert_eq!(observed.audio, [true]);
     assert_eq!(observed.events.len(), 1, "the automation reaches the plugin as an event too");
     assert_eq!(observed.events[0].sample, 10);
 }
@@ -512,6 +523,7 @@ fn an_invalid_list_loses_the_callbacks_input() {
     assert_eq!(observed.begins, [(true, true, 0.0)]);
     assert!(observed.events.is_empty(), "not even the callback's transport");
     assert_eq!(observed.pushes, [false]);
+    assert_eq!(observed.audio, [false], "no audio to record or analyze");
     assert!(d.sink.offers.is_empty());
 }
 
