@@ -28,7 +28,7 @@ const UI_STATE: &str = "ui-state";
 /// are taken one after the other, never nested.
 pub(crate) fn save(params: &HarmonigraphParams, state: &mut PluginState) {
     let maps = serde_json::to_string(&*params.maps.read());
-    let window = serde_json::to_string(&*params.editor_state);
+    let window = serde_json::to_string(&params.editor_state.saved());
     let look = serde_json::to_string(&*params.ui_state.save());
     for (key, json) in [(LATTICE_MAPS, maps), (EDITOR_STATE, window), (UI_STATE, look)] {
         match json {

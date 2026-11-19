@@ -104,7 +104,7 @@ pub(super) fn frame(
             .and_then(|timing| harmonigraph_perf::link_target_fps(timing.refresh, timing.divisor)),
         shell_ms: shell_start.elapsed().as_secs_f32() * 1000.0 + state.take_ms,
     };
-    // A fold is priced against `egui_state.size`, which is the size the window
+    // A fold is priced against `egui_state.size()`, which is the size the window
     // actually has: the window's size source negotiated any size asked for
     // before this frame, and the size changes only when the host agrees, or
     // in the own window to the size AppKit applied. So two folds in
@@ -113,7 +113,7 @@ pub(super) fn frame(
     // Offered only where the shell can give the editor its own window, and
     // read back after the UI has had the chance to flip it.
     shared.ui.workspace.interaction.own_window =
-        egui_state.size.offered().then(|| !egui_state.docked());
+        egui_state.window.offered().then(|| !egui_state.docked());
     let take_start = Instant::now();
     let mut drawing = Duration::ZERO;
     let ask = shared.take_pass(sample_rate, |shared| {
@@ -146,7 +146,7 @@ pub(super) fn frame(
     // Also where a host restore that moved the setting reaches an open editor.
     if let Some(own) = shared.ui.workspace.interaction.own_window {
         egui_state.set_docked(!own);
-        egui_state.size.want(own);
+        egui_state.window.want(own);
     }
 
     // A pane folded sideways (or came back) leaves every other pane its width
@@ -156,7 +156,7 @@ pub(super) fn frame(
     // before the frame it will be laid out in — is where this window takes it
     // (see `next_size`).
     if let Some(size) = ask {
-        egui_state.size.request_size((size.x.round() as u32, size.y.round() as u32));
+        egui_state.window.request_size((size.x.round() as u32, size.y.round() as u32));
         ui.ctx().request_repaint();
     }
     // A resize or an Own window switch marks the project modified, as an edit

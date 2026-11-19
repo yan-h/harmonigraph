@@ -10,7 +10,6 @@ pub(crate) mod gestures;
 pub(crate) mod input;
 mod lock;
 mod persist;
-mod pop_out;
 mod shared;
 #[cfg(all(feature = "startup-probe", target_os = "macos"))]
 pub(crate) mod startup_probe;
@@ -54,3 +53,8 @@ const MAX_SIZE: (u32, u32) = (8192, 8192);
 /// outside them is refused (Yan, #1814).
 pub(crate) const LIMITS: plugin_own_window::Limits =
     plugin_own_window::Limits { min: MIN_SIZE, max: MAX_SIZE };
+/// The title of the editor's own window, egui-plugin-window's, which keeps the
+/// picture on screen when the host is not the frontmost app, and the name
+/// AppKit remembers its place under, in the defaults of the process the plugin
+/// runs in: a new name would forget where the player put it.
+const NAME: &str = "Harmonigraph";

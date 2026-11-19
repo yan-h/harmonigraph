@@ -202,7 +202,7 @@ impl Editor for LatticeEditor {
             // SAFETY: the host's view the editor opened in, and baseview's
             // inside it, both alive for the call, on the main thread.
             unsafe {
-                self.egui_state.size.attach(
+                self.egui_state.window.attach(
                     parent,
                     view.ns_view,
                     !self.egui_state.docked(),
@@ -231,7 +231,7 @@ impl Editor for LatticeEditor {
     /// The size the host is told: a proposal while the host is being asked
     /// for it, and the accepted size otherwise.
     fn size(&self) -> (u32, u32) {
-        self.egui_state.size.reported_size()
+        self.egui_state.window.reported_size()
     }
 
     // Hosts with proper resize support (Bitwig at least) provide a native
@@ -245,7 +245,7 @@ impl Editor for LatticeEditor {
     /// A size the host's border drag proposes, held to the editor's limits,
     /// so the drag stops at them.
     fn adjust_size(&self, width: u32, height: u32) -> (u32, u32) {
-        self.egui_state.size.limits().clamp((width, height))
+        self.egui_state.window.limits().clamp((width, height))
     }
 
     /// Refused outside the limits, and otherwise taken, unless the own window
@@ -253,7 +253,7 @@ impl Editor for LatticeEditor {
     /// attaches the editor, the project will open it there
     /// ([`EditorSize::host_set_size`](plugin_own_window::EditorSize::host_set_size)).
     fn set_size(&self, width: u32, height: u32) -> bool {
-        let state = &self.egui_state.size;
+        let state = &self.egui_state.window;
         let size = (width, height);
         // Its own proposal echoed back, or the size it has, is no news.
         let told = state.reported_size();
@@ -292,8 +292,8 @@ pub(crate) fn next_size(
     host: &dyn EditorHost,
     shared: &EditorLock,
 ) -> Option<(u32, u32)> {
-    state.size.next_frame(opened, || {
-        let (width, height) = state.size.reported_size();
+    state.window.next_frame(opened, || {
+        let (width, height) = state.window.reported_size();
         let started = Instant::now();
         let accepted = host.request_resize((width, height));
         let roundtrip = started.elapsed().as_secs_f64() * 1000.0;

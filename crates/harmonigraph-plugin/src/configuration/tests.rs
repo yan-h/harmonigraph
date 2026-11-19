@@ -968,10 +968,9 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     frame();
     assert_eq!(device.service(), before + 2, "once");
 
-    let saved = crate::editor::EguiState::from_size(900, 700);
-    saved.set_docked(true);
+    let saved = crate::editor::SavedWindow { size: (900, 700), docked: true };
     let mut project = device.wrapper().get_state_object();
-    project.fields.insert("editor-state".into(), serde_json::to_string(&*saved).unwrap());
+    project.fields.insert("editor-state".into(), serde_json::to_string(&saved).unwrap());
     device.load(project);
     frame();
     assert_eq!(state.size(), (900, 700), "the restore installed");
@@ -1054,10 +1053,9 @@ fn a_restore_while_the_editor_is_open_resizes_its_window_at_the_next_frame() {
     frame();
     let kept = state.size();
     let restored = (kept.0 + 120, kept.1 + 80);
-    let saved = crate::editor::EguiState::from_size(restored.0, restored.1);
-    saved.set_docked(true);
+    let saved = crate::editor::SavedWindow { size: restored, docked: true };
     let mut project = device.wrapper().get_state_object();
-    project.fields.insert("editor-state".into(), serde_json::to_string(&*saved).unwrap());
+    project.fields.insert("editor-state".into(), serde_json::to_string(&saved).unwrap());
     let marks = device.service();
 
     device.load(project);
