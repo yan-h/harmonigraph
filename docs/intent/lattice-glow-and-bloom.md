@@ -26,4 +26,4 @@ One line per decision; the audit reads this before asking anything.
 
 Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
 
-- Off-pane halo owner selection moves into `harmonigraph-scene`, and the glow fade's step reads the scene's own view. To be built after #1838; see `lattice-notes.md`. #1861 R5
+- Off-pane halo owner selection moves into `harmonigraph-scene`, and the glow fade's step reads the scene's own view. Built with #1838 in PR #1882; see `lattice-notes.md`. #1861 R5

@@ -1,8 +1,10 @@
-//! Select geometry for off-pane light without creating another animation clock.
+//! The lattice pane's off-pane light owners, chosen by
+//! [`harmonigraph_scene::light_owners`] beside the rules that size and place a
+//! node; what this surface already carries light at is the one thing only the
+//! UI knows, since the glow fade lives here.
 
-use glam::{Vec2, Vec3};
 use harmonigraph_core::LatticePos;
-use harmonigraph_scene::{DrawnWindow, NodeMotion, MAX_DRAWN_NODES, MIN_NODE_SCALE};
+use harmonigraph_scene::DrawnWindow;
 
 pub(super) fn owners(
     state: &crate::PictureState,
@@ -11,87 +13,25 @@ pub(super) fn owners(
     surface: usize,
     now: f64,
 ) -> Vec<LatticePos> {
-    let spare = MAX_DRAWN_NODES.saturating_sub(window.count());
-    let view = &state.appearance.view;
-    if spare == 0 || !now.is_finite() || !view.glow_draws() {
-        return Vec::new();
-    }
-    let camera = &state.appearance.camera;
-    let Some(bounds) = view.light_owner_window(camera, aspect) else { return Vec::new() };
-    if window.contains(bounds.min) && window.contains(bounds.max) {
-        return Vec::new();
-    }
-    let classes = NodeMotion::light_classes(&state.runtime.tracker, view, &view.envelope(), now);
     let motion = state.surfaces.node_motion.get(&surface);
     let glow = state.surfaces.glow_fade.get(&surface);
-    if classes.is_empty() && motion.is_none() && glow.is_none() {
-        return Vec::new();
-    }
-    let center = view.center();
-    let transform = camera.view_proj(aspect);
-    let (right, up) = camera.right_up();
-    let radius = view.light_owner_radius();
-    let tuning = &state.runtime.tuning;
-    let mut extra: Vec<_> = bounds
-        .positions()
-        .filter(|&pos| {
-            if window.contains(pos) {
-                return false;
-            }
-            let class =
-                harmonigraph_core::PitchClass::from_cents(tuning.pitch_class(pos).to_cents());
-            // A nearest class is on either side in sorted octave order, wrapping
-            // at the ends, just as the trail's remembered-class lookup does.
-            let matches = if classes.is_empty() {
-                false
-            } else {
-                let above = classes.partition_point(|&pitch| pitch < class);
-                tuning.matches(classes[above % classes.len()], class)
-                    || tuning.matches(classes[(above + classes.len() - 1) % classes.len()], class)
-            };
-            if !matches
-                && !motion.is_some_and(|m| m.owns_light(pos))
-                && !glow.is_some_and(|g| g.owns(pos))
-            {
-                return false;
-            }
-            let centered = pos - center;
-            let world =
-                Vec3::new(centered.fives as f32, centered.threes as f32, centered.sevens as f32);
-            let scale = view.sevens_size.powi(centered.sevens.abs()).max(MIN_NODE_SCALE);
-            let r = radius * scale;
-            let mut lo = Vec2::splat(f32::INFINITY);
-            let mut hi = Vec2::splat(f32::NEG_INFINITY);
-            for x in [-1.0, 1.0] {
-                for y in [-1.0, 1.0] {
-                    let p = transform * (world + (right * x + up * y) * r).extend(1.0);
-                    if p.w > 0.0 && p.z >= 0.0 {
-                        let projected = p.truncate().truncate() / p.w;
-                        lo = lo.min(projected);
-                        hi = hi.max(projected);
-                    }
-                }
-            }
-            hi.x >= -1.0 && hi.y >= -1.0 && lo.x <= 1.0 && lo.y <= 1.0
-        })
-        .collect();
-    if extra.len() > spare {
-        let eye = camera.eye();
-        let distance = |p: &LatticePos| {
-            let p = *p - center;
-            Vec3::new(p.fives as f32, p.threes as f32, p.sevens as f32).distance_squared(eye)
-        };
-        extra.sort_unstable_by(|a, b| distance(a).total_cmp(&distance(b)));
-        extra.truncate(spare);
-    }
-    extra
+    harmonigraph_scene::light_owners(
+        &state.runtime.tracker,
+        &state.runtime.tuning,
+        &state.appearance.view,
+        &state.appearance.camera,
+        window,
+        aspect,
+        |pos| motion.is_some_and(|m| m.owns_light(pos)) || glow.is_some_and(|g| g.owns(pos)),
+        now,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use harmonigraph_core::{NoteEvent, SourceId};
-    use harmonigraph_scene::{Projection, Scene};
+    use harmonigraph_scene::{Projection, Scene, MAX_DRAWN_NODES};
 
     fn state() -> crate::PictureState {
         let mut state = crate::tests::probe::fresh().picture;

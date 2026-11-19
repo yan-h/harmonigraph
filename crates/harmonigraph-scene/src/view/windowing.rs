@@ -160,7 +160,7 @@ impl ViewConfig {
     /// [`glow_span`](crate::glow_span) in world units, as `vs_glow_splat` in
     /// lattice.wgsl draws it. Per-sheet scale (floored at
     /// [`MIN_NODE_SCALE`](crate::MIN_NODE_SCALE)) is applied by the selector.
-    pub fn light_owner_radius(&self) -> f32 {
+    pub(crate) fn light_owner_radius(&self) -> f32 {
         let rings = self.rings();
         crate::derive::marker_world(crate::glow_span(
             rings.outer,
@@ -174,7 +174,7 @@ impl ViewConfig {
     /// A billboard can leave its owner's sheet in Z under a tilted camera.
     /// Expand that slab before bounding visible points, then expand XY to reach
     /// their owners. The ordinary horizon budget bounds even degenerate views.
-    pub fn light_owner_window(&self, camera: &Camera, aspect: f32) -> Option<DrawnWindow> {
+    pub(crate) fn light_owner_window(&self, camera: &Camera, aspect: f32) -> Option<DrawnWindow> {
         let radius = self.light_owner_radius();
         let center = self.center();
         let (low, high) = self.sevens_window();

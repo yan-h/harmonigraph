@@ -828,11 +828,21 @@ fn a_node_added_to_a_pane_lights_in_its_own_colour() {
         scene.nodes = if arrived { vec![band, mark] } else { vec![band] };
         scene
     };
-    let one = shooter.shot(&scene_of(false));
-    let two = shooter.shot(&scene_of(true));
+    // The halo alone, against the same two nodes with the light off: the
+    // added node's own mark strip is green ink, which a difference between
+    // the two frames would count as light whatever its row held.
+    let ground = shooter.shot(&{
+        let mut scene = scene_of(true);
+        scene.view.glow_reach = 0.0;
+        scene
+    });
+    // The second frame on the first one's pane: a fresh pane per shot would
+    // draw two nodes from the start, and nothing would have been added.
+    shooter.shot(&scene_of(false));
+    let two = shooter.shot_again(&scene_of(true));
 
-    // What the second frame added, per channel, over the right-hand half of the
-    // picture — where the added node is, and where the first frame has nothing.
+    // The light over the right-hand half of the picture, where the added node
+    // is.
     let mut added = [0i64; 3];
     let row = SIZE[0] as usize;
     for i in 0..(SIZE[0] * SIZE[1]) as usize {
@@ -840,7 +850,7 @@ fn a_node_added_to_a_pane_lights_in_its_own_colour() {
             continue;
         }
         for (c, sum) in added.iter_mut().enumerate() {
-            *sum += (i64::from(two[i * 4 + c]) - i64::from(one[i * 4 + c])).max(0);
+            *sum += (i64::from(two[i * 4 + c]) - i64::from(ground[i * 4 + c])).max(0);
         }
     }
     assert!(added[1] > 0, "the added node lit nothing at all: {added:?}");
@@ -924,7 +934,10 @@ fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
         idle.melody_level = 1.0;
         // What `GlowFade` hands a node it gave no row to.
         idle.glow = harmonigraph_scene::GlowStep::default();
-        scene.nodes.push(idle);
+        // Ahead of the lit node, which then ships as instance 1 and reads
+        // row 0: behind it the two numberings agree, and a halo reading its
+        // instance's index rather than its row passes.
+        scene.nodes.insert(0, idle);
         scene
     };
     let unlit = |mut scene: Scene| -> Scene {

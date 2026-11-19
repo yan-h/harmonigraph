@@ -156,8 +156,6 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         &mut expected,
         &sounding(),
         &Tuning::default(),
-        &normalized,
-        &normalized.envelope(),
         &RingFade::default(),
         NOW,
     );

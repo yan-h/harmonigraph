@@ -2,20 +2,13 @@
 use harmonigraph_scene::Scene;
 
 pub(super) fn apply(scene: &mut Scene, state: &mut crate::PictureState, surface: usize, now: f64) {
-    // The pane's own envelope, assembled where every other one is
-    // (`ViewConfig::envelope`) rather than rebuilt from the two halves here.
-    // The shape and the duration are two view fields, and the single
-    // assembly point is what keeps a caller from pairing one with the wrong
-    // other — the Fade bar's preview is the one exception the doc there
-    // names, and this was a second, undeclared one.
-    let env = state.appearance.view.envelope();
+    // Stepped on the scene's own view and its envelope, which the motion reads
+    // for itself: a look handed in beside the scene could be a second one.
     let motion = state.surfaces.node_motion.entry(surface).or_default();
     motion.step(
         scene,
         &state.runtime.tracker,
         &state.runtime.tuning,
-        &state.appearance.view,
-        &env,
         &state.runtime.ring_fade,
         now,
     );

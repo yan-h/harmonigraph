@@ -20,8 +20,6 @@ pub(super) fn animated_snapshot(
         &mut scene,
         tracker,
         tuning,
-        view,
-        &view.envelope(),
         &harmonigraph_scene::RingFade::default(),
         now,
     );
@@ -244,7 +242,7 @@ pub(super) fn parity_scene() -> Scene {
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv
         // every glow bar is dialled in.
-        marker_unit: 0.34 * 1.8,
+        marker_unit: 0.34 * harmonigraph_scene::RADII_PER_UV,
         glow_clock: None,
         star_solo: Default::default(),
     }
@@ -297,6 +295,9 @@ pub(super) struct Shooter {
     /// egui's font texture as a shell publishes it before every frame: the
     /// stand-in sheet (`text::tests::atlas`) on the GPU.
     pub(super) font: wgpu::Texture,
+    /// The production linear blit the glow tests read the glow target back
+    /// through, built on the first read at `format` rather than on every one.
+    pub(super) blit: std::cell::OnceCell<wgpu::RenderPipeline>,
 }
 
 /// The device every [`Shooter::new`] draws on, and the programs a window
@@ -366,6 +367,7 @@ impl Shooter {
             size,
             pane: 1,
             clear: wgpu::Color::BLACK,
+            blit: std::cell::OnceCell::new(),
         }
     }
 
@@ -559,7 +561,7 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     // node's radius through this factor, so a scene that sets one and not the
     // other is a scene `derive_scene` cannot build — and every Shadow in it is two
     // different world distances, one for a ring and one for a cross.
-    scene.marker_unit = scene.node_radius * 1.8;
+    scene.marker_unit = scene.node_radius * harmonigraph_scene::RADII_PER_UV;
     scene
 }
 

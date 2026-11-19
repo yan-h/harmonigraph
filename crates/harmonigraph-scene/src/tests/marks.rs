@@ -15,10 +15,7 @@ fn motion_scene(
     now: f64,
 ) -> Scene {
     let mut scene = derive_scene(tracker, tuning, view, &view.reach(), Camera::default(), None);
-    let mut normalized = view.clone();
-    normalized.sanitize();
-    let view = &normalized;
-    motion.step(&mut scene, tracker, tuning, view, &view.envelope(), &RingFade::default(), now);
+    motion.step(&mut scene, tracker, tuning, &RingFade::default(), now);
     scene
 }
 
