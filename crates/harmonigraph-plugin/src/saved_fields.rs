@@ -16,7 +16,7 @@ use harmonigraph_clap::plugin::PluginState;
 use harmonigraph_clap::prelude::shell_error;
 use harmonigraph_clap::wrapper::clap::setup::Prepared;
 
-use crate::editor::EguiState;
+use crate::editor::SavedWindow;
 use crate::HarmonigraphParams;
 use harmonigraph_ui::lattice_maps::MapDocument;
 
@@ -28,7 +28,7 @@ const UI_STATE: &str = "ui-state";
 /// are taken one after the other, never nested.
 pub(crate) fn save(params: &HarmonigraphParams, state: &mut PluginState) {
     let maps = serde_json::to_string(&*params.maps.read());
-    let window = serde_json::to_string(&*params.editor_state);
+    let window = serde_json::to_string(&params.editor_state.saved());
     let look = serde_json::to_string(&*params.ui_state.save());
     for (key, json) in [(LATTICE_MAPS, maps), (EDITOR_STATE, window), (UI_STATE, look)] {
         match json {
@@ -86,7 +86,7 @@ fn parse<T: serde::de::DeserializeOwned>(
 pub(crate) struct Fields {
     params: Arc<HarmonigraphParams>,
     maps: Option<MapDocument>,
-    window: Option<EguiState>,
+    window: Option<SavedWindow>,
     look: Option<String>,
     /// The Console lines the restore owes.
     notes: Vec<String>,

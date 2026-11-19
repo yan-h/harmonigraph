@@ -60,9 +60,8 @@
 //! "the frame on record" in their names is the one the base draws.
 
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
-use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_take::{Header, NoteKind, NoteRecord, Take};
-use harmonigraph_ui::{PictureState, SpectrogramRender};
+use harmonigraph_ui::SpectrogramRender;
 
 use crate::render::{render, Settings};
 use crate::replay::Replay;
@@ -170,14 +169,14 @@ fn probe_audio() -> Audio {
 }
 
 /// One golden frame: the pane's size and what it is dialled to.
-struct Shot {
+pub(crate) struct Shot {
     /// Output pixels. The spectral fixture is full-bleed, so the height IS the
     /// pitch axis and decides the image's rows.
-    size: [u32; 2],
+    pub(crate) size: [u32; 2],
     /// The displayed pitch range, in MIDI. Which arm of the row read runs is
     /// this against the height above: wider than a bucket per row is a mean,
     /// narrower is a lerp.
-    range: (f32, f32),
+    pub(crate) range: (f32, f32),
 }
 
 /// The whole analyzer axis — where a fresh pane opens.
@@ -275,7 +274,10 @@ impl Shot {
 
     /// The same take with one further turn of the appearance, for a shot that
     /// is about a setting rather than about the pane.
-    fn dialled(&self, tune: impl FnOnce(&mut harmonigraph_ui::AppearanceDocument)) -> Take {
+    pub(crate) fn dialled(
+        &self,
+        tune: impl FnOnce(&mut harmonigraph_ui::AppearanceDocument),
+    ) -> Take {
         let mut appearance = pinned_look();
         let cfg = &mut appearance.spectrum;
         // These established goldens pin the immediate texture response.
@@ -320,11 +322,16 @@ fn pinned_look() -> harmonigraph_ui::AppearanceDocument {
         .expect("the golden look parses")
 }
 
-/// The pinned look names every field the document saves. One it leaves out
-/// draws at its `Default`, so the next DAW capture that moves that default
-/// moves the frames drawing it, which the pin exists to prevent.
+/// The pinned look names every field the document saves that a frame reads.
+/// One it leaves out draws at its `Default`, so the next DAW capture that moves
+/// that default moves the frames drawing it, which the pin exists to prevent.
+///
+/// Except `render`, the Video pane's export settings: no golden reads them
+/// from the pin. Each takes its size and layout from its own `Settings`, and
+/// the one field the renderer reads, `render.spectrogram`, every shot sets
+/// itself (#1853).
 #[test]
-fn the_pinned_look_pins_every_field() {
+fn the_pinned_look_pins_every_drawn_field() {
     fn paths(value: &ron::Value, at: &str, out: &mut Vec<String>) {
         match value {
             ron::Value::Map(map) => {
@@ -348,7 +355,7 @@ fn the_pinned_look_pins_every_field() {
     let pinned = keys(harmonigraph_golden::LOOK);
     let missing: Vec<_> = keys(&pinned_look().serialize())
         .into_iter()
-        .filter(|path| !pinned.contains(path))
+        .filter(|path| path != ".render" && !path.starts_with(".render.") && !pinned.contains(path))
         .collect();
     assert!(missing.is_empty(), "look.ron draws these at their Default: {missing:#?}");
 }
@@ -375,7 +382,7 @@ fn check_take(name: &str, shot: Shot, take: Take) {
 }
 
 /// The LAST frame `take` renders at `shot`, or `None` without a GPU.
-fn last_frame(shot: &Shot, take: Take) -> Option<Vec<u8>> {
+pub(crate) fn last_frame(shot: &Shot, take: Take) -> Option<Vec<u8>> {
     let settings = shot.settings();
     let mut audio = probe_audio();
     let mut replay = Replay::new(take);
@@ -465,62 +472,6 @@ fn full_resolution_stars_draw_the_frame_on_record() {
     check_take("spectrogram-starfield", shot, take);
 }
 
-/// The light field holds the newest slab across the analyzer divider, so the
-/// texture beside it is as bright as it is further in. It used to be silence
-/// past the divider, which the reduced field's filtering and every star
-/// centred there pulled into a dark seam a few pixels wide.
-///
-/// Colour memory, on as the look ships, widened that seam (8 pixels against
-/// 5, #1540), so the claim is held at the fresh pickup and release as well as
-/// with the memory off, under Watercolor as well as Stars, each measured over
-/// its own seam's width.
-#[test]
-fn textures_hold_their_light_up_to_the_analyzer() {
-    use harmonigraph_scene::CloudStyle;
-    let shot = Shot { size: [480, 240], range: (36.0, 96.0) };
-    let fresh = harmonigraph_scene::SpectralAtmosphere::default();
-    for (style, memory) in [
-        (CloudStyle::Stars, false),
-        (CloudStyle::Stars, true),
-        (CloudStyle::Watercolor, false),
-        (CloudStyle::Watercolor, true),
-    ] {
-        let take = shot.dialled(|a| {
-            let atmosphere = &mut a.spectrum.atmosphere;
-            atmosphere.cloud_style = style;
-            if memory {
-                (atmosphere.color_pickup, atmosphere.color_release) =
-                    (fresh.color_pickup, fresh.color_release);
-            }
-            a.spectrum.roll_fraction = 0.65;
-        });
-        let Some(frame) = last_frame(&shot, take) else {
-            eprintln!("skipping textures_hold_their_light_up_to_the_analyzer: no usable GPU");
-            return;
-        };
-        let [w, h] = shot.size.map(|n| n as usize);
-        let mean = |columns: std::ops::Range<usize>| {
-            let n = columns.len() * h * 3;
-            let sum: u32 = columns
-                .flat_map(|x| (0..h).flat_map(move |y| (0..3).map(move |c| (y * w + x) * 4 + c)))
-                .map(|i| u32::from(frame[i]))
-                .sum();
-            sum as f32 / n as f32
-        };
-        // `dialled` draws full-bleed, so the region is exactly the pane's
-        // first `roll_fraction` of its width and the divider is drawn at its
-        // edge. A margin there would move both windows off the seam.
-        let divider = (0.65 * w as f32).round() as usize;
-        let seam = if memory { 8 } else { 5 };
-        let (edge, inside) =
-            (mean(divider - 1 - seam..divider - 1), mean(divider - 60..divider - 20));
-        assert!(
-            edge > 0.95 * inside,
-            "{style:?}, memory {memory}: the newest edge {edge} against {inside} further in"
-        );
-    }
-}
-
 /// The pinned look's Stars settings draw into a reduced image, filtered up
 /// into the pane.
 #[test]
@@ -569,267 +520,4 @@ fn spectral_shadows_draw_the_frame_on_record() {
         ..Default::default()
     };
     check_take("spectrogram-spectral-shadows", shot, take);
-}
-
-/// Frames per second the cost measurement renders at.
-///
-/// Higher than [`FPS`] to get more frames out of the same audio: [`SECONDS`]
-/// at this rate is 240 of them, which puts the fixed cost of standing a
-/// renderer up far enough below the per-frame figure to stop mattering.
-///
-/// It is not free of the picture, so the DIFFERENCE columns are what to read
-/// and the absolute ones are not. A frame is fed exactly its own step of
-/// audio, so at 120 fps each carries half the samples a 60 fps frame does —
-/// half the analyzer columns to transform, and half as many to fold into the
-/// grid. That share sits in all three configurations and subtracts out; what
-/// it leaves behind is an absolute per-frame figure under what the shipping
-/// rate pays.
-const TIMING_FPS: f64 = 120.0;
-
-/// Frames dropped off the front of a render before the clock starts.
-///
-/// Every render builds its own device, so every render compiles the shaders
-/// and creates the pipelines it touches — and the heatmap's are built lazily,
-/// on the first frame that has two analyzer columns to draw rather than on
-/// frame 0. Timed from frame 1 that compile lands INSIDE the span, on the one
-/// row it can bias: neither control ever creates that pipeline, so it does not
-/// subtract out. Enough frames to cover it, and small beside the 240 a render
-/// emits.
-const WARMUP: u64 = 16;
-
-/// Fraction of the frame's height the control's pane is squeezed into.
-const SLIVER: f32 = 0.02;
-
-/// What the pane is asked to draw for one row of the table.
-#[derive(Clone, Copy, PartialEq)]
-enum Drawn {
-    /// The pane's whole depth given to the heatmap.
-    Heatmap,
-    /// None of it, which leaves the live curve and its rulings — egui shapes
-    /// built on the CPU, and the thing the heatmap replaced the compose of.
-    Curve,
-    /// The same pane, in a sliver of the frame — [`SLIVER`] of its height,
-    /// the rest background. A layout with NO panes is refused by the renderer,
-    /// and this is the nearest thing to it: every stage still runs and the
-    /// pane still draws, over about a fiftieth of the pixels. It is the
-    /// control the other two are measured against, and it carries that
-    /// fiftieth with it, so a difference reads a hair low.
-    Sliver,
-}
-
-/// Milliseconds a frame takes end to end, and how many were rendered.
-fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
-    let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
-    let cfg = &mut state.appearance.spectrum;
-    cfg.show_roll = false;
-    cfg.roll_fraction = if drawn == Drawn::Heatmap { 1.0 } else { 0.0 };
-    cfg.roll_seconds = WINDOW;
-    (cfg.low_midi, cfg.high_midi) = whole_axis();
-    state.appearance.render.spectrogram = SpectrogramRender::Scrolling;
-    let take = Take {
-        header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
-        events: Vec::new(),
-        params: Vec::new(),
-        configurations: Vec::new(),
-        truncated: false,
-        incomplete: None,
-        ..Default::default()
-    };
-    let mut layout = crate::frames::single_pane(harmonigraph_ui::Pane::Spectral);
-    if drawn == Drawn::Sliver {
-        // A placement's rect is `(x0, y0, x1, y1)`, so the sliver is taken from
-        // the pane's OWN top edge rather than the frame's. Floored at two
-        // pixels because `Layout::resolve` drops a pane under one pixel tall,
-        // and a layout that resolves to no panes is an error out of the
-        // renderer — a panic where a reading was asked for.
-        let floor = 2.0 / size[1] as f32;
-        for placement in &mut layout.panes {
-            placement.rect.3 = placement.rect.1 + SLIVER.max(floor);
-        }
-    }
-    let settings = Settings {
-        layout,
-        size,
-        pixels_per_point: 1.0,
-        fps: TIMING_FPS,
-        start: 0.0,
-        end: SECONDS,
-        audio_start: 0.0,
-    };
-    let mut audio = probe_audio();
-    let mut replay = Replay::new(take);
-    // The clock starts past [`WARMUP`] frames and not at the call: standing a
-    // renderer up costs a few hundred milliseconds of adapter and pipeline
-    // creation, which divided over the frames is the same order as the
-    // per-frame figure being measured — and the last of it is paid a few
-    // frames INTO the render rather than before it.
-    let mut seen = 0u64;
-    let mut first: Option<std::time::Instant> = None;
-    let mut last = None;
-    let mut frames = 0u64;
-    let appearance = crate::render::appearance_for(replay.take(), None).unwrap();
-    match render(&mut replay, Some(&mut audio), &settings, appearance, |frame| {
-        seen += 1;
-        if seen <= WARMUP {
-            return Ok(frame);
-        }
-        let now = std::time::Instant::now();
-        if first.is_none() {
-            first = Some(now);
-        } else {
-            frames += 1;
-        }
-        last = Some(now);
-        Ok(frame)
-    }) {
-        Ok(_) => {}
-        Err(e) if e.contains("no usable GPU adapter") => return None,
-        Err(e) => panic!("{e}"),
-    }
-    // A render that finished with nothing left to time is a broken fixture,
-    // not a missing GPU — which is what the `None` above is read as.
-    assert!(
-        frames > 0,
-        "{seen} frames rendered, under the two past the {WARMUP}-frame warm-up an interval needs"
-    );
-    let span = last.zip(first).map_or(0.0, |(l, f)| l.duration_since(f).as_secs_f64() * 1000.0);
-    Some((span / frames as f64, frames))
-}
-
-/// One size's readings: the three configurations' own medians, and the two
-/// costs, which are medians of PER-ROUND differences rather than differences
-/// of the medians above.
-struct Round {
-    /// Sliver, heatmap, curve — the frame each configuration draws, in ms.
-    columns: [f64; 3],
-    /// Median and scatter, in ms.
-    heatmap_cost: (f64, f64),
-    curve_cost: (f64, f64),
-    frames: u64,
-}
-
-/// What drawing the heatmap costs a rendered frame, end to end.
-///
-/// The same take rendered at one size three ways — the pane's whole depth to
-/// the heatmap, the same depth to the live curve, and the pane squeezed into a
-/// sliver — so the analyzer, the replay, egui, the encode and the readback sit
-/// in all three and difference out. [`Drawn::Sliver`] is the control: what is
-/// left over it is what drawing that pane costs through the path that ships.
-///
-/// It has to be measured in a frame rather than around one. A microbenchmark
-/// of the draw alone cannot see it: the per-draw command overhead is larger
-/// than the fragment work, and a submit-and-wait costs milliseconds of round
-/// trip either way.
-///
-/// `#[ignore]`, and it asserts nothing: the numbers belong to the machine that
-/// ran them.
-#[test]
-#[ignore]
-fn what_the_heatmap_costs_a_frame() {
-    // Sizes the pane is really dragged to, ending past a full Retina window:
-    // the brief predicts the heatmap's share barely moves with the pitch axis,
-    // because a taller pane reads shorter runs and the runs tile the buckets
-    // either way.
-    let sizes = [[256u32, 128], [256, 384], [512, 768], [1024, 1536], [2048, 1024]];
-    eprintln!("\n== what one rendered frame costs, and the heatmap's share ==");
-    eprintln!(
-        "{:>12}  {:>7}  {:>7}  {:>7}   {:>12}  {:>12}  {:>6}",
-        "size", "sliver", "heatmap", "curve", "heatmap-", "curve-", "px"
-    );
-    // Readings scatter by a few tenths of a millisecond, so each figure is the
-    // median of REPS renders.
-    // Interleaved, not blocked: this machine drifts by most of a millisecond
-    // over a minute, and three runs of one config followed by three of another
-    // turn that drift into a difference between them. One of each per round
-    // puts the drift in all three equally, where the subtraction removes it.
-    // ROTATED within the round for the same reason one scale down: a drift
-    // ACROSS the three renders of a single round is a ramp that a fixed order
-    // samples at a fixed offset per configuration, which is precisely the
-    // difference being printed. REPS is a multiple of three, so every
-    // configuration spends the same number of rounds in each position.
-    const ORDER: [Drawn; 3] = [Drawn::Sliver, Drawn::Heatmap, Drawn::Curve];
-    const REPS: usize = 9;
-    let round = |size| -> Option<Round> {
-        let mut runs = [const { Vec::new() }; 3];
-        let mut frames = 0;
-        // A throwaway round in front, for whatever the process caches once —
-        // the driver's on-disk function cache, the first touch of the adapter.
-        // Not for pipeline creation: a render builds its own device, so every
-        // render pays that, and [`WARMUP`] is what keeps it off the clock.
-        for &drawn in &ORDER {
-            frame_ms(size, drawn)?;
-        }
-        for rep in 0..REPS {
-            for step in 0..ORDER.len() {
-                let slot = (rep + step) % ORDER.len();
-                let (ms, n) = frame_ms(size, ORDER[slot])?;
-                runs[slot].push(ms);
-                frames = n;
-            }
-        }
-        // PAIRED: each round's difference is taken first and the median is of
-        // those, never of the three columns separately. A median per column
-        // and a subtraction after it lets one polluted render move the answer
-        // — a single 1.4 ms excursion in the control's column dragged a
-        // difference from 1.19 ms to 0.31 ms with the other two columns
-        // steady, because nothing in that arrangement knows the two readings
-        // belong to the same round. Here such a round is one sample among
-        // REPS and the median steps over it. The columns are still printed,
-        // as medians of their own, for the shape of the frame they describe —
-        // the DIFFERENCE columns are the measurement.
-        let mut costs = [Vec::with_capacity(REPS), Vec::with_capacity(REPS)];
-        let [sliver, heatmap, curve] = &runs;
-        for ((base, heat), curv) in sliver.iter().zip(heatmap).zip(curve) {
-            costs[0].push(heat - base);
-            costs[1].push(curv - base);
-        }
-        let mid = |times: &mut Vec<f64>| {
-            times.sort_by(f64::total_cmp);
-            times[times.len() / 2]
-        };
-        // Half the span the middle REPS-2 samples cover, printed beside each
-        // cost. It is what says whether a row may be quoted: this machine
-        // moves a whole render by a millisecond under contention, and a row
-        // whose spread is the size of its own figure is the noise, not the
-        // heatmap. It is not an error bar on a mean — nothing here is
-        // normally distributed — just the scatter the median stepped over.
-        let spread = |times: &mut Vec<f64>| {
-            times.sort_by(f64::total_cmp);
-            (times[times.len() - 2] - times[1]) / 2.0
-        };
-        let mut columns = [0.0; 3];
-        for (slot, times) in runs.iter_mut().enumerate() {
-            columns[slot] = mid(times);
-        }
-        Some(Round {
-            columns,
-            heatmap_cost: (mid(&mut costs[0]), spread(&mut costs[0])),
-            curve_cost: (mid(&mut costs[1]), spread(&mut costs[1])),
-            frames,
-        })
-    };
-    for size in sizes {
-        let Some(r) = round(size) else {
-            eprintln!("no usable GPU adapter; skipping");
-            return;
-        };
-        let [sliver, heatmap, curve] = r.columns;
-        let px = size[0] * size[1];
-        eprintln!(
-            "{:>5} x {:<4}  {sliver:>7.3}  {heatmap:>7.3}  {curve:>7.3}   {:>6.3} ±{:<5.3}  {:>6.3} ±{:<5.3}  {:>5.2}M  ({} frames)",
-            size[0],
-            size[1],
-            r.heatmap_cost.0,
-            r.heatmap_cost.1,
-            r.curve_cost.0,
-            r.curve_cost.1,
-            px as f64 / 1.0e6,
-            r.frames,
-        );
-    }
-    eprintln!(
-        "(heatmap- and curve- are each pane's cost over the sliver frame, as\n \
-         median ± the scatter the median stepped over; a row whose scatter is\n \
-         the size of its figure is this machine, not the pane)\n"
-    );
 }

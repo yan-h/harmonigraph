@@ -965,14 +965,18 @@ impl<P: Plugin> Wrapper<P> {
         true
     }
 
+    /// The size the editor would take nearest the one the host proposes,
+    /// written back in place: a border drag stops at the editor's limits.
     unsafe extern "C" fn ext_gui_adjust_size(
-        _plugin: *const clap_plugin,
-        _width: *mut u32,
-        _height: *mut u32,
+        plugin: *const clap_plugin,
+        width: *mut u32,
+        height: *mut u32,
     ) -> bool {
-        // We accept whatever size the host proposes as-is (no snapping). The
-        // width/height are left untouched, signalling that the requested size is
-        // acceptable.
+        check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, width, height);
+        let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
+
+        let Some(editor) = wrapper.editor.get() else { return false };
+        unsafe { (*width, *height) = editor.adjust_size(*width, *height) };
         true
     }
 
