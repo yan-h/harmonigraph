@@ -68,7 +68,7 @@ A recorder that counts frames will therefore produce video that drifts against t
 Any live-capture route **must** force continuous repaint while recording, stamp each frame with a real timestamp, and let the encoder normalize to constant frame rate.
 Related:
 the window is HiDPI and resizable mid-recording, and H.264 wants even dimensions —
-the size has to be locked (the editor can even ask the host for an exact physical size via `requested_size` in `editor/persist.rs` + `request_resize()` in `editor/window.rs`).
+the size has to be locked (the editor can even ask the host for an exact physical size via `EditorSize::request_size` on `EguiState` in `editor/persist.rs`, which the window's size source asks the host for in `editor/window.rs`).
 
 And audio:
 the mono ring feeding the spectrum analyzer **drops samples under backpressure by design** (`AUDIO_RING_CAPACITY` and the `audio_producer` writes in `crates/harmonigraph-plugin/src/lib.rs`).
