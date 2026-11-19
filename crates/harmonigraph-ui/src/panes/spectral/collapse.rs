@@ -108,9 +108,15 @@ impl Regions {
     /// Whether [`draw_picture`](Self::draw_picture) draws the far region
     /// with any depth, from what it lays the regions out by: unfolded, and
     /// either the spectrum folded, when the far region takes the whole
-    /// picture, or the divider not dragged shut, before this frame's
-    /// gestures move it. Any other reading of it leaves the overview
-    /// disagreeing with the picture it sits under (#1842).
+    /// picture, or the divider not dragged shut. Any other reading of it
+    /// leaves the overview disagreeing with the picture it sits under
+    /// (#1842).
+    ///
+    /// The divider is read as the frame begins, before `draw_picture`
+    /// restores the saved hold, takes the pane's size into it, or lets a drag
+    /// move it: the strip has to be decided first, since its height comes out
+    /// of the picture's. So a frame that drags the divider shut, or open,
+    /// keeps the strip it began with, and the next frame follows.
     fn far_drawn(&self, state: &PictureState) -> bool {
         let folded = self.folded(&state.appearance.spectrum);
         !folded[1] && (folded[0] || gestures::spectrum_split(state, DOCKED_SURFACE) < 1.0)
