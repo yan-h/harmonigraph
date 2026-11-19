@@ -60,16 +60,26 @@ impl Default for Fixture {
     }
 }
 
+/// The setup's one saved field: opaque to the shell, which only frames it.
+static FIELD: Mutex<String> = Mutex::new(String::new());
+
 struct FixtureSetup;
-struct Nothing;
-impl Prepared for Nothing {
-    fn commit(self: Box<Self>) {}
+struct Field(Option<String>);
+impl Prepared for Field {
+    fn commit(self: Box<Self>) {
+        if let Some(field) = self.0 {
+            *FIELD.lock().unwrap_or_else(|e| e.into_inner()) = field;
+        }
+    }
 }
 impl Setup for FixtureSetup {
-    fn prepare(&self, _: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
-        Ok(Box::new(Nothing))
+    fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
+        Ok(Box::new(Field(state.fields.get("field").cloned())))
     }
-    fn save(&self, _: &mut PluginState) {}
+    fn save(&self, state: &mut PluginState) {
+        let field = FIELD.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        state.fields.insert("field".into(), field);
+    }
     fn install_wakeup(&self, _: Box<dyn Fn() + Send + Sync>) {}
     fn service(&self) -> Serviced {
         Serviced::default()
@@ -533,4 +543,50 @@ fn a_transport_event_in_the_list_reaches_the_plugin_and_is_noticed_once() {
     d.run(128, events, Some(transport(0)));
     d.main();
     assert_eq!(NOTICES.load(Ordering::Relaxed), 1, "once");
+}
+
+/// The bytes a save writes and a load reads, those the shell owns: an 8-byte
+/// little-endian length, then the version, each parameter's unmodulated value
+/// under its id, and each field the setup writes as a JSON string the shell
+/// does not read. Saved projects hold exactly these, so a change is a change
+/// to every project.
+#[test]
+fn a_save_is_framed_json_of_the_version_the_parameters_and_the_fields() {
+    use clap_sys::ext::state::{CLAP_EXT_STATE, clap_plugin_state};
+    use clap_sys::stream::{clap_istream, clap_ostream};
+    unsafe extern "C" fn write(stream: *const clap_ostream, data: *const c_void, size: u64) -> i64 {
+        let bytes = unsafe { &mut *((*stream).ctx.cast::<Vec<u8>>()) };
+        bytes.extend_from_slice(unsafe { std::slice::from_raw_parts(data.cast(), size as usize) });
+        size as i64
+    }
+    unsafe extern "C" fn read(stream: *const clap_istream, data: *mut c_void, size: u64) -> i64 {
+        let bytes = unsafe { &mut *((*stream).ctx.cast::<&[u8]>()) };
+        let count = bytes.len().min(size as usize);
+        unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), data.cast(), count) };
+        *bytes = &bytes[count..];
+        count as i64
+    }
+    let _serial = serial();
+    let d = Device::new();
+    let state = unsafe {
+        &*(((*d.plugin).get_extension.unwrap())(d.plugin, CLAP_EXT_STATE.as_ptr())
+            .cast::<clap_plugin_state>())
+    };
+    *FIELD.lock().unwrap() = r#"{"opaque":[1,2]}"#.into();
+    d.flush(vec![param(0.5, 0)]);
+    let json =
+        br#"{"version":"1","params":{"axis":{"f32":0.5}},"fields":{"field":"{\"opaque\":[1,2]}"}}"#;
+    let mut saved = Vec::new();
+    let stream = clap_ostream { ctx: (&mut saved as *mut Vec<u8>).cast(), write: Some(write) };
+    assert!(unsafe { (state.save.unwrap())(d.plugin, &stream) });
+    assert_eq!(saved[..8], (json.len() as u64).to_le_bytes());
+    assert_eq!(std::str::from_utf8(&saved[8..]).unwrap(), std::str::from_utf8(json).unwrap());
+
+    let json = br#"{"version":"0","params":{"axis":{"f32":0.25}},"fields":{"field":"x"}}"#;
+    let framed = [&(json.len() as u64).to_le_bytes()[..], json].concat();
+    let mut unread = &framed[..];
+    let stream = clap_istream { ctx: (&mut unread as *mut &[u8]).cast(), read: Some(read) };
+    assert!(unsafe { (state.load.unwrap())(d.plugin, &stream) });
+    assert_eq!(d.value(), 0.25);
+    assert_eq!(*FIELD.lock().unwrap(), "x", "the field reached the setup as it was saved");
 }
