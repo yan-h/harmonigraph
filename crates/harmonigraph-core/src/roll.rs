@@ -43,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::canonical::VoiceBaseline;
 use crate::notes::{
-    Envelope, Expression, Expressions, SourceId, Time, Voice, VoiceKey, VoiceState,
+    Envelope, Expression, Expressions, PressId, SourceId, Time, Voice, VoiceKey, VoiceState,
 };
 use crate::tuning::PitchClass;
 
@@ -94,10 +94,13 @@ pub struct RollNote {
     /// The pitch class of the last breakpoint of `bends`, kept beside it
     /// because a voice is read per node and per frame.
     pitch_class: PitchClass,
-    /// A voice and no timeline note: released at or before its onset (rule
-    /// 1), or held or fading when Clear roll took the timeline. Leaving the
-    /// voices drops it rather than filing it in `past`.
-    off_timeline: bool,
+    /// Released at or before its onset (rule 1): a voice that pulses, and no
+    /// timeline note. Filed in `past` like any finished press, where the
+    /// timeline leaves it out and the lattice still replays its departure.
+    pulse: bool,
+    /// What Clear roll took of it, if it was held or fading then: either way
+    /// it is no timeline note, and leaving the voices drops it.
+    cleared: Cleared,
     /// Its source was hidden when it left the held set (rule 4), stamped by
     /// [`NoteRoll::depart`]: it was never drawn leaving, and the lattice, which
     /// replays finished presses past their voices' fades, replays none of it
@@ -132,13 +135,32 @@ impl RollNote {
             expressions: vec![(at, expressions)],
             expression_spacing: Self::EXPRESSION_SPACING,
             pitch_class: PitchClass::from_cents(pitch * 100.0),
-            off_timeline: false,
+            pulse: false,
+            cleared: Cleared::No,
             left_hidden: false,
         }
     }
 
     pub fn key(&self) -> VoiceKey {
         VoiceKey { source: self.source, channel: self.channel, note: self.note }
+    }
+
+    /// The press's identity: its key and its onset, as its voice's is
+    /// ([`Voice::id`]).
+    pub fn id(&self) -> PressId {
+        (self.key(), self.start.to_bits())
+    }
+
+    /// Released at or before its onset (rule 1, [`NoteRoll::note_off`]): a
+    /// voice that pulses, its release waiting out the attack. A reset that
+    /// closes a note at its onset is not one: that note sounded.
+    pub fn is_pulse(&self) -> bool {
+        self.pulse
+    }
+
+    /// No timeline note: a rule-1 pulse, or a press Clear roll took.
+    fn off_timeline(&self) -> bool {
+        self.pulse || self.cleared != Cleared::No
     }
 
     /// When it left the held set — its release, a reset, or a baseline that
@@ -366,6 +388,17 @@ impl RollNote {
     }
 }
 
+/// What Clear roll took of a press ([`NoteRoll::clear`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Cleared {
+    #[default]
+    No,
+    /// Held: off the timeline, and still on the lattice.
+    Held,
+    /// Fading: off the timeline, and its light dropped from the lattice.
+    Released,
+}
+
 /// Every note press still sounding, fading or remembered, each in exactly one
 /// bucket.
 #[derive(Clone, Debug, Default)]
@@ -387,8 +420,8 @@ pub struct NoteRoll {
     /// Finished notes, oldest release first ([`RollNote::departed`]), held so by
     /// [`retire`](Self::retire) whatever order the releases arrive in — sources
     /// are mapped onto the clock by their own offsets, so one source's release
-    /// can arrive after a later one's. Timeline notes only: `retire` drops a
-    /// note marked off the timeline.
+    /// can arrive after a later one's. Timeline notes and rule-1 pulses:
+    /// `retire` drops a note Clear took.
     past: VecDeque<RollNote>,
     hidden_sources: BTreeSet<SourceId>,
     /// Keeps every note, past [`MAX_NOTES`](Self::MAX_NOTES): a roll of a
@@ -458,7 +491,7 @@ impl NoteRoll {
             return;
         };
         note.end = Some(at);
-        note.off_timeline |= at <= note.start;
+        note.pulse = at <= note.start;
         self.release(note);
     }
 
@@ -505,10 +538,12 @@ impl NoteRoll {
     /// because trim, activity and the note cap all read the order. Equal
     /// releases keep their arrival order.
     ///
-    /// A note marked off the timeline is dropped instead: it was a voice and
-    /// nothing else. The note cap applies as each note is filed.
+    /// A note Clear took is dropped instead: it was a voice and nothing else.
+    /// A rule-1 pulse is filed, off the timeline, so the lattice can replay a
+    /// departure that outlasts its voice's fade. The note cap applies as each
+    /// note is filed.
     fn retire(&mut self, note: RollNote) {
-        if note.off_timeline {
+        if note.cleared != Cleared::No {
             return;
         }
         let at = note.departed();
@@ -570,7 +605,7 @@ impl NoteRoll {
             for note in ended {
                 self.retire(note);
             }
-            if let Some(note) = self.live.get_mut(&key).filter(|note| !note.off_timeline) {
+            if let Some(note) = self.live.get_mut(&key).filter(|note| !note.off_timeline()) {
                 if note.end_pitch() != row.pitch() {
                     // A baseline is a state observation, not an expression
                     // path connecting the previous sample to the recovered one.
@@ -713,28 +748,36 @@ impl NoteRoll {
     }
 
     /// Every timeline note, hidden sources' included: finished, then fading,
-    /// then sounding. Leaves out what is marked off it; `past` holds none.
+    /// then sounding. Leaves out what is marked off it.
     fn timeline(&self) -> impl Iterator<Item = &RollNote> {
-        let on = |n: &&RollNote| !n.off_timeline;
-        self.past.iter().chain(self.fading.iter().chain(self.live.values()).filter(on))
+        let on = |n: &&RollNote| !n.off_timeline();
+        self.past.iter().chain(&self.fading).chain(self.live.values()).filter(on)
     }
 
     /// Every press the voices draw or drew, as the lattice replays them:
-    /// finished ones that left while their source showed, then every fading
-    /// one, then the held ones whose source shows now. Unlike
-    /// [`notes`](Self::notes) it keeps what is marked off the timeline while it
-    /// is a voice — a rule-1 pulse, a note Clear took — and asks of a finished
-    /// press whether it showed as it left (rule 4) rather than now, so the Show
-    /// switch turned on after a hidden release brings back no fade.
+    /// finished ones that left at or after `since` while their source showed,
+    /// then every fading one but those Clear took, then the held ones whose
+    /// source shows now.
     ///
-    /// A note marked off the timeline is gone from here once its voice's fade
-    /// ends, since `past` holds none. Two presses here can share a key and an
-    /// onset: a rule-1 pulse and the press a host sends at the same sample
-    /// after it, or a fade a baseline withdrew (rule 6) and the fresh press it
-    /// opened. The later one in this order is the one still sounding.
-    pub fn voice_presses(&self) -> impl Iterator<Item = &RollNote> {
+    /// Unlike [`notes`](Self::notes) it keeps a rule-1 pulse, fading and
+    /// finished, and a note held across a Clear, and it asks of a finished
+    /// press whether it showed as it left (rule 4) rather than now, so the Show
+    /// switch turned on after a hidden release brings back no fade. A press
+    /// Clear took released is left out, as the glow drops its light: replayed,
+    /// a fresh surface would light it again. One Clear took held stays here,
+    /// and once released it leaves `past` with its voice.
+    ///
+    /// `since` seeks the release-ordered `past` rather than walking it, so the
+    /// cost is the recent presses' rather than the session's. Two presses here
+    /// can share an identity: a rule-1 pulse and the press a host sends at the
+    /// same sample after it, or a fade a baseline withdrew (rule 6) and the
+    /// fresh press it opened. The later one in this order is the one sounding.
+    pub fn voice_presses(&self, since: Time) -> impl Iterator<Item = &RollNote> {
+        let from = self.past.partition_point(|n| n.departed().is_some_and(|at| at < since));
+        let past = self.past.range(from..).filter(|note| !note.left_hidden);
+        let fading = self.fading.iter().filter(|note| note.cleared != Cleared::Released);
         let live = self.live.values().filter(|note| !self.hides(note.source));
-        self.past.iter().filter(|note| !note.left_hidden).chain(&self.fading).chain(live)
+        past.chain(fading).chain(live)
     }
 
     /// Every remembered note, finished ones first, then the fading ones and
@@ -755,11 +798,11 @@ impl NoteRoll {
     /// is scanned, which for a roll the tracker prunes is a fade's worth of
     /// notes.
     pub fn latest_activity(&self, now: Time) -> Option<Time> {
-        let shown = |n: &&RollNote| !n.off_timeline && !self.hides(n.source);
+        let shown = |n: &&RollNote| !n.off_timeline() && !self.hides(n.source);
         if self.live.values().any(|n| shown(&n)) {
             return Some(now);
         }
-        let past = self.past.iter().rev().find(|n| !self.hides(n.source));
+        let past = self.past.iter().rev().find(shown);
         let past = past.and_then(RollNote::departed);
         self.fading
             .iter()
@@ -782,10 +825,17 @@ impl NoteRoll {
     /// land nowhere the Roll draws, until a baseline revives it or it is played
     /// again. That is what "clear the roll" is asked for; the alternative (keep
     /// the held ones) leaves a stub whose start time is already off-screen.
+    ///
+    /// The lattice keeps what is held and drops what is fading, as the glow
+    /// does its lights (`PictureState::clear_accumulated`), and the finished
+    /// presses in `past` go with the timeline.
     pub fn clear(&mut self) {
         self.past.clear();
-        for note in self.live.values_mut().chain(&mut self.fading) {
-            note.off_timeline = true;
+        for note in self.live.values_mut() {
+            note.cleared = Cleared::Held;
+        }
+        for note in &mut self.fading {
+            note.cleared = Cleared::Released;
         }
     }
 }

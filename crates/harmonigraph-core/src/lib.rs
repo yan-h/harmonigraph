@@ -34,8 +34,8 @@ pub mod tuning;
 pub use coords::{positions_within, LatticePos, NoteName};
 pub use history::{NoteHistory, Visit};
 pub use notes::{
-    Envelope, Expression, Expressions, NoteEvent, NoteEventKind, NoteTracker, SourceId, Time,
-    Voice, VoiceKey, VoiceState,
+    Envelope, Expression, Expressions, NoteEvent, NoteEventKind, NoteTracker, PressId, SourceId,
+    Time, Voice, VoiceKey, VoiceState,
 };
 pub use roll::{NoteRoll, RollNote};
 pub use tuning::{

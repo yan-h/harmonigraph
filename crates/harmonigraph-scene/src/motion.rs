@@ -5,7 +5,7 @@ use crate::{
     IntensityReading, NoteAnimationConfig, RingFade, Scene, ViewConfig, STAGGER_SPREAD_RANGE,
 };
 use harmonigraph_core::{
-    Envelope, LatticePos, NoteTracker, PitchClass, RollNote, Tuning, VoiceKey, VoiceState,
+    Envelope, LatticePos, NoteTracker, PitchClass, PressId, Tuning, VoiceState,
 };
 use std::collections::hash_map::Entry;
 
@@ -15,11 +15,13 @@ use std::collections::hash_map::Entry;
 type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::FixedState>;
 type HashSet<K> = std::collections::HashSet<K, foldhash::fast::FixedState>;
 
-type Identity = (VoiceKey, u64);
+type Identity = PressId;
 #[derive(Clone, Copy)]
 struct FactualTip {
     bend: (u64, u32),
     end: Option<u64>,
+    /// A rule-1 pulse's lattice off, fixed when the pulse is first seen.
+    pulse_off: Option<f64>,
 }
 #[derive(Clone, Copy)]
 struct Held {
@@ -488,7 +490,7 @@ impl NodeMotion {
     ) -> Vec<PitchClass> {
         let floor = now - horizon(view.fade_time, view.mark_delay, view.note_animation);
         let mut classes: Vec<_> = tracker.voices().map(|voice| voice.pitch_class).collect();
-        let presses = tracker.roll().voice_presses();
+        let presses = tracker.roll().voice_presses(floor);
         for note in presses.filter(|note| note.end.is_none_or(|at| at >= floor)) {
             for ((at, pitch), (end, next)) in note.segments(now) {
                 if at <= now && end >= floor {
@@ -740,58 +742,66 @@ impl NodeMotion {
         };
         let retained =
             now - horizon.max(self::horizon(crate::FADE_TIME_MAX, crate::MARK_DELAY_MAX, longest));
-        // Rule 1's pulse: a press whose off lands at or before its onset is a
-        // voice that still pulses in full, its release waiting out the attack
+        // Rule 1's pulse: a press released at or before its onset is a voice
+        // that still pulses in full, its release waiting out the attack
         // (`Voice::release_level`), and the lattice's off for it waits the same.
         // Only for it: any press with a length the lattice draws as far as its
-        // attack got.
+        // attack got. The off is fixed as the pulse is first seen and carried
+        // in its cursor, so a Fade drag after it neither moves an off already
+        // applied nor holds the pulse again.
         let attack = f64::from(env.attack_time.max(0.0));
-        let pulse = |note: &RollNote| note.end.is_some_and(|at| at <= note.start);
-        let off =
-            |note: &RollNote| note.end.map(|at| if pulse(note) { note.start + attack } else { at });
         // What the voices drew, and not the Roll's timeline: the timeline
         // leaves out a pulse, and follows the Show switch for a press that was
-        // hidden as it left, which would replay a fade nobody saw.
-        let mut notes: Vec<_> = tracker
-            .roll()
-            .voice_presses()
-            .filter(|note| off(note).is_none_or(|at| at >= retained))
-            .collect();
-        // A pulse sharing its key and onset with a later press, which hosts
-        // send as on, off, on at one sample, yields to it
-        // (`NoteRoll::voice_presses`). Replayed as one identity, its off would
-        // end the press, and their two tips would read as news on every frame.
+        // hidden as it left, which would replay a fade nobody saw. Sought from
+        // the oldest release a pulse's off can still keep in reach.
+        let since = retained - f64::from(crate::FADE_TIME_MAX);
+        let mut notes: Vec<_> = tracker.roll().voice_presses(since).collect();
+        // A pulse sharing its identity with a later press, which hosts send as
+        // on, off, on at one sample, yields to it (`NoteRoll::voice_presses`).
+        // Replayed as one identity, its off would end the press, and their two
+        // tips would read as news on every frame. The rest keep their order,
+        // in which the later of two sharing an identity is the one sounding.
         let mut unique = HashSet::default();
-        notes.reverse();
-        notes.retain(|note| unique.insert((note.key(), note.start.to_bits())) || !pulse(note));
+        let keep: Vec<_> =
+            notes.iter().rev().map(|note| unique.insert(note.id()) || !note.is_pulse()).collect();
+        let mut keep = keep.into_iter().rev();
+        notes.retain(|_| keep.next() == Some(true));
         let mut seen = HashMap::default();
         let mut late = false;
-        for note in &notes {
-            let id = (note.key(), note.start.to_bits());
+        let mut replay = Vec::with_capacity(notes.len());
+        for note in notes {
+            let id = note.id();
             let old = self.seen.get(&id);
-            // The factual end, not the lattice's off: a pulse's off moves with
-            // the Fade, and a cursor keyed on it would read a Fade drag as a
-            // late delivery and reset the surface on every frame of it.
+            let pulse_off = note
+                .is_pulse()
+                .then(|| old.and_then(|tip| tip.pulse_off).unwrap_or(note.start + attack));
+            let off = pulse_off.or(note.end);
+            if off.is_some_and(|at| at < retained) {
+                continue;
+            }
+            // The factual end, not the lattice's off: the cursor tells a late
+            // delivery from a note already seen, which a pulse's off says
+            // nothing about.
             let end = note.end.map(f64::to_bits);
             // Completed old lifetimes cannot acquire more bends. Retain their
             // cursor even outside today's horizon, up to the longest the bar can
             // set, so a longer fade setting cannot mistake them for newly
             // delivered notes.
-            let tip = if off(note).is_some_and(|at| at < floor) && old.is_some_and(|v| v.end == end)
-            {
+            let tip = if off.is_some_and(|at| at < floor) && old.is_some_and(|v| v.end == end) {
                 *old.unwrap()
             } else {
                 let ((at, pitch), _) = note.segments(now).last().unwrap_or((
                     (note.start, note.start_pitch()),
                     (note.start, note.start_pitch()),
                 ));
-                FactualTip { bend: (at.to_bits(), pitch.to_bits()), end }
+                FactualTip { bend: (at.to_bits(), pitch.to_bits()), end, pulse_off }
             };
             let behind = |at| self.at.is_some_and(|begin| at < begin) && at >= floor && at <= now;
             late |= old.is_none() && behind(note.start);
             late |= old.is_none_or(|v| v.bend != tip.bend) && behind(f64::from_bits(tip.bend.0));
-            late |= old.is_none_or(|v| v.end != tip.end) && off(note).is_some_and(behind);
+            late |= old.is_none_or(|v| v.end != tip.end) && off.is_some_and(behind);
             seen.insert(id, tip);
+            replay.push((note, off));
         }
         // The display clock can run ahead of a newly delivered audio block.
         // Reconstruct the bounded factual timeline when an unseen edge arrives
@@ -815,12 +825,11 @@ impl NodeMotion {
         // One bounded roll scan per surface, never one scan per node. Only
         // edges since the checkpoint are replayed; retained old notes cannot
         // restart a finished animation when history is trimmed.
-        for note in notes {
-            let end = off(note);
+        for (note, end) in replay {
             if end.is_some_and(|at| at < begin) {
                 continue;
             }
-            let id = (note.key(), note.start.to_bits());
+            let id = note.id();
             if initial
                 && note.start < begin
                 && end.is_none_or(|at| at > begin)
@@ -854,8 +863,10 @@ impl NodeMotion {
             if let Some(at) = end {
                 add(at, None);
                 endings.insert(id, intensity.read(note.velocity, note.expressions_at(at)));
-                if note.end != end && note.start <= now && at > now {
-                    pulsing.push((id, held(note.start, note.start_pitch())));
+                // At the pitch its replay left it on, which is its voice's:
+                // a tuned onset is a bend at the onset itself.
+                if note.is_pulse() && note.start <= now && at > now {
+                    pulsing.push((id, held(at, note.end_pitch())));
                 }
             }
             // observed_until is loss of observation, not a factual key-up.
@@ -942,8 +953,7 @@ impl NodeMotion {
         self.held.clear();
         for voice in tracker.voices().filter(|v| matches!(v.state, VoiceState::Held)) {
             let reading = intensity.read(voice.velocity, voice.expressions);
-            self.held
-                .insert((voice.key(), voice.on_time.to_bits()), Held::new(voice.pitch, reading));
+            self.held.insert(voice.id(), Held::new(voice.pitch, reading));
         }
         self.held.extend(pulsing);
         self.gates(scene, tuning, view, env, fade, tracker, now, false, std::mem::take(&mut first));
@@ -1652,13 +1662,121 @@ mod tests {
     }
     /// A press whose off lands on its onset (rule 1) pulses on the lattice as
     /// its voice does on the Spiral and the note band: a full arrival, its off
-    /// waiting out the attack, then a departure to nothing (#1838).
+    /// waiting out the attack, then a departure to nothing (#1838). On a
+    /// straight-line Fade, sampled on the off itself, where the attack lands.
     #[test]
     fn a_zero_length_note_pulses_in_full() {
-        let frames = presences(&[on(1.0, 60), off(1.0, 60)]);
-        let peak = frames.iter().map(|f| f.0).fold(0.0, f32::max);
-        assert!(peak > 0.99, "the pulse peaked at {peak}");
-        assert_eq!(frames.last().unwrap().0, 0.0, "the pulse never left");
+        let view = ViewConfig { fade_shape: 0.0, ..view() };
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        draw(&mut motion, &mut tracker, &view, 0.95, false);
+        tracker.handle_event(on(1.0, 60));
+        tracker.handle_event(off(1.0, 60));
+        let mut at =
+            |now| origin(&draw(&mut motion, &mut tracker, &view, now, false)).presence_with_opacity;
+        let (rising, peak) = (at(1.5), at(2.0));
+        assert!((rising - 0.5).abs() < 1e-5, "half the attack drew {rising}");
+        assert_eq!(peak, 1.0, "the pulse peaked at {peak}");
+        assert_eq!(at(3.5), 0.0, "the pulse never left");
+    }
+    /// A transport reset that closes a note at its own onset is no rule-1
+    /// pulse: that note sounded, for a length nobody knows, and the lattice
+    /// draws it as far as its attack got, which is nothing.
+    #[test]
+    fn a_reset_at_a_notes_onset_is_no_pulse() {
+        let frames = presences(&[on(1.0, 60), NoteEvent::source_reset(1.0, SourceId::DIRECT)]);
+        assert!(frames.iter().all(|f| f.0 == 0.0), "the reset note pulsed");
+    }
+    /// A pulse whose onset is tuned lights the node its tuning names, as its
+    /// voice does on the Spiral and the note band, and not its key's.
+    #[test]
+    fn a_tuned_pulse_lights_the_node_its_tuning_names() {
+        let view = view();
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        draw(&mut motion, &mut tracker, &view, 0.95, false);
+        let tuned = NoteEvent {
+            kind: harmonigraph_core::NoteEventKind::Tuning { semitones: 4.0 },
+            ..on(1.0, 60)
+        };
+        for event in [on(1.0, 60), tuned, off(1.0, 60)] {
+            tracker.handle_event(event);
+        }
+        for now in [1.0, 1.25, 1.5, 1.75] {
+            let scene = draw(&mut motion, &mut tracker, &view, now, false);
+            assert_eq!(origin(&scene).presence_with_opacity, 0.0, "the key's node lit at {now}");
+            let lit = scene.nodes.iter().any(|n| n.presence_with_opacity > 0.0);
+            assert!(lit || now == 1.0, "the tuned node is dark at {now}");
+        }
+    }
+    /// A Note fade dragged longer after a pulse has left does not hold it
+    /// again: its off is where the Fade put it when the pulse was seen.
+    #[test]
+    fn a_fade_drag_after_a_pulse_left_does_not_bring_it_back() {
+        let view = view();
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        draw_duration(&mut motion, &mut tracker, &view, 0.95, false, 0.5);
+        tracker.handle_event(on(1.0, 60));
+        tracker.handle_event(off(1.0, 60));
+        let mut last = 1.0;
+        for k in 0..30 {
+            let now = 1.0 + f64::from(k) * 0.05;
+            // Past the off at 1.5, the bar dragged to 0.9: the off it would
+            // put the pulse at now is still to come.
+            let fade = if now < 1.6 { 0.5 } else { 0.9 };
+            let scene = draw_duration(&mut motion, &mut tracker, &view, now, false, fade);
+            let presence = origin(&scene).presence_with_opacity;
+            assert!(now < 1.55 || presence <= last, "the pulse arrived again at {now}: {presence}");
+            last = presence;
+        }
+    }
+    /// A pulse's lattice departure outlasts its voice's fade by the fade-out
+    /// delay: a surface opened after the voice is gone draws it as the surface
+    /// that watched it does.
+    #[test]
+    fn a_surface_opened_after_a_pulses_voice_ends_draws_its_departure() {
+        let mut view = view();
+        view.note_animation.fade_out_delay = 0.2;
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        draw_duration(&mut motion, &mut tracker, &view, 0.95, false, 0.1);
+        tracker.handle_event(on(1.0, 60));
+        tracker.handle_event(off(1.0, 60));
+        let mut watched = 0.0;
+        for k in 0..=13 {
+            let scene = draw_duration(
+                &mut motion,
+                &mut tracker,
+                &view,
+                1.0 + f64::from(k) * 0.02,
+                false,
+                0.1,
+            );
+            watched = origin(&scene).presence_with_opacity;
+        }
+        assert_eq!(tracker.voices().count(), 0, "the fixture must outlive the pulse's voice");
+        assert!(watched > 0.0, "the fixture must still be departing");
+        let fresh =
+            draw_duration(&mut NodeMotion::default(), &mut tracker, &view, 1.26, false, 0.1);
+        assert!((origin(&fresh).presence_with_opacity - watched).abs() < 1e-5, "{watched}");
+    }
+    /// Clear display history drops a released note's light (#1784 G1), so a
+    /// surface opened after it, which replays what it has missed, does not
+    /// light that note again while its voice still fades.
+    #[test]
+    fn a_surface_opened_after_clear_draws_no_released_note() {
+        let view = view();
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        tracker.handle_event(on(0.0, 60));
+        draw(&mut motion, &mut tracker, &view, 0.5, false);
+        tracker.handle_event(off(1.0, 60));
+        draw(&mut motion, &mut tracker, &view, 1.2, false);
+        tracker.clear_roll();
+        let fresh = draw(&mut NodeMotion::default(), &mut tracker, &view, 1.3, false);
+        assert!(tracker.voices().count() > 0, "the fixture's voice must still fade");
+        assert_eq!(origin(&fresh).presence_with_opacity, 0.0, "a cleared release came back");
     }
     /// Hosts send one press as an on, an off and a second on at one sample:
     /// the pulse between them shares the second press's key and onset, and

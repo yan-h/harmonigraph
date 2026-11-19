@@ -61,6 +61,11 @@ pub struct VoiceKey {
     pub note: u8,
 }
 
+/// One press: its key and the bits of its onset. What a press is known by
+/// across frames, as a [`Voice`] and as a [`RollNote`](crate::RollNote) alike;
+/// a retrigger at another instant is another press.
+pub type PressId = (VoiceKey, u64);
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum NoteEventKind {
     On {
@@ -522,6 +527,11 @@ pub struct Voice {
 impl Voice {
     pub fn key(&self) -> VoiceKey {
         VoiceKey { source: self.source, channel: self.channel, note: self.note }
+    }
+
+    /// The press this voice is: its key and onset ([`PressId`]).
+    pub fn id(&self) -> PressId {
+        (self.key(), self.on_time.to_bits())
     }
 
     /// What is left of this voice's RELEASE, `[0, 1]`: 1 for the whole of a
