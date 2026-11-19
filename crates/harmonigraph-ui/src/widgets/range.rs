@@ -155,22 +155,16 @@ impl Grab {
                 }
             }
         };
-        // The pair the bar writes is the pair its config's `sanitize` keeps:
-        // the same two clamps, `lo` under `max - min_span` and then `hi` at
-        // least `lo + min_span`, on every grab. Each arm keeps `min_span` in
-        // exact arithmetic, but f32 does not: `hi - lo` after a High drag to
-        // its stop can come out an ulp short, a Span carries that width on,
-        // and a Low stop at `hi - min_span` can land an ulp low, so the next
-        // `sanitize` moved the value and `compose_scene`'s debug assert that
-        // the view is sanitized fired (#1839). One post-condition rather than
-        // a repair in each arm, so a new arm cannot miss it.
-        //
-        // `max`/`min` rather than `clamp`: the bar takes any axis, and on one
-        // whose `(max - min_span) + min_span` rounds past `max` the clamp's
-        // bounds would cross, which `f32::clamp` answers with a panic. No
-        // shipped axis does, the pitch range's fractional ends included.
-        let lo = lo.min(max - min_span);
-        (lo, hi.max(lo + min_span).min(max))
+        // The pair the bar writes is the pair its config's `sanitize` keeps,
+        // by the one rule both call (`clamp_span`), on every grab. Each arm
+        // keeps `min_span` in exact arithmetic, but f32 does not: `hi - lo`
+        // after a High drag to its stop can come out an ulp short, a Span
+        // carries that width on, and a Low stop at `hi - min_span` can land an
+        // ulp low, so the next `sanitize` moved the value and
+        // `compose_scene`'s debug assert that the view is sanitized fired
+        // (#1839). One post-condition rather than a repair in each arm, so a
+        // new arm cannot miss it.
+        harmonigraph_scene::clamp_span(lo, hi, (min, max), min_span)
     }
 }
 
@@ -1945,29 +1939,41 @@ mod tests {
     /// A grab writes a pair its config's `sanitize` keeps as it is, f32
     /// rounding included, so the value on screen is the one the file holds
     /// and `compose_scene`'s sanitized-view assert holds (#1839). The issue's
-    /// two cases: the Pitch color range's High end dragged to its stop and the
-    /// span then slid, and a Low end stopped under a high end an ulp off a
-    /// whole number on a negative axis (Level color range).
+    /// two cases, each written into the real config the bar edits and run
+    /// through its real `sanitize`: the Pitch color range's High end dragged
+    /// to its stop and the span then slid, and the Level color range's Low end
+    /// stopped under a high end an ulp off a whole number on its negative axis.
     #[test]
     fn a_grab_writes_a_pair_sanitize_keeps() {
-        // `ViewConfig::sanitize`'s and `SpectrumConfig::sanitize`'s two clamps.
-        let sanitized = |(lo, hi): (f32, f32), (min, max): (f32, f32), span: f32| {
-            let lo = lo.clamp(min, max - span);
-            (lo, hi.clamp(lo + span, max))
+        use harmonigraph_scene::{ViewConfig, COLOR_RANGE_MIN_SPAN, PITCH_COLOR_MAX};
+        let kept_by_view = |(lo, hi): (f32, f32)| {
+            let mut view =
+                ViewConfig { darkest_pitch: lo, brightest_pitch: hi, ..Default::default() };
+            view.sanitize();
+            (view.darkest_pitch, view.brightest_pitch)
         };
-        let (color, span) = ((0.0, 120.0), 12.0);
+        let (color, span) = ((0.0, PITCH_COLOR_MAX), COLOR_RANGE_MIN_SPAN);
         let lo = 87.0f32 / 200.0 * 120.0;
         let stopped = Grab::High.apply(-500.0, (lo, 100.0), color, span);
-        assert_eq!(stopped, sanitized(stopped, color, span), "High at its stop");
+        assert_eq!(stopped, kept_by_view(stopped), "High at its stop");
         let slide = Grab::Span { offset: 0.0, width: stopped.1 - stopped.0 };
         let slid = slide.apply(30.0, stopped, color, span);
-        assert_eq!(slid, sanitized(slid, color, span), "the stopped span slid");
+        assert_eq!(slid, kept_by_view(slid), "the stopped span slid");
 
-        let level = (-100.0, 0.0);
+        let kept_by_spectrum = |(lo, hi): (f32, f32)| {
+            let mut cfg = crate::SpectrumConfig {
+                volume_floor_db: lo,
+                volume_ceiling_db: hi,
+                ..Default::default()
+            };
+            cfg.sanitize();
+            (cfg.volume_floor_db, cfg.volume_ceiling_db)
+        };
+        let level = (crate::LEVEL_MIN_DB, crate::LEVEL_MAX_DB);
         let hi = -52.000_004_f32;
         assert_ne!(hi, -52.0, "the fixture's high end is an ulp off a whole number");
-        let low = Grab::Low.apply(500.0, (-90.0, hi), level, span);
-        assert_eq!(low, sanitized(low, level, span), "Low at its stop");
+        let low = Grab::Low.apply(500.0, (-90.0, hi), level, crate::LEVEL_RANGE_MIN_SPAN);
+        assert_eq!(low, kept_by_spectrum(low), "Low at its stop");
     }
 
     /// Either end can still reach its own limit — clamping the pair must not

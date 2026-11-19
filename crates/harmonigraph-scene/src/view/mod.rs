@@ -1168,10 +1168,12 @@ impl ViewConfig {
         // produce: both ends on the MIDI axis, the high end at least
         // `COLOR_RANGE_MIN_SPAN` above the low, so the readout's two ends are
         // the two the ramp reads.
-        self.darkest_pitch = finite_or(self.darkest_pitch, fresh.darkest_pitch)
-            .clamp(0.0, PITCH_COLOR_MAX - COLOR_RANGE_MIN_SPAN);
-        self.brightest_pitch = finite_or(self.brightest_pitch, fresh.brightest_pitch)
-            .clamp(self.darkest_pitch + COLOR_RANGE_MIN_SPAN, PITCH_COLOR_MAX);
+        (self.darkest_pitch, self.brightest_pitch) = crate::clamp_span(
+            finite_or(self.darkest_pitch, fresh.darkest_pitch),
+            finite_or(self.brightest_pitch, fresh.brightest_pitch),
+            (0.0, PITCH_COLOR_MAX),
+            COLOR_RANGE_MIN_SPAN,
+        );
 
         self.octave_count = crate::octaves::clamp_count(self.octave_count);
         self.octave_center = crate::octaves::clamp_center(self.octave_center);
