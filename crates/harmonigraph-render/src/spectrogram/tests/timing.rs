@@ -260,6 +260,12 @@ fn cloud_costs_by_style_and_dial() {
                     cloud_style: CloudStyle::Watercolor,
                     color_pickup: 0.0,
                     color_release: 0.0,
+                    // A blur on both axes, the fresh one from #884 until the
+                    // 2026-10-07 capture zeroed it (#1475), which the readings
+                    // in docs/spectrogram-cloud-performance.md were taken at;
+                    // `blur only` and `watercolor, no blur` turn on it.
+                    pitch_softness: 35.0,
+                    time_softness: 120.0,
                     ..Default::default()
                 };
                 turn(&mut settings);
@@ -330,6 +336,15 @@ fn cloud_costs_by_style_and_dial() {
             .atmosphere
             .filter(|a| a.settings.sanitized().effects().light())
             .map(|a| atmosphere::source_size(size, ppp, a));
+        // Every case but `plain` draws a light field, `blur only` by its
+        // softness alone; one that does not is the plain heatmap measured
+        // under another name.
+        assert_eq!(
+            source.is_some(),
+            case.turn.is_some(),
+            "{} draws no light field: its timings are the plain heatmap's",
+            case.name
+        );
         eprintln!(
             "{} / {:.2} / {:.1}: {}; wall {:.3}; CPU {:.3}; source px {:?}",
             case.name,

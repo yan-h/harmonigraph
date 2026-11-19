@@ -1364,16 +1364,20 @@ impl Targets {
         // star atlas alone is the largest thing a pane allocates. The tone and
         // the starfield's two are cleared whole each frame before anything
         // reads them, so a carried one holds nothing a fresh one would not.
-        let (carried, carried_memory, carried_tone, carried_stars) =
-            previous.map_or(Default::default(), |previous| {
+        // The starfield's atlas and image are carried each on its own size,
+        // so a Stars resolution drag reallocates the image alone.
+        let (carried, carried_memory, carried_tone, (carried_atlas, carried_image)) = previous
+            .map_or(Default::default(), |previous| {
+                let held = previous.shape.stars.zip(star_shape);
+                let (atlas, image) = previous.stars.map(|s| (s.atlas, s.image)).unzip();
                 (
                     previous.tile.filter(|_| previous.shape.tile == tile_texels),
                     previous.memory.filter(|_| previous.shape.memory == memory_size),
                     previous.tone.filter(|_| previous.shape.tone == tone_size),
-                    previous
-                        .stars
-                        .filter(|_| previous.shape.stars == star_shape)
-                        .map(|stars| (stars.atlas, stars.image)),
+                    (
+                        atlas.filter(|_| held.is_some_and(|(was, is)| was.atlas == is.atlas)),
+                        image.filter(|_| held.is_some_and(|(was, is)| was.image == is.image)),
+                    ),
                 )
             });
         let formatted = |label, size, format| crate::stars::image(device, label, size, format);
@@ -1384,12 +1388,13 @@ impl Targets {
         let tone = tone_size
             .map(|size| carried_tone.unwrap_or_else(|| sized("spectral_cloud_tone", size)));
         let star_views = star_shape.map(|shape| {
-            carried_stars.unwrap_or_else(|| {
-                (
-                    formatted("spectral_star_atlas", shape.atlas, STAR_FORMAT),
-                    formatted("spectral_star_image", shape.image, STAR_IMAGE_FORMAT),
-                )
-            })
+            (
+                carried_atlas
+                    .unwrap_or_else(|| formatted("spectral_star_atlas", shape.atlas, STAR_FORMAT)),
+                carried_image.unwrap_or_else(|| {
+                    formatted("spectral_star_image", shape.image, STAR_IMAGE_FORMAT)
+                }),
+            )
         });
         let memory_views = memory_size.map(|size| {
             carried_memory.as_ref().map_or_else(
@@ -1905,14 +1910,6 @@ impl Targets {
         if let Some(memory) = self.memory.as_mut() {
             memory.frame = None;
         }
-    }
-
-    /// Frees the colour history for a pane whose cloud is not drawn at all.
-    /// The shape forgets it too, so drawing with a history again rebuilds the
-    /// targets with a fresh one.
-    pub fn release_memory(&mut self) {
-        self.memory = None;
-        self.shape.memory = None;
     }
 
     pub fn composite_group(&self) -> &wgpu::BindGroup {
