@@ -315,7 +315,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                     format.block_copy_size(None).unwrap() / u32::from(format.components());
                 assert_eq!(channel, 2, "{format:?} is not a half-float target");
                 let bytes = readback(&device, &queue, &texture, SIZE);
-                let halves = bytes.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+                let halves = bytes.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b));
                 halves.map(shadow::tests::half).collect::<Vec<f32>>()
             })
         };
