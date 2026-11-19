@@ -1,7 +1,7 @@
 //! Which instances reach the GPU at all, and the early-outs that drop them.
 
 use super::fixtures::*;
-use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use crate::gpu_harness::{headless_device, readback, render_to_texture, render_to_textures};
 use crate::*;
 
 /// The fragment shader's early-outs — skipping the fragments outside
@@ -205,7 +205,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 // the visible pair and the local transmission.
                 let build = |src: &str| {
                     let shader = lattice_module(&device, &with_common(src));
-                    let (scene, _) = create_pipelines(&device, &shader, format, layouts, 3);
+                    let (scene, _) = create_pipelines(&device, &shader, layouts, false);
                     let (cells, _) =
                         create_cell_pipelines(&device, &shader, &res.compiled.bind_group_layout);
                     (scene, cells)
@@ -285,9 +285,14 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             .and_then(|o| o.shadow.as_ref())
             .map_or(&res.compiled.shadow_dummy_bind_group, |a| a.read());
 
-        let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
+        // The bloom-off scene pass's targets, in its formats and cleared as
+        // `encode_scene` clears them: the visible pair to nothing, the
+        // transmission to one.
+        let formats: Vec<_> = scene_targets(false).into_iter().map(|t| t.unwrap().format).collect();
+        let clears = [wgpu::Color::TRANSPARENT, wgpu::Color::TRANSPARENT, wgpu::Color::WHITE];
+        let targets: [_; 3] = std::array::from_fn(|i| (formats[i], clears[i]));
         let draw = |pipeline: &wgpu::RenderPipeline| {
-            let targets = render_to_targets(&device, &queue, SIZE, format, clear, |pass| {
+            let textures = render_to_textures(&device, &queue, SIZE, targets, |pass| {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
                 pass.set_bind_group(1, light, &[]);
@@ -303,46 +308,45 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
                 pass.draw(0..4, 0..pane.instance_count);
             });
-            targets.map(|texture| readback(&device, &queue, &texture, SIZE))
+            // Every channel of every target a half float, read as its value.
+            textures.map(|texture| {
+                let format = texture.format();
+                let channel =
+                    format.block_copy_size(None).unwrap() / u32::from(format.components());
+                assert_eq!(channel, 2, "{format:?} is not a half-float target");
+                let bytes = readback(&device, &queue, &texture, SIZE);
+                let halves = bytes.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+                halves.map(shadow::tests::half).collect::<Vec<f32>>()
+            })
         };
         let with_early_out = draw(fast);
         let without = draw(slow);
 
-        // Guard against a vacuous pass: the nodes must have drawn something
-        // over the clear color.
-        let bg = [18u8, 20, 23, 255];
+        // Guard against a vacuous pass: the nodes must have drawn something.
         assert!(
-            without[0].chunks(4).any(|px| px.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 8)),
+            without[0].iter().any(|&v| v > 0.03),
             "the {name} scene drew nothing; the comparison is vacuous",
         );
 
         // The two builds are different programs and Metal compiles both with
-        // fast math, so their last f32 ulp may round differently and a value on
-        // an 8-bit rounding boundary come out one step apart. It did, in one
-        // byte of one fixture, once the slot walk rotated its edges instead of
-        // taking their sines. An
-        // early-out that changes what is drawn moves a contour across many
-        // pixels, so a handful of one-step flips is all this lets through.
-        // The transmission target is a half float, whose step is one ulp of
-        // its bits rather than one of a byte, so it is compared as those.
-        const ROUNDING_FLIPS: usize = 4;
+        // fast math, so their last f32 ulp may round differently and a value
+        // on a half-float rounding boundary come out one step apart: a few
+        // dozen values a fixture. An early-out that changes what is drawn
+        // moves a contour, and values by far more than a step (0.87 with
+        // `paint_reach` cut by a tenth), so one step is all this lets through.
+        // Compared as values, so a zero of either sign is one value.
+        let step = |v: f32| 2f32.powi(v.abs().max(2f32.powi(-14)).log2().floor() as i32 - 10);
         let differing: Vec<_> = with_early_out
             .iter()
             .zip(&without)
             .enumerate()
             .flat_map(|(target, (fast, slow))| {
-                let width = if target == 2 { 2 } else { 1 };
-                let value = |c: &[u8]| c.iter().rev().fold(0u16, |v, &b| v << 8 | u16::from(b));
-                fast.chunks(width)
-                    .zip(slow.chunks(width))
-                    .enumerate()
-                    .map(move |(i, (a, b))| (target, i, value(a), value(b)))
+                fast.iter().zip(slow).enumerate().map(move |(i, (&a, &b))| (target, i, a, b))
             })
-            .filter(|&(_, _, a, b)| a != b)
+            .filter(|&(_, _, a, b)| (a - b).abs() > step(a.abs().max(b.abs())))
             .collect();
         assert!(
-            differing.len() <= ROUNDING_FLIPS
-                && differing.iter().all(|&(_, _, a, b)| a.abs_diff(b) == 1),
+            differing.is_empty(),
             "the {name} scene changed when the early-outs were enabled: {} values, first \
              (target, index, with, without) {:?}",
             differing.len(),
@@ -436,71 +440,6 @@ struct Programs {
     fast_cells: wgpu::RenderPipeline,
     slow_cells: wgpu::RenderPipeline,
     light: wgpu::BindGroup,
-}
-
-/// The scene's three targets as the bloom-off pass lays them out
-/// (`scene_targets`), the first cleared to `clear` and the rest to nothing,
-/// drawn into by one pass.
-fn render_to_targets(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    size: [u32; 2],
-    format: wgpu::TextureFormat,
-    clear: wgpu::Color,
-    draw: impl FnOnce(&mut wgpu::RenderPass<'static>),
-) -> [wgpu::Texture; 3] {
-    let targets: Vec<_> = scene_targets(format, false)
-        .into_iter()
-        .map(|target| target.expect("every scene target is written").format)
-        .collect();
-    let textures: [wgpu::Texture; 3] = std::array::from_fn(|i| {
-        crate::gpu_memory::texture(
-            device,
-            &wgpu::TextureDescriptor {
-                label: Some("parity_target"),
-                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: targets[i],
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            },
-        )
-    });
-    let views = textures.each_ref().map(|t| t.create_view(&Default::default()));
-    let mut encoder = device.create_command_encoder(&Default::default());
-    {
-        let attachments: Vec<_> = views
-            .iter()
-            .enumerate()
-            .map(|(i, view)| {
-                Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(if i == 0 {
-                            clear
-                        } else {
-                            wgpu::Color::TRANSPARENT
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })
-            })
-            .collect();
-        let mut pass = encoder
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("parity_pass"),
-                color_attachments: &attachments,
-                ..Default::default()
-            })
-            .forget_lifetime();
-        draw(&mut pass);
-    }
-    queue.submit([encoder.finish()]);
-    textures
 }
 
 /// A node that can paint nothing is not shipped at all — and the marker standing
