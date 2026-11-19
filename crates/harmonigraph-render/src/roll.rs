@@ -688,7 +688,7 @@ impl RollPipelines {
         let bloom_layout = crate::BloomChain::add_layout(device, "roll_bloom_bind_group_layout");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("roll_shader"),
-            source: wgpu::ShaderSource::Wgsl(crate::roll_source().into()),
+            source: wgpu::ShaderSource::Wgsl(crate::roll_module().into()),
         });
         let core_pipeline = |format| {
             create_core_pipeline(device, &shader, format, target_format.is_srgb(), &layout)

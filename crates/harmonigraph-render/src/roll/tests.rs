@@ -253,7 +253,7 @@ fn led_note(fade: f32, alpha: f32) -> RollInstance {
 
 #[test]
 fn uniforms_match_the_bound_shader_layout() {
-    crate::uniforms::layout::check_binding::<RollUniforms>(&crate::roll_source(), 0, 0);
+    crate::uniforms::layout::check_binding::<RollUniforms>(&crate::roll_module(), 0, 0);
 }
 
 #[test]
@@ -569,7 +569,7 @@ fn cuts_stay_on_their_notes_in_a_rect_off_the_surface_corner() {
 
 #[test]
 fn baked_roll_shader_validates() {
-    crate::validate_wgsl("roll.wgsl", &crate::roll_source(), 0, ROLL_ENTRY_POINTS)
+    crate::validate_wgsl("roll.wgsl", &crate::roll_module(), 0, ROLL_ENTRY_POINTS)
         .expect("baked roll.wgsl must parse and validate");
 }
 

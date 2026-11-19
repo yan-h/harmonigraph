@@ -84,8 +84,8 @@ fn vs_dot_cut(
 /// feather inside the dot's quad, at the dot's own strength.
 fn dot_cut(at: Dot, p: vec2<f32>) -> f32 {
     let d = length(p - at.center) - at.radius;
-    let cut = surround_cut_coverage(dot_locals.surround, d, dot_locals.feather);
-    return unpack4x8unorm(at.aura).a * cut;
+    let strength = unpack4x8unorm(at.aura).a;
+    return surround_cut_coverage(dot_locals.surround, strength, d, dot_locals.feather);
 }
 
 /// How much of `p` `at`'s disc covers: its coverage, not its opacity, so a

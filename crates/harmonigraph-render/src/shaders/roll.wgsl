@@ -515,7 +515,10 @@ struct NoteCut {
 /// tint's fade alike.
 fn cut_strength(in: VertexOut, rim: Rim) -> NoteCut {
     if !rim.live { return NoteCut(0.0, 0.0); }
-    let wrap = surround_cut_coverage(locals.surround, rim.d, locals.feather) * rim.keep * rim.lead;
+    // At a strength of 1: the note's own strength and opacity come in after
+    // the masks, below.
+    let cover = surround_cut_coverage(locals.surround, 1.0, rim.d, locals.feather);
+    let wrap = cover * rim.keep * rim.lead;
     let fade = surround_fade_at(locals.surround, rim.d) * rim.lead;
     return NoteCut(in.aura.a * wrap * along(in, in.fade), fade);
 }

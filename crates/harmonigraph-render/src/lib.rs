@@ -228,7 +228,7 @@ pub(crate) fn text_source() -> String {
 /// roll.wgsl after the surround's arithmetic it calls into: the whole roll
 /// module. It names nothing in common.wgsl, so it takes none of it, and a
 /// common-shader reload leaves the roll's pipelines as they are.
-pub(crate) fn roll_source() -> String {
+pub(crate) fn roll_module() -> String {
     format!("{}\n{}", surround::SRC, roll::ROLL_SRC)
 }
 
