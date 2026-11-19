@@ -12,41 +12,19 @@
 
 use super::harness::*;
 use crate::*;
-use glam::{Vec3, Vec4};
 use harmonigraph_core::Tuning;
 
-/// A [`ViewConfig`] with every float poisoned, and every other field set to
-/// whatever it takes to reach the picture: a window with nodes in it, a
-/// sounding note's marks, and the resting marker field switched on.
+/// A [`ViewConfig`] with every float NaN, and every other field set to what it
+/// takes to reach the picture: a window with nodes in it, a sounding note's
+/// marks, and every intensity weight filled, since an empty one holds no
+/// number to poison.
 ///
-/// Written WHOLE rather than over `..ViewConfig::default()` on purpose. A new
-/// dial then breaks this fixture instead of slipping past it, which is the one
-/// mechanism that keeps the assertion below covering the next float as well as
-/// today's.
+/// The floats are found in the view's serialized text rather than written
+/// out, so one added anywhere in the view, a nested group or a gradient knob
+/// included, is poisoned without an edit here; the test below holds that the
+/// fixture leaves no real float behind.
 fn poisoned_view() -> ViewConfig {
-    let nan = f32::NAN;
-    let base = ViewConfig::default();
-    // Written out for the same reason the view is, and it has to be its own
-    // literal: taken from `base` the six knobs arrive CLEAN, and the 256-entry
-    // `pitch_lut` the sweep walks would be asserted over a gradient nothing
-    // ever poisoned — the one float the "written WHOLE" mechanism above cannot
-    // catch by itself, since the field is one name here and seven there.
-    //
-    // Green today because every consumer funnels through `color::with_lut`,
-    // which calls `Gradient::sanitized` before keying its memo. That is the
-    // claim this pins; a knob added to `Gradient` and left out of that repair
-    // is what it goes red for.
-    let pitch_gradient = Gradient {
-        hue_start: nan,
-        hue_span: nan,
-        lightness: nan,
-        lightness_ramp: nan,
-        chroma: nan,
-        chroma_ramp: nan,
-        bend: Bend { at: nan, share: nan, ..Bend::default() },
-    };
-    let shadow = ShadowStyle { width: nan, spread: nan, depth: nan };
-    ViewConfig {
+    let mut base = ViewConfig {
         extent_threes: 3,
         extent_fives: 3,
         min_sevens: -1,
@@ -54,307 +32,59 @@ fn poisoned_view() -> ViewConfig {
         center_threes: 0,
         center_fives: 0,
         center_sevens: 0,
-        sevens_size: nan,
-        sevens_label: base.sevens_label,
-        label_scale: nan,
         show_cents: true,
         note_names: NoteNames::Played,
-        show_map_indicators: base.show_map_indicators,
-        pitch_gradient,
-        darkest_pitch: nan,
-        brightest_pitch: nan,
-        band_width: nan,
-        ring_inner: nan,
-        ring_gap: nan,
-        lattice_ground: nan,
-        marker_ink: nan,
-        octave_count: base.octave_count,
-        octave_center: nan,
-        spectral_reading: base.spectral_reading,
-        spectral_width: nan,
-        spectral_ring_width: nan,
-        spectral_ring_range: nan,
-        spectral_ring_gate: nan,
-        spectral_ring_hysteresis: nan,
-        spectral_ring_attack: nan,
-        spectral_ring_release: nan,
-        fade_time: nan,
-        fade_shape: nan,
-        note_bloom: nan,
-        note_animation: NoteAnimationConfig {
-            stagger_spread: nan,
-            radial_start: nan,
-            fade_out_delay: nan,
-        },
-        intensity: {
-            let source = || crate::IntensitySource { opacity: Some(nan), thickness: Some(nan) };
-            crate::IntensitySettings {
-                velocity: source(),
-                gain: source(),
-                pressure: source(),
-                timbre: source(),
-                opacity_rest: nan,
-                thickness_base: nan,
-                thickness_max: nan,
-            }
-        },
-        mark_thickness: nan,
-        mark_delay: nan,
-        plus_arm: nan,
-        plus_taper: nan,
-        render_scale: nan,
-        spiral_bloom: nan,
-        glow_reach: nan,
-        atmosphere: AtmosphereSettings {
-            material_style: base.atmosphere.material_style,
-            material_amount: nan,
-            stars: crate::StarSettings {
-                star_randomness: nan,
-                star_size_variation: nan,
-                star_jitter: nan,
-                star_layers: base.atmosphere.stars.star_layers,
-                star_spacing_ratio: [nan; crate::star_plan::STAR_DEPTHS],
-                star_size: [nan; crate::star_plan::STAR_DEPTHS],
-                star_speed: [nan; crate::star_plan::STAR_DEPTHS],
-                star_lifetime: nan,
-                star_twinkle_dip: nan,
-                star_solid: [nan; crate::star_plan::STAR_DEPTHS],
-                star_cover: nan,
-                star_glow_falloff: nan,
-                star_resolution: nan,
-            },
-            material_settings: crate::MaterialSettings {
-                velvet_size: nan,
-                velvet_variety: nan,
-                velvet_edge: nan,
-                velvet_irregularity: nan,
-                velvet_shape: nan,
-                velvet_square: nan,
-                velvet_tilt: nan,
-                wash_size: nan,
-                wash_fuzz: nan,
-                wash_lobe: nan,
-                wash_refract: nan,
-                wash_layers: nan,
-                wash_randomness: nan,
-            },
-            material_speed: nan,
-            material_direction: nan,
-            texture_depth: nan,
-            texture_scale: nan,
-            texture_speed: nan,
-            breath_amount: nan,
-            breath_speed: nan,
-        },
-        glow_strength: nan,
-        glow_curve: GlowCurve { shape: nan },
-        shadow: ShadowSettings {
-            lattice_geometry: shadow,
-            lattice_text: shadow,
-            spectral_text: shadow,
-        },
-        hide_behind: nan,
-        glow_wash: nan,
-        glow_blend: nan,
-        glow_accumulation: nan,
-        glow_attack: nan,
-        glow_release: nan,
+        ..ViewConfig::default()
+    };
+    let intensity = &mut base.intensity;
+    for source in [
+        &mut intensity.velocity,
+        &mut intensity.gain,
+        &mut intensity.pressure,
+        &mut intensity.timbre,
+    ] {
+        *source = crate::IntensitySource { opacity: Some(1.0), thickness: Some(1.0) };
     }
+    let text = ron::to_string(&base).expect("a view serializes");
+    ron::from_str(&nan_floats(&text)).expect("a poisoned view parses")
 }
 
-/// Every float the scene ships, under the name a failure has to print to be
-/// worth anything: "something is NaN" costs a bisect, "`marker_unit` is NaN"
-/// costs a read.
-#[derive(Default)]
-struct Floats(Vec<(String, f32)>);
-
-impl Floats {
-    fn one(&mut self, name: impl Into<String>, value: f32) {
-        self.0.push((name.into(), value));
-    }
-
-    fn many(&mut self, name: &str, values: impl IntoIterator<Item = f32>) {
-        for (i, value) in values.into_iter().enumerate() {
-            self.one(format!("{name}[{i}]"), value);
+/// `text` with every float literal in it made `NaN`: RON writes a float with a
+/// fraction or an exponent, and an integer with neither. A number starts
+/// where no name runs into it, so a digit inside a key is left alone.
+fn nan_floats(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let (mut out, mut at) = (String::with_capacity(text.len()), 0);
+    while at < text.len() {
+        let named = at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_');
+        if named || !(bytes[at].is_ascii_digit() || bytes[at] == b'-') {
+            out.push(char::from(bytes[at]));
+            at += 1;
+            continue;
         }
+        let end = text[at + 1..]
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+')))
+            .map_or(text.len(), |n| at + 1 + n);
+        let token = &text[at..end];
+        let float = token.parse::<f64>().is_ok() && token.contains(['.', 'e', 'E']);
+        out.push_str(if float { "NaN" } else { token });
+        at = end;
     }
-
-    fn vec3(&mut self, name: &str, value: Vec3) {
-        self.many(name, value.to_array());
-    }
-
-    fn vec4(&mut self, name: &str, value: Vec4) {
-        self.many(name, value.to_array());
-    }
-
-    fn luts(&mut self, name: &str, lut: &[Vec4]) {
-        for (i, color) in lut.iter().enumerate() {
-            self.vec4(&format!("{name}[{i}]"), *color);
-        }
-    }
+    out
 }
 
-/// Every float the scene DERIVES, flattened.
-///
-/// Every struct is destructured EXHAUSTIVELY — no `..` anywhere below — so a
-/// field added to the scene, to a node or to a marker breaks this walk rather
-/// than going unwatched. That is the half of the claim a test cannot assert:
-/// the assertion says the floats are real numbers, and this says which floats
-/// there are.
-///
-/// The view the scene carries is not walked here: [`broken_view`] reads every
-/// float in it off its debug dump.
-fn scene_floats(scene: &Scene) -> Floats {
-    let mut f = Floats::default();
-    let Scene {
-        view: _,
-        edge_softness_points,
-        nodes,
-        camera,
-        node_radius,
-        outer_inner,
-        outer_outer,
-        rings_outer,
-        mark_inner,
-        octave_gap,
-        lattice_ground,
-        spectral,
-        octave_layout,
-        pluses,
-        plus_half_width,
-        plus_taper_start,
-        background,
-        pitch_lut,
-        pitch_lut_spacing,
-        marker_unit,
-        glow_clock,
-        star_solo: _,
-    } = scene;
-    f.one("edge_softness_points", *edge_softness_points);
-
-    for (i, node) in nodes.iter().enumerate() {
-        let NodeInstance {
-            lattice_pos: _,
-            world_pos,
-            presence_with_opacity,
-            presence_without_opacity,
-            departing: _,
-            slice_progress,
-            octaves,
-            thickness,
-            hovered: _,
-            on_home: _,
-            scale,
-            cents,
-            melody_slots: _,
-            bass_slots: _,
-            melody_level,
-            bass_level,
-            audio_ring,
-            glow,
-            trail,
-        } = node;
-        f.vec3(&format!("nodes[{i}].world_pos"), *world_pos);
-        f.one(format!("nodes[{i}].presence_with_opacity"), *presence_with_opacity);
-        f.one(format!("nodes[{i}].presence_without_opacity"), *presence_without_opacity);
-        f.many(&format!("nodes[{i}].slice_progress"), *slice_progress);
-        f.many(&format!("nodes[{i}].octaves"), *octaves);
-        f.many(&format!("nodes[{i}].thickness"), *thickness);
-        f.one(format!("nodes[{i}].scale"), *scale);
-        f.one(format!("nodes[{i}].cents"), *cents);
-        f.one(format!("nodes[{i}].melody_level"), *melody_level);
-        f.one(format!("nodes[{i}].bass_level"), *bass_level);
-        f.one(format!("nodes[{i}].audio_ring"), *audio_ring);
-        let GlowStep { level, light } = glow;
-        f.one(format!("nodes[{i}].glow.level"), *level);
-        {
-            let GlowLight { l, m } = light;
-            f.many(&format!("nodes[{i}].glow.light.l"), *l);
-            f.many(&format!("nodes[{i}].glow.light.m"), *m);
-        }
-        f.one(format!("nodes[{i}].trail"), *trail);
-    }
-
-    let Camera { target, yaw, pitch, distance, projection: _, cabinet_angle, cabinet_scale } =
-        camera;
-    f.vec3("camera.target", *target);
-    f.one("camera.yaw", *yaw);
-    f.one("camera.pitch", *pitch);
-    f.one("camera.distance", *distance);
-    f.one("camera.cabinet_angle", *cabinet_angle);
-    f.one("camera.cabinet_scale", *cabinet_scale);
-
-    f.one("node_radius", *node_radius);
-
-    f.one("outer_inner", *outer_inner);
-    f.one("outer_outer", *outer_outer);
-    f.one("rings_outer", *rings_outer);
-    f.one("mark_inner", *mark_inner);
-    f.one("octave_gap", *octave_gap);
-    f.vec4("lattice_ground", *lattice_ground);
-
-    let SpectralPaint {
-        lut,
-        lut_spacing,
-        folded: _,
-        inner,
-        outer,
-        range,
-        gate,
-        hysteresis,
-        levels: _,
-        color_levels: _,
-    } = spectral;
-    f.luts("spectral.lut", lut);
-    f.many("spectral.lut_spacing", [lut_spacing.at, lut_spacing.share]);
-    f.one("spectral.inner", *inner);
-    f.one("spectral.outer", *outer);
-    f.one("spectral.range", *range);
-    f.one("spectral.gate", *gate);
-    f.one("spectral.hysteresis", *hysteresis);
-
-    let OctaveLayout { center, span: _ } = octave_layout;
-    f.one("octave_layout.center", *center);
-
-    for (i, plus) in pluses.iter().enumerate() {
-        let PlusInstance { node: _, pos, radius, color, strength } = plus;
-        f.vec3(&format!("pluses[{i}].pos"), *pos);
-        f.one(format!("pluses[{i}].radius"), *radius);
-        f.vec4(&format!("pluses[{i}].color"), *color);
-        f.one(format!("pluses[{i}].strength"), *strength);
-    }
-
-    f.one("plus_half_width", *plus_half_width);
-    f.one("plus_taper_start", *plus_taper_start);
-    f.vec4("background", *background);
-    f.luts("pitch_lut", pitch_lut);
-    f.many("pitch_lut_spacing", [pitch_lut_spacing.at, pitch_lut_spacing.share]);
-    f.one("marker_unit", *marker_unit);
-
-    // Nothing to walk here, and that is worth saying rather than leaving as a
-    // silent pass: `derive_scene` ships `glow_clock: None` unconditionally,
-    // the clock being the SHELL's glow pass to fill, as the carried lights
-    // above are. Read as coverage of the clock the arm below would be a green
-    // light with nothing behind it, so the test asserts the emptiness, and the
-    // day `derive_scene` starts filling it this comment goes red instead of
-    // going stale.
-    if let Some(clock) = glow_clock {
-        f.one("glow_clock", *clock as f32);
-    }
-
-    f
-}
-
-/// Every value in the view's `{:#?}` dump that is not a real number, by its
-/// path through the dump. Read off the debug output rather than walked by
-/// hand, so a field added to the view or anything nested in it is covered
-/// without being named here. It sees a value only where derived pretty `Debug`
-/// prints it alone on its line, so a `Range<f32>`, a `Duration` or a
-/// hand-written `Debug` would go unseen.
-fn broken_view(view: &ViewConfig) -> Vec<String> {
+/// Every float in a value's `{:#?}` dump that `keep` picks, by its path through
+/// the dump: "something is NaN" costs a bisect, "`marker_unit` is NaN" costs a
+/// read. Read off the debug output rather than walked by hand, so a field
+/// added to the scene, a node, a marker or the view is covered without being
+/// named here. It sees a value only where derived pretty `Debug` prints it
+/// alone on its line, which glam's vectors, arrays, options and every derived
+/// struct here do; a `Range<f32>`, a `Duration` or a hand-written `Debug`
+/// would go unseen.
+fn floats_where(value: &impl std::fmt::Debug, keep: impl Fn(f64) -> bool) -> Vec<String> {
     // Each open container's name and how many unnamed items it has shown.
-    let (mut path, mut broken) = (Vec::<(String, usize)>::new(), Vec::new());
-    for line in format!("{view:#?}").lines() {
+    let (mut path, mut found) = (Vec::<(String, usize)>::new(), Vec::new());
+    for line in format!("{value:#?}").lines() {
         let line = line.trim();
         if line.starts_with(['}', ']', ')']) {
             path.pop();
@@ -370,25 +100,23 @@ fn broken_view(view: &ViewConfig) -> Vec<String> {
             (None, None) => (String::new(), line),
         };
         let value = value.trim_end_matches(',');
-        if ["NaN", "inf", "-inf"].contains(&value) {
+        // An integer prints with neither a fraction nor an exponent.
+        let float =
+            value.parse::<f64>().ok().filter(|v| !v.is_finite() || value.contains(['.', 'e']));
+        if float.is_some_and(&keep) {
             let at: Vec<_> = path.iter().map(|(name, _)| name.as_str()).chain([&*name]).collect();
-            broken.push(format!("{} = {value}", at.join(".").trim_matches('.')));
+            found.push(format!("{} = {value}", at.join(".").trim_matches('.')));
         }
         if line.ends_with(['{', '[', '(']) {
             path.push((name, 0));
         }
     }
-    broken
+    found
 }
 
-/// Every float the scene ships, by name, that is not a real number.
-fn broken(scene: &Scene) -> Vec<String> {
-    scene_floats(scene)
-        .0
-        .into_iter()
-        .filter(|(_, value)| !value.is_finite())
-        .map(|(name, value)| format!("{name} = {value}"))
-        .collect()
+/// Every value in a dump that is not a real number, by its path.
+fn broken(value: &impl std::fmt::Debug) -> Vec<String> {
+    floats_where(value, |v| !v.is_finite())
 }
 
 #[test]
@@ -396,6 +124,8 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
     // Past the fresh Note fade a NaN one repairs to, so the held note has
     // arrived and the node layers it lights are in the walk.
     const NOW: f64 = 1.0;
+    let real = floats_where(&poisoned_view(), f64::is_finite);
+    assert!(real.is_empty(), "the poisoned view still holds real floats: {}", real.join(", "));
     let scene = scene_of(&sounding(), &Tuning::default(), &poisoned_view(), NOW);
 
     // The fixture has to ARRIVE, or the sweep below passes over an empty
@@ -411,13 +141,6 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         .find(|n| !n.on_home)
         .expect("the fixture has sevens layers, so the sevens scale below has something to size")
         .scale;
-    // The emptiness the walk's `glow_clock` arm rests on, stated where it can
-    // go red: the clock is the shell's to fill, and nothing here covers it.
-    assert!(
-        scene.glow_clock.is_none(),
-        "`derive_scene` filled the glow clock, so the walk's empty arm is no longer honest",
-    );
-
     let mut normalized = poisoned_view();
     normalized.sanitize();
     // The requested window is independent of the view's repaired dials.
@@ -438,17 +161,12 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         &RingFade::default(),
         NOW,
     );
-    // The view's half of the claim, by name, before the comparisons below:
-    // a NaN would also fail those, unnamed, and an infinity left on both sides
-    // would pass them.
-    let names = broken_view(&scene.view);
-    assert!(names.is_empty(), "the view's repair left: {}", names.join(", "));
-    assert_eq!(scene.view, expected.view);
-    assert_eq!(scene_floats(&scene).0, scene_floats(&expected).0);
-    assert_eq!(off_sheet, normalized.sevens_size);
-
+    // The claim, by name, before the comparison below: a NaN would also fail
+    // that, unnamed, and an infinity left on both sides would pass it.
     let names = broken(&scene);
     assert!(names.is_empty(), "a NaN view reached the scene at: {}", names.join(", "));
+    assert_eq!(scene, expected);
+    assert_eq!(off_sheet, normalized.sevens_size);
 
     // A nonzero arm makes the marker walk reach its geometry and ink too.
     let drawable = ViewConfig { plus_arm: 0.5, ..poisoned_view() };

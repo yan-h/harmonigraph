@@ -4,6 +4,34 @@ use super::harness::*;
 use crate::*;
 use harmonigraph_core::{NoteTracker, Tuning};
 
+/// A non-finite Shadow field repairs to its own group's fresh value, as the
+/// recorded rule for nested groups has it (#1677 area 5 Q2): every field of
+/// every group, since the text groups' fresh Spread is not the 0 a bare
+/// clamp falls back to (#1847).
+#[test]
+fn a_non_finite_shadow_field_repairs_to_its_groups_fresh_value() {
+    let fresh = ViewConfig::default().shadow;
+    let groups = fresh.groups();
+    for (name, values) in [
+        ("width", groups.map(|g| g.width)),
+        ("spread", groups.map(|g| g.spread)),
+        ("depth", groups.map(|g| g.depth)),
+    ] {
+        assert!(
+            values.iter().any(|&value| value != 0.0),
+            "no fresh group holds its {name} off 0, so a repair to 0 would pass",
+        );
+    }
+    for poison in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut view = ViewConfig::default();
+        for group in view.shadow.groups_mut() {
+            *group = ShadowStyle { width: poison, spread: poison, depth: poison };
+        }
+        view.sanitize();
+        assert_eq!(view.shadow.groups(), fresh.groups(), "{poison} did not repair to fresh");
+    }
+}
+
 /// The blob door and the picture door hold every Shadow GROUP to the same
 /// endpoints, so a saved value never reads out differently from what is drawn.
 ///

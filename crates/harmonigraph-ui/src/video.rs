@@ -266,7 +266,7 @@ impl RenderConfig {
         // every bar and quietly disable the trigger; clamping to the range the
         // field can produce keeps the number on screen the number that fires.
         if !self.stop_bar.is_finite() {
-            self.stop_bar = 65.0;
+            self.stop_bar = RenderConfig::default().stop_bar;
         }
         self.stop_bar = self.stop_bar.clamp(STOP_BAR_RANGE.0, STOP_BAR_RANGE.1);
         // The same for the tail: a NaN would reach the render's end and make

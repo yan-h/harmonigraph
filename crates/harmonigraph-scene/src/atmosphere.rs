@@ -73,6 +73,9 @@ pub enum CloudStyle {
 /// pane is the right way round — the picture says so immediately, and the
 /// alternative is a bar that cannot reach what the export needs.
 pub const CLOUD_SIZE_MIN: f32 = 0.0625;
+/// What the Velvet scales' Edge softness bar offers
+/// ([`MaterialSettings::velvet_edge`]), and what a load holds a saved one to.
+pub const VELVET_EDGE_RANGE: std::ops::RangeInclusive<f32> = 0.01..=1.0;
 /// See [`CLOUD_SIZE_MIN`].
 pub const CLOUD_SIZE_MAX: f32 = 2.0;
 
@@ -347,7 +350,12 @@ impl MaterialSettings {
         self.velvet_size =
             clamp(self.velvet_size, fresh.velvet_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.velvet_variety = clamp(self.velvet_variety, fresh.velvet_variety, 0.0, 1.0);
-        self.velvet_edge = clamp(self.velvet_edge, fresh.velvet_edge, 0.01, 1.0);
+        self.velvet_edge = clamp(
+            self.velvet_edge,
+            fresh.velvet_edge,
+            *VELVET_EDGE_RANGE.start(),
+            *VELVET_EDGE_RANGE.end(),
+        );
         self.velvet_irregularity =
             clamp(self.velvet_irregularity, fresh.velvet_irregularity, 0.0, 1.0);
         self.velvet_shape = clamp(self.velvet_shape, fresh.velvet_shape, 0.0, 1.0);
