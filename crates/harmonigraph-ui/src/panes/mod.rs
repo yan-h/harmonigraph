@@ -719,8 +719,12 @@ pub(super) fn subsection<R>(
 ) -> egui::Response {
     crate::widgets::group_space(ui);
     let id = ui.make_persistent_id(title);
+    #[cfg(test)]
+    let open = ui.data(|data| data.get_temp::<bool>(open_subsections_id())).unwrap_or(false);
+    #[cfg(not(test))]
+    let open = false;
     let mut fold =
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, open);
     let job = egui::text::LayoutJob::single_section(
         title.to_owned(),
         egui::TextFormat::simple(egui::TextStyle::Button.resolve(ui.style()), crate::theme::text()),
@@ -737,6 +741,21 @@ pub(super) fn subsection<R>(
     header
 }
 
+#[cfg(test)]
+fn open_subsections_id() -> egui::Id {
+    egui::Id::new("harmonigraph_ui::panes::open_subsections")
+}
+
+/// Open every [`subsection`] `ctx` draws that has not been folded yet, for a
+/// sweep that measures a page with its folds open. A flag the fold reads,
+/// rather than a click on each chevron, which a sweep could only find by its
+/// paint, and rather than egui's `set_everything_is_visible`, which shows every
+/// tooltip on the page too.
+#[cfg(test)]
+pub(crate) fn open_subsections(ctx: &egui::Context) {
+    ctx.data_mut(|data| data.insert_temp(open_subsections_id(), true));
+}
+
 /// How far a [`block`]'s title stands from whatever is over it, ink to ink, at
 /// scale 1: twice a group's gap, so a title reads as its own rows' and not as
 /// the end of the rows before it.
@@ -747,7 +766,7 @@ const BLOCK_GAP: f32 = 2.0 * crate::widgets::GROUP_GAP;
 /// nothing. A fold's indent is the column its chevron is centred in, and its
 /// body lines up with the name after it; a block has no chevron, so its indent
 /// only has to read as one.
-pub(crate) const BLOCK_INDENT: f32 = 11.0;
+const BLOCK_INDENT: f32 = 11.0;
 
 /// Where a [`block`]'s guide line stands in from its title's left edge, at
 /// scale 1: under the title's first stroke, which the face's side bearing
@@ -802,6 +821,41 @@ mod block_tests {
 
     fn row(ui: &mut egui::Ui) -> egui::Rect {
         ui.allocate_exact_size(egui::vec2(100.0, 20.0), egui::Sense::hover()).0
+    }
+
+    /// A subsection opens closed, a click on its header opens it, and the next
+    /// closes it again: the gesture the settings sweeps no longer make, since
+    /// they open every fold by [`super::open_subsections`].
+    #[test]
+    fn a_click_on_a_subsections_header_opens_and_closes_it() {
+        use crate::tests::probe::press;
+        let ctx = crate::tests::probe::themed();
+        let mut t = 0.0;
+        let mut frame = |dt: f64, events: Vec<egui::Event>| {
+            t += dt;
+            let mut drawn = false;
+            let mut header = egui::Rect::NOTHING;
+            let input = egui::RawInput { time: Some(t), events, ..Default::default() };
+            let _ = ctx.run_ui(input, |ui| {
+                header = subsection(ui, "Fold", |ui| {
+                    drawn = true;
+                    row(ui)
+                })
+                .rect;
+            });
+            (header, drawn)
+        };
+        let (header, drawn) = frame(0.0, vec![]);
+        assert!(!drawn, "a subsection opened open");
+        let at = header.center();
+        for want in [true, false] {
+            // A click is quick; the frame read after it a second on, past the
+            // fold's animation.
+            frame(0.1, vec![egui::Event::PointerMoved(at)]);
+            frame(0.1, vec![press(at, true)]);
+            frame(0.1, vec![press(at, false)]);
+            assert_eq!(frame(1.0, vec![]).1, want, "a click left the fold as it was");
+        }
     }
 
     /// A block's title stands [`BLOCK_GAP`] under the row over it, whether a

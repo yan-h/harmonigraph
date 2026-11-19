@@ -266,6 +266,8 @@ impl<'a> LayerStrip<'a> {
             Vec2::new(width, theme::row_height(scale)),
             Sense::click_and_drag(),
         );
+        #[cfg(test)]
+        super::range_probe::record_placed("LayerStrip", rect, ui);
         let slot = (rect.width() / CELLS as f32).max(1.0);
         // Cell units and points, the two directions. Cell `i` is centered on
         // `x_of(i)`, so a whole number is a sheet and a half is a border.

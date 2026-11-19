@@ -36,9 +36,8 @@ use harmonigraph_scene::SEVENS_SIZE_RANGE;
 /// so the field shrinks with the row on its own and a narrow column caps it
 /// well under this.
 const PRESET_NAME_WIDTH: f32 = 110.0;
-/// What the empty preset name field shows, which is also how a test tells
-/// that field from a bar: both are row-high wells.
-pub(crate) const PRESET_NAME_HINT: &str = "preset name";
+/// What the empty preset name field shows.
+const PRESET_NAME_HINT: &str = "preset name";
 
 /// Camera framing: projection, angle, and saved angles.
 pub(super) fn camera(

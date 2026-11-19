@@ -408,7 +408,7 @@ pub(crate) fn toggle_button(ui: &mut Ui, on: &mut bool, label: &str, hint: &str)
 /// per option rather than one spanning them all, so the page shows through the
 /// gap between two options and a label of several words reads as one choice
 /// rather than as several. A button's fill rather than a value bar's well,
-/// which says "a range to drag" and is the one thing a bar is found by.
+/// which says "a range to drag".
 fn filled_option(ui: &mut Ui, selected: bool, label: &str, hint: &str) -> egui::Response {
     let radius = theme::control_radius(theme::ui_scale(ui.ctx()));
     let fill = ui.painter().add(egui::Shape::Noop);

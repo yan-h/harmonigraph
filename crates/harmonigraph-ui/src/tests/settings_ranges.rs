@@ -30,7 +30,7 @@
 //! ordering/minimum spans and gestures are outside this guard, as are renderer
 //! clamps and semantic unit mappings.
 
-use super::harness::{set_optional_sections, SETTINGS_PANES};
+use super::harness::{set_optional_sections, MATERIALS, PROJECTIONS, SETTINGS_PANES, TEXTURES};
 use super::persist::{nested_pairs, nested_scalars};
 use super::probe::{fresh, themed};
 use crate::widgets::range_probe::{collect, Visit};
@@ -273,15 +273,17 @@ struct Scenario {
 }
 
 fn scenarios() -> Vec<Scenario> {
+    // The first of each mode list; every other one is a scenario of its own
+    // below, so a mode added to the shared lists is drawn here too.
     let base = Scenario {
         pane: SETTINGS_PANES[0],
         expanded: false,
-        projection: Projection::Cabinet,
+        projection: PROJECTIONS[0],
         enabled: false,
         meantone: false,
         marvel: false,
-        style: harmonigraph_scene::CloudStyle::Watercolor,
-        material: harmonigraph_scene::LatticeMaterial::None,
+        style: TEXTURES[0],
+        material: MATERIALS[0],
     };
     let mut cases = Vec::new();
     for &pane in SETTINGS_PANES {
@@ -289,49 +291,20 @@ fn scenarios() -> Vec<Scenario> {
         // Draw conditional audio, mapping, spectrogram and ribbon bars.
         cases.push(Scenario { pane, enabled: true, ..base });
     }
-    // Lattice materials share the spectrogram geometry bars, plus amount, speed
-    // and direction.
-    cases.push(Scenario {
-        pane: panes::Tab::LatticeSettings,
-        material: harmonigraph_scene::LatticeMaterial::Watercolor,
-        enabled: true,
-        ..base
-    });
-    cases.push(Scenario {
-        pane: panes::Tab::LatticeSettings,
-        material: harmonigraph_scene::LatticeMaterial::Stars,
-        expanded: true,
-        enabled: true,
-        ..base
-    });
-    // Exercise the Scales-specific geometry controls in both pictures.
-    cases.push(Scenario {
-        pane: panes::Tab::AnalyzerSettings,
-        style: harmonigraph_scene::CloudStyle::VelvetScales,
-        enabled: true,
-        ..base
-    });
-    cases.push(Scenario {
-        pane: panes::Tab::LatticeSettings,
-        material: harmonigraph_scene::LatticeMaterial::VelvetScales,
-        enabled: true,
-        ..base
-    });
-    // Stars replace the wash's bars and shared Drift speed.
-    cases.push(Scenario {
-        pane: panes::Tab::AnalyzerSettings,
-        style: harmonigraph_scene::CloudStyle::Stars,
-        expanded: true,
-        enabled: true,
-        ..base
-    });
-    for projection in [Projection::Perspective, Projection::Orthographic] {
-        cases.push(Scenario {
-            pane: panes::Tab::LatticeSettings,
-            projection,
-            enabled: true,
-            ..base
-        });
+    // Each lattice material's own dials (amount, speed and direction beside
+    // the geometry it shares with the spectrogram), and each texture's, with
+    // every fold open for the Stars layer editor.
+    for material in MATERIALS.into_iter().skip(1) {
+        let pane = panes::Tab::LatticeSettings;
+        cases.push(Scenario { pane, material, expanded: true, enabled: true, ..base });
+    }
+    for style in TEXTURES.into_iter().skip(1) {
+        let pane = panes::Tab::AnalyzerSettings;
+        cases.push(Scenario { pane, style, expanded: true, enabled: true, ..base });
+    }
+    for projection in PROJECTIONS.into_iter().skip(1) {
+        let pane = panes::Tab::LatticeSettings;
+        cases.push(Scenario { pane, projection, enabled: true, ..base });
     }
     // Cover each comma derivation branch, including both modes, with every
     // fold open.

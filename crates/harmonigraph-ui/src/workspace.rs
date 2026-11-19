@@ -23,7 +23,7 @@ pub(crate) enum Section {
 }
 
 impl Section {
-    const ALL: [Self; 3] = [Self::Lattice, Self::Analyzer, Self::Settings];
+    pub(crate) const ALL: [Self; 3] = [Self::Lattice, Self::Analyzer, Self::Settings];
 
     /// The section's tabs, in strip order. The Settings tabs run from the
     /// pictures' own settings to the editor's, so the ones a narrow column
@@ -125,7 +125,7 @@ impl Layout {
                 *size = if size.is_finite() { size.clamp(1.0, 8192.0) } else { 300.0 };
             }
         }
-        if !matches!(self.analyzer_tab, Tab::Spectral | Tab::Spiral) {
+        if Section::of(self.analyzer_tab) != Section::Analyzer {
             self.analyzer_tab = Tab::Spectral;
         }
         if self.settings_tab.is_picture() {

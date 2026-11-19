@@ -16,13 +16,6 @@ const PLOT_ROWS: f32 = 3.0;
 /// points as a flat one and draws without facets.
 const CURVE_SEGMENTS: usize = 64;
 
-/// Height of a [`BendPlot`]'s well at this scale. Shared with the scale
-/// census, which finds bars by their full-width well and has to know this one
-/// is three rows on purpose.
-pub(crate) fn bend_plot_height(scale: f32) -> f32 {
-    theme::row_height(scale) * PLOT_ROWS
-}
-
 /// The part of the well the curve is drawn in: inset like a bar's track, so
 /// both ends of the range are places the handle can stand rather than edges
 /// it merges into.
@@ -92,7 +85,7 @@ impl<'a> BendPlot<'a> {
         });
 
         let scale = theme::ui_scale(ui.ctx());
-        let size = Vec2::new(bar_width(ui), bend_plot_height(scale));
+        let size = Vec2::new(bar_width(ui), theme::row_height(scale) * PLOT_ROWS);
         let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
         let plot = plot_area(rect, scale);
         let pos_of = |t: f32, w: f32| {

@@ -446,6 +446,8 @@ impl<'a> StackBar<'a> {
             Vec2::new(width, theme::row_height(scale)),
             Sense::click_and_drag(),
         );
+        #[cfg(test)]
+        super::range_probe::record_placed("StackBar", rect, ui);
         // The axis is inset the way every two-handle bar's is, so a boundary at
         // either limit still seats a whole thumb inside the bar. It matters more
         // here than on a range: a node with nothing but its middle parks three

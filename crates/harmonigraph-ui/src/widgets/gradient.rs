@@ -95,10 +95,8 @@ const FLIP_GAP: f32 = 2.0;
 /// What a [`SpectrumBar`]'s track measures in a column `column` points wide:
 /// the column, less the flip button at the right end and the gap beside it.
 ///
-/// Shared with the settings tests, whose sweep pins every bar in a pane to the
-/// width of its column. This is the one bar that is narrower, and the sweep has
-/// to know by how much or it is choosing between failing on a bar that is
-/// correct and passing on one that has stopped tracking the column.
+/// Shared with the settings test that finds each gradient group's spectrum
+/// track by its width.
 pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
     (column - (FLIP_W + FLIP_GAP) * scale).max(0.0)
 }
@@ -407,6 +405,8 @@ impl<'a> SpectrumBar<'a> {
         // the track quietly holds the gesture.
         let flip_gap = FLIP_GAP * scale;
         let (id, rect) = ui.allocate_space(Vec2::new(width, theme::row_height(scale)));
+        #[cfg(test)]
+        super::range_probe::record_placed("SpectrumBar", rect, ui);
         // The track's width is what the circle and the settings sweep both
         // measure, so the row is laid out from it rather than from the button:
         // a column too narrow to leave the track anything then gives the button
@@ -1132,6 +1132,8 @@ impl<'a> SpreadBar<'a> {
             Vec2::new(width, theme::row_height(scale)),
             Sense::click_and_drag(),
         );
+        #[cfg(test)]
+        super::range_probe::record_placed("SpreadBar", rect, ui);
         let axis = self.spread.axis();
         let (min, max) = axis;
         // Values live on an inset track, so both limits are places a handle can

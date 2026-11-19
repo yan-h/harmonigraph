@@ -1,8 +1,9 @@
-//! Observations at the real controls' entry, before interaction can repair input.
+//! Observations at the real controls: the values a bar is handed at its
+//! entry, before interaction can repair input, and where each bar is laid.
 //! Compiled out entirely outside unit tests. Scopes nest and unwind safely;
 //! other tests drawing on another thread cannot contribute observations.
 
-use std::{cell::RefCell, ops::RangeInclusive};
+use std::{cell::RefCell, ops::RangeInclusive, thread::LocalKey};
 
 #[derive(Debug)]
 pub(crate) struct Visit {
@@ -15,8 +16,29 @@ pub(crate) struct Visit {
     pub default: Option<Option<Vec<f32>>>,
 }
 
+/// Where a bar was laid: the rect it allocated, and the `max_rect` of the `Ui`
+/// it was laid in, which is the column it was offered. Recorded by every bar
+/// that sizes itself from its column (`bar::bar_width`), so the settings sweeps
+/// read a bar's geometry from the bar rather than picking its well out of the
+/// paint.
+#[derive(Clone, Debug)]
+pub(crate) struct Placed {
+    /// The bar's label, or its kind where it carries none of its own.
+    pub name: String,
+    pub rect: egui::Rect,
+    pub column: egui::Rect,
+}
+
+type Scopes<T> = RefCell<Vec<Vec<T>>>;
+
 thread_local! {
-    static SCOPES: RefCell<Vec<Vec<Visit>>> = const { RefCell::new(Vec::new()) };
+    static SCOPES: Scopes<Visit> = const { RefCell::new(Vec::new()) };
+    static PLACED: Scopes<Placed> = const { RefCell::new(Vec::new()) };
+}
+
+/// Record that the bar `name` took `rect` in `ui`.
+pub(super) fn record_placed(name: &str, rect: egui::Rect, ui: &egui::Ui) {
+    push_into(&PLACED, Placed { name: name.to_owned(), rect, column: ui.max_rect() });
 }
 
 pub(super) fn record(label: &str, values: &[f32], range: &RangeInclusive<f32>) {
@@ -47,33 +69,45 @@ fn push(
     range: &RangeInclusive<f32>,
     default: Option<Option<Vec<f32>>>,
 ) {
-    SCOPES.with_borrow_mut(|scopes| {
-        if let Some(visits) = scopes.last_mut() {
-            visits.push(Visit {
-                label: label.to_owned(),
-                values: values.to_vec(),
-                range: range.clone(),
-                default,
-            });
+    push_into(
+        &SCOPES,
+        Visit { label: label.to_owned(), values: values.to_vec(), range: range.clone(), default },
+    );
+}
+
+fn push_into<T: 'static>(key: &'static LocalKey<Scopes<T>>, item: T) {
+    key.with_borrow_mut(|scopes| {
+        if let Some(items) = scopes.last_mut() {
+            items.push(item);
         }
     });
 }
 
+/// The values every bar `draw` drew was handed.
 pub(crate) fn collect(draw: impl FnOnce()) -> Vec<Visit> {
-    struct Scope;
-    impl Drop for Scope {
+    collect_in(&SCOPES, draw)
+}
+
+/// Where every bar `draw` drew was laid.
+pub(crate) fn placed(draw: impl FnOnce()) -> Vec<Placed> {
+    collect_in(&PLACED, draw)
+}
+
+fn collect_in<T: 'static>(key: &'static LocalKey<Scopes<T>>, draw: impl FnOnce()) -> Vec<T> {
+    struct Scope<T: 'static>(&'static LocalKey<Scopes<T>>);
+    impl<T: 'static> Drop for Scope<T> {
         fn drop(&mut self) {
-            SCOPES.with_borrow_mut(|scopes| {
+            self.0.with_borrow_mut(|scopes| {
                 scopes.pop().unwrap();
             });
         }
     }
-    SCOPES.with_borrow_mut(|scopes| scopes.push(Vec::new()));
-    let scope = Scope;
+    key.with_borrow_mut(|scopes| scopes.push(Vec::new()));
+    let scope = Scope(key);
     draw();
-    let visits = SCOPES.with_borrow_mut(|scopes| std::mem::take(scopes.last_mut().unwrap()));
+    let items = key.with_borrow_mut(|scopes| std::mem::take(scopes.last_mut().unwrap()));
     drop(scope);
-    visits
+    items
 }
 
 #[test]

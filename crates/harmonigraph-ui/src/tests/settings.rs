@@ -92,22 +92,15 @@ fn wheel_over_settings_pane(pane: panes::Tab, screen_h: f32) -> f32 {
 /// wraps each tab body in, which is what leaves the bar the pane's right margin
 /// to stand in (see [`nothing_is_drawn_under_a_settings_pane_scroll_bar`]).
 ///
-/// The two readout panes build an area of their own and are not swept here: the
-/// Console sticks to the bottom, where a wheel DOWN is a no-op, so it answers
+/// The Console builds an area of its own and is not swept here: it
+/// sticks to the bottom, where a wheel DOWN is a no-op, so it answers
 /// this question with the opposite sign and needs a fixture of its own rather
 /// than a row in this one.
 #[test]
 fn every_settings_pane_scrolls_when_its_content_overflows() {
     // A short window, so that every one of them overflows — including the
     // System page, the shortest list of the set.
-    for pane in [
-        panes::Tab::Tuning,
-        panes::Tab::Mappings,
-        panes::Tab::LatticeSettings,
-        panes::Tab::AnalyzerSettings,
-        panes::Tab::System,
-        panes::Tab::Video,
-    ] {
+    for &pane in SETTINGS_PANES.iter().filter(|&&pane| pane != panes::Tab::Console) {
         let moved = wheel_over_settings_pane(pane, 200.0);
         assert!(moved < -8.0, "{pane:?} did not scroll to the wheel (content moved {moved})");
     }
@@ -399,92 +392,9 @@ fn the_scrolling_spectrogram_choice_names_its_span() {
     assert!(text_y(&shapes, "Scrolling (42.0 s)").is_some(), "Scrolling did not name its span");
 }
 
-/// The bar tracks a pane drew, each as the span it covers: the track, and any
-/// companion picture before it.
-///
-/// A `ValueBar`/`RangeBar` track is a `theme::ROW_HEIGHT`-tall rect in `well()`,
-/// which the accent fill over it does not answer to — that is the same height in
-/// a different color. The record button's panel does: it is a control in a
-/// settings row, so it is a row high like everything else in one, and it is
-/// painted in the same track color. The dot inside it is what tells the two
-/// apart, and it is read out of the paint rather than the panel being skipped
-/// for having an odd width — a width is exactly what is under test here, so
-/// excusing a rect for being an odd length would excuse the bug.
-fn bar_tracks(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rect> {
-    let well = crate::theme::well();
-    let pictures: Vec<_> = shapes
-        .iter()
-        .filter_map(|cs| match &cs.shape {
-            egui::Shape::Rect(r)
-                if r.fill == well
-                    && (r.rect.height() - crate::widgets::direct_plot_height(1.0)).abs() < 0.6 =>
-            {
-                Some(r.rect)
-            }
-            egui::Shape::Mesh(mesh)
-                if (mesh.calc_bounds().height() - crate::theme::ROW_HEIGHT).abs() < 0.6 =>
-            {
-                Some(mesh.calc_bounds())
-            }
-            _ => None,
-        })
-        .collect();
-    let dots: Vec<egui::Pos2> = shapes
-        .iter()
-        .filter_map(|cs| match &cs.shape {
-            egui::Shape::Circle(c) => Some(c.center),
-            _ => None,
-        })
-        .collect();
-    let fields = SettingsCase::text_fields(shapes);
-    shapes
-        .iter()
-        .filter_map(|cs| match &cs.shape {
-            // A text field is a row-high well too, told from a bar by what it
-            // holds (`SettingsCase::text_fields`), as the record panel is by
-            // its dot — not by its width, which the column clamps at the
-            // narrow end.
-            egui::Shape::Rect(r)
-                if r.fill == well
-                    && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.6
-                    && !dots.iter().any(|&dot| r.rect.contains(dot))
-                    && !fields.iter().any(|&field| r.rect.contains(field)) =>
-            {
-                if let Some(picture) = pictures.iter().find(|picture| {
-                    r.rect.left() >= picture.right()
-                        && r.rect.top() >= picture.top() - 0.6
-                        && r.rect.bottom() <= picture.bottom() + 0.6
-                }) {
-                    // A paired control must fill the column as a whole. Its
-                    // slider starts immediately after its actual picture,
-                    // rather than being excused for any arbitrary short width.
-                    assert!((r.rect.left() - picture.right() - crate::theme::ROW_GAP).abs() < 0.6);
-                    Some(egui::Rect::from_x_y_ranges(
-                        picture.left()..=r.rect.right(),
-                        r.rect.y_range(),
-                    ))
-                } else {
-                    Some(r.rect)
-                }
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// How many source-to-display mappings a fresh view carries, each drawn as a
-/// weight bar in the Mappings page's MIDI note intensity section.
-fn fresh_mappings() -> usize {
-    let fresh = harmonigraph_scene::IntensitySettings::default();
-    [fresh.velocity, fresh.gain, fresh.pressure, fresh.timbre]
-        .iter()
-        .flat_map(|source| [source.opacity, source.thickness])
-        .filter(Option::is_some)
-        .count()
-}
-
-/// Every bar in a settings pane is the same length, and that length is the
-/// column's — so dragging the column narrower narrows all of them together.
+/// Every bar in a settings pane fills the column it is laid in, and that column
+/// is the pane's or one inside it — so dragging the column narrower narrows all
+/// of them together.
 ///
 /// What breaks it is invisible in the code that draws a bar, which is why this
 /// is pinned rather than left to reading: egui's `Region::expand_to_include_rect`
@@ -495,180 +405,61 @@ fn fresh_mappings() -> usize {
 /// widest thing above it — the bars under a wide row running their value
 /// readout off the pane edge while the bars above it compress properly.
 ///
+/// Read from the bars themselves (`range_probe::placed`): each records the rect
+/// it took and the column its `Ui` offered it. So a bar that shares its row (a
+/// mapping's weight beside Delete, an interval beside its temperament switch,
+/// a map Position's Fine and Coarse halves, a diagram's value column) is held
+/// to the column it was given rather than counted as a known exception, and
+/// that column is held to the pane, where an overrun shows. A bar laid in a
+/// column of a fixed width would pass both, so each bar is also held to
+/// narrowing whenever the pane does.
+///
 /// Swept down to [`crate::theme::SETTINGS_MIN_CONTENT`], the narrowest the
 /// dock lays a settings pane out at, and on to 190, because
 /// a window too narrow to hold the floor still draws narrower: at 1.5x scale,
 /// with both pictures folded, a 400pt window leaves about 193 design points.
 #[test]
-fn every_bar_fills_its_settings_column_or_diagram_value_column() {
-    // How much shorter than the column a mapping's weight bar is, as first
-    // measured — held to be the same at every width rather than quoted.
-    let mut weight_short_by: Option<f32> = None;
-    // A bar under an open subsection or in a block fills THAT column, which is
-    // the page's less the fold's or the block's indent. Counted per case, and
-    // held to the same count at every width, for the reason the weight bars are.
-    let indent = fold_indent(&super::probe::themed());
-    // The gap between two bars sharing a row: the pane's own item spacing.
-    let mut gap = 0.0;
-    let _ = super::probe::themed().run_ui(Default::default(), |ui| {
-        gap = ui.spacing().item_spacing.x;
-    });
+fn every_bar_fills_its_column_and_narrows_with_the_pane() {
     let cases = settings_cases();
-    let mut nested_per_case: Vec<Option<usize>> = vec![None; cases.len()];
+    let mut wider: Vec<Option<Vec<f32>>> = vec![None; cases.len()];
     for width in [400.0f32, 240.0, crate::theme::SETTINGS_MIN_CONTENT, 190.0] {
+        let (left, right) = (crate::theme::PANE_INSET, crate::theme::PANE_INSET + width);
         for (index, &case) in cases.iter().enumerate() {
-            let pane = case.pane;
-            let tracks = bar_tracks(&settings_pane_at_width(case, width));
-            let widths: Vec<f32> = tracks.iter().map(egui::Rect::width).collect();
-            // One bar per gradient is deliberately shorter: the spectrum
-            // track, which gives the right end of its row to the flip
-            // button. It still narrows with the column, which is what this
-            // is about, so it is allowed its own length rather than excused
-            // from the sweep.
-            //
-            // COUNTED, not merely permitted. A sweep that accepts either
-            // length from any bar accepts a spectrum track that never
-            // reserved the button's width at all — it comes out at the
-            // column's own length and passes on the first alternative,
-            // with the button painted over its left end. So the count is
-            // exact: TWO on the Mappings page, which carries both gradients
-            // — the lattice's pitch table and the heatmap's level table, on
-            // the same three bars over the same type — and none anywhere
-            // else.
-            let track = crate::widgets::spectrum_track_width(width, 1.0);
-            // A mapping's weight bar gives the right end of its row to its
-            // Delete button, and is counted the same way: one per mapping
-            // the fresh settings carry, all of them on the Mappings page. How
-            // wide the button is is the button's business; what is held is
-            // that the bar is short of the column by the SAME amount at
-            // every width, which is the bar narrowing with the column.
-            let mappings = if pane == panes::Tab::Mappings { fresh_mappings() } else { 0 };
-            let mut short = 0;
-            let mut weights = 0;
-            let mut nested = 0;
-            let mut links = Vec::new();
-            // A lattice map's Position block lays each axis out as one row of
-            // two bars, Fine and Coarse, each half the block's column with the
-            // pane's gap between. Counted for the reason the spectrum track
-            // is — a sweep merely permitting the half length passes a Position
-            // gone back to full bars, or a half that lost its partner — so the
-            // count is exact: three of each half on
-            // the Tuning page's Lattice Map case, the one case whose backend
-            // draws a map, and none anywhere else. Placed as well as sized:
-            // the left half starts at the block column's edge and the right
-            // one ends at the column's, so the pair lines up with the full
-            // bars over and under it.
-            let maps = case.variant
-                == Variant::Engine(harmonigraph_core::lattice_map::TuningEngine::LatticeMap);
-            let half = (width - crate::panes::BLOCK_INDENT - gap) / 2.0;
-            let block_left = crate::theme::PANE_INSET + crate::panes::BLOCK_INDENT;
-            let column_right = crate::theme::PANE_INSET + width;
-            let (mut left_halves, mut right_halves) = (0, 0);
-            for (track_rect, bar) in tracks.iter().zip(&widths) {
-                if (bar - half).abs() < 1.0 {
-                    if (track_rect.left() - block_left).abs() < 1.0 {
-                        left_halves += 1;
-                        continue;
-                    }
-                    if (track_rect.right() - column_right).abs() < 1.0 {
-                        right_halves += 1;
-                        continue;
-                    }
-                }
-                // Placed too: a bar in a block or a fold sized to the whole
-                // column starts an indent in and overruns it, widening the
-                // column for every row under it.
-                if (bar - width).abs() < 1.0
-                    && (track_rect.left() - crate::theme::PANE_INSET).abs() < 1.0
-                {
-                    continue;
-                }
-                if (bar - track).abs() < 1.0 {
-                    short += 1;
-                    continue;
-                }
-                // Placed as well as sized: a top-level bar one indent short
-                // has the nested width too, but starts at the column's edge.
-                // A block's rows stand in by its own, tighter indent.
-                let nested_by = |indent: f32| {
-                    (bar - (width - indent)).abs() < 1.0
-                        && (track_rect.left() - (crate::theme::PANE_INSET + indent)).abs() < 1.0
-                };
-                if nested_by(indent) || nested_by(crate::panes::BLOCK_INDENT) {
-                    nested += 1;
-                    continue;
-                }
-                // At this sweep's wide width both temperament switches sit
-                // inline. At the smaller widths they wrap under full bars.
-                if pane == panes::Tab::Tuning && width == 400.0 {
-                    links.push(*bar);
-                    continue;
-                }
-                weights += 1;
-                let by = width - bar;
-                let first = *weight_short_by.get_or_insert(by);
+            let bars = bars_at_width(case, width);
+            for bar in &bars {
+                let (name, column) = (&bar.name, bar.column);
                 assert!(
-                    by > 0.0 && (by - first).abs() < 1.0,
-                    "{case:?} at {width}pt drew a {bar}pt bar: not the \
-                     column, not the spectrum track's {track}pt, and not a weight bar \
-                     {first}pt short of the column like the others (all of {widths:?})"
+                    column.left() >= left - 0.5 && column.right() <= right + 0.5,
+                    "{case:?} at {width}pt laid {name} in {column:?}, past the pane's \
+                     {left}..{right}: something above it overran"
+                );
+                assert!(
+                    (bar.rect.right() - column.right()).abs() < 0.5,
+                    "{case:?} at {width}pt: {name} took {:?} of its column {column:?}",
+                    bar.rect
                 );
             }
-            if pane == panes::Tab::Tuning && width == 400.0 {
-                assert_eq!(
-                    links.len(),
-                    2,
-                    "{case:?}: one shortened bar per link, not {links:?} (all of {widths:?})"
-                );
-                assert!((links[0] - links[1]).abs() < 1.0, "interval columns align");
-                assert!(links[0] > width / 2.0 && links[0] < width);
+            let widths: Vec<f32> = bars.iter().map(|bar| bar.rect.width()).collect();
+            if let Some(before) = &wider[index] {
+                assert_eq!(before.len(), widths.len(), "{case:?} drew other bars at {width}pt");
+                for ((was, now), bar) in before.iter().zip(&widths).zip(&bars) {
+                    assert!(
+                        now < was,
+                        "{case:?}: {} is {now}pt at {width}pt, no narrower than {was}pt in a \
+                         wider pane",
+                        bar.name
+                    );
+                }
             }
-            let want = if maps { 3 } else { 0 };
-            assert_eq!(
-                (left_halves, right_halves),
-                (want, want),
-                "{case:?} at {width}pt drew {left_halves} left and {right_halves} right \
-                 half-column bars, not {want} of each (all of {widths:?})"
-            );
-            let want = if pane == panes::Tab::Mappings { 2 } else { 0 };
-            assert_eq!(
-                short, want,
-                "{case:?} at {width}pt drew {short} short bars, not {want} \
-                 (all of {widths:?})"
-            );
-            assert_eq!(
-                weights, mappings,
-                "{case:?} at {width}pt drew {weights} weight bars, not \
-                 {mappings} (all of {widths:?})"
-            );
-            let first = *nested_per_case[index].get_or_insert(nested);
-            assert_eq!(
-                nested, first,
-                "{case:?} at {width}pt drew {nested} bars in a subsection's column, against \
-                 {first} at the first width (all of {widths:?})"
-            );
+            wider[index] = Some(widths);
         }
     }
-    // The sniffing above finds nothing if the bars stop being painted this way,
-    // and a test that measures nothing passes. The Lattice page is the deepest
-    // stack of bars in the dock — every layer of the note contributing one or
-    // more, on top of the camera and the depth axis — so it is the pane to ask
-    // whether bars are still being painted at all.
-    //
-    // The floor is a count of the bars a fresh view draws LIVE, and a gated bar
-    // is not in it: [`bar_tracks`] finds a track by the well's own fill,
-    // and a disabled `Ui` fades its painter, so a greyed track is no longer
-    // that color. Sheet size is inert with Sheets at its fresh 0, and
-    // half the node layers gate on something — hence a floor well under the
-    // count. What the floor watches for is the paint going away, which takes
-    // every bar at once; a control coming, going or greying is not what it is
-    // asking about.
-    let bars = bar_tracks(&settings_pane_at_width(
-        SettingsCase::fresh(panes::Tab::LatticeSettings),
-        400.0,
-    ))
-    .len();
-    assert!(bars >= 12, "only found {bars} bar tracks on the Lattice page; has the paint changed?");
+    // A probe that records nothing passes everything above. The Lattice page
+    // is the deepest stack of bars in the dock — every layer of the note
+    // contributing one or more, on top of the camera and the depth axis — so
+    // it is the page to ask whether bars still record at all.
+    let bars = bars_at_width(SettingsCase::fresh(panes::Tab::LatticeSettings), 400.0).len();
+    assert!(bars >= 12, "only {bars} bars recorded on the Lattice page; has the probe moved?");
 }
 
 /// Each settings tab draws its own body, and only that body: a string only

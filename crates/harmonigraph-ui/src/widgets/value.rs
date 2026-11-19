@@ -354,6 +354,8 @@ impl<'a> ValueBar<'a> {
             Vec2::new(width, theme::row_height(scale)),
             Sense::click_and_drag(),
         );
+        #[cfg(test)]
+        super::range_probe::record_placed(self.label, rect, ui);
 
         let edit_id = response.id.with("edit");
         let focus_id = edit_id.with("focus_pending");
@@ -831,6 +833,8 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
     let width = bar_width(ui);
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, theme::row_height(scale)), Sense::hover());
+    #[cfg(test)]
+    super::range_probe::record_placed(label, rect, ui);
 
     let corner = bar_radius(scale);
     let radius = CornerRadius::same(corner);

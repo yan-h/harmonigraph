@@ -481,6 +481,8 @@ impl<'a> RangeBar<'a> {
             Vec2::new(width, theme::row_height(scale)),
             Sense::click_and_drag(),
         );
+        #[cfg(test)]
+        super::range_probe::record_placed(self.label, rect, ui);
         let (min, max) = (*self.range.start(), *self.range.end());
         // Every pair a `min_span` bar is handed went through its config's
         // `sanitize`, which opens it to the minimum, so no producer hands one
