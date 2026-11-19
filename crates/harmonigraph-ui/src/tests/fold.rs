@@ -608,6 +608,35 @@ fn analyzer_regions_fold_independently_and_restore_the_original_geometry() {
     }
 }
 
+/// A loaded project draws the spectrum at the length its Analyzer was saved
+/// at, in points, rather than at the dial's share of the pane it opens in: the
+/// load re-takes the spectrum hold from the regions' saved geometry on the
+/// first fully open frame (`SpectrumHold::relayout`).
+#[test]
+fn a_loaded_project_draws_the_spectrum_at_its_saved_length() {
+    let mut saved = fresh();
+    saved.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    let dial = saved.picture.appearance.spectrum.roll_fraction;
+    saved.workspace.interaction.analyzer_regions = ron::from_str(&format!(
+        "(geometry:Some((depths:(100.0,400.0),dial:{dial:?},vertical:false)))"
+    ))
+    .expect("an Analyzer's regions parse");
+    let mut state = fresh();
+    assert!(state.install_document(&saved.save_persist()));
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
+    let split =
+        h.ctx.read_response(egui::Id::new(("spectral-split", 0usize))).unwrap().rect.center().x;
+    let dialled = body.width() * (1.0 - dial);
+    assert!((dialled - 100.0).abs() > 10.0, "the dial alone draws {dialled} points, too close");
+    assert!(
+        (split - body.left() - 100.0).abs() < 1.0,
+        "the spectrum opened {} points long, not the 100 saved",
+        split - body.left(),
+    );
+}
+
 #[test]
 fn analyzer_region_restore_respects_a_split_edited_while_folded() {
     let mut state = fresh();
