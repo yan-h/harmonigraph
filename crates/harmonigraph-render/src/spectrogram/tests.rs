@@ -1577,26 +1577,24 @@ fn parity(device: &wgpu::Device, queue: &wgpu::Queue, reference: &Reference) -> 
 
 #[test]
 fn baked_spectrogram_shader_validates() {
-    for (source, required) in [
-        (SPECTROGRAM_SRC, SPECTROGRAM_ENTRY_POINTS),
-        (atmosphere::SOURCE, &["vs_fullscreen", "fs_close_h", "fs_close_v"][..]),
-    ] {
-        let module = naga::front::wgsl::parse_str(source)
-            .map_err(|e| e.emit_to_string(source))
-            .expect("spectral shaders must parse");
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .expect("spectral shaders must validate");
-        for required in required {
-            assert!(
-                module.entry_points.iter().any(|ep| ep.name == *required),
-                "missing entry point `{required}`"
-            );
-        }
-    }
+    // `SPECTROGRAM_SRC` joins the geometry and the stars ahead with the
+    // separator `crate::module_source` uses, so the seam reads off the same
+    // count.
+    let shared = concat!(
+        include_str!("../shaders/atmosphere_geometry.wgsl"),
+        "\n",
+        include_str!("../shaders/stars.wgsl"),
+    );
+    let seam = crate::Seam::after("atmosphere_geometry.wgsl and stars.wgsl", shared);
+    crate::validate_wgsl("spectrogram.wgsl", SPECTROGRAM_SRC, seam, SPECTROGRAM_ENTRY_POINTS)
+        .expect("baked spectrogram.wgsl must parse and validate");
+    crate::validate_wgsl(
+        "spectral_atmosphere.wgsl",
+        atmosphere::SOURCE,
+        crate::Seam::NONE,
+        &["vs_fullscreen", "fs_close_h", "fs_close_v"],
+    )
+    .expect("baked spectral_atmosphere.wgsl must parse and validate");
 }
 
 /// The vertex-layout <-> shader-input contract (attribute locations,

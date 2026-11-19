@@ -729,14 +729,12 @@ mod tests {
 
     #[test]
     fn shader_validates() {
-        let module =
-            naga::front::wgsl::parse_str(SOURCE).map_err(|e| e.emit_to_string(SOURCE)).unwrap();
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap();
+        // `SOURCE` joins the geometry ahead with the separator
+        // `crate::module_source` uses, so the seam reads off the same count.
+        let geometry = include_str!("shaders/atmosphere_geometry.wgsl");
+        let seam = crate::Seam::after("atmosphere_geometry.wgsl", geometry);
+        crate::validate_wgsl("lattice_material.wgsl", SOURCE, seam, &[] as &[&str])
+            .expect("baked lattice_material.wgsl must parse and validate");
     }
 
     #[test]

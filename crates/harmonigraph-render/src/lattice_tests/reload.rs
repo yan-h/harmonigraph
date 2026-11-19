@@ -60,7 +60,6 @@ fn an_edit_to_the_common_half_reaches_the_text_module_and_the_lattice_one() {
     let reloaded = poll_now(&mut watcher).expect("an edited common half is a reload");
     assert!(reloaded.lattice.contains("common TWO"), "the lattice module kept the old common half");
     assert!(reloaded.text.contains("common TWO"), "the text module kept the old common half");
-    assert_eq!(reloaded.common, "// common TWO\n");
     // ...and each is still its own module, not the same one twice.
     assert!(reloaded.lattice.contains("lattice one"));
     assert!(reloaded.text.contains("text one"));
@@ -130,7 +129,7 @@ fn a_published_reload_raises_the_count_and_hands_over_the_source() {
     let _guard = reload::test_lock();
     let before = reload::generation();
     let marker = "// a_published_reload_raises_the_count_and_hands_over_the_source\n";
-    reload::publish(format!("{}{marker}", with_common(text::TEXT_SRC)), COMMON_SRC.to_owned());
+    reload::publish(format!("{}{marker}", with_common(text::TEXT_SRC)));
 
     assert!(
         reload::generation() > before,
@@ -140,8 +139,13 @@ fn a_published_reload_raises_the_count_and_hands_over_the_source() {
     // Still a whole module: what a reader gets has to be something that
     // compiles, since the next `TextResources::new` builds four pipelines
     // out of it without looking.
-    validate_wgsl("text.wgsl", &reload::text_source(), common_lines(COMMON_SRC), &[] as &[&str])
-        .expect("a published module must still be one");
+    validate_wgsl(
+        "text.wgsl",
+        &reload::text_source(),
+        Seam::after("common.wgsl", COMMON_SRC),
+        &[] as &[&str],
+    )
+    .expect("a published module must still be one");
 }
 
 /// The seam a naga diagnostic's line number has to be read against. Off by one
@@ -151,7 +155,7 @@ fn a_published_reload_raises_the_count_and_hands_over_the_source() {
 fn the_stated_seam_is_where_the_module_actually_starts() {
     for common in ["a\nb\n", "a\nb", "", "\n"] {
         let joined = module_source(common, "MODULE_LINE_ONE\nMODULE_LINE_TWO");
-        let seam = common_lines(common);
+        let seam = prefix_lines(common);
         let lines: Vec<&str> = joined.lines().collect();
         assert_eq!(
             lines.get(seam).copied(),
@@ -167,13 +171,13 @@ fn the_stated_seam_is_where_the_module_actually_starts() {
 #[test]
 fn the_baked_common_half_seams_where_it_says_it_does() {
     let joined = with_common("MODULE_LINE_ONE");
-    let seam = common_lines(COMMON_SRC);
+    let seam = prefix_lines(COMMON_SRC);
     assert_eq!(joined.lines().nth(seam), Some("MODULE_LINE_ONE"));
 }
 
 /// And the seam a REJECTION states is the one its own module was joined at.
 ///
-/// The two tests above measure `common_lines` on its own; this is the pairing
+/// The two tests above measure `prefix_lines` on its own; this is the pairing
 /// the reload path actually makes, and the only one that can be wrong — a
 /// module built against the common half on DISK, checked after an edit there
 /// has changed how many lines it takes. Reading the seam off `COMMON_SRC` at
@@ -186,16 +190,17 @@ fn a_rejection_states_the_seam_its_own_module_was_joined_at() {
     // A common half two lines longer than the baked one, which is what saving
     // an edit to common.wgsl produces.
     let common = format!("{COMMON_SRC}\n// one\n// two\n");
-    let seam = common_lines(&common);
+    let seam = prefix_lines(&common);
     assert!(
-        seam > common_lines(COMMON_SRC),
+        seam > prefix_lines(COMMON_SRC),
         "the fixture's common half is no longer than the baked one, so a seam \
          taken from either would pass",
     );
 
     let source = module_source(&common, "fn broken( {");
-    let err = validate_wgsl("lattice.wgsl", &source, seam, &[] as &[&str])
-        .expect_err("`fn broken( {` does not parse");
+    let err =
+        validate_wgsl("lattice.wgsl", &source, Seam::after("common.wgsl", &common), &[] as &[&str])
+            .expect_err("`fn broken( {` does not parse");
 
     assert!(
         err.contains(&format!("lines 1-{seam} below are common.wgsl")),
@@ -220,7 +225,7 @@ fn a_rejection_names_the_module_it_is_about() {
     let err = validate_wgsl(
         "text.wgsl",
         &with_common(text::TEXT_SRC),
-        common_lines(COMMON_SRC),
+        Seam::after("common.wgsl", COMMON_SRC),
         &entry_points(&with_common(SHADER_SRC)),
     )
     .expect_err("text.wgsl declares none of the lattice's entry points");
@@ -238,8 +243,9 @@ fn a_reload_missing_an_entry_point_is_refused_by_name() {
     let edited = baked.replace(&format!("fn {dropped}("), &format!("fn {dropped}_renamed("));
     assert_ne!(edited, baked, "`{dropped}` is not declared as `fn {dropped}(`");
 
-    let err = validate_wgsl("lattice.wgsl", &edited, common_lines(COMMON_SRC), &required)
-        .expect_err("a module without one of the baked entry points must be refused");
+    let err =
+        validate_wgsl("lattice.wgsl", &edited, Seam::after("common.wgsl", COMMON_SRC), &required)
+            .expect_err("a module without one of the baked entry points must be refused");
     assert!(err.contains(&format!("missing entry point `{dropped}`")), "{err}");
 }
 

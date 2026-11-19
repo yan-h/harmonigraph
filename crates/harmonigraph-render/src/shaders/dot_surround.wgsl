@@ -53,11 +53,6 @@ struct DotOut {
     @location(0) @interpolate(flat) dot: u32,
 };
 
-/// The cut's reach in points, 0 while it is off.
-fn cut_reach() -> f32 {
-    return select(0.0, dot_locals.surround.cut.y, dot_locals.surround.cut.x > 0.0);
-}
-
 /// One corner of a dot's quad: its disc grown by the cut's reach and a feather
 /// past that, which takes in the reach's antialiasing.
 @vertex
@@ -70,7 +65,7 @@ fn vs_dot_cut(
         select(-1.0, 1.0, (vertex & 2u) == 2u),
     );
     let at = dots[dot];
-    let local = corner * (at.radius + cut_reach() + dot_locals.feather);
+    let local = corner * (at.radius + surround_reach(dot_locals.surround) + dot_locals.feather);
     let in_viewport = at.center + local - dot_locals.origin_points;
     var out: DotOut;
     out.position = vec4<f32>(
@@ -84,26 +79,19 @@ fn vs_dot_cut(
 }
 
 /// How much of the picture `at`'s cut takes at `p` (in points), as a share of
-/// the cut's amount, before any disc holds it out: [`surround_ramp`] of the
-/// distance past the disc's edge, and nothing from the reach's antialiasing
-/// on, which ends half a feather inside the dot's quad.
+/// the cut's amount, before any disc holds it out: [`surround_cut_coverage`] of
+/// the distance past the disc's edge, whose reach's antialiasing ends half a
+/// feather inside the dot's quad, at the dot's own strength.
 fn dot_cut(at: Dot, p: vec2<f32>) -> f32 {
-    let reach = cut_reach();
-    if reach <= 0.0 {
-        return 0.0;
-    }
-    let f = max(dot_locals.feather, 1e-6);
     let d = length(p - at.center) - at.radius;
-    let end = clamp((reach - d) / f + 0.5, 0.0, 1.0);
-    let fade = surround_fade_at(dot_locals.surround, d);
-    return unpack4x8unorm(at.aura).a * fade * end;
+    let strength = unpack4x8unorm(at.aura).a;
+    return surround_cut_coverage(dot_locals.surround, strength, d, dot_locals.feather);
 }
 
 /// How much of `p` `at`'s disc covers: its coverage, not its opacity, so a
 /// translucent dot holds a cut out as fully as an opaque one.
 fn dot_fill(at: Dot, p: vec2<f32>) -> f32 {
-    let f = max(dot_locals.feather, 1e-6);
-    return clamp(0.5 - (length(p - at.center) - at.radius) / f, 0.0, 1.0);
+    return surround_inside(length(p - at.center) - at.radius, 0.0, dot_locals.feather);
 }
 
 /// The cut `in`'s dot lands here, its amount included, when it is the
@@ -126,10 +114,10 @@ fn landed(in: DotOut) -> f32 {
     // antialiasing. A hundredth of a feather inside where `dot_cut` reads 0,
     // so only where the loop's own reading is 0 too.
     let own = length(p - mine.center) - mine.radius;
-    if own <= -0.51 * f || own >= cut_reach() + 0.51 * f {
+    if own <= -0.51 * f || own >= surround_reach(dot_locals.surround) + 0.51 * f {
         discard;
     }
-    let grow = cut_reach() + f;
+    let grow = surround_reach(dot_locals.surround) + f;
     var strongest = 0.0;
     var winner = in.dot;
     var uncovered = 1.0;

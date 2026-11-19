@@ -236,20 +236,11 @@ pub(crate) fn centered_note() -> RollInstance {
     RollInstance {
         center: [128.0, 128.0],
         half_extent: [12.0, 60.0],
-        shear: 0.0,
-        rounding: 0.0,
-        lead_fade: 0.0,
-        lead_alpha: 1.0,
         core: [255, 0, 0, 255],
         // Cutting whole, and filling with black, so the harness's cut takes
         // the backdrop toward black.
         aura: [0, 0, 0, 255],
-        span: RollInstance::WHOLE,
-        ramp: [0.0, 0.0],
-        fade: [1.0, 1.0],
-        taper_depth: [0.0; 4],
-        taper: RollInstance::UNTAPERED,
-        tremolo: [0.0; 2],
+        ..RollInstance::PLAIN
     }
 }
 
@@ -262,7 +253,7 @@ fn led_note(fade: f32, alpha: f32) -> RollInstance {
 
 #[test]
 fn uniforms_match_the_bound_shader_layout() {
-    crate::uniforms::layout::check_binding::<RollUniforms>(&crate::roll_source(), 0, 0);
+    crate::uniforms::layout::check_binding::<RollUniforms>(&crate::roll_module(), 0, 0);
 }
 
 #[test]
@@ -578,24 +569,13 @@ fn cuts_stay_on_their_notes_in_a_rect_off_the_surface_corner() {
 
 #[test]
 fn baked_roll_shader_validates() {
-    // After the surround's arithmetic it calls into, as `roll_source`
-    // joins it.
-    let source = crate::with_common(&crate::roll_module());
-    let module = naga::front::wgsl::parse_str(&source)
-        .map_err(|e| e.emit_to_string(&source))
-        .expect("roll.wgsl must parse");
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
+    crate::validate_wgsl(
+        "roll.wgsl",
+        &crate::roll_module(),
+        crate::Seam::after("surround.wgsl", crate::surround::SRC),
+        ROLL_ENTRY_POINTS,
     )
-    .validate(&module)
-    .expect("roll.wgsl must validate");
-    for required in ROLL_ENTRY_POINTS {
-        assert!(
-            module.entry_points.iter().any(|ep| ep.name == *required),
-            "missing entry point `{required}`"
-        );
-    }
+    .expect("baked roll.wgsl must parse and validate");
 }
 
 /// The vertex-layout <-> shader-input contract (attribute locations,
@@ -1058,13 +1038,7 @@ fn a_box_rounded_at_its_half_extent_is_a_disc() {
         return;
     };
     // White on black with no cut, so every byte is the disc's coverage.
-    let dot = RollInstance {
-        half_extent: [12.0, 12.0],
-        rounding: 12.0,
-        core: [255; 4],
-        aura: [0; 4],
-        ..centered_note()
-    };
+    let dot = RollInstance::dot([128.0, 128.0], 12.0, [255; 4]);
     let frame = draw(&device, &queue, vec![dot], wgpu::Color::BLACK);
     let ink: f32 = (0..SIZE[1])
         .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
@@ -1606,10 +1580,6 @@ fn the_bloom_covers_the_pixels_the_halo_is_stretched_across() {
 /// hide would show here.
 #[test]
 fn a_pane_that_stops_drawing_keeps_its_chain() {
-    // Held across every prepare: under `hot-reload` a shader published by
-    // another test between two of them makes `is_stale` rebuild the
-    // resources, pane map included, which reads here as an eviction (#675).
-    let _guard = crate::reload::test_lock();
     let Some((device, queue)) = headless_device() else {
         return;
     };

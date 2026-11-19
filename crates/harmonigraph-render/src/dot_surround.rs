@@ -36,7 +36,7 @@ pub(crate) const ENTRY_POINTS: &[&str] =
 /// dot_surround.wgsl after the surround's arithmetic it calls into. It names
 /// nothing in common.wgsl, so it takes none of it.
 pub(crate) fn source() -> String {
-    format!("{}\n{SRC}", crate::surround::SRC)
+    crate::module_source(crate::surround::SRC, SRC)
 }
 
 /// One sounding note's dot, as its surround needs it: where it stands, how big
@@ -116,8 +116,6 @@ pub(crate) struct Pipelines {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
-    #[cfg(feature = "hot-reload")]
-    generation: u64,
 }
 
 struct Pane {
@@ -156,10 +154,6 @@ impl Resources {
 
 impl Pipelines {
     fn is_stale(&self, format: wgpu::TextureFormat) -> bool {
-        #[cfg(feature = "hot-reload")]
-        if self.generation != crate::reload::generation() {
-            return true;
-        }
         self.format != format
     }
 
@@ -198,13 +192,7 @@ impl Pipelines {
             "fs_dot_surround",
             format,
         );
-        Pipelines {
-            pipeline,
-            layout,
-            format,
-            #[cfg(feature = "hot-reload")]
-            generation: crate::reload::generation(),
-        }
+        Pipelines { pipeline, layout, format }
     }
 }
 
@@ -383,8 +371,13 @@ mod tests {
 
     #[test]
     fn baked_dot_surround_shader_validates() {
-        crate::validate_wgsl("dot_surround.wgsl", &source(), 0, ENTRY_POINTS)
-            .expect("baked dot_surround.wgsl must parse and validate");
+        crate::validate_wgsl(
+            "dot_surround.wgsl",
+            &source(),
+            crate::Seam::after("surround.wgsl", crate::surround::SRC),
+            ENTRY_POINTS,
+        )
+        .expect("baked dot_surround.wgsl must parse and validate");
     }
 
     #[test]

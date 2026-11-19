@@ -17,14 +17,14 @@
 //! ```
 //! `PROBE_SIZE=WxH` (device pixels, default 3840x1000: the roll is a strip),
 //! `PROBE_PPP` (default 2), `PROBE_FRAMES` (default 120) and `PROBE_CASE` (a
-//! substring of the case name, e.g. `dense`). Each workload is timed under the
-//! backdrop cut at the look's defaults ([`SurroundCut::OFF`] carries the reach,
-//! shape and tint a fresh `SpectrumConfig` has, which `harmonigraph-ui` pins).
+//! substring of the case name, e.g. `dense`). Each workload is timed under a
+//! full backdrop cut at [`SurroundCut::OFF`]'s reach, shape and tint.
 //!
 //! The notes are synthetic, since the pane that builds them lives in
-//! `harmonigraph-ui`: ribbons at the pane's default width ([`DEFAULT_RIBBON_SEMITONES`] over
-//! 72, floored at 1.5 pt) and length floor (1 pt), mostly plain held boxes with
-//! leads, glides, tapers, two-piece fades and tremolo mixed in.
+//! `harmonigraph-ui`, and drawn at fixed representative figures rather than the
+//! look's defaults, which move with every capture: ribbons [`RIBBON_SEMITONES`]
+//! across (over 72, floored at 1.5 pt) and a length floor of 1 pt, mostly plain
+//! held boxes with leads, glides, tapers, two-piece fades and tremolo mixed in.
 //! Both workloads are far denser than a real one: the live pane (about
 //! 420x674 pt, 2026-10-09) showing a whole recorded take drew 51 pieces, for
 //! about 1.1 ms over the empty roll under the Gaussian shadow it then had and
@@ -36,6 +36,9 @@ use crate::SurroundCut;
 
 const AXES: RollAxes = RollAxes { pitch_dir: [0.0, -1.0], depth_dir: [1.0, 0.0] };
 const SPAN_SEMITONES: f32 = 72.0;
+/// A ribbon's width in semitones: about the pane's Ribbon width when the probe
+/// was written.
+const RIBBON_SEMITONES: f32 = 0.55;
 fn env<T: std::str::FromStr>(name: &str, default: T) -> T {
     std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
@@ -67,7 +70,7 @@ fn instances(work: &Workload, points: [f32; 2]) -> Vec<RollInstance> {
     let mut rng = Lcg(0x005e_ed0f_a011);
     let per_second = points[0] / work.span_seconds;
     let semitone = points[1] / SPAN_SEMITONES;
-    let half_pitch = (0.5 * DEFAULT_RIBBON_SEMITONES * semitone).max(0.75);
+    let half_pitch = (0.5 * RIBBON_SEMITONES * semitone).max(0.75);
     let mut out = Vec::with_capacity(work.notes + work.notes / 5);
     for i in 0..work.notes {
         let start = rng.next() * work.span_seconds;
@@ -78,18 +81,9 @@ fn instances(work: &Workload, points: [f32; 2]) -> Vec<RollInstance> {
         let mut note = RollInstance {
             center: [(start + 0.5 * duration) * per_second, points[1] - (key + 0.5) * semitone],
             half_extent: [half_pitch, half_depth],
-            shear: 0.0,
-            rounding: 0.0,
-            lead_fade: 0.0,
-            lead_alpha: 1.0,
             core: [230, 40 + shade / 2, 255 - shade, 255],
             aura: [0, 0, 0, 255],
-            span: RollInstance::WHOLE,
-            ramp: [0.0, 0.0],
-            fade: [1.0, 1.0],
-            taper_depth: [0.0; 4],
-            taper: RollInstance::UNTAPERED,
-            tremolo: [0.0; 2],
+            ..RollInstance::PLAIN
         };
         if i % 7 == 0 && half_depth > 4.0 {
             note.lead_fade = if i % 2 == 0 { 0.0 } else { 0.4 * half_depth };
@@ -178,7 +172,6 @@ fn a_frame_of_the_roll_costs_this_much() {
     );
     let (control, control_p10) = time(Vec::new(), SurroundCut::OFF);
     eprintln!("control (empty roll): median {control:.3} ms, p10 {control_p10:.3} ms");
-    // The look's defaults (`SpectrumConfig`'s).
     let cut = SurroundCut { amount: 1.0, ..SurroundCut::OFF };
     for work in &WORKLOADS {
         let case = format!("{} under the cut", work.name);

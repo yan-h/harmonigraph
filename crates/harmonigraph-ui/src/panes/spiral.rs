@@ -551,18 +551,12 @@ pub(crate) fn spiral_pane(
     // strength of 0 is the callback's to decline without allocating.
     if !marks.is_empty() {
         let bloom = harmonigraph_render::bloom_strength(state.appearance.view.spiral_bloom);
-        painter.add(harmonigraph_render::roll_paint_callback(
+        painter.add(harmonigraph_render::dots_paint_callback(
             rect,
-            rect.size(),
             marks,
-            harmonigraph_render::RollClip::whole(rect),
-            // A disc has no axis to turn: any pair the shader can read.
-            harmonigraph_render::RollAxes { pitch_dir: [1.0, 0.0], depth_dir: [0.0, 1.0] },
             bloom,
-            harmonigraph_render::SurroundCut::OFF,
             state.surfaces.target_format,
             super::lattice::SPIRAL_ROLL_PANE,
-            1.0,
         ));
     }
     // The names last, and outside the disc, so nothing in the picture is over
@@ -871,23 +865,7 @@ fn dots(
             let strength = voice.strength * voice.opacity;
             let color = note_color(state, voice.pitch, strength);
             (
-                harmonigraph_render::RollInstance {
-                    center,
-                    half_extent: [radius, radius],
-                    shear: 0.0,
-                    rounding: radius,
-                    lead_fade: 0.0,
-                    lead_alpha: 1.0,
-                    core: color.to_array(),
-                    // The dots' cut is `dot_surround`'s, not the roll's.
-                    aura: [0; 4],
-                    span: harmonigraph_render::RollInstance::WHOLE,
-                    ramp: [0.0; 2],
-                    fade: [1.0; 2],
-                    taper_depth: [0.0; 4],
-                    taper: harmonigraph_render::RollInstance::UNTAPERED,
-                    tremolo: [0.0; 2],
-                },
+                harmonigraph_render::RollInstance::dot(center, radius, color.to_array()),
                 harmonigraph_render::SurroundDot {
                     center,
                     radius,

@@ -40,12 +40,6 @@ use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
-/// The pane's default Ribbon width in semitones, which this crate cannot read
-/// from `SpectrumConfig`. Only the roll timing probe draws with it;
-/// `harmonigraph-ui` pins it to `roll_thickness`'s default
-/// (`a_fresh_ribbon_is_the_renders_probe_width`).
-pub const DEFAULT_RIBBON_SEMITONES: f32 = 0.551_037_2;
-
 pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 
 /// Entry points the roll shader must provide: the two vertex stages (the
@@ -187,25 +181,55 @@ impl RollInstance {
     pub const WHOLE: [f32; 2] = [f32::MIN, f32::MAX];
     /// A [`taper`](Self::taper) at full width all along.
     pub const UNTAPERED: [f32; 4] = [1.0; 4];
+    /// Every field at the value that leaves the box as it is: square, unbent,
+    /// whole, at full width and opacity, with no lead, no ornament and no cut,
+    /// and with no size or color. A caller fills in what it means and takes the
+    /// rest from here, so a ribbon-only field it never names cannot drop its
+    /// box by being left at zero.
+    pub const PLAIN: Self = Self {
+        center: [0.0; 2],
+        half_extent: [0.0; 2],
+        shear: 0.0,
+        rounding: 0.0,
+        lead_fade: 0.0,
+        lead_alpha: 1.0,
+        core: [0; 4],
+        aura: [0; 4],
+        span: Self::WHOLE,
+        ramp: [0.0; 2],
+        fade: [1.0; 2],
+        taper_depth: [0.0; 4],
+        taper: Self::UNTAPERED,
+        tremolo: [0.0; 2],
+    };
+
+    /// One of the Spiral's dots: a disc of `radius` points round `center`, in
+    /// `core`, premultiplied as [`core`](Self::core) is. It cuts nothing here:
+    /// the dots' cut is `dot_surround`'s.
+    pub fn dot(center: [f32; 2], radius: f32, core: [u8; 4]) -> Self {
+        Self { center, half_extent: [radius, radius], rounding: radius, core, ..Self::PLAIN }
+    }
+
+    /// The fields in declaration order, which is what places each one: the
+    /// macro lays the offsets out in the order listed. roll.wgsl's
+    /// `NoteInput` reads them at the same contiguous locations. Several fields
+    /// share a slot, so a struct of twelve locations carries all fourteen.
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<RollInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x2, // center
-            1 => Float32x2, // half_extent
-            2 => Float32,   // shear
-            3 => Float32,   // rounding
-            // Several to a slot, packed when sixteen locations were taken for
-            // the limit; the device takes the adapter's own, 31 on Metal
-            // (`device_limits`).
-            4 => Float32x2, // lead_fade, lead_alpha
-            8 => Unorm8x4,  // core
-            9 => Unorm8x4,  // aura
-            14 => Float32x4, // span, ramp
-            15 => Float32x2, // fade
-            5 => Float32x4,  // taper_depth
-            6 => Float32x4,  // taper
-            7 => Float32x2,  // tremolo
+            0 => Float32x2,  // center
+            1 => Float32x2,  // half_extent
+            2 => Float32,    // shear
+            3 => Float32,    // rounding
+            4 => Float32x2,  // lead_fade, lead_alpha
+            5 => Unorm8x4,   // core
+            6 => Unorm8x4,   // aura
+            7 => Float32x4,  // span, ramp
+            8 => Float32x2,  // fade
+            9 => Float32x4,  // taper_depth
+            10 => Float32x4, // taper
+            11 => Float32x2, // tremolo
         ],
     };
 }
@@ -287,6 +311,33 @@ pub fn roll_paint_callback(
             target_format,
             pane_id,
         },
+    )
+}
+
+/// Draw the Spiral's `dots` ([`RollInstance::dot`]) into `rect` through the
+/// roll's renderer, so they bloom through its chain at `bloom`: a
+/// [`roll_paint_callback`] with no cut of its own and no axis to turn, the
+/// whole of `rect` its clip and its bloom's owner. `pane_id` is as there.
+pub fn dots_paint_callback(
+    rect: egui::Rect,
+    dots: Vec<RollInstance>,
+    bloom: f32,
+    target_format: wgpu::TextureFormat,
+    pane_id: u64,
+) -> egui::PaintCallback {
+    roll_paint_callback(
+        rect,
+        rect.size(),
+        dots,
+        RollClip::whole(rect),
+        // A disc has no axis to turn: any pair the shader can read.
+        RollAxes { pitch_dir: [1.0, 0.0], depth_dir: [0.0, 1.0] },
+        bloom,
+        crate::SurroundCut::OFF,
+        target_format,
+        pane_id,
+        // The cut is off, and its reach is all this scales.
+        1.0,
     )
 }
 
@@ -426,8 +477,6 @@ pub(crate) struct RollPipelines {
     bloom_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
-    #[cfg(feature = "hot-reload")]
-    generation: u64,
 }
 
 struct RollPane {
@@ -592,10 +641,6 @@ impl RollResources {
 
 impl RollPipelines {
     fn is_stale(&self, target_format: wgpu::TextureFormat) -> bool {
-        #[cfg(feature = "hot-reload")]
-        if self.generation != crate::reload::generation() {
-            return true;
-        }
         self.target_format != target_format
     }
 
@@ -636,15 +681,14 @@ impl RollPipelines {
             label: Some("roll_filter_bind_group_layout"),
             entries: &[texture_entry(0), sampler_entry(1)],
         });
-        // Binding 2, matching `body_holdout` in roll.wgsl.
         let holdout_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("roll_holdout_bind_group_layout"),
-            entries: &[texture_entry(2)],
+            entries: &[texture_entry(0)],
         });
         let bloom_layout = crate::BloomChain::add_layout(device, "roll_bloom_bind_group_layout");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("roll_shader"),
-            source: wgpu::ShaderSource::Wgsl(crate::roll_source().into()),
+            source: wgpu::ShaderSource::Wgsl(crate::roll_module().into()),
         });
         let core_pipeline = |format| {
             create_core_pipeline(device, &shader, format, target_format.is_srgb(), &layout)
@@ -698,8 +742,6 @@ impl RollPipelines {
             // so every hop is a resample.
             sampler,
             target_format,
-            #[cfg(feature = "hot-reload")]
-            generation: crate::reload::generation(),
         }
     }
 }
@@ -803,7 +845,7 @@ impl RollHoldout {
                 label: Some("roll_holdout_read_bind_group"),
                 layout: read_layout,
                 entries: &[wgpu::BindGroupEntry {
-                    binding: 2,
+                    binding: 0,
                     resource: wgpu::BindingResource::TextureView(&view),
                 }],
             }),
