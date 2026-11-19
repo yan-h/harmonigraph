@@ -16,13 +16,15 @@ const RENDER_STDERR: &str = "probe.take: 1.6s of events -> 108 frames at 30 fps,
 fn diagnostics_and_malformed_records_do_not_retarget_progress() {
     let progress = Progress::default();
     progress.begin();
-    let warning = "warning: only 30 frames fit the soundtrack";
+    // Built from the renderer's own prefix, which every writer in
+    // harmonigraph-offline uses, so reader and writers meet at one constant.
+    let warning = format!("{WARNING_PREFIX}only 30 frames fit the soundtrack");
     let tail = follow(
         format!("progress: 0/300 frames (0%)\n{warning}\nprogress: broken\n").as_bytes(),
         &progress,
     );
     assert_eq!(progress.read(), Some(RenderProgress { done: 0, total: 300 }));
-    assert_eq!(tail.warnings, [warning]);
+    assert_eq!(tail.warnings, std::slice::from_ref(&warning));
     assert_eq!(tail.last, warning);
     follow(
         b"progress: 120/120 frames (100%)\ndone: 120 frames\ntiming: 300 frames drawn".as_slice(),

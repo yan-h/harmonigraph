@@ -916,6 +916,9 @@ mod tests {
 
         let warnings = take_warnings("take-1.take", &take);
         assert_eq!(warnings.len(), 1, "one warning, and no refusal: {warnings:?}");
+        // The prefix `harmonigraph-record`'s `follow` keeps an export job's
+        // warnings by: a format contract between the two binaries.
+        assert!(warnings[0].starts_with(WARNING_PREFIX), "{}", warnings[0]);
         assert!(warnings[0].contains("6..=8"), "the lost range is named: {}", warnings[0]);
 
         let played: Vec<u8> = take.notes().map(|n| n.note).collect();
