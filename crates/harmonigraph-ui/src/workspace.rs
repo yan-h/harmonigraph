@@ -520,36 +520,10 @@ fn section_ui(
     pane.painter().rect_filled(rect, 0.0, theme::panel());
     if folded {
         if rail > 0.0 {
-            let response = pane.interact(rect, pane.id().with("unfold"), egui::Sense::click());
-            pane.painter().rect_filled(rect, 0.0, theme::header());
-            crate::widgets::paint_fold(
-                &pane,
-                &response,
-                Rect::from_min_size(rect.min, Vec2::splat(rail)),
-                if vertical_rail { Vec2::X } else { Vec2::Y },
-            );
-            let galley = pane.painter().layout_no_wrap(
-                title.into(),
-                egui::TextStyle::Heading.resolve(pane.style()),
-                theme::text(),
-            );
-            if vertical_rail {
-                let at = pos2(
-                    rect.center().x - galley.size().y * 0.5,
-                    rect.top() + rail + 8.0 + galley.size().x,
-                );
-                pane.painter().add(
-                    egui::epaint::TextShape::new(at, galley, theme::text())
-                        .with_angle(-std::f32::consts::FRAC_PI_2),
-                );
-            } else {
-                pane.painter().galley(
-                    rect.min + vec2(rail + 4.0, (rail - galley.size().y) * 0.5),
-                    galley,
-                    theme::text(),
-                );
-            }
-            if response.clicked() {
+            use crate::widgets::{paint_rail, Rail};
+            let (run, direction) =
+                if vertical_rail { (Rail::Column, Vec2::X) } else { (Rail::Row, Vec2::Y) };
+            if paint_rail(&pane, rect, pane.id().with("unfold"), run, direction, title) {
                 layout.folded[index] = false;
             }
         }

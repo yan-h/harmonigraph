@@ -5,6 +5,73 @@ use egui::{Rect, Response, Vec2};
 
 use crate::theme;
 
+/// Which way a folded pane's [`paint_rail`] runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Rail {
+    /// Down a column: the fold button at the top, the title turned to read
+    /// upward under it.
+    Column,
+    /// Across a row: the fold button at the left, the title after it.
+    Row,
+}
+
+/// The rail a folded pane leaves, a workspace section's or an analyzer
+/// region's, as one control: the whole rail answers a click by unfolding the
+/// pane, with the fold button at its start pointing `direction` and the
+/// pane's `title` beside it where the rail is long enough to hold it whole.
+/// Returns whether it was clicked.
+///
+/// One function for both, so the two rails keep one look: their own copies
+/// had drifted apart, by two points in where the title stood and in which of
+/// them named itself to a hover or to AccessKit.
+pub(crate) fn paint_rail(
+    ui: &egui::Ui,
+    rect: Rect,
+    id: egui::Id,
+    rail: Rail,
+    direction: Vec2,
+    title: &str,
+) -> bool {
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let expand = format!("Expand {title}");
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, expand.clone()));
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::header());
+    // The rail's thickness, which is the fold button's cell: square at the
+    // rail's start.
+    let (thickness, length) = match rail {
+        Rail::Column => (rect.width(), rect.height()),
+        Rail::Row => (rect.height(), rect.width()),
+    };
+    paint_fold(ui, &response, Rect::from_min_size(rect.min, Vec2::splat(thickness)), direction);
+    let galley = painter.layout_no_wrap(
+        title.to_owned(),
+        egui::TextStyle::Heading.resolve(ui.style()),
+        theme::text(),
+    );
+    let gap = 6.0 * theme::ui_scale(ui.ctx());
+    // Whole or not at all: a title clipped at the rail's end reads as a
+    // different word.
+    if galley.size().x + thickness + 2.0 * gap <= length {
+        let (anchor, angle) = match rail {
+            Rail::Column => (
+                egui::pos2(
+                    rect.center().x - galley.size().y * 0.5,
+                    rect.top() + thickness + gap + galley.size().x,
+                ),
+                -std::f32::consts::FRAC_PI_2,
+            ),
+            Rail::Row => (
+                egui::pos2(rect.left() + thickness + gap, rect.center().y - galley.size().y * 0.5),
+                0.0,
+            ),
+        };
+        painter.add(egui::epaint::TextShape::new(anchor, galley, theme::text()).with_angle(angle));
+    }
+    response.on_hover_text(expand).clicked()
+}
+
 /// A pane's fold button — a workspace section's or an analyzer region's — as
 /// a square with a double chevron pointing the way the pane's edge will move
 /// when it is clicked: toward the edge on an open pane, out of the rail on a

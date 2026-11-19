@@ -33,7 +33,7 @@ mod value;
 #[cfg(test)]
 pub(crate) use bend::bend_plot_height;
 pub use bend::BendPlot;
-pub(crate) use fold::{paint_chevron, paint_fold};
+pub(crate) use fold::{paint_chevron, paint_fold, paint_rail, Rail};
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub use label::label;
 pub(crate) use label::{
