@@ -282,7 +282,7 @@ pub(crate) struct SpectrogramSurfaces(Vec<SpectrogramSurface>);
 impl SpectrogramSurfaces {
     /// The surface's own state, empty on first sight of its id.
     ///
-    /// A method on the field rather than on [`AudioSpectrum`], so a caller
+    /// A method on the field rather than on [`AudioSpectrum`](crate::AudioSpectrum), so a caller
     /// reading the shared pyramid can hold that borrow while this one is out.
     pub(crate) fn at(&mut self, surface: usize) -> &mut SpectrogramSurface {
         if self.0.len() <= surface {
