@@ -4,7 +4,7 @@
 use egui::{CornerRadius, Response, Sense, Stroke, Ui, Vec2};
 use harmonigraph_scene::{Bend, Gradient};
 
-use super::bar::{bar_radius, bar_width, HANDLE_INSET};
+use super::bar::{bar_radius, bar_width, with_gestures, HANDLE_INSET};
 use crate::theme;
 
 /// Rows the plot stands, so a corner at 90% of the range is a drag of a few
@@ -33,7 +33,11 @@ fn plot_area(well: egui::Rect, scale: f32) -> egui::Rect {
 /// The gradient's [`Bend`]: a row of on/off buttons naming the channels that
 /// follow the curve, over a plot of the range (across) against how far those
 /// channels have come (up). Drag anywhere on the plot to move the knee's
-/// corner; double-click to straighten it.
+/// corner; double-click to put back `home`'s, which is not straight for every
+/// caller (the audio level colors' fresh curve holds its change back).
+///
+/// The hover is the bar's: the caller's [`hint`](Self::hint), then the
+/// gestures in the wording every bar ends with, so no caller writes them.
 ///
 /// The handle is the CORNER, where the knee's two straight lines meet, and the
 /// lines are drawn faintly through it: the curve rounds inside the corner
@@ -48,6 +52,7 @@ fn plot_area(well: egui::Rect, scale: f32) -> egui::Rect {
 pub struct BendPlot<'a> {
     gradient: &'a mut Gradient,
     home: Gradient,
+    hint: Option<&'a str>,
 }
 
 impl<'a> BendPlot<'a> {
@@ -57,7 +62,16 @@ impl<'a> BendPlot<'a> {
     ///
     /// [`SpectrumBar::new`]: super::gradient::SpectrumBar::new
     pub fn new(gradient: &'a mut Gradient, home: Gradient) -> Self {
-        BendPlot { gradient, home }
+        BendPlot { gradient, home, hint: None }
+    }
+
+    /// What the hover says the curve is; the plot ends it with the gestures
+    /// it answers to (see [`ValueBar::hint`]).
+    ///
+    /// [`ValueBar::hint`]: super::value::ValueBar::hint
+    pub fn hint(mut self, hint: &'a str) -> Self {
+        self.hint = Some(hint);
+        self
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -106,7 +120,7 @@ impl<'a> BendPlot<'a> {
 
         // Off screen nothing below is needed; see the same line in `ValueBar`.
         if !ui.is_rect_visible(rect) {
-            return response;
+            return with_gestures(response, self.hint, true, false);
         }
         // ---- Paint ---- read back after the write, so the handle is under the
         // pointer on the frame it moved.
@@ -140,7 +154,7 @@ impl<'a> BendPlot<'a> {
             Stroke::new(theme::LINE_WIDTH * scale, theme::panel()),
         );
 
-        response.on_hover_cursor(egui::CursorIcon::Crosshair)
+        with_gestures(response.on_hover_cursor(egui::CursorIcon::Crosshair), self.hint, true, false)
     }
 }
 
@@ -159,7 +173,7 @@ mod tests {
 
     /// Click a point on the plot, as fractions of its width and height from
     /// the bottom-left, `clicks` times through a real context.
-    fn click(g: &mut Gradient, (x, y): (f32, f32), clicks: usize) {
+    fn click(g: &mut Gradient, home: Gradient, (x, y): (f32, f32), clicks: usize) {
         let ctx = crate::tests::probe::themed();
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 200.0));
         let plot = std::cell::Cell::new(egui::Rect::NOTHING);
@@ -174,7 +188,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    plot.set(BendPlot::new(g, Gradient::default()).show(ui).rect);
+                    plot.set(BendPlot::new(g, home).show(ui).rect);
                 },
             );
         };
@@ -188,15 +202,58 @@ mod tests {
         }
     }
 
+    /// A double-click puts back `home`'s corner, which is bent for the audio
+    /// level colors (#1846), and leaves the channels as they are.
     #[test]
-    fn a_click_moves_the_corner_and_a_double_click_straightens_it() {
+    fn a_click_moves_the_corner_and_a_double_click_puts_homes_back() {
+        let home = Gradient {
+            bend: Bend { at: 0.7, share: 0.4, ..Bend::default() },
+            ..Default::default()
+        };
+        assert!(!home.bend.is_straight(), "the fixture's home must be bent");
         let mut g = Gradient::default();
         g.bend.lightness = false;
-        click(&mut g, (0.9, 0.15), 1);
+        click(&mut g, home, (0.9, 0.15), 1);
         assert_eq!(g.bend, Bend { at: 0.9, share: 0.15, lightness: false, ..Bend::default() });
 
-        click(&mut g, (0.9, 0.15), 2);
-        assert!(g.bend.is_straight(), "a double-click left the curve bent: {:?}", g.bend);
+        click(&mut g, home, (0.9, 0.15), 2);
+        assert_eq!((g.bend.at, g.bend.share), (0.7, 0.4), "a double-click missed home");
         assert!(!g.bend.lightness, "a double-click switched a channel back on");
+    }
+
+    /// The plot's hover is its hint and then the gestures in the bars' one
+    /// wording, so no caller promises a gesture the plot lacks (#1846).
+    #[test]
+    fn the_plots_hover_ends_with_its_gestures() {
+        use crate::tests::probe::{events_into, themed};
+        let ctx = themed();
+        ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+        let size = egui::vec2(300.0, 200.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut g = Gradient::default();
+        let plot = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut draw = |events| {
+            events_into(&ctx, size, rect, events, |ui| {
+                plot.set(
+                    BendPlot::new(&mut g, Gradient::default()).hint("The curve.").show(ui).rect,
+                );
+            })
+        };
+        draw(vec![]);
+        draw(vec![egui::Event::PointerMoved(plot.get().center())]);
+        let shown: Vec<_> = (0..3)
+            .map(|_| draw(vec![]))
+            .last()
+            .unwrap()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().contains("Drag") => {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, ["The curve.\nDrag to adjust, double-click to reset."]);
     }
 }
