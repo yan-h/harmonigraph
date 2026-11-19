@@ -1305,7 +1305,7 @@ fn temperament_switches_sit_beside_their_intervals() {
 fn a_transient_tuning_status_does_not_move_the_adaptive_controls() {
     let adaptive_y = |pending| {
         let mut state = fresh();
-        state.picture.runtime.configuration_pending = pending;
+        state.picture.runtime.configuration_pending_shown = pending;
         let output = adaptive_tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT);
         if pending {
             assert!(

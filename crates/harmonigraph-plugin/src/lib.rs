@@ -995,12 +995,11 @@ impl Plugin for Harmonigraph {
     }
 
     fn reset(&mut self) {
-        // The session's cut first, as the audio engine's own reset took it
-        // before the plugin's state was reset.
-        if let Some(hub) = &mut self.aggregation {
-            hub.stop();
-        }
         if let Some(owner) = self.configuration.as_mut() {
+            // The session's cut first, as the audio engine's own reset took
+            // it before the plugin's state was reset. Only with an owner: a
+            // plugin built outside the shell has no session to cut.
+            self.aggregation.as_mut().unwrap().stop();
             // Stop may arrive after activation but before start_processing
             // resets this owner. Close its run before forgetting routes.
             owner.recording.close_stopped(&mut self.take);

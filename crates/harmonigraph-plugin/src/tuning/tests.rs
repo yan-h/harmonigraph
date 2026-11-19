@@ -357,8 +357,7 @@ impl Device {
     /// Note retuning defaults to Pass through; these fixtures are about the
     /// adaptive correction, so the Hub starts with it selected. The Hub adopts
     /// a flush at its next process boundary, ahead of that callback's events,
-    /// so the value is not readable here; the adaptive tests failing without
-    /// it is what shows it lands.
+    /// and the adaptive tests failing without it is what shows it lands.
     fn select_adaptive(&self) {
         let events = vec![parameter("tuning-engine", 1.0, 0)];
         let input = clap_input_events {

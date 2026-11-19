@@ -84,7 +84,7 @@ pub struct VisualRuntime {
     pub configuration_status: u32,
     /// Show "Tuning change pending audio adoption": the configuration the
     /// editor requested has gone unadopted for [`PENDING_AFTER`].
-    pub configuration_pending: bool,
+    pub configuration_pending_shown: bool,
     configuration_unadopted: PendingLabel<harmonigraph_core::configuration::ResolvedConfig>,
     /// Show the map's "pending audio adoption": the map state the parameters
     /// request has gone unadopted for [`PENDING_AFTER`].
@@ -125,7 +125,7 @@ impl Default for VisualRuntime {
             replayed_configuration: None,
             adaptive_policy: Default::default(),
             configuration_status: 0,
-            configuration_pending: false,
+            configuration_pending_shown: false,
             configuration_unadopted: PendingLabel::default(),
             maps_pending: false,
             maps_unadopted: PendingLabel::default(),
@@ -175,7 +175,7 @@ impl VisualRuntime {
         if let Some(owned) = owned {
             self.apply_resolved(owned.resolved);
             self.configuration_status = owned.status;
-            self.configuration_pending =
+            self.configuration_pending_shown =
                 self.configuration_unadopted.shown(owned.resolved, owned.pending, Instant::now());
         } else if let Some(recorded) = self.replayed_configuration {
             self.apply_resolved(recorded);

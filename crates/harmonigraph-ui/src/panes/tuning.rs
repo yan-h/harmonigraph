@@ -309,7 +309,7 @@ pub(super) fn tuning_pane(
     }
     instance_section(ui, state, params);
     // Keep transient status after every control so it cannot move a held slider.
-    if !configuration_notice && state.runtime.configuration_pending {
+    if !configuration_notice && state.runtime.configuration_pending_shown {
         crate::widgets::label(ui, "Tuning change pending audio adoption");
     }
     // Kept for the rest of the editor — the lattice's dots and edits, and the
