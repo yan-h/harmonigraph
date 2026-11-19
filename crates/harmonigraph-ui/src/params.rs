@@ -111,6 +111,11 @@ pub struct TuningInstance {
     pub max_delay: u32,
     pub delay_text: String,
     pub status: String,
+    /// Whether the row's name is drawn in the fault colour: before the host
+    /// first activates the instance, while a status bit is set, and while
+    /// missed corrections are counted (`docs/intent/tuning.md`). Decided
+    /// where the status is, rather than read back out of `status`'s wording.
+    pub faulted: bool,
     pub last_pitch: Option<(f64, f64)>,
 }
 

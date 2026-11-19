@@ -99,9 +99,9 @@ impl Worker {
 
     fn assert_failed(&self, cause: &str) {
         let control = self.control.as_ref().unwrap();
-        // A Stop seals on the pass after the one that polled it. A write
-        // error reaches the status line alone, and the same pass then
-        // replaces it with the whole failure, so the wait is for the whole.
+        // The worker finds the error on its own thread, and a Stop seals on
+        // the pass after the one that polled it, so the wait is for both. The
+        // line it waits for is the one the failure writes whole (#1843).
         wait_for("failure on the status line, no Stop pending", || {
             let message = control.status();
             message.contains(cause)

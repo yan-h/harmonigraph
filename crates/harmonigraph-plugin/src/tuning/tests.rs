@@ -1022,6 +1022,10 @@ fn missed_corrections_survive_a_stop_and_clear_at_reset_or_reactivation() {
                 pair.idle();
             }
             assert_eq!((pair.misses(), pair.status()), (1, 0), "Stop keeps the count alone");
+            // Counted misses with no status bit still draw the Tune's name in
+            // the fault colour (`docs/intent/tuning.md`, #1798 H3).
+            let tune = instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap();
+            assert!(tune.faulted, "{clear}: a counted miss alone drew no fault");
             match clear {
                 "Reset" => session::session().request_reset(),
                 _ => pair.tune.reactivate_format(48000.0, 512),

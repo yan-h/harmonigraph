@@ -36,16 +36,17 @@ pub fn snapshots() -> Vec<TuningInstance> {
             let output = shared.last_output.load(Ordering::Relaxed);
             let name = shared.name.lock().unwrap().clone();
             let misses = shared.misses.load(Ordering::Relaxed);
+            let bits = shared.status();
             let status = if frames == 0 {
                 "Waiting for host activation".to_owned()
             } else if misses != 0 {
                 format!(
                     "{}\n{}",
-                    super::session::status_text(shared.status()),
-                    setup::deadline_text(shared.status(), misses)
+                    super::session::status_text(bits),
+                    setup::deadline_text(bits, misses)
                 )
             } else {
-                super::session::status_text(shared.status())
+                super::session::status_text(bits)
             };
             Some(TuningInstance {
                 id: *id,
@@ -76,6 +77,9 @@ pub fn snapshots() -> Vec<TuningInstance> {
                     setup::delay_text(requested, active, frames, rate)
                 },
                 status,
+                // Waiting for activation is a status to inspect too (Yan,
+                // #1861), and misses stay red until Reset (#1798 H3).
+                faulted: frames == 0 || bits != 0 || misses != 0,
                 last_pitch: (input != i64::MIN && output != i64::MIN)
                     .then_some((input as f64 / 1_000_000.0, output as f64 / 1_000_000.0)),
             })

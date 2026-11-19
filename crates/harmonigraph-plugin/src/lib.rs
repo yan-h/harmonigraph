@@ -1026,7 +1026,7 @@ impl Plugin for Harmonigraph {
             owner.begin(boundary, seed, &self.take);
         }
         if boundary.input_lost {
-            owner.fault();
+            owner.fault(&self.take);
         }
     }
 
