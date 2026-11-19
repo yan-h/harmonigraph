@@ -9,9 +9,8 @@
 // is that hue laid on; over bright energy it is what keeps the note legible.
 // Where two notes' cuts meet, the stronger lands, with its color.
 //
-// Functions only, with no bindings, so it can be joined to any module: a
-// producer's own module puts it after common.wgsl and before its own source,
-// and the composite's after nothing.
+// Functions only, with no bindings, so it can be joined to any module: each
+// module that uses it puts it before its own source, and no other half.
 
 /// The cut as every producer that draws it reads it. One vec4, so it
 /// sits at the head of a uniform block with no padding of its own.
@@ -38,6 +37,52 @@ fn surround_ramp(k: f32, x: f32) -> f32 {
 /// note's cut and its tint both read this, so they cannot part ways.
 fn surround_fade_at(surround: SurroundCut, d: f32) -> f32 {
     return surround_ramp(surround.cut.z, max(d, 0.0) / surround.cut.y);
+}
+
+/// The cut's reach past a note's edge, in points.
+///
+/// Above 0 wherever a shader reads it. Whether the cut draws is decided once,
+/// on the Rust side: a cut that draws nothing is uploaded as all 0, and no
+/// producer draws its surround pass for one (`SurroundUniform::draws`), so no
+/// fragment here ever sees a cut that is off.
+fn surround_reach(surround: SurroundCut) -> f32 {
+    return surround.cut.y;
+}
+
+/// Coverage of everything on the near side of `edge`: how much of a window
+/// `feather` points wide (one pixel of whatever is drawn into), centered on
+/// the signed distance `d`, lands inside it.
+///
+/// A box filter along the distance gradient, which is exact for a straight
+/// edge and is what makes a shape thinner than a pixel come out FAINTER rather
+/// than snapping to a full pixel — the same bargain epaint's feathering makes,
+/// so a hairline ribbon reads the way it does through the tessellator. The
+/// note's own edge reads it at an `edge` of 0, and the cut's far end at its
+/// reach.
+fn surround_inside(d: f32, edge: f32, feather: f32) -> f32 {
+    let f = max(feather, 1e-6);
+    return clamp((edge - d) / f + 0.5, 0.0, 1.0);
+}
+
+/// How much of the picture the cut of a note cutting at `strength` takes `d`
+/// points off its edge, as a share of the cut's amount: [`surround_ramp`] over
+/// the cut's reach, and nothing from the reach's antialiasing on, which ends
+/// half a feather past it.
+///
+/// Read off the distance rather than a blur of the note's silhouette, which is
+/// the point of it: a blur of a ribbon thinner than its σ never reaches full
+/// strength, so the surround all but vanished round exactly the hairline notes
+/// that need one, and spread into a wide smear round a fat one. Here a note's
+/// edge is equally held at every width. The amount itself is laid on by each
+/// producer, one amount for every note, so it changes no note's rank against
+/// another's.
+///
+/// `strength` comes first in the product, as each producer multiplied it
+/// before this was shared: the dots' candidates compare these readings to the
+/// bit, and a regrouped product is a different last bit.
+fn surround_cut_coverage(surround: SurroundCut, strength: f32, d: f32, feather: f32) -> f32 {
+    let reach = surround_reach(surround);
+    return strength * surround_fade_at(surround, d) * surround_inside(d, reach, feather);
 }
 
 /// A note's fill where [`surround_fade_at`] reads `fade`, above 0: `sooner` more

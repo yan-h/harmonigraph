@@ -223,38 +223,55 @@ fn attachment(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachmen
     })
 }
 
+/// The displaced material's baked geometry: one period of the cell walk in two
+/// textures, rebaked in place when the geometry dials move.
+///
+/// Allocation and rebake have keys of their own, as the spectrogram's
+/// atmosphere keeps its `Shape` apart from its `TileKey`: only `texels` decides
+/// an allocation, since a rebuild replaces both textures and every binding of
+/// them, and the geometry decides a rebake into the same ones. Keyed on the
+/// geometry too, a drag of Edge feathering or Shape warp allocated two
+/// textures, a buffer and two bind groups on every frame of it.
+/// Refraction, layer mix, amount, drift, light and camera reach neither key:
+/// they are live inputs.
 pub(super) struct Tile {
-    // Only baked geometry and quantized density belong in this key.
-    // Refraction, layer mix, amount, drift, light and camera are live inputs.
     texels: u32,
-    geometry: [u32; 2],
+    /// What the textures hold: the `[wash_fuzz, wash_lobe]` bits last baked,
+    /// `None` until the first bake.
+    baked: Option<[u32; 2]>,
+    views: [wgpu::TextureView; 2],
+    /// The bake's `Geometry`, written before each rebake.
+    geometry: wgpu::Buffer,
+    bake_binding: wgpu::BindGroup,
     bind_group: wgpu::BindGroup,
+    #[cfg(test)]
+    bakes: usize,
 }
 impl Tile {
+    /// The binding the material reads, which changes only with an allocation.
     #[cfg(test)]
-    pub(super) fn geometry_binding(&self) -> wgpu::BindGroup {
+    pub(super) fn binding(&self) -> wgpu::BindGroup {
         self.bind_group.clone()
     }
-    fn new(
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        pipelines: &Pipelines,
-        texels: u32,
-        geometry: [u32; 2],
-    ) -> Self {
-        let a = texture(device, "lattice_material_tile_a", [texels; 2], FORMAT);
-        let b = texture(device, "lattice_material_tile_b", [texels; 2], FORMAT);
+    /// How many times this allocation has been baked.
+    #[cfg(test)]
+    pub(super) fn bakes(&self) -> usize {
+        self.bakes
+    }
+    fn new(device: &wgpu::Device, pipelines: &Pipelines, texels: u32) -> Self {
+        let views = ["lattice_material_tile_a", "lattice_material_tile_b"]
+            .map(|label| texture(device, label, [texels; 2], FORMAT));
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_material_tile"),
             layout: &pipelines.tile_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&a),
+                    resource: wgpu::BindingResource::TextureView(&views[0]),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&b),
+                    resource: wgpu::BindingResource::TextureView(&views[1]),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -262,34 +279,63 @@ impl Tile {
                 },
             ],
         });
-
-        let values = Geometry {
-            fuzz: f32::from_bits(geometry[0]),
-            lobe: f32::from_bits(geometry[1]),
-            padding: Float2([0.0; 2]),
-        };
-        let buffer = crate::gpu_memory::buffer_init(
+        let geometry = crate::gpu_memory::buffer(
             device,
-            &wgpu::util::BufferInitDescriptor {
+            &wgpu::BufferDescriptor {
                 label: Some("material_geometry"),
-                contents: bytemuck::bytes_of(&values),
-                usage: wgpu::BufferUsages::UNIFORM,
+                size: size_of::<Geometry>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             },
         );
         let bake_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material_geometry"),
             layout: &pipelines.bake_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 3, resource: buffer.as_entire_binding() }],
+            entries: &[wgpu::BindGroupEntry { binding: 3, resource: geometry.as_entire_binding() }],
         });
+        Self {
+            texels,
+            baked: None,
+            views,
+            geometry,
+            bake_binding,
+            bind_group,
+            #[cfg(test)]
+            bakes: 0,
+        }
+    }
+    /// Bake `geometry` into the textures, unless they already hold it.
+    fn bake(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &Pipelines,
+        geometry: [u32; 2],
+    ) {
+        if self.baked == Some(geometry) {
+            return;
+        }
+        let values = Geometry {
+            fuzz: f32::from_bits(geometry[0]),
+            lobe: f32::from_bits(geometry[1]),
+            padding: Float2([0.0; 2]),
+        };
+        // Lands before this frame's encoder runs, and a pane bakes at most
+        // once a frame, so the pass below reads these values.
+        queue.write_buffer(&self.geometry, 0, bytemuck::bytes_of(&values));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("lattice_material_geometry_bake"),
-            color_attachments: &[attachment(&a), attachment(&b)],
+            color_attachments: &[attachment(&self.views[0]), attachment(&self.views[1])],
             ..Default::default()
         });
         pass.set_pipeline(&pipelines.bake);
-        pass.set_bind_group(0, &bake_binding, &[]);
+        pass.set_bind_group(0, &self.bake_binding, &[]);
         pass.draw(0..4, 0..1);
-        Self { texels, geometry, bind_group }
+        self.baked = Some(geometry);
+        #[cfg(test)]
+        {
+            self.bakes += 1;
+        }
     }
 }
 
@@ -336,6 +382,10 @@ impl Source {
             ],
         });
         Self { view, buffer, bind_group, stars: None, velvet: false }
+    }
+    #[cfg(test)]
+    pub(super) fn stars(&self) -> Option<&lattice_stars::Targets> {
+        self.stars.as_ref()
     }
     pub(super) fn star_output(&self) -> Option<&wgpu::BindGroup> {
         self.stars.as_ref().map(|stars| &stars.output_group)
@@ -469,7 +519,8 @@ pub(super) fn prepare(
         return motion;
     }
     // The spectrogram's sampling, on the glow target. Quantized density keeps
-    // nearby resizes from rebaking; a 2048 cap bounds memory to 64 MiB.
+    // nearby resizes from reallocating; a 2048 cap bounds the pair at 64 MiB,
+    // though a scene under about 5,000 px tall holds 2-12 MiB.
     let dials = &material.settings;
     let cell = crate::material_cells::cell(velvet, dials, size[1] as f32);
     let drift = crate::material_cells::drift(
@@ -483,12 +534,15 @@ pub(super) fn prepare(
         ((crate::material_cells::WASH_PERIOD * cell / 128.0).ceil() as u32 * 128).clamp(128, 2048);
     if velvet {
         pane.material_tile = None;
-    } else if pane
-        .material_tile
-        .as_ref()
-        .is_none_or(|tile| tile.texels != texels || tile.geometry != geometry)
-    {
-        pane.material_tile = Some(Tile::new(device, encoder, pipelines, texels, geometry));
+    } else {
+        if pane.material_tile.as_ref().is_none_or(|tile| tile.texels != texels) {
+            // Dropped before the new one is built, so a resize never holds
+            // both sizes at once.
+            pane.material_tile = None;
+            pane.material_tile = Some(Tile::new(device, pipelines, texels));
+        }
+        let tile = pane.material_tile.as_mut().expect("allocated above");
+        tile.bake(queue, encoder, pipelines, geometry);
     }
     let source = glow.material_source.get_or_insert_with(|| Source::new(device, pipelines, size));
     source.stars = None;
@@ -675,14 +729,12 @@ mod tests {
 
     #[test]
     fn shader_validates() {
-        let module =
-            naga::front::wgsl::parse_str(SOURCE).map_err(|e| e.emit_to_string(SOURCE)).unwrap();
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap();
+        // `SOURCE` joins the geometry ahead with the separator
+        // `crate::module_source` uses, so the seam reads off the same count.
+        let geometry = include_str!("shaders/atmosphere_geometry.wgsl");
+        let seam = crate::Seam::after("atmosphere_geometry.wgsl", geometry);
+        crate::validate_wgsl("lattice_material.wgsl", SOURCE, seam, &[] as &[&str])
+            .expect("baked lattice_material.wgsl must parse and validate");
     }
 
     #[test]

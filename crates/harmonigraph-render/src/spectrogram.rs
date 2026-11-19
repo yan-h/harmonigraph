@@ -859,15 +859,16 @@ impl CallbackTrait for SpectrogramCallback {
                     },
                 );
                 pane.cloud_ready = true;
+            } else if let Some(target) = pane.cloud.as_mut() {
+                // A pane with no pixels to draw in: its targets stay for when
+                // it has some again, and its history ends, as a degenerate
+                // frame's does.
+                target.invalidate_memory();
             }
-        }
-
-        // No cloud this frame — every effect off, or no light field to draw
-        // — so its history is freed rather than held for a look not drawn.
-        if !pane.cloud_ready {
-            if let Some(target) = pane.cloud.as_mut() {
-                target.release_memory();
-            }
+        } else {
+            // No cloud at this look, every effect off: its targets are freed
+            // rather than held for a look not drawn.
+            pane.cloud = None;
         }
         Vec::new()
     }

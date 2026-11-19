@@ -11,16 +11,14 @@ fn baked_shader_validates() {
     validate_wgsl(
         "lattice.wgsl",
         &with_common(SHADER_SRC),
-        common_lines(COMMON_SRC),
+        Seam::after("common.wgsl", COMMON_SRC),
         &[] as &[&str],
     )
     .expect("baked lattice.wgsl must parse and validate");
 }
 
-/// The `const _: () = assert!(PITCH_LUT_N == 64)` in `lib.rs` ties one Rust
-/// literal to another; the two that decide what the GPU actually reads are in
-/// WGSL, where no compiler is checking them against the scene's constant. This
-/// is the half that catches a one-sided bump.
+/// The two tables that decide what the GPU actually reads are declared in
+/// WGSL, where no compiler is checking them against the scene's constant.
 ///
 /// Both slips are silent otherwise. Raise the array but not the const and the
 /// shader walks 63 entries of a longer table, painting a top-of-range glyph the
@@ -98,6 +96,90 @@ fn uniform_transport_matches_nagas_resolved_layout() {
     assert_eq!(std::mem::offset_of!(Uniforms, composite), 0);
     assert_eq!(std::mem::size_of::<CompositeParams>(), 48);
     assert_eq!(std::mem::offset_of!(CompositeParams, bloom_strength), 12);
+}
+
+/// The storage rows a scene draw reads, against the Rust rows written into
+/// them: the light table's `LightRow` and every caster's `ShadowCaster`.
+///
+/// Neither has a binding size that is validated against a declaration, and
+/// a row a field longer or shorter on one side reads every field after it out
+/// of the next row: a halo coloured by its neighbour's slots, or a shadow of
+/// the right shape in the wrong place.
+#[test]
+fn storage_rows_match_nagas_resolved_layout() {
+    use crate::uniforms::layout::check_storage_array;
+    check_storage_array::<LightRow>(&with_common(SHADER_SRC), 1, 0);
+    check_storage_array::<crate::shadow::ShadowCaster>(&with_common(SHADER_SRC), 3, 0);
+}
+
+impl crate::uniforms::layout::GpuLayout for LightRow {
+    fn layout() -> crate::uniforms::layout::Layout {
+        use crate::uniforms::layout::{Field, Kind, Layout};
+        type Slots = [f32; harmonigraph_scene::OCTAVE_SLOTS];
+        Layout::of::<Self>(Kind::Struct(vec![
+            Field {
+                name: "cents",
+                offset: std::mem::offset_of!(Self, cents),
+                layout: f32::layout(),
+            },
+            Field { name: "l", offset: std::mem::offset_of!(Self, l), layout: Slots::layout() },
+            Field { name: "m", offset: std::mem::offset_of!(Self, m), layout: Slots::layout() },
+        ]))
+    }
+}
+
+/// Each `[f32; 4]` row is a `vec4<f32>` in WGSL.
+impl crate::uniforms::layout::GpuLayout for crate::shadow::ShadowCaster {
+    fn layout() -> crate::uniforms::layout::Layout {
+        use crate::uniforms::layout::{Field, Kind, Layout};
+        let row = |name, offset| Field {
+            name,
+            offset,
+            layout: Layout::of::<[f32; 4]>(Kind::Vector(naga::Scalar::F32, naga::VectorSize::Quad)),
+        };
+        Layout::of::<Self>(Kind::Struct(vec![
+            row("rect", std::mem::offset_of!(Self, rect)),
+            row("cell", std::mem::offset_of!(Self, cell)),
+            row("map", std::mem::offset_of!(Self, map)),
+            row("shade", std::mem::offset_of!(Self, shade)),
+        ]))
+    }
+}
+
+/// The constants the shaders declare as literals of their own, against the
+/// Rust ones the CPU sizes, packs and indexes with.
+///
+/// Each is well-formed WGSL at any value, so a one-sided bump is silent: a
+/// slot count or span the packing and the shader read differently lights the
+/// wrong octave, an analyzer grid out of step draws a plausible ring of the
+/// wrong buckets at the wrong pitches, and a mark sheet index out of step
+/// samples a mark from the font.
+#[test]
+fn the_shaders_literals_are_the_rust_constants() {
+    use crate::shadow::tests::shader_const;
+    let number = |src: &str, name: &str| -> f64 {
+        let value = shader_const(src, name);
+        value.trim_end_matches('u').parse().unwrap_or_else(|_| panic!("{name} is a number"))
+    };
+    for (name, rust) in [
+        ("OCTAVE_SLOTS", harmonigraph_scene::OCTAVE_SLOTS as f64),
+        ("MAX_SPAN", f64::from(harmonigraph_scene::MAX_SPAN)),
+        ("SPECTRUM_BUCKETS", harmonigraph_scene::SPECTRAL_BUCKETS as f64),
+        ("BUCKETS_PER_SEMITONE", harmonigraph_scene::SPECTRAL_BUCKETS_PER_SEMITONE as f64),
+    ] {
+        assert_eq!(number(SHADER_SRC, name), rust, "lattice.wgsl's {name}");
+    }
+    // Compared as the f32 both sides compute in.
+    assert_eq!(
+        number(SHADER_SRC, "SPECTRUM_MIN_MIDI") as f32,
+        harmonigraph_scene::SPECTRAL_AXIS.0,
+        "lattice.wgsl's SPECTRUM_MIN_MIDI"
+    );
+    assert_eq!(
+        number(crate::text::TEXT_SRC, "SHEET_MARK"),
+        f64::from(crate::text::GlyphInstance::MARK),
+        "text.wgsl's SHEET_MARK"
+    );
 }
 
 /// blit.wgsl has no hot-reload path, so a broken edit would otherwise

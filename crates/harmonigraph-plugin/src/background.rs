@@ -13,9 +13,9 @@
 //! **The FFTs run with no lock held.** A step takes the editor's lock to move
 //! the notes into the tracker and the audio out of its ring (a copy), lets
 //! go, analyzes, and takes it again to hand the columns to the store
-//! ([`LiveInput::take`](crate::editor::input::LiveInput::take), `analyze`,
-//! `give`). So the host's main thread, which a frame and a window opening run
-//! on, waits on this thread for a copy or an append, never for an FFT, and no
+//! ([`LiveInput::take`], then the [`Taken`] it returns: `analyze`, `give`).
+//! So the host's main thread, which a frame and a window opening run on,
+//! waits on this thread for a copy or an append, never for an FFT, and no
 //! longer does any FFT itself. The notes and the clock heartbeat go with the
 //! audio, in the same hold, because the heartbeat's offset is what dates the
 //! audio: observed and then mapped in one hold, as a frame's drain did, where
@@ -71,6 +71,8 @@
 //! is dated, so their join would scroll across the heatmap as a seam (#324).
 //!
 //! [`EditorShared::poll_take_end`]: crate::editor::EditorShared::poll_take_end
+//! [`LiveInput::take`]: crate::editor::input::LiveInput::take
+//! [`Taken`]: crate::editor::input::Taken
 //! [`SpectrumConfig::default`]: harmonigraph_ui::SpectrumConfig
 
 #[cfg(test)]
@@ -80,6 +82,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use crate::editor::input::LiveInput;
 use crate::editor::{EditorLock, EguiState};
 
 /// How often the worker looks for input while the editor window is open.
@@ -119,8 +122,23 @@ pub(crate) struct InputWorker {
     /// rings, ages the picture or ends a take, so the editor then shows no
     /// input until the plug-in is reloaded: a case outside the use, with a
     /// Console line rather than a fallback that would run the analysis on
-    /// the host's main thread.
-    thread: Option<JoinHandle<()>>,
+    /// the host's main thread. The thread owns the input.
+    thread: Option<JoinHandle<Ended>>,
+}
+
+/// What the thread hands back as it ends: nothing, so the input it owned is
+/// freed there rather than on the thread that drops the plugin; in tests, the
+/// input, for them to read (`InputWorker::join`).
+#[cfg(not(test))]
+type Ended = ();
+#[cfg(test)]
+type Ended = LiveInput;
+
+#[cfg(not(test))]
+fn ended(_: LiveInput) {}
+#[cfg(test)]
+fn ended(input: LiveInput) -> LiveInput {
+    input
 }
 
 impl InputWorker {
@@ -128,6 +146,7 @@ impl InputWorker {
         shared: Arc<EditorLock>,
         editor_state: Arc<EguiState>,
         tape: crate::tape::Worker,
+        input: LiveInput,
     ) -> InputWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -140,11 +159,12 @@ impl InputWorker {
             .name("harmonigraph-input-worker".to_string())
             .spawn(move || {
                 raise_to_gui_priority();
-                let mut tape = tape;
+                let (mut tape, mut input) = (tape, input);
                 #[cfg(not(test))]
-                run(&worker, &editor_state, &mut tape, &flag);
+                run(&worker, &editor_state, &mut tape, &mut input, &flag);
                 #[cfg(test)]
-                run(&worker, &editor_state, &mut tape, &flag, &worker_rounds);
+                run(&worker, &editor_state, &mut tape, &mut input, &flag, &worker_rounds);
+                ended(input)
             });
         let thread = match thread {
             Ok(thread) => Some(thread),
@@ -171,17 +191,28 @@ impl InputWorker {
     pub(crate) fn completed_rounds(&self) -> u64 {
         self.rounds.load(Ordering::Acquire)
     }
+
+    /// Stops the thread and waits for it, and what it handed back; `None`
+    /// when it was never spawned, already joined, or ended in a panic outside
+    /// a step. Joining can wait for the current step, one [`SHUT_POLL`]
+    /// sleep at most, and the final drain in [`run`].
+    fn stop_and_join(&mut self) -> Option<Ended> {
+        self.stop.store(true, Ordering::Relaxed);
+        self.thread.take().and_then(|thread| thread.join().ok())
+    }
+
+    /// [`Self::stop_and_join`], for a test that drains the input by hand or
+    /// reads what its analysis ran at.
+    #[cfg(test)]
+    pub(crate) fn join(&mut self) -> Option<LiveInput> {
+        self.stop_and_join()
+    }
 }
 
 impl Drop for InputWorker {
-    /// Stops the thread and waits for it, so the plugin never outlives its own
-    /// worker. Joining can wait for the current step, one [`SHUT_POLL`] sleep
-    /// at most, and the final drain in [`run`].
+    /// Stops the thread, so the plugin never outlives its own worker.
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.stop_and_join();
     }
 }
 
@@ -208,7 +239,10 @@ fn raise_to_gui_priority() {
 thread_local! {
     /// Run between a step's two holds of the lock, just before its FFTs.
     #[allow(clippy::type_complexity)]
-    static BETWEEN_HOLDS: std::cell::RefCell<Option<Box<dyn FnMut(&EditorLock, &crate::editor::input::Taken)>>> = const { std::cell::RefCell::new(None) };
+    static BETWEEN_HOLDS: std::cell::RefCell<Option<Box<dyn FnMut(&EditorLock, &crate::editor::input::Taken<'_>)>>> = const { std::cell::RefCell::new(None) };
+    /// Run just after them, before the second hold.
+    #[allow(clippy::type_complexity)]
+    static ANALYZED: std::cell::RefCell<Option<Box<dyn FnMut(&crate::editor::input::Taken<'_>)>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// One step: take the notes and the audio under the lock, age the picture and
@@ -262,18 +296,23 @@ thread_local! {
 /// until it stops, and a picture that does not show it has nothing new to
 /// draw. What else a step changes (the tape's view, a Console line) is drawn
 /// at the idle poll.
-fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::Worker) {
+fn step(
+    shared: &EditorLock,
+    editor_state: &EguiState,
+    tape: &mut crate::tape::Worker,
+    input: &mut LiveInput,
+) {
     let (taken, struck) = {
         let mut guard = shared.lock();
         let shared = &mut *guard;
-        let now = shared.input.now();
+        let now = shared.clock.now();
         let open = editor_state.is_open();
         let settings = &shared.ui.picture.appearance.spectrum;
         tape.exchange(&mut shared.ui.picture.runtime.tape, settings, open);
         let onset = newest_onset(&shared.ui.picture.runtime);
-        let taken =
-            shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
-        std::mem::swap(&mut shared.input.tape_notes, &mut tape.inbox);
+        // The drain's marks go straight to the tape, which `settle` empties
+        // every step.
+        let taken = input.take(&mut shared.clock, &mut shared.ui.picture, &mut tape.inbox, now);
         if let Some(taken) = &taken {
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
@@ -283,7 +322,7 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
         // decided in `poll_take_end`, so without it here an armed take would
         // run to whenever a frame next noticed, and a Bitwig audio export,
         // which leaves the window shut, would render nothing.
-        let display = shared.input.display_now(now);
+        let display = shared.clock.display_now(now);
         shared.ui.picture.runtime.advance_time(display, &shared.ui.picture.appearance);
         shared.poll_take_end();
         (taken, struck)
@@ -305,7 +344,9 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
     let taken = taken.map(|mut taken| {
         #[cfg(test)]
         BETWEEN_HOLDS.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(shared, &taken)));
-        crate::editor::input::LiveInput::analyze(&mut taken);
+        taken.analyze();
+        #[cfg(test)]
+        ANALYZED.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(&taken)));
         taken
     });
     if taken.is_none() && tape.logs.is_empty() {
@@ -313,8 +354,7 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
     }
     let mut guard = shared.lock();
     let shared = &mut *guard;
-    let resumed =
-        taken.is_some_and(|taken| shared.input.give(&mut shared.ui.picture.runtime, taken));
+    let resumed = taken.is_some_and(|taken| taken.give(&mut shared.ui.picture.runtime));
     for line in tape.logs.drain(..) {
         shared.ui.picture.runtime.console.log(line);
     }
@@ -332,28 +372,29 @@ fn newest_onset(runtime: &harmonigraph_ui::VisualRuntime) -> Option<f64> {
 }
 
 /// A [`step`] that survives its own panic. One would otherwise end the
-/// thread with the analysis out and nothing draining either ring, which
-/// freezes the picture and every duty of a step for the session with
-/// nothing said. Handing the drain to the frames instead would only move the
-/// same panic onto the host's main thread. So the analysis is put back fresh,
-/// the source run restarts so its columns re-anchor, the console says so
-/// once, and the next step carries on.
+/// thread with nothing draining either ring, which freezes the picture and
+/// every duty of a step for the session with nothing said. Handing the drain
+/// to the frames instead would only move the same panic onto the host's main
+/// thread. So the analysis starts fresh, whatever the panic left it in, with
+/// no lock held, the source run restarts so its columns re-anchor, the
+/// console says so once, and the next step carries on.
 ///
 /// Whether the step completed.
 fn guarded_step(
     shared: &EditorLock,
     editor_state: &EguiState,
     tape: &mut crate::tape::Worker,
+    input: &mut LiveInput,
     panicked: &mut bool,
 ) -> bool {
-    let stepped =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| step(shared, editor_state, tape)));
+    let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        step(shared, editor_state, tape, input)
+    }));
     if stepped.is_err() {
-        let mut guard = shared.lock();
-        let shared = &mut *guard;
-        shared.input.recover_analysis();
+        input.restart_analysis();
         if !std::mem::replace(panicked, true) {
             shared
+                .lock()
                 .ui
                 .picture
                 .runtime
@@ -376,13 +417,14 @@ fn run(
     shared: &EditorLock,
     editor_state: &EguiState,
     tape: &mut crate::tape::Worker,
+    input: &mut LiveInput,
     stop: &AtomicBool,
     #[cfg(test)] rounds: &AtomicU64,
 ) {
     let mut panicked = false;
     let mut in_a_row = 0;
     while !stop.load(Ordering::Relaxed) {
-        if guarded_step(shared, editor_state, tape, &mut panicked) {
+        if guarded_step(shared, editor_state, tape, input, &mut panicked) {
             in_a_row = 0;
         } else {
             in_a_row += 1;
@@ -404,8 +446,8 @@ fn run(
     // display payloads before the editor's bank is reclaimed off thread.
     let mut shared = shared.lock();
     let shared = &mut *shared;
-    let now = shared.input.now();
-    shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
+    let now = shared.clock.now();
+    input.drain(&mut shared.clock, &mut shared.ui.picture, &mut tape.inbox, now);
 }
 
 #[cfg(test)]
@@ -430,6 +472,8 @@ mod tests {
         audio_frames: u64,
         editor_state: Arc<EguiState>,
         tape: crate::tape::Worker,
+        /// The input the thread would own.
+        input: LiveInput,
     }
 
     fn tape() -> crate::tape::Worker {
@@ -440,12 +484,8 @@ mod tests {
         let (notes, note_consumer) = harmonigraph_record::publication::channel();
         let (audio, audio_consumer) = crate::audio_ingress::channel(crate::AUDIO_RING_CAPACITY);
         let (recorder, take_control) = harmonigraph_record::channel();
-        let shared = EditorShared::new(
-            note_consumer,
-            audio_consumer,
-            Arc::new(AtomicU32::new(48_000.0f32.to_bits())),
-            take_control,
-        );
+        let shared =
+            EditorShared::new(Arc::new(AtomicU32::new(48_000.0f32.to_bits())), take_control);
         Harness {
             shared: Arc::new(EditorLock::new(shared, Arc::default())),
             recorder,
@@ -454,6 +494,7 @@ mod tests {
             audio_frames: 0,
             editor_state: EguiState::from_size(800, 600),
             tape: tape(),
+            input: LiveInput::new(note_consumer, audio_consumer),
         }
     }
 
@@ -469,7 +510,7 @@ mod tests {
     impl Harness {
         /// One round of the loop the thread runs.
         fn step(&mut self) {
-            super::step(&self.shared, &self.editor_state, &mut self.tape);
+            super::step(&self.shared, &self.editor_state, &mut self.tape, &mut self.input);
         }
 
         /// Mono audio at 48 kHz, enough for the analyzer to fill a window and
@@ -554,7 +595,7 @@ mod tests {
         /// precisely the bug (see `SpectrumAnalysis::feed_source`, the one
         /// thing that carries one to the other).
         fn analyzed_lag(&self) -> f64 {
-            self.shared.lock().input.analysis_lag().expect("a step gave the analysis back")
+            self.input.analysis_lag()
         }
     }
 
@@ -787,39 +828,71 @@ mod tests {
         assert!(h.columns() > 0, "the step analyzed nothing");
     }
 
-    /// A step that panics with the analysis out leaves the next one
-    /// analyzing again, with its columns dated where they belong rather than
-    /// from the frame zero of the run the panic interrupted.
+    /// A step that panics between its holds, before its FFTs or after them,
+    /// leaves the next one analyzing again: with its columns dated where they
+    /// belong rather than from the frame zero of the run the panic
+    /// interrupted, and only its own columns given to the spectrum, none of
+    /// those the panicked step made.
     #[test]
     fn a_panicking_step_leaves_the_next_one_analyzing() {
-        let mut h = harness();
-        h.push_audio(20_000);
-        h.step();
-        let before = h.columns();
-        assert!(before > 0, "the first step analyzed nothing");
-        let newest =
-            |h: &Harness| h.shared.lock().ui.picture.runtime.spectrum.newest_column().unwrap();
-        let first = newest(&h);
+        // The columns 40 000 frames make from a fresh analysis.
+        let fresh = {
+            let mut h = harness();
+            h.push_audio(40_000);
+            h.step();
+            h.columns()
+        };
+        for after_the_ffts in [false, true] {
+            let mut h = harness();
+            h.push_audio(20_000);
+            h.step();
+            let before = h.columns();
+            assert!(before > 0, "the first step analyzed nothing");
+            let newest =
+                |h: &Harness| h.shared.lock().ui.picture.runtime.spectrum.newest_column().unwrap();
+            let first = newest(&h);
 
-        h.push_audio(20_000);
-        BETWEEN_HOLDS.set(Some(Box::new(|_: &EditorLock, _| panic!("a step's bug"))));
-        let mut panicked = false;
-        super::guarded_step(&h.shared, &h.editor_state, &mut h.tape, &mut panicked);
-        BETWEEN_HOLDS.set(None);
-        assert!(panicked, "the hook did not run");
+            h.push_audio(20_000);
+            if after_the_ffts {
+                ANALYZED.set(Some(Box::new(|taken| {
+                    assert!(!taken.columns().is_empty(), "the FFTs made no column to leave behind");
+                    panic!("a step's bug");
+                })));
+            } else {
+                BETWEEN_HOLDS.set(Some(Box::new(|_: &EditorLock, _| panic!("a step's bug"))));
+            }
+            let mut panicked = false;
+            super::guarded_step(
+                &h.shared,
+                &h.editor_state,
+                &mut h.tape,
+                &mut h.input,
+                &mut panicked,
+            );
+            BETWEEN_HOLDS.set(None);
+            ANALYZED.set(None);
+            assert!(panicked, "the hook did not run");
+            assert_eq!(h.columns(), before, "the panicked step gave columns");
 
-        h.push_audio(40_000);
-        h.step();
-        assert!(h.columns() > before, "nothing was analyzed after the panic");
-        // Both newest columns lag their audio's end by the same column lag,
-        // and the audio ends 60 000 frames apart; the restarted run's hop
-        // grid puts its newest column up to a hop (8 ms) short of that.
-        let spacing = newest(&h) - first;
-        assert!(
-            (spacing - 60_000.0 / 48_000.0).abs() < 0.01,
-            "the newest columns are {spacing:.3} s apart where their audio is 1.25 s: the \
-             columns after the panic are dated from the interrupted run",
-        );
+            h.push_audio(40_000);
+            h.step();
+            assert_eq!(
+                h.columns() - before,
+                fresh,
+                "after the FFTs: {after_the_ffts}. The step after the panic gave other than \
+                 its own columns",
+            );
+            // Both newest columns lag their audio's end by the same column lag,
+            // and the audio ends 60 000 frames apart; the restarted run's hop
+            // grid puts its newest column up to a hop (8 ms) short of that.
+            let spacing = newest(&h) - first;
+            assert!(
+                (spacing - 60_000.0 / 48_000.0).abs() < 0.01,
+                "after the FFTs: {after_the_ffts}. The newest columns are {spacing:.3} s apart \
+                 where their audio is 1.25 s: the columns after the panic are dated from the \
+                 interrupted run",
+            );
+        }
     }
 
     /// A step analyzes under the settings it took the audio with, even if they
@@ -887,7 +960,14 @@ mod tests {
         let mut h = harness();
         h.push_audio(20_000);
 
-        let analyzer = InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), tape());
+        // The harness's input, which the thread then owns; the harness keeps
+        // one nothing feeds.
+        let unfed = LiveInput::new(
+            harmonigraph_record::publication::channel().1,
+            crate::audio_ingress::channel(1).1,
+        );
+        let input = std::mem::replace(&mut h.input, unfed);
+        let analyzer = InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), tape(), input);
         // Polled to a deadline, so a loaded machine cannot fail this for being
         // slow — it is asserting that steps happen at all, not how fast.
         let started = Instant::now();

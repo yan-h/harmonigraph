@@ -160,8 +160,9 @@ quick run cargo clippy --workspace --all-targets -- -D warnings
 # run of harmonigraph-clap's own tests: its unit tests and the CLAP boundary and
 # auxiliary fixtures. harmonigraph-plugin's dev-dependency already turns the
 # fixture feature (which brings the allocation guard) on in a workspace run;
-# naming it here keeps `clap_boundary`, whose `required-features` would
-# otherwise skip it without a word, running if that dev-dependency ever changes.
+# naming it here keeps `clap_boundary` and `clap_auxiliary`, whose
+# `required-features` would otherwise skip them without a word, running if that
+# dev-dependency ever changes.
 #
 # harmonigraph-render is EXCLUDED because this run was the SECOND of two copies
 # of its tests and the wrong one to keep: 282 of them here in 47.7s, 284 of them

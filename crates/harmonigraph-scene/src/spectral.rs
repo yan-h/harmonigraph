@@ -234,6 +234,7 @@ pub type SpectralLevels = [u8; SPECTRUM_BINS];
 /// pitch ramp's, which is the exact confusion the two schemes exist to
 /// prevent. [`silent`](Self::silent) is the one state where none of it is
 /// read.
+#[derive(Debug, PartialEq)]
 pub struct SpectralPaint {
     /// The FREQUENCY scheme's ramp — `SpectrumConfig::spectrogram_gradient`
     /// through [`pitch_ramp_lut`], the same gradient
@@ -507,14 +508,18 @@ impl RingGate {
         // position is untouched: at a gate of `SPECTRAL_GATE_MIN` the floor is
         // zero, silence still opens every bucket, and that picture — the
         // analyzer's whole reading at once — is the one thing the floor is for.
-        const GRID_STEP: f32 = 1.0 / 255.0;
-        let gate = if held {
-            (self.gate - self.hysteresis).max(self.gate.min(GRID_STEP))
-        } else {
-            self.gate
-        };
+        let gate = if held { closing_threshold(self.gate, self.hysteresis) } else { self.gate };
         f32::from(self.peaks[bucket]) / 255.0 >= gate
     }
+}
+
+/// The level an open bucket is held to, below the opening `gate` by the
+/// `hysteresis` band but never under one step of the `u8` level grid while the
+/// gate stands above it (see [`RingGate::opens`] for why), and 0 at the gate's
+/// own floor. The threshold widget marks the same line.
+pub fn closing_threshold(gate: f32, hysteresis: f32) -> f32 {
+    const GRID_STEP: f32 = 1.0 / 255.0;
+    (gate - hysteresis).max(gate.min(GRID_STEP))
 }
 
 /// How far open the gate stands at every bucket of the analyzer's grid, carried

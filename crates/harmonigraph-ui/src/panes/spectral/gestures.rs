@@ -169,14 +169,30 @@ pub(super) fn drag_split(
 /// preview and the offline renderer draw from a size their own layout fixes,
 /// and a hold means nothing there.
 #[derive(Default)]
-pub(crate) struct SpectrumHold(Option<Held>);
+pub(crate) struct SpectrumHold {
+    held: Option<Held>,
+    /// Re-take the hold from the Analyzer regions' saved geometry on the next
+    /// fully open frame ([`Regions`](super::collapse::Regions)): set by a load
+    /// and by a new window, which lay the Analyzer out afresh. An unfold needs
+    /// none, since a fold no longer changes the pane's size and the hold keeps
+    /// the spectrum's points. Here rather than on the regions, which a project
+    /// saves, because it is about the window this session is drawing in.
+    pub(super) relayout: bool,
+}
+
+impl SpectrumHold {
+    /// Re-take the hold from the saved geometry on the next fully open frame.
+    pub(crate) fn relayout(&mut self) {
+        self.relayout = true;
+    }
+}
 
 /// Reopening editor regions restores their measured split without writing the
 /// appearance dial that recorded takes and the Video preview share.
 pub(super) fn restore_spectrum(state: &mut PictureState, depths: [f32; 2]) {
     let cfg = state.appearance.spectrum;
     let depth = depths[0] + depths[1];
-    state.surfaces.spectrum_hold.0 = (depth > 0.0).then_some(Held {
+    state.surfaces.spectrum_hold.held = (depth > 0.0).then_some(Held {
         dial: cfg.roll_fraction,
         depth: depths[0] / super::axes::spectrum_share(&cfg).max(f32::EPSILON),
         vertical: cfg.orientation.is_time_vertical(),
@@ -233,7 +249,7 @@ pub(super) const FAR_REGION_FLOOR_PT: f32 = 64.0;
 pub(super) fn spectrum_split(state: &PictureState, surface: usize) -> f32 {
     let cfg = &state.appearance.spectrum;
     let dialled = spectrum_share(cfg);
-    match state.surfaces.spectrum_hold.0 {
+    match state.surfaces.spectrum_hold.held {
         // A dial of the WHOLE axis is a state rather than a size: the far
         // region turned off, or the divider dragged shut — which the pane
         // keeps grabbable precisely so that shutting it is not one-way (see
@@ -280,7 +296,7 @@ pub(crate) fn hold_spectrum(state: &mut PictureState, pane: egui::Vec2) {
     // keep (see [`spectrum_split`]). Dropped rather than left standing: what
     // re-opens it is a drag, which re-dials anyway.
     if share >= 1.0 {
-        state.surfaces.spectrum_hold.0 = None;
+        state.surfaces.spectrum_hold.held = None;
         return;
     }
     let vertical = cfg.orientation.is_time_vertical();
@@ -295,14 +311,14 @@ pub(crate) fn hold_spectrum(state: &mut PictureState, pane: egui::Vec2) {
     if !depth.is_finite() || depth <= 0.0 {
         return;
     }
-    let held = match state.surfaces.spectrum_hold.0 {
+    let held = match state.surfaces.spectrum_hold.held {
         Some(held) if held.dial == cfg.roll_fraction && held.vertical == vertical => held,
         // Dialled since this last looked — so THIS is the picture to keep, at
         // the size and along the axis it was set on. A dial is already the
         // answer for the pane it was made on, so nothing is derived from it
         // until that pane changes.
         _ => {
-            state.surfaces.spectrum_hold.0 =
+            state.surfaces.spectrum_hold.held =
                 Some(Held { dial: cfg.roll_fraction, depth, vertical, held: share });
             return;
         }
@@ -314,7 +330,7 @@ pub(crate) fn hold_spectrum(state: &mut PictureState, pane: egui::Vec2) {
     // its share of a pane it is supposed to be filling more of.
     let kept = share * held.depth;
     let keep = kept.min((depth - FAR_REGION_FLOOR_PT).max(share * depth)) / depth;
-    state.surfaces.spectrum_hold.0 = Some(Held { held: keep.clamp(0.0, 1.0), ..held });
+    state.surfaces.spectrum_hold.held = Some(Held { held: keep.clamp(0.0, 1.0), ..held });
 }
 
 /// How much one point of scroll zooms, as an exponent — a full notch of a

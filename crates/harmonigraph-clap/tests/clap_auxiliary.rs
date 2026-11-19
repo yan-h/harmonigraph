@@ -1,18 +1,11 @@
 //! Missing inputs are silent; a missing output leaves the callback without audio.
 use clap_sys::{
     audio_buffer::clap_audio_buffer,
-    factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory},
-    host::clap_host,
-    plugin::clap_plugin,
     process::{CLAP_PROCESS_CONTINUE, clap_process},
-    version::CLAP_VERSION,
 };
 use harmonigraph_clap::prelude::*;
-use std::{
-    ffi::{c_char, c_void},
-    ptr,
-    sync::Arc,
-};
+use harmonigraph_clap::testing::{Device, Host};
+use std::{ptr, sync::Arc};
 
 #[derive(Default)]
 struct AuxiliaryFixture;
@@ -52,51 +45,11 @@ impl Plugin for AuxiliaryFixture {
 
 export_clap!(AuxiliaryFixture);
 
-unsafe extern "C" fn extension(_: *const clap_host, _: *const c_char) -> *const c_void {
-    ptr::null()
-}
-unsafe extern "C" fn request(_: *const clap_host) {}
-
-struct Device {
-    plugin: *const clap_plugin,
-    _host: Box<clap_host>,
-}
-
-impl Device {
-    fn new() -> Self {
-        let host = Box::new(clap_host {
-            clap_version: CLAP_VERSION,
-            host_data: ptr::null_mut(),
-            name: c"fixture".as_ptr(),
-            vendor: c"fixture".as_ptr(),
-            url: c"".as_ptr(),
-            version: c"1".as_ptr(),
-            get_extension: Some(extension),
-            request_restart: Some(request),
-            request_process: Some(request),
-            request_callback: Some(request),
-        });
-        let factory = unsafe { (clap_entry.get_factory.unwrap())(CLAP_PLUGIN_FACTORY_ID.as_ptr()) }
-            .cast::<clap_plugin_factory>();
-        let plugin = unsafe {
-            ((*factory).create_plugin.unwrap())(factory, &*host, c"fixture.auxiliary".as_ptr())
-        };
-        assert!(!plugin.is_null());
-        assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
-        assert!(unsafe { ((*plugin).activate.unwrap())(plugin, 48000.0, 1, 64) });
-        assert!(unsafe { ((*plugin).start_processing.unwrap())(plugin) });
-        Self { plugin, _host: host }
-    }
-}
-
-impl Drop for Device {
-    fn drop(&mut self) {
-        unsafe {
-            ((*self.plugin).stop_processing.unwrap())(self.plugin);
-            ((*self.plugin).deactivate.unwrap())(self.plugin);
-            ((*self.plugin).destroy.unwrap())(self.plugin);
-        }
-    }
+/// The fixture, created, activated at 48 kHz and 64 frames, and processing.
+fn device() -> Device {
+    let mut device = Device::new(&clap_entry, c"fixture.auxiliary", Host::new());
+    device.activate(48000.0, 64);
+    device
 }
 
 fn descriptor(channels: &mut [*mut f32; 2]) -> clap_audio_buffer {
@@ -115,7 +68,7 @@ fn descriptor(channels: &mut [*mut f32; 2]) -> clap_audio_buffer {
 /// audio, and the output untouched.
 #[test]
 fn omitted_auxiliary_inputs_are_silent_and_a_missing_main_output_has_no_audio() {
-    let device = Device::new();
+    let device = device();
     for (block, (frames, auxiliary, channels, output)) in [
         (32, true, 2, true),
         // After a full port, so a channel left as it was fails.
@@ -153,10 +106,7 @@ fn omitted_auxiliary_inputs_are_silent_and_a_missing_main_output_has_no_audio() 
             in_events: ptr::null(),
             out_events: ptr::null(),
         };
-        assert_eq!(
-            unsafe { ((*device.plugin).process.unwrap())(device.plugin, &process) },
-            CLAP_PROCESS_CONTINUE,
-        );
+        assert_eq!(device.process_raw(&process), CLAP_PROCESS_CONTINUE);
         let expected = |sidechain: bool| {
             let mut expected = [-1.0; 64];
             if output {

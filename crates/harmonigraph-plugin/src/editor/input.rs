@@ -6,46 +6,53 @@ use egui_baseview::baseview::FrameTiming;
 
 use super::clock::ClockMapper;
 
-/// The sole display and analyzer ingress, retained for the plugin lifetime.
-/// Synchronous draining never acquires the audio callback or a window.
-pub(crate) struct LiveInput {
-    pub(super) consumer: harmonigraph_record::publication::Consumer,
-    pub(super) audio_consumer: crate::audio_ingress::Consumer,
+/// The clock frames draw by, the only part of the input a frame reads: it
+/// stays under the editor lock, while the input itself ([`LiveInput`]) is the
+/// input worker's.
+pub(crate) struct DisplayClock {
     /// Latest rate is for recording controls, never for interpreting queued audio.
     pub(super) sample_rate_bits: Arc<AtomicU32>,
-    /// Expected next source frame and epoch; gaps restart the streaming analyzer.
-    pub(super) audio_position: Option<(u64, u64)>,
-    /// Presentation seconds of the retained run’s frame zero, before mapping.
-    pub(super) audio_origin: f64,
     /// Wall-clock epoch, also used to age the picture when callbacks stop.
     pub(super) start: Instant,
     /// Audio->GUI clock mapping (see ClockMapper).
-    pub(super) clock: ClockMapper,
-    /// The buffers the last [`Taken`] came back in, so a step allocates only
-    /// when it needs more than any before it.
-    pub(super) spare: TakenAudio,
-    /// The analysis over this input, dated from `audio_origin`: out with a
-    /// [`Taken`] between [`Self::take`] and [`Self::give`], and `None` while it
-    /// is, so a step that panicked in between leaves it for
-    /// [`Self::recover_analysis`] to replace.
-    pub(super) analysis: Option<harmonigraph_ui::SpectrumAnalysis>,
-    /// What the display did to its voices, at presentation times, for the
-    /// tape to place by song position; the input worker swaps it out each
-    /// step. Bounded, so nothing grows where no worker runs.
-    pub(crate) tape_notes: Vec<(f64, crate::tape::notes::Mark)>,
-    pub(super) recorder: crate::tape::notes::Recorder,
+    pub(super) mapper: ClockMapper,
 }
 
-/// The audio one [`LiveInput::take`] moved out of the ring, and the analysis
-/// moved out with it: what [`LiveInput::analyze`] runs without the lock.
-pub(crate) struct Taken {
+/// The sole display and analyzer ingress, retained for the plugin lifetime.
+/// Synchronous draining never acquires the audio callback or a window.
+///
+/// The input worker owns it ([`crate::background`]) and nothing under the
+/// editor lock reads it: a step takes the lock for what the drain writes,
+/// the tracker and the [`DisplayClock`], and to hand the columns to the
+/// spectrum. So the analysis never leaves it, and a step that panicked
+/// anywhere leaves it here for [`Self::restart_analysis`].
+pub(crate) struct LiveInput {
+    consumer: harmonigraph_record::publication::Consumer,
+    audio_consumer: crate::audio_ingress::Consumer,
+    /// Expected next source frame and epoch; gaps restart the streaming analyzer.
+    audio_position: Option<(u64, u64)>,
+    /// Presentation seconds of the retained run’s frame zero, before mapping.
+    audio_origin: f64,
+    /// What a [`Taken`] carries, in buffers kept from one to the next, so a
+    /// step allocates only when it needs more than any before it.
+    scratch: Scratch,
+    /// The analysis over this input, dated from `audio_origin`.
     analysis: harmonigraph_ui::SpectrumAnalysis,
-    audio: TakenAudio,
+    recorder: crate::tape::notes::Recorder,
 }
 
-/// [`Taken`]'s buffers, which outlive it in [`LiveInput::spare`].
+/// The audio one [`LiveInput::take`] moved out of the ring, until
+/// [`Taken::give`] hands what [`Taken::analyze`] made of it to the spectrum:
+/// a borrow of the input, so the three run in that order, once each, and
+/// nothing else drains the input in between. A step holds it across the
+/// lock's release, which is where the FFTs run.
+pub(crate) struct Taken<'a> {
+    input: &'a mut LiveInput,
+}
+
+/// [`Taken`]'s buffers.
 #[derive(Default)]
-pub(crate) struct TakenAudio {
+struct Scratch {
     /// The settings when the audio was taken, which analyze it and smooth
     /// the curve it moves.
     config: harmonigraph_ui::SpectrumConfig,
@@ -57,7 +64,7 @@ pub(crate) struct TakenAudio {
     deliveries: Vec<harmonigraph_ui::Delivery>,
 }
 
-/// One callback's block of [`TakenAudio::samples`].
+/// One callback's block of [`Scratch::samples`].
 struct TakenBlock {
     /// The block starts a new retained source run.
     restart: bool,
@@ -69,12 +76,13 @@ struct TakenBlock {
     block: crate::audio_ingress::Block,
 }
 
-impl Taken {
+impl Taken<'_> {
     /// Each block's descriptor and samples, in drain order.
     pub(crate) fn blocks(&self) -> impl Iterator<Item = (crate::audio_ingress::Block, &[f32])> {
+        let scratch = &self.input.scratch;
         let mut start = 0;
-        self.audio.blocks.iter().map(move |block| {
-            let samples = &self.audio.samples[start..start + block.len];
+        scratch.blocks.iter().map(move |block| {
+            let samples = &scratch.samples[start..start + block.len];
             start += block.len;
             (block.block, samples)
         })
@@ -83,25 +91,68 @@ impl Taken {
     pub(crate) fn clocked_blocks(
         &self,
     ) -> impl Iterator<Item = (crate::audio_ingress::Block, f64)> + '_ {
-        let offset = self.audio.offset;
-        self.audio
-            .blocks
-            .iter()
-            .map(move |taken| (taken.block, taken.block.presentation() + offset))
+        let scratch = &self.input.scratch;
+        let offset = scratch.offset;
+        scratch.blocks.iter().map(move |taken| (taken.block, taken.block.presentation() + offset))
     }
     /// Whether this step found audio, and has analyzed none of it yet.
     #[cfg(test)]
     pub(crate) fn unanalyzed_audio(&self) -> bool {
-        !self.audio.blocks.is_empty() && self.audio.deliveries.is_empty()
+        let scratch = &self.input.scratch;
+        !scratch.blocks.is_empty() && scratch.deliveries.is_empty()
+    }
+    /// The columns the analysis has made so far, as `(time, power)`.
+    #[cfg(test)]
+    pub(crate) fn columns(&self) -> Vec<(f64, Vec<f32>)> {
+        (self.input.scratch.deliveries.iter())
+            .filter_map(harmonigraph_ui::Delivery::column)
+            .map(|column| (column.time(), column.power().to_vec()))
+            .collect()
+    }
+    /// Run the FFTs over what was taken, with no lock held.
+    pub(crate) fn analyze(&mut self) {
+        let LiveInput { analysis, scratch, .. } = &mut *self.input;
+        let mut start = 0;
+        for block in &scratch.blocks {
+            if block.restart {
+                analysis.restart();
+                scratch.deliveries.push(harmonigraph_ui::Delivery::Restart);
+            }
+            let samples = &scratch.samples[start..start + block.len];
+            start += block.len;
+            analysis.feed_source(
+                samples,
+                block.block.format.channels,
+                block.block.format.sample_rate,
+                block.origin,
+                &scratch.config,
+                |delivery| scratch.deliveries.push(delivery),
+            );
+        }
+    }
+    /// Hand what [`Self::analyze`] made to the spectrum. Whether that brought
+    /// sound back to a spectrum gone still
+    /// ([`AudioSpectrum::give`](harmonigraph_ui::AudioSpectrum::give)).
+    pub(crate) fn give(self, runtime: &mut harmonigraph_ui::VisualRuntime) -> bool {
+        let scratch = &mut self.input.scratch;
+        runtime.spectrum.give(scratch.deliveries.drain(..), &scratch.config)
     }
 }
 
 impl LiveInput {
-    /// The host sample rate the audio thread published, as an f32. It lives
-    /// in an `AtomicU32` as the f32's bit pattern (a lock-free f32); this
-    /// names the bit-cast so its readers can't spell it inconsistently.
-    pub(super) fn sample_rate(&self) -> f32 {
-        f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed))
+    pub(crate) fn new(
+        consumer: harmonigraph_record::publication::Consumer,
+        audio_consumer: crate::audio_ingress::Consumer,
+    ) -> Self {
+        LiveInput {
+            consumer,
+            audio_consumer,
+            audio_position: None,
+            audio_origin: 0.0,
+            scratch: Scratch::default(),
+            analysis: Default::default(),
+            recorder: Default::default(),
+        }
     }
     /// Drain exactly what the process callback sent to the live analyzer.
     /// Test-only because production drains through [`Self::take`], which also
@@ -113,39 +164,57 @@ impl LiveInput {
         samples
     }
     /// Drain note events from the audio thread into the tracker, mapping
-    /// their sample-clock timestamps onto the GUI clock. A fresh audio
-    /// heartbeat anchors the whole stream before historical records are
-    /// mapped; delayed batches never reset that anchor.
-    fn drain_into_tracker(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, now: f64) {
+    /// their sample-clock timestamps onto the GUI clock, and what the display
+    /// did to its voices into `marks`, at presentation times, for the tape to
+    /// place by song position (bounded by [`crate::tape::notes::NOTES`]).
+    /// A fresh audio heartbeat anchors the whole stream before historical
+    /// records are mapped; delayed batches never reset that anchor.
+    fn drain_into_tracker(
+        &mut self,
+        clock: &mut DisplayClock,
+        picture: &mut harmonigraph_ui::PictureState,
+        marks: &mut Vec<(f64, crate::tape::notes::Mark)>,
+        now: f64,
+    ) {
+        let clock = &mut clock.mapper;
         if let Some(observation) = self.consumer.clock() {
-            self.clock.observe(observation, now);
+            clock.observe(observation, now);
         }
-        let Some(offset) = self.clock.offset else { return };
-        let tracker = &mut runtime.tracker;
-        let (recorder, tape) = (&mut self.recorder, &mut self.tape_notes);
+        let Some(offset) = clock.offset else { return };
+        let tracker = &mut picture.runtime.tracker;
+        let recorder = &mut self.recorder;
         self.consumer.drain(|event| {
             let result = tracker.handle_canonical_mapped(event, offset);
             debug_assert!(result.is_ok(), "validated canonical publication");
-            recorder.record(tracker, event.time(), tape);
+            recorder.record(tracker, event.time(), marks);
             true
         });
     }
     /// Move the audio ring's blocks out, mapped to the GUI clock with the
-    /// offset [`Self::drain_into_tracker`] has just observed, and the
-    /// analysis with them; `None` until a heartbeat has given that offset,
-    /// leaving the audio in the ring as before.
+    /// offset [`Self::drain_into_tracker`] has just observed; `None` until a
+    /// heartbeat has given that offset, leaving the audio in the ring as
+    /// before, and when the ring held none.
     ///
-    /// Always drains AND (in [`Self::analyze`]) always feeds. There is no
+    /// Always drains AND (in [`Taken::analyze`]) always feeds. There is no
     /// display state that makes the samples unwanted: the curve and the
     /// spectrogram read this one analyzer, the curve is always drawn, and
     /// feeding it is also what drives smooth repaint while anything it heard
     /// is still on screen (`harmonigraph_ui::Reason::Audible`).
-    fn take_audio(&mut self, appearance: &harmonigraph_ui::AppearanceDocument) -> Option<Taken> {
+    fn take_audio(
+        &mut self,
+        clock: &DisplayClock,
+        picture: &harmonigraph_ui::PictureState,
+    ) -> Option<Taken<'_>> {
+        let audio = &mut self.scratch;
+        // Emptied at every take rather than once given, so what a step that
+        // panicked before giving left behind is never given again.
+        audio.samples.clear();
+        audio.blocks.clear();
+        audio.deliveries.clear();
         // One clock conversion per take, shared with note delivery and made
         // in the same hold, observed and then mapped as a frame's drain did.
-        let offset = self.clock.offset?;
-        let mut audio = std::mem::take(&mut self.spare);
-        audio.config = appearance.spectrum;
+        let offset = clock.mapper.offset?;
+        audio.config = picture.appearance.spectrum;
         audio.offset = offset;
         self.audio_consumer.drain(|block, samples| {
             let position = (block.epoch, block.first_frame);
@@ -162,71 +231,79 @@ impl LiveInput {
             });
             self.audio_position = Some((block.epoch, block.first_frame + block.frames as u64));
         });
-        // Nothing to analyze: leave the analysis where it is, and spare the
-        // caller a second hold to give back nothing.
-        if audio.blocks.is_empty() {
-            self.spare = audio;
-            return None;
-        }
-        // Every step gives the analysis back, and a step that panicked with
-        // it out has it replaced by `recover_analysis` before the next.
-        debug_assert!(self.analysis.is_some(), "the analysis was given back");
-        let analysis = self.analysis.take().unwrap_or_default();
-        Some(Taken { analysis, audio })
-    }
-    /// Run the FFTs over what [`Self::take`] moved out, with no lock held.
-    pub(crate) fn analyze(taken: &mut Taken) {
-        let Taken { analysis, audio, .. } = taken;
-        let mut start = 0;
-        for block in &audio.blocks {
-            if block.restart {
-                analysis.restart();
-                audio.deliveries.push(harmonigraph_ui::Delivery::Restart);
-            }
-            let samples = &audio.samples[start..start + block.len];
-            start += block.len;
-            analysis.feed_source(
-                samples,
-                block.block.format.channels,
-                block.block.format.sample_rate,
-                block.origin,
-                &audio.config,
-                |delivery| audio.deliveries.push(delivery),
-            );
-        }
+        // Nothing to analyze: spare the caller a second hold to give back
+        // nothing.
+        (!self.scratch.blocks.is_empty()).then_some(Taken { input: self })
     }
     /// The lag the analysis runs at, which tells a test the resolution it
-    /// analyzes under; `None` while a step has it out.
+    /// analyzes under.
     #[cfg(test)]
-    pub(crate) fn analysis_lag(&self) -> Option<f64> {
-        self.analysis.as_ref().map(harmonigraph_ui::SpectrumAnalysis::lag)
+    pub(crate) fn analysis_lag(&self) -> f64 {
+        self.analysis.lag()
     }
-    /// Put a fresh analysis back if a panic between [`Self::take`] and
-    /// [`Self::give`] lost the one taken, and start the source run over, so the
+    /// Start a fresh analysis after a step panicked, with the one it left
+    /// in whatever state the panic did, and start the source run over, so the
     /// next block re-anchors the fresh analyzer's grid instead of extending
-    /// the interrupted run's.
-    pub(crate) fn recover_analysis(&mut self) {
-        if self.analysis.is_none() {
-            self.analysis = Some(Default::default());
-            self.audio_position = None;
+    /// the interrupted run's. Needs no lock: nothing under it is touched.
+    pub(crate) fn restart_analysis(&mut self) {
+        self.analysis = Default::default();
+        self.audio_position = None;
+    }
+    /// The locked half of a step: the notes into the tracker and their
+    /// marks into `marks` ([`Self::drain_into_tracker`]), then the audio out
+    /// of its ring, for [`Taken::analyze`] then [`Taken::give`].
+    /// Input feeding does not prune: its callers age the picture after it,
+    /// the input worker in the same hold and a frame in `begin_frame`.
+    pub(crate) fn take(
+        &mut self,
+        clock: &mut DisplayClock,
+        picture: &mut harmonigraph_ui::PictureState,
+        marks: &mut Vec<(f64, crate::tape::notes::Mark)>,
+        now: f64,
+    ) -> Option<Taken<'_>> {
+        self.drain_into_tracker(clock, picture, marks, now);
+        self.take_audio(clock, picture)
+    }
+    /// A whole step with the lock held throughout: take, analyze, give. The
+    /// input worker splits the same three around its lock; this is them in
+    /// one, for its final drain and for tests.
+    pub(crate) fn drain(
+        &mut self,
+        clock: &mut DisplayClock,
+        picture: &mut harmonigraph_ui::PictureState,
+        marks: &mut Vec<(f64, crate::tape::notes::Mark)>,
+        now: f64,
+    ) {
+        if let Some(mut taken) = self.take(clock, picture, marks, now) {
+            taken.analyze();
+            taken.give(&mut picture.runtime);
         }
     }
-    /// Hand what [`Self::analyze`] made to the spectrum, and put the analysis
-    /// back. Whether that brought sound back to a spectrum gone still
-    /// ([`AudioSpectrum::give`](harmonigraph_ui::AudioSpectrum::give)).
-    pub(crate) fn give(
+    /// [`Self::drain`] with a delivery tap: the columns its analysis made, as
+    /// `(time, power)`, whether or not the history kept them.
+    #[cfg(test)]
+    pub(crate) fn drain_columns(
         &mut self,
-        runtime: &mut harmonigraph_ui::VisualRuntime,
-        taken: Taken,
-    ) -> bool {
-        let Taken { analysis, mut audio } = taken;
-        let resumed = runtime.spectrum.give(audio.deliveries.drain(..), &audio.config);
-        debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
-        self.analysis = Some(analysis);
-        audio.samples.clear();
-        audio.blocks.clear();
-        self.spare = audio;
-        resumed
+        clock: &mut DisplayClock,
+        picture: &mut harmonigraph_ui::PictureState,
+        now: f64,
+    ) -> Vec<(f64, Vec<f32>)> {
+        let Some(mut taken) = self.take(clock, picture, &mut Vec::new(), now) else {
+            return Vec::new();
+        };
+        taken.analyze();
+        let columns = taken.columns();
+        taken.give(&mut picture.runtime);
+        columns
+    }
+}
+
+impl DisplayClock {
+    /// The host sample rate the audio thread published, as an f32. It lives
+    /// in an `AtomicU32` as the f32's bit pattern (a lock-free f32); this
+    /// names the bit-cast so its readers can't spell it inconsistently.
+    pub(super) fn sample_rate(&self) -> f32 {
+        f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed))
     }
     /// The wall clock used to observe incoming batches: seconds since
     /// the PLUGIN was instantiated, not since the window opened.
@@ -268,84 +345,32 @@ impl LiveInput {
             .map_or(observed, |target| target.saturating_duration_since(self.start).as_secs_f64())
     }
     pub(crate) fn display_now(&mut self, wall_now: f64) -> f64 {
-        self.clock.now(wall_now)
-    }
-    /// The locked half of a step: the notes into the tracker, then the
-    /// audio out of its ring with the analysis alongside, for
-    /// [`Self::analyze`] then [`Self::give`].
-    /// Input feeding does not prune: its callers age the picture after it,
-    /// the input worker in the same hold and a frame in `begin_frame`.
-    pub(crate) fn take(
-        &mut self,
-        runtime: &mut harmonigraph_ui::VisualRuntime,
-        appearance: &harmonigraph_ui::AppearanceDocument,
-        now: f64,
-    ) -> Option<Taken> {
-        self.drain_into_tracker(runtime, now);
-        self.take_audio(appearance)
-    }
-    /// A whole step with the lock held throughout: take, analyze, give. The
-    /// input worker splits the same three around its lock; this is them in
-    /// one, for its final drain and for tests.
-    pub(crate) fn drain(
-        &mut self,
-        runtime: &mut harmonigraph_ui::VisualRuntime,
-        appearance: &harmonigraph_ui::AppearanceDocument,
-        now: f64,
-    ) {
-        if let Some(mut taken) = self.take(runtime, appearance, now) {
-            Self::analyze(&mut taken);
-            self.give(runtime, taken);
-        }
-    }
-    /// [`Self::drain`] with a delivery tap: the columns its analysis made, as
-    /// `(time, power)`, whether or not the history kept them.
-    #[cfg(test)]
-    pub(crate) fn drain_columns(
-        &mut self,
-        runtime: &mut harmonigraph_ui::VisualRuntime,
-        appearance: &harmonigraph_ui::AppearanceDocument,
-        now: f64,
-    ) -> Vec<(f64, Vec<f32>)> {
-        let Some(mut taken) = self.take(runtime, appearance, now) else { return Vec::new() };
-        Self::analyze(&mut taken);
-        let columns = (taken.audio.deliveries.iter())
-            .filter_map(harmonigraph_ui::Delivery::column)
-            .map(|column| (column.time(), column.power().to_vec()))
-            .collect();
-        self.give(runtime, taken);
-        columns
+        self.mapper.now(wall_now)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::shared::EditorShared;
-    use super::FrameTiming;
+    use super::{FrameTiming, LiveInput};
     use harmonigraph_core::notes::{NoteEvent, SourceId};
     use std::sync::Arc;
 
-    fn audio_harness(capacity: usize) -> (crate::audio_ingress::Producer, EditorShared) {
+    fn editor() -> EditorShared {
+        let (_recorder, control) = harmonigraph_record::channel();
+        EditorShared::new(Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())), control)
+    }
+
+    fn audio_harness(capacity: usize) -> (crate::audio_ingress::Producer, EditorShared, LiveInput) {
         let (_notes, consumer) = harmonigraph_record::publication::channel();
         let (audio, audio_consumer) = crate::audio_ingress::channel(capacity);
-        let (_recorder, control) = harmonigraph_record::channel();
-        let mut shared = EditorShared::new(
-            consumer,
-            audio_consumer,
-            Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            control,
-        );
-        shared.input.clock.observe(0.0, 0.0);
-        (audio, shared)
+        let mut shared = editor();
+        shared.clock.mapper.observe(0.0, 0.0);
+        (audio, shared, LiveInput::new(consumer, audio_consumer))
     }
 
-    fn drain_audio(shared: &mut EditorShared, now: f64) {
-        shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
-    }
-
-    fn drain_columns(shared: &mut EditorShared, now: f64) -> Vec<(f64, Vec<f32>)> {
-        let picture = &mut shared.ui.picture;
-        shared.input.drain_columns(&mut picture.runtime, &picture.appearance, now)
+    fn drain_audio(input: &mut LiveInput, shared: &mut EditorShared, now: f64) {
+        input.drain(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), now);
     }
 
     /// Callbacks a 144 Hz display link ran late by these amounts — the spread
@@ -355,9 +380,9 @@ mod tests {
     /// draws when it ran.
     #[test]
     fn frames_draw_at_their_refresh_however_late_the_callback_ran() {
-        let (_audio, mut shared) = audio_harness(1024);
+        let (_audio, mut shared, _input) = audio_harness(1024);
         let refresh = 1.0 / 144.0;
-        let start = shared.input.start;
+        let start = shared.clock.start;
         // The media clock's origin is unrelated to the plugin's.
         let media = 322_510.0;
         let mut drawn = Vec::new();
@@ -372,18 +397,18 @@ mod tests {
                 refresh,
                 divisor: 1,
             };
-            let wall = shared.input.frame_wall(Some(timing), fired);
+            let wall = shared.clock.frame_wall(Some(timing), fired);
             if late_ms / 1000.0 < refresh {
                 assert!(wall >= fired, "drawn before its own callback ran, at {late_ms} ms late");
             }
-            drawn.push(shared.input.display_now(wall));
+            drawn.push(shared.clock.display_now(wall));
         }
         for step in drawn.windows(2).map(|pair| pair[1] - pair[0]) {
             assert!((step - refresh).abs() < 1e-6, "stepped {step} s against {refresh} s");
         }
 
         let observed = drawn.last().unwrap() + 0.05;
-        assert_eq!(shared.input.frame_wall(None, observed), observed);
+        assert_eq!(shared.clock.frame_wall(None, observed), observed);
         // A target AppKit got wrong, which would hold the picture still.
         for target_timestamp in [media + observed + 5.0, f64::NAN] {
             let fired_at = start + std::time::Duration::from_secs_f64(observed);
@@ -395,7 +420,7 @@ mod tests {
                 refresh,
                 divisor: 1,
             };
-            assert_eq!(shared.input.frame_wall(Some(timing), observed), observed);
+            assert_eq!(shared.clock.frame_wall(Some(timing), observed), observed);
         }
     }
 
@@ -412,7 +437,7 @@ mod tests {
         for (callback, drain_every, delay) in
             [(frames, 1, 0.0), (127, 1, 0.0), (511, 7, 0.3), (4093, 99, 3.0)]
         {
-            let (mut tx, mut shared) = audio_harness(crate::AUDIO_RING_CAPACITY);
+            let (mut tx, mut shared, mut input) = audio_harness(crate::AUDIO_RING_CAPACITY);
             let mut count = 0;
             let mut actual = Vec::new();
             for first in (0..frames).step_by(callback) {
@@ -432,10 +457,18 @@ mod tests {
                 count += 1;
                 if count % drain_every == 0 {
                     let now = 10.0 + end as f64 / 48_000.0 + delay;
-                    actual.extend(drain_columns(&mut shared, now));
+                    actual.extend(input.drain_columns(
+                        &mut shared.clock,
+                        &mut shared.ui.picture,
+                        now,
+                    ));
                 }
             }
-            actual.extend(drain_columns(&mut shared, 15.0 + delay));
+            actual.extend(input.drain_columns(
+                &mut shared.clock,
+                &mut shared.ui.picture,
+                15.0 + delay,
+            ));
             assert!(actual.len() > 50, "fixture must fill the window and reach many FFT hops");
             if let Some(expected) = &reference {
                 assert_eq!(&actual, expected, "callback={callback}, drain_every={drain_every}");
@@ -452,7 +485,7 @@ mod tests {
     /// every slot was sized for a column.
     #[test]
     fn a_full_ring_step_leaves_a_small_spare_delivery_list() {
-        let (mut tx, mut shared) = audio_harness(crate::AUDIO_RING_CAPACITY);
+        let (mut tx, mut shared, mut input) = audio_harness(crate::AUDIO_RING_CAPACITY);
         let format =
             crate::audio_ingress::Format { channels: 2, sample_rate: 48_000.0, sidechain: false };
         let block = 64;
@@ -467,8 +500,8 @@ mod tests {
                 (0..block * 2).map(|i| ((first * 2 + i) as f32 * 0.047).sin()),
             );
         }
-        drain_audio(&mut shared, 5.0);
-        let spare = &shared.input.spare;
+        drain_audio(&mut input, &mut shared, 5.0);
+        let spare = &input.scratch;
         assert!(spare.deliveries.capacity() >= frames / block, "the step must take every block");
         let held = spare.deliveries.capacity() * size_of::<harmonigraph_ui::Delivery>();
         assert!(held < 100_000, "the spare delivery list holds {held} bytes");
@@ -483,15 +516,10 @@ mod tests {
             let (mut notes, consumer) = harmonigraph_record::publication::channel();
             let (mut audio, audio_consumer) =
                 crate::audio_ingress::channel(crate::AUDIO_RING_CAPACITY);
-            let (_recorder, control) = harmonigraph_record::channel();
-            let mut shared = EditorShared::new(
-                consumer,
-                audio_consumer,
-                Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-                control,
-            );
+            let mut shared = editor();
+            let mut input = LiveInput::new(consumer, audio_consumer);
             notes.observe_clock(0.0);
-            drain_audio(&mut shared, 0.0);
+            drain_audio(&mut input, &mut shared, 0.0);
             let format = crate::audio_ingress::Format {
                 channels: 1,
                 sample_rate: 48_000.0,
@@ -517,8 +545,12 @@ mod tests {
                     )
                     .unwrap();
                 notes.observe_clock(end);
-                columns.extend(drain_columns(&mut shared, end / speed));
-                now = shared.input.display_now(end / speed);
+                columns.extend(input.drain_columns(
+                    &mut shared.clock,
+                    &mut shared.ui.picture,
+                    end / speed,
+                ));
+                now = shared.clock.display_now(end / speed);
                 shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
             }
             let onsets: Vec<_> =
@@ -540,7 +572,7 @@ mod tests {
     #[test]
     fn source_discontinuities_refill_the_window_without_erasing_history() {
         let window = harmonigraph_ui::SpectrumConfig::default().window.frame(48_000.0);
-        let (mut tx, mut shared) = audio_harness(window + 384);
+        let (mut tx, mut shared, mut input) = audio_harness(window + 384);
         let mono =
             crate::audio_ingress::Format { channels: 1, sample_rate: 48_000.0, sidechain: false };
         // Retain a full window plus a hop, then drop an entire callback.
@@ -560,7 +592,7 @@ mod tests {
             crate::audio_ingress::TapePlay::Idle,
             std::iter::repeat(-0.5),
         );
-        drain_audio(&mut shared, 1.0);
+        drain_audio(&mut input, &mut shared, 1.0);
         let before = shared.ui.picture.runtime.spectrum.columns_taken();
         assert!(before > 0);
         // A gap cannot complete a window using the previous run's tail.
@@ -572,7 +604,7 @@ mod tests {
             crate::audio_ingress::TapePlay::Idle,
             std::iter::repeat(-0.5),
         );
-        drain_audio(&mut shared, 2.0);
+        drain_audio(&mut input, &mut shared, 2.0);
         assert_eq!(shared.ui.picture.runtime.spectrum.columns_taken(), before);
         // Queue old-format partial audio before a reset and new-format audio.
         tx.publish(
@@ -596,7 +628,7 @@ mod tests {
             crate::audio_ingress::TapePlay::Idle,
             std::iter::repeat(0.0),
         );
-        let mut refilled = drain_columns(&mut shared, 4.0);
+        let mut refilled = input.drain_columns(&mut shared.clock, &mut shared.ui.picture, 4.0);
         assert_eq!(shared.ui.picture.runtime.spectrum.columns_taken(), before);
         for i in 1..=4 {
             tx.publish(
@@ -607,7 +639,7 @@ mod tests {
                 crate::audio_ingress::TapePlay::Idle,
                 std::iter::repeat(0.0),
             );
-            refilled.extend(drain_columns(&mut shared, 5.0));
+            refilled.extend(input.drain_columns(&mut shared.clock, &mut shared.ui.picture, 5.0));
         }
         assert!(!refilled.is_empty(), "new format must refill and emit columns");
         for (time, power) in &refilled {
@@ -627,13 +659,8 @@ mod tests {
         // tests below can't cover: observe-newest-THEN-map ordering.)
         let (mut producer, consumer) = harmonigraph_record::publication::channel();
         let (_audio_producer, audio_consumer) = crate::audio_ingress::channel(64);
-        let (_recorder, take_control) = harmonigraph_record::channel();
-        let mut shared = EditorShared::new(
-            consumer,
-            audio_consumer,
-            std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            take_control,
-        );
+        let mut shared = editor();
+        let mut input = LiveInput::new(consumer, audio_consumer);
         for (source, time) in [(1, 99.950), (2, 99.995)] {
             let event = NoteEvent::on(time, SourceId(source), 0, 60, 1.0);
             producer
@@ -648,7 +675,7 @@ mod tests {
         }
 
         producer.observe_clock(99.995);
-        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 7.0);
+        input.drain_into_tracker(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 7.0);
         let mut on_times: Vec<f64> =
             shared.ui.picture.runtime.tracker.voices().map(|v| v.on_time).collect();
         on_times.sort_by(f64::total_cmp);
@@ -663,9 +690,9 @@ mod tests {
         // An idle poll, a second and a half on, re-reads the same heartbeat.
         // That is not a new clock: it must not re-anchor the mapping, which
         // would read as a callback pause.
-        let anchored = shared.input.clock.offset;
-        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 8.5);
-        assert_eq!(shared.input.clock.offset, anchored, "an idle poll re-anchored the clock");
+        let anchored = shared.clock.mapper.offset;
+        input.drain_into_tracker(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 8.5);
+        assert_eq!(shared.clock.mapper.offset, anchored, "an idle poll re-anchored the clock");
         producer.observe_clock(11.0);
         // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
         // at GUI=12; neither its batch nor a later idle poll is a new clock.
@@ -680,7 +707,7 @@ mod tests {
         producer.note(accepted).unwrap();
         let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
         producer.note(NoteDelta { event, lifetime: 62, ..accepted }).unwrap();
-        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 21.0);
+        input.drain_into_tracker(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 21.0);
         assert_eq!(
             shared
                 .ui
@@ -711,7 +738,7 @@ mod tests {
         .unwrap();
         producer.observe_clock(12.0);
         producer.baseline(&baseline).unwrap();
-        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 22.2);
+        input.drain_into_tracker(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 22.2);
         let note = shared
             .ui
             .picture
@@ -765,7 +792,7 @@ mod tests {
         )
         .unwrap();
         producer.baseline(&restated).unwrap();
-        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 22.3);
+        input.drain_into_tracker(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 22.3);
         let voice =
             shared.ui.picture.runtime.tracker.voices().find(|v| v.source == SourceId(3)).unwrap();
         let note = shared

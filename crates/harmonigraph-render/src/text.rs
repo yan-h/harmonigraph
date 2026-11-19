@@ -700,7 +700,6 @@ fn create_spectral_shadow_pipeline(
 /// zero off every halo — a standoff of nothing over the whole box. Declaring it
 /// keeps the two pipelines on one layout; the pass binds the light there
 /// already.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_shadow_box_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
@@ -708,10 +707,9 @@ pub(crate) fn create_shadow_box_pipeline(
     glow: &wgpu::BindGroupLayout,
     atlas: &wgpu::BindGroupLayout,
     casters: &wgpu::BindGroupLayout,
-    target_format: wgpu::TextureFormat,
     bloom: bool,
 ) -> wgpu::RenderPipeline {
-    let targets = crate::scene_targets(target_format, bloom);
+    let targets = crate::scene_targets(bloom);
     glyph_pipeline(
         device,
         shader,
@@ -1020,7 +1018,7 @@ pub(crate) fn create_text_pipeline(
             write_mask: wgpu::ColorWrites::ALL,
         })]
     } else {
-        crate::scene_targets(target_format, attachments == 4)
+        crate::scene_targets(attachments == 4)
     };
     // Visible ink uses egui blending; transmission uses premultiplied
     // source-over to restore T only under visible ink.
@@ -1274,7 +1272,7 @@ pub(crate) mod tests {
     /// shot for the scene pass's glyph fill and shadow box).
     #[test]
     fn baked_text_shader_validates() {
-        let seam = crate::common_lines(crate::COMMON_SRC);
+        let seam = crate::Seam::after("common.wgsl", crate::COMMON_SRC);
         crate::validate_wgsl("text.wgsl", &crate::with_common(TEXT_SRC), seam, &[] as &[&str])
             .expect("baked text.wgsl must parse and validate");
     }
@@ -1364,13 +1362,10 @@ pub(crate) mod tests {
             "nothing has been published since these were built"
         );
 
-        crate::reload::publish(
-            format!(
-                "{}\n// pipelines_built_before_a_reload_are_stale\n",
-                crate::with_common(TEXT_SRC)
-            ),
-            crate::COMMON_SRC.to_owned(),
-        );
+        crate::reload::publish(format!(
+            "{}\n// pipelines_built_before_a_reload_are_stale\n",
+            crate::with_common(TEXT_SRC)
+        ));
         assert!(
             resources.pipelines.is_stale(FORMAT),
             "a reload the text pipelines never hear about"

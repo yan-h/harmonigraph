@@ -177,7 +177,7 @@ fn lead_alpha(note: &RollNote, now: f64, release: f32) -> f32 {
 /// UI, of what `vs_note_cut` hands `note_vertex` in `roll.wgsl`.
 ///
 /// The shader grows each note's box by its surround's reach plus one feather
-/// (`cut_reach() + locals.feather`) on both axes, and across pitch by the
+/// (`surround_reach(locals.surround) + locals.feather`) on both axes, and across pitch by the
 /// centre line's drift over the box's half length as well, and ink outside
 /// that quad is never drawn. Every cull here keeps a note while that quad can
 /// still touch what it is tested against, so each asks this rather than
@@ -738,8 +738,6 @@ fn source_instances(
                     tongue = Some(RollInstance {
                         center: [center.x, center.y],
                         half_extent: [half_pitch * grow, half],
-                        shear: 0.0,
-                        rounding: 0.0,
                         // The whole box is lead, so its opacity and configured tip
                         // fade apply from the now-line to its analyzer-side tip;
                         // `lead` keeps the fade within the lead.
@@ -747,12 +745,9 @@ fn source_instances(
                         lead_alpha: standing,
                         core: note_color(state, pitch, 1.0).to_array(),
                         aura: note_fill(state, pitch, 1.0),
-                        span: RollInstance::WHOLE,
-                        ramp: [0.0, 0.0],
                         fade,
-                        taper_depth: [0.0; 4],
                         taper,
-                        tremolo: [0.0; 2],
+                        ..RollInstance::PLAIN
                     });
                 }
             }
@@ -857,17 +852,9 @@ fn source_instances(
                 center: [center.x, center.y],
                 half_extent: [half_pitch, half_depth],
                 shear: slope,
-                rounding: 0.0,
-                lead_fade: 0.0,
-                lead_alpha: 1.0,
                 core: core.to_array(),
                 aura: note_fill(state, pitch, 1.0),
-                span: RollInstance::WHOLE,
-                ramp: [0.0, 0.0],
-                fade: [1.0, 1.0],
-                taper_depth: [0.0; 4],
-                taper: RollInstance::UNTAPERED,
-                tremolo: [0.0; 2],
+                ..RollInstance::PLAIN
             };
             // Where a moment of this segment lands along its box, as the
             // shader's depth offset from the center, which the seam moved.
@@ -1281,6 +1268,21 @@ mod tests {
     /// either side of.
     const OUTLINE_REACH: f32 = 7.154_435;
 
+    /// [`fresh`], with the roll's own dials set here rather than inherited: a
+    /// capture of new defaults moves them, and the tests that start from this
+    /// are sized against them. A test that depends on one of them more closely
+    /// sets it again itself.
+    fn pinned() -> PictureState {
+        let mut state = fresh();
+        let spectrum = &mut state.appearance.spectrum;
+        spectrum.note_cut = 1.0;
+        spectrum.note_cut_reach = 15.0;
+        spectrum.roll_seconds = 160.0;
+        spectrum.roll_fraction = 0.8;
+        spectrum.roll_lead = 0.3;
+        state
+    }
+
     /// The roll's geometry for `state`, derived exactly the way
     /// [`spectral_pane`](super::super::spectral_pane) derives it
     /// before handing over — same axes, same pitch scale, same split.
@@ -1331,7 +1333,7 @@ mod tests {
     /// as "notes vanish early" more strongly the further out you zoom.
     #[test]
     fn a_note_keeps_drawing_until_its_outline_has_left_too() {
-        let mut state = fresh();
+        let mut state = pinned();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.roll_seconds = 10.0;
         state.appearance.spectrum.low_midi = 48.0;
@@ -1410,7 +1412,7 @@ mod tests {
 
     #[test]
     fn tiny_expression_excursions_keep_positive_and_absent_intervals() {
-        let mut state = fresh();
+        let mut state = pinned();
         state.appearance.spectrum.roll_lead = 0.0;
         state.appearance.view.intensity = IntensitySettings {
             thickness_base: 0.0,
@@ -1551,7 +1553,7 @@ mod tests {
     /// ribbon on the frame its predecessor left.
     #[test]
     fn the_note_closing_a_run_keeps_its_hatching_as_the_run_leaves() {
-        let mut state = fresh();
+        let mut state = pinned();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.roll_seconds = 10.0;
         state.appearance.spectrum.roll_fraction = 1.0;
@@ -1601,7 +1603,7 @@ mod tests {
     /// trim under the far edge.
     #[test]
     fn a_repeats_onset_holds_as_the_note_before_it_leaves() {
-        let mut state = fresh();
+        let mut state = pinned();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 48.0;
         state.appearance.spectrum.high_midi = 72.0;
@@ -1752,7 +1754,7 @@ mod tests {
     /// either side. A note whose intensity holds still is drawn whole.
     #[test]
     fn a_notes_fade_follows_its_pressure_in_pieces_of_one_box() {
-        let mut state = fresh();
+        let mut state = pinned();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 54.0;
         state.appearance.spectrum.high_midi = 66.0;
@@ -1841,7 +1843,7 @@ mod tests {
     /// `a_notes_fade_follows_its_pressure_in_pieces_of_one_box`.
     #[test]
     fn a_swelled_note_is_kept_past_its_ribbon_width() {
-        let mut state = fresh();
+        let mut state = pinned();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 54.0;
         state.appearance.spectrum.high_midi = 78.0;
@@ -1891,38 +1893,13 @@ mod tests {
     /// for.
     #[test]
     fn a_cut_of_nothing_makes_no_room_for_a_surround() {
-        let mut state = fresh();
+        let mut state = pinned();
         assert!(
             surround(&state, 1.0) > 0.0,
             "the fixture's reach is 0, which proves nothing below"
         );
         state.appearance.spectrum.note_cut = 0.0;
         assert_eq!(surround(&state, 1.0), 0.0, "a cut of nothing still made room for one");
-    }
-
-    /// The renderer keeps its own copy of the cut's defaults
-    /// ([`SurroundCut::OFF`](harmonigraph_render::SurroundCut::OFF)), which its
-    /// timing probe draws a fresh look from; this keeps the two together.
-    #[test]
-    fn a_fresh_cut_is_the_renders_defaults_at_a_full_amount() {
-        assert_eq!(
-            fresh().appearance.spectrum.note_cut(),
-            harmonigraph_render::SurroundCut {
-                amount: 1.0,
-                ..harmonigraph_render::SurroundCut::OFF
-            },
-        );
-    }
-
-    /// The renderer's timing probe draws ribbons at the pane's default width,
-    /// which it cannot read from `SpectrumConfig`; this keeps the two together
-    /// ([`DEFAULT_RIBBON_SEMITONES`](harmonigraph_render::DEFAULT_RIBBON_SEMITONES)).
-    #[test]
-    fn a_fresh_ribbon_is_the_renders_probe_width() {
-        assert_eq!(
-            fresh().appearance.spectrum.roll_thickness,
-            harmonigraph_render::DEFAULT_RIBBON_SEMITONES,
-        );
     }
 
     /// A cut of nothing is off upstream of the renderer too: the roll's
@@ -2520,7 +2497,7 @@ mod tests {
     #[test]
     fn a_bend_finished_before_the_region_leaves_nothing_at_its_edge() {
         let bent = || {
-            let mut state = fresh();
+            let mut state = pinned();
             state.appearance.spectrum.orientation = SpectralOrientation::Left;
             state.appearance.spectrum.roll_seconds = 10.0;
             state.appearance.spectrum.low_midi = 48.0;
@@ -2562,7 +2539,7 @@ mod tests {
     /// into the visible window with another application of the length floor.
     #[test]
     fn a_note_that_stops_on_the_edge_is_not_refloored() {
-        let mut state = fresh();
+        let mut state = pinned();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 48.0;
         state.appearance.spectrum.high_midi = 84.0;
@@ -2886,7 +2863,7 @@ mod tests {
     /// pieces at every breakpoint.
     #[test]
     fn a_bent_note_leads_past_its_last_segment_alone() {
-        let mut state = fresh();
+        let mut state = pinned();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.roll_seconds = 10.0;
         state.appearance.spectrum.low_midi = 48.0;
@@ -3002,7 +2979,7 @@ mod tests {
         // spread over two seconds it is a shallow ramp. Same endpoints either
         // way, and both sit above the zoom.
         let glide = |after: f64| {
-            let mut state = fresh();
+            let mut state = pinned();
             state.appearance.spectrum.orientation = SpectralOrientation::Left;
             state.appearance.spectrum.roll_seconds = 10.0;
             // The narrowest zoom there is (`PITCH_RANGE_MIN_SPAN`); anything
@@ -3043,7 +3020,7 @@ mod tests {
     /// which makes the box a parallelogram and costs nothing else.
     #[test]
     fn a_glide_shears_the_note_rather_than_needing_another_shape() {
-        let mut state = fresh();
+        let mut state = pinned();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 55.0;
         state.appearance.spectrum.high_midi = 67.0;
@@ -3078,12 +3055,12 @@ mod tests {
     /// the box is pinned there until it has one (see
     /// [`a_sounding_note_is_floored_into_the_past_alone`]). A fixture straddling
     /// that crossover reads the transition as a snap and fails for a reason
-    /// that has nothing to do with rounding. At the captured 72 s Span a point
-    /// is a fraction of a second, which puts the crossover shortly after the
-    /// note begins.
+    /// that has nothing to do with rounding. At [`pinned`]'s 160 s Span a
+    /// point is a fraction of a second, which puts the crossover shortly after
+    /// the note begins.
     #[test]
     fn a_scrolling_note_moves_sub_pixel_rather_than_in_whole_pixel_jumps() {
-        let mut state = fresh();
+        let mut state = pinned();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 55.0;
         state.appearance.spectrum.high_midi = 67.0;
@@ -3099,7 +3076,7 @@ mod tests {
         };
         let from = 5.0;
         assert!(
-            one(&instances(&state, from)).half_extent[1] > MIN_LENGTH_PT / PPP,
+            one(&instances(&state, from)).half_extent[1] > 0.5 * MIN_LENGTH_PT,
             "the fixture sits on the length floor, where the note is pinned rather \
              than scrolling, and the crossover would read as a snap",
         );

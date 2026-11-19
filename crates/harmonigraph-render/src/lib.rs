@@ -15,8 +15,6 @@
 //! makes the render-scale option (super/sub-sampling) possible, and gives
 //! post-processing (bloom etc.) a texture to read. Painter order supplies all
 //! occlusion; there is no depth attachment.
-//! `offscreen_composite_matches_direct_draw` in the tests pins
-//! down that this path matches drawing straight into the egui pass.
 //!
 //! The node NAMES are drawn in that same pass, each at its own node's place
 //! in the order (see [`LatticeLabels`]) — so a nearer node covers the name of
@@ -65,7 +63,7 @@ pub mod startup;
 /// helpers and [`BloomChain`]; the lattice's offscreen target
 /// are beside the point for a flat ribbon.
 mod roll;
-pub use roll::{roll_paint_callback, RollAxes, RollClip, RollInstance, DEFAULT_RIBBON_SEMITONES};
+pub use roll::{dots_paint_callback, roll_paint_callback, RollAxes, RollClip, RollInstance};
 
 /// The backdrop cut round a note, shared by the roll's ribbons and the
 /// Spiral's dots.
@@ -173,18 +171,20 @@ const BLIT_SRC: &str = include_str!("shaders/blit.wgsl");
 /// what is allowed in there.
 pub(crate) const COMMON_SRC: &str = include_str!("shaders/common.wgsl");
 
-/// One module's WGSL: `common.wgsl` and the module's own source, concatenated.
+/// One module's WGSL: the shared half it calls into, then the module's own
+/// source, concatenated: `common.wgsl` for the lattice and text modules,
+/// `surround.wgsl` for the roll's, the dots' cut and the surround composite.
 ///
 /// WGSL has no include and naga takes a string, so this IS the linkage between
-/// the two files, and every `create_shader_module` for a module that names
-/// anything in common.wgsl is handed the result. Common goes first, so a module
-/// can call into it and it can call into no module.
+/// the two files, and every `create_shader_module` for a joined module is
+/// handed the result. The shared half goes first, so a module can call into it
+/// and it can call into no module.
 ///
-/// A module that names nothing in it is compiled as it stands. Handing one the
-/// common half anyway would redeclare `glow_tex` at blit.wgsl's own slot for
-/// it, which is a compile error rather than a tidy-up.
-pub(crate) fn module_source(common: &str, module: &str) -> String {
-    format!("{common}\n{module}")
+/// A module that names nothing in common.wgsl is not joined to it. Handing one
+/// the common half anyway would redeclare `glow_tex` at blit.wgsl's own slot
+/// for it, which is a compile error rather than a tidy-up.
+pub(crate) fn module_source(prefix: &str, module: &str) -> String {
+    format!("{prefix}\n{module}")
 }
 
 /// [`module_source`] against the common half baked into this build, which is
@@ -193,18 +193,42 @@ pub(crate) fn with_common(module: &str) -> String {
     module_source(COMMON_SRC, module)
 }
 
-/// How many lines of a concatenated module belong to the common half.
+/// How many lines of a concatenated module belong to its shared half,
+/// `prefix`.
 ///
 /// The offset every naga diagnostic carries: it counts lines in the string it
 /// was handed, and the module's own file starts after this many.
 ///
-/// Counted off the PREFIX [`module_source`] builds rather than off the common
+/// Counted off the PREFIX [`module_source`] builds rather than off the shared
 /// half alone, which makes it right by construction instead of by three cases:
-/// the separator adds a line where common already ends in a newline and ends
-/// common's last line where it does not.
+/// the separator adds a line where the half already ends in a newline and ends
+/// its last line where it does not.
 #[cfg(any(test, feature = "hot-reload"))]
-fn common_lines(common: &str) -> usize {
-    module_source(common, "").lines().count()
+fn prefix_lines(prefix: &str) -> usize {
+    module_source(prefix, "").lines().count()
+}
+
+/// Where a joined module's own file starts, as a diagnostic has to be read
+/// against it: the file [`module_source`] put ahead of it, and how many lines
+/// of the join that takes.
+#[cfg(any(test, feature = "hot-reload"))]
+#[derive(Clone, Copy, Debug)]
+struct Seam {
+    file: &'static str,
+    lines: usize,
+}
+
+#[cfg(any(test, feature = "hot-reload"))]
+impl Seam {
+    /// A module compiled as its own file stands, joined to nothing: a
+    /// diagnostic's line is already the file's.
+    #[cfg(test)]
+    const NONE: Self = Seam { file: "", lines: 0 };
+
+    /// The seam of a module joined after `prefix`, which is read from `file`.
+    fn after(file: &'static str, prefix: &str) -> Self {
+        Seam { file, lines: prefix_lines(prefix) }
+    }
 }
 
 /// The whole text module as this build should compile it: baked, or — under
@@ -225,25 +249,11 @@ pub(crate) fn text_source() -> String {
     }
 }
 
-/// The roll's module joined to the common half currently in force, after the
-/// surround's arithmetic it shares with the Spiral's dots. Its own file
-/// remains baked; a common-shader reload still rebuilds
-/// them so every group uses one generation of the two kernels.
-pub(crate) fn roll_source() -> String {
-    #[cfg(feature = "hot-reload")]
-    {
-        module_source(&reload::common_source(), &roll_module())
-    }
-    #[cfg(not(feature = "hot-reload"))]
-    {
-        with_common(&roll_module())
-    }
-}
-
-/// roll.wgsl after the surround's arithmetic it calls into, which is the
-/// roll's own half of its module: common.wgsl goes before both.
+/// roll.wgsl after the surround's arithmetic it calls into: the whole roll
+/// module. It names nothing in common.wgsl, so it takes none of it, and a
+/// common-shader reload leaves the roll's pipelines as they are.
 pub(crate) fn roll_module() -> String {
-    format!("{}\n{}", surround::SRC, roll::ROLL_SRC)
+    module_source(surround::SRC, roll::ROLL_SRC)
 }
 
 /// What a committed reload leaves for the pipelines it cannot reach itself.
@@ -261,7 +271,6 @@ mod reload {
     use std::sync::RwLock;
 
     static TEXT: RwLock<Option<String>> = RwLock::new(None);
-    static COMMON: RwLock<Option<String>> = RwLock::new(None);
     static GENERATION: AtomicU64 = AtomicU64::new(0);
 
     /// Held by every test that publishes or asks whether a build is current.
@@ -290,9 +299,8 @@ mod reload {
     /// other order hands out a raised count over the previous source, which is
     /// a rebuild that produces the build it was called to replace and then
     /// reports itself done.
-    pub(super) fn publish(text: String, common: String) {
+    pub(super) fn publish(text: String) {
         *TEXT.write().expect("no reader panics while holding this") = Some(text);
-        *COMMON.write().expect("no reader panics while holding this") = Some(common);
         GENERATION.fetch_add(1, Ordering::Release);
     }
 
@@ -303,15 +311,6 @@ mod reload {
             .expect("no writer panics while holding this")
             .clone()
             .unwrap_or_else(|| crate::with_common(crate::text::TEXT_SRC))
-    }
-
-    #[cfg(feature = "hot-reload")]
-    pub(super) fn common_source() -> String {
-        COMMON
-            .read()
-            .expect("no writer panics while holding this")
-            .clone()
-            .unwrap_or_else(|| crate::COMMON_SRC.to_owned())
     }
 }
 
@@ -350,7 +349,6 @@ const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 #[cfg(any(test, feature = "hot-reload"))]
 #[cfg_attr(all(test, not(feature = "hot-reload")), allow(dead_code))]
 struct ReloadedShaders {
-    common: String,
     lattice: String,
     text: String,
     /// Lines the common half takes in both modules above — the seam a naga
@@ -361,7 +359,7 @@ struct ReloadedShaders {
     /// added or removed a line, the baked seam is wrong by that many for
     /// every message from then on, which is the failure the banner exists to
     /// prevent rather than to commit.
-    seam: usize,
+    seam: Seam,
 }
 
 /// Watches the three files those two modules are made of, on disk (dev builds
@@ -443,10 +441,9 @@ impl ShaderWatcher {
                 let text = std::fs::read_to_string(&self.text).ok()?;
                 self.mtime = Some(mtime);
                 Some(ReloadedShaders {
-                    common: common.clone(),
                     lattice: module_source(&common, &lattice),
                     text: module_source(&common, &text),
-                    seam: common_lines(&common),
+                    seam: Seam::after("common.wgsl", &common),
                 })
             }
         }
@@ -470,7 +467,7 @@ impl ShaderWatcher {
 /// either file. Naga weaves those numbers through a rendered snippet, so the
 /// seam is stated rather than the numbers rewritten.
 ///
-/// `seam` is the caller's because it is a property of the common half THIS
+/// `seam` is the caller's because it is a property of the shared half THIS
 /// `source` was built from, and the hot-reload path's is read off disk: taking
 /// it from `COMMON_SRC` here would state the baked half's seam over a module
 /// joined to a different one, and be wrong by however many lines common.wgsl
@@ -479,13 +476,17 @@ impl ShaderWatcher {
 fn validate_wgsl(
     name: &str,
     source: &str,
-    seam: usize,
+    seam: Seam,
     required: &[impl AsRef<str>],
 ) -> Result<(), String> {
+    let Seam { file, lines } = seam;
     let banner = |body: String| {
+        if lines == 0 {
+            return format!("in {name}:\n{body}");
+        }
         format!(
-            "in {name} (lines 1-{seam} below are common.wgsl; past that, \
-             subtract {seam} for the line in {name}):\n{body}"
+            "in {name} (lines 1-{lines} below are {file}; past that, \
+             subtract {lines} for the line in {name}):\n{body}"
         )
     };
     let module =
@@ -537,30 +538,13 @@ use uniforms::*;
 /// renderer rather than two.
 const SPECTRUM_WORDS: usize = harmonigraph_scene::SPECTRAL_BUCKETS.div_ceil(16);
 
-// Two fixed-size GPU homes, one per table, and both are exact rather than
-// one-sided ceilings — the uploads below fill every entry unconditionally, so
-// a SMALLER constant in harmonigraph-scene reads off the end of a shorter
-// array and panics on the first frame, which a ceiling would wave through.
+// Three u32 words carry the octave levels and thicknesses, a byte a slot
+// (`pack_slot_bytes`), which is room for twelve.
 //
-// 3 u32 words hold 12 packed levels, one byte per octave slot.
-const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS == 11);
-// lattice.wgsl clamps the span to its own literal MAX_SPAN.
-const _: () = assert!(harmonigraph_scene::MAX_SPAN == 11);
-
-// The shader declares `pitch_lut` with a literal length; keep the two in
-// lockstep so the uniform buffer and the WGSL agree. `spectral_lut` beside it
-// is the same length by construction — one gradient table shape, two tables.
-const _: () = assert!(harmonigraph_scene::PITCH_LUT_N == 64);
-
-// The analyzer's grid, which lattice.wgsl also declares as literals
-// (SPECTRUM_BUCKETS, BUCKETS_PER_SEMITONE, SPECTRUM_MIN_MIDI, and the length
-// of the `spectrum_color` array). A mismatch here is a ring reading the wrong
-// buckets at the wrong pitches, which draws a plausible picture of nothing —
-// so the numbers are asserted rather than trusted to stay in step.
-const _: () = assert!(harmonigraph_scene::SPECTRAL_BUCKETS == 3828);
-const _: () = assert!(harmonigraph_scene::SPECTRAL_BUCKETS_PER_SEMITONE == 32);
-const _: () = assert!(harmonigraph_scene::SPECTRAL_AXIS.0 == 15.486_82);
-const _: () = assert!(SPECTRUM_WORDS == 240);
+// The shaders' own literals for the slot count, the span cap, the gradient
+// tables' length and the analyzer's grid are read out of the WGSL and pinned
+// against the scene's constants by `lattice_tests::contract`.
+const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS <= 12);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1099,12 +1083,11 @@ struct CompiledLatticeResources {
     /// A 1x1 transparent texture in [`filter_layout`](Self::filter_layout),
     /// standing in for the glow target at group 1 wherever there is not one.
     ///
-    /// Two places there is not, and neither is an error state: Background glow
-    /// reach or gain at 0 drops the target entirely (`Offscreen::ensure_glow`), and the
-    /// single-attachment `fs_main`/`fs_plus` path the parity test draws through
-    /// has no glow pass at all. Transparent light composites to the plain
-    /// ground, so `node_paint` needs no branch for either — which is the whole
-    /// reason this is a dummy texture rather than a second pipeline variant.
+    /// Not an error state: Background glow reach or gain at 0 drops the target
+    /// entirely (`Offscreen::ensure_glow`). Transparent light composites to the
+    /// plain ground, so `node_paint` needs no branch for it — which is the
+    /// whole reason this is a dummy texture rather than a second pipeline
+    /// variant.
     glow_dummy_bind_group: wgpu::BindGroup,
     /// The same transparent texel, held for the bloom-off composite binding.
     bloom_dummy: wgpu::TextureView,

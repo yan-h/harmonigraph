@@ -36,11 +36,10 @@ pub(super) fn lattice_module(device: &wgpu::Device, shader_src: &str) -> wgpu::S
     })
 }
 
-/// The visible pair, local notation transmission, then optional bloom input.
-pub(super) fn scene_targets(
-    format: wgpu::TextureFormat,
-    bloom: bool,
-) -> Vec<Option<wgpu::ColorTargetState>> {
+/// The scene pass's targets, in the formats it allocates them in: the visible
+/// pair, local notation transmission, then optional bloom input.
+pub(super) fn scene_targets(bloom: bool) -> Vec<Option<wgpu::ColorTargetState>> {
+    let format = LATTICE_COLOR_FORMAT;
     let target = |format| {
         Some(wgpu::ColorTargetState {
             format,
@@ -61,16 +60,14 @@ pub(super) fn scene_targets(
 ///
 /// The scene writes two visible colors and scalar local transmission, plus
 /// the bloom input when enabled (see [`LatticeBloom::input_view`]).
-/// The single-attachment variant serves only direct rasterization references.
-/// Both rely on painter order and carry no depth state.
+/// It relies on painter order and carries no depth state.
 fn create_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
-    target_format: wgpu::TextureFormat,
     layouts: SceneLayouts<'_>,
     entry_points: (&str, &str),
     vertex_layouts: &[wgpu::VertexBufferLayout<'_>],
-    attachments: usize,
+    bloom: bool,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_pipeline_layout"),
@@ -83,16 +80,7 @@ fn create_pipeline(
         ..Default::default()
     });
 
-    let color_target = wgpu::ColorTargetState {
-        format: target_format,
-        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-        write_mask: wgpu::ColorWrites::ALL,
-    };
-    let targets = if attachments == 1 {
-        vec![Some(color_target)]
-    } else {
-        scene_targets(target_format, attachments == 4)
-    };
+    let targets = scene_targets(bloom);
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         // Name the pipeline after its vertex entry point, so a GPU capture
@@ -122,40 +110,26 @@ fn create_pipeline(
     })
 }
 
-/// One target for rasterization references, three for the visible scene plus
+/// The node and marker pipelines: three targets for the visible scene plus
 /// local transmission, four when the label-free bloom input is also needed.
 pub(super) fn create_pipelines(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
-    target_format: wgpu::TextureFormat,
     layouts: SceneLayouts<'_>,
-    attachments: usize,
+    bloom: bool,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    let (node, plus) = match attachments {
-        1 => ("fs_main", "fs_plus"),
-        3 => ("fs_main_split", "fs_plus_split"),
-        4 => ("fs_main_scene", "fs_plus_scene"),
-        _ => unreachable!("scene attachment count"),
-    };
+    let (node, plus) =
+        if bloom { ("fs_main_scene", "fs_plus_scene") } else { ("fs_main_split", "fs_plus_split") };
     (
         create_pipeline(
             device,
             shader,
-            target_format,
             layouts,
             ("vs_main", node),
             &[GpuInstance::LAYOUT, shadow::ShadowBox::BESIDE_NODES],
-            attachments,
+            bloom,
         ),
-        create_pipeline(
-            device,
-            shader,
-            target_format,
-            layouts,
-            ("vs_plus", plus),
-            &[GpuPlus::LAYOUT],
-            attachments,
-        ),
+        create_pipeline(device, shader, layouts, ("vs_plus", plus), &[GpuPlus::LAYOUT], bloom),
     )
 }
 
@@ -186,13 +160,7 @@ fn create_scene_pipelines(
     glyph_layout: &wgpu::BindGroupLayout,
 ) -> [ScenePipelines; 2] {
     [false, true].map(|bloom| {
-        let (nodes, pluses) = create_pipelines(
-            device,
-            lattice_shader,
-            LATTICE_COLOR_FORMAT,
-            layouts,
-            if bloom { 4 } else { 3 },
-        );
+        let (nodes, pluses) = create_pipelines(device, lattice_shader, layouts, bloom);
         ScenePipelines {
             draws: OrderedPipelines {
                 nodes,
@@ -214,17 +182,10 @@ fn create_scene_pipelines(
                     layouts.glow,
                     layouts.shadow,
                     layouts.casters,
-                    LATTICE_COLOR_FORMAT,
                     bloom,
                 ),
             },
-            glow_over: create_glow_over_pipeline(
-                device,
-                blit_shader,
-                LATTICE_COLOR_FORMAT,
-                layouts.glow,
-                bloom,
-            ),
+            glow_over: create_glow_over_pipeline(device, blit_shader, layouts.glow, bloom),
         }
     })
 }
@@ -390,7 +351,6 @@ pub(super) fn create_ink_strip_pipelines(
 fn create_glow_over_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
-    target_format: wgpu::TextureFormat,
     light_layout: &wgpu::BindGroupLayout,
     bloom: bool,
 ) -> wgpu::RenderPipeline {
@@ -401,7 +361,7 @@ fn create_glow_over_pipeline(
         bind_group_layouts: &[Some(light_layout)],
         ..Default::default()
     });
-    let mut targets = scene_targets(target_format, bloom);
+    let mut targets = scene_targets(bloom);
     targets[2].as_mut().unwrap().write_mask = wgpu::ColorWrites::empty();
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("fs_glow_over"),

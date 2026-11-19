@@ -62,11 +62,11 @@ struct Phrase {
 
 impl Phrase {
     fn new() -> Self {
-        let mut hub = Device::new(false);
+        let mut hub = hub().with_adaptive();
         hub.activate_format(44100.0, 512);
         configure(&hub, Tuning::just());
         let sources = std::array::from_fn(|_| {
-            let mut source = Device::new(true);
+            let mut source = tune();
             source.activate_format(44100.0, 512);
             source
         });
@@ -366,7 +366,7 @@ fn production_a_released_note_never_outvotes_a_held_one() {
 fn production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correction() {
     let _scope = crate::test_scope::enter();
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
-    crate::configuration::inject_recorder(recorder);
+    crate::test_device::inject_recorder(recorder);
     let mut phrase = Phrase::new();
     capture.arm();
     phrase.step(
@@ -808,7 +808,7 @@ fn a_take_lane_gap_owes_every_source_its_own_snapshot() {
     use harmonigraph_take::CanonicalRecord;
     let _scope = crate::test_scope::enter();
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
-    crate::configuration::inject_recorder(recorder);
+    crate::test_device::inject_recorder(recorder);
     let mut phrase = Phrase::new();
     capture.arm();
     let directory =
@@ -879,7 +879,7 @@ fn a_take_armed_between_an_onset_and_its_sound_opens_with_that_voice() {
     use harmonigraph_take::CanonicalRecord;
     let _scope = crate::test_scope::enter();
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
-    crate::configuration::inject_recorder(recorder);
+    crate::test_device::inject_recorder(recorder);
     let mut phrase = Phrase::new();
     phrase.step([vec![note(1, 0, 60, 400, true)], vec![], vec![]], [0, 1, 2]);
     capture.arm();
@@ -960,7 +960,7 @@ fn a_snapshot_one_lane_refused_still_reaches_the_other_lane() {
     use harmonigraph_take::CanonicalRecord;
     let _scope = crate::test_scope::enter();
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
-    crate::configuration::inject_recorder(recorder);
+    crate::test_device::inject_recorder(recorder);
     let mut phrase = Phrase::new();
     capture.arm();
     let directory =

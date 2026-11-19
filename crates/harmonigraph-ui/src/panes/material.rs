@@ -250,7 +250,7 @@ pub(super) fn velvet(
         .percent()
         .hint("Variation in scale radius. 0% makes equal sizes; 50% is the Scales reference.")
         .show(ui);
-    ValueBar::new(&mut s.velvet_edge, 0.01..=1.0, "Edge softness")
+    ValueBar::new(&mut s.velvet_edge, harmonigraph_scene::VELVET_EDGE_RANGE, "Edge softness")
         .default_value(fresh.velvet_edge)
         .percent()
         .hint("Width of the transitions between overlapping scales.")

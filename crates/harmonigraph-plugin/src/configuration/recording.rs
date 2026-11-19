@@ -78,39 +78,4 @@ impl Recording {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use harmonigraph_core::configuration::ConfigReducer;
-
-    /// A run is stated on the presentation clock the Hub times its records on,
-    /// and the configuration in force is written inside it.
-    #[test]
-    fn a_run_opens_on_the_presentation_clock_with_its_configuration() {
-        let (mut recorder, mut capture) = harmonigraph_record::testing::channel();
-        capture.arm();
-        let intent = recorder.capture_recording_intent();
-        recorder.is_armed_at(intent);
-        let origin = recorder.observe_transport(20.0, true, 64.0 / 48_000.0);
-        let mut recording =
-            Recording { captured_intent: intent, block_start: 1000, ..Default::default() };
-        recording.presentation = Presentation { anchor: Some((1000, 5.0)), rate: 48_000.0 };
-        recorder.record(recording.presentation.at(recording.block_start), origin);
-        recorder
-            .configuration(recording.presentation.at(1000), ConfigReducer::default().resolved());
-        recording.registered(1040);
-        let entries = capture.drain_entries();
-        let Some(harmonigraph_record::Entry::Run { at, song }) = entries.first().copied() else {
-            panic!("the first recorded block opens a run");
-        };
-        assert_eq!((at, song), (5.0, 20.0));
-        assert_eq!(entries.len(), 2, "and its configuration");
-
-        capture.stop();
-        recording.close_stopped(&mut recorder);
-        let entries = capture.drain_entries();
-        let Some(harmonigraph_record::Entry::RunEnd { at }) = entries.first().copied() else {
-            panic!("the stopped run closes");
-        };
-        assert_eq!(at, 5.0 + 40.0 / 48_000.0);
-    }
-}
+pub(super) mod tests;

@@ -608,6 +608,71 @@ fn analyzer_regions_fold_independently_and_restore_the_original_geometry() {
     }
 }
 
+/// The length the docked spectrum is drawn at, in points, along the depth
+/// axis of a Left-oriented Analyzer, and the pane's width.
+fn spectrum_length(h: &DockHarness, state: &SharedState) -> (f32, f32) {
+    let body = pane_body(state, &panes::Tab::Spectral).unwrap();
+    let split =
+        h.ctx.read_response(egui::Id::new(("spectral-split", 0usize))).unwrap().rect.center().x;
+    (split - body.left(), body.width())
+}
+
+/// A fresh state with the Analyzer laid out along x, its dial and its history
+/// layer set here rather than inherited.
+fn relayout_state() -> SharedState {
+    let mut state = fresh();
+    let spectrum = &mut state.picture.appearance.spectrum;
+    spectrum.orientation = SpectralOrientation::Left;
+    spectrum.roll_fraction = 0.75;
+    spectrum.show_spectrogram = true;
+    state
+}
+
+/// A loaded project draws the spectrum at the length its Analyzer was saved
+/// at, in points, rather than at the dial's share of the pane it opens in: the
+/// load re-takes the spectrum hold from the regions' saved geometry on the
+/// first fully open frame (`SpectrumHold::relayout`).
+#[test]
+fn a_loaded_project_draws_the_spectrum_at_its_saved_length() {
+    let mut saved = relayout_state();
+    saved.workspace.interaction.analyzer_regions =
+        ron::from_str("(geometry:Some((depths:(100.0,400.0),dial:0.75,vertical:false)))")
+            .expect("an Analyzer's regions parse");
+    let mut state = relayout_state();
+    assert!(state.install_document(&saved.save_persist()));
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let (length, width) = spectrum_length(&h, &state);
+    let dialled = width * 0.25;
+    assert!((dialled - 100.0).abs() > 10.0, "the dial alone draws {dialled} points, too close");
+    assert!((length - 100.0).abs() < 1.0, "the spectrum opened {length} points long, not 100");
+}
+
+/// A new window opens the Analyzer at the spectrum length the last one drew,
+/// in points, on its first frame: the window's opening re-takes the hold from
+/// the regions' geometry, with nothing loaded. What tells the two apart is a
+/// last window too narrow for the dialled length, where the spectrum gave way:
+/// the hold alone would open the next, wider window back at the dialled length.
+#[test]
+fn a_new_window_draws_the_spectrum_at_the_last_drawn_length() {
+    let mut state = relayout_state();
+    state.picture.appearance.spectrum.roll_fraction = 0.25;
+    let wide = DEFAULT_WINDOW + egui::vec2(400.0, 0.0);
+    let mut h = DockHarness::at(wide);
+    h.settle(&mut state);
+    let (dialled, _) = spectrum_length(&h, &state);
+    // The same window, narrowed.
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let (drawn, _) = spectrum_length(&h, &state);
+    assert!(dialled - drawn > 10.0, "the narrow window kept {drawn} of {dialled} points");
+    state.start_window_session();
+    let mut reopened = DockHarness::at(wide);
+    reopened.frame(&mut state, vec![]);
+    let (length, _) = spectrum_length(&reopened, &state);
+    assert!((length - drawn).abs() < 1.0, "the new window drew {length} points, not {drawn}");
+}
+
 #[test]
 fn analyzer_region_restore_respects_a_split_edited_while_folded() {
     let mut state = fresh();

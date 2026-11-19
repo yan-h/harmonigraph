@@ -18,12 +18,6 @@ pub(crate) struct Regions {
     /// Last fully open composition. Temporary expansion into a folded region
     /// never changes this snapshot or the appearance dial.
     geometry: Option<Geometry>,
-    /// Re-take the spectrum hold from `geometry` on the next fully open frame:
-    /// set by a load and by a new window, which lay the Analyzer out afresh.
-    /// An unfold needs none, since a fold no longer changes the pane's size and
-    /// the hold keeps the spectrum's points.
-    #[serde(skip)]
-    restore: bool,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -43,14 +37,13 @@ impl Geometry {
 impl Regions {
     /// Take on what the pane writes by itself as it lays the Analyzer out:
     /// the depths it draws, every frame, from the pane's size, the Tape tab and
-    /// the spectrum hold, and the relayout flag a save skips. The pane writes
+    /// the spectrum hold. The pane writes
     /// the depths every frame it draws whole, so a copy settled at each write
     /// holds `live`'s. An edit that moves them moves the dial or the layout on
     /// the way, which the key sees, a divider dragged back to where it began
     /// included (`SharedState::report_edit` reports a gesture that moved).
     pub(crate) fn copy_layout(&mut self, live: &Regions) {
         self.geometry = live.geometry;
-        self.restore = live.restore;
     }
 
     pub fn sanitize(&mut self) {
@@ -60,13 +53,6 @@ impl Regions {
                 && geometry.dial.is_finite()
                 && (0.0..=1.0).contains(&geometry.dial)
         });
-        self.restore = true;
-    }
-
-    /// Re-take the spectrum hold from the saved geometry on the next unfolded
-    /// frame, as a load does: a new window lays the Analyzer out afresh.
-    pub fn relayout(&mut self) {
-        self.restore = true;
     }
 
     /// The docked Analyzer: in Tape mode, the audition's controls along the
@@ -154,7 +140,7 @@ impl Regions {
             [if folded[0] { rail } else { 0.0 }, if folded[1] && history { rail } else { 0.0 }];
         let available = (depth - rail_depths.iter().sum::<f32>()).max(0.0);
         if !folded[0] && !folded[1] {
-            if std::mem::take(&mut self.restore) {
+            if std::mem::take(&mut state.surfaces.spectrum_hold.relayout) {
                 if let Some(geometry) = geometry {
                     gestures::restore_spectrum(state, geometry.depths);
                 }
