@@ -120,7 +120,8 @@ pub(crate) struct Worker {
     evicted_reported: bool,
     /// Where the lattice map selection is read from.
     params: Arc<crate::HarmonigraphParams>,
-    /// The notes the live drain recorded, swapped out each step.
+    /// The notes the live drain records, straight into here; [`Self::settle`]
+    /// empties it every step.
     pub(crate) inbox: Vec<(f64, Mark)>,
     recent: VecDeque<Placed>,
     /// Marks waiting for the block they sound in.
@@ -412,7 +413,7 @@ impl Worker {
     /// is and which lattice map was selected where it was recorded.
     pub(crate) fn feed(
         &mut self,
-        taken: &crate::editor::input::Taken,
+        taken: &crate::editor::input::Taken<'_>,
         runtime: &mut harmonigraph_ui::VisualRuntime,
     ) {
         let tracker = &mut runtime.tracker;

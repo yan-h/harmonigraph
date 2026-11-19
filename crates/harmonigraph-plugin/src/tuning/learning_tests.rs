@@ -19,7 +19,7 @@ fn heard(device: &Device) -> usize {
 #[test]
 fn learn_hears_more_held_voices_than_the_adaptive_context_holds() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
     let settings = settings(&hub);
@@ -29,7 +29,7 @@ fn learn_hears_more_held_voices_than_the_adaptive_context_holds() {
     // Every Tune pairs before any plays: a pairing is a session cut.
     let tunes: Vec<_> = (0..5)
         .map(|_| {
-            let mut tune = Device::new(true);
+            let mut tune = tune();
             tune.shared().set_retune(false);
             tune.activate();
             tune

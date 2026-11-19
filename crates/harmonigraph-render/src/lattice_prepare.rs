@@ -227,17 +227,6 @@ impl LatticeCallback {
                     reloaded.seam,
                     &entry_points(&with_common(text::TEXT_SRC)),
                 )
-            })
-            .and_then(|()| {
-                // roll.wgsl itself is baked, entry points and all, and
-                // common.wgsl declares none: what can break is its call into
-                // the common half just read, so nothing is required here.
-                validate_wgsl(
-                    "roll.wgsl",
-                    &module_source(&reloaded.common, &crate::roll_module()),
-                    reloaded.seam,
-                    &[] as &[&str],
-                )
             });
             match checked {
                 Ok(()) => {
@@ -268,7 +257,7 @@ impl LatticeCallback {
                     // of the map this one cannot reach: publishing raises the
                     // count they watch, and the next prepare that reads it
                     // rebuilds them against this same source.
-                    reload::publish(reloaded.text, reloaded.common);
+                    reload::publish(reloaded.text);
                     eprintln!("[harmonigraph-render] shaders hot-reloaded");
                 }
                 Err(err) => {

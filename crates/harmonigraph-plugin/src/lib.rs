@@ -93,6 +93,8 @@ static ALLOCATOR: harmonigraph_perf::heap::Counting<nice_assert_no_alloc::AllocD
     );
 
 #[cfg(test)]
+mod test_device;
+#[cfg(test)]
 mod test_scope;
 mod tuning;
 use tuning::plugin::HarmonigraphTune;
@@ -139,8 +141,9 @@ pub struct Harmonigraph {
     audio_producer: audio_ingress::Producer,
     /// Current rate for recording controls only; queued audio carries its own.
     sample_rate_bits: Arc<AtomicU32>,
-    /// State shared with the editor; created eagerly so the ring buffer's
-    /// consumer end has somewhere to live before the GUI opens.
+    /// State shared with the editor; created eagerly, since the input worker
+    /// drains into it, and installs a host restore through it, before the
+    /// GUI opens.
     editor_shared: Arc<editor::EditorLock>,
     /// The host's side of the editor, given before the editor is made: the
     /// editor's parameter edits, its resize requests and its own window's
@@ -732,18 +735,13 @@ impl Default for Harmonigraph {
         let (take, mut take_control) = harmonigraph_record::channel();
         let consumer = take_control.take_display().expect("one display consumer");
         #[cfg(test)]
-        let take = configuration::injected_recorder().unwrap_or(take);
+        let take = test_device::injected_recorder().unwrap_or(take);
         let params = Arc::new(HarmonigraphParams::default());
         let (tape, tape_worker) = tape::channel(params.clone());
         let aggregation = tuning::hub::Hub::new();
         let wake = aggregation.shared.clone();
         take_control.set_stop_wakeup(move || wake.request_main());
-        let mut editor = editor::EditorShared::new(
-            consumer,
-            audio_consumer,
-            sample_rate_bits.clone(),
-            take_control,
-        );
+        let mut editor = editor::EditorShared::new(sample_rate_bits.clone(), take_control);
         // An edit to what `ui-state` saves marks the project modified, as a
         // musical setting's does (#1813).
         let settings = params.settings.clone();
@@ -759,6 +757,7 @@ impl Default for Harmonigraph {
             editor_shared.clone(),
             params.editor_state.clone(),
             tape_worker,
+            editor::input::LiveInput::new(consumer, audio_consumer),
         );
         params.ui_state.attach(&editor_shared);
         Harmonigraph {
@@ -1074,16 +1073,16 @@ mod tests {
     use super::*;
 
     /// How long a "the analyzer has done the work" assertion waits before it
-    /// gives up — on the analyzer, or on the machine, which is a distinction
-    /// [`columns_after`] keeps rather than resolves.
+    /// gives up — on the analyzer, or on the machine, a distinction a wait
+    /// cannot resolve, so its failure message must not claim either.
     ///
     /// Two orders of magnitude over the 20 ms poll, because what has to be
     /// bounded is not how fast the analyzer works but how long the scheduler
     /// may ignore it: on a shared CI runner a round can simply fail to happen
     /// inside any window a fixed sleep would pick, which is what took main red
     /// at `f9cbc4e0` on a tree that had already passed (#598). Nothing healthy
-    /// ever spends this — [`columns_after`] returns on the round that
-    /// lands — so it costs the suite only when it is about to fail anyway.
+    /// ever spends this — a wait returns on the round that lands — so it
+    /// costs the suite only when it is about to fail anyway.
     const ANALYSIS_DEADLINE: Duration = Duration::from_secs(5);
 
     /// The global allocator this profile is meant to have is the one that
@@ -1111,41 +1110,6 @@ mod tests {
         }
     }
 
-    /// A column count above `before`, or `None` if
-    /// [`ANALYSIS_DEADLINE`] passes without one.
-    ///
-    /// **`None` does not mean the wiring is broken, and a caller must not word
-    /// it that way.** An expired deadline says only that no column arrived in
-    /// five seconds, which a flag nobody watches and a runner that never
-    /// scheduled the thread produce alike; telling those two apart is exactly
-    /// what a deadline gives up in exchange for not being a fixed sleep. The
-    /// distinction is worth the `Option`, because #598 cost a session partly
-    /// by asserting a cause in its failure message that its evidence did not
-    /// support.
-    ///
-    /// Sound only for asserting that work HAS happened. The reverse claim —
-    /// that the analyzer left a ring alone — is not waitable at all, because
-    /// every wait ends in "not yet", and a thread the scheduler forgot looks
-    /// exactly like a thread correctly holding off. Those assertions keep a
-    /// fixed settle and are commented where they stand.
-    fn columns_after(plugin: &Harmonigraph, before: u64) -> Option<u64> {
-        let started = Instant::now();
-        loop {
-            let columns = plugin.editor_shared.lock().ui.picture.runtime.spectrum.columns_taken();
-            if columns > before {
-                return Some(columns);
-            }
-            if started.elapsed() >= ANALYSIS_DEADLINE {
-                return None;
-            }
-            // Deliberately NOT `POLL`: a test written to stop being flaky
-            // should not sample in lockstep with the thread it is watching.
-            // Half the period leaves the two with no phase relationship to get
-            // wrong, and costs nothing.
-            std::thread::sleep(background::POLL / 2);
-        }
-    }
-
     /// Whether the analyzer completed a loop round after `before`.
     ///
     /// This is the synchronization a negative assertion cannot obtain from
@@ -1163,6 +1127,13 @@ mod tests {
             }
             std::thread::sleep(background::POLL / 2);
         }
+    }
+
+    /// Stop the plugin's input worker and take the input it owned, after
+    /// its final drain: for a test that drains by hand at times it chooses,
+    /// or reads what the worker's analysis ran at.
+    fn stop_input_worker(plugin: &mut Harmonigraph) -> editor::input::LiveInput {
+        plugin._input_worker.join().expect("the input worker ran and ended")
     }
 
     fn publish_test_audio(plugin: &mut Harmonigraph, frames: usize) {
@@ -1242,34 +1213,31 @@ mod tests {
         };
 
         let mut plugin = Harmonigraph::default();
+        let state = plugin.params.editor_state.clone();
+        state.pass_request.take();
         // What the host does when it restores a project, and all it does: no
         // editor, no activation, just the field.
         restore(&plugin, &blob);
         // A Precise frame is 24,576 samples; this is more than one frameful,
         // so the analyzer cannot come out of the drain empty.
         publish_test_audio(&mut plugin, 40_000);
-        assert!(
-            columns_after(&plugin, 0).is_some(),
-            "nothing was analyzed in {ANALYSIS_DEADLINE:?}: either the restored blob \
-             reaches nothing without an editor, or this runner never scheduled the \
-             analyzer",
-        );
-
-        // The worker has the analysis out while it analyzes, so wait for a
-        // moment it has given it back.
+        // Waited for without taking the editor lock, which would install the
+        // restore itself: the worker asks for a pass once it has given the
+        // first sound to the spectrum, and nothing else here asks for one.
         let started = Instant::now();
-        let (shared, lag) = loop {
-            let shared = plugin.editor_shared.lock();
-            if let Some(lag) = shared.input.analysis_lag() {
-                break (shared, lag);
-            }
-            drop(shared);
+        while !state.pass_request.take() {
             assert!(
                 started.elapsed() < ANALYSIS_DEADLINE,
-                "the input worker held the analysis out for {ANALYSIS_DEADLINE:?}",
+                "nothing was analyzed in {ANALYSIS_DEADLINE:?}, or this runner never \
+                 scheduled the analyzer",
             );
-            std::thread::sleep(background::POLL);
-        };
+            std::thread::sleep(background::POLL / 2);
+        }
+
+        // The analysis is the worker's own, so read it once the worker has
+        // stopped and handed it back.
+        let lag = stop_input_worker(&mut plugin).analysis_lag();
+        let shared = plugin.editor_shared.lock();
         assert_eq!(shared.ui.picture.appearance.camera.yaw, 1.23);
         assert_eq!(shared.ui.picture.appearance.view.max_sevens, 3);
         assert_eq!(shared.ui.picture.appearance.render.short_edge, 2160);
@@ -1604,11 +1572,9 @@ mod tests {
     #[test]
     fn a_sidechain_process_block_feeds_analysis_and_leaves_main_untouched() {
         let mut plugin = Harmonigraph::default();
+        let mut input = stop_input_worker(&mut plugin);
         plugin.params.set(Row::AnalysisInput, 1.0);
         assert_eq!(plugin.params.analysis_input(), AnalysisInput::Sidechain);
-        let shared = plugin.editor_shared.clone();
-        let mut shared = shared.lock();
-        let shared = &mut *shared;
         let mut main_left = [1.0, 2.0, 3.0, 4.0];
         let mut main_right = [5.0, 6.0, 7.0, 8.0];
         let expected_main_left = main_left;
@@ -1627,7 +1593,7 @@ mod tests {
         assert_eq!(main_left, expected_main_left, "process changed the main left pass-through");
         assert_eq!(main_right, expected_main_right, "process changed the main right pass-through");
         assert_eq!(
-            shared.input.drain_analysis_audio_for_test().as_slice(),
+            input.drain_analysis_audio_for_test().as_slice(),
             &expected_sidechain,
             "the live analyzer received Main instead of Sidechain",
         );
@@ -1752,6 +1718,7 @@ mod tests {
     #[test]
     fn queued_history_keeps_its_clock_across_the_actual_plugin_reset() {
         let mut plugin = Harmonigraph::default();
+        let mut input = stop_input_worker(&mut plugin);
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
         let shared = &mut *shared;
@@ -1774,7 +1741,7 @@ mod tests {
         while shared.ui.picture.runtime.tracker.roll().notes().count() < 2
             && Instant::now() < deadline
         {
-            shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, 22.0);
+            input.drain(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 22.0);
             std::thread::yield_now();
         }
         let notes: Vec<_> =
@@ -1785,6 +1752,7 @@ mod tests {
     #[test]
     fn analyzer_source_time_ignores_transport_loops_stops_and_missing_positions() {
         let mut plugin = Harmonigraph::default();
+        let mut input = stop_input_worker(&mut plugin);
         plugin.sample_rate = 48_000.0;
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
@@ -1798,9 +1766,9 @@ mod tests {
             let mut main = [&mut left[..], &mut right[..]];
             plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
         }
-        let columns = shared.input.drain_columns(
-            &mut shared.ui.picture.runtime,
-            &shared.ui.picture.appearance,
+        let columns = input.drain_columns(
+            &mut shared.clock,
+            &mut shared.ui.picture,
             plugin.presentation_seconds,
         );
         assert!(columns.len() > 40, "all three callbacks must reach the analyzer");
@@ -1816,9 +1784,10 @@ mod tests {
         let mut right = [0.0; 384];
         let mut main = [&mut left[..], &mut right[..]];
         plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
-        shared.input.drain(
-            &mut shared.ui.picture.runtime,
-            &shared.ui.picture.appearance,
+        input.drain(
+            &mut shared.clock,
+            &mut shared.ui.picture,
+            &mut Vec::new(),
             plugin.presentation_seconds,
         );
         assert_eq!(shared.ui.picture.runtime.spectrum.columns_taken(), before);

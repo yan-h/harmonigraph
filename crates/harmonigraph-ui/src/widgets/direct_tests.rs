@@ -71,7 +71,7 @@ fn drift_edits_vector_and_compass_keeps_speed_independent() {
 fn cabinet_endpoint_sets_angle_and_length_within_the_quadrant() {
     let (mut a, mut l) = (0.3, 0.4);
     drag(|ui| cabinet(ui, &mut a, &mut l, (0.0, 0.0)), 0, egui::vec2(40.0, -60.0));
-    assert!((0.0..=std::f32::consts::FRAC_PI_2).contains(&a));
+    assert!(harmonigraph_scene::Camera::CABINET_ANGLE_RANGE.contains(&a));
     assert!(a > 0.3 && l > 0.4 && l <= 1.0);
 }
 #[test]

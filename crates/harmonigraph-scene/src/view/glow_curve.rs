@@ -2,6 +2,14 @@
 
 use super::*;
 
+/// Limits of the signed exponent that shapes the glow's normalized falloff
+/// (see [`GlowCurve::shape`]). Zero is linear, positive values fall quickly
+/// and negative values hold their brightness before falling. Eight already
+/// puts the halfway level within two percent of an endpoint, so more travel
+/// spends almost the whole bar on curves that read alike.
+pub const GLOW_CURVE_SHAPE_MIN: f32 = -8.0;
+pub const GLOW_CURVE_SHAPE_MAX: f32 = 8.0;
+
 /// The shape of the node glow's falloff through [`ViewConfig::glow_reach`].
 /// The centre and the far edge stay fixed at 1 and 0 while one signed exponent
 /// bends the curve between them without an interpolation join or an inflection.

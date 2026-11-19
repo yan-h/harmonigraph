@@ -85,9 +85,9 @@ fn retune_off_forgets_held_and_released_context_but_preserves_sounding_pitch() {
 fn show_hides_and_restores_held_output_without_changing_tuning() {
     use harmonigraph_core::NoteTracker;
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     let mut pair = Pair { hub, tune, raw: 0 };
     let mut tracker = NoteTracker::new();
@@ -156,7 +156,7 @@ fn central_edits_include_harmonigraph_and_use_each_tuners_host_latency() {
     assert_eq!(instances::snapshots().len(), 1, "a retired row cannot receive stale GUI edits");
     // A Tune the host has not activated yet is waiting, which keeps the fault
     // colour: a status to inspect (Yan, #1861).
-    let _waiting = Device::new(true);
+    let _waiting = tune();
     let row = instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap();
     assert_eq!(row.status, "Waiting for host activation");
     assert!(row.faulted, "a Tune waiting for activation drew no fault");
@@ -205,15 +205,8 @@ fn track_names_follow_the_host_until_overridden() {
     let _scope = crate::test_scope::enter();
     for tuner in [false, true] {
         for compat in [false, true] {
-            let device = Device::with_host(
-                tuner,
-                Host {
-                    track_info: true,
-                    track_info_compat: compat,
-                    track_name: std::sync::Mutex::new(Some("Bäss".to_owned())),
-                    ..Default::default()
-                },
-            );
+            let host = host().track_info(compat, Some("Bäss"));
+            let device = if tuner { Device::tune(host) } else { Device::hub(host).with_adaptive() };
             let snapshot = || instances::snapshots().into_iter().next().unwrap();
             let row = snapshot();
             assert_eq!(row.display_name, "Bäss", "init reads the host before any editor opens");
@@ -226,7 +219,7 @@ fn track_names_follow_the_host_until_overridden() {
                 .cast::<clap_plugin_track_info>())
             };
             let rename = |name: Option<&str>| {
-                *device._stats.track_name.lock().unwrap() = name.map(str::to_owned);
+                *device.host().track_name.lock().unwrap() = name.map(str::to_owned);
                 unsafe {
                     extension.changed.unwrap()(device.plugin);
                 }
@@ -249,7 +242,7 @@ fn track_names_follow_the_host_until_overridden() {
             rename(Some(""));
             assert_eq!(snapshot().display_name, fallback);
         }
-        let _device = Device::new(tuner);
+        let _device = if tuner { tune() } else { hub().with_adaptive() };
         let row = instances::snapshots().remove(0);
         assert_eq!(
             row.display_name,

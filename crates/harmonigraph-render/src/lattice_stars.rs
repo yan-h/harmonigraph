@@ -373,14 +373,11 @@ mod tests {
     use super::*;
     #[test]
     fn shader_and_uniform_validate() {
-        let module =
-            naga::front::wgsl::parse_str(SOURCE).map_err(|e| e.emit_to_string(SOURCE)).unwrap();
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap();
+        // `SOURCE` joins the stars ahead with the separator
+        // `crate::module_source` uses, so the seam reads off the same count.
+        let seam = crate::Seam::after("stars.wgsl", include_str!("shaders/stars.wgsl"));
+        crate::validate_wgsl("lattice_stars.wgsl", SOURCE, seam, &[] as &[&str])
+            .expect("baked lattice_stars.wgsl must parse and validate");
         crate::uniforms::layout::check_binding::<Settings>(SOURCE, 0, 0);
     }
 

@@ -30,8 +30,9 @@ categories = ["multimedia::audio"]
 license = "ISC"
 
 [features]
-# Enables deterministic scheduling observations only in the boundary fixtures.
-# Its counting allocator wraps the allocation guard, so it brings the guard.
+# Enables deterministic scheduling observations only in the boundary fixtures,
+# and the `testing` module's CLAP host every entry-point fixture runs on. Its
+# counting allocator wraps the allocation guard, so it brings the guard.
 clap-boundary-tests = ["assert_process_allocs"]
 assert_process_allocs = ["dep:nice-assert-no-alloc"]
 
@@ -49,6 +50,8 @@ required-features = ["clap-boundary-tests"]
 [[test]]
 name = "clap_auxiliary"
 path = "tests/clap_auxiliary.rs"
+# Its host is `harmonigraph_clap::testing`'s, behind the fixture feature.
+required-features = ["clap-boundary-tests"]
 
 [dependencies.anyhow]
 version = "1.0"

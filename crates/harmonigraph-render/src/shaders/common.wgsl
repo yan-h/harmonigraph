@@ -1,4 +1,4 @@
-// What the lattice, text and roll modules spell, spelled once.
+// What the lattice and text modules spell, spelled once.
 //
 // Not a module of its own. WGSL has no include and naga takes a string, so this
 // text is prepended to another module's own source at pipeline creation
@@ -204,9 +204,9 @@ const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
 // as a share of the result rather than inside the exponent.
 //
 // Spectral shadows spend darkness in stops, retaining stronger tails that
-// separate dots and labels from the spectrum. (Ribbons draw their own glow
-// off their edge's distance in roll.wgsl, linear in the darkness, and do not
-// come through here.) Lattice shadows use the
+// separate dots and labels from the spectrum. (Ribbons do not come through
+// here: their surround is the backdrop cut, read off their edge's distance in
+// roll.wgsl.) Lattice shadows use the
 // linear local_shadow_transmittance below. Each caller owns its kernel sample.
 //
 // `full` arrives already in 0..=1 and already spent through the Gaussian's

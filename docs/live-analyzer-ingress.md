@@ -32,8 +32,8 @@ One input worker drains this consumer, open window or shut (#1559):
 it takes the notes and the audio under the editor's lock,
 runs the FFTs with the lock free,
 and hands the columns to the spectrum under it again.
-`LiveInput` owns the analysis and moves it out with the audio it takes (#1758).
-A frame reads the analysis lag from the settings rather than from the hand-over,
+The input worker owns `LiveInput`, the analysis included, rather than keeping it under the editor's lock (#1866).
+A frame reads the analysis lag from the settings, since the analysis is the worker's,
 and a Clear pressed during the FFTs empties the history before their columns join it,
 at most one step's worth from just before the press (#1784).
 Opening or closing the editor introduces no source epoch and moves no drain.

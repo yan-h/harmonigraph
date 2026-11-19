@@ -767,6 +767,9 @@ impl SharedState {
         self.workspace.layout.sanitize();
         self.workspace.interaction.analyzer_regions = persist.analyzer_regions;
         self.workspace.interaction.analyzer_regions.sanitize();
+        // The regions' geometry is new, so the next open frame takes the
+        // spectrum hold from it.
+        self.picture.surfaces.spectrum_hold.relayout();
         // A restore into an open window replaces the layout a fold or a
         // divider drag in flight was made for.
         self.workspace.layout_runtime = workspace::Runtime::default();
@@ -808,7 +811,7 @@ impl SharedState {
         self.workspace.window_size_change = egui::Vec2::ZERO;
         self.workspace.interaction.appearance_editor.start_window_session();
         // The new window lays the Analyzer out afresh.
-        self.workspace.interaction.analyzer_regions.relayout();
+        self.picture.surfaces.spectrum_hold.relayout();
         // A viewing aid for one window (`SurfaceState::star_solo`).
         self.picture.surfaces.star_solo = Default::default();
     }
@@ -895,8 +898,8 @@ impl UiPersist {
     ///
     /// - the host-owned camera ([`AppearanceDocument::copy_host_owned`]),
     ///   which reaches it as parameters and which automation moves;
-    /// - what the Analyzer's regions lay out by themselves, and the relayout
-    ///   flag serde skips ([`Regions::copy_layout`]).
+    /// - what the Analyzer's regions lay out by themselves
+    ///   ([`Regions::copy_layout`]).
     ///
     /// The layout `workspace::show` fits to the window is settled where it is
     /// written instead, since the layout is also edited.
@@ -906,7 +909,7 @@ impl UiPersist {
     /// whole by its derived `PartialEq`, so a field added inside one is in the
     /// key by itself. What it does not: a `#[serde(skip)]` field added to any
     /// of them is compared all the same, and marks the project at every change
-    /// until it is copied in here, as the regions' relayout flag is.
+    /// until it is copied in here.
     ///
     /// [`AppearanceDocument::copy_host_owned`]: crate::AppearanceDocument::copy_host_owned
     /// [`Regions::copy_layout`]: crate::panes::spectral::collapse::Regions::copy_layout
