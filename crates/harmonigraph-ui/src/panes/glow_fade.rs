@@ -181,7 +181,7 @@ impl GlowFade {
     /// Answers whether some light still moves a pixel on its own after the
     /// step: the larger of its level's distance above its target and its
     /// colour's still to move ([`easing`]), times the glow gain, is over
-    /// [`VISIBLE_STEP`]. What the frame loop stays awake for (`releasing` in
+    /// [`VISIBLE_STEP`], on a layer that draws it. What the frame loop stays awake for (`releasing` in
     /// `lib.rs`), asked on the step's own draw.
     fn step(&mut self, scene: &mut Scene, view: &ViewConfig, now: f64) -> bool {
         let (up, down) = coefficients(now, self.at, view.glow_attack, view.glow_release);
@@ -201,6 +201,18 @@ impl GlowFade {
         // settled at its reading is still, so a mark held with no key down
         // never keeps the loop awake.
         let strength = scene.view.glow_strength;
+        // And only a light some layer draws: the renderer lays a slot's weight
+        // on the octave band and a mark's on the mark strip, each only where
+        // that layer has width (`ink_at` in `lattice.wgsl`), and a halo with no
+        // ink under it is no pixels at all. Its fall is a still picture, so it
+        // holds nothing (#1836). The weights themselves are left whole: the
+        // level is read off every layer, and gating them here would move the
+        // halo of a node that does draw one.
+        let (band, marks) = (scene.outer_outer > scene.outer_inner, scene.view.marks_draw());
+        let shines = |light: &GlowLight| {
+            (band && light.l.iter().any(|&l| l > 0.0))
+                || (marks && light.m.iter().any(|&m| m > 0.0))
+        };
         let mut moving = false;
         // The lights this frame sees already, which are what a new one counts
         // against the most a surface lights at once: one carried for a node
@@ -250,7 +262,7 @@ impl GlowFade {
                     // Asked after the end is said, so the step that ends a
                     // light asks for no frame after it.
                     let seen = (lit.level - target).max(easing(lit.level, &lit.light, &goal));
-                    moving |= seen * strength > VISIBLE_STEP;
+                    moving |= seen * strength > VISIBLE_STEP && shines(&lit.light);
                     GlowStep { level: lit.level, light: lit.light }
                 }
                 // A node with no light yet and none arriving is left alone, and
@@ -770,6 +782,33 @@ mod tests {
         let mut scene = scene_at(&state, 1.5);
         let moving = fade.step(&mut scene, &state.appearance.view, 1.5);
         assert!(moving, "a released light is falling");
+    }
+
+    /// A falling light holds the frame loop only through a layer the renderer
+    /// draws it on: the octave band for a slot's light, the mark strip for a
+    /// mark's. With both dialled to nothing the halo is no pixels at all
+    /// (`ink_at` in `lattice.wgsl`), and its release is a still picture
+    /// (#1836).
+    #[test]
+    fn a_light_on_layers_that_draw_nothing_asks_for_no_repaint() {
+        let falling = |band_width: f32, mark_thickness: f32| {
+            let mut state = lit(0.0, 2.0);
+            state.appearance.view.band_width = band_width;
+            state.appearance.view.mark_thickness = mark_thickness;
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+            let mut fade = GlowFade::default();
+            let mut scene = scene_at(&state, 0.0);
+            fade.step(&mut scene, &state.appearance.view, 0.0);
+            state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+            let mut scene = scene_at(&state, 1.5);
+            let moving = fade.step(&mut scene, &state.appearance.view, 1.5);
+            let level = node_at(&scene, LatticePos::ORIGIN).glow.level;
+            assert!(level > 0.3, "the fixture's light must still be falling: {level}");
+            moving
+        };
+        assert!(falling(0.2, 0.0), "a light the band draws is falling");
+        assert!(falling(0.0, 0.1), "a light the mark draws is falling");
+        assert!(!falling(0.0, 0.0), "a light no layer draws held the loop");
     }
 
     /// The step that ends a light, snapping it to exactly 0, asks for no
