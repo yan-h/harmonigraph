@@ -58,5 +58,5 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 
 ## 2026-11-18 (#1824, in chat)
 
-- An edit to what `editor-state` saves, the window's size and the System tab's Own window choice, marks the Bitwig project modified too, through the same notice as `ui-state` (option A). A host-driven resize while the editor opens does not count, nor does a restore. #1824
-Where the opening ends, at the end of the window's first frame, is the implementer's choice, not Yan's answer.
+- An edit to what `editor-state` saves, the window's size and the System tab's Own window choice, marks the Bitwig project modified too, through the same notice as `ui-state` (option A). #1824
+That a host-driven resize while the editor opens does not count, that a restore does not, and that the opening ends with the window's first frame are the implementer's reading, settled by the coordinating session, not Yan's answer: option A left the host resize open and named no restore.

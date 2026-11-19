@@ -218,8 +218,7 @@ impl StarLayout {
 /// the finest `Star spacing`, where a far cell is a fraction of a pixel on any
 /// real pane — the finest cells are raised to the
 /// smallest floor that fits, so those slices hold fewer, sparser stars and
-/// every other slice is untouched. Solo only changes composition: hidden
-/// layers keep their cells and colour history running at the full field's cost.
+/// every other slice is untouched.
 pub(crate) fn star_layout(settings: harmonigraph_scene::StarSettings, aspect: f32) -> StarLayout {
     let wanted = star_cells(settings);
     let drawn = settings.plan().depths.map(|depth| depth.gather != StarGather::Off);
