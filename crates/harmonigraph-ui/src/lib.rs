@@ -527,7 +527,7 @@ impl Animating {
         let moving = state.picture.surfaces.moving_this_frame;
         Self {
             voices: state.picture.runtime.tracker.voices().next().is_some(),
-            learn: state.picture.runtime.learn_active,
+            learn: moving.learn,
             roll: moving.roll,
             releasing: moving.releasing,
             audible: moving.audible,
@@ -612,6 +612,12 @@ pub(crate) struct Moving {
     /// The piano roll still scrolling a note across its window
     /// ([`roll::scrolling`](panes::spectral::roll::scrolling)).
     roll: bool,
+    /// Learn's armed pulse, drawn: the lattice's badge and border, or the
+    /// Tuning pane's ring round its switch. Reported where each is painted,
+    /// so Learn armed where neither draws — Lattice Map, which suspends it,
+    /// or both panes out of sight — leaves a still picture to the idle poll
+    /// (#1834).
+    learn: bool,
 }
 
 impl Moving {
@@ -625,6 +631,10 @@ impl Moving {
 
     pub(crate) fn roll(&mut self, moving: bool) {
         self.roll |= moving;
+    }
+
+    pub(crate) fn learn(&mut self, pulsing: bool) {
+        self.learn |= pulsing;
     }
 }
 

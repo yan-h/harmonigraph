@@ -182,6 +182,11 @@ pub(super) fn tuning_pane(
     params: &dyn ParamBackend,
     now: f64,
 ) {
+    use harmonigraph_core::lattice_map::TuningEngine;
+    // Read once, ahead of everything that asks which engine plays: the Learn
+    // ring below and the retuning controls under it read this frame's engine,
+    // so the two never disagree about whether Learn acts (#1834).
+    let maps = params.lattice_maps();
     section(ui, "Tuning", |ui| {
         axis_bar(ui, state, params, TuningAxis::COffset);
         axis_bar(ui, state, params, TuningAxis::Three);
@@ -251,11 +256,7 @@ pub(super) fn tuning_pane(
             // Lattice Map learns nothing, so an armed ring there would
             // announce an action that does not happen.
             let learning = state.runtime.learn_active
-                && state
-                    .runtime
-                    .lattice_maps
-                    .as_ref()
-                    .is_none_or(|maps| maps.playback.engine.learns());
+                && maps.as_ref().is_none_or(|maps| maps.playback.engine.learns());
             if learning {
                 // Pulsing armed ring so the engaged mode can't be missed. It
                 // stands `pad` out from the switch, so its corners are the
@@ -271,6 +272,7 @@ pub(super) fn tuning_pane(
                     ),
                     egui::StrokeKind::Outside,
                 );
+                state.surfaces.moving_this_frame.learn(true);
             }
         });
     });
@@ -300,8 +302,6 @@ pub(super) fn tuning_pane(
         axis_bar(ui, state, params, TuningAxis::Tolerance);
     });
 
-    use harmonigraph_core::lattice_map::TuningEngine;
-    let maps = params.lattice_maps();
     match (retuning_controls(ui, state, params, maps.as_ref()), &maps) {
         (TuningEngine::Adaptive, _) => adaptive_controls(ui, state, params),
         (TuningEngine::LatticeMap, Some(view)) => map_controls(ui, state, params, view),
@@ -312,8 +312,8 @@ pub(super) fn tuning_pane(
     if !configuration_notice && state.runtime.configuration_pending_shown {
         crate::widgets::label(ui, "Tuning change pending audio adoption");
     }
-    // Kept for the rest of the editor — the lattice's dots and edits, and the
-    // Learn ring above, next frame — which wants the same view.
+    // Kept for the rest of the editor — the lattice's dots and edits — which
+    // wants the same view.
     if maps.is_some() {
         state.runtime.observe_maps(maps);
         if state.runtime.maps_pending {

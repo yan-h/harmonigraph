@@ -379,6 +379,7 @@ pub(crate) fn draw_lattice(
     }
     if let Some(mut badge) = badge {
         draw_learn_overlay(ui, rect, state, now, surface, &mut badge);
+        state.surfaces.moving_this_frame.learn(true);
     }
     state.surfaces.spare_nodes = scene.nodes;
     window
@@ -869,6 +870,43 @@ mod tests {
     };
     use harmonigraph_core::{NoteEvent, SourceId};
     use harmonigraph_scene::NoteNames;
+
+    /// Learn armed holds the loop at full rate through the lattice only while
+    /// the pane draws its pulsing badge: under an engine that learns, and not
+    /// under Lattice Map, which suspends Learn and leaves the pane still
+    /// (#1834). Nothing else here moves, so the frame's report is Learn's.
+    #[test]
+    fn learn_holds_the_loop_only_while_its_badge_pulses() {
+        use crate::lattice_maps::{MapPlayback, MapView};
+        use crate::tests::probe::events_into;
+        use harmonigraph_core::lattice_map::TuningEngine;
+        let pulsing = |engine: TuningEngine| {
+            let mut state = fresh();
+            state.runtime.learn_active = true;
+            state.runtime.lattice_maps = Some(MapView {
+                playback: MapPlayback { engine, ..Default::default() },
+                offsets: Default::default(),
+                followed: harmonigraph_core::LatticePos::ORIGIN,
+                unadopted: None,
+                names: Default::default(),
+                edit_shape: false,
+                can_undo: false,
+                full: false,
+            });
+            let ctx = themed();
+            let screen = egui::vec2(400.0, 400.0);
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen);
+            let output =
+                events_into(&ctx, screen, rect, vec![], |ui| lattice_pane(ui, &mut state, 0.0, 0));
+            let badge = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(r)
+                    if r.stroke.color == theme::armed().gamma_multiply(learn_pulse(0.0)))
+            });
+            (badge, state.surfaces.moving_this_frame.learn)
+        };
+        assert_eq!(pulsing(TuningEngine::Off), (true, true), "the badge pulses at full rate");
+        assert_eq!(pulsing(TuningEngine::LatticeMap), (false, false), "a still pane held the loop");
+    }
 
     /// An audition marks the nodes of the map its spot was recorded under,
     /// where its notes were assigned; editing a shape marks the live map,

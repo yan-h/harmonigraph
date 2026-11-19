@@ -150,32 +150,41 @@ fn derive_from_fifth_sends_the_shown_policy_with_the_shown_fifths_keyboard() {
     assert_eq!(sent, [Some(PolicyConfig { keyboard, ..shown })]);
 }
 
-/// With Learn on, whether the pane draws the armed ring at `now`.
-fn learn_ring_drawn(engine: TuningEngine) -> bool {
+/// With Learn on, whether the pane's first frame draws the armed ring at
+/// `now`, and whether that frame holds the loop at full rate for it.
+fn learn_ring_drawn(engine: TuningEngine) -> (bool, bool) {
     let ctx = themed();
     let params = Edits::new(engine, Follow::Off, 1);
     let mut state = fresh_picture();
     state.runtime.learn_active = true;
     let size = egui::vec2(420.0, 2000.0);
     let now = 0.0;
-    let mut frame = || {
+    let ring = theme::armed().gamma_multiply(learn_pulse(now));
+    let output =
         events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), vec![], |ui| {
             tuning_pane(ui, &mut state, &params, now);
-        })
-    };
-    // The pane learns the engine from the previous frame's view.
-    frame();
-    let ring = theme::armed().gamma_multiply(learn_pulse(now));
-    frame().shapes.iter().any(|shape| {
+        });
+    let drawn = output.shapes.iter().any(|shape| {
         matches!(&shape.shape, egui::Shape::Rect(rect)
             if rect.stroke.color == ring && rect.stroke.width == theme::LINE_WIDTH)
-    })
+    });
+    (drawn, state.surfaces.moving_this_frame.learn)
 }
 
+/// On the pane's first frame, so the engine it reads is this frame's rather
+/// than one an earlier frame left behind.
 #[test]
 fn the_learn_ring_is_drawn_only_where_learn_acts() {
-    assert!(learn_ring_drawn(TuningEngine::Off), "Pass through learns, so the ring pulses");
-    assert!(!learn_ring_drawn(TuningEngine::LatticeMap), "Lattice Map suspends Learn");
+    assert_eq!(
+        learn_ring_drawn(TuningEngine::Off),
+        (true, true),
+        "Pass through learns, so the ring pulses at full rate"
+    );
+    assert_eq!(
+        learn_ring_drawn(TuningEngine::LatticeMap),
+        (false, false),
+        "Lattice Map suspends Learn, and its still ring holds nothing"
+    );
 }
 
 /// Each row's buttons act on that row's map, selected or not, and are
