@@ -134,7 +134,7 @@ impl Grab {
     ) -> (f32, f32) {
         // No span wider than the axis, which would cross the clamps below.
         let min_span = min_span.min(max - min);
-        match self {
+        let (lo, hi) = match self {
             Grab::Low => (v.clamp(min, (hi - min_span).max(min)), hi),
             Grab::High => (lo, v.clamp((lo + min_span).min(max), max)),
             // Where the pointer wants the span, wall behavior aside. Running
@@ -154,7 +154,22 @@ impl Grab {
                     (want_lo, want_hi)
                 }
             }
-        }
+        };
+        // The pair the bar writes is the pair its config's `sanitize` keeps:
+        // the same two clamps, `lo` under `max - min_span` and then `hi` at
+        // least `lo + min_span`, on every grab. Each arm keeps `min_span` in
+        // exact arithmetic, but f32 does not: `hi - lo` after a High drag to
+        // its stop can come out an ulp short, a Span carries that width on,
+        // and a Low stop at `hi - min_span` can land an ulp low, so the next
+        // `sanitize` moved the value and `compose_scene`'s debug assert that
+        // the view is sanitized fired (#1839). One post-condition rather than
+        // a repair in each arm, so a new arm cannot miss it.
+        //
+        // `max`/`min` rather than `clamp`: on an axis end that is not a whole
+        // number (the analyzer's pitch range) `lo + min_span` can round past
+        // `max`, and `f32::clamp` panics when its bounds cross.
+        let lo = lo.min(max - min_span);
+        (lo, hi.max(lo + min_span).min(max))
     }
 }
 
@@ -1922,6 +1937,34 @@ mod tests {
         assert_eq!((lo, hi), (48.0, 60.0), "low stops one octave below high");
         let (lo, hi) = Grab::High.apply(-200.0, (24.0, 60.0), AXIS, OCTAVE);
         assert_eq!((lo, hi), (24.0, 36.0), "high stops one octave above low");
+    }
+
+    /// A grab writes a pair its config's `sanitize` keeps as it is, f32
+    /// rounding included, so the value on screen is the one the file holds
+    /// and `compose_scene`'s sanitized-view assert holds (#1839). The issue's
+    /// two cases: the Pitch color range's High end dragged to its stop and the
+    /// span then slid, and a Low end stopped under a high end an ulp off a
+    /// whole number on a negative axis (Level color range).
+    #[test]
+    fn a_grab_writes_a_pair_sanitize_keeps() {
+        // `ViewConfig::sanitize`'s and `SpectrumConfig::sanitize`'s two clamps.
+        let sanitized = |(lo, hi): (f32, f32), (min, max): (f32, f32), span: f32| {
+            let lo = lo.clamp(min, max - span);
+            (lo, hi.clamp(lo + span, max))
+        };
+        let (color, span) = ((0.0, 120.0), 12.0);
+        let lo = 87.0f32 / 200.0 * 120.0;
+        let stopped = Grab::High.apply(-500.0, (lo, 100.0), color, span);
+        assert_eq!(stopped, sanitized(stopped, color, span), "High at its stop");
+        let slide = Grab::Span { offset: 0.0, width: stopped.1 - stopped.0 };
+        let slid = slide.apply(30.0, stopped, color, span);
+        assert_eq!(slid, sanitized(slid, color, span), "the stopped span slid");
+
+        let level = (-100.0, 0.0);
+        let hi = -52.000_004_f32;
+        assert_ne!(hi, -52.0, "the fixture's high end is an ulp off a whole number");
+        let low = Grab::Low.apply(500.0, (-90.0, hi), level, span);
+        assert_eq!(low, sanitized(low, level, span), "Low at its stop");
     }
 
     /// Either end can still reach its own limit — clamping the pair must not
