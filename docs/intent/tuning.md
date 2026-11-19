@@ -62,3 +62,7 @@ Yan took the recommendations made after the audit was checked against the code (
 
 - "Waiting for host activation" keeps the fault colour: it is a status to inspect, shown only before the first activation. The status-string check (#1841) is fixed without changing it. #1861
 - One CLAP test host serves all five suites that now carry their own, in `harmonigraph-clap` behind its test feature, with Retune or Adaptive chosen explicitly; the take suites move out of `configuration/tests.rs`. To be built after #1814 step 7. #1861 R3
+
+## 2026-11-19 (#1881, PR #1884)
+
+- With the CLAP shell running the steady clock on across a host's restart of its counter, a backward step no longer reaches the plugin, so a Lattice Map note struck just before a restart is tuned by the map in force at its own sample. This supersedes the 2026-11-14 #1792 line's sentence about a note struck just before a steady-clock discontinuity, superseded by the session under Yan's rule on decisions whose need a change still meets, and told to Yan in the wave's questions issue. The one lost-history path for every engine stands. #1881

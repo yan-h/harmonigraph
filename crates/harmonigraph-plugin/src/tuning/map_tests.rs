@@ -345,24 +345,23 @@ fn a_held_over_onset_keeps_its_own_blocks_configuration_across_an_editor_edit() 
     assert!((struck.frozen_offset_microcents + 1_000_000).abs() < 100);
 }
 
-/// A record the Hub holds over to the next callback carries a sample from
-/// before this callback began, and a steady-clock regression clears the
-/// history out from under it: `at` then has nothing to answer with. Holding
-/// one over is routine rather than exotic — any Tune the host runs after the
-/// Hub is a callback behind by construction, and `collect` leaves whatever
-/// passes `BATCH_EVENTS` in the ring on top of that.
+/// A record whose sample the history does not reach: here a Tune's, struck on
+/// a callback past the end of the Hub's next one, as a Tune whose counter has
+/// jumped ahead strikes it. `at` never extrapolates through a callback whose
+/// automation it has not seen, so it has nothing to answer with. (A steady
+/// counter that goes back no longer reaches this path: the shell runs it on,
+/// #1881.)
 ///
 /// Every engine then assigns from the state it holds now, as it would have had
 /// the history still reached that sample (#920, #1792), rather than leaving the
 /// onset raw.
 #[test]
-fn a_retained_onset_behind_a_clock_regression_is_assigned_from_the_live_state() {
+fn a_retained_onset_the_history_does_not_reach_is_assigned_from_the_live_state() {
     for engine in [TuningEngine::Adaptive, TuningEngine::LatticeMap] {
-        // The same onset twice: once with the next callback in sequence, which
-        // is the control, and once with it located behind the sample the
-        // retained record carries.
+        // The same onset twice: once struck inside the history, which is the
+        // control, and once struck past the Hub's next callback.
         let mut landed: [(Option<LatticePos>, i64, bool); 2] = Default::default();
-        for (slot, backward) in [false, true].into_iter().enumerate() {
+        for (slot, ahead) in [false, true].into_iter().enumerate() {
             let _scope = crate::test_scope::enter();
             let mut hub = Device::new(false);
             hub.activate_format(44100.0, 512);
@@ -378,9 +377,10 @@ fn a_retained_onset_behind_a_clock_regression_is_assigned_from_the_live_state() 
             // The Hub runs first in this block, so the copy of the note lands
             // in the ring behind the drain that would have taken it.
             hub.run_format(1536, vec![], None, None, 512);
-            source.run_format(1536, vec![note(1, 0, 50, 0, true)], None, None, 512);
+            let struck = if ahead { 4096 } else { 1536 };
+            source.run_format(struck, vec![note(1, 0, 50, 0, true)], None, None, 512);
             assert_eq!(inspect_hub(&hub, |hub| hub.test_held(0)), 0, "the copy is still in flight");
-            hub.run_format(if backward { 1024 } else { 2048 }, vec![], None, None, 512);
+            hub.run_format(2048, vec![], None, None, 512);
             let voice = voice(&hub, 0, 50);
             let status = hub.shared().status.load(Ordering::Relaxed);
             landed[slot] =
