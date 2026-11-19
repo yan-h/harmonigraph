@@ -139,7 +139,7 @@ impl LiveInput {
     /// display state that makes the samples unwanted: the curve and the
     /// spectrogram read this one analyzer, the curve is always drawn, and
     /// feeding it is also what drives smooth repaint while anything it heard
-    /// is still on screen (`harmonigraph_ui::Animating::audible`).
+    /// is still on screen (`harmonigraph_ui::Reason::Audible`).
     fn take_audio(&mut self, appearance: &harmonigraph_ui::AppearanceDocument) -> Option<Taken> {
         // One clock conversion per take, shared with note delivery and made
         // in the same hold, observed and then mapped as a frame's drain did.

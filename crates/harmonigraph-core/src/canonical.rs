@@ -553,7 +553,6 @@ mod tests {
         tracker.replace_source(&off).unwrap();
         assert_eq!(tracker.held_count(), 0);
         assert_eq!(tracker.roll().notes().count(), 0, "a hidden source draws nothing");
-        assert_eq!(tracker.roll().latest_activity(2.05), None, "and keeps nothing animating");
         let mut tuning = delta(
             NoteEvent {
                 time: 2.1,

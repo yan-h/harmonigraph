@@ -204,6 +204,10 @@ pub(super) struct NoteLabel {
     pub lead: egui::Pos2,
     /// The direction from that point INTO the note — see the measured rectangle.
     pub grow: egui::Vec2,
+    /// Its note is on a roll that scrolls and its body has not yet passed the
+    /// far edge: a name still inside its own Span, which holds the frame loop
+    /// ([`Reason::RollInSpan`](crate::Reason::RollInSpan)).
+    pub in_span: bool,
     /// Test-only: the take time this name was placed at. Which NOTE a name
     /// belongs to is the whole question when asking whether the set of them
     /// holds still as the picture scrolls, and a rect that scrolls cannot
@@ -347,12 +351,15 @@ pub(super) fn plan(
             .roll
             .notes()
             .filter(move |note| source.plays(shown, note) && note.stop(time.now) >= sweep_from)
-            .map(move |note| (note, time, anchor_edge(note, &time, anchor)))
+            .map(move |note| {
+                let in_span = source.now_line && note.stop(time.now) >= time.oldest();
+                (note, time, anchor_edge(note, &time, anchor), in_span)
+            })
             // Nor a note whose named end lies past the near edge, which only
             // Tape mode's song has: that end is ink this window does not draw,
             // so its name leaves with it, as a name leaves the far edge with
             // its onset (#1728's pick).
-            .filter(move |(_, _, edge)| edge.time <= time.origin)
+            .filter(move |(_, _, edge, _)| edge.time <= time.origin)
     });
 
     // Measure each pitch class once per frame. Font, scale and direction are
@@ -400,7 +407,7 @@ pub(super) fn plan(
     // no longer makes this trade — there a name stays until its own box has
     // left (see `visible` below) — so the two edges now differ.
     let mut candidates = Vec::new();
-    for (note, time, edge) in notes {
+    for (note, time, edge, in_span) in notes {
         let (name, ink) = naming(edge.pitch, &mut names);
         let beyond = (scale.min_midi - edge.pitch).max(edge.pitch - scale.max_midi);
         if !width.reaches(note, time.now, beyond) {
@@ -425,6 +432,7 @@ pub(super) fn plan(
                 rect,
                 lead,
                 grow,
+                in_span,
                 #[cfg(test)]
                 at: edge.time,
             },
@@ -1049,7 +1057,8 @@ mod tests {
             // As Tape mode's: the window 32 to 42 s, every note ended.
             let time =
                 TimeAxis { split, depth_span: 1.0 - split, window: 10.0, origin: 42.0, now: 42.0 };
-            let sources = [RollSource { roll: &recorded, time, lead: false, live_during: None }];
+            let sources =
+                [RollSource { roll: &recorded, time, now_line: false, live_during: None }];
             let mut thinning = Thinning::default();
             let placed =
                 plan_sources_for_test(&state, &axes, &scale, &sources, 100.0, FLAT, &mut thinning);
@@ -1314,6 +1323,7 @@ mod tests {
                 rect: egui::Rect::NOTHING,
                 lead: axes.at(0.5, 0.5) + axes.dir_depth() * (LABEL_INSET * FLAT.air),
                 grow: axes.dir_depth(),
+                in_span: false,
                 #[cfg(test)]
                 at: 0.0,
             })
@@ -3174,6 +3184,7 @@ mod tests {
                             rect: egui::Rect::NOTHING,
                             lead: anchor + grow * (LABEL_INSET * scales.air),
                             grow,
+                            in_span: false,
                             at: 0.0,
                         };
                         let mut batch = crate::text::TextBatch::default();

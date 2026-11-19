@@ -1008,10 +1008,14 @@ impl Plugin for Harmonigraph {
         // Reset only observed direct input. The session owner must publish
         // its own explicit source/session controls after lifecycle validation.
         // Presentation time stays continuous across the reset, so history
-        // queued before it keeps its place.
+        // queued before it keeps its place. The marker is timed where the
+        // Hub's clock left off, which the next callback's notes start at, or,
+        // before any, at the time that clock will be pinned to.
         self.take.publish_clock(self.presentation_seconds);
+        let at = self.aggregation.as_ref().and_then(|hub| hub.endpoint());
         let _ = self.take.publish_note(
-            CoreNoteEvent::source_reset(self.presentation_seconds, SourceId::DIRECT).into(),
+            CoreNoteEvent::source_reset(at.unwrap_or(self.presentation_seconds), SourceId::DIRECT)
+                .into(),
         );
     }
 
