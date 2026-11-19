@@ -215,6 +215,28 @@ pub const PITCH_COLOR_MAX: f32 = 120.0;
 /// about how small type may be drawn) says anything about that.
 pub const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 
+/// A range's pair of ends held to its axis `min..=max` with the high end at
+/// least `min_span` above the low: the low end under `max - min_span`, then the
+/// high end between `lo + min_span` and `max`.
+///
+/// The one owner of that rule, for every pair a `sanitize` repairs and every
+/// control that writes one (the range bars, the analyzer's drags), so the pair
+/// a control writes is the pair the next `sanitize` keeps, f32 rounding
+/// included (#1839). Both ends must be finite; callers repair a non-finite
+/// one first.
+///
+/// An axis too short for its span crosses the clamps' bounds, which no caller
+/// hands it: a `debug_assert`, as the stakes record asks of a case no
+/// producer writes (#1631), and in release `f32::clamp`'s own panic.
+pub fn clamp_span(lo: f32, hi: f32, (min, max): (f32, f32), min_span: f32) -> (f32, f32) {
+    debug_assert!(
+        min <= max - min_span && (max - min_span) + min_span <= max,
+        "an axis {min}..={max} too short for a span of {min_span}"
+    );
+    let lo = lo.clamp(min, max - min_span);
+    (lo, hi.clamp(lo + min_span, max))
+}
+
 /// The narrowest and widest the spectral kernel can be set to
 /// ([`ViewConfig::spectral_width`]), in cents — the bar's two ends, and what
 /// `sanitize` holds a hand-edited view to.

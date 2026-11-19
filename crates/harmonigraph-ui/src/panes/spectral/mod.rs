@@ -36,6 +36,8 @@ pub(crate) use gestures::DEPTH_ZOOM_PER_DRAG_POINT;
 /// things with it.
 pub(crate) use gestures::ZOOM_PER_SCROLL_POINT;
 pub(crate) use gestures::{hold_spectrum, SpectrumHold};
+#[cfg(test)]
+pub(crate) use settings::TEXTURE_CHOICES;
 pub(super) use settings::{analysis_section, ribbons_section, spectrogram_section, view_section};
 
 use crate::{theme, PictureState};
@@ -175,17 +177,24 @@ fn level_label_into(joined: bool) -> f32 {
 /// Lighting a band here for the lattice-hovered pitch class is the same
 /// trade the other way round — in every octave, it puts a stripe across the
 /// whole picture, too loud an answer to a pointer resting somewhere else.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spectral_pane(
     ui: &mut egui::Ui,
     state: &mut PictureState,
     now: f64,
-    // Which live copy of the pane this is (see `crate::draw_pane`): two live
+    // Which live copy of the pane this is (see `crate::draw_panes`): two live
     // spectrograms in a frame need their own grid.
     surface: usize,
     // Scale point-sized ribbon floors and shadows with the composed preview.
     // The configured semitone width already follows the pane's pitch axis.
     point_scale: f32,
     navigation: Navigation,
+    // The window of the lattice this pane describes, which its off-lattice
+    // bands and its names ask (`PictureState::shown`): the docked lattice's
+    // from the frame before for the docked pane, and the same frame's own
+    // lattice's, drawn just before it, for a composed one: the Video preview or
+    // an export (`crate::draw_panes`, #1833).
+    shown: harmonigraph_scene::DrawnWindow,
     // The Stars solo the spectrogram draws: the window's for the working
     // pane, none for the Video preview and an export (Yan, #1862).
     star_solo: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
@@ -474,7 +483,7 @@ pub(crate) fn spectral_pane(
     // this reads `shown` rather than the reach.
     let mut namer = names::Namer::new(
         &state.appearance.view,
-        state.shown(),
+        shown,
         &state.runtime.tuning,
         state.runtime.tempered,
     );

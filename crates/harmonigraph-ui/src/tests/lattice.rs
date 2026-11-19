@@ -60,7 +60,7 @@ fn zoom_gesture_over_lattice_zooms_the_camera() {
 /// drafting choices remain available even when another projection is active.
 #[test]
 fn double_click_resets_lattice_navigation_but_keeps_drafting_choices() {
-    for projection in PROJECTIONS {
+    for projection in projections() {
         let mut state = fresh();
         let mut h = DockHarness::new();
         let at = egui::pos2(150.0, 150.0); // Inside the default Lattice section.
@@ -390,23 +390,11 @@ fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
         drawn.count(),
         state.picture.appearance.view.reach().count(),
     );
-
-    // Export has no pointer/chrome, but its spectral pane still describes
-    // the camera's picture. A zoomed-out window must not fall back to reach.
-    let mut state = fresh();
-    state.picture.appearance.camera.projection = harmonigraph_scene::Projection::Perspective;
-    state.picture.appearance.camera.distance = harmonigraph_scene::Camera::MAX_DISTANCE;
-    let backend = RecordingBackend::default();
-    begin_frame(&mut state.picture, &backend, 0.0);
-    let expected =
-        state.picture.appearance.view.scrolled(&state.picture.appearance.camera, 16.0 / 9.0);
-    assert_ne!(expected, state.picture.appearance.view.reach());
-    super::probe::painted_full(egui::vec2(640.0, 360.0), |ui| {
-        crate::draw_pane(ui, Pane::Lattice, &mut state.picture, 0.0, 0);
-    });
-    assert_eq!(state.picture.surfaces.drawn_this_frame, Some(expected));
-    begin_frame(&mut state.picture, &backend, 1.0 / 60.0);
-    assert_eq!(state.picture.shown(), expected, "export discarded the camera window");
+    // A composed frame, an export or the Video preview, hands its spectral
+    // pane the window its own lattice drew instead (`crate::draw_panes`), held
+    // by `an_exported_frame_flags_nothing_its_own_lattice_draws` in
+    // harmonigraph-offline and `the_preview_describes_its_own_lattice_rather_
+    // than_the_docked_one`.
 }
 
 /// The lattice pane stands on a ground it paints itself, and paints the same
@@ -420,7 +408,8 @@ fn the_lattice_pane_paints_the_ground_it_hands_the_scene() {
     let mut state = fresh();
     let screen = egui::vec2(600.0, 500.0);
     let shapes = super::probe::painted_full(screen, |ui| {
-        crate::draw_pane(ui, Pane::Lattice, &mut state.picture, 0.0, 0);
+        let full = [(Pane::Lattice, ui.max_rect())];
+        crate::draw_panes(ui, &full, &mut state.picture, 0.0);
     })
     .shapes;
 
@@ -462,7 +451,8 @@ fn the_pane_paints_the_shells_ground_rather_than_the_skins() {
     state.picture.set_background((7, 9, 11));
     let screen = egui::vec2(600.0, 500.0);
     let shapes = super::probe::painted_full(screen, |ui| {
-        crate::draw_pane(ui, Pane::Lattice, &mut state.picture, 0.0, 0);
+        let full = [(Pane::Lattice, ui.max_rect())];
+        crate::draw_panes(ui, &full, &mut state.picture, 0.0);
     })
     .shapes;
 

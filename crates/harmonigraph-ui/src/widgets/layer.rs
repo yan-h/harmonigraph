@@ -1,11 +1,11 @@
 //! [`LayerStrip`]: which septimal sheets the lattice draws and which of them
 //! is home, as one row.
 
-use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
+use egui::{CornerRadius, Response, Sense, TextStyle, Ui};
 use harmonigraph_scene::{ViewConfig, SEVENS_LAYER_LIMIT};
 
 use super::bar::{
-    bar_radius, bar_width, drag, elided_name, grip_radius, paint_thumbs, poised, track_fill,
+    allocate_row, bar_radius, drag, elided_name, grip_radius, paint_thumbs, poised, track_fill,
     with_gestures, BAR_TEXT_PAD, HANDLE_W,
 };
 use super::text_at;
@@ -261,11 +261,7 @@ impl<'a> LayerStrip<'a> {
 
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
-        let width = bar_width(ui);
-        let (rect, mut response) = ui.allocate_exact_size(
-            Vec2::new(width, theme::row_height(scale)),
-            Sense::click_and_drag(),
-        );
+        let (rect, mut response) = allocate_row(ui, "LayerStrip", Sense::click_and_drag());
         let slot = (rect.width() / CELLS as f32).max(1.0);
         // Cell units and points, the two directions. Cell `i` is centered on
         // `x_of(i)`, so a whole number is a sheet and a half is a border.

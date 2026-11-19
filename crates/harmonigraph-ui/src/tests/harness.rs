@@ -6,6 +6,7 @@
 //! in [`super::probe`], and [`press`] is re-exported from there so a suite
 //! reaching for the harness gets both.
 
+use crate::widgets::range_probe::Placed;
 use crate::*;
 use harmonigraph_take::RenderProgress;
 
@@ -303,19 +304,29 @@ impl DockHarness {
     }
 }
 
-/// The projections a settings sweep has to cover, default first.
+/// The modes a page draws controls of its own for, read off the editor's own
+/// option tables, so a mode added to a choice row is swept and range-guarded
+/// without a list here. Every one rather than every one that differs from
+/// today's defaults, because a default moving is how the sweeps lost the
+/// Stars editor, Scales and the Adaptive section without a line of them
+/// changing (#1484).
 ///
-/// Only the Camera block's content turns on this, and it turns on it hard:
-/// `view::camera` hides the whole camera-angle half — Camera yaw and pitch, the
-/// Angle presets, the Save-angle row — under Cabinet, which has a fixed
-/// viewpoint and no angle to set, and hides the two cabinet knobs under the
-/// others. `Camera::default()` IS Cabinet, so a fixture that takes the default
-/// and stops there never draws that half of the pane at all.
-pub(super) const PROJECTIONS: [harmonigraph_scene::Projection; 3] = [
-    harmonigraph_scene::Projection::Cabinet,
-    harmonigraph_scene::Projection::Perspective,
-    harmonigraph_scene::Projection::Orthographic,
-];
+/// Projection turns the Camera block hard: `view::camera` hides the whole
+/// camera-angle half (Camera yaw and pitch, the Angle presets, the Save-angle
+/// row) under Cabinet, and the two cabinet knobs under the others.
+pub(super) fn projections() -> impl Iterator<Item = harmonigraph_scene::Projection> {
+    crate::panes::view::PROJECTION_CHOICES.into_iter().map(|(projection, _, _)| projection)
+}
+
+/// The spectrogram's textures, as [`projections`] reads the projections.
+pub(super) fn textures() -> impl Iterator<Item = harmonigraph_scene::CloudStyle> {
+    crate::panes::spectral::TEXTURE_CHOICES.into_iter().map(|(style, _, _)| style)
+}
+
+/// The lattice glow's materials, as [`projections`] reads the projections.
+pub(super) fn materials() -> impl Iterator<Item = harmonigraph_scene::LatticeMaterial> {
+    crate::panes::MATERIAL_CHOICES.into_iter().map(|(material, _, _)| material)
+}
 
 /// Every settings tab, in the column's own order.
 pub(super) const SETTINGS_PANES: &[panes::Tab] = crate::workspace::Section::Settings.tabs();
@@ -351,7 +362,7 @@ pub(super) fn set_optional_sections(state: &mut SharedState, on: bool) {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Variant {
     Fresh,
-    /// The Lattice page's Camera block (see [`PROJECTIONS`]).
+    /// The Lattice page's Camera block (see [`projections`]).
     Projection(harmonigraph_scene::Projection),
     /// The spectrogram's texture, whose own controls the Analyzer page draws.
     Texture(harmonigraph_scene::CloudStyle),
@@ -364,6 +375,9 @@ pub(super) enum Variant {
     /// The Hub's note retuning on a backend that has an engine selector;
     /// Lattice Map plays [`lattice_map_view`].
     Engine(harmonigraph_core::lattice_map::TuningEngine),
+    /// Velocity and gain routed to Opacity, so the Mappings page draws a
+    /// weight bar beside a Delete button for each.
+    Routed,
 }
 
 /// One settings page drawn one way: what the layout sweeps iterate.
@@ -402,6 +416,12 @@ impl SettingsCase {
             Variant::Projection(projection) => appearance.camera.projection = projection,
             Variant::Texture(style) => appearance.spectrum.atmosphere.cloud_style = style,
             Variant::Material(material) => appearance.view.atmosphere.material_style = material,
+            Variant::Routed => {
+                let intensity = &mut appearance.view.intensity;
+                for source in [&mut intensity.velocity, &mut intensity.gain] {
+                    *source.weight_mut(harmonigraph_scene::IntensityTarget::Opacity) = Some(1.0);
+                }
+            }
             Variant::Lit => {
                 set_optional_sections(&mut state, true);
                 // The fresh middle is a look and free to grow, and a ring
@@ -429,111 +449,44 @@ impl SettingsCase {
             ..Default::default()
         }
     }
-
-    /// How many closed folds the page draws, which [`open_settings_pane`]
-    /// has to open: the Sources table's Source details and Tuning delay on
-    /// every Tuning page, whatever the engine, whose own controls are all
-    /// blocks; the Video page's Exports.
-    pub(super) fn folds(self) -> usize {
-        match self.pane {
-            panes::Tab::Tuning => 2,
-            panes::Tab::Video => 1,
-            _ => 0,
-        }
-    }
-
-    /// Where the page's text fields are, by what the fixture puts in them:
-    /// the empty camera preset name's hint, the saved map's name in its
-    /// field, and the selected source's name in Source details.
-    ///
-    /// A field is a well a row high or less, like a bar, and is told from one
-    /// by what it holds rather than by its size, which is exactly what a
-    /// sweep measures; named rather than sniffed, so a field nobody listed
-    /// reads as a mis-sized bar and fails, where a looser rule (any well
-    /// holding clipped text) was found to drop real bars instead.
-    pub(super) fn text_fields(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Pos2> {
-        let map_name = lattice_map_view().names.first().map(|(_, name)| name.clone());
-        let source = super::probe::tuning_instances().swap_remove(0).name;
-        shapes
-            .iter()
-            .filter_map(|cs| match &cs.shape {
-                egui::Shape::Text(t)
-                    if t.galley.text() == crate::panes::view::PRESET_NAME_HINT
-                        || Some(t.galley.text()) == map_name.as_deref()
-                        || t.galley.text() == source =>
-                {
-                    Some(t.visual_bounding_rect().center())
-                }
-                _ => None,
-            })
-            .collect()
-    }
 }
 
 /// The cases the layout sweeps draw: each page fresh, then every texture on
 /// the Analyzer page, every material and projection on the Lattice page,
-/// every retuning engine on the Tuning page, and [`Variant::Lit`] on the
+/// every retuning engine on the Tuning page, the Mappings page with two
+/// mappings routed ([`Variant::Routed`]), and [`Variant::Lit`] on the
 /// Lattice, Analyzer and System pages — all against a plugin's backend
 /// ([`SettingsCase::backend`]), with every fold open.
 ///
 /// Not every state a page can be in. Left out, among others: a greyed
 /// control's lit form (Texture mix or the glow at 0 grey the controls under
-/// them, and the width sweep skips a greyed track); the Mappings page with
-/// other than its fresh mappings; a tuner selected in the Sources table,
+/// them); a tuner selected in the Sources table,
 /// whose Source details adds a delay row the Hub's lacks; a configuration
 /// view (the range guard draws one, at 600 pt) or a status notice; and held
 /// voices.
 ///
-/// Every texture, material and engine rather than every one that differs from today's defaults,
-/// because a default moving is how the sweeps lost the Stars editor, Scales
-/// and the Adaptive section without a line of them changing (#1484). The
-/// matches are exhaustive so a new texture, material or engine does not
-/// compile until it is listed here.
+/// Every texture, material, projection and engine, for the reason
+/// [`projections`] gives.
 pub(super) fn settings_cases() -> Vec<SettingsCase> {
     use harmonigraph_core::lattice_map::TuningEngine;
-    use harmonigraph_scene::{CloudStyle, LatticeMaterial};
     use panes::Tab;
-    let textures = [CloudStyle::Watercolor, CloudStyle::Stars, CloudStyle::VelvetScales];
-    let materials = [
-        LatticeMaterial::None,
-        LatticeMaterial::Watercolor,
-        LatticeMaterial::Stars,
-        LatticeMaterial::VelvetScales,
-    ];
     let engines = TuningEngine::HOST;
-    for texture in textures {
-        match texture {
-            CloudStyle::Watercolor | CloudStyle::Stars | CloudStyle::VelvetScales => {}
-        }
-    }
-    for material in materials {
-        match material {
-            LatticeMaterial::None
-            | LatticeMaterial::Watercolor
-            | LatticeMaterial::Stars
-            | LatticeMaterial::VelvetScales => {}
-        }
-    }
-    for engine in engines {
-        match engine {
-            TuningEngine::Off | TuningEngine::Adaptive | TuningEngine::LatticeMap => {}
-        }
-    }
     let mut cases = Vec::new();
     for &pane in SETTINGS_PANES {
         let variants: Vec<Variant> = match pane {
             Tab::AnalyzerSettings => {
-                textures.map(Variant::Texture).into_iter().chain([Variant::Lit]).collect()
+                textures().map(Variant::Texture).chain([Variant::Lit]).collect()
             }
-            // Every material at the fresh projection, then every other
-            // projection at the fresh material: the Camera block and the
-            // glow's material are independent blocks of the page.
-            Tab::LatticeSettings => materials
+            // Every material at the fresh projection, then every projection
+            // at the fresh material, Cabinet named rather than left to the
+            // fresh camera: the Camera block and the glow's material are
+            // independent blocks of the page.
+            Tab::LatticeSettings => materials()
                 .map(Variant::Material)
-                .into_iter()
-                .chain(PROJECTIONS[1..].iter().map(|&p| Variant::Projection(p)))
+                .chain(projections().map(Variant::Projection))
                 .chain([Variant::Lit])
                 .collect(),
+            Tab::Mappings => vec![Variant::Fresh, Variant::Routed],
             Tab::System => vec![Variant::Fresh, Variant::Lit],
             // No engine selector at all, then each engine behind one.
             Tab::Tuning => {
@@ -546,9 +499,8 @@ pub(super) fn settings_cases() -> Vec<SettingsCase> {
     cases
 }
 
-/// One settings page whose content box is `width` points wide, as the shapes it
-/// emitted, with every fold it draws closed opened and counted (see
-/// [`open_settings_pane`]). Driven
+/// One settings page whose content box is `width` points wide, every fold on
+/// it open, as the shapes it emitted. Driven
 /// through [`panes::Viewer`] rather than the dock, so a sweep over widths costs
 /// one pane each instead of a whole window, and the width under test is the
 /// pane's own rather than a window size minus chrome.
@@ -567,97 +519,43 @@ pub(super) fn settings_pane_at_width(
     case: SettingsCase,
     width: f32,
 ) -> Vec<egui::epaint::ClippedShape> {
-    open_settings_pane(&super::probe::themed(), case, &mut case.state(), width)
+    open_settings_pane(&super::probe::themed(), case, &mut case.state(), width).0
 }
 
-/// `case`'s page drawn on `ctx` into a content box `width` across, after
-/// opening every fold on it, as the shapes the last frame emitted.
+/// Where every bar on `case`'s page was laid, at a content box `width` across,
+/// every fold open (see [`settings_pane_at_width`]).
+pub(super) fn bars_at_width(case: SettingsCase, width: f32) -> Vec<Placed> {
+    open_settings_pane(&super::probe::themed(), case, &mut case.state(), width).1
+}
+
+/// `case`'s page drawn on `ctx` into a content box `width` across with every
+/// fold on it open: the shapes the last frame emitted, and where each bar in
+/// that frame was laid.
 ///
-/// Opened the way a person opens them — a click on each closed fold's arrow
-/// in turn, until none is left — because a subsection's fold lives in egui's
-/// memory under an id only the pane can name, and the one switch that opens
-/// every fold at once (`Memory::set_everything_is_visible`) also shows every
-/// tooltip on the page, which is exactly what a geometry sweep must not draw.
-/// The pointer leaves before the last frame for the same reason.
-///
-/// The arrows are found by their paint, which nothing else reports: egui
-/// records a widget's kind only for AccessKit, where a fold header is a
-/// `Button` like any other. So the count opened is held to
-/// [`SettingsCase::folds`]: an arrow restyled past [`closed_fold`]'s reading
-/// opens nothing, and that must fail here rather than leave every sweep
-/// measuring a folded page.
+/// The folds are subsections, opened by the flag [`panes::open_subsections`]
+/// sets rather than by a click on each, since a subsection's fold lives in
+/// egui's memory under an id only the pane can name, and the one switch that
+/// opens every fold at once (`Memory::set_everything_is_visible`) also shows
+/// every tooltip on the page, which is exactly what a geometry sweep must not
+/// draw.
 pub(super) fn open_settings_pane(
     ctx: &egui::Context,
     case: SettingsCase,
     state: &mut SharedState,
     width: f32,
-) -> Vec<egui::epaint::ClippedShape> {
+) -> (Vec<egui::epaint::ClippedShape>, Vec<Placed>) {
     let backend = case.backend();
-    let mut now = 0.0;
-    let frame = |state: &mut SharedState, now: f64, events: Vec<egui::Event>| {
-        tab_body_with(ctx, state, case.pane, (width, PANE_HEIGHT), now, &backend, events).shapes
+    panes::open_subsections(ctx);
+    let frame = |state: &mut SharedState| {
+        tab_body_with(ctx, state, case.pane, (width, PANE_HEIGHT), 0.0, &backend, vec![]).shapes
     };
-    frame(state, now, vec![]);
+    frame(state);
     // The pending notices wait for one request to go unadopted that long:
     // past it, so the page draws them too.
     state.picture.runtime.backdate_pending_labels();
-    let mut shapes = frame(state, now, vec![]);
-    let mut opened = 0;
-    while let Some(at) = closed_fold(&shapes) {
-        // More than any page holds; a fold that will not stay open would
-        // otherwise loop here for ever.
-        assert!(opened < 16, "{case:?} still has a closed fold after opening sixteen");
-        // egui resolves the widget under the pointer from the previous pass,
-        // so the pointer arrives a frame before the press.
-        for events in [
-            vec![egui::Event::PointerMoved(at)],
-            vec![egui::Event::PointerMoved(at), press(at, true)],
-            vec![press(at, false)],
-        ] {
-            now += 1.0 / 60.0;
-            frame(state, now, events);
-        }
-        // A second on, past the fold's opening animation.
-        now += 1.0;
-        shapes = frame(state, now, vec![egui::Event::PointerGone]);
-        opened += 1;
-    }
-    assert_eq!(opened, case.folds(), "{case:?} opened {opened} folds at {width}pt");
-    shapes
-}
-
-/// How far a subsection indents its body on `ctx`, whose chrome scale it
-/// follows: a bar in an open subsection is the page's column less this.
-pub(super) fn fold_indent(ctx: &egui::Context) -> f32 {
-    let mut indent = 0.0;
-    let _ = ctx.run_ui(Default::default(), |ui| indent = ui.spacing().indent);
-    indent
-}
-
-/// The centre of the first closed fold's arrow in `shapes`: a three-point
-/// path pointing right — two points one above the other and the third out to
-/// their right, level with their middle — in the exact proportions of the
-/// chevron `widgets::paint_chevron` strokes for our sections and subsections,
-/// twice as tall as it reaches. Exact, because other right-pointing
-/// triangles share the page (a gradient's flip button); a restyled arrow
-/// then fails [`open_settings_pane`]'s count rather than going unopened.
-fn closed_fold(shapes: &[egui::epaint::ClippedShape]) -> Option<egui::Pos2> {
-    shapes.iter().find_map(|cs| match &cs.shape {
-        egui::Shape::Path(path) if path.points.len() == 3 => {
-            let mut points = [path.points[0], path.points[1], path.points[2]];
-            points.sort_by(|a, b| a.x.total_cmp(&b.x));
-            let [a, b, tip] = points;
-            let (reach, span) = (tip.x - a.x, (a.y - b.y).abs());
-            let shape = 2.0 * reach;
-            let pointing_right = reach > 0.5
-                && (a.x - b.x).abs() < 0.01
-                && (tip.y - (a.y + b.y) / 2.0).abs() < 0.01
-                && !path.closed
-                && (span - shape).abs() < 0.01;
-            pointing_right.then(|| egui::pos2((a.x + tip.x) / 2.0, tip.y))
-        }
-        _ => None,
-    })
+    let mut shapes = Vec::new();
+    let bars = crate::widgets::range_probe::placed(|| shapes = frame(state));
+    (shapes, bars)
 }
 
 /// The height every pane fixture is drawn at: taller than any settings pane's
