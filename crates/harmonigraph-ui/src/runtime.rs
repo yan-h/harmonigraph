@@ -194,6 +194,14 @@ impl VisualRuntime {
         self.maps_unadopted.backdate();
     }
 
+    /// Whether Learn acts: armed, under an engine that learns, where `engine`
+    /// is the Hub's selected one (`None` for a shell with no engine selector,
+    /// which learns). The one rule Learn's two indicators, the lattice's badge
+    /// and the Tuning pane's ring, and the pane's "suspended" line all read.
+    pub fn learn_acts(&self, engine: Option<harmonigraph_core::lattice_map::TuningEngine>) -> bool {
+        self.learn_active && engine.is_none_or(|engine| engine.learns())
+    }
+
     /// Keep this frame's map view, and decide its pending label.
     pub fn observe_maps(&mut self, maps: Option<crate::lattice_maps::MapView>) {
         self.maps_pending = maps

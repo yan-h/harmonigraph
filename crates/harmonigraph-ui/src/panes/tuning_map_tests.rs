@@ -151,8 +151,9 @@ fn derive_from_fifth_sends_the_shown_policy_with_the_shown_fifths_keyboard() {
 }
 
 /// With Learn on, whether the pane's first frame draws the armed ring at
-/// `now`, and whether that frame holds the loop at full rate for it.
-fn learn_ring_drawn(engine: TuningEngine) -> (bool, bool) {
+/// `now`, and whether that frame holds the loop at full rate for it, with the
+/// pane `below` points down a 2000-point screen.
+fn learn_ring_drawn(engine: TuningEngine, below: f32) -> (bool, bool) {
     let ctx = themed();
     let params = Edits::new(engine, Follow::Off, 1);
     let mut state = fresh_picture();
@@ -162,13 +163,14 @@ fn learn_ring_drawn(engine: TuningEngine) -> (bool, bool) {
     let ring = theme::armed().gamma_multiply(learn_pulse(now));
     let output =
         events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), vec![], |ui| {
+            ui.add_space(below);
             tuning_pane(ui, &mut state, &params, now);
         });
     let drawn = output.shapes.iter().any(|shape| {
         matches!(&shape.shape, egui::Shape::Rect(rect)
             if rect.stroke.color == ring && rect.stroke.width == theme::LINE_WIDTH)
     });
-    (drawn, state.surfaces.moving_this_frame.learn)
+    (drawn, state.surfaces.moving_this_frame.holds(crate::Reason::LearnPulse))
 }
 
 /// On the pane's first frame, so the engine it reads is this frame's rather
@@ -176,15 +178,17 @@ fn learn_ring_drawn(engine: TuningEngine) -> (bool, bool) {
 #[test]
 fn the_learn_ring_is_drawn_only_where_learn_acts() {
     assert_eq!(
-        learn_ring_drawn(TuningEngine::Off),
+        learn_ring_drawn(TuningEngine::Off, 0.0),
         (true, true),
         "Pass through learns, so the ring pulses at full rate"
     );
     assert_eq!(
-        learn_ring_drawn(TuningEngine::LatticeMap),
+        learn_ring_drawn(TuningEngine::LatticeMap, 0.0),
         (false, false),
         "Lattice Map suspends Learn, and its still ring holds nothing"
     );
+    // Scrolled out of the settings page, the pulse is seen nowhere.
+    assert!(!learn_ring_drawn(TuningEngine::Off, 3000.0).1, "a ring out of view held the loop");
 }
 
 /// Each row's buttons act on that row's map, selected or not, and are

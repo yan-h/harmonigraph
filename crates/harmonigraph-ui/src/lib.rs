@@ -423,7 +423,7 @@ pub fn begin_frame(state: &mut PictureState, params: &dyn ParamBackend, now: f64
     state.surfaces.drawn = state.surfaces.drawn_this_frame.take();
     // And for the same reason, what the pictures drawn say about when they
     // stop moving: one not drawn this frame holds the loop for nothing.
-    state.surfaces.moving_this_frame = Moving::default();
+    state.surfaces.moving_this_frame = Animating::default();
 }
 
 /// A pane that stands on its own, outside the dock.
@@ -514,93 +514,61 @@ const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 /// next frame this far out, through [`repaint_after`], rather than holding the
 /// whole editor at the display rate: a full redraw at 144 Hz costs Bitwig's
 /// main thread (#1673), and these run for as long as Record waits armed or an
-/// export runs. They are not [`Animating`] reasons, which are the picture's
+/// export runs. They are not [`Reason`]s, which are the picture's
 /// motion alone, so the frame log reads these passes as the idle-rate draws
 /// they are (#1872).
 pub(crate) const CHROME_REPAINT_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(33);
 
-/// Each reason the editor is drawing at full rate rather than polling, apart
-/// so the frame log can say which one held it there (#1670 Q2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Animating {
-    pub voices: bool,
-    pub learn_pulse: bool,
-    pub roll: bool,
-    pub releasing: bool,
-    pub audible: bool,
-    pub playhead: bool,
-}
-
-impl Animating {
-    /// What holds the frame loop at full rate, read once every pane has drawn
-    /// (see [`Moving`]).
-    pub fn of(state: &SharedState) -> Self {
-        let moving = state.picture.surfaces.moving_this_frame;
-        Self {
-            voices: state.picture.runtime.tracker.voices().next().is_some(),
-            learn_pulse: moving.learn,
-            roll: moving.roll,
-            releasing: moving.releasing,
-            audible: moving.audible,
-            playhead: moving.playhead,
+/// Declares [`Reason`] from one list, each reason beside the name the frame
+/// log gives it, so a reason added or renamed is written once.
+macro_rules! reasons {
+    ($($(#[$doc:meta])* $reason:ident => $name:literal,)*) => {
+        /// Each reason the editor draws at full rate rather than polling, apart
+        /// so the frame log can say which one held it there (#1670 Q2).
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Reason {
+            $($(#[$doc])* $reason,)*
         }
-    }
 
-    pub fn any(self) -> bool {
-        self.reasons().any(|(on, _)| on)
-    }
+        impl Reason {
+            /// Every reason, in the order the frame log lists them.
+            const ALL: &'static [Reason] = &[$(Reason::$reason),*];
 
-    /// Each reason with the name the frame log gives it, so one that is added
-    /// or renamed is changed here alone.
-    fn reasons(self) -> impl Iterator<Item = (bool, &'static str)> {
-        [
-            (self.voices, "voices"),
-            (self.learn_pulse, "learn"),
-            (self.roll, "roll"),
-            (self.releasing, "releasing"),
-            (self.audible, "audible"),
-            (self.playhead, "playhead"),
-        ]
-        .into_iter()
-    }
-}
-
-/// The names of the reasons that hold, space-separated: what the frame log's
-/// `animating` row carries.
-impl std::fmt::Display for Animating {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut names = self.reasons().filter(|(on, _)| *on).map(|(_, name)| name);
-        if let Some(first) = names.next() {
-            f.write_str(first)?;
+            /// The word the frame log's `animating` row uses for it.
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Reason::$reason => $name,)*
+                }
+            }
         }
-        names.try_for_each(|name| write!(f, " {name}"))
-    }
+    };
 }
 
-/// Whether each picture drawn this frame is still moving, as its draw reported
-/// it, under the reasons the frame log names: what keeps a picture moving is
-/// the code moving it's to say, from the state or stamp that motion runs on,
-/// so a delay a picture gains reaches the guard with no edit here (#1677 R1).
-///
-/// Cleared by [`begin_frame`] beside
-/// [`drawn_this_frame`](SurfaceState::drawn_this_frame), and for its reason: a
-/// picture not drawn this frame — its pane folded or hidden, its layer off, the
-/// Video tab closed — moves nothing, so it holds nothing, whatever its last
-/// draw said. One revealed again reports on its first draw. Read by
-/// [`Animating::of`] once every pane has drawn, in the same pass and so at the
-/// same `now`, which is why a yes or no is the whole answer: nothing asks a picture
-/// about a time it has not drawn.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Moving {
+reasons! {
+    /// A voice the tracker still holds, sounding or fading. The one reason
+    /// read rather than reported: [`Animating::of`] asks the tracker.
+    Voices => "voices",
+    /// Learn's armed pulse, drawn where it can be seen: the lattice's badge
+    /// and border, or the Tuning pane's ring round its switch. Learn armed
+    /// where neither draws — Lattice Map, which suspends it, or both out of
+    /// sight — leaves a still picture to the idle poll (#1834).
+    LearnPulse => "learn",
+    /// A note the live roll draws, as a ribbon, a name or a Lead, still inside
+    /// its own Span: its body has not yet scrolled past the far edge, or its
+    /// Lead is still fading through its release. One off the pitch zoom draws
+    /// nothing and so holds nothing, and an overhang still sliding off the far
+    /// edge finishes at the idle poll (Yan, #1861 on #1835). Tape mode's roll
+    /// holds nothing: its song axis does not scroll.
+    RollInSpan => "roll",
     /// A lattice node still moving after its voice was pruned
     /// ([`NodeMotion::moving`](harmonigraph_scene::NodeMotion::moving): a
     /// departure's Fade-out delay, its stagger and the presence it holds for
-    /// them), or a node's Background glow still moving: its level falling, or
-    /// its colour still easing toward its reading
-    /// ([`GlowFade::step`](panes::glow_fade::GlowFade::step)), which
-    /// can outlast the slices by many seconds.
-    releasing: bool,
+    /// them), or a node's Background glow still moving on a layer that draws
+    /// it: its level falling, or its colour still easing toward its reading
+    /// ([`GlowFade::step_drawn`](panes::glow_fade::GlowFade::step_drawn)),
+    /// which can outlast the slices by many seconds.
+    Releasing => "releasing",
     /// A picture drawn from audio above silence. Samples arriving are not
     /// enough, because a host streams silence with its transport stopped and
     /// drawing that at full rate cost Bitwig's main thread about 30% for a
@@ -617,50 +585,75 @@ pub(crate) struct Moving {
     ///   wedge is drawn, on the note Fade
     ///   ([`RingFade`](harmonigraph_scene::RingFade)). That fade is the whole of
     ///   a ring-posed node's leaving: the pose itself snaps back behind a
-    ///   presence already at zero, so nothing in `releasing` moves for it.
+    ///   presence already at zero, so nothing in `Releasing` moves for it.
     ///
     /// A stage downstream of another answers only for its own state: while the
     /// stage it reads is still moving, that stage holds the loop, and each
     /// frame it holds steps the next one on what it reads now.
-    audible: bool,
-    /// The piano roll still scrolling a note it draws across its window
-    /// ([`roll::scrolling`](panes::spectral::roll::scrolling)).
-    roll: bool,
-    /// Learn's armed pulse, drawn: the lattice's badge and border, or the
-    /// Tuning pane's ring round its switch. Reported where each is painted,
-    /// so Learn armed where neither draws — Lattice Map, which suspends it,
-    /// or both panes out of sight — leaves a still picture to the idle poll
-    /// (#1834).
-    learn: bool,
-    /// A Tape mode playhead crossing the stretch of song shown fast enough to
-    /// see it step at the idle poll: an audition's, or the host's position
-    /// while the transport rolls
-    /// (`playhead_moving` in the Analyzer's Tape mode).
-    /// Not the transport rolling or an audition playing as such: a playhead
-    /// off the stretch shown, or crawling across a whole song, moves nothing
-    /// the poll does not draw as well (#1837).
-    playhead: bool,
+    Audible => "audible",
+    /// A Tape mode playhead the editor draws moving visibly across the
+    /// stretch of song shown: an audition's, or the host's position while the
+    /// transport rolls, still advancing, on the axis as it moves, at a device
+    /// pixel a 144 Hz refresh or faster (`marks` in the Analyzer's Tape mode).
+    /// Not the transport rolling or an audition playing as such (#1837).
+    Playhead => "playhead",
 }
 
-impl Moving {
-    pub(crate) fn releasing(&mut self, moving: bool) {
-        self.releasing |= moving;
+/// The reasons holding the editor at full rate this frame.
+///
+/// Each picture drawn says whether it is still moving, as its draw found it,
+/// from the state or stamp its own motion runs on, so a delay a picture gains
+/// reaches the repaint guard with no edit here (#1677 R1). The shell's copy
+/// ([`moving_this_frame`](SurfaceState::moving_this_frame)) is cleared by
+/// [`begin_frame`] beside [`drawn_this_frame`](SurfaceState::drawn_this_frame),
+/// and for its reason: a picture not drawn this frame — its pane folded or
+/// hidden, its layer off, the Video tab closed — moves nothing, so it holds
+/// nothing, whatever its last draw said. One revealed again reports on its
+/// first draw. Read by [`Animating::of`] once every pane has drawn, in the
+/// same pass and so at the same `now`, which is why a yes or no is the whole
+/// answer: nothing asks a picture about a time it has not drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Animating(u8);
+
+impl Animating {
+    /// What holds the frame loop at full rate: what the pictures drawn this
+    /// frame reported, and the tracker's voices.
+    pub fn of(state: &SharedState) -> Self {
+        let mut held = state.picture.surfaces.moving_this_frame;
+        held.hold_if(Reason::Voices, state.picture.runtime.tracker.voices().next().is_some());
+        held
     }
 
-    pub(crate) fn audible(&mut self, moving: bool) {
-        self.audible |= moving;
+    /// Hold the loop for `reason` this frame.
+    pub(crate) fn hold(&mut self, reason: Reason) {
+        self.0 |= 1 << reason as u8;
     }
 
-    pub(crate) fn roll(&mut self, moving: bool) {
-        self.roll |= moving;
+    /// Hold the loop for `reason` this frame if `moving`.
+    pub(crate) fn hold_if(&mut self, reason: Reason, moving: bool) {
+        if moving {
+            self.hold(reason);
+        }
     }
 
-    pub(crate) fn learn(&mut self, pulsing: bool) {
-        self.learn |= pulsing;
+    pub fn holds(self, reason: Reason) -> bool {
+        self.0 & (1 << reason as u8) != 0
     }
 
-    pub(crate) fn playhead(&mut self, moving: bool) {
-        self.playhead |= moving;
+    pub fn any(self) -> bool {
+        self.0 != 0
+    }
+}
+
+/// The names of the reasons that hold, space-separated: what the frame log's
+/// `animating` row carries.
+impl std::fmt::Display for Animating {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut names = Reason::ALL.iter().filter(|&&r| self.holds(r)).map(|r| r.name());
+        if let Some(first) = names.next() {
+            f.write_str(first)?;
+        }
+        names.try_for_each(|name| write!(f, " {name}"))
     }
 }
 

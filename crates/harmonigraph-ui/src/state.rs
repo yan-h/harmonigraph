@@ -179,8 +179,8 @@ pub struct SurfaceState {
     pub drawn_this_frame: Option<DrawnWindow>,
     /// Whether each picture drawn so far THIS frame is still moving, cleared by
     /// `begin_frame` and read by the repaint guard once every pane has drawn
-    /// ([`Moving`](crate::Moving)). Runtime-only.
-    pub(crate) moving_this_frame: crate::Moving,
+    /// ([`Animating`](crate::Animating)). Runtime-only.
+    pub(crate) moving_this_frame: crate::Animating,
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
     pub target_format: TextureFormat,

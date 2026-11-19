@@ -357,9 +357,8 @@ pub(crate) fn draw_lattice(
     // Only the interactive copy shows it at all: the badge is chrome about
     // the working view being in learn mode, and the preview is a picture of
     // the render, not a place to work.
-    let learns =
-        state.runtime.lattice_maps.as_ref().is_none_or(|maps| maps.playback.engine.learns());
-    let badge = (response.is_some() && state.runtime.learn_active && learns)
+    let engine = state.runtime.lattice_maps.as_ref().map(|maps| maps.playback.engine);
+    let badge = (response.is_some() && state.runtime.learn_acts(engine))
         .then(|| learn_badge(ui, rect, now));
     ui.painter().set(
         lattice,
@@ -379,7 +378,7 @@ pub(crate) fn draw_lattice(
     }
     if let Some(mut badge) = badge {
         draw_learn_overlay(ui, rect, state, now, surface, &mut badge);
-        state.surfaces.moving_this_frame.learn(true);
+        state.surfaces.moving_this_frame.hold(crate::Reason::LearnPulse);
     }
     state.surfaces.spare_nodes = scene.nodes;
     window
@@ -902,7 +901,7 @@ mod tests {
                 matches!(&shape.shape, egui::Shape::Rect(r)
                     if r.stroke.color == theme::armed().gamma_multiply(learn_pulse(0.0)))
             });
-            (badge, state.surfaces.moving_this_frame.learn)
+            (badge, state.surfaces.moving_this_frame.holds(crate::Reason::LearnPulse))
         };
         assert_eq!(pulsing(TuningEngine::Off), (true, true), "the badge pulses at full rate");
         assert_eq!(pulsing(TuningEngine::LatticeMap), (false, false), "a still pane held the loop");

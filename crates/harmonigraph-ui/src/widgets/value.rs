@@ -847,8 +847,11 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
     // Unconditional, unlike a bar whose animation is its fill's: this one is
     // only on screen while a render is running, and the stripes cross the whole
     // track whether or not the fill has reached them. At the chrome's 30 Hz
-    // rather than the display rate, for as long as an export runs (#1872).
-    crate::repaint_after(ui.ctx(), crate::CHROME_REPAINT_INTERVAL);
+    // rather than the display rate, for as long as an export runs (#1872),
+    // and only while some of the bar is in view.
+    if ui.is_rect_visible(rect) {
+        crate::repaint_after(ui.ctx(), crate::CHROME_REPAINT_INTERVAL);
+    }
 
     let painter = ui.painter();
     painter.rect_filled(rect, radius, theme::well());

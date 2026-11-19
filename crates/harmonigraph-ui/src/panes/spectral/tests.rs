@@ -2887,7 +2887,7 @@ fn the_rolls_ink_stops_at_the_now_line() {
             let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
             super::roll::take_roll_draw_probe();
             let output = painted_into(SCREEN, WIDE, |ui| {
-                roll::draw_roll(
+                let _ = roll::draw_live_roll(
                     ui.painter(),
                     &a,
                     &scale,
@@ -3324,6 +3324,35 @@ fn tape_mode_rolls_the_recording_and_what_was_played_over_the_audition() {
     assert_eq!(drawn(&mut state), Some(2));
 }
 
+/// Tape mode's roll holds no full-rate frames: its song axis stands still,
+/// so neither the recording's notes nor a note played over the audition and
+/// released moves once drawn, names included. A held one is its voice's to
+/// hold (#1835).
+#[test]
+fn tape_modes_roll_holds_nothing_once_its_notes_are_drawn() {
+    use harmonigraph_core::notes::{NoteEvent, SourceId};
+    use harmonigraph_core::{NoteRoll, VoiceKey};
+    let mut state = on_tape();
+    state.appearance.spectrum.show_roll = true;
+    state.appearance.spectrum.note_names = true;
+    let mut recorded = NoteRoll::uncapped();
+    let key = VoiceKey { source: SourceId(1), channel: 0, note: 60 };
+    recorded.note_on(key, 1.0, 60.0, 10.0);
+    recorded.note_off(key, 12.0);
+    state.runtime.tape.notes = std::sync::Arc::new(recorded);
+    state.runtime.tape.audition =
+        Some(crate::tape::Audition { clock: 98.0, song: 20.0, speed: 1.0, until: None });
+    let tracker = &mut state.runtime.tracker;
+    tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT, 0, 64, 1.0));
+    tracker.handle_event(NoteEvent::off(99.5, SourceId::DIRECT, 0, 64));
+    super::roll::take_roll_draw_probe();
+    state.surfaces.moving_this_frame = Default::default();
+    tape_frames(&mut state, Navigation::Docked, vec![vec![]]);
+    let drawn = super::roll::take_roll_draw_probe().map(|probe| probe.note_count);
+    assert_eq!(drawn, Some(2), "the fixture draws the recorded note and the one played over it");
+    assert!(!state.surfaces.moving_this_frame.holds(crate::Reason::RollInSpan));
+}
+
 /// Tape mode names the notes it rolls (#1728): the recording's in the window,
 /// and those played live over the audition, but not those played before it
 /// nor the tape's own playback. Nor a note later than the window: the live
@@ -3563,7 +3592,7 @@ fn a_tape_playhead_holds_full_rate_only_while_it_visibly_crosses_the_stretch_sho
         state.runtime.tape.heard = heard;
         state.surfaces.moving_this_frame = Default::default();
         overview_frames(&ctx, &mut state, vec![vec![]]);
-        state.surfaces.moving_this_frame.playhead
+        state.surfaces.moving_this_frame.holds(crate::Reason::Playhead)
     };
     assert!(moving(true, Some(1.0), false), "an audition crossing a zoomed stretch idled");
     assert!(moving(true, None, true), "the rolling transport's playhead idled");

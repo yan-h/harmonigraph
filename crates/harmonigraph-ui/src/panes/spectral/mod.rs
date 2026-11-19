@@ -418,7 +418,7 @@ pub(crate) fn spectral_pane(
     // the harmonic series marches up the axis from each note.
     if show_spectrum && split > 0.0 {
         let moving = state.runtime.spectrum.moving(now);
-        state.surfaces.moving_this_frame.audible(moving);
+        state.surfaces.moving_this_frame.hold_if(crate::Reason::Audible, moving);
         if let Some(levels) = state.runtime.spectrum.display(now) {
             // Only the buckets inside the pitch range.
             // One slab per pitch PIXEL, each reading the whole run of buckets
@@ -513,18 +513,19 @@ pub(crate) fn spectral_pane(
     // `roll::lead`, and the divider below for what still draws over it).
     // The width it draws a body at is also where the names leave the pitch
     // zoom, so both take this one (computed above, for Tape mode's roll too).
-    // Whether the live roll drew anything, when it is drawn: what it says
-    // about its motion waits for its names, below.
-    let live_roll = (show_history && split < 1.0 && cfg.show_roll && song.is_none()).then(|| {
-        roll::draw_roll(
+    // Whether something the live roll drew is still inside its Span: what it
+    // says about its motion waits for its names, below.
+    let mut in_span = false;
+    if show_history && split < 1.0 && cfg.show_roll && song.is_none() {
+        in_span = roll::draw_live_roll(
             &painter,
             &axes,
             &scale,
             &width,
             state,
             roll::RollDrawOptions { split, now, surface, point_scale },
-        )
-    });
+        );
+    }
 
     // The now-line, where the roll hands over to the spectrum — drawn after
     // all three things it divides rather than at the end of the roll. It marks
@@ -640,7 +641,6 @@ pub(crate) fn spectral_pane(
             theme::picture(),
         );
     }
-    let mut named = false;
     if show_history {
         let mut thinning = state.surfaces.note_names.remove(&surface).unwrap_or_default();
         let sources = match song {
@@ -661,17 +661,15 @@ pub(crate) fn spectral_pane(
         );
         state.surfaces.note_names.insert(surface, thinning);
         names::draw(&painter, &note_names, text.names.label, &mut labels);
-        named = !note_names.is_empty();
+        in_span |= note_names.iter().any(|label| label.in_span);
     } else {
         state.surfaces.note_names.remove(&surface);
     }
-    // The live roll moves while its Span reaches a note it draws, as a ribbon
-    // or as a name: one off the zoom, or too thin to draw, leaves a still
-    // picture to the idle poll (#1835).
-    if let Some(drew) = live_roll {
-        let moving = (drew || named) && roll::scrolling(state, now);
-        state.surfaces.moving_this_frame.roll(moving);
-    }
+    // The roll moves while a note it draws, as a ribbon, a Lead or a name, is
+    // still inside its own Span: one off the zoom, or too thin to draw, or an
+    // overhang past the far edge, leaves a still picture to the idle poll
+    // (#1835).
+    state.surfaces.moving_this_frame.hold_if(crate::Reason::RollInSpan, in_span);
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.
     labels.flush(

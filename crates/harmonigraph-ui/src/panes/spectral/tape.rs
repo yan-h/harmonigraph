@@ -261,14 +261,18 @@ pub(super) fn draw(
     let axis = SongAxis::new(axes, split, window);
     heatmap(painter, axes, scale, state, &axis, surface, pane_id(surface));
     if state.appearance.spectrum.show_roll {
-        notes(painter, axes, scale, state, &axis, surface, frame);
+        // Through the live roll's own rule, which holds nothing for a song
+        // axis: it stands still, and a live note played over the audition
+        // moves only while it sounds, which its voice holds.
+        let in_span = notes(painter, axes, scale, state, &axis, surface, frame);
+        state.surfaces.moving_this_frame.hold_if(crate::Reason::RollInSpan, in_span);
     }
     let view = &mut state.runtime.tape;
     coverage(painter, axes, view, &axis);
     let labels = ruler(painter, axes, view, &axis);
     marks(painter, axes, view, &axis);
     let moving = playhead_moving(view, &axis, painter.ctx().pixels_per_point());
-    state.surfaces.moving_this_frame.playhead(moving);
+    state.surfaces.moving_this_frame.hold_if(crate::Reason::Playhead, moving);
     let view = &mut state.runtime.tape;
     let pointer = response.hover_pos().filter(|&p| axes.depth_at(p) >= split);
     if let Some(pointer) = pointer {
@@ -422,7 +426,8 @@ fn heatmap(
 }
 
 /// The recording's notes along the song, and over them the notes played live
-/// during the last audition, at the song seconds they sounded over.
+/// during the last audition, at the song seconds they sounded over. Answers as
+/// [`roll::draw_rolls`] does.
 fn notes(
     painter: &egui::Painter,
     axes: &Axes,
@@ -431,7 +436,7 @@ fn notes(
     axis: &SongAxis,
     surface: usize,
     frame: RollFrame,
-) {
+) -> bool {
     let sources = roll_sources(state, axis.split, axis.window, frame.now);
     let options = RollDrawOptions {
         split: axis.split,
@@ -439,7 +444,7 @@ fn notes(
         surface,
         point_scale: frame.point_scale,
     };
-    roll::draw_rolls(painter, axes, scale, frame.width, state, &options, &sources);
+    roll::draw_rolls(painter, axes, scale, frame.width, state, &options, &sources)
 }
 
 /// The rolls Tape mode draws and names over `window`: the recording's notes,
@@ -460,7 +465,7 @@ pub(super) fn roll_sources<'a>(
         origin: window.to,
         now: window.to,
     };
-    let recorded = RollSource { roll: &view.notes, time: song, lead: false, live_during: None };
+    let recorded = RollSource { roll: &view.notes, time: song, now_line: false, live_during: None };
     let mut sources = vec![recorded];
     if let Some(audition) = view.audition {
         // The display clock at the window's near edge, and how long that
@@ -470,7 +475,7 @@ pub(super) fn roll_sources<'a>(
         sources.push(RollSource {
             roll: state.roll(),
             time: TimeAxis { origin, window: seconds, now, ..song },
-            lead: false,
+            now_line: false,
             live_during: Some((audition.clock, audition.until.unwrap_or(f64::INFINITY))),
         });
     }
@@ -708,7 +713,7 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
     coverage(&painter, &axes, view, &axis);
     marks(&painter, &axes, view, &axis);
     let moving = playhead_moving(view, &axis, ui.ctx().pixels_per_point());
-    state.surfaces.moving_this_frame.playhead(moving);
+    state.surfaces.moving_this_frame.hold_if(crate::Reason::Playhead, moving);
     let view = &state.runtime.tape;
     // The rest of the song dimmed, and the stretch shown outlined.
     let (a, b) = span_x(&axes, &axis, shown);
