@@ -211,7 +211,8 @@ impl Pump {
             }
         }
         if self.open.is_none() {
-            fence.fail_with_message(status.lock().clone());
+            let cause = status.lock().clone();
+            fail_with(fence, status, cause);
         }
     }
 
@@ -232,7 +233,7 @@ impl Pump {
     ) -> Pumped {
         let mut pumped = Pumped::default();
         let had_records = drain_records(consumer, records, audio, &mut self.open, status, fence);
-        let had_publications = self.drain_publications(publications, items, fence) != 0;
+        let had_publications = self.drain_publications(publications, items, status, fence) != 0;
         pumped.worked = had_records || had_publications;
         let failed = fence.failed.load(Ordering::Acquire);
         if let Some(recording) = self.open.as_mut() {
@@ -242,7 +243,7 @@ impl Pump {
             let marked = if failed { recording.mark_incomplete() } else { Ok(()) };
             let written = marked.and_then(|()| recording.flush());
             if let Err(error) = written {
-                fence.fail_with_message(error.to_string());
+                fail_with(fence, status, error.to_string());
             }
         }
         let sealable = self.open.as_ref().is_none_or(|o| !o.run_open);
@@ -287,6 +288,7 @@ impl Pump {
         &mut self,
         publications: &mut publication::Consumer,
         items: usize,
+        status: &Mutex<String>,
         fence: &RecordFence,
     ) -> usize {
         let open = &mut self.open;
@@ -294,12 +296,22 @@ impl Pump {
             // A gap is NOT a failure (#712): the reader warns if it overlaps
             // a run.
             let record = harmonigraph_take::CanonicalRecord::from_event(event);
-            if open.as_mut().is_some_and(|open| open.writer.canonical(record).is_err()) {
-                fence.fail();
+            if let Some(Err(error)) = open.as_mut().map(|open| open.writer.canonical(record)) {
+                fail_with(fence, status, error.to_string());
             }
             true
         })
     }
+}
+
+/// A failure the writer found: keep its cause, and point the status line at
+/// it, so [`Control::status`] reads the whole failure ("recording incomplete:
+/// <cause>; no render started") from the pass that found it. Writing the bare
+/// cause there instead showed it without the rest until the next GUI refresh,
+/// or, after a Stop, until the take sealed (#1843).
+fn fail_with(fence: &RecordFence, status: &Mutex<String>, cause: String) {
+    fence.fail_with_message(cause);
+    *status.lock() = CONFIGURATION_FAILURE.into();
 }
 
 /// In-memory endpoints for dependent crates that need to reach their real
@@ -498,10 +510,7 @@ fn drain_records(
     status: &Mutex<String>,
     fence: &RecordFence,
 ) -> bool {
-    let io_failure = |error: std::io::Error| {
-        fence.fail_with_message(error.to_string());
-        *status.lock() = error.to_string();
-    };
+    let io_failure = |error: std::io::Error| fail_with(fence, status, error.to_string());
     let mut any = false;
     for _ in 0..count {
         let Ok(entry) = consumer.pop() else { break };

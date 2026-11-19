@@ -118,6 +118,22 @@ fn collision_and_initialization_failure_remove_only_owned_files() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A writer-side failure reaches the status line whole: its cause, and that
+/// no render started. A take that cannot be created is the case the status
+/// read before the next GUI refresh showed as the bare cause (#1843).
+#[test]
+fn a_take_that_cannot_be_created_says_so_whole_on_the_status_line() {
+    let (_rec, ctrl, _ends) = endpoints(1024, 1024);
+    let file = std::env::temp_dir().join(format!("harmonigraph-not-a-dir-{}", std::process::id()));
+    std::fs::write(&file, b"").unwrap();
+    let mut pump = Pump::default();
+    let header = header_for(48_000.0, String::new());
+    pump.start(header, file.join("take.take"), FIXTURE_SPEC, &ctrl.status, &ctrl.fence);
+    std::fs::remove_file(&file).unwrap();
+    let status = ctrl.status();
+    assert!(status.contains("cannot create") && status.contains("no render started"), "{status}");
+}
+
 /// A [`Recorder`] whose rings the test keeps the far end of.
 ///
 /// [`channel`] hands both consumers to the writer thread, which drains them
