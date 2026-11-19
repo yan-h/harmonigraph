@@ -497,6 +497,7 @@ impl LatticeCallback {
                 speed: atmosphere.material_speed,
                 settings: atmosphere.material_settings,
                 stars: atmosphere.stars.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
+                solo: scene.star_solo,
                 direction: atmosphere.material_direction,
             },
             texture_speed: atmosphere.texture_speed,

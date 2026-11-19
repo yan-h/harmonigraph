@@ -1079,6 +1079,12 @@ pub struct Scene {
     /// `None` out of [`derive_scene`], a snapshot with no time in it, which
     /// holds them where they are.
     pub glow_clock: Option<f64>,
+    /// Which Stars depths the editor solos: while any drawn depth is, only the
+    /// soloed ones are composited. A viewing aid of the editor's window rather
+    /// than part of the look (#1828): none out of [`derive_scene`], and only
+    /// the editor's working lattice pane is handed one, so the Video preview
+    /// and an export draw none.
+    pub star_solo: [bool; star_plan::STAR_DEPTHS],
 }
 
 #[cfg(test)]

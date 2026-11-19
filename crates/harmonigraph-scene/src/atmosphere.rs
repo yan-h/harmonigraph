@@ -559,14 +559,6 @@ pub struct StarSettings {
     /// [`STAR_RESOLUTION_MIN`]..=[`STAR_RESOLUTION_MAX`], snapped to
     /// [`STAR_RESOLUTION_STEP`].
     pub star_resolution: f32,
-    /// Which depths are soloed: while any drawn depth is, only the soloed
-    /// ones are composited. Hidden layers keep baking and updating colour
-    /// history, so toggles preserve the look and cost the full field. A flag on a
-    /// depth `Star layers` leaves out counts for nothing, and the panel clears
-    /// them all when the layer count changes. A look aid,
-    /// never saved, so every load draws every layer and no export is soloed.
-    #[serde(skip)]
-    pub star_solo: [bool; crate::star_plan::STAR_DEPTHS],
 }
 impl Default for StarSettings {
     fn default() -> Self {
@@ -622,7 +614,6 @@ impl Default for StarSettings {
             // Between the old Medium preset's 50% far and 75% near images:
             // sharper than Medium, cheaper than High.
             star_resolution: 0.75,
-            star_solo: [false; crate::star_plan::STAR_DEPTHS],
         }
     }
 }

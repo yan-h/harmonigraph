@@ -110,8 +110,9 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
     let background = state.surfaces.background;
     ui.painter().rect_filled(rect, 0.0, state.background_ink());
     let stats = Some(state.instruments.lattice_stats.clone());
+    let solo = state.surfaces.star_solo.lattice;
     let window =
-        draw_lattice(ui, rect, state, now, surface, background, Some(&response), stats, 1.0);
+        draw_lattice(ui, rect, state, now, surface, background, Some(&response), stats, 1.0, solo);
     state.surfaces.drawn_this_frame = Some(window);
 }
 
@@ -229,6 +230,40 @@ pub(crate) fn compose_scene(
     scene
 }
 
+/// The Stars solo a copy that is not the working pane draws: none.
+pub(crate) const NO_SOLO: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS] =
+    [false; harmonigraph_scene::star_plan::STAR_DEPTHS];
+
+/// The scene one copy of the lattice draws over `rect`, and the window it
+/// shows: a different window from the one the pane beside it shows and from
+/// the one the names are chosen out of (see `ViewConfig::scrolled`), derived
+/// per copy and per frame at the copy's own aspect. What sets one copy apart
+/// from another is handed in: its hover, its ground, its point scale and the
+/// Stars solo it draws ([`draw_lattice`]).
+#[allow(clippy::too_many_arguments)]
+fn copy_scene(
+    state: &mut PictureState,
+    rect: egui::Rect,
+    now: f64,
+    surface: usize,
+    hovered: Option<harmonigraph_core::LatticePos>,
+    background: glam::Vec4,
+    point_scale: f32,
+    star_solo: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
+) -> (harmonigraph_scene::DrawnWindow, harmonigraph_scene::Scene) {
+    let aspect = rect.width() / rect.height().max(1.0);
+    let window = state.appearance.view.scrolled(&state.appearance.camera, aspect);
+    let mut scene = compose_scene(state, &window, aspect, hovered, surface, now);
+    scene.edge_softness_points *= point_scale;
+    // The ground this pass is composited over. Only the shell knows it -- the
+    // fill the docked pane just painted here, the render layout's own
+    // background offline -- so it is carried in by the caller rather than
+    // assumed by the scene.
+    scene.background = background;
+    scene.star_solo = star_solo;
+    (window, scene)
+}
+
 /// The lattice's shared draw sequence: derive the scene, pick when this is
 /// the interactive copy, lay out and draw the node labels, and hand the
 /// frame to its paint callback. Both [`lattice_pane`] and the Render
@@ -245,6 +280,10 @@ pub(crate) fn compose_scene(
 /// could disagree.
 /// Returns the drawn window so the dock/export can publish it for sibling
 /// panes, while the Video preview leaves their primary window alone.
+///
+/// `star_solo` is the Stars solo this copy draws: the window's for the
+/// working pane, and none for the Video preview and an export, so that what
+/// the preview frames is what the render produces (Yan, #1862).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_lattice(
     ui: &mut egui::Ui,
@@ -256,26 +295,12 @@ pub(crate) fn draw_lattice(
     response: Option<&egui::Response>,
     stats: Option<std::sync::Arc<harmonigraph_render::LatticeStats>>,
     point_scale: f32,
+    star_solo: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
 ) -> harmonigraph_scene::DrawnWindow {
-    // The lattice this pane shows, which is a different window from the one
-    // the pane beside it shows and from the one the names are chosen out of —
-    // see `ViewConfig::scrolled`. Derived here, per copy and per frame, and
-    // returned to the caller: the docked pane and the Video tab's preview both
-    // reach this function every frame at their own aspects.
-    let window = state
-        .appearance
-        .view
-        .scrolled(&state.appearance.camera, rect.width() / rect.height().max(1.0));
     // Only the interactive copy carries the hover picked in this view.
     let hovered = response.and(state.surfaces.hovered);
-    let mut scene =
-        compose_scene(state, &window, rect.width() / rect.height().max(1.0), hovered, surface, now);
-    scene.edge_softness_points *= point_scale;
-    // The ground this pass is composited over. Only the shell knows it -- the
-    // fill the docked pane just painted here, the render layout's own
-    // background offline -- so it is carried in by the caller rather than
-    // assumed by the scene.
-    scene.background = background;
+    let (window, scene) =
+        copy_scene(state, rect, now, surface, hovered, background, point_scale, star_solo);
 
     // Picking updates the *shared* hover state, one frame behind the scene
     // it was derived from (imperceptible, standard for immediate mode). Only
@@ -1709,7 +1734,7 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
 
         let without = frame_full(&ctx, screen, |ui| {
-            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None, 1.0);
+            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None, 1.0, NO_SOLO);
         })
         .shapes
         .len();
@@ -1725,6 +1750,7 @@ mod tests {
                 Some(&response),
                 None,
                 1.0,
+                NO_SOLO,
             );
         })
         .shapes
@@ -1748,7 +1774,7 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
 
         let _ = frame_full(&ctx, screen, |ui| {
-            draw_lattice(ui, rect, &mut state, 0.0, 1, glam::Vec4::ZERO, None, None, 1.0);
+            draw_lattice(ui, rect, &mut state, 0.0, 1, glam::Vec4::ZERO, None, None, 1.0, NO_SOLO);
         });
         assert_eq!(state.surfaces.drawn_this_frame, None, "the preview published a window");
 
@@ -1779,7 +1805,7 @@ mod tests {
         // No response: nothing picks, so the docked pane's last hover must
         // survive a preview frame drawn in between.
         let _ = frame_full(&ctx, screen, |ui| {
-            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None, 1.0);
+            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None, 1.0, NO_SOLO);
         });
         assert_eq!(
             state.surfaces.hovered,
@@ -1801,6 +1827,7 @@ mod tests {
                 Some(&response),
                 None,
                 1.0,
+                NO_SOLO,
             );
         });
         assert_eq!(

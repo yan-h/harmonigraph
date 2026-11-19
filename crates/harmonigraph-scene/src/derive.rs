@@ -158,6 +158,7 @@ pub fn derive_scene_with_extra(
         // to recover the arm its bar was dialled at.
         marker_unit: marker_world(1.0),
         glow_clock: None,
+        star_solo: Default::default(),
         view: normalized,
     }
 }

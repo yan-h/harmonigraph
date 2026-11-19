@@ -29,7 +29,9 @@ const BODY_ALPHA: u8 = profile::FILL_ALPHA_U8;
 /// One frame of the whole Spectral pane into `rect` at `now`, on a themed
 /// context of its own.
 fn painted_pane(rect: egui::Rect, state: &mut PictureState, now: f64) -> egui::FullOutput {
-    painted_into(SCREEN, rect, |ui| spectral_pane(ui, state, now, 0, 1.0, Navigation::Docked))
+    painted_into(SCREEN, rect, |ui| {
+        spectral_pane(ui, state, now, 0, 1.0, Navigation::Docked, crate::panes::lattice::NO_SOLO)
+    })
 }
 
 fn axes(rect: egui::Rect, orientation: SpectralOrientation) -> Axes {
@@ -850,7 +852,15 @@ fn drag_pane_with_navigation(
             },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                spectral_pane(&mut child, state, 100.0, surface, 1.0, navigation);
+                spectral_pane(
+                    &mut child,
+                    state,
+                    100.0,
+                    surface,
+                    1.0,
+                    navigation,
+                    crate::panes::lattice::NO_SOLO,
+                );
             },
         );
     };
@@ -928,7 +938,15 @@ fn preview_wheel_zooms_pitch_with_or_without_shift_and_consumes_both_axes() {
                 },
                 |ui| {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                    spectral_pane(&mut child, &mut state, 100.0, 1, 1.0, Navigation::Preview);
+                    spectral_pane(
+                        &mut child,
+                        &mut state,
+                        100.0,
+                        1,
+                        1.0,
+                        Navigation::Preview,
+                        crate::panes::lattice::NO_SOLO,
+                    );
                     remaining_scroll.set(ui.input(|input| input.smooth_scroll_delta));
                 },
             );
@@ -1811,7 +1829,15 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     // not hold, and this fixture is about what the curve reaches inside the
     // pane rather than about anything at the window's edge.
     let output = painted_into(egui::vec2(2000.0, 2000.0), rect, |ui| {
-        spectral_pane(ui, &mut state, 1.0, 0, 1.0, Navigation::Docked);
+        spectral_pane(
+            ui,
+            &mut state,
+            1.0,
+            0,
+            1.0,
+            Navigation::Docked,
+            crate::panes::lattice::NO_SOLO,
+        );
     });
     output.shapes.into_iter().map(|s| s.shape).collect()
 }
@@ -3243,7 +3269,15 @@ fn tape_frames(
         };
         let _ = ctx.run_ui(input, |ui| {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-            spectral_pane(&mut child, state, 100.0, 0, 1.0, navigation);
+            spectral_pane(
+                &mut child,
+                state,
+                100.0,
+                0,
+                1.0,
+                navigation,
+                crate::panes::lattice::NO_SOLO,
+            );
         });
     }
     ctx
@@ -3454,7 +3488,15 @@ fn overview_frames(ctx: &egui::Context, state: &mut PictureState, frames: Vec<Ve
         let _ = ctx.run_ui(input, |ui| {
             tape::overview(ui, STRIP, state, 0);
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-            spectral_pane(&mut child, state, 100.0, 0, 1.0, Navigation::Docked);
+            spectral_pane(
+                &mut child,
+                state,
+                100.0,
+                0,
+                1.0,
+                Navigation::Docked,
+                crate::panes::lattice::NO_SOLO,
+            );
         });
     }
 }

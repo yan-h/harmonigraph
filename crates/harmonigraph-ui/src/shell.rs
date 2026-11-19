@@ -191,8 +191,8 @@ mod tests {
 
     /// An edit to what a save stores is told once, at the end of the gesture
     /// that made it, even one that came back to where it began (#1813). A
-    /// restore, the layout fitted to the window, the host's camera and the
-    /// Stars solos are no edit: a project saved before its editor ever opened,
+    /// restore, the layout fitted to the window and the host's camera are no
+    /// edit: a project saved before its editor ever opened,
     /// restored into an open editor, fits its layout to the window, and so
     /// does a window that grows after.
     #[test]
@@ -212,30 +212,15 @@ mod tests {
         for size in [SIZE, SIZE, grown, grown] {
             let _ = frame(&ctx, &mut state, size);
         }
-        let appearance = &mut state.picture.appearance;
-        appearance.camera.yaw += 0.5;
-        for stars in
-            [&mut appearance.view.atmosphere.stars, &mut appearance.spectrum.atmosphere.stars]
-        {
-            stars.star_solo[0] = !stars.star_solo[0];
-        }
+        state.picture.appearance.camera.yaw += 0.5;
         let _ = frame(&ctx, &mut state, grown);
         assert_eq!(told.load(Relaxed), 0, "nothing a save stores was edited");
 
-        // A look saved to a slot is an edit; saved again with only a solo
-        // changed, it stores the same.
-        let save_to_slot = |state: &mut SharedState| {
-            let editor = &mut state.workspace.interaction.appearance_editor;
-            editor.save_to(1, &state.picture.appearance);
-        };
-        save_to_slot(&mut state);
+        // A look saved to a slot is an edit.
+        let editor = &mut state.workspace.interaction.appearance_editor;
+        editor.save_to(1, &state.picture.appearance);
         let _ = frame(&ctx, &mut state, grown);
         assert_eq!(told.load(Relaxed), 1, "a look saved to a slot");
-        let solo = &mut state.picture.appearance.view.atmosphere.stars.star_solo;
-        solo[0] = !solo[0];
-        save_to_slot(&mut state);
-        let _ = frame(&ctx, &mut state, grown);
-        assert_eq!(told.load(Relaxed), 1, "a slot that differs by a solo stores the same");
 
         // The divider dragged away and back after the pane grew, within one
         // pinch: nothing until it ends, then once.

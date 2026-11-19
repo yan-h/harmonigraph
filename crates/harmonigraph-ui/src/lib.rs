@@ -488,6 +488,7 @@ pub fn draw_pane(
                 None,
                 None,
                 1.0,
+                panes::lattice::NO_SOLO,
             );
             state.surfaces.drawn_this_frame = Some(window);
         }
@@ -499,6 +500,7 @@ pub fn draw_pane(
             surface,
             1.0,
             panes::spectral::Navigation::None,
+            panes::lattice::NO_SOLO,
         ),
     }
 }

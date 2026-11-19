@@ -215,10 +215,6 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 - The host refusing an onset's tuning expression after accepting its note sends no miss, and the Tune's held voice keeps the correction, so the player's later per-note tuning jumps to the corrected pitch. Bitwig does not refuse output events.
 - A miss the Hub reads a pass late, with a Tuning delay long enough that the withdrawal lands more than 50 ms after the onset: the ribbon moves to the raw pitch, while a name anchored at the onset keeps the corrected spelling for the note's life (`RollNote::settled_pitch` follows a bend only within `RollNote::SETTLE`), in the editor and in an export; a name a few cents off, or spelled the other way (Yan, #1804).
 
-**Cases the look slots go without** (#1804), each with its cost when it occurs:
-
-- A Stars solo a stored look captured: after the editor is reopened, switching back to that look draws only the soloed Stars layers until the solo is switched off. Never in a save or an export, which do not carry the solo (Yan, #1804).
-
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.

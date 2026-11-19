@@ -109,6 +109,7 @@ pub(crate) fn render_pane(
                         PREVIEW_SURFACE,
                         preview_scale(box_rect.width(), &state.appearance.render),
                         super::spectral::Navigation::Preview,
+                        super::lattice::NO_SOLO,
                     );
                 }
                 Pane::Lattice => preview_lattice(
@@ -618,6 +619,7 @@ fn preview_lattice(
         None,
         None,
         point_scale,
+        super::lattice::NO_SOLO,
     );
 }
 
@@ -970,6 +972,7 @@ mod tests {
                     PREVIEW_SURFACE,
                     1.0,
                     super::super::spectral::Navigation::Preview,
+                    crate::panes::lattice::NO_SOLO,
                 );
             },
         );

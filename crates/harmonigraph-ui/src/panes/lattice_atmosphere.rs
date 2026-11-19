@@ -5,7 +5,11 @@ use harmonigraph_scene::{
     NEBULA_SPEED_MIN,
 };
 
-pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewConfig) {
+pub(super) fn settings(
+    ui: &mut egui::Ui,
+    view: &mut harmonigraph_scene::ViewConfig,
+    solo: &mut [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
+) {
     let glow_enabled = view.glow_draws();
     let settings = &mut view.atmosphere;
     use crate::widgets::{choice_row, ValueBar};
@@ -74,7 +78,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             let stars = settings.material_style == LatticeMaterial::Stars;
             if stars {
                 super::block(ui, "Appearance", |ui| {
-                    super::material::stars(ui, &mut settings.stars, &super::fresh_view().atmosphere.stars, harmonigraph_scene::StarPane::Lattice);
+                    super::material::stars(ui, &mut settings.stars, solo, &super::fresh_view().atmosphere.stars, harmonigraph_scene::StarPane::Lattice);
                 });
             }
             super::block(ui, "Motion", |ui| {
