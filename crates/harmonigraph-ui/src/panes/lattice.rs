@@ -16,7 +16,7 @@ use harmonigraph_scene::{derive_scene_with_extra, Camera, Projection, SevensLabe
 /// `surface` is which live copy of the pane this is, and every id it claims is
 /// derived from it — the GPU pane id ([`pane_id`]) and the badge's text batch.
 /// The docked tab is 0; offline a layout hands each placement its index (see
-/// [`draw_pane`](crate::draw_pane)), so a `.ron` naming the lattice twice draws
+/// [`draw_panes`](crate::draw_panes)), so a `.ron` naming the lattice twice draws
 /// two pictures instead of one picture twice.
 pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64, surface: usize) {
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
@@ -276,8 +276,9 @@ fn copy_scene(
 /// has none of its own — its camera is framed in the Lattice tab, not here
 /// — so all three are skipped together rather than by three flags that
 /// could disagree.
-/// Returns the drawn window so the dock/export can publish it for sibling
-/// panes, while the Video preview leaves their primary window alone.
+/// Returns the drawn window for the panes that describe it: the dock publishes
+/// it for the next frame, and a composed frame (an export, the Video preview)
+/// hands it to the spectral pane drawn after it, publishing nothing.
 ///
 /// `star_solo` is the Stars solo this copy draws: the window's for the
 /// working pane, and none for the Video preview and an export, so that what
@@ -355,9 +356,8 @@ pub(crate) fn draw_lattice(
     // Only the interactive copy shows it at all: the badge is chrome about
     // the working view being in learn mode, and the preview is a picture of
     // the render, not a place to work.
-    let learns =
-        state.runtime.lattice_maps.as_ref().is_none_or(|maps| maps.playback.engine.learns());
-    let badge = (response.is_some() && state.runtime.learn_active && learns)
+    let engine = state.runtime.lattice_maps.as_ref().map(|maps| maps.playback.engine);
+    let badge = (response.is_some() && state.runtime.learn_acts(engine))
         .then(|| learn_badge(ui, rect, now));
     ui.painter().set(
         lattice,
@@ -377,6 +377,7 @@ pub(crate) fn draw_lattice(
     }
     if let Some(mut badge) = badge {
         draw_learn_overlay(ui, rect, state, now, surface, &mut badge);
+        state.surfaces.moving_this_frame.hold(crate::Reason::LearnPulse);
     }
     state.surfaces.spare_nodes = scene.nodes;
     window
@@ -867,6 +868,43 @@ mod tests {
     };
     use harmonigraph_core::{NoteEvent, SourceId};
     use harmonigraph_scene::NoteNames;
+
+    /// Learn armed holds the loop at full rate through the lattice only while
+    /// the pane draws its pulsing badge: under an engine that learns, and not
+    /// under Lattice Map, which suspends Learn and leaves the pane still
+    /// (#1834). Nothing else here moves, so the frame's report is Learn's.
+    #[test]
+    fn learn_holds_the_loop_only_while_its_badge_pulses() {
+        use crate::lattice_maps::{MapPlayback, MapView};
+        use crate::tests::probe::events_into;
+        use harmonigraph_core::lattice_map::TuningEngine;
+        let pulsing = |engine: TuningEngine| {
+            let mut state = fresh();
+            state.runtime.learn_active = true;
+            state.runtime.lattice_maps = Some(MapView {
+                playback: MapPlayback { engine, ..Default::default() },
+                offsets: Default::default(),
+                followed: harmonigraph_core::LatticePos::ORIGIN,
+                unadopted: None,
+                names: Default::default(),
+                edit_shape: false,
+                can_undo: false,
+                full: false,
+            });
+            let ctx = themed();
+            let screen = egui::vec2(400.0, 400.0);
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen);
+            let output =
+                events_into(&ctx, screen, rect, vec![], |ui| lattice_pane(ui, &mut state, 0.0, 0));
+            let badge = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(r)
+                    if r.stroke.color == theme::armed().gamma_multiply(learn_pulse(0.0)))
+            });
+            (badge, state.surfaces.moving_this_frame.holds(crate::Reason::LearnPulse))
+        };
+        assert_eq!(pulsing(TuningEngine::Off), (true, true), "the badge pulses at full rate");
+        assert_eq!(pulsing(TuningEngine::LatticeMap), (false, false), "a still pane held the loop");
+    }
 
     /// An audition marks the nodes of the map its spot was recorded under,
     /// where its notes were assigned; editing a shape marks the live map,

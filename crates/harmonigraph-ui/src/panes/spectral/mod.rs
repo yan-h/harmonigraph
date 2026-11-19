@@ -177,17 +177,24 @@ fn level_label_into(joined: bool) -> f32 {
 /// Lighting a band here for the lattice-hovered pitch class is the same
 /// trade the other way round — in every octave, it puts a stripe across the
 /// whole picture, too loud an answer to a pointer resting somewhere else.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spectral_pane(
     ui: &mut egui::Ui,
     state: &mut PictureState,
     now: f64,
-    // Which live copy of the pane this is (see `crate::draw_pane`): two live
+    // Which live copy of the pane this is (see `crate::draw_panes`): two live
     // spectrograms in a frame need their own grid.
     surface: usize,
     // Scale point-sized ribbon floors and shadows with the composed preview.
     // The configured semitone width already follows the pane's pitch axis.
     point_scale: f32,
     navigation: Navigation,
+    // The window of the lattice this pane describes, which its off-lattice
+    // bands and its names ask (`PictureState::shown`): the docked lattice's
+    // from the frame before for the docked pane, and the same frame's own
+    // lattice's, drawn just before it, for a composed one: the Video preview or
+    // an export (`crate::draw_panes`, #1833).
+    shown: harmonigraph_scene::DrawnWindow,
     // The Stars solo the spectrogram draws: the window's for the working
     // pane, none for the Video preview and an export (Yan, #1862).
     star_solo: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
@@ -420,7 +427,7 @@ pub(crate) fn spectral_pane(
     // the harmonic series marches up the axis from each note.
     if show_spectrum && split > 0.0 {
         let moving = state.runtime.spectrum.moving(now);
-        state.surfaces.moving_this_frame.audible(moving);
+        state.surfaces.moving_this_frame.hold_if(crate::Reason::Audible, moving);
         if let Some(levels) = state.runtime.spectrum.display(now) {
             // Only the buckets inside the pitch range.
             // One slab per pitch PIXEL, each reading the whole run of buckets
@@ -476,7 +483,7 @@ pub(crate) fn spectral_pane(
     // this reads `shown` rather than the reach.
     let mut namer = names::Namer::new(
         &state.appearance.view,
-        state.shown(),
+        shown,
         &state.runtime.tuning,
         state.runtime.tempered,
     );
@@ -515,8 +522,11 @@ pub(crate) fn spectral_pane(
     // `roll::lead`, and the divider below for what still draws over it).
     // The width it draws a body at is also where the names leave the pitch
     // zoom, so both take this one (computed above, for Tape mode's roll too).
+    // Whether something the live roll drew is still inside its Span: what it
+    // says about its motion waits for its names, below.
+    let mut in_span = false;
     if show_history && split < 1.0 && cfg.show_roll && song.is_none() {
-        roll::draw_roll(
+        in_span = roll::draw_live_roll(
             &painter,
             &axes,
             &scale,
@@ -524,8 +534,6 @@ pub(crate) fn spectral_pane(
             state,
             roll::RollDrawOptions { split, now, surface, point_scale },
         );
-        let moving = roll::scrolling(state, now);
-        state.surfaces.moving_this_frame.roll(moving);
     }
 
     // The now-line, where the roll hands over to the spectrum — drawn after
@@ -662,9 +670,15 @@ pub(crate) fn spectral_pane(
         );
         state.surfaces.note_names.insert(surface, thinning);
         names::draw(&painter, &note_names, text.names.label, &mut labels);
+        in_span |= note_names.iter().any(|label| label.in_span);
     } else {
         state.surfaces.note_names.remove(&surface);
     }
+    // The roll moves while a note it draws, as a ribbon, a Lead or a name, is
+    // still inside its own Span: one off the zoom, or too thin to draw, or an
+    // overhang past the far edge, leaves a still picture to the idle poll
+    // (#1835).
+    state.surfaces.moving_this_frame.hold_if(crate::Reason::RollInSpan, in_span);
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.
     labels.flush(

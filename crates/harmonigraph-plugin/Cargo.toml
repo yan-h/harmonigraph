@@ -43,7 +43,7 @@ egui-wgpu = { workspace = true }
 pollster = "0.4"
 egui-baseview = { workspace = true }
 raw-window-handle = { workspace = true }
-# The editor's own window, shared with otonal (`editor::pop_out`).
+# The editor's size and own window, shared with otonal (`EditorSize`, in `editor::persist`).
 plugin-own-window = { workspace = true }
 
 rtrb = { workspace = true }

@@ -1152,6 +1152,34 @@ fn a_miss_read_a_callback_late_is_withdrawn_at_that_callbacks_start() {
     assert!((withdrawn - start).abs() < 1e-9, "withdrawn at {withdrawn}, not at {start}");
 }
 
+/// An invalid first callback, whose steady time may be CLAP's -1 for
+/// "unknown", pins nothing: the presentation clock is pinned at the first
+/// valid one, so a note struck there is timed as it is without the invalid
+/// callback before it.
+#[test]
+fn an_invalid_first_callback_does_not_pin_the_presentation_clock() {
+    let onset = |invalid_first: bool| {
+        let _scope = crate::test_scope::enter();
+        let (mut hub, mut capture) = Device::recorded_hub();
+        hub.activate();
+        if invalid_first {
+            hub.run_status(-1, vec![], None, None, 64, true);
+        }
+        hub.run(0, vec![note(1, 0, 60, 0, true)], None);
+        capture.display_events().iter().find_map(|record| match record {
+            harmonigraph_take::CanonicalRecord::Delta(d)
+                if matches!(d.event.kind, harmonigraph_take::NoteKind::On { .. }) =>
+            {
+                Some(d.event.t)
+            }
+            _ => None,
+        })
+    };
+    let pinned = onset(false);
+    assert!(pinned.is_some(), "the fixture publishes its onset");
+    assert_eq!(onset(true), pinned);
+}
+
 /// #1799. A miss names its onset by serial, so one for a voice already
 /// released changes nothing, even with a new press held on the same key.
 #[test]

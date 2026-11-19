@@ -46,8 +46,8 @@ A change to them lands there first and reaches Harmonigraph as a bump of that `r
 The editor's own window comes from the same repository and commit:
 its crate `plugin-own-window`, shared with otonal, which carries no patch since it has no upstream.
 Its `rev`, under `[workspace.dependencies]` in the same file, moves with the two above.
-What it took from Harmonigraph's former copy, `crates/harmonigraph-plugin/src/editor/pop_out.rs`, is in that repository's `PATCHES.md`;
-that file is now the adapter, which gives the window its name, its size limits, the host to tell of its close button, and what a move writes into the editor's saved size.
+What it took from Harmonigraph's former copy, [`crates/harmonigraph-plugin/src/editor/pop_out.rs`](https://github.com/yan-h/harmonigraph/blob/b611eb94/crates/harmonigraph-plugin/src/editor/pop_out.rs), is in that repository's `PATCHES.md`;
+that file, the adapter, is gone too, since the editor's size and own window are that crate's `EditorSize`, which `EguiState` holds (`crates/harmonigraph-plugin/src/editor/persist.rs`).
 
 Harmonigraph keeps proving the one build that repository's CI cannot:
 the plugin's `frame-log` feature, which reaches into egui-baseview and needs the patched wgpu-hal above (`cargo build -p harmonigraph-plugin --features frame-log`).

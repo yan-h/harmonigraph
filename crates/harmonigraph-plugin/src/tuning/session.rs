@@ -72,7 +72,9 @@ pub enum Copied {
     Input {
         /// Participation at arrival, including its edit generation.
         retune: u64,
-        /// Absolute input sample on the host's steady timeline.
+        /// Absolute input sample on the Tune's steady clock: the host's
+        /// counter, which the shell runs on across a restart
+        /// (`Boundary::steady_time`).
         sample: i64,
         event: Event,
     },

@@ -125,8 +125,9 @@ impl Regions {
                 }
             }
             super::hold_spectrum(state, rect.size());
-            let solo = state.surfaces.star_solo.spectrogram;
-            super::spectral_pane(ui, state, now, DOCKED_SURFACE, 1.0, Navigation::Docked, solo);
+            let (shown, solo) = (state.shown(), state.surfaces.star_solo.spectrogram);
+            let navigation = Navigation::Docked;
+            super::spectral_pane(ui, state, now, DOCKED_SURFACE, 1.0, navigation, shown, solo);
             let split = gestures::spectrum_split(state, DOCKED_SURFACE);
             drawn_depths = [depth * split, depth * (1.0 - split)];
             self.geometry = Some(Geometry {
@@ -169,6 +170,7 @@ impl Regions {
                     DOCKED_SURFACE,
                     1.0,
                     Navigation::Folded(RegionView { split, shown: [!folded[0], !folded[1]] }),
+                    state.shown(),
                     state.surfaces.star_solo.spectrogram,
                 );
             }

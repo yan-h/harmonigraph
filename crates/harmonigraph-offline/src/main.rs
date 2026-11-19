@@ -20,7 +20,7 @@ mod replay;
 mod sink;
 mod wav;
 
-use harmonigraph_take::RenderProgress;
+use harmonigraph_take::{RenderProgress, WARNING_PREFIX};
 use harmonigraph_ui::layout::export_pixels_per_point as default_scale;
 use harmonigraph_ui::Layout;
 use harmonigraph_ui::VideoEncoder;
@@ -330,7 +330,7 @@ fn take_warnings(take_path: &str, take: &harmonigraph_take::Take) -> Vec<String>
     let mut warnings = Vec::new();
     if let Some(incomplete) = take.incomplete {
         warnings.push(format!(
-            "warning: {take_path}: note history {}..={} is missing ({:?}) — rendering \
+            "{WARNING_PREFIX}{take_path}: note history {}..={} is missing ({:?}) — rendering \
              the records that survived, so notes may be missing or drawn short. \
              Nothing is invented to fill the hole.",
             incomplete.first_publication, incomplete.last_publication, incomplete.reason
@@ -338,7 +338,7 @@ fn take_warnings(take_path: &str, take: &harmonigraph_take::Take) -> Vec<String>
     }
     if take.truncated {
         warnings.push(format!(
-            "warning: {take_path} ends mid-record — the export was interrupted. \
+            "{WARNING_PREFIX}{take_path} ends mid-record — the export was interrupted. \
              Rendering the {} events that survived.",
             take.notes().count()
         ));
@@ -387,7 +387,7 @@ fn export(args: Args) -> Result<(), String> {
     if args.size.is_some() && !size_matches_frame(size, &frame) {
         let [w, h] = size;
         eprintln!(
-            "warning: --size {w}x{h} is not the {}:{} this take was framed at — \
+            "{WARNING_PREFIX}--size {w}x{h} is not the {}:{} this take was framed at — \
              the picture is recomposed to fit, not letterboxed. Drop --size to \
              render the frame as previewed.",
             frame.aspect_w, frame.aspect_h
@@ -410,7 +410,7 @@ fn export(args: Args) -> Result<(), String> {
         // A missing recording would otherwise produce a silent render with
         // no spectrum and no explanation.
         eprintln!(
-            "warning: take names {:?} but it is not beside the take",
+            "{WARNING_PREFIX}take names {:?} but it is not beside the take",
             take.audio_file.as_deref().unwrap_or_default()
         );
     }
@@ -551,7 +551,7 @@ fn export(args: Args) -> Result<(), String> {
                 archive.display(),
                 began.elapsed().as_secs_f64()
             ),
-            Err(error) => eprintln!("\nwarning: no archive copy: {error}"),
+            Err(error) => eprintln!("\n{WARNING_PREFIX}no archive copy: {error}"),
         }
     }
     // Always publish the encoder's final count, even inside the reporting period.
@@ -916,10 +916,9 @@ mod tests {
 
         let warnings = take_warnings("take-1.take", &take);
         assert_eq!(warnings.len(), 1, "one warning, and no refusal: {warnings:?}");
-        // `warning:` is the prefix `harmonigraph-record`'s `follow` picks an
-        // export job's warning out by, so it is a format contract between the
-        // two binaries rather than decoration.
-        assert!(warnings[0].starts_with("warning:"), "{}", warnings[0]);
+        // The prefix `harmonigraph-record`'s `follow` keeps an export job's
+        // warnings by: a format contract between the two binaries.
+        assert!(warnings[0].starts_with(WARNING_PREFIX), "{}", warnings[0]);
         assert!(warnings[0].contains("6..=8"), "the lost range is named: {}", warnings[0]);
 
         let played: Vec<u8> = take.notes().map(|n| n.note).collect();

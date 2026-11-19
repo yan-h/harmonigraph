@@ -300,7 +300,7 @@ impl Width {
 /// pitch range. `split` is the depth fraction the roll starts at; `now` is
 /// the shell clock, the same one the tracker's events are stamped with.
 /// `surface` names the roll — which live copy of the pane this is (see
-/// [`draw_pane`](crate::draw_pane)) — so two live copies get their own
+/// [`draw_panes`](crate::draw_panes)) — so two live copies get their own
 /// instance buffer.
 ///
 /// One paint callback for the whole roll, drawing one instanced quad per
@@ -325,9 +325,11 @@ pub(super) struct RollDrawOptions {
 pub(super) struct RollSource<'a> {
     pub(super) roll: &'a NoteRoll,
     pub(super) time: TimeAxis,
-    /// A sounding note carries past the now-line ([`lead`]). Off where the
-    /// region's near edge is no now-line, as in Tape mode.
-    pub(super) lead: bool,
+    /// The region's near edge is the now-line, so the window scrolls with the
+    /// clock and a sounding note carries past it ([`lead`]). Off in Tape mode,
+    /// whose song axis stands still: its notes draw no lead and move nothing
+    /// ([`Reason::RollInSpan`](crate::Reason::RollInSpan)).
+    pub(super) now_line: bool,
     /// Only the notes played live from the first time until the second,
     /// none of the tape's own: what was played over an audition, which the
     /// recording does not hold.
@@ -350,7 +352,7 @@ impl<'a> RollSource<'a> {
         RollSource {
             roll: state.roll(),
             time: TimeAxis::new(state, split, now),
-            lead: true,
+            now_line: true,
             live_during: None,
         }
     }
@@ -380,34 +382,29 @@ pub(crate) fn take_roll_draw_probe() -> Option<RollDrawProbe> {
     ROLL_DRAW_PROBE.with(std::cell::Cell::take)
 }
 
-/// Whether the roll still has something moving across it: its window reaches
-/// back to a note that was sounding. Goes quiet once the last note has
-/// scrolled off the far edge, so an idle plugin still idles. Asked by the
-/// roll's draw, so a roll that is not drawn holds nothing
-/// ([`Moving`](crate::Moving)).
-pub(crate) fn scrolling(state: &PictureState, now: f64) -> bool {
-    let cfg = &state.appearance.spectrum;
-    state
-        .runtime
-        .tracker
-        .roll()
-        .latest_activity(now)
-        .is_some_and(|last| now - last <= f64::from(cfg.roll_seconds.max(cfg.roll_lead_release)))
-}
-
-pub(super) fn draw_roll(
+/// Draw the live roll, answering as [`draw_rolls`] does.
+#[must_use = "whether the roll still moves is the frame loop's to hear"]
+pub(super) fn draw_live_roll(
     painter: &egui::Painter,
     axes: &Axes,
     scale: &PitchScale,
     width: &Width,
     state: &PictureState,
     options: RollDrawOptions,
-) {
+) -> bool {
     let live = RollSource::live(state, options.split, options.now);
-    draw_rolls(painter, axes, scale, width, state, &options, &[live]);
+    draw_rolls(painter, axes, scale, width, state, &options, &[live])
 }
 
 /// Draw `sources` as one roll, in order, through one paint callback.
+///
+/// Answers whether something it drew is still inside its own Span
+/// ([`Reason::RollInSpan`](crate::Reason::RollInSpan)): a ribbon whose note
+/// has not yet scrolled past the far edge, or a Lead, which stands only while
+/// its note sounds or its release fades it. Each asks of its own note, so an
+/// older note's overhang sliding off the far edge is not held at full rate by
+/// a newer note the roll does not draw (#1835).
+#[must_use = "whether the roll still moves is the frame loop's to hear"]
 pub(super) fn draw_rolls(
     painter: &egui::Painter,
     axes: &Axes,
@@ -416,15 +413,16 @@ pub(super) fn draw_rolls(
     state: &PictureState,
     options: &RollDrawOptions,
     sources: &[RollSource],
-) {
+) -> bool {
     let ppp = painter.ctx().pixels_per_point().max(1e-3);
-    let (mut notes, mut tongues) = (Vec::new(), Vec::new());
+    let (mut notes, mut tongues, mut in_span) = (Vec::new(), Vec::new(), false);
     for source in sources {
-        let (n, t) = source_instances(axes, scale, width, state, source, ppp, options.point_scale);
-        notes.extend(n);
-        tongues.extend(t);
+        let ink = source_instances(axes, scale, width, state, source, ppp, options.point_scale);
+        notes.extend(ink.notes);
+        tongues.extend(ink.tongues);
+        in_span |= ink.in_span;
     }
-    let leads = sources.iter().any(|source| source.lead);
+    let leads = sources.iter().any(|source| source.now_line);
     // The roll's own share of the pane, and the whole of what its ink may
     // reach. The outline stands off EVERY side of a note, so a note sounding
     // now — whose leading end is the now-line itself — paints its edge across
@@ -485,7 +483,7 @@ pub(super) fn draw_rolls(
             .store((notes.len() + tongues.len()) as u32, std::sync::atomic::Ordering::Relaxed);
     }
     if notes.is_empty() && tongues.is_empty() {
-        return;
+        return false;
     }
     let axes_size = axes.rect.size();
     let dir = |v: egui::Vec2| [v.x, v.y];
@@ -507,6 +505,7 @@ pub(super) fn draw_rolls(
         pane,
         options.point_scale,
     ));
+    in_span
 }
 
 /// Every visible note segment as one GPU instance, in paint order.
@@ -531,9 +530,9 @@ pub(super) fn note_instances(
     ppp: f32,
 ) -> Vec<RollInstance> {
     let width = Width::of(state, axes, scale, 1.0);
-    let (mut notes, tongues) =
-        roll_instances_with_floor(axes, scale, &width, state, split, now, ppp, 1.0);
-    notes.extend(tongues);
+    let ink = roll_instances_with_floor(axes, scale, &width, state, split, now, ppp, 1.0);
+    let mut notes = ink.notes;
+    notes.extend(ink.tongues);
     notes
 }
 
@@ -553,13 +552,21 @@ fn roll_instances_with_floor(
     now: f64,
     ppp: f32,
     point_scale: f32,
-) -> (Vec<RollInstance>, Vec<RollInstance>) {
+) -> RollInk {
     let live = RollSource::live(state, split, now);
     source_instances(axes, scale, width, state, &live, ppp, point_scale)
 }
 
-/// The roll's geometry for any [`RollSource`]: what [`draw_rolls`] draws, as
-/// the history's segments and the leads' tongues.
+/// What one [`RollSource`] draws: the history's segments and the leads'
+/// tongues, and whether any of it is still inside its own Span (see
+/// [`draw_rolls`]).
+struct RollInk {
+    notes: Vec<RollInstance>,
+    tongues: Vec<RollInstance>,
+    in_span: bool,
+}
+
+/// The roll's geometry for any [`RollSource`]: what [`draw_rolls`] draws.
 fn source_instances(
     axes: &Axes,
     scale: &PitchScale,
@@ -568,7 +575,7 @@ fn source_instances(
     source: &RollSource,
     ppp: f32,
     point_scale: f32,
-) -> (Vec<RollInstance>, Vec<RollInstance>) {
+) -> RollInk {
     let cfg = &state.appearance.spectrum;
     let time = source.time;
     let (split, now) = (time.split, time.now);
@@ -593,7 +600,7 @@ fn source_instances(
     // decided once for the same reason. See [`lead`]. How much of that a
     // particular note still has is [`lead_alpha`]'s, and is per note: it is a
     // reading of that note's own release.
-    let (lead_px, lead_fade_px) = if source.lead { lead(cfg, axes, split) } else { (0.0, 0.0) };
+    let (lead_px, lead_fade_px) = if source.now_line { lead(cfg, axes, split) } else { (0.0, 0.0) };
     // The antialiasing ramp the shader feathers every edge with — one physical
     // pixel, in points at this display's density, the same figure it takes as
     // `feather`. Ink reaches half of it past whatever it edges.
@@ -678,7 +685,7 @@ fn source_instances(
     // ends of the one before it only by starting within a cut and a floored
     // length of that one's stop, so one starting later changes nothing that
     // is on the pane.
-    let near = if source.lead { f64::INFINITY } else { time.origin + ink_seconds + band };
+    let near = if source.now_line { f64::INFINITY } else { time.origin + ink_seconds + band };
     let mut notes: Vec<&RollNote> = roll
         .notes()
         .filter(|note| source.plays(state.roll(), note))
@@ -694,6 +701,7 @@ fn source_instances(
     let mut instances = Vec::with_capacity(notes.len());
     let mut painted = Vec::with_capacity(notes.len());
     let mut tongues = Vec::new();
+    let mut in_span = false;
     let ribbons = density::layout(&notes, now, minimum, gap, edge);
     for ribbon in ribbons {
         let note = ribbon.last();
@@ -753,6 +761,7 @@ fn source_instances(
         // keep one order across the line.
         if let Some(tongue) = tongue {
             tongues.push((ribbon.paint_starts[ribbon.paint_starts.len() - 1].0, tongue));
+            in_span = true;
         }
         for ((t0, p0), (t1, p1)) in ribbon.segments(now) {
             // A segment wholly before the region is DROPPED, and the test has
@@ -871,6 +880,9 @@ fn source_instances(
         if ribbon.dense() {
             texture_run(&mut instances, first_instance, axes, &time, point_scale);
         }
+        // Drawn, and its newest note's body not yet past the far edge: what
+        // is left of it is an overhang, which finishes at the idle poll.
+        in_span |= source.now_line && instances.len() > first_instance && note.stop(now) >= oldest;
         // A later attack in this ribbon must paint above a voice that began
         // between its members. Split only its draw spans: the shared box and
         // ornament continue through each cut without adding a cap or seam.
@@ -903,10 +915,11 @@ fn source_instances(
     }
     painted.sort_by_key(|&(order, _)| order);
     tongues.sort_by_key(|&(order, _)| order);
-    (
-        painted.into_iter().map(|(_, instance)| instance).collect(),
-        tongues.into_iter().map(|(_, tongue)| tongue).collect(),
-    )
+    RollInk {
+        notes: painted.into_iter().map(|(_, instance)| instance).collect(),
+        tongues: tongues.into_iter().map(|(_, tongue)| tongue).collect(),
+        in_span,
+    }
 }
 
 /// Uniform inset hatching inside one continuous silhouette. Absolute take
@@ -1186,7 +1199,7 @@ fn note_instances_with_floor(
     point_scale: f32,
 ) -> Vec<RollInstance> {
     let width = Width::of(state, axes, scale, point_scale);
-    roll_instances_with_floor(axes, scale, &width, state, split, now, ppp, point_scale).0
+    roll_instances_with_floor(axes, scale, &width, state, split, now, ppp, point_scale).notes
 }
 
 /// The color of a note at `pitch`: the lattice's own, off the same
@@ -1261,7 +1274,8 @@ mod tests {
         let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
         let split = super::super::axes::spectrum_share(cfg);
         let width = Width::of(state, &axes, &scale, 1.0);
-        roll_instances_with_floor(&axes, &scale, &width, state, split, now, PPP, 1.0)
+        let ink = roll_instances_with_floor(&axes, &scale, &width, state, split, now, PPP, 1.0);
+        (ink.notes, ink.tongues)
     }
 
     /// The history's segments alone: what a test of a note's own geometry
@@ -1337,7 +1351,7 @@ mod tests {
         let axes = Axes::new(PANE, &state.appearance.spectrum);
         let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
         crate::tests::probe::frame_full(&ctx, egui::vec2(640.0, 360.0), |ui| {
-            draw_roll(
+            let _ = draw_live_roll(
                 ui.painter(),
                 &axes,
                 &scale,
@@ -2370,8 +2384,8 @@ mod tests {
             let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
             let now = 15.0;
             let width = Width::of(&state, &axes, &scale, 1.0);
-            let (notes, _) =
-                roll_instances_with_floor(&axes, &scale, &width, &state, 0.5, now, PPP, 1.0);
+            let notes =
+                roll_instances_with_floor(&axes, &scale, &width, &state, 0.5, now, PPP, 1.0).notes;
             let bent = notes
                 .iter()
                 .find(|note| note.shear != 0.0 && note.span[1] == f32::MAX)
