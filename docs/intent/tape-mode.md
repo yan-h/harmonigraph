@@ -13,4 +13,4 @@ Yan’s decisions recorded for future drift audits.
 
 Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
 
-- The Tape heatmap shares the spectrogram's folded grid, keyed on a Tape revision count bumped when slabs settle; folding `SongAxis` into `TimeAxis` is optional; #1837 and #1842 are fixed in their own PRs. To be built. #1861 R4
+- The Tape heatmap shares the spectrogram's folded grid, keyed on a Tape revision count bumped when slabs settle; folding `SongAxis` into `TimeAxis` is optional; #1837 and #1842 are fixed in their own PRs. #1861 R4 (Built in #1892, with #1842's fix: the revision advances on every write to a copy, `put` and `clear`, since the copy the pane draws is written only by the sync and never settled. `SongAxis` was not folded into `TimeAxis`: it carries the stretch shown, `Window`, which the coverage band, the ruler, the playhead's speed and the heatmap read and `TimeAxis` has no place for.)

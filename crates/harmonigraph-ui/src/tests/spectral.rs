@@ -381,7 +381,7 @@ fn a_curving_zoom_drag_does_not_turn_into_a_pan() {
         let mut bins = [0.02f32; SPECTRUM_BINS];
         bins[400 + (n * 13) % 3000] = 1.0;
         state.picture.runtime.spectrum.push_history(t, &bins);
-        t += crate::AudioSpectrum::FFT_INTERVAL;
+        t += crate::spectrogram::FFT_INTERVAL;
         n += 1;
     }
     h.settle(&mut state);

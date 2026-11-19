@@ -15,7 +15,7 @@ use harmonigraph_core::spectrum::SPECTRUM_BINS;
 use harmonigraph_render::SpectrogramSlab;
 
 use super::{live_slab, PowerMean, RING_SLOTS};
-use crate::spectrum::SpectrumBuckets;
+use harmonigraph_core::spectrum::SpectrumBuckets;
 
 /// Seconds one slab of `level` spans: the ladder's floor rung, doubled
 /// `level` times.
@@ -28,7 +28,7 @@ pub(crate) fn width(level: usize) -> f64 {
 /// two slabs deep, the coarsest any surface asks for. Sixteen today, the
 /// coarsest 524 s.
 pub(crate) const LEVELS: usize = {
-    let floor = crate::AudioSpectrum::FFT_INTERVAL * super::LADDER_FLOOR_COLUMNS;
+    let floor = crate::spectrogram::FFT_INTERVAL * super::LADDER_FLOOR_COLUMNS;
     let mut level = 0;
     while floor * ((1u64 << level) as f64) * 2.0 < crate::ROLL_SECONDS_MAX as f64 {
         level += 1;
@@ -48,7 +48,7 @@ pub(crate) fn level_of(bucket: f64) -> usize {
 /// window still lands on a slab the ring holds. Never more than the ring, so
 /// any run a surface reads out of a level fits the ring it is drawn into.
 fn retention(level: usize) -> usize {
-    let reach = (crate::AudioSpectrum::HISTORY_MAX_SECONDS / width(level)).ceil() as usize + 3;
+    let reach = (crate::spectrogram::HISTORY_MAX_SECONDS / width(level)).ceil() as usize + 3;
     RING_SLOTS.min(reach)
 }
 
@@ -323,25 +323,6 @@ impl SlabPyramid {
     pub(crate) fn silence(&self) -> &SpectrogramSlab {
         &self.silence
     }
-}
-
-/// One level of `width` seconds keeping `keep` slabs, fed `columns` in order:
-/// its first key and its slabs, for the tests that hold a level to the
-/// oracle at widths off the ladder.
-#[cfg(test)]
-pub(crate) fn fold_one_level(
-    width: f64,
-    keep: usize,
-    columns: &[(f64, Box<SpectrumBuckets>)],
-) -> (i64, Vec<SpectrogramSlab>) {
-    let mut level = Level { width, keep, ..Level::new(0) };
-    let silence = SpectrogramSlab::from([0; SPECTRUM_BINS]);
-    for (time, power) in columns {
-        let zero = power.iter().all(|&p| p == 0.0);
-        level.fold(*time, power, zero, &silence);
-    }
-    level.finish();
-    (level.first_key, level.slabs.into_iter().collect())
 }
 
 #[cfg(test)]

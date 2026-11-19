@@ -679,20 +679,21 @@ fn source_instances(
     let minimum = f64::from(2.0 * min_half_depth) * per_point;
     let gap = density::GAP_PT * f64::from(point_scale.max(0.0)) * per_point;
     let band = minimum + 2.0 * gap;
-    // And at the near edge where it is no now-line (Tape mode, where `lead`
-    // is off): the tape's roll runs on past the stretch shown, where the live
-    // roll ends at now. The same ink and band, mirrored: a note decides the
-    // ends of the one before it only by starting within a cut and a floored
-    // length of that one's stop, so one starting later changes nothing that
-    // is on the pane.
-    let near = if source.now_line { f64::INFINITY } else { time.origin + ink_seconds + band };
+    // And at the near edge where it bounds the notes (Tape mode): the tape's
+    // roll runs on past the stretch shown, where the live roll ends at now.
+    // The same ink and band, mirrored: a note decides the ends of the one
+    // before it only by starting within a cut and a floored length of that
+    // one's stop, so one starting later changes nothing that is on the pane.
+    // Only where it is not the now-line, past which nothing has sounded yet.
+    let near_edge = if source.now_line { f64::INFINITY } else { time.origin + ink_seconds };
     let mut notes: Vec<&RollNote> = roll
         .notes()
         .filter(|note| source.plays(state.roll(), note))
         .filter(|note| {
-            note.stop(now) >= edge - band || lead_alpha(note, now, cfg.roll_lead_release) > 0.0
+            note.stop(now) >= edge - band
+                || (source.now_line && lead_alpha(note, now, cfg.roll_lead_release) > 0.0)
         })
-        .filter(|note| note.start <= near)
+        .filter(|note| note.start <= near_edge + band)
         .collect();
     notes.sort_unstable_by(|a, b| a.start.total_cmp(&b.start).then_with(|| a.key().cmp(&b.key())));
 
@@ -769,7 +770,9 @@ fn source_instances(
             // contain: a detached dot a few points off the ribbon's own end,
             // wearing the full outline, which is all a box with no length is.
             //
-            if t1 < edge {
+            // One starting past the near edge's ink is dropped the same way:
+            // none of it reaches the region.
+            if t1 < edge || t0 > near_edge {
                 continue;
             }
             let cropped_t0 = t0.max(edge);
@@ -862,7 +865,23 @@ fn source_instances(
             if points.iter().all(|(_, look)| look.width == 0.0) {
                 continue;
             }
+            let pieces = instances.len();
             push_pieces(&mut instances, segment, &points, offset);
+            // At a near edge that bounds the notes, the pieces past its ink
+            // are not drawn and the one crossing it draws only up to it: by
+            // its draw span, which leaves the segment's box, colour and
+            // intensity as they are, so nothing on the pane moves as the
+            // edge does (#1849). Cropping the segment itself, as the far edge
+            // does, would re-read its intensity at the crop.
+            if near_edge.is_finite() {
+                let bound = offset(near_edge);
+                instances.truncate(
+                    pieces + instances[pieces..].iter().take_while(|p| p.span[1] >= bound).count(),
+                );
+                for piece in &mut instances[pieces..] {
+                    piece.span[0] = piece.span[0].max(bound);
+                }
+            }
         }
         if ribbon.dense() {
             texture_run(&mut instances, first_instance, axes, &time, point_scale);
@@ -2382,6 +2401,85 @@ mod tests {
             // neither the discarded note-on intensity nor its full bend survives.
             assert!((bent.fade[1] - 0.25).abs() < 1e-5, "{bent:?}");
             assert!((bent.taper[2] - 1.5 / 2.8).abs() < 1e-5, "{bent:?}");
+        }
+    }
+
+    /// Where the near edge bounds the notes (Tape mode), a note running on
+    /// past it draws only up to the ink's reach (#1849), and what the region
+    /// shows of it does not move as the edge does: the pieces past the edge
+    /// are dropped and the one crossing it bounded by its draw span, its
+    /// intensity left as the whole note reads it. A pressure ramp capped by
+    /// Opacity is the case a crop of the note itself would move: the capped
+    /// reading at the crop is not the line between the capped breakpoints.
+    #[test]
+    fn a_note_crossing_the_near_edge_draws_what_is_shown_as_the_edge_moves() {
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.view.intensity = IntensitySettings {
+            velocity: Default::default(),
+            gain: Default::default(),
+            pressure: harmonigraph_scene::IntensitySource { opacity: Some(2.0), thickness: None },
+            opacity_rest: 0.0,
+            ..Default::default()
+        };
+        // C4 pressed from 0 to 1 over 9 ms, under one breakpoint spacing, so
+        // the roll keeps it as one line between two breakpoints; Opacity caps
+        // it halfway, at 2.0045 s. Shown on a window a few milliseconds long,
+        // so the ramp spans the region.
+        let tracker = &mut state.runtime.tracker;
+        tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
+        tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
+            time: 2.009,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Expression {
+                expression: harmonigraph_core::Expression::Pressure,
+                value: 1.0,
+            },
+        });
+        tracker.handle_event(NoteEvent::off(2.05, SourceId::DIRECT, 0, 60));
+        let expressions = state.roll().notes().next().unwrap().expressions().len();
+        assert_eq!(expressions, 2, "fixture: the ramp is not one line");
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 400.0));
+        let axes = Axes::new(rect, &state.appearance.spectrum);
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        let width = Width::of(&state, &axes, &scale, 1.0);
+        let ink = Quad::new(surround(&state, 1.0), 1.0 / PPP).depth(0.5 * MIN_LENGTH_PT);
+        // The opacity drawn at song seconds `at` with the region's far edge at
+        // 1.995 s and its near edge at `near`, and how many pieces draw past
+        // the near edge's ink.
+        let read = |near: f64, at: f64| {
+            let window = near - 1.995;
+            let time = TimeAxis { split: 0.5, depth_span: 0.5, window, origin: near, now: 3.0 };
+            let source =
+                RollSource { roll: state.roll(), time, now_line: false, live_during: None };
+            let pieces = source_instances(&axes, &scale, &width, &state, &source, PPP, 1.0).notes;
+            let reach = near + f64::from(ink) * time.seconds_per_point(&axes);
+            let mut fade = None;
+            let mut past = 0;
+            for piece in &pieces {
+                let center = egui::pos2(piece.center[0], piece.center[1]);
+                let centre = (center - axes.at(0.5, 0.0)).dot(axes.dir_depth()) / axes.depth_len();
+                let offset = |t: f64| (time.depth_of_unclamped(t) - centre) * axes.depth_len();
+                past += usize::from(piece.span[0] < offset(reach) - 0.01);
+                let (off, [low, high]) = (offset(at), piece.ramp);
+                if (low..=high).contains(&off) && high > low {
+                    let s = (off - low) / (high - low);
+                    fade = Some(piece.fade[0] + (piece.fade[1] - piece.fade[0]) * s);
+                }
+            }
+            (fade.expect("a piece covers the point"), past)
+        };
+        // A third of the way up the ramp, read with the near edge past the
+        // cap at three places along the ramp, and with the whole ramp shown.
+        let at = 2.003;
+        let whole = read(2.02, at).0;
+        assert!((whole - 1.0 / 3.0).abs() < 1e-3, "fixture: the whole ramp reads {whole}");
+        for near in [2.0055, 2.0065, 2.0075] {
+            let (fade, past) = read(near, at);
+            assert_eq!(past, 0, "edge at {near}: {past} pieces draw past it");
+            assert!((fade - whole).abs() < 1e-4, "edge at {near}: {fade}, whole note {whole}");
         }
     }
 

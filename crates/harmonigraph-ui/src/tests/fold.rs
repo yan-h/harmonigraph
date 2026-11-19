@@ -924,6 +924,37 @@ fn a_short_analyzer_keeps_the_tape_controls_and_drops_the_overview() {
     assert!(h.ctx.read_response(overview).is_none(), "the overview stayed on a short pane");
 }
 
+/// The overview shows wherever the tape's far region is drawn: with the
+/// divider dragged shut and the spectrum folded, the far region takes the
+/// whole picture, and the overview stays under it (#1842). Folding the far
+/// region takes the overview with it.
+#[test]
+fn the_tape_overview_follows_the_far_region_the_pane_draws() {
+    let mut state = fresh();
+    state.workspace.layout.position = Position::Below;
+    state.workspace.layout.below.analyzer = 400.0;
+    let cfg = &mut state.picture.appearance.spectrum;
+    (cfg.show_roll, cfg.show_spectrogram, cfg.roll_fraction) = (true, true, 0.0);
+    let tape = &mut state.picture.runtime.tape;
+    (tape.present, tape.enabled, tape.showing) = (true, true, true);
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let body = pane_body(&state, &panes::Tab::Spectral).expect("the Analyzer is drawn");
+    let (row, strip) = (theme::tab_bar_height(1.0), 1.5 * theme::tab_bar_height(1.0));
+    assert!(body.height() > 3.0 * (row + strip), "fixture is a short pane: {body:?}");
+    let overview = egui::Id::new(("tape-overview", panes::DOCKED_SURFACE));
+    let mut drawn = |state: &mut SharedState, collapsed: [bool; 2]| {
+        state.workspace.interaction.analyzer_regions.collapsed = collapsed;
+        // Two, since a response is read from the previous pass as well.
+        h.frame(state, vec![]);
+        h.frame(state, vec![]);
+        h.ctx.read_response(overview).is_some()
+    };
+    assert!(!drawn(&mut state, [false, false]), "the divider shut leaves no far region");
+    assert!(drawn(&mut state, [true, false]), "the far region fills the pane, no overview");
+    assert!(!drawn(&mut state, [true, true]), "the overview outlived the far region's fold");
+}
+
 /// With time running across the Analyzer, a folded history region's space goes
 /// to the spectrum: its pitch rulings, which span its whole depth, run up to
 /// the folded region's rail rather than stopping where the open split had them

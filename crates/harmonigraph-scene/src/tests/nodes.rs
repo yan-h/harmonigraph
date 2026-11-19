@@ -4,6 +4,7 @@
 use super::harness::*;
 use crate::*;
 use glam::Vec3;
+use harmonigraph_core::spectrum::bucket_pitch;
 use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, SourceId, Tuning};
 
 #[test]

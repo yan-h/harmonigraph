@@ -388,9 +388,8 @@ const WINDOWS: [(crate::SpectrumWindow, &str, &str); 3] = [
 ];
 
 /// Each choice's hover, named in time, which is what a setting holds at every
-/// sample rate. Built once: a lag is a sum over the frame's window
-/// (`fixed_moments`), tens of thousands of `exp` and `cos` across the three,
-/// and nothing it reads can change.
+/// sample rate. Built once, since nothing it reads can change, rather than
+/// formatted every frame the section shows.
 static WINDOW_HINTS: std::sync::LazyLock<[String; 3]> = std::sync::LazyLock::new(|| {
     WINDOWS.map(|(window, _, hint)| {
         let lag = crate::SpectrumConfig { window, ..Default::default() }.column_lag(48_000.0);

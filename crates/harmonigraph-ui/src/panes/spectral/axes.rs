@@ -461,18 +461,11 @@ impl Axes {
 /// spectrum owns all of it. The spectrogram shares the roll's region and time
 /// axis, so it carves out the same share.
 pub(super) fn spectrum_share(cfg: &crate::SpectrumConfig) -> f32 {
-    if cfg.show_roll || cfg.show_spectrogram {
+    if cfg.has_far_region() {
         (1.0 - cfg.roll_fraction).clamp(0.0, 1.0)
     } else {
         1.0
     }
-}
-
-/// The whole axis the analyzer covers, as a span — the widest the pitch range
-/// can be zoomed out to.
-pub(super) fn widest_span() -> f32 {
-    use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
-    SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI
 }
 
 /// Where a pitch sits on the pane's axis: the pitch range, as a mapping.

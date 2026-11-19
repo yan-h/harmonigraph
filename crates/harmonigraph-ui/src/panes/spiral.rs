@@ -664,7 +664,7 @@ fn strip(
     cfg: &crate::SpectrumConfig,
     now: f64,
 ) -> egui::Mesh {
-    use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+    use harmonigraph_core::spectrum::{midi_to_bucket_x, BINS_PER_SEMITONE};
 
     let levels = state.runtime.spectrum.display(now);
     let span = spiral.max_midi - spiral.min_midi;
@@ -684,8 +684,11 @@ fn strip(
     let half_step = span / (2.0 * steps as f32);
     let level = |midi: f32| {
         let Some(levels) = levels else { return power_db(0.0) };
-        let bucket_x = |m: f32| (m - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32;
-        footprint_mean_db(levels, bucket_x(midi - half_step), bucket_x(midi + half_step))
+        footprint_mean_db(
+            levels,
+            midi_to_bucket_x(midi - half_step),
+            midi_to_bucket_x(midi + half_step),
+        )
     };
 
     let mut mesh = egui::Mesh::default();

@@ -27,6 +27,33 @@ use crate::panes::spectral::axes::{spectrogram_level_raw, PitchScale};
 use crate::SpectrumConfig;
 use harmonigraph_scene::Gradient;
 
+/// Seconds of AUDIO between FFTs (125 columns a second), measured in
+/// samples rather than on the shell clock — see
+/// [`feed_source`](crate::SpectrumAnalysis::feed_source).
+///
+/// A column is folded into every level of the slab pyramid, into the one
+/// slab it lands in at each, so the rate buys smoothness at the newest
+/// edge for a fold per level, and no REACH: each level keeps slabs, not
+/// columns.
+///
+/// At 8 ms this is a picture setting and not an analysis one: the window
+/// is untouched, so what a column RESOLVES is unchanged, and overlapping
+/// that same window more finely just draws the time axis at 2.5x the
+/// resolution 20 ms reaches (via [`live_slab`], whose ladder is rungs of THIS
+/// interval, so the picture's grid tracks it).
+/// A column costs about 30 µs per channel through Fast at 48 kHz and 106
+/// through Precise (#1597's measurement) — up to 2.7% of a core in stereo,
+/// against 1.1% at 20 ms. The frame is a length of time
+/// ([`SpectrumWindow::frame`](crate::SpectrumWindow::frame)), so a column
+/// costs about twice that at 88.2 and 96 kHz and four times at 176.4 and
+/// 192.
+pub(crate) const FFT_INTERVAL: f64 = 0.008;
+
+/// The most history ever kept, span-independent: the longest span the
+/// roll offers. Each rung of the slab pyramid keeps this much and three
+/// slabs more, or its ring, whichever is fewer; see [`SlabPyramid`].
+pub(crate) const HISTORY_MAX_SECONDS: f64 = crate::ROLL_SECONDS_MAX as f64;
+
 /// Most time slabs a live window is ever cut into, whatever the pane's size —
 /// and so, with the window, the FINEST slab any given moment can be drawn into.
 /// It also sizes the slab pyramid: each of the finest levels keeps a ring this
@@ -92,7 +119,7 @@ const LADDER_FLOOR_COLUMNS: f64 = 2.0;
 /// shape of a piece instead of the grain of a phrase — and zooming in is what
 /// asks for the grain back.
 pub(crate) fn live_slab(window: f64, target_cols: usize) -> f64 {
-    let mut bucket = crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
+    let mut bucket = crate::spectrogram::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
     // The Span reaches ten minutes and the pane can be a sliver, so walk the
     // ladder under a bound rather than trusting the ratio to be sane.
     for _ in 0..64 {
@@ -264,6 +291,103 @@ struct ShadeLut {
     lut: Arc<Vec<[u8; 4]>>,
 }
 
+/// Every drawing surface's heatmap state, indexed by the surface id its copy of
+/// the pane was drawn with: 0 the docked Spectral pane, 1 the Video pane's
+/// preview, and offline the placement's index in the layout (see
+/// [`draw_panes`](crate::draw_panes)).
+///
+/// Each surface reads a run of its own: the slab width comes off the pane's
+/// own depth in points, so two placements at different sizes sharing one
+/// surface would each replace the other's run every frame.
+///
+/// What stays SHARED is the analyzer and the slab pyramid it fills
+/// ([`AudioSpectrum::pyramid`](crate::AudioSpectrum::pyramid)): there is one selected input and one stream of
+/// columns, and a surface holds only the run it read out of them.
+#[derive(Default)]
+pub(crate) struct SpectrogramSurfaces(Vec<SpectrogramSurface>);
+
+impl SpectrogramSurfaces {
+    /// The surface's own state, empty on first sight of its id.
+    ///
+    /// A method on the field rather than on [`AudioSpectrum`](crate::AudioSpectrum), so a caller
+    /// reading the shared pyramid can hold that borrow while this one is out.
+    pub(crate) fn at(&mut self, surface: usize) -> &mut SpectrogramSurface {
+        if self.0.len() <= surface {
+            self.0.resize_with(surface + 1, SpectrogramSurface::default);
+        }
+        &mut self.0[surface]
+    }
+
+    /// Every surface an id has been asked for, for the readings and the
+    /// teardowns that are about all of them at once.
+    pub(crate) fn all(&self) -> impl Iterator<Item = &SpectrogramSurface> {
+        self.0.iter()
+    }
+    /// Full uploads of the slab grid across every surface since the plugin
+    /// was opened.
+    ///
+    /// CORRECT and expensive, which is the whole problem — it draws the right
+    /// picture at many times the cost, so nothing on screen distinguishes a
+    /// working delta upload from one that has quietly stopped. The overlay
+    /// turns it into a rate, where "climbing" is the entire diagnosis.
+    ///
+    /// The live heatmaps' alone: a Tape zoom re-sends its grid at every level
+    /// it crosses, as it should, and counted here it would raise the alarm.
+    pub(crate) fn full_uploads(&self) -> u32 {
+        self.all().map(|s| s.folded.full_uploads()).sum()
+    }
+}
+
+/// One drawing surface's heatmap: the immutable snapshot of the run it drew.
+/// The renderer separately owns its uploaded copy.
+///
+/// Runtime-only, never persisted, and rebuilt from the pyramid when dropped,
+/// so a default is always a safe state.
+#[derive(Default)]
+pub(crate) struct SpectrogramSurface {
+    /// The run and palette reused across frames. See
+    /// [`FoldedGrid`].
+    pub(crate) folded: FoldedGrid,
+    /// The pyramid level the previous frame drew at, which is what gives
+    /// [`live_slab`]'s ladder its hysteresis —
+    /// see [`Plan::new`]. `None` before the first frame.
+    pub(crate) held_level: Option<usize>,
+    /// The Tape heatmaps' runs, by [`TapeStrip`]: the far region's and the
+    /// overview's, a memo each, since the two read different runs every
+    /// frame they draw.
+    pub(crate) tape: [FoldedGrid; 2],
+}
+
+/// Which of Tape mode's two heatmaps a run is drawn into.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TapeStrip {
+    /// The far region's.
+    Region = 0,
+    /// The overview's, the whole recording under the pane.
+    Overview = 1,
+}
+
+/// Which slabs of the tape's spectrogram a Tape heatmap draws, and the copy
+/// they were read from: the whole of what decides its run (#1869).
+///
+/// Slabs `first..=last` of `level`, a silent slab where the tape holds none,
+/// read from the tape at [`revision`](crate::tape::spectrogram::TapeSpectrogram::revision).
+/// The live heatmap's test of its newest slab cannot stand in for the
+/// revision: the tape replaces slabs anywhere in its history, and a run
+/// whose newest slab held still would draw the replaced ones stale with
+/// nothing saying so. The revision is the whole tape's rather than the
+/// run's, so the memo is rebuilt whenever the view's copy is written,
+/// stretches off the window included: while recording, at each sync. A
+/// rebuild costs a pointer per slab of the run; the renderer still uploads
+/// only the slabs that changed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TapeRun {
+    pub(crate) level: usize,
+    pub(crate) first: i64,
+    pub(crate) last: i64,
+    pub(crate) revision: u64,
+}
+
 /// CPU memo of the run a surface drew and its palette. Upload history belongs
 /// to the renderer.
 #[derive(Default)]
@@ -276,7 +400,17 @@ pub(crate) struct FoldedGrid {
 struct FoldedRun {
     first_key: i64,
     run: Arc<[SpectrogramSlab]>,
-    layout: TexLayout,
+    from: RunSource,
+}
+
+/// What a held run was read out of, which is what decides whether the next
+/// frame's run is the same one.
+#[derive(Clone, Copy)]
+enum RunSource {
+    /// The live pyramid, where it sits in time: see [`FoldedGrid::accept`].
+    Live(TexLayout),
+    /// The tape's spectrogram: see [`TapeRun`].
+    Tape(TapeRun),
 }
 
 impl FoldedGrid {
@@ -299,23 +433,63 @@ impl FoldedGrid {
         let first_key = run.first_key;
         let len = run.len();
         let last = run.slabs.clone().next_back();
-        if let Some(held) = self.run.as_ref().filter(|held| {
-            held.layout.bucket.to_bits() == layout.bucket.to_bits()
-                && held.first_key == first_key
-                && held.run.len() == len
-                && held.run.last().zip(last).is_some_and(|(a, b)| Arc::ptr_eq(a, b))
-        }) {
-            return held.layout;
+        if let Some(held) = self.run.as_ref() {
+            if let RunSource::Live(held_layout) = held.from {
+                if held_layout.bucket.to_bits() == layout.bucket.to_bits()
+                    && held.first_key == first_key
+                    && held.run.len() == len
+                    && held.run.last().zip(last).is_some_and(|(a, b)| Arc::ptr_eq(a, b))
+                {
+                    return held_layout;
+                }
+            }
         }
         let run: Arc<[SpectrogramSlab]> = run.slabs.cloned().collect();
-        self.run = Some(FoldedRun { first_key, run, layout });
+        self.run = Some(FoldedRun { first_key, run, from: RunSource::Live(layout) });
         layout
+    }
+
+    /// The grid a Tape heatmap draws: the run `key` names, read through
+    /// `slab` only when the run held is not that one, so a still frame hands
+    /// the renderer the run it already uploaded.
+    pub(crate) fn tape(
+        &mut self,
+        key: TapeRun,
+        slab: impl Fn(i64) -> SpectrogramSlab,
+    ) -> SpectrogramGrid {
+        let held = self
+            .run
+            .as_ref()
+            .is_some_and(|held| matches!(held.from, RunSource::Tape(from) if from == key));
+        if !held {
+            let run = (key.first..=key.last).map(slab).collect();
+            self.run = Some(FoldedRun { first_key: key.first, run, from: RunSource::Tape(key) });
+        }
+        self.grid().expect("a run is held")
+    }
+
+    /// The Tape run held and the slabs it holds, for tests.
+    #[cfg(test)]
+    pub(crate) fn tape_run(&self) -> Option<(TapeRun, Arc<[SpectrogramSlab]>)> {
+        let held = self.run.as_ref()?;
+        match held.from {
+            RunSource::Tape(key) => Some((key, held.run.clone())),
+            RunSource::Live(_) => None,
+        }
     }
 
     fn grid(&self) -> Option<SpectrogramGrid> {
         let held = self.run.as_ref()?;
+        // A live run always fits the ring: no pyramid level keeps more. A
+        // Tape run can be longer only at the coarsest level, a song past
+        // about 2.3 hours, and takes a ring its own length.
+        debug_assert!(
+            matches!(held.from, RunSource::Tape(_)) || held.run.len() <= RING_SLOTS,
+            "a live run of {} slabs outgrew the ring",
+            held.run.len()
+        );
         Some(SpectrogramGrid {
-            capacity: RING_SLOTS as u32,
+            capacity: RING_SLOTS.max(held.run.len()) as u32,
             bins: SPECTRUM_BINS as u32,
             first_key: held.first_key,
             run: held.run.clone(),
@@ -507,7 +681,7 @@ pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
 /// a still frame keeps the same snapshot.
 pub(crate) fn run_for(
     pyramid: &mut SlabPyramid,
-    surfaces: &mut crate::spectrum::SpectrogramSurfaces,
+    surfaces: &mut SpectrogramSurfaces,
     surface: usize,
     plan: &Plan,
 ) -> Option<TexLayout> {
@@ -532,7 +706,7 @@ pub(crate) fn run_for(
 /// The shade table `cfg` draws a heatmap through, shared with the surface's
 /// live heatmap.
 pub(crate) fn shades(
-    surfaces: &mut crate::spectrum::SpectrogramSurfaces,
+    surfaces: &mut SpectrogramSurfaces,
     surface: usize,
     cfg: &SpectrumConfig,
 ) -> SpectrogramShades {
@@ -544,7 +718,7 @@ pub(crate) fn shades(
 /// `None` before anything has been folded into the surface, which is the same
 /// frame [`run_for`] answers `None` on.
 pub(crate) fn frame_data(
-    surfaces: &mut crate::spectrum::SpectrogramSurfaces,
+    surfaces: &mut SpectrogramSurfaces,
     surface: usize,
     cfg: &SpectrumConfig,
 ) -> Option<(SpectrogramGrid, SpectrogramShades)> {

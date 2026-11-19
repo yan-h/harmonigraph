@@ -42,8 +42,7 @@ fn display_recovers_after_nonfinite_audio() {
     let both = (poisoned_columns.len() + columns.len()) as u64;
     assert_eq!(pyramid.open_count(coarsest), both, "the two batches' columns share the slab");
     let (_, slabs) = pyramid.level(coarsest);
-    let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
-        * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as usize;
+    let a4 = harmonigraph_core::spectrum::midi_to_bucket_x(69.0) as usize;
     assert!(slabs.last().unwrap()[a4] > 0, "the open slab lost the clean tone to the NaN");
 }
 
@@ -71,8 +70,7 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
             .map(|(i, _)| i as i32)
             .unwrap();
         // A4 is MIDI 69; its bucket scales with the axis resolution.
-        let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
-            * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as i32;
+        let a4 = harmonigraph_core::spectrum::midi_to_bucket_x(69.0) as i32;
         assert!(
             (peak - a4).abs() <= buckets,
             "{window:?}: 440 Hz should peak at A4 (bucket {a4}), got {peak}"
@@ -152,12 +150,11 @@ fn a_bucket_rises_on_the_attack_and_falls_on_the_release() {
     // much audio plus ten hops — enough for a 10 ms time to land and for a 1 s
     // one to have moved a few percent.
     let window = SpectrumConfig::default().window.frame(48_000.0);
-    let phase = window + 10 * (AudioSpectrum::FFT_INTERVAL * f64::from(sr)) as usize;
+    let phase = window + 10 * (crate::spectrogram::FFT_INTERVAL * f64::from(sr)) as usize;
     let tone: Vec<f32> =
         (0..phase).map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin()).collect();
     let silence = vec![0.0; phase];
-    let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
-        * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as usize;
+    let a4 = harmonigraph_core::spectrum::midi_to_bucket_x(69.0) as usize;
 
     // What A4 reads after the tone, and what is left of it after the silence.
     let run = |attack: f32, release: f32| {
@@ -199,7 +196,7 @@ fn a_live_column_is_stamped_at_the_centre_of_its_window() {
     // FFT_INTERVAL of audio (see `feed_source`), so a batch ending mid-hop
     // leaves its newest column up to one hop further back than this — correctly,
     // since that is where the window it measured ends.
-    let hop = (AudioSpectrum::FFT_INTERVAL * 48_000.0).round() as usize;
+    let hop = (crate::spectrogram::FFT_INTERVAL * 48_000.0).round() as usize;
     let samples = hop * (config.window.frame(48_000.0) / hop + 1); // enough to fill the frame
     let sine: Vec<f32> = (0..samples)
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
@@ -269,7 +266,7 @@ fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
     // and waits only for the rest of itself (#1584).
     let carried = initial.min(config.window.frame(48_000.0));
     let config = SpectrumConfig { window: SpectrumWindow::Balanced, ..config };
-    let hop = (AudioSpectrum::FFT_INTERVAL * f64::from(sample_rate)).round() as usize;
+    let hop = (crate::spectrogram::FFT_INTERVAL * f64::from(sample_rate)).round() as usize;
     let first_ready = (initial + config.window.frame(48_000.0) - carried).div_ceil(hop) * hop;
     let rest = vec![0.2; first_ready - initial - 1];
     feed(&mut spectrum, &mut analysis, &rest, &config);
@@ -314,9 +311,7 @@ fn stereo_analysis_preserves_an_antiphase_partial() {
 
     assert!(live.len() > 50, "only {} live columns for a second of audio", live.len());
     let bucket_of = |hz: f32| {
-        ((harmonigraph_core::spectrum::hz_to_midi(hz)
-            - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
-            * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32)
+        harmonigraph_core::spectrum::midi_to_bucket_x(harmonigraph_core::spectrum::hz_to_midi(hz))
             .round() as usize
     };
     let loudest = |bucket: usize| {
@@ -352,7 +347,7 @@ fn the_heatmap_reads_its_own_color_level_scale() {
         let tolerance = 0.5 * harmonigraph_core::spectrogram::DB_STEP
             / (cfg.volume_ceiling_db - cfg.volume_floor_db)
             + 1e-6;
-        let curve = spectrogram_level_db(cfg, 10.0 * power.max(1e-12).log10(), midi);
+        let curve = spectrogram_level_db(cfg, crate::panes::spectral::axes::power_db(power), midi);
         let heatmap = crate::spectrogram::bin_level_for_test(
             cfg,
             harmonigraph_core::spectrogram::quantize(power),
@@ -381,7 +376,7 @@ fn the_heatmap_reads_its_own_color_level_scale() {
         let tolerance = 0.5 * harmonigraph_core::spectrogram::DB_STEP
             / (cfg.volume_ceiling_db - cfg.volume_floor_db)
             + 1e-6;
-        let curve = spectrogram_level_db(&cfg, 10.0 * (1e-5f32).log10(), midi);
+        let curve = spectrogram_level_db(&cfg, crate::panes::spectral::axes::power_db(1e-5), midi);
         let heatmap = crate::spectrogram::bin_level_for_test(
             &cfg,
             harmonigraph_core::spectrogram::quantize(1e-5),
@@ -530,7 +525,7 @@ fn runtime_advances_histories_without_a_surface() {
     let columns = runtime.spectrum.columns_taken();
     runtime.advance_time(10.0, &appearance);
     assert_eq!(runtime.spectrum.columns_taken(), columns, "advancement must not repeat analysis");
-    runtime.advance_time(1.0 + AudioSpectrum::HISTORY_MAX_SECONDS + 1.0, &appearance);
+    runtime.advance_time(1.0 + crate::spectrogram::HISTORY_MAX_SECONDS + 1.0, &appearance);
     assert!(
         runtime.spectrum.newest_column().is_some(),
         "the history is bounded by its rings, not trimmed by the clock",
@@ -606,7 +601,7 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
     assert_ne!(wide, first, "a changed width must change this fixture's measurement");
     // More audio while the frame's time stands still, so only the display
     // revision can tell the memo it is stale.
-    let batch = AudioSpectrum::FFT_INTERVAL * 48_000.0 * 3.0;
+    let batch = crate::spectrogram::FFT_INTERVAL * 48_000.0 * 3.0;
     let short: Vec<f32> = tone(660.0)[..batch as usize].to_vec();
     feed.feed(&mut spectrum, &short, 1, 48_000.0, 1.0 + batch / 48_000.0, &cfg);
     let next = spectrum.folded(1.0, 50.0).unwrap().to_vec();
@@ -693,8 +688,7 @@ fn a_setting_listens_as_long_at_every_sample_rate() {
     let columns = crate::spectrum::heard_at(&mut spectrum, &sine, 1, sr, 1.0, &config);
     let power = columns.last().expect("the frame filled").power();
     let peak = (0..power.len()).max_by(|&a, &b| power[a].total_cmp(&power[b])).unwrap();
-    let midi = harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI
-        + (peak as f32 + 0.5) / harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32;
+    let midi = harmonigraph_core::spectrum::bucket_pitch(peak);
     let off = midi - harmonigraph_core::spectrum::hz_to_midi(25.0);
     assert!(
         power[peak] > 0.0 && off.abs() < 0.5,
@@ -710,7 +704,7 @@ fn batch(newest: f64, power: f32) -> [Delivery; 2] {
         Delivery::Column(Box::new(crate::spectrum::AnalyzedColumn {
             time: newest,
             power: [power; harmonigraph_core::spectrum::SPECTRUM_BINS],
-            step: AudioSpectrum::FFT_INTERVAL,
+            step: crate::spectrogram::FFT_INTERVAL,
         })),
     ]
 }
@@ -723,7 +717,7 @@ fn batch(newest: f64, power: f32) -> [Delivery; 2] {
 fn a_hand_over_says_when_sound_comes_back() {
     let cfg = SpectrumConfig::default();
     let mut spectrum = AudioSpectrum::default();
-    let step = AudioSpectrum::FFT_INTERVAL;
+    let step = crate::spectrogram::FFT_INTERVAL;
     assert!(!spectrum.give(batch(100.0, 0.0), &cfg), "silence");
     assert!(spectrum.give(batch(100.0 + step, 1.0), &cfg), "the first sound");
     assert!(!spectrum.give(batch(100.0 + 2.0 * step, 1.0), &cfg), "sound going on");
@@ -741,55 +735,4 @@ fn a_hand_over_says_when_sound_comes_back() {
     // Then loud enough to lift the curve while the heatmap hears on: the
     // curve comes back alone.
     assert!(spectrum.give(batch(100.0 + 2.0 * step, 1.0), &slow), "heard again by the curve alone");
-}
-
-/// The costs the slab pyramid adds, for the numbers #1758 quotes: a column
-/// folded into all sixteen levels, a silent one on the fast path, and the
-/// hold of the editor lock a mono catch-up takes, 371 columns given at
-/// once. Printed, not asserted; run in release with `--ignored
-/// --nocapture`.
-#[test]
-#[ignore]
-fn the_folds_timings() {
-    use std::time::Instant;
-    const BINS: usize = harmonigraph_core::spectrum::SPECTRUM_BINS;
-    let cfg = SpectrumConfig::default();
-    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
-    let mut power = || {
-        let mut power = [0.0f32; BINS];
-        for p in power.iter_mut() {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            *p = 10f32.powf(-11.0 + 10.0 * (seed >> 40) as f32 / (1u64 << 24) as f32);
-        }
-        power
-    };
-    let per_column = |columns: &[[f32; BINS]]| {
-        let mut pyramid = crate::spectrogram::SlabPyramid::default();
-        let start = Instant::now();
-        for (k, power) in columns.iter().enumerate() {
-            pyramid.push(90.0 + k as f64 * AudioSpectrum::FFT_INTERVAL, power);
-        }
-        start.elapsed().as_secs_f64() / columns.len() as f64 * 1e6
-    };
-    let loud: Vec<_> = (0..4000).map(|_| power()).collect();
-    let silent = vec![[0.0f32; BINS]; 4000];
-    println!("a column through all sixteen levels: {:.2} us", per_column(&loud));
-    println!("a silent column, fast path: {:.3} us", per_column(&silent));
-
-    let mut spectrum = AudioSpectrum::default();
-    let deliveries: Vec<_> = (0..371)
-        .map(|k| {
-            Delivery::Column(Box::new(crate::spectrum::AnalyzedColumn {
-                time: 90.0 + k as f64 * AudioSpectrum::FFT_INTERVAL,
-                power: power(),
-                step: AudioSpectrum::FFT_INTERVAL,
-            }))
-        })
-        .collect();
-    let start = Instant::now();
-    spectrum.give(deliveries, &cfg);
-    let hold = start.elapsed().as_secs_f64() * 1e3;
-    println!("the hold of a 371-column catch-up given at once: {hold:.3} ms");
 }

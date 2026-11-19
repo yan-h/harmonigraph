@@ -46,29 +46,10 @@ impl SpectrumWindow {
     }
 
     /// The analyzer's frame at `sample_rate`: how many samples one column is
-    /// read from. The analysis crate sizes it for the listen at 48 kHz, and it
-    /// scales by a power of two, the smallest that keeps it no more than about
-    /// a tenth shorter in TIME than at 48 kHz: 44.1 and 48 kHz read the same
-    /// frame and 88.2 and 96 kHz one twice as long, the same listen to within
-    /// 9%, in a size the transform still takes fast. A rate between, 32 or 64
-    /// kHz, listens longer rather than shorter, so no rate reads the bottom of
-    /// the axis worse than 48 kHz does; rounding to the nearest power instead
-    /// halved the frame at 32 kHz and lost Fast's 22 to 28 Hz. Counted in
-    /// samples, every setting read twice as blurry at 96 kHz, at half the lag,
-    /// and Fast could not place 20 to 44 Hz at all there.
-    ///
-    /// The rate comes from the host or a file's header, so the scale is held
-    /// to 6 kHz through 384 kHz: an absurd rate must not grow the frame without
-    /// bound.
+    /// read from, which the analysis crate scales with the rate
+    /// ([`fixed_frame_at`](harmonigraph_analysis::fixed_frame_at)).
     pub fn frame(self, sample_rate: f32) -> usize {
-        let base = harmonigraph_analysis::fixed_frame(self.listen());
-        let octaves = ((f64::from(sample_rate) / 48_000.0).log2() - 0.15).ceil();
-        let octaves = if octaves.is_nan() { 0 } else { octaves.clamp(-3.0, 3.0) as i32 };
-        if octaves >= 0 {
-            base << octaves
-        } else {
-            base >> -octaves
-        }
+        harmonigraph_analysis::fixed_frame_at(self.listen(), sample_rate)
     }
 }
 
@@ -608,6 +589,12 @@ impl SpectrumConfig {
         }
     }
 
+    /// The Analyzer has a far region: the roll or the spectrogram is on,
+    /// which share it and its time axis.
+    pub(crate) fn has_far_region(&self) -> bool {
+        self.show_roll || self.show_spectrogram
+    }
+
     /// The analyzer these settings ask for at `sample_rate`: the window's
     /// frame.
     pub fn analyzer(&self, sample_rate: f32) -> harmonigraph_analysis::AnalyzerConfig {
@@ -858,7 +845,7 @@ pub(crate) fn sane_scale(scale: f32) -> f32 {
 /// controls now set it — the Analyzer section's History duration bar and the drag across the
 /// picture — and a gesture that clamped to its own idea of the limits would
 /// push the bar past its own ends. The maximum is also
-/// [`AudioSpectrum::HISTORY_MAX_SECONDS`](crate::AudioSpectrum::HISTORY_MAX_SECONDS),
+/// [`HISTORY_MAX_SECONDS`](crate::spectrogram::HISTORY_MAX_SECONDS),
 /// the history's reach, so the heatmap can fill the widest span the axis
 /// offers.
 pub(crate) const ROLL_SECONDS_MIN: f32 = 1.0;

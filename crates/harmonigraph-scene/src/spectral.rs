@@ -65,7 +65,7 @@ use std::collections::VecDeque;
 
 use glam::Vec4;
 use harmonigraph_core::spectrum::{
-    BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI,
+    midi_to_bucket_x, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI,
 };
 use harmonigraph_core::Envelope;
 
@@ -737,7 +737,7 @@ fn window_max(levels: &SpectralLevels, half: usize) -> Box<SpectralLevels> {
 /// that pitch.
 ///
 /// The CPU's form of the shader's `spectrum_color_at`, down to the half-bucket
-/// offset ([`bucket_pitch`]) and to answering zero rather than the nearest end
+/// offset ([`bucket_pitch`](harmonigraph_core::spectrum::bucket_pitch)) and to answering zero rather than the nearest end
 /// past the axis. The two read different WINDOWS of the analyzer's grid — this
 /// one the Level window, the shader the volume-color one
 /// ([`SpectralPaint::color_levels`]) — so what has to match is the WALK: a
@@ -768,10 +768,10 @@ fn open_at(grid: &[f32; SPECTRUM_BINS], pitch: f32) -> f32 {
 /// One definition of where a pitch lands on the grid, because three readers
 /// have to agree on it — the gate's levels, the fade's own openness, and the
 /// shader's `spectrum_color_at`, which is the one that draws. The half bucket is the
-/// grid's own convention ([`bucket_pitch`]): a bucket stands for its CENTRE,
+/// grid's own convention ([`bucket_pitch`](harmonigraph_core::spectrum::bucket_pitch)): a bucket stands for its CENTRE,
 /// and dropping it puts every partial half a bucket flat of where it sounds.
 fn grid_at(pitch: f32) -> Option<(usize, usize, f32)> {
-    let x = (pitch - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32 - 0.5;
+    let x = midi_to_bucket_x(pitch) - 0.5;
     if x < 0.0 || x > (SPECTRUM_BINS - 1) as f32 {
         return None;
     }
@@ -857,23 +857,13 @@ pub fn ring_gradient(gradient: Gradient, ground: f32) -> Gradient {
     }
 }
 
-/// The MIDI pitch bucket `bucket` of the analyzer's grid is centred on.
-///
-/// The grid is absolute log pitch at [`BINS_PER_SEMITONE`] buckets a semitone,
-/// and a bucket stands for its own CENTRE rather than its low edge — the half
-/// step is what keeps a partial's pitch and the bucket that carries it
-/// agreeing to better than a bucket, which at 3.125¢ is the whole resolution
-/// the ring has to place a partial with.
-pub fn bucket_pitch(bucket: usize) -> f32 {
-    SPECTRUM_MIN_MIDI + (bucket as f32 + 0.5) / BINS_PER_SEMITONE as f32
-}
-
 /// The pitch axis the analyzer reaches, as the ring reads it: 20 Hz to 20 kHz.
 pub const SPECTRAL_AXIS: (f32, f32) = (SPECTRUM_MIN_MIDI, SPECTRUM_MAX_MIDI);
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use harmonigraph_core::spectrum::bucket_pitch;
 
     fn ringed(width: f32, range: f32) -> ViewConfig {
         ViewConfig {

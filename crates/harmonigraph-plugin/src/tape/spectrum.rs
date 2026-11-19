@@ -147,7 +147,7 @@ impl Spectrum {
 mod tests {
     use super::*;
     use crate::tape::store::{Chunk, Stamp};
-    use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+    use harmonigraph_core::spectrum::{bucket_pitch, midi_to_bucket_x};
     use harmonigraph_ui::SpectrumWindow;
 
     const RATE: f32 = 48_000.0;
@@ -178,14 +178,14 @@ mod tests {
 
     /// The bucket MIDI pitch `midi` falls in.
     fn bucket(midi: f32) -> usize {
-        ((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as usize
+        midi_to_bucket_x(midi) as usize
     }
 
     /// The MIDI pitch the view's copy of column `k` peaks at.
     fn peak(view: &TapeSpectrogram, k: i64) -> Option<f32> {
         let column = view.slab(0, k)?;
         let (bucket, _) = column.iter().enumerate().max_by_key(|&(_, &b)| b)?;
-        Some(SPECTRUM_MIN_MIDI + (bucket as f32 + 0.5) / BINS_PER_SEMITONE as f32)
+        Some(bucket_pitch(bucket))
     }
 
     #[test]

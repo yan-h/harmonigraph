@@ -51,6 +51,16 @@ pub struct TapeSpectrogram {
     /// Columns set since [`settle`](Self::settle) last rebuilt the levels
     /// above them.
     unsettled: BTreeSet<i64>,
+    /// See [`revision`](Self::revision).
+    revision: u64,
+}
+
+/// A revision no copy has held: every write takes the next one, so two
+/// copies holding the same revision hold the same slabs, whichever copy wrote
+/// it, a clone or a cleared one included.
+fn next_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl std::fmt::Debug for TapeSpectrogram {
@@ -73,11 +83,24 @@ impl TapeSpectrogram {
     }
 
     pub fn clear(&mut self) {
-        *self = TapeSpectrogram::default();
+        *self = TapeSpectrogram { revision: next_revision(), ..TapeSpectrogram::default() };
+    }
+
+    /// A number that changes with every write to any slab, and so names what
+    /// the slabs hold: the Tape heatmap's memo is keyed on it (#1869). Not
+    /// the newest slab, as the live heatmap's is, since the tape replaces
+    /// slabs anywhere in its history: a re-analysis, or a pass that wins a
+    /// stretch. A copy changes only through [`put`](Self::put) and
+    /// [`clear`](Self::clear), which [`set_column`](Self::set_column) and
+    /// [`settle`](Self::settle) go through, so the view's copy, which is
+    /// written and never settled, moves it too.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Set slab `key` of `level` as another copy holds it: `None` removes it.
     pub fn put(&mut self, level: usize, key: i64, slab: Option<SpectrogramSlab>) {
+        self.revision = next_revision();
         match slab {
             Some(slab) => self.levels[level].insert(key, slab),
             None => self.levels[level].remove(&key),
@@ -193,6 +216,7 @@ pub fn silent_slab() -> SpectrogramSlab {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use harmonigraph_analysis::fixed_frame;
 
     fn flat(byte: BucketDb) -> SpectrogramSlab {
         Arc::from([byte; SPECTRUM_BINS])
@@ -225,7 +249,7 @@ mod tests {
 
     #[test]
     fn a_column_reads_the_frame_its_lag_places_around_its_centre() {
-        let config = AnalyzerConfig { sample_rate: 48_000.0, fft_size: 4096 };
+        let config = AnalyzerConfig { sample_rate: 48_000.0, fft_size: fixed_frame(4096) };
         let (frame, lag) = ColumnAnalyzer::reach(config);
         let mut analyzer = ColumnAnalyzer::default();
         let mut asked = None;

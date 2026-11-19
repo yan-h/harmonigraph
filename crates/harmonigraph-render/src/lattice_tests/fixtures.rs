@@ -695,7 +695,7 @@ pub(super) fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f3
     paint.range = range;
     if let Some(pitch) = sounding {
         for (bucket, level) in paint.levels.iter_mut().enumerate() {
-            let cents = (harmonigraph_scene::bucket_pitch(bucket) - pitch) * 100.0;
+            let cents = (harmonigraph_core::spectrum::bucket_pitch(bucket) - pitch) * 100.0;
             if cents.abs() <= PARTIAL_HALF_CENTS {
                 *level = 255;
             }

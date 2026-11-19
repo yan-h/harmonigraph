@@ -65,11 +65,10 @@ impl Regions {
         if !(view.present && view.showing) || full.height() <= 3.0 * row {
             return self.draw_picture(ui, state, now, frameless);
         }
-        // Only over a far region with depth to show the tape in, and the
-        // first to go on a short pane: the controls hold Stop.
+        // Only under a far region the picture draws, and the first to go on
+        // a short pane: the controls hold Stop.
         let overview = super::tape::active(state, Navigation::Docked)
-            && !self.collapsed[1]
-            && gestures::spectrum_split(state, DOCKED_SURFACE) < 1.0
+            && self.far_drawn(state)
             && full.height() > 3.0 * (row + strip);
         let below = row + if overview { strip } else { 0.0 };
         let (picture, bottom) = full.split_top_bottom_at_y(full.bottom() - below);
@@ -83,6 +82,30 @@ impl Regions {
             self.draw_picture(ui, state, now, frameless);
         });
         ui.allocate_rect(bottom, Sense::hover());
+    }
+
+    /// Which regions the picture folds. Turning off the history layers hides
+    /// the far region and its control; it does not discard the user's
+    /// independent layout folds.
+    fn folded(&self, cfg: &crate::SpectrumConfig) -> [bool; 2] {
+        [self.collapsed[0], self.collapsed[1] || !cfg.has_far_region()]
+    }
+
+    /// Whether [`draw_picture`](Self::draw_picture) draws the far region
+    /// with any depth, from what it lays the regions out by: unfolded, and
+    /// either the spectrum folded, when the far region takes the whole
+    /// picture, or the divider not dragged shut. Any other reading of it
+    /// leaves the overview disagreeing with the picture it sits under
+    /// (#1842).
+    ///
+    /// The divider is read as the frame begins, before `draw_picture`
+    /// restores the saved hold, takes the pane's size into it, or lets a drag
+    /// move it: the strip has to be decided first, since its height comes out
+    /// of the picture's. So a frame that drags the divider shut, or open,
+    /// keeps the strip it began with, and the next frame follows.
+    fn far_drawn(&self, state: &PictureState) -> bool {
+        let folded = self.folded(&state.appearance.spectrum);
+        !folded[1] && (folded[0] || gestures::spectrum_split(state, DOCKED_SURFACE) < 1.0)
     }
 
     fn draw_picture(
@@ -99,10 +122,8 @@ impl Regions {
         if !rect.is_positive() || !depth.is_finite() {
             return;
         }
-        let history = cfg.show_roll || cfg.show_spectrogram;
-        // Turning off the history layers hides that region and its control;
-        // it does not discard the user's independent layout folds.
-        let folded = [self.collapsed[0], self.collapsed[1] || !history];
+        let history = cfg.has_far_region();
+        let folded = self.folded(&cfg);
         let rail = if frameless {
             0.0
         } else {

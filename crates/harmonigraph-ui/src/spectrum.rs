@@ -1,14 +1,13 @@
 //! The audio-derived spectrum behind the Spectral pane: the analyzer that
 //! turns incoming samples into columns, and what those columns become, the
-//! curve and the history. Separate surface storage describes the uploaded
-//! heatmap textures.
+//! curve and the history. What each drawing surface holds of the history is
+//! [`SpectrogramSurfaces`](crate::spectrogram::SpectrogramSurfaces), beside
+//! the heatmap it feeds.
 //! Runtime-only — none of this is persisted.
 
 use crate::SpectrumConfig;
 
-/// One power value per pitch-spectrum bucket, the array the analyzer fills
-/// and the pane draws. See [`harmonigraph_core::spectrum::SPECTRUM_BINS`].
-pub(crate) type SpectrumBuckets = [f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
+use harmonigraph_core::spectrum::SpectrumBuckets;
 
 /// Audio-derived pitch spectrum shown in the Spectral pane: what the columns
 /// a feeder's [`SpectrumAnalysis`] makes become. Each shell owns the analysis
@@ -150,56 +149,6 @@ impl AnalyzedColumn {
     }
 }
 
-/// Every drawing surface's heatmap state, indexed by the surface id its copy of
-/// the pane was drawn with: 0 the docked Spectral pane, 1 the Video pane's
-/// preview, and offline the placement's index in the layout (see
-/// [`draw_panes`](crate::draw_panes)).
-///
-/// Each surface reads a run of its own: the slab width comes off the pane's
-/// own depth in points, so two placements at different sizes sharing one
-/// surface would each replace the other's run every frame.
-///
-/// What stays SHARED is the analyzer and the slab pyramid it fills
-/// ([`AudioSpectrum::pyramid`]): there is one selected input and one stream of
-/// columns, and a surface holds only the run it read out of them.
-#[derive(Default)]
-pub(crate) struct SpectrogramSurfaces(Vec<SpectrogramSurface>);
-
-impl SpectrogramSurfaces {
-    /// The surface's own state, empty on first sight of its id.
-    ///
-    /// A method on the field rather than on [`AudioSpectrum`], so a caller
-    /// reading the shared pyramid can hold that borrow while this one is out.
-    pub(crate) fn at(&mut self, surface: usize) -> &mut SpectrogramSurface {
-        if self.0.len() <= surface {
-            self.0.resize_with(surface + 1, SpectrogramSurface::default);
-        }
-        &mut self.0[surface]
-    }
-
-    /// Every surface an id has been asked for, for the readings and the
-    /// teardowns that are about all of them at once.
-    pub(crate) fn all(&self) -> impl Iterator<Item = &SpectrogramSurface> {
-        self.0.iter()
-    }
-}
-
-/// One drawing surface's heatmap: the immutable snapshot of the run it drew.
-/// The renderer separately owns its uploaded copy.
-///
-/// Runtime-only, never persisted, and rebuilt from the pyramid when dropped,
-/// so a default is always a safe state.
-#[derive(Default)]
-pub(crate) struct SpectrogramSurface {
-    /// The run and palette reused across frames. See
-    /// [`FoldedGrid`](crate::spectrogram::FoldedGrid).
-    pub(crate) folded: crate::spectrogram::FoldedGrid,
-    /// The pyramid level the previous frame drew at, which is what gives
-    /// [`live_slab`](crate::spectrogram::live_slab)'s ladder its hysteresis —
-    /// see [`Plan::new`](crate::spectrogram::Plan::new). `None` before the first frame.
-    pub(crate) held_level: Option<usize>,
-}
-
 impl Default for SpectrumAnalysis {
     fn default() -> Self {
         SpectrumAnalysis {
@@ -229,7 +178,7 @@ impl Default for AudioSpectrum {
 
 impl SpectrumAnalysis {
     /// Analyze interleaved samples, `channels` to a frame, one spectrum per
-    /// [`FFT_INTERVAL`](AudioSpectrum::FFT_INTERVAL) of audio in them, handing
+    /// [`FFT_INTERVAL`](crate::spectrogram::FFT_INTERVAL) of audio in them, handing
     /// `deliver` the batch's arrival and then each column it completes.
     ///
     /// `origin` is frame zero of this run on the shell clock, which the
@@ -289,7 +238,7 @@ impl SpectrumAnalysis {
         let sr = f64::from(sample_rate.max(1.0));
         let newest = origin + (self.frames_seen + batch as u64 - 1) as f64 / sr;
         deliver(Delivery::Arrival { newest });
-        let hop = ((AudioSpectrum::FFT_INTERVAL * sr).round() as u64).max(1);
+        let hop = ((crate::spectrogram::FFT_INTERVAL * sr).round() as u64).max(1);
         // Columns fall on multiples of `hop` frames from the start of the
         // stream. Left at zero the first boundary would be frame 1 and every one
         // after it a frame early, which is harmless but makes the grid
@@ -452,28 +401,6 @@ pub(crate) fn hop_alpha(seconds: f32, dt: f64) -> f32 {
 }
 
 impl AudioSpectrum {
-    /// Seconds of AUDIO between FFTs (125 columns a second), measured in
-    /// samples rather than on the shell clock — see
-    /// [`feed_source`](SpectrumAnalysis::feed_source).
-    ///
-    /// A column is folded into every level of the slab pyramid, into the one
-    /// slab it lands in at each, so the rate buys smoothness at the newest
-    /// edge for a fold per level, and no REACH: each level keeps slabs, not
-    /// columns.
-    ///
-    /// At 8 ms this is a picture setting and not an analysis one: the window
-    /// is untouched, so what a column RESOLVES is unchanged, and overlapping
-    /// that same window more finely just draws the time axis at 2.5x the
-    /// resolution 20 ms reaches (via
-    /// [`live_slab`](crate::spectrogram::live_slab), whose ladder is
-    /// rungs of THIS interval, so the picture's grid tracks it).
-    /// A column costs about 30 µs per channel through Fast at 48 kHz and 106
-    /// through Precise (#1597's measurement) — up to 2.7% of a core in stereo,
-    /// against 1.1% at 20 ms. The frame is a length of time
-    /// ([`SpectrumWindow::frame`](crate::SpectrumWindow::frame)), so a column
-    /// costs about twice that at 88.2 and 96 kHz and four times at 176.4 and
-    /// 192.
-    pub(crate) const FFT_INTERVAL: f64 = 0.008;
     /// How long after the last samples the curve keeps drawing.
     pub(crate) const HOLD_SECONDS: f64 = 0.5;
 
@@ -528,12 +455,6 @@ impl AudioSpectrum {
     pub fn display(&self, now: f64) -> Option<&SpectrumBuckets> {
         self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS).then_some(&self.display)
     }
-
-    /// The most history ever kept, span-independent: the longest span the
-    /// roll offers. Each rung of the slab pyramid keeps this much and three
-    /// slabs more, or its ring, whichever is fewer; see
-    /// [`SlabPyramid`](crate::spectrogram::SlabPyramid).
-    pub(crate) const HISTORY_MAX_SECONDS: f64 = crate::ROLL_SECONDS_MAX as f64;
 
     /// A column straight into the history, for a test that needs history
     /// without analyzing audio. See [`AudioSpectrum::keep`].
@@ -600,19 +521,6 @@ impl AudioSpectrum {
     /// [`moving_until`](Self::moving_until).
     pub(crate) fn moving(&self, now: f64) -> bool {
         self.moving_until().is_some_and(|until| until >= now)
-    }
-}
-
-impl SpectrogramSurfaces {
-    /// Full uploads of the slab grid across every surface since the plugin
-    /// was opened.
-    ///
-    /// CORRECT and expensive, which is the whole problem — it draws the right
-    /// picture at many times the cost, so nothing on screen distinguishes a
-    /// working delta upload from one that has quietly stopped. The overlay
-    /// turns it into a rate, where "climbing" is the entire diagnosis.
-    pub(crate) fn full_uploads(&self) -> u32 {
-        self.all().map(|s| s.folded.full_uploads()).sum()
     }
 }
 

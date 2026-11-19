@@ -3584,6 +3584,57 @@ fn the_overview_box_moves_the_stretch_shown_and_its_ends_resize_it() {
     assert_eq!(state.runtime.tape.request, None, "a drag on the overview is not a cue");
 }
 
+/// Both Tape heatmaps hand a still frame the run they already drew, and a
+/// slab replaced mid-history, as a re-analysis or a winning pass replaces
+/// one, reaches the next frame's run although the run's newest slab is the
+/// same allocation as before (#1869).
+#[test]
+fn the_tape_heatmaps_keep_their_runs_until_the_tape_is_written() {
+    use crate::spectrogram::TapeStrip;
+    use crate::tape::spectrogram::{COLUMN_SECONDS, LEVELS};
+    use harmonigraph_core::spectrum::SPECTRUM_BINS;
+    let mut state = on_tape();
+    // 40 s of columns at -60 dB, settled into every level, so the runs both
+    // strips read hold real slabs rather than the shared silent one.
+    let byte = harmonigraph_core::spectrogram::quantize(1e-6);
+    let tape = &mut state.runtime.tape.spectrogram;
+    for k in 0..(40.0 / COLUMN_SECONDS) as i64 {
+        tape.set_column(k, Some(std::sync::Arc::from([byte; SPECTRUM_BINS])));
+    }
+    tape.settle(&mut Default::default());
+    let ctx = themed();
+    let runs = |state: &mut PictureState| {
+        let surface = state.surfaces.spectrogram.at(0);
+        [TapeStrip::Region, TapeStrip::Overview].map(|strip| {
+            surface.tape[strip as usize].tape_run().expect("the strip drew a Tape run")
+        })
+    };
+    overview_frames(&ctx, &mut state, vec![vec![]]);
+    let before = runs(&mut state);
+    overview_frames(&ctx, &mut state, vec![vec![]]);
+    for ((key, run), (held_key, held)) in runs(&mut state).iter().zip(&before) {
+        assert_eq!(key, held_key);
+        assert!(std::sync::Arc::ptr_eq(run, held), "a still frame rebuilt the run of {key:?}");
+    }
+
+    // A louder slab in the middle of the far region's run, at its level.
+    let (key, run) = &before[TapeStrip::Region as usize];
+    assert!(key.level < LEVELS && run.len() >= 3, "fixture's run is too short: {key:?}");
+    let middle = key.first + run.len() as i64 / 2;
+    let louder: harmonigraph_render::SpectrogramSlab =
+        std::sync::Arc::from([harmonigraph_core::spectrogram::quantize(1e-3); SPECTRUM_BINS]);
+    state.runtime.tape.spectrogram.put(key.level, middle, Some(louder.clone()));
+    overview_frames(&ctx, &mut state, vec![vec![]]);
+    let (after_key, after) = &runs(&mut state)[TapeStrip::Region as usize];
+    assert_eq!((after_key.first, after.len()), (key.first, run.len()), "the window moved");
+    assert!(
+        std::sync::Arc::ptr_eq(after.last().unwrap(), run.last().unwrap()),
+        "fixture: the newest slab must stay the same allocation"
+    );
+    let at = (middle - key.first) as usize;
+    assert!(std::sync::Arc::ptr_eq(&after[at], &louder), "the replaced slab was not drawn");
+}
+
 /// Which parts of the Tape picture [`playhead_frames`] draws.
 #[derive(Clone, Copy)]
 enum Drawn {
