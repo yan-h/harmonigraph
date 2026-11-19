@@ -406,7 +406,7 @@ fn the_scrolling_spectrogram_choice_names_its_span() {
 /// readout off the pane edge while the bars above it compress properly.
 ///
 /// Read from the bars themselves (`range_probe::placed`): each records the rect
-/// it took and the column its `Ui` offered it. So a bar that shares its row (a
+/// it took and the room across its `Ui` offered it just before. So a bar that shares its row (a
 /// mapping's weight beside Delete, an interval beside its temperament switch,
 /// a map Position's Fine and Coarse halves, a diagram's value column) is held
 /// to the column it was given rather than counted as a known exception, and
@@ -427,16 +427,16 @@ fn every_bar_fills_its_column_and_narrows_with_the_pane() {
         for (index, &case) in cases.iter().enumerate() {
             let bars = bars_at_width(case, width);
             for bar in &bars {
-                let (name, column) = (&bar.name, bar.column);
+                let (name, offered) = (&bar.name, bar.offered);
                 assert!(
-                    column.left() >= left - 0.5 && column.right() <= right + 0.5,
-                    "{case:?} at {width}pt laid {name} in {column:?}, past the pane's \
+                    offered.min >= left - 0.5 && offered.max <= right + 0.5,
+                    "{case:?} at {width}pt offered {name} {offered:?}, past the pane's \
                      {left}..{right}: something above it overran"
                 );
+                let took = bar.rect.x_range();
                 assert!(
-                    (bar.rect.right() - column.right()).abs() < 0.5,
-                    "{case:?} at {width}pt: {name} took {:?} of its column {column:?}",
-                    bar.rect
+                    (took.min - offered.min).abs() < 0.5 && (took.max - offered.max).abs() < 0.5,
+                    "{case:?} at {width}pt: {name} took {took:?} of the room {offered:?} offered"
                 );
             }
             let widths: Vec<f32> = bars.iter().map(|bar| bar.rect.width()).collect();

@@ -16,10 +16,15 @@ pub(crate) struct Visit {
     pub default: Option<Option<Vec<f32>>>,
 }
 
-/// Where a bar was laid: the rect it allocated, and the `max_rect` of the `Ui`
-/// it was laid in, which is the column it was offered. Recorded by every
-/// row-high control that sizes itself from its column (`bar::bar_width`), the
-/// skin colour picker's row included, so the settings sweeps read a bar's
+/// Where a bar was laid: the rect it allocated, and the horizontal room its
+/// `Ui` offered it just before, which is the column it was meant to fill.
+/// Read before the allocation because egui grows a `Ui`'s `max_rect` to hold
+/// whatever it allocates, so a bar wider than its column would otherwise have
+/// already widened the column it is checked against.
+///
+/// Recorded by [`bar::allocate_row`](super::bar::allocate_row), which every
+/// row-high control that sizes itself from its column allocates through, so a
+/// new bar is counted by construction and the settings sweeps read a bar's
 /// geometry from the bar rather than picking its well out of the paint. The
 /// plots are several rows tall and not bars, and record nothing.
 #[derive(Clone, Debug)]
@@ -27,7 +32,7 @@ pub(crate) struct Placed {
     /// The bar's label, or its kind where it carries none of its own.
     pub name: String,
     pub rect: egui::Rect,
-    pub column: egui::Rect,
+    pub offered: egui::Rangef,
 }
 
 type Scopes<T> = RefCell<Vec<Vec<T>>>;
@@ -37,9 +42,9 @@ thread_local! {
     static PLACED: Scopes<Placed> = const { RefCell::new(Vec::new()) };
 }
 
-/// Record that the bar `name` took `rect` in `ui`.
-pub(super) fn record_placed(name: &str, rect: egui::Rect, ui: &egui::Ui) {
-    push_into(&PLACED, Placed { name: name.to_owned(), rect, column: ui.max_rect() });
+/// Record that the bar `name` took `rect` of the room `offered` across.
+pub(super) fn record_placed(name: &str, rect: egui::Rect, offered: egui::Rangef) {
+    push_into(&PLACED, || Placed { name: name.to_owned(), rect, offered });
 }
 
 pub(super) fn record(label: &str, values: &[f32], range: &RangeInclusive<f32>) {
@@ -70,16 +75,21 @@ fn push(
     range: &RangeInclusive<f32>,
     default: Option<Option<Vec<f32>>>,
 ) {
-    push_into(
-        &SCOPES,
-        Visit { label: label.to_owned(), values: values.to_vec(), range: range.clone(), default },
-    );
+    push_into(&SCOPES, || Visit {
+        label: label.to_owned(),
+        values: values.to_vec(),
+        range: range.clone(),
+        default,
+    });
 }
 
-fn push_into<T: 'static>(key: &'static LocalKey<Scopes<T>>, item: T) {
+/// Push what `make` builds into the innermost open scope, building nothing
+/// when no scope is open: every frame of every test draws through here,
+/// the allocation profiles included, and only a collecting one pays.
+fn push_into<T: 'static>(key: &'static LocalKey<Scopes<T>>, make: impl FnOnce() -> T) {
     key.with_borrow_mut(|scopes| {
         if let Some(items) = scopes.last_mut() {
-            items.push(item);
+            items.push(make());
         }
     });
 }

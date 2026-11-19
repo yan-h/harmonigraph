@@ -30,7 +30,7 @@
 //! ordering/minimum spans and gestures are outside this guard, as are renderer
 //! clamps and semantic unit mappings.
 
-use super::harness::{set_optional_sections, MATERIALS, PROJECTIONS, SETTINGS_PANES, TEXTURES};
+use super::harness::{materials, projections, set_optional_sections, textures, SETTINGS_PANES};
 use super::persist::{nested_pairs, nested_scalars};
 use super::probe::{fresh, themed};
 use crate::widgets::range_probe::{collect, Visit};
@@ -273,17 +273,18 @@ struct Scenario {
 }
 
 fn scenarios() -> Vec<Scenario> {
-    // The first of each mode list; every other one is a scenario of its own
-    // below, so a mode added to the shared lists is drawn here too.
+    // The fresh modes, Cabinet named; every other one is a scenario of its
+    // own below, read off the editor's option tables, so a mode added to a
+    // choice row is drawn here too.
     let base = Scenario {
         pane: SETTINGS_PANES[0],
         expanded: false,
-        projection: PROJECTIONS[0],
+        projection: Projection::Cabinet,
         enabled: false,
         meantone: false,
         marvel: false,
-        style: TEXTURES[0],
-        material: MATERIALS[0],
+        style: crate::panes::fresh_spectrum().atmosphere.cloud_style,
+        material: harmonigraph_scene::LatticeMaterial::default(),
     };
     let mut cases = Vec::new();
     for &pane in SETTINGS_PANES {
@@ -294,15 +295,15 @@ fn scenarios() -> Vec<Scenario> {
     // Each lattice material's own dials (amount, speed and direction beside
     // the geometry it shares with the spectrogram), and each texture's, with
     // every fold open for the Stars layer editor.
-    for material in MATERIALS.into_iter().skip(1) {
+    for material in materials().filter(|&material| material != base.material) {
         let pane = panes::Tab::LatticeSettings;
         cases.push(Scenario { pane, material, expanded: true, enabled: true, ..base });
     }
-    for style in TEXTURES.into_iter().skip(1) {
+    for style in textures().filter(|&style| style != base.style) {
         let pane = panes::Tab::AnalyzerSettings;
         cases.push(Scenario { pane, style, expanded: true, enabled: true, ..base });
     }
-    for projection in PROJECTIONS.into_iter().skip(1) {
+    for projection in projections().filter(|&projection| projection != base.projection) {
         let pane = panes::Tab::LatticeSettings;
         cases.push(Scenario { pane, projection, enabled: true, ..base });
     }

@@ -304,68 +304,28 @@ impl DockHarness {
     }
 }
 
-/// The projections a settings sweep has to cover, default first.
-///
-/// Only the Camera block's content turns on this, and it turns on it hard:
-/// `view::camera` hides the whole camera-angle half — Camera yaw and pitch, the
-/// Angle presets, the Save-angle row — under Cabinet, which has a fixed
-/// viewpoint and no angle to set, and hides the two cabinet knobs under the
-/// others. `Camera::default()` IS Cabinet, so a fixture that takes the default
-/// and stops there never draws that half of the pane at all.
-pub(super) const PROJECTIONS: [harmonigraph_scene::Projection; 3] = [
-    harmonigraph_scene::Projection::Cabinet,
-    harmonigraph_scene::Projection::Perspective,
-    harmonigraph_scene::Projection::Orthographic,
-];
-
-/// Every spectrogram texture, each with dials of its own on the Analyzer page
-/// (and its own bars in the range guard), Watercolor first as the plain one.
-pub(super) const TEXTURES: [harmonigraph_scene::CloudStyle; 3] = [
-    harmonigraph_scene::CloudStyle::Watercolor,
-    harmonigraph_scene::CloudStyle::Stars,
-    harmonigraph_scene::CloudStyle::VelvetScales,
-];
-
-/// Every lattice glow material, each with dials of its own on the Lattice
-/// page, the fresh one (none) first.
-pub(super) const MATERIALS: [harmonigraph_scene::LatticeMaterial; 4] = [
-    harmonigraph_scene::LatticeMaterial::None,
-    harmonigraph_scene::LatticeMaterial::Watercolor,
-    harmonigraph_scene::LatticeMaterial::Stars,
-    harmonigraph_scene::LatticeMaterial::VelvetScales,
-];
-
-/// Never called: its matches are exhaustive, so a new texture, material,
-/// projection or engine does not compile until it is listed in [`TEXTURES`],
-/// [`MATERIALS`], [`PROJECTIONS`] or `TuningEngine::HOST`, which the sweeps
-/// and the range guard iterate. Every one rather than every one that differs
-/// from today's defaults, because a default moving is how the sweeps lost the
+/// The modes a page draws controls of its own for, read off the editor's own
+/// option tables, so a mode added to a choice row is swept and range-guarded
+/// without a list here. Every one rather than every one that differs from
+/// today's defaults, because a default moving is how the sweeps lost the
 /// Stars editor, Scales and the Adaptive section without a line of them
 /// changing (#1484).
-#[allow(dead_code)]
-fn every_mode_is_listed(
-    texture: harmonigraph_scene::CloudStyle,
-    material: harmonigraph_scene::LatticeMaterial,
-    projection: harmonigraph_scene::Projection,
-    engine: harmonigraph_core::lattice_map::TuningEngine,
-) {
-    use harmonigraph_core::lattice_map::TuningEngine;
-    use harmonigraph_scene::{CloudStyle, LatticeMaterial, Projection};
-    match texture {
-        CloudStyle::Watercolor | CloudStyle::Stars | CloudStyle::VelvetScales => {}
-    }
-    match material {
-        LatticeMaterial::None
-        | LatticeMaterial::Watercolor
-        | LatticeMaterial::Stars
-        | LatticeMaterial::VelvetScales => {}
-    }
-    match projection {
-        Projection::Cabinet | Projection::Perspective | Projection::Orthographic => {}
-    }
-    match engine {
-        TuningEngine::Off | TuningEngine::Adaptive | TuningEngine::LatticeMap => {}
-    }
+///
+/// Projection turns the Camera block hard: `view::camera` hides the whole
+/// camera-angle half (Camera yaw and pitch, the Angle presets, the Save-angle
+/// row) under Cabinet, and the two cabinet knobs under the others.
+pub(super) fn projections() -> impl Iterator<Item = harmonigraph_scene::Projection> {
+    crate::panes::view::PROJECTION_CHOICES.into_iter().map(|(projection, _, _)| projection)
+}
+
+/// The spectrogram's textures, as [`projections`] reads the projections.
+pub(super) fn textures() -> impl Iterator<Item = harmonigraph_scene::CloudStyle> {
+    crate::panes::spectral::TEXTURE_CHOICES.into_iter().map(|(style, _, _)| style)
+}
+
+/// The lattice glow's materials, as [`projections`] reads the projections.
+pub(super) fn materials() -> impl Iterator<Item = harmonigraph_scene::LatticeMaterial> {
+    crate::panes::MATERIAL_CHOICES.into_iter().map(|(material, _, _)| material)
 }
 
 /// Every settings tab, in the column's own order.
@@ -402,7 +362,7 @@ pub(super) fn set_optional_sections(state: &mut SharedState, on: bool) {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Variant {
     Fresh,
-    /// The Lattice page's Camera block (see [`PROJECTIONS`]).
+    /// The Lattice page's Camera block (see [`projections`]).
     Projection(harmonigraph_scene::Projection),
     /// The spectrogram's texture, whose own controls the Analyzer page draws.
     Texture(harmonigraph_scene::CloudStyle),
@@ -415,6 +375,9 @@ pub(super) enum Variant {
     /// The Hub's note retuning on a backend that has an engine selector;
     /// Lattice Map plays [`lattice_map_view`].
     Engine(harmonigraph_core::lattice_map::TuningEngine),
+    /// Velocity and gain routed to Opacity, so the Mappings page draws a
+    /// weight bar beside a Delete button for each.
+    Routed,
 }
 
 /// One settings page drawn one way: what the layout sweeps iterate.
@@ -453,6 +416,12 @@ impl SettingsCase {
             Variant::Projection(projection) => appearance.camera.projection = projection,
             Variant::Texture(style) => appearance.spectrum.atmosphere.cloud_style = style,
             Variant::Material(material) => appearance.view.atmosphere.material_style = material,
+            Variant::Routed => {
+                let intensity = &mut appearance.view.intensity;
+                for source in [&mut intensity.velocity, &mut intensity.gain] {
+                    *source.weight_mut(harmonigraph_scene::IntensityTarget::Opacity) = Some(1.0);
+                }
+            }
             Variant::Lit => {
                 set_optional_sections(&mut state, true);
                 // The fresh middle is a look and free to grow, and a ring
@@ -484,20 +453,20 @@ impl SettingsCase {
 
 /// The cases the layout sweeps draw: each page fresh, then every texture on
 /// the Analyzer page, every material and projection on the Lattice page,
-/// every retuning engine on the Tuning page, and [`Variant::Lit`] on the
+/// every retuning engine on the Tuning page, the Mappings page with two
+/// mappings routed ([`Variant::Routed`]), and [`Variant::Lit`] on the
 /// Lattice, Analyzer and System pages — all against a plugin's backend
 /// ([`SettingsCase::backend`]), with every fold open.
 ///
 /// Not every state a page can be in. Left out, among others: a greyed
 /// control's lit form (Texture mix or the glow at 0 grey the controls under
-/// them); the Mappings page with
-/// other than its fresh mappings; a tuner selected in the Sources table,
+/// them); a tuner selected in the Sources table,
 /// whose Source details adds a delay row the Hub's lacks; a configuration
 /// view (the range guard draws one, at 600 pt) or a status notice; and held
 /// voices.
 ///
-/// Every texture, material and engine, for the reason [`every_mode_is_listed`]
-/// gives.
+/// Every texture, material, projection and engine, for the reason
+/// [`projections`] gives.
 pub(super) fn settings_cases() -> Vec<SettingsCase> {
     use harmonigraph_core::lattice_map::TuningEngine;
     use panes::Tab;
@@ -506,17 +475,18 @@ pub(super) fn settings_cases() -> Vec<SettingsCase> {
     for &pane in SETTINGS_PANES {
         let variants: Vec<Variant> = match pane {
             Tab::AnalyzerSettings => {
-                TEXTURES.map(Variant::Texture).into_iter().chain([Variant::Lit]).collect()
+                textures().map(Variant::Texture).chain([Variant::Lit]).collect()
             }
-            // Every material at the fresh projection, then every other
-            // projection at the fresh material: the Camera block and the
-            // glow's material are independent blocks of the page.
-            Tab::LatticeSettings => MATERIALS
+            // Every material at the fresh projection, then every projection
+            // at the fresh material, Cabinet named rather than left to the
+            // fresh camera: the Camera block and the glow's material are
+            // independent blocks of the page.
+            Tab::LatticeSettings => materials()
                 .map(Variant::Material)
-                .into_iter()
-                .chain(PROJECTIONS[1..].iter().map(|&p| Variant::Projection(p)))
+                .chain(projections().map(Variant::Projection))
                 .chain([Variant::Lit])
                 .collect(),
+            Tab::Mappings => vec![Variant::Fresh, Variant::Routed],
             Tab::System => vec![Variant::Fresh, Variant::Lit],
             // No engine selector at all, then each engine behind one.
             Tab::Tuning => {

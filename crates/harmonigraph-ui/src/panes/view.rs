@@ -48,6 +48,22 @@ pub(super) fn camera(
     super::block(ui, "Camera", |ui| camera_rows(ui, appearance, interaction));
 }
 
+/// The Projection row's options, which the settings sweeps also iterate, so
+/// a projection added here is drawn by them without a list of their own.
+pub(crate) const PROJECTION_CHOICES: [(Projection, &str, &str); 3] = [
+    (Projection::Perspective, "Perspective", "Depth converges and shrinks, like a real camera"),
+    (
+        Projection::Orthographic,
+        "Orthographic",
+        "Uniform scale at every depth; parallel lines stay parallel",
+    ),
+    (
+        Projection::Cabinet,
+        "Cabinet",
+        "Fifths and thirds stay face-on; seventh layers are offset diagonally. Drag to pan; orbit is disabled.",
+    ),
+];
+
 fn camera_rows(
     ui: &mut egui::Ui,
     appearance: &mut AppearanceDocument,
@@ -56,28 +72,7 @@ fn camera_rows(
     // Projection: perspective converges with depth; orthographic keeps
     // equal intervals at equal screen offsets everywhere (isometric-style
     // reading — depth shows only through the node size cue and occlusion).
-    choice_row(
-        ui,
-        "Projection",
-        &mut appearance.camera.projection,
-        &[
-            (
-                Projection::Perspective,
-                "Perspective",
-                "Depth converges and shrinks, like a real camera",
-            ),
-            (
-                Projection::Orthographic,
-                "Orthographic",
-                "Uniform scale at every depth; parallel lines stay parallel",
-            ),
-            (
-                Projection::Cabinet,
-                "Cabinet",
-                "Fifths and thirds stay face-on; seventh layers are offset diagonally. Drag to pan; orbit is disabled.",
-            ),
-        ],
-    );
+    choice_row(ui, "Projection", &mut appearance.camera.projection, &PROJECTION_CHOICES);
     if appearance.camera.projection == Projection::Cabinet {
         crate::widgets::cabinet(
             ui,

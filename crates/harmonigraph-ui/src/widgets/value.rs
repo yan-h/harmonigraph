@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
-use super::bar::{bar_radius, bar_width, elided_name, track_fill, with_gestures, BAR_TEXT_PAD};
+use super::bar::{allocate_row, bar_radius, elided_name, track_fill, with_gestures, BAR_TEXT_PAD};
 use super::text_at;
 use crate::theme;
 
@@ -349,13 +349,7 @@ impl<'a> ValueBar<'a> {
         #[cfg(test)]
         super::range_probe::record_value_bar(self.label, *self.value, &self.range, self.default);
         let scale = theme::ui_scale(ui.ctx());
-        let width = bar_width(ui);
-        let (rect, mut response) = ui.allocate_exact_size(
-            Vec2::new(width, theme::row_height(scale)),
-            Sense::click_and_drag(),
-        );
-        #[cfg(test)]
-        super::range_probe::record_placed(self.label, rect, ui);
+        let (rect, mut response) = allocate_row(ui, self.label, Sense::click_and_drag());
 
         let edit_id = response.id.with("edit");
         let focus_id = edit_id.with("focus_pending");
@@ -830,11 +824,7 @@ fn stripes(
 /// width pads it to a fixed one instead (monospace, so that is enough).
 pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str) -> Response {
     let scale = theme::ui_scale(ui.ctx());
-    let width = bar_width(ui);
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(width, theme::row_height(scale)), Sense::hover());
-    #[cfg(test)]
-    super::range_probe::record_placed(label, rect, ui);
+    let (rect, response) = allocate_row(ui, label, Sense::hover());
 
     let corner = bar_radius(scale);
     let radius = CornerRadius::same(corner);

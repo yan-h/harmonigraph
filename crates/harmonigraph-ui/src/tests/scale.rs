@@ -13,23 +13,9 @@ const PANE_WIDTH: f32 = 400.0;
 /// [`settings_pane_at_width`] — the dock's clip outside the pane's content box
 /// — at a fixed width, because here it is the scale that varies.
 fn settings_pane_at_scale(case: SettingsCase, scale: f32) -> Vec<egui::epaint::ClippedShape> {
-    drawn_at_scale(case, scale).0
-}
-
-/// The same page at the same scale, as the shapes and where each bar was laid.
-fn drawn_at_scale(
-    case: SettingsCase,
-    scale: f32,
-) -> (Vec<egui::epaint::ClippedShape>, Vec<crate::widgets::range_probe::Placed>) {
     let mut state = case.state();
     state.workspace.interaction.prefs.ui_scale = scale;
-    open_settings_pane(&super::probe::themed_scaled(scale), case, &mut state, PANE_WIDTH)
-}
-
-/// The cases of the pages that draw bars — every settings page but the
-/// Console, a readout. Video draws two: Tail and the export's progress.
-fn bar_cases() -> impl Iterator<Item = SettingsCase> {
-    settings_cases().into_iter().filter(|case| case.pane != panes::Tab::Console)
+    open_settings_pane(&super::probe::themed_scaled(scale), case, &mut state, PANE_WIDTH).0
 }
 
 /// Every shape's bottom edge, ignoring the ones that carry no geometry (they
@@ -59,9 +45,11 @@ fn tallest_text(shapes: &[egui::epaint::ClippedShape]) -> f32 {
 /// control.
 #[test]
 fn the_ui_scale_shrinks_the_panel_chrome() {
-    // Not Video, whose page runs to the pane's foot at any scale, so where its
-    // paint ends says nothing about its spacing.
-    for case in bar_cases().filter(|case| case.pane != panes::Tab::Video) {
+    // Not the two readouts: Video's page runs to the pane's foot at any scale,
+    // so where its paint ends says nothing about its spacing, and the Console
+    // is a log.
+    let readouts = [panes::Tab::Video, panes::Tab::Console];
+    for case in settings_cases().into_iter().filter(|case| !readouts.contains(&case.pane)) {
         let (full, small) = (settings_pane_at_scale(case, 1.0), settings_pane_at_scale(case, 0.75));
 
         let (tall, short) = (tallest_text(&full), tallest_text(&small));
@@ -329,8 +317,9 @@ const ROUNDING: f32 = egui::emath::GUI_ROUNDING;
 /// wraps does not, so the headroom is not the same fraction twice. With no
 /// vertical padding it is at its narrowest at 0.75: 1.25pt.
 ///
-/// [`every_bar_has_its_declared_height`] covers the other half of a settings pane, the
-/// bars, which reach the height by allocating it rather than by any floor.
+/// The other half of a settings pane, the bars, reach the height by
+/// allocating it rather than by any floor, all through `bar::allocate_row`,
+/// whose own test holds it to the row at every scale.
 #[test]
 fn every_settings_row_is_one_row_high() {
     for kind in CONTROLS {
@@ -368,36 +357,6 @@ fn every_settings_row_is_one_row_high() {
                         rect.height(),
                     );
                 }
-            }
-        }
-    }
-}
-
-/// Every bar a settings pane draws is its declared height at every scale.
-///
-/// Bars occupy one [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT), reached by
-/// allocating it outright rather than by the `interact_size` floor that
-/// catches settings rows.
-///
-/// Read from the bars themselves (`range_probe::placed`), each recording the
-/// rect it took, so every bar a page draws is in the census, greyed and nested
-/// ones included, and a mis-sized one fails rather than dropping out of a
-/// sniff of the paint.
-#[test]
-fn every_bar_has_its_declared_height() {
-    for case in bar_cases() {
-        for step in 0..=17u8 {
-            let scale = 0.75 + 0.05 * f32::from(step);
-            let want = crate::theme::row_height(scale);
-            let (_, bars) = drawn_at_scale(case, scale);
-            assert!(!bars.is_empty(), "{case:?} at scale {scale} drew no bars to measure");
-            for bar in bars {
-                assert!(
-                    (bar.rect.height() - want).abs() < ROUNDING,
-                    "{case:?} at scale {scale} drew {} {}pt high, not its declared {want}pt",
-                    bar.name,
-                    bar.rect.height(),
-                );
             }
         }
     }

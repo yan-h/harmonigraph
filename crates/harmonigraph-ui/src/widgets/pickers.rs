@@ -19,12 +19,7 @@ pub(crate) fn skin_color(
         super::range_probe::record(labels[1], &[*amount], &(0.0..=1.0));
     }
     let scale = theme::ui_scale(ui.ctx());
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(super::bar::bar_width(ui), theme::row_height(scale)),
-        egui::Sense::click(),
-    );
-    #[cfg(test)]
-    super::range_probe::record_placed(label, rect, ui);
+    let (rect, response) = super::bar::allocate_row(ui, label, egui::Sense::click());
     let visuals = ui.style().interact(&response);
     ui.painter().rect_filled(rect, super::bar::bar_radius(scale), visuals.bg_fill);
     let job = egui::text::LayoutJob::simple(

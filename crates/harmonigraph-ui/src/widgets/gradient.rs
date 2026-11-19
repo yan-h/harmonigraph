@@ -11,9 +11,9 @@ use egui::{Color32, CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{gradient_color, hue_circle, Gradient, HUE_CIRCLE_N, PITCH_LUT_N};
 
 use super::bar::{
-    bar_radius, bar_width, drag, elided_name, grip_radius, paint_thumbs, poised, track_fill,
-    with_gestures, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE,
-    HANDLE_W, TEXT_GAP,
+    allocate_row, bar_radius, bar_width, drag, elided_name, grip_radius, paint_thumbs, poised,
+    track_fill, with_gestures, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET,
+    HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use super::text_at;
@@ -389,9 +389,9 @@ impl<'a> SpectrumBar<'a> {
 
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
-        let width = bar_width(ui);
-        // Space first, senses after: the row holds two controls side by side,
-        // and each is interacted with over its OWN rectangle. That is what
+        // The row senses hover alone, and the clicks and drags after: the row
+        // holds two controls side by side, and each is interacted with over
+        // its OWN rectangle. That is what
         // keeps a press on the flip button out of the track — a button that
         // senses clicks and not drags produces no drag hit at all, so there is
         // nothing for the track to inherit at any distance.
@@ -404,11 +404,10 @@ impl<'a> SpectrumBar<'a> {
         // frames before that are ones the button spends looking pressed while
         // the track quietly holds the gesture.
         let flip_gap = FLIP_GAP * scale;
-        let (id, rect) = ui.allocate_space(Vec2::new(width, theme::row_height(scale)));
-        #[cfg(test)]
-        super::range_probe::record_placed("SpectrumBar", rect, ui);
-        // The track's width is what the circle and the settings sweep both
-        // measure, so the row is laid out from it rather than from the button:
+        let (rect, row) = allocate_row(ui, "SpectrumBar", Sense::hover());
+        let id = row.id;
+        // The track's width is what the circle measures, so the row is laid
+        // out from it rather than from the button:
         // a column too narrow to leave the track anything then gives the button
         // the row, which is the right way round. A coarse handle beats an
         // unreachable one, but a button with no width cannot be pressed at all.
@@ -1127,13 +1126,7 @@ impl<'a> SpreadBar<'a> {
 
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
-        let width = bar_width(ui);
-        let (rect, mut response) = ui.allocate_exact_size(
-            Vec2::new(width, theme::row_height(scale)),
-            Sense::click_and_drag(),
-        );
-        #[cfg(test)]
-        super::range_probe::record_placed("SpreadBar", rect, ui);
+        let (rect, mut response) = allocate_row(ui, "SpreadBar", Sense::click_and_drag());
         let axis = self.spread.axis();
         let (min, max) = axis;
         // Values live on an inset track, so both limits are places a handle can

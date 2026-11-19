@@ -6,7 +6,7 @@ use std::ops::RangeInclusive;
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    bar_radius, bar_width, drag, elided_name, grip_radius, paint_thumbs, poised, track_fill,
+    allocate_row, bar_radius, drag, elided_name, grip_radius, paint_thumbs, poised, track_fill,
     with_gestures, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, GRIP_TEXT_PAD, HANDLE_INSET,
     HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
@@ -471,13 +471,7 @@ impl<'a> RangeBar<'a> {
             self.default,
         );
         let scale = theme::ui_scale(ui.ctx());
-        let width = bar_width(ui);
-        let (rect, mut response) = ui.allocate_exact_size(
-            Vec2::new(width, theme::row_height(scale)),
-            Sense::click_and_drag(),
-        );
-        #[cfg(test)]
-        super::range_probe::record_placed(self.label, rect, ui);
+        let (rect, mut response) = allocate_row(ui, self.label, Sense::click_and_drag());
         let (min, max) = (*self.range.start(), *self.range.end());
         // Every pair a `min_span` bar is handed went through its config's
         // `sanitize`, which opens it to the minimum, so no producer hands one

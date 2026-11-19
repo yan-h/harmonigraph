@@ -13,6 +13,8 @@ pub mod glow_fade;
 pub mod labels;
 pub mod lattice;
 mod lattice_atmosphere;
+#[cfg(test)]
+pub(crate) use lattice_atmosphere::MATERIAL_CHOICES;
 pub mod lighting;
 mod material;
 pub(crate) mod node_motion;
