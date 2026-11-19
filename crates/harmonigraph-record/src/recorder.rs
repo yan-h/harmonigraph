@@ -762,24 +762,12 @@ impl Control {
         self.latches.captured.load(Ordering::Relaxed)
     }
 
-    /// Whether the audio thread saw the transport go backwards and ended the
-    /// take — the GUI's cue to stop recording and render it.
-    pub fn hit_rewind(&self) -> bool {
-        self.latches.end() == Some(End::Rewind)
-    }
-
     /// The bar to end the take at, or `None` for every trigger but
     /// `AtBar`. Called at every poll of the take's end, like
     /// [`set_end_at_rewind`](Self::set_end_at_rewind), so a mid-take change
     /// of mind reaches the audio thread.
     pub fn set_stop_bar(&self, bar: Option<f64>) {
         self.latches.stop_at_bar.set(bar);
-    }
-
-    /// Whether the audio thread played the take through its stop bar and ended
-    /// it there — the GUI's cue to stop recording and render.
-    pub fn hit_stop_bar(&self) -> bool {
-        self.latches.end() == Some(End::Bar)
     }
 
     /// An audio-owned completion remains authoritative even if the GUI's

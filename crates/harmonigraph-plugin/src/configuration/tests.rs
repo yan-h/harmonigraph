@@ -1585,7 +1585,7 @@ fn a_short_stopped_export_finishes_with_or_without_midi() {
         assert!(shared.lock().take.has_rolled());
         assert_eq!(shared.lock().take.captured() > 0, with_note);
         device.run_transport(320, vec![], false, None, Some(stopped(5.0)));
-        assert!(!shared.lock().take.hit_rewind(), "the restore records nothing and ends nothing");
+        assert!(!shared.lock().take.has_ended(), "the restore records nothing and ends nothing");
         shared.lock().poll_through_stop_debounce();
         assert!(!shared.lock().take.is_recording(), "stillness ends even one callback's take");
         device.finish_notes(384, if with_note { &[(10, 60)] } else { &[] });
