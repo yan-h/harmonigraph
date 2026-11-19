@@ -242,7 +242,7 @@ pub(super) fn parity_scene() -> Scene {
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv
         // every glow bar is dialled in.
-        marker_unit: 0.34 * 1.8,
+        marker_unit: 0.34 * harmonigraph_scene::RADII_PER_UV,
         glow_clock: None,
         star_solo: Default::default(),
     }
@@ -511,7 +511,7 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     // node's radius through this factor, so a scene that sets one and not the
     // other is a scene `derive_scene` cannot build — and every Shadow in it is two
     // different world distances, one for a ring and one for a cross.
-    scene.marker_unit = scene.node_radius * 1.8;
+    scene.marker_unit = scene.node_radius * harmonigraph_scene::RADII_PER_UV;
     scene
 }
 

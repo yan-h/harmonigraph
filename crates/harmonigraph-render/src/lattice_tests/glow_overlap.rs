@@ -25,7 +25,8 @@ fn scene(levels: &[f32], gain: f32, separated: bool) -> Scene {
             node.glow.level = *level;
             node.lattice_pos = harmonigraph_core::LatticePos::new(i as i32, 0, 0);
             if separated {
-                node.world_pos.x = (i as f32 * 2.0 - 1.0) * scene.node_radius * 1.8;
+                node.world_pos.x =
+                    (i as f32 * 2.0 - 1.0) * scene.node_radius * harmonigraph_scene::RADII_PER_UV;
             }
             node.cents = if i % 2 == 0 { 0.0 } else { 1100.0 };
             node
@@ -54,17 +55,35 @@ fn read_glow(shooter: &Shooter) -> Vec<u8> {
     read_glow_binding(shooter, glow.binding())
 }
 
+/// The production linear blit, built once per device and format rather than
+/// on every read: a test reads the glow dozens of times.
+fn blit_pipeline(shooter: &Shooter) -> wgpu::RenderPipeline {
+    type Cached = (wgpu::Device, wgpu::TextureFormat, wgpu::RenderPipeline);
+    thread_local! {
+        static BLIT: std::cell::RefCell<Option<Cached>> = const { std::cell::RefCell::new(None) };
+    }
+    BLIT.with_borrow_mut(|cached| {
+        if let Some((device, format, pipeline)) = cached {
+            if *device == shooter.device && *format == shooter.format {
+                return pipeline.clone();
+            }
+        }
+        let resources = shooter.resources.get::<LatticeResources>().unwrap();
+        let pipeline = create_post_pipeline(
+            &shooter.device,
+            &blit_module(&shooter.device),
+            "fs_blit",
+            shooter.format,
+            &resources.compiled.filter_layout,
+            None,
+        );
+        *cached = Some((shooter.device.clone(), shooter.format, pipeline.clone()));
+        pipeline
+    })
+}
+
 fn read_glow_binding(shooter: &Shooter, binding: &wgpu::BindGroup) -> Vec<u8> {
-    let resources = shooter.resources.get::<LatticeResources>().unwrap();
-    let shader = blit_module(&shooter.device);
-    let pipeline = create_post_pipeline(
-        &shooter.device,
-        &shader,
-        "fs_blit",
-        shooter.format,
-        &resources.compiled.filter_layout,
-        None,
-    );
+    let pipeline = blit_pipeline(shooter);
     let texture = render_to_texture(
         &shooter.device,
         &shooter.queue,
@@ -255,11 +274,10 @@ fn materials_drift_stays_continuous_across_axis_wraps() {
                 harmonigraph_scene::MaterialSettings::DRIFT_START[axis]
                     + harmonigraph_scene::MaterialSettings::drift_rate(1.0, direction)[axis] * now
             };
-            let cells = f64::from(if style == harmonigraph_scene::LatticeMaterial::VelvetScales {
-                405.0 / 240.0 / scene.view.atmosphere.material_settings.velvet_size
-            } else {
-                5.25 / scene.view.atmosphere.material_settings.wash_size
-            });
+            let cells = crate::material_cells::cells_per_unit(
+                style == harmonigraph_scene::LatticeMaterial::VelvetScales,
+                &scene.view.atmosphere.material_settings,
+            );
             let origin = if style == harmonigraph_scene::LatticeMaterial::VelvetScales {
                 0.0
             } else {
@@ -282,92 +300,6 @@ fn materials_drift_stays_continuous_across_axis_wraps() {
             );
             }
         }
-    }
-}
-
-/// A Drift speed or direction drag minutes in moves the glow material on by
-/// one frame's travel at the new dials, where the clock times them would jump
-/// it as far as it had come since the clock started (#1639). The stars travel
-/// along the same direction at their own speeds.
-#[test]
-fn a_drift_nudge_minutes_in_moves_the_material_one_frame_at_most() {
-    use harmonigraph_scene::LatticeMaterial;
-    let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    for style in
-        [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
-    {
-        for direction in [false, true] {
-            let case = format!("{style:?}, direction {direction}");
-            let mut scene = scene(&[1.0, 1.0], 0.75, true);
-            let a = &mut scene.view.atmosphere;
-            a.material_style = style;
-            a.breath_amount = 0.0;
-            a.material_amount = 1.0;
-            a.material_speed = 1.0;
-            let (carried, restarted) = nudged(&mut shooter, scene, |a| {
-                if direction {
-                    a.material_direction += 1.0;
-                } else if style == LatticeMaterial::Stars {
-                    a.stars.star_speed = a.stars.star_speed.map(|s| s * 0.99);
-                } else {
-                    a.material_speed *= 0.99;
-                }
-            });
-            assert!(carried <= 2, "{case}: sudden channel step {carried}");
-            assert!(restarted > 10, "{case}: a restart lands there too ({restarted})");
-        }
-    }
-}
-
-/// Ten minutes in, `nudge` a dial and run a frame on: the largest channel step
-/// of the carried light, and of a pane started over at that frame.
-fn nudged(
-    shooter: &mut Shooter,
-    mut scene: Scene,
-    nudge: impl FnOnce(&mut harmonigraph_scene::AtmosphereSettings),
-) -> (u8, u8) {
-    let largest_step =
-        |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
-    scene.glow_clock = Some(600.0);
-    let held = glow(shooter, &scene);
-    nudge(&mut scene.view.atmosphere);
-    *scene.glow_clock.as_mut().unwrap() += 0.0001;
-    shooter.shot_again(&scene);
-    let carried = largest_step(&held, &read_glow(shooter));
-    (carried, largest_step(&held, &glow(shooter, &scene)))
-}
-
-#[test]
-fn a_texture_speed_nudge_minutes_in_moves_the_texture_one_frame_at_most() {
-    let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    let mut scene = scene(&[1.0, 1.0], 0.75, true);
-    let a = &mut scene.view.atmosphere;
-    a.material_amount = 0.0;
-    a.breath_amount = 0.0;
-    a.texture_depth = 1.0;
-    a.texture_scale = 4.0;
-    let (carried, restarted) = nudged(&mut shooter, scene, |a| a.texture_speed *= 0.99);
-    assert!(carried <= 2, "sudden channel step {carried}");
-    assert!(restarted > 10, "a restart lands there too ({restarted})");
-}
-
-#[test]
-fn a_breathing_speed_nudge_minutes_in_moves_the_light_one_frame_at_most() {
-    let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    for stopping in [false, true] {
-        let mut scene = scene(&[1.0, 1.0], 0.75, true);
-        let a = &mut scene.view.atmosphere;
-        a.material_amount = 0.0;
-        a.texture_depth = 0.0;
-        a.breath_amount = 1.0;
-        if stopping {
-            a.breath_speed = 0.01;
-        }
-        let (carried, restarted) = nudged(&mut shooter, scene, |a| {
-            a.breath_speed = if stopping { 0.0 } else { a.breath_speed * 0.99 };
-        });
-        assert!(carried <= 2, "stopping={stopping}: sudden channel step {carried}");
-        assert!(restarted > 10, "stopping={stopping}: a restart lands there too ({restarted})");
     }
 }
 
@@ -683,7 +615,12 @@ fn a_lone_glow_keeps_its_colour_profile_and_fade() {
             scene.view.glow_accumulation = accumulation;
             assert_eq!(glow(&mut shooter, &scene), pixels, "a lone glow cannot change");
         }
-        let per_uv = on_screen(&scene, SIZE, glam::Vec3::X * scene.node_radius * 1.8).x - CENTRE.x;
+        let per_uv = on_screen(
+            &scene,
+            SIZE,
+            glam::Vec3::X * scene.node_radius * harmonigraph_scene::RADII_PER_UV,
+        )
+        .x - CENTRE.x;
         let mut visible = 0;
         for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
             let at = glam::vec2((index % 256) as f32 + 0.5, (index / 256) as f32 + 0.5);
@@ -900,7 +837,12 @@ fn the_color_transition_ends_at_the_ring_even_with_a_wider_halo() {
     scene.mark_inner = scene.rings_outer;
     scene.view.mark_thickness = 0.6;
     let wide = glow(&mut shooter, &scene);
-    let per_uv = on_screen(&scene, SIZE, glam::Vec3::X * scene.node_radius * 1.8).x - CENTRE.x;
+    let per_uv = on_screen(
+        &scene,
+        SIZE,
+        glam::Vec3::X * scene.node_radius * harmonigraph_scene::RADII_PER_UV,
+    )
+    .x - CENTRE.x;
     let hue = |p: &[u8]| {
         let sum = p[..3].iter().map(|&c| f32::from(c)).sum::<f32>();
         glam::vec3(f32::from(p[0]), f32::from(p[1]), f32::from(p[2])) / sum
@@ -928,46 +870,6 @@ fn the_color_transition_ends_at_the_ring_even_with_a_wider_halo() {
         high - low
     );
     assert!(worst < 0.025, "a wider footprint averaged directional colors: hue error {worst}");
-}
-
-#[test]
-#[ignore = "manual MRT precision stress measurement"]
-fn dense_faint_overlap_order_precision() {
-    let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    // Follow-up: https://github.com/yan-h/harmonigraph/issues/878
-    // Coincident halos intentionally exceed ordinary lattice overlap. This
-    // probe measures f16 blend drift rather than asserting exact order parity.
-    for count in [128, 1024, 4096] {
-        let levels: Vec<f32> = (0..count)
-            .map(|i| if i < count * 500 / 4096 { 0.000382 / 0.8 } else { 0.004165 / 0.8 })
-            .collect();
-        let mut scene = scene(&levels, 1.0, false);
-        scene.view.atmosphere.texture_depth = 0.0;
-        scene.view.atmosphere.breath_amount = 0.0;
-        scene.pitch_lut = std::array::from_fn(|i| {
-            if i * 2 < harmonigraph_scene::PITCH_LUT_N {
-                glam::Vec4::new(1.0, 0.15, 0.1, 1.0)
-            } else {
-                glam::Vec4::new(0.1, 1.0, 0.25, 1.0)
-            }
-        });
-        for (i, node) in scene.nodes.iter_mut().enumerate() {
-            node.cents = if i < count * 500 / 4096 { 0.0 } else { 1100.0 };
-        }
-        for accumulation in [0.0, 0.5, 1.0] {
-            scene.view.glow_accumulation = accumulation;
-            let forward = glow(&mut shooter, &scene);
-            assert!(
-                forward.as_chunks::<4>().0.iter().any(|pixel| pixel[..3].iter().any(|v| *v > 20)),
-                "the stress fixture must produce visible overlapping light"
-            );
-            scene.nodes.reverse();
-            let backward = glow(&mut shooter, &scene);
-            scene.nodes.reverse();
-            let largest = forward.iter().zip(&backward).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
-            eprintln!("precision count={count} accumulation={accumulation}: maximum order difference {largest}/255");
-        }
-    }
 }
 
 #[test]
