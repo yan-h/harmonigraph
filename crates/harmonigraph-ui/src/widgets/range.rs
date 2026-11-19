@@ -165,9 +165,10 @@ impl Grab {
         // the view is sanitized fired (#1839). One post-condition rather than
         // a repair in each arm, so a new arm cannot miss it.
         //
-        // `max`/`min` rather than `clamp`: on an axis end that is not a whole
-        // number (the analyzer's pitch range) `lo + min_span` can round past
-        // `max`, and `f32::clamp` panics when its bounds cross.
+        // `max`/`min` rather than `clamp`: the bar takes any axis, and on one
+        // whose `(max - min_span) + min_span` rounds past `max` the clamp's
+        // bounds would cross, which `f32::clamp` answers with a panic. No
+        // shipped axis does, the pitch range's fractional ends included.
         let lo = lo.min(max - min_span);
         (lo, hi.max(lo + min_span).min(max))
     }
