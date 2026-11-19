@@ -525,7 +525,7 @@ pub(crate) const CHROME_REPAINT_INTERVAL: std::time::Duration =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Animating {
     pub voices: bool,
-    pub learn: bool,
+    pub learn_pulse: bool,
     pub roll: bool,
     pub releasing: bool,
     pub audible: bool,
@@ -539,7 +539,7 @@ impl Animating {
         let moving = state.picture.surfaces.moving_this_frame;
         Self {
             voices: state.picture.runtime.tracker.voices().next().is_some(),
-            learn: moving.learn,
+            learn_pulse: moving.learn,
             roll: moving.roll,
             releasing: moving.releasing,
             audible: moving.audible,
@@ -556,7 +556,7 @@ impl Animating {
     fn reasons(self) -> impl Iterator<Item = (bool, &'static str)> {
         [
             (self.voices, "voices"),
-            (self.learn, "learn"),
+            (self.learn_pulse, "learn"),
             (self.roll, "roll"),
             (self.releasing, "releasing"),
             (self.audible, "audible"),
