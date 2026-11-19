@@ -11,7 +11,7 @@ use harmonigraph_take::ParamKey;
 use parking_lot::Mutex;
 
 use crate::{configuration, publication};
-use render_job::{spawn_render, Progress, RenderControl, RenderRequest};
+use render_job::{spawn_render, Progress, RenderControl};
 
 mod lifecycle;
 mod render_job;
@@ -813,8 +813,13 @@ impl Control {
     /// recorded), and the renderer takes the output size from it alone: `size`
     /// is only what the Exports list shows for the job.
     pub fn queue_export(&self, path: std::path::PathBuf, appearance: String, size: [u32; 2]) {
-        let request = RenderRequest { appearance: Some(appearance) };
-        spawn_render(request, path, Some(size), self.progress.clone(), self.render.clone());
+        spawn_render(
+            Some(appearance),
+            path,
+            Some(size),
+            self.progress.clone(),
+            self.render.clone(),
+        );
     }
     pub fn export_jobs(&self) -> Vec<harmonigraph_take::render::ExportJob> {
         self.render.snapshots(&self.progress)

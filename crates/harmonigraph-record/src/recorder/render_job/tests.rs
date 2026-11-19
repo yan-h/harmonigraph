@@ -226,8 +226,10 @@ impl Fixture {
             std::env::temp_dir().join(format!("harmonigraph-queue-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir(&dir).unwrap();
+        // With no `--appearance`, the renderer reads the take's own look:
+        // this one draws that as `own`.
         std::fs::write(dir.join("renderer"), r#"#!/bin/sh
-look=$(cat "$5")
+if [ "$4" = --appearance ]; then look=$(cat "$5"); else look=own; fi
 case "$look" in
  retry) if [ ! -e "$1.retry" ]; then touch "$1.retry"; echo 'transient encoder failure' >&2; exit 7; fi ;;
  slow) sleep 300 & echo partial > "$3"; echo 'progress: 1/10 frames (10%)' >&2; wait ;;
@@ -247,15 +249,15 @@ echo 'progress: 10/10 frames (100%)' >&2
         *control.test_program.lock() = Some(dir.join("renderer"));
         Arc::new(control)
     }
-    fn request(&self, look: &str) -> RenderRequest {
-        RenderRequest { appearance: Some(look.into()) }
+    fn request(&self, look: &str) -> Option<String> {
+        Some(look.into())
     }
-    fn enqueue(&self, request: RenderRequest) {
-        self.enqueue_sized(request, None);
+    fn enqueue(&self, appearance: Option<String>) {
+        self.enqueue_sized(appearance, None);
     }
-    fn enqueue_sized(&self, request: RenderRequest, size: Option<[u32; 2]>) {
+    fn enqueue_sized(&self, appearance: Option<String>, size: Option<[u32; 2]>) {
         spawn_render(
-            request,
+            appearance,
             self.dir.join("music.take"),
             size,
             self.progress.clone(),
@@ -433,25 +435,20 @@ fn cancellation_before_publication_and_shutdown_never_publish_or_start_late_jobs
     assert_eq!(f.jobs().len(), 3);
 }
 
+/// An automatic export names no appearance, so the renderer reads the take's
+/// own and a malformed one is refused as the recorded look rather than as a
+/// replacement (#1845). The take here records a look of its own, which the
+/// queue once read back and passed as a replacement.
 #[cfg(unix)]
 #[test]
-fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_enqueue() {
+fn two_instances_publish_distinct_videos_and_an_automatic_export_names_no_appearance() {
     let f = Fixture::new("instances");
     let take = f.dir.join("music.take");
     let header =
         harmonigraph_take::Header { appearance: Some("recorded".into()), ..Default::default() };
     harmonigraph_take::Writer::create(&take, &header).unwrap().flush().unwrap();
     let gate = f.control.running.lock();
-    let mut request = f.request("");
-    request.appearance = None;
-    f.enqueue(request);
-    harmonigraph_take::Writer::create(
-        &take,
-        &harmonigraph_take::Header { appearance: Some("changed after enqueue".into()), ..header },
-    )
-    .unwrap()
-    .flush()
-    .unwrap();
+    f.enqueue(None);
     let other = Fixture::queue(&f.dir);
     let other_progress = Arc::new(Progress::default());
     spawn_render(f.request("other instance"), take, None, other_progress.clone(), other.clone());
@@ -461,7 +458,7 @@ fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_
     let first = f.jobs().remove(0);
     let second = other.snapshots(&other_progress).remove(0);
     assert_ne!(first.output, second.output);
-    assert_eq!(std::fs::read_to_string(first.output).unwrap(), "recorded unsized");
+    assert_eq!(std::fs::read_to_string(first.output).unwrap(), "own unsized");
     assert_eq!(std::fs::read_to_string(second.output).unwrap(), "other instance unsized");
     other.shutdown();
 }

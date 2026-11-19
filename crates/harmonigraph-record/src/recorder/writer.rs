@@ -140,8 +140,8 @@ pub fn channel() -> (Recorder, Control) {
             // rather than going with the thread.
             if let Some(path) = pumped.finished {
                 *thread_last_take.lock() = Some(path.clone());
-                let render = RenderRequest { appearance: None };
-                spawn_render(render, path, None, thread_progress.clone(), thread_render.clone());
+                // The take's own look: the renderer reads it from the file.
+                spawn_render(None, path, None, thread_progress.clone(), thread_render.clone());
             }
             #[cfg(all(test, feature = "test-support"))]
             if processed_stop {
