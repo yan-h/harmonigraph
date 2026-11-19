@@ -597,6 +597,27 @@ pub enum NoteNames {
     Played,
 }
 
+/// How wide a lattice group's shadow may be asked to be (see [`ShadowStyle::width`]),
+/// in the quad UV units the layer sizes above are in.
+///
+/// One node radius, so the percentage printed on the bar is its literal share
+/// of the node and its far end is 100%. That still takes the blur well past the
+/// gaps between a node's layers while keeping the control about the shadow
+/// around the node rather than empty room beyond it.
+///
+/// It is the cheap direction of the two the bar moves in. A cell is drawn at
+/// `min(1, SIGMA_CELL_MAX / σ)` of the target's pixels (`shadow::pack_into`), so the
+/// atlas SHRINKS as this opens and the blur's tap count is flat; what grows is
+/// the quad every caster is billboarded onto, each one reaching
+/// `REACH_SIGMAS · σ` past its own ink (`shadow_reach_uv` in lattice.wgsl), and
+/// so the fill the scene pass pays. `timing.rs` is what reads that back.
+pub const GLOW_SHADOW_MAX: f32 = 1.0;
+
+/// Spectral notes and text can cast three four-point edge units (12 points).
+/// Keep the unit fixed so opening the range preserves saved widths. Wider
+/// shadows cover more pixels; the shared blur still caps its kernel radius.
+pub const SPECTRAL_SHADOW_MAX: f32 = 3.0;
+
 /// One GROUP of casters' shadow: how far it reaches, how far its caster grows
 /// first and how dark it lands.
 ///
@@ -616,8 +637,8 @@ pub enum NoteNames {
 #[serde(default)]
 pub struct ShadowStyle {
     /// How wide the shadow is, as a share of the caster group's reference size.
-    /// The upper limit is [`GLOW_SHADOW_MAX`](crate::GLOW_SHADOW_MAX) for lattice
-    /// groups and [`SPECTRAL_SHADOW_MAX`](crate::SPECTRAL_SHADOW_MAX) for spectral
+    /// The upper limit is [`GLOW_SHADOW_MAX`] for lattice
+    /// groups and [`SPECTRAL_SHADOW_MAX`] for spectral
     /// groups. Lattice groups use a
     /// node radius; spectral groups use the renderer's fixed four-point edge
     /// unit so their shadows stay screen-constant across pitch zoom and pane
@@ -656,8 +677,8 @@ impl Default for ShadowStyle {
     /// default. Deliberate rather than residual (#719) — "a shadow with nothing
     /// said about it" and "what this group opens on" are different questions, so
     /// the two answers are under no obligation to draw the same fresh picture.
-    /// `a_shadow_group_missing_one_field_fills_it_from_the_bare_style` in the UI
-    /// persist tests holds it, beside the missing-group sweep.
+    /// `a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest` in the UI
+    /// persist tests holds it, with each group named in its `nested_defaults`.
     fn default() -> ShadowStyle {
         ShadowStyle {
             // Numbers first chosen for contour shadows (removed in #1499),
@@ -787,7 +808,7 @@ impl ShadowSettings {
     /// Every group, in the order the settings pane lists them.
     ///
     /// The sanitizer's finite-value repair and the tests sweep this list;
-    /// [`clamped`](Self::clamped) assigns each group's width limit.
+    /// [`sanitized`](Self::sanitized) assigns each group's width limit.
     pub fn groups(&self) -> [ShadowStyle; 3] {
         [self.lattice_geometry, self.lattice_text, self.spectral_text]
     }
@@ -797,8 +818,25 @@ impl ShadowSettings {
         [&mut self.lattice_geometry, &mut self.lattice_text, &mut self.spectral_text]
     }
 
-    /// Every group held to its bars' ranges; see [`ShadowStyle::clamped`].
-    pub fn clamped(self) -> ShadowSettings {
+    /// What a load holds: a non-finite field repaired from its own group's
+    /// fresh value ([`Default`] above, #1677 area 5 Q2), then every group held
+    /// to its bars' ranges ([`ShadowStyle::clamped`]). The width is what every
+    /// caster's quad is grown by, so a number from outside the bar is a quad
+    /// nothing can fill, and the depth is a SHARE of the frame, so the unit
+    /// interval.
+    ///
+    /// Over the groups the settings enumerate rather than by name, so a group
+    /// added arrives sanitized, and destructured whole, so a field added to
+    /// `ShadowStyle` does not build until it is repaired here too (#1847 was
+    /// Spread, left to the clamp's 0).
+    pub fn sanitized(mut self) -> ShadowSettings {
+        for (style, fresh) in self.groups_mut().into_iter().zip(ShadowSettings::default().groups())
+        {
+            let ShadowStyle { width, spread, depth } = style;
+            *width = finite_or(*width, fresh.width);
+            *spread = finite_or(*spread, fresh.spread);
+            *depth = finite_or(*depth, fresh.depth);
+        }
         ShadowSettings {
             lattice_geometry: self.lattice_geometry.clamped(crate::GLOW_SHADOW_MAX),
             lattice_text: self.lattice_text.clamped(crate::GLOW_SHADOW_MAX),

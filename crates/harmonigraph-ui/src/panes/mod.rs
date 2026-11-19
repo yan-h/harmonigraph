@@ -924,3 +924,69 @@ mod block_tests {
         assert!((block - plain).abs() < 0.5, "an opening block at {block}, a line at {plain}");
     }
 }
+
+#[cfg(test)]
+mod edge_bar_tests {
+    /// A double-click on a soft edge's bar puts it back to the FRESH pair, not to
+    /// the ends of its axis, which are the widest reach there is at the softest it
+    /// goes.
+    ///
+    /// The pair goes through the bar as two points and comes back as a reach and
+    /// a fade, so it can come back off by a float rounding; the tolerance is for
+    /// that, and is nowhere near the axis ends.
+    ///
+    /// It is also the gesture most likely to be aimed here by habit: every one of
+    /// these controls takes a six-digit number that gets captured out of a project
+    /// rather than dragged, and on a `ValueBar` a double-click opens the box to
+    /// type one.
+    ///
+    /// Driven through the real widget rather than asserted on the mapping, since
+    /// what is being pinned is which of two resets the gesture reaches.
+    #[test]
+    fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
+        let ctx = crate::tests::probe::themed();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
+        let fresh = harmonigraph_scene::ViewConfig::default();
+        // Dialled somewhere else first, so landing on the fresh pair is a move.
+        let (mut reach, mut fade) = (0.42f32, 0.1f32);
+        let mut time = 0.0;
+        let mut click = |reach: &mut f32, fade: &mut f32, events: Vec<egui::Event>| {
+            time += 1.0 / 60.0;
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    super::edge_bar(
+                        ui,
+                        (reach, fade),
+                        harmonigraph_scene::PLUS_SIZE_MAX,
+                        "Arm length",
+                        (fresh.plus_arm, fresh.plus_taper),
+                        |v| format!("{v:.2}"),
+                        "",
+                    );
+                },
+            );
+        };
+        let at = egui::pos2(150.0, 10.0);
+        let press = |pressed: bool| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        click(&mut reach, &mut fade, vec![]);
+        for _ in 0..2 {
+            let events = vec![egui::Event::PointerMoved(at), press(true), press(false)];
+            click(&mut reach, &mut fade, events);
+        }
+        assert!(
+            (reach - fresh.plus_arm).abs() < 1e-6 && (fade - fresh.plus_taper).abs() < 1e-6,
+            "a double-click landed on ({reach}, {fade}) rather than the fresh pair",
+        );
+    }
+}
