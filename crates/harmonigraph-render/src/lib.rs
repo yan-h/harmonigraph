@@ -15,8 +15,6 @@
 //! makes the render-scale option (super/sub-sampling) possible, and gives
 //! post-processing (bloom etc.) a texture to read. Painter order supplies all
 //! occlusion; there is no depth attachment.
-//! `offscreen_composite_matches_direct_draw` in the tests pins
-//! down that this path matches drawing straight into the egui pass.
 //!
 //! The node NAMES are drawn in that same pass, each at its own node's place
 //! in the order (see [`LatticeLabels`]) — so a nearer node covers the name of
@@ -532,30 +530,13 @@ use uniforms::*;
 /// renderer rather than two.
 const SPECTRUM_WORDS: usize = harmonigraph_scene::SPECTRAL_BUCKETS.div_ceil(16);
 
-// Two fixed-size GPU homes, one per table, and both are exact rather than
-// one-sided ceilings — the uploads below fill every entry unconditionally, so
-// a SMALLER constant in harmonigraph-scene reads off the end of a shorter
-// array and panics on the first frame, which a ceiling would wave through.
+// Three u32 words carry the octave levels and thicknesses, a byte a slot
+// (`pack_slot_bytes`), which is room for twelve.
 //
-// 3 u32 words hold 12 packed levels, one byte per octave slot.
-const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS == 11);
-// lattice.wgsl clamps the span to its own literal MAX_SPAN.
-const _: () = assert!(harmonigraph_scene::MAX_SPAN == 11);
-
-// The shader declares `pitch_lut` with a literal length; keep the two in
-// lockstep so the uniform buffer and the WGSL agree. `spectral_lut` beside it
-// is the same length by construction — one gradient table shape, two tables.
-const _: () = assert!(harmonigraph_scene::PITCH_LUT_N == 64);
-
-// The analyzer's grid, which lattice.wgsl also declares as literals
-// (SPECTRUM_BUCKETS, BUCKETS_PER_SEMITONE, SPECTRUM_MIN_MIDI, and the length
-// of the `spectrum_color` array). A mismatch here is a ring reading the wrong
-// buckets at the wrong pitches, which draws a plausible picture of nothing —
-// so the numbers are asserted rather than trusted to stay in step.
-const _: () = assert!(harmonigraph_scene::SPECTRAL_BUCKETS == 3828);
-const _: () = assert!(harmonigraph_scene::SPECTRAL_BUCKETS_PER_SEMITONE == 32);
-const _: () = assert!(harmonigraph_scene::SPECTRAL_AXIS.0 == 15.486_82);
-const _: () = assert!(SPECTRUM_WORDS == 240);
+// The shaders' own literals for the slot count, the span cap, the gradient
+// tables' length and the analyzer's grid are read out of the WGSL and pinned
+// against the scene's constants by `lattice_tests::contract`.
+const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS <= 12);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1094,12 +1075,11 @@ struct CompiledLatticeResources {
     /// A 1x1 transparent texture in [`filter_layout`](Self::filter_layout),
     /// standing in for the glow target at group 1 wherever there is not one.
     ///
-    /// Two places there is not, and neither is an error state: Background glow
-    /// reach or gain at 0 drops the target entirely (`Offscreen::ensure_glow`), and the
-    /// single-attachment `fs_main`/`fs_plus` path the parity test draws through
-    /// has no glow pass at all. Transparent light composites to the plain
-    /// ground, so `node_paint` needs no branch for either — which is the whole
-    /// reason this is a dummy texture rather than a second pipeline variant.
+    /// Not an error state: Background glow reach or gain at 0 drops the target
+    /// entirely (`Offscreen::ensure_glow`). Transparent light composites to the
+    /// plain ground, so `node_paint` needs no branch for it — which is the
+    /// whole reason this is a dummy texture rather than a second pipeline
+    /// variant.
     glow_dummy_bind_group: wgpu::BindGroup,
     /// The same transparent texel, held for the bloom-off composite binding.
     bloom_dummy: wgpu::TextureView,
