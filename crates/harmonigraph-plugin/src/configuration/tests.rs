@@ -1428,6 +1428,56 @@ fn a_host_reset_right_after_a_loop_wrap_keeps_the_take_whole() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A tuning edit before a host reset is in force after it, and the run the
+/// reset opens states it again at its start: each run carries the
+/// configuration it sounds in, so the resumed section does not lean on the
+/// reader joining it to the run before (#1832 review).
+#[test]
+fn a_tuning_edit_before_a_host_reset_opens_the_run_after_it() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-config-reset-edit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+    let block = 64.0 / 48000.0;
+    device.run_transport(0, vec![], false, None, Some(transport(1.0, 0)));
+    let edited = microcents(690.0);
+    assert!(device.settings().submit(ConfigEdit::axis(TuningAxis::Three, edited)));
+    device.run_transport(64, vec![], false, None, Some(transport(1.0 + block, 0)));
+    device.run_transport(128, vec![], false, None, Some(transport(1.0 + 2.0 * block, 0)));
+    unsafe { ((*device.plugin).reset.unwrap())(device.plugin) };
+    let mut raw = 192;
+    for i in 3..10 {
+        device.run_transport(raw, vec![], false, None, Some(transport(1.0 + i as f64 * block, 0)));
+        raw += 64;
+    }
+    capture.stop();
+    for _ in 0..12 {
+        let mut parked = transport(1.0 + 10.0 * block, 0);
+        parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        device.run_transport(raw, vec![], false, None, Some(parked));
+        raw += 64;
+    }
+    writer.stop();
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let configurations: Vec<_> = take.configurations.iter().map(|c| (c.t, c.axes[1])).collect();
+    let resumed = 1.0 + 3.0 * block;
+    assert!(
+        configurations.iter().any(|&(t, axis)| (t - resumed).abs() < 1e-9 && axis == edited),
+        "the run after the reset opens with the edit: {configurations:?}"
+    );
+    assert_eq!(configurations.last().map(|c| c.1), Some(edited), "{configurations:?}");
+    drop(writer);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Armed with the transport stopped, then sent back to the start before
 /// anything played — Bitwig's stop-returns-to-start, or a jump to bar 1 for an
 /// AtBar take. Under take v7 that move owed a split, and paying it from a pass
@@ -1585,7 +1635,7 @@ fn a_short_stopped_export_finishes_with_or_without_midi() {
         assert!(shared.lock().take.has_rolled());
         assert_eq!(shared.lock().take.captured() > 0, with_note);
         device.run_transport(320, vec![], false, None, Some(stopped(5.0)));
-        assert!(!shared.lock().take.hit_rewind(), "the restore records nothing and ends nothing");
+        assert!(!shared.lock().take.has_ended(), "the restore records nothing and ends nothing");
         shared.lock().poll_through_stop_debounce();
         assert!(!shared.lock().take.is_recording(), "stillness ends even one callback's take");
         device.finish_notes(384, if with_note { &[(10, 60)] } else { &[] });
@@ -1963,6 +2013,91 @@ fn a_configuration_applied_before_arming_records_once_as_the_takes_initial_value
     assert_eq!(configs.len(), 1, "only the take's initial value is recorded");
     assert_eq!(configs[0].axes[1], 698_000_000);
     assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
+}
+
+/// Lost host input is judged at the callback that loses it: a take armed
+/// there fails, however the host goes on, and one armed after it refuses until
+/// a host reset clears the loss. A loss while no take is armed fails nothing,
+/// rather than refusing every later take until the plugin reloads, or a take
+/// whose Stop landed before it (#1832).
+#[test]
+fn lost_input_fails_the_take_armed_at_the_loss() {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Case {
+        /// The take closed, then the loss; a take armed after it.
+        AfterTheTake,
+        /// Lost while it records, stopped before the next callback.
+        WhileRecording,
+        /// Lost while armed and parked, stopped before the next callback.
+        WhileParked,
+        /// Lost while it records, and the host resets before the next.
+        ResetNext,
+        /// Stopped, then lost before a callback closed its run.
+        StoppedFirst,
+    }
+    /// One callback at `raw`, the transport playing or parked there.
+    fn play(device: &mut Device, raw: i64, playing: bool) {
+        let mut at = transport(raw as f64 / 48_000.0, 0);
+        if !playing {
+            at.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        }
+        device.run_transport(raw, vec![], false, None, Some(at));
+    }
+    /// One callback at `raw` whose input is lost: an event past its end.
+    fn lose(device: &mut Device, raw: i64) {
+        let lost = vec![note(10, 60, 64, CLAP_EVENT_NOTE_ON)];
+        let (status, _) = device.run_transport(raw, lost, false, None, None);
+        assert_eq!(status, CLAP_PROCESS_ERROR, "the fixture must lose the callback's input");
+    }
+    let _scope = crate::test_scope::enter();
+    for case in [
+        Case::AfterTheTake,
+        Case::WhileRecording,
+        Case::WhileParked,
+        Case::ResetNext,
+        Case::StoppedFirst,
+    ] {
+        let (mut device, capture) = recorded_device();
+        device.activate();
+        let dir = std::env::temp_dir()
+            .join(format!("harmonigraph-config-loss-{}-{case:?}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
+        capture.arm();
+        match case {
+            Case::AfterTheTake => {
+                play(&mut device, 0, true);
+                capture.stop();
+                play(&mut device, 64, true);
+                lose(&mut device, 128);
+                play(&mut device, 192, true);
+                assert!(!writer.failed(), "a loss after the take closed fails nothing");
+                capture.arm();
+                play(&mut device, 256, true);
+            }
+            Case::WhileRecording | Case::WhileParked => {
+                play(&mut device, 0, case == Case::WhileRecording);
+                lose(&mut device, 64);
+                capture.stop();
+                play(&mut device, 128, true);
+            }
+            Case::ResetNext => {
+                play(&mut device, 0, true);
+                lose(&mut device, 64);
+                unsafe { ((*device.plugin).reset.unwrap())(device.plugin) };
+            }
+            Case::StoppedFirst => {
+                play(&mut device, 0, true);
+                capture.stop();
+                lose(&mut device, 64);
+                play(&mut device, 128, true);
+            }
+        }
+        assert_eq!(writer.failed(), case != Case::StoppedFirst, "{case:?}");
+        drop(writer);
+        drop(device);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[test]
