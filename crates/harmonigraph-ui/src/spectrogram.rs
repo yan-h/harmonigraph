@@ -329,13 +329,12 @@ impl SpectrogramSurfaces {
     /// CORRECT and expensive, which is the whole problem — it draws the right
     /// picture at many times the cost, so nothing on screen distinguishes a
     /// working delta upload from one that has quietly stopped. The overlay
-    /// turns it into a rate, where "climbing" is the entire diagnosis. The
-    /// Tape heatmaps' count with the live ones'.
+    /// turns it into a rate, where "climbing" is the entire diagnosis.
+    ///
+    /// The live heatmaps' alone: a Tape zoom re-sends its grid at every level
+    /// it crosses, as it should, and counted here it would raise the alarm.
     pub(crate) fn full_uploads(&self) -> u32 {
-        self.all()
-            .flat_map(|s| std::iter::once(&s.folded).chain(&s.tape))
-            .map(FoldedGrid::full_uploads)
-            .sum()
+        self.all().map(|s| s.folded.full_uploads()).sum()
     }
 }
 
@@ -481,9 +480,15 @@ impl FoldedGrid {
 
     fn grid(&self) -> Option<SpectrogramGrid> {
         let held = self.run.as_ref()?;
+        // A live run always fits the ring: no pyramid level keeps more. A
+        // Tape run can be longer only at the coarsest level, a song past
+        // about 2.3 hours, and takes a ring its own length.
+        debug_assert!(
+            matches!(held.from, RunSource::Tape(_)) || held.run.len() <= RING_SLOTS,
+            "a live run of {} slabs outgrew the ring",
+            held.run.len()
+        );
         Some(SpectrogramGrid {
-            // A live run always fits the ring. A Tape run can be longer only
-            // at the coarsest level, a song past about 2.3 hours.
             capacity: RING_SLOTS.max(held.run.len()) as u32,
             bins: SPECTRUM_BINS as u32,
             first_key: held.first_key,
