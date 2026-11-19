@@ -133,7 +133,7 @@ pub struct PictureState {
 
 /// Viewport geometry and temporal graphics, separate from input history.
 pub struct SurfaceState {
-    pub(crate) spectrogram: crate::spectrum::SpectrogramSurfaces,
+    pub(crate) spectrogram: crate::spectrogram::SpectrogramSurfaces,
     pub(crate) note_names: std::collections::HashMap<usize, panes::spectral::names::Thinning>,
     /// The lattice node the pointer is over, if any.
     ///

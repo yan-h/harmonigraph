@@ -264,6 +264,66 @@ struct ShadeLut {
     lut: Arc<Vec<[u8; 4]>>,
 }
 
+/// Every drawing surface's heatmap state, indexed by the surface id its copy of
+/// the pane was drawn with: 0 the docked Spectral pane, 1 the Video pane's
+/// preview, and offline the placement's index in the layout (see
+/// [`draw_panes`](crate::draw_panes)).
+///
+/// Each surface reads a run of its own: the slab width comes off the pane's
+/// own depth in points, so two placements at different sizes sharing one
+/// surface would each replace the other's run every frame.
+///
+/// What stays SHARED is the analyzer and the slab pyramid it fills
+/// ([`AudioSpectrum::pyramid`](crate::AudioSpectrum::pyramid)): there is one selected input and one stream of
+/// columns, and a surface holds only the run it read out of them.
+#[derive(Default)]
+pub(crate) struct SpectrogramSurfaces(Vec<SpectrogramSurface>);
+
+impl SpectrogramSurfaces {
+    /// The surface's own state, empty on first sight of its id.
+    ///
+    /// A method on the field rather than on [`AudioSpectrum`], so a caller
+    /// reading the shared pyramid can hold that borrow while this one is out.
+    pub(crate) fn at(&mut self, surface: usize) -> &mut SpectrogramSurface {
+        if self.0.len() <= surface {
+            self.0.resize_with(surface + 1, SpectrogramSurface::default);
+        }
+        &mut self.0[surface]
+    }
+
+    /// Every surface an id has been asked for, for the readings and the
+    /// teardowns that are about all of them at once.
+    pub(crate) fn all(&self) -> impl Iterator<Item = &SpectrogramSurface> {
+        self.0.iter()
+    }
+    /// Full uploads of the slab grid across every surface since the plugin
+    /// was opened.
+    ///
+    /// CORRECT and expensive, which is the whole problem — it draws the right
+    /// picture at many times the cost, so nothing on screen distinguishes a
+    /// working delta upload from one that has quietly stopped. The overlay
+    /// turns it into a rate, where "climbing" is the entire diagnosis.
+    pub(crate) fn full_uploads(&self) -> u32 {
+        self.all().map(|s| s.folded.full_uploads()).sum()
+    }
+}
+
+/// One drawing surface's heatmap: the immutable snapshot of the run it drew.
+/// The renderer separately owns its uploaded copy.
+///
+/// Runtime-only, never persisted, and rebuilt from the pyramid when dropped,
+/// so a default is always a safe state.
+#[derive(Default)]
+pub(crate) struct SpectrogramSurface {
+    /// The run and palette reused across frames. See
+    /// [`FoldedGrid`].
+    pub(crate) folded: FoldedGrid,
+    /// The pyramid level the previous frame drew at, which is what gives
+    /// [`live_slab`]'s ladder its hysteresis —
+    /// see [`Plan::new`]. `None` before the first frame.
+    pub(crate) held_level: Option<usize>,
+}
+
 /// CPU memo of the run a surface drew and its palette. Upload history belongs
 /// to the renderer.
 #[derive(Default)]
@@ -507,7 +567,7 @@ pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
 /// a still frame keeps the same snapshot.
 pub(crate) fn run_for(
     pyramid: &mut SlabPyramid,
-    surfaces: &mut crate::spectrum::SpectrogramSurfaces,
+    surfaces: &mut SpectrogramSurfaces,
     surface: usize,
     plan: &Plan,
 ) -> Option<TexLayout> {
@@ -532,7 +592,7 @@ pub(crate) fn run_for(
 /// The shade table `cfg` draws a heatmap through, shared with the surface's
 /// live heatmap.
 pub(crate) fn shades(
-    surfaces: &mut crate::spectrum::SpectrogramSurfaces,
+    surfaces: &mut SpectrogramSurfaces,
     surface: usize,
     cfg: &SpectrumConfig,
 ) -> SpectrogramShades {
@@ -544,7 +604,7 @@ pub(crate) fn shades(
 /// `None` before anything has been folded into the surface, which is the same
 /// frame [`run_for`] answers `None` on.
 pub(crate) fn frame_data(
-    surfaces: &mut crate::spectrum::SpectrogramSurfaces,
+    surfaces: &mut SpectrogramSurfaces,
     surface: usize,
     cfg: &SpectrumConfig,
 ) -> Option<(SpectrogramGrid, SpectrogramShades)> {

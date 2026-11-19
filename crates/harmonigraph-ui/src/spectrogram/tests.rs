@@ -608,7 +608,7 @@ fn a_slow_drag_with_tremor_crosses_a_rung_once() {
 fn the_held_width_survives_a_frame_through_the_surface() {
     let interval = crate::AudioSpectrum::FFT_INTERVAL;
     let mut spectrum = crate::AudioSpectrum::default();
-    let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
+    let mut surfaces = crate::spectrogram::SpectrogramSurfaces::default();
     let mut bins = [0.0f32; SPECTRUM_BINS];
     bins[1000] = 0.8;
     // The pane below asks for 1024 slabs, so the 32/64 ms rungs part at a
@@ -652,7 +652,7 @@ fn the_held_width_survives_a_frame_through_the_surface() {
 #[test]
 fn unchanged_columns_reuse_the_folded_snapshot() {
     let mut spectrum = crate::AudioSpectrum::default();
-    let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
+    let mut surfaces = crate::spectrogram::SpectrogramSurfaces::default();
     let bins = [0.5; SPECTRUM_BINS];
     for i in 0..200 {
         spectrum.push_history(90.0 + i as f64 * 0.01, &bins);
@@ -742,7 +742,7 @@ fn the_folded_snapshot_changes_only_at_oldest_slab_boundaries() {
         [(0.0, 1.0), (0.2, 0.1), (0.4, 0.01), (2.2, 0.5), (3.2, 0.2)]
             .map(|(t, p)| col(t * bucket, &[(1000, p)])),
     );
-    let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
+    let mut surfaces = crate::spectrogram::SpectrogramSurfaces::default();
     // The far edge one slab in, so the run starts one slab before it, at the
     // oldest slab.
     let initial = Plan::new(&view, bucket, None);
@@ -1088,7 +1088,7 @@ fn the_snapshot_follows_the_fold_and_not_the_read() {
         spectrum.push_history(at(i), &power(0.5));
     }
     let from = at(4);
-    let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
+    let mut surfaces = crate::spectrogram::SpectrogramSurfaces::default();
     let base_plan = Plan::new(&base_view, from, None);
     assert_eq!(base_plan.bucket(), 2.0 * interval, "the fixture's slab width");
     let mut draw = |spectrum: &mut crate::AudioSpectrum, v: &PaneView, from: f64| {
@@ -1471,7 +1471,7 @@ mod gpu {
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
         let cfg = SpectrumConfig::default();
         let mut spectrum = crate::AudioSpectrum::default();
-        let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
+        let mut surfaces = crate::spectrogram::SpectrogramSurfaces::default();
         let mut tally = Tally { clock: 100.0, ..Tally::default() };
 
         // A moving peak over a low bed, so consecutive slabs differ and a slab
@@ -1489,7 +1489,7 @@ mod gpu {
 
         let frame = |t: &mut Tally,
                      spectrum: &mut crate::AudioSpectrum,
-                     surfaces: &mut crate::spectrum::SpectrogramSurfaces,
+                     surfaces: &mut crate::spectrogram::SpectrogramSurfaces,
                      headless: &mut SpectrogramHeadless,
                      view: &PaneView|
          -> (SpectrogramGrid, SpectrogramRead, Vec<u8>) {
@@ -1630,7 +1630,7 @@ mod gpu {
         // from the wrong slot is the wrong number, and the ramp never repeats
         // inside a run.
         let mut spectrum = crate::AudioSpectrum::default();
-        let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
+        let mut surfaces = crate::spectrogram::SpectrogramSurfaces::default();
         let mut columns = (0..238).map(|i| {
             let time = -1.5 + i as f64 * interval;
             let key = (time / bucket).floor() as i64;
@@ -2085,7 +2085,7 @@ mod gpu {
         // the budget at the bottom counts the crossings of each.
         let window = 180.0;
         let mut spectrum = crate::AudioSpectrum::default();
-        let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
+        let mut surfaces = crate::spectrogram::SpectrogramSurfaces::default();
         let mut clock = 0.0f64;
         let mut n = 0usize;
         let push = |spectrum: &mut crate::AudioSpectrum, clock: &mut f64, n: &mut usize| {
@@ -2102,7 +2102,7 @@ mod gpu {
         // One frame at a pane this wide, with the columns a live stream
         // delivers between two frames.
         let frame = |spectrum: &mut crate::AudioSpectrum,
-                     surfaces: &mut crate::spectrum::SpectrogramSurfaces,
+                     surfaces: &mut crate::spectrogram::SpectrogramSurfaces,
                      headless: &mut SpectrogramHeadless,
                      clock: &mut f64,
                      n: &mut usize,
@@ -2151,7 +2151,7 @@ mod gpu {
 #[test]
 fn a_stopped_stream_draws_nothing_until_columns_resume() {
     let mut spectrum = crate::AudioSpectrum::default();
-    let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
+    let mut surfaces = crate::spectrogram::SpectrogramSurfaces::default();
     let bins = [0.5; SPECTRUM_BINS];
     let view = PaneView {
         ppp: 1.0,
