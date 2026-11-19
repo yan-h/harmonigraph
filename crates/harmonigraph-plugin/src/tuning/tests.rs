@@ -175,7 +175,7 @@ fn raw_midi(data: [u8; 3], time: u32) -> Input {
         data,
     })
 }
-fn hub_wrapper(device: &Device) -> &nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph> {
+fn hub_wrapper(device: &Device) -> &harmonigraph_clap::wrapper::clap::Wrapper<crate::Harmonigraph> {
     assert!(!device.tuner);
     unsafe { &*((*device.plugin).plugin_data.cast()) }
 }
@@ -191,7 +191,7 @@ fn inspect_tune<R>(device: &Device, f: impl FnOnce(&tune::Tune) -> R) -> R {
     let wrapper = unsafe {
         &*((*device.plugin)
             .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<plugin::HarmonigraphTune>>())
+            .cast::<harmonigraph_clap::wrapper::clap::Wrapper<plugin::HarmonigraphTune>>())
     };
     wrapper.test_inspect_plugin(|plugin| f(plugin.tune.as_ref().unwrap()))
 }
@@ -303,7 +303,7 @@ unsafe extern "C" fn push(
 fn parameter(id: &str, value: f64, time: u32) -> Input {
     Input::Param(clap_event_param_value {
         header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, time),
-        param_id: nice_plug::wrapper::hash_param_id(id),
+        param_id: harmonigraph_clap::wrapper::hash_param_id(id),
         cookie: ptr::null_mut(),
         note_id: -1,
         port_index: -1,
@@ -427,7 +427,7 @@ impl Device {
     fn latency(&self) -> u32 {
         latency_of(self.plugin)
     }
-    fn tune_wrapper(&self) -> &nice_plug::wrapper::clap::Wrapper<plugin::HarmonigraphTune> {
+    fn tune_wrapper(&self) -> &harmonigraph_clap::wrapper::clap::Wrapper<plugin::HarmonigraphTune> {
         assert!(self.tuner);
         unsafe { &*((*self.plugin).plugin_data.cast()) }
     }
@@ -438,7 +438,7 @@ impl Device {
             let wrapper = unsafe {
                 &*((*self.plugin)
                     .plugin_data
-                    .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+                    .cast::<harmonigraph_clap::wrapper::clap::Wrapper<crate::Harmonigraph>>())
             };
             wrapper
                 .test_inspect_plugin(|plugin| plugin.aggregation.as_ref().unwrap().shared.clone())
@@ -1022,6 +1022,10 @@ fn missed_corrections_survive_a_stop_and_clear_at_reset_or_reactivation() {
                 pair.idle();
             }
             assert_eq!((pair.misses(), pair.status()), (1, 0), "Stop keeps the count alone");
+            // Counted misses with no status bit still draw the Tune's name in
+            // the fault colour (`docs/intent/tuning.md`, #1798 H3).
+            let tune = instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap();
+            assert!(tune.faulted, "{clear}: a counted miss alone drew no fault");
             match clear {
                 "Reset" => session::session().request_reset(),
                 _ => pair.tune.reactivate_format(48000.0, 512),
@@ -1502,7 +1506,7 @@ fn the_delay_is_saved_and_reported_as_latency_before_any_hub_exists() {
     assert_eq!(tune.latency(), 4 * 256, "the new multiplier is adopted at the reactivation");
     let saved = tune.tune_wrapper().get_state_object();
     let mut reopened = Device::new(true);
-    reopened.tune_wrapper().set_state_object_from_gui(saved);
+    assert!(reopened.tune_wrapper().test_restore(&saved));
     reopened.activate_format(48000.0, 256);
     assert_eq!(reopened.latency(), 4 * 256, "a reopened project reports the saved delay");
 }

@@ -65,3 +65,9 @@ Yan approved a search's three relaxations; each supersedes part of the entry abo
 ## 2026-11-15 (merge audit, #1803)
 
 - The take's end releases what is still held: the reader ends every voice held at the last run's end, there, as a session reset does, so a Tail fades the last chord and counts from the take's end. It adds to R1 above, whose drop of a release that sounds after the last recorded block left such a note held through the tail. A take that ends with nothing held is unchanged, and an export at Tail 0 still ends with its audio. #1803 option 1
+
+## 2026-11-18 (maintainability audit, #1861)
+
+Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
+
+- The six ignored PNG probes in the offline renderer's frame tests and the closed #503 heatmap timing benchmark are deleted, left to git history. #1861 Q4

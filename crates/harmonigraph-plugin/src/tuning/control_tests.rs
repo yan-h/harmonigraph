@@ -126,6 +126,7 @@ fn central_edits_include_harmonigraph_and_use_each_tuners_host_latency() {
     let rows = instances::snapshots();
     assert_eq!(rows.len(), 2);
     assert!(rows[0].is_hub);
+    assert!(rows.iter().all(|row| !row.faulted), "an activated, clean pair draws no fault");
     for row in &rows {
         instances::edit(row.id, InstanceEdit::Retune(false));
         instances::edit(row.id, InstanceEdit::Show(false));
@@ -153,14 +154,20 @@ fn central_edits_include_harmonigraph_and_use_each_tuners_host_latency() {
     drop(pair.tune);
     instances::edit(tuner.id, InstanceEdit::Retune(true));
     assert_eq!(instances::snapshots().len(), 1, "a retired row cannot receive stale GUI edits");
+    // A Tune the host has not activated yet is waiting, which keeps the fault
+    // colour: a status to inspect (Yan, #1861).
+    let _waiting = Device::new(true);
+    let row = instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap();
+    assert_eq!(row.status, "Waiting for host activation");
+    assert!(row.faulted, "a Tune waiting for activation drew no fault");
 }
 
 #[test]
 fn instance_settings_restore_independently_and_default_missing_fields() {
-    use nice_plug::wrapper::clap::setup::Setup;
+    use harmonigraph_clap::wrapper::clap::setup::Setup;
     let shared = setup::Shared::source();
     let adapter = setup::Adapter(shared.clone());
-    let mut state = nice_plug::plugin::PluginState {
+    let mut state = harmonigraph_clap::plugin::PluginState {
         version: String::new(),
         params: Default::default(),
         fields: Default::default(),

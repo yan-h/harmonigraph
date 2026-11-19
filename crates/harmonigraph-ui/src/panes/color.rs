@@ -52,8 +52,7 @@ const LEVEL_COLORS_HINT: &str =
 /// The tooltip both groups' curve plots carry.
 const BEND_HINT: &str = "Where along the range the selected color components spend their change. \
                  Across is the range, up is how much of the change has happened. \
-                 Drag right to hold the change back for the top of the range, for example the loudest few dB. \
-                 Double-click straightens it.";
+                 Drag right to hold the change back for the top of the range, for example the loudest few dB.";
 
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // The gradient a fresh view opens on, which is where a double-click on any
@@ -92,7 +91,7 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
             "Saturation at the low and high pitches: 0% is gray, 100% is the most vivid available color.",
         )
         .show(ui);
-    BendPlot::new(&mut view.pitch_gradient, home).show(ui).on_hover_text(BEND_HINT);
+    BendPlot::new(&mut view.pitch_gradient, home).hint(BEND_HINT).show(ui);
     preview
         .show(ui, &view.pitch_gradient)
         .on_hover_text("MIDI note colors from low pitch on the left to high pitch on the right.");
@@ -160,7 +159,7 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
             "Saturation at the low and high audio levels: 0% is gray, 100% is the most vivid available color.",
         )
         .show(ui);
-    BendPlot::new(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(BEND_HINT);
+    BendPlot::new(&mut cfg.spectrogram_gradient, home).hint(BEND_HINT).show(ui);
     RangeBar::new(
         &mut cfg.volume_floor_db,
         &mut cfg.volume_ceiling_db,

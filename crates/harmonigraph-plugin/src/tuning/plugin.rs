@@ -1,6 +1,6 @@
 //! The production companion. No analyzer, audio rings, recorder, dock, shared
 //! visualization state or GPU editor is constructed for this CLAP class.
-use nice_plug::prelude::*;
+use harmonigraph_clap::prelude::*;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -60,7 +60,7 @@ impl Plugin for HarmonigraphTune {
     fn params(&self) -> Arc<Table> {
         Arc::new(Table::empty())
     }
-    fn setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
+    fn setup(&self) -> Option<Arc<dyn harmonigraph_clap::wrapper::clap::setup::Setup>> {
         Some(Arc::new(setup::Adapter(self.shared.clone())))
     }
     #[cfg(target_os = "macos")]

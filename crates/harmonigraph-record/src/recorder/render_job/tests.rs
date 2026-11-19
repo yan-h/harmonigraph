@@ -226,8 +226,10 @@ impl Fixture {
             std::env::temp_dir().join(format!("harmonigraph-queue-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir(&dir).unwrap();
+        // With no `--appearance`, the renderer reads the take's own look:
+        // this one draws that as `own`.
         std::fs::write(dir.join("renderer"), r#"#!/bin/sh
-look=$(cat "$5")
+if [ "$4" = --appearance ]; then look=$(cat "$5"); else look=own; fi
 case "$look" in
  retry) if [ ! -e "$1.retry" ]; then touch "$1.retry"; echo 'transient encoder failure' >&2; exit 7; fi ;;
  slow) sleep 300 & echo partial > "$3"; echo 'progress: 1/10 frames (10%)' >&2; wait ;;
@@ -247,15 +249,12 @@ echo 'progress: 10/10 frames (100%)' >&2
         *control.test_program.lock() = Some(dir.join("renderer"));
         Arc::new(control)
     }
-    fn request(&self, look: &str) -> RenderRequest {
-        RenderRequest { appearance: Some(look.into()) }
+    fn enqueue(&self, appearance: Option<String>) {
+        self.enqueue_sized(appearance, None);
     }
-    fn enqueue(&self, request: RenderRequest) {
-        self.enqueue_sized(request, None);
-    }
-    fn enqueue_sized(&self, request: RenderRequest, size: Option<[u32; 2]>) {
+    fn enqueue_sized(&self, appearance: Option<String>, size: Option<[u32; 2]>) {
         spawn_render(
-            request,
+            appearance,
             self.dir.join("music.take"),
             size,
             self.progress.clone(),
@@ -291,9 +290,9 @@ fn fifo_variants_capture_settings_keep_existing_files_and_continue_after_failure
     let f = Fixture::new("fifo");
     std::fs::write(f.dir.join("music.mp4"), "existing video").unwrap();
     let gate = f.control.running.lock();
-    f.enqueue_sized(f.request("first"), Some([16, 18]));
-    f.enqueue_sized(f.request("retry"), Some([20, 22]));
-    f.enqueue_sized(f.request("third"), Some([24, 26]));
+    f.enqueue_sized(Some("first".into()), Some([16, 18]));
+    f.enqueue_sized(Some("retry".into()), Some([20, 22]));
+    f.enqueue_sized(Some("third".into()), Some([24, 26]));
     assert_eq!(
         f.jobs().iter().map(|j| j.size).collect::<Vec<_>>(),
         [Some([16, 18]), Some([20, 22]), Some([24, 26])]
@@ -339,8 +338,8 @@ fn an_archive_copy_is_published_beside_its_video_without_overwriting_one() {
     let f = Fixture::new("archive");
     std::fs::write(f.dir.join("music-archive.mp4"), "earlier copy").unwrap();
     let gate = f.control.running.lock();
-    f.enqueue(f.request("archive"));
-    f.enqueue(f.request("plain"));
+    f.enqueue(Some("archive".into()));
+    f.enqueue(Some("plain".into()));
     assert_eq!(f.jobs()[0].output, f.dir.join("music-1.mp4"));
     assert_eq!(f.jobs()[1].output, f.dir.join("music-2.mp4"));
     // Another writer takes each chosen name's copy after enqueue: a plain
@@ -368,7 +367,7 @@ fn an_archive_copy_is_published_beside_its_video_without_overwriting_one() {
 #[test]
 fn a_failed_archive_copy_is_in_the_detail_beside_the_takes_warning() {
     let f = Fixture::new("nocopy");
-    f.enqueue(f.request("nocopy"));
+    f.enqueue(Some("nocopy".into()));
     f.finished();
     let job = &f.jobs()[0];
     assert_eq!(job.state, ExportStatus::Completed);
@@ -383,10 +382,10 @@ fn cancellation_reaps_descendants_cleans_only_owned_files_and_preserves_other_jo
     let orphan = f.dir.join(format!("music.export-{}-1-0", std::process::id()));
     std::fs::create_dir(&orphan).unwrap();
     std::fs::write(orphan.join("keep"), "owned elsewhere").unwrap();
-    f.enqueue(f.request("slow"));
+    f.enqueue(Some("slow".into()));
     wait_until("descendant and partial output", || f.progress.read().is_some_and(|p| p.done == 1));
-    f.enqueue(f.request("cancel pending"));
-    f.enqueue(f.request("survivor"));
+    f.enqueue(Some("cancel pending".into()));
+    f.enqueue(Some("survivor".into()));
     f.control.cancel_job(2);
     f.control.cancel_job(1);
     f.finished();
@@ -414,7 +413,7 @@ fn cancellation_reaps_descendants_cleans_only_owned_files_and_preserves_other_jo
 fn cancellation_before_publication_and_shutdown_never_publish_or_start_late_jobs() {
     let f = Fixture::new("publish");
     let gate = f.control.before_publish.lock();
-    f.enqueue(f.request("finished bytes"));
+    f.enqueue(Some("finished bytes".into()));
     wait_until("renderer to finish", || {
         f.progress.read().is_some_and(|p| p.done == 10) && f.control.child.lock().is_none()
     });
@@ -423,45 +422,40 @@ fn cancellation_before_publication_and_shutdown_never_publish_or_start_late_jobs
     f.finished();
     assert_eq!(f.jobs()[0].state, ExportStatus::Cancelled);
     assert!(!f.jobs()[0].output.exists());
-    f.enqueue(f.request("slow"));
+    f.enqueue(Some("slow".into()));
     wait_until("renderer to start", || f.progress.read().is_some_and(|p| p.done == 1));
-    f.enqueue(f.request("pending"));
+    f.enqueue(Some("pending".into()));
     f.control.shutdown();
     assert!(f.jobs().iter().all(|j| j.state == ExportStatus::Cancelled));
     assert!(f.control.child.lock().is_none());
-    f.enqueue(f.request("late recorder completion"));
+    f.enqueue(Some("late recorder completion".into()));
     assert_eq!(f.jobs().len(), 3);
 }
 
+/// An automatic export names no appearance, so the renderer reads the take's
+/// own and a malformed one is refused as the recorded look rather than as a
+/// replacement (#1845). The take here records a look of its own, which the
+/// queue once read back and passed as a replacement.
 #[cfg(unix)]
 #[test]
-fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_enqueue() {
+fn two_instances_publish_distinct_videos_and_an_automatic_export_names_no_appearance() {
     let f = Fixture::new("instances");
     let take = f.dir.join("music.take");
     let header =
         harmonigraph_take::Header { appearance: Some("recorded".into()), ..Default::default() };
     harmonigraph_take::Writer::create(&take, &header).unwrap().flush().unwrap();
     let gate = f.control.running.lock();
-    let mut request = f.request("");
-    request.appearance = None;
-    f.enqueue(request);
-    harmonigraph_take::Writer::create(
-        &take,
-        &harmonigraph_take::Header { appearance: Some("changed after enqueue".into()), ..header },
-    )
-    .unwrap()
-    .flush()
-    .unwrap();
+    f.enqueue(None);
     let other = Fixture::queue(&f.dir);
     let other_progress = Arc::new(Progress::default());
-    spawn_render(f.request("other instance"), take, None, other_progress.clone(), other.clone());
+    spawn_render(Some("other instance".into()), take, None, other_progress.clone(), other.clone());
     drop(gate);
     f.finished();
     wait_until("second instance", || !other.queue.lock().working);
     let first = f.jobs().remove(0);
     let second = other.snapshots(&other_progress).remove(0);
     assert_ne!(first.output, second.output);
-    assert_eq!(std::fs::read_to_string(first.output).unwrap(), "recorded unsized");
+    assert_eq!(std::fs::read_to_string(first.output).unwrap(), "own unsized");
     assert_eq!(std::fs::read_to_string(second.output).unwrap(), "other instance unsized");
     other.shutdown();
 }

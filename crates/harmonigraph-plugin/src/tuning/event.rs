@@ -1,7 +1,7 @@
 //! Fixed performance values. These cannot contain full transport, a host
 //! pointer, or an allocation.
+use harmonigraph_clap::events::InputValue;
 use harmonigraph_core::Expression;
-use nice_plug::events::InputValue;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
@@ -49,7 +49,7 @@ impl Event {
     }
 
     /// Can reach a CLAP output list as itself. This is what the deleted
-    /// `nice_plug` staging validator checked before it would retain a value:
+    /// nice-plug staging validator checked before it would retain a value:
     /// `Output::push` now encodes whatever it is handed, so a kind CLAP has no
     /// note event for, or a magnitude it cannot carry, has to be refused here
     /// instead. MIDI is already narrowed by [`Self::from_input`].

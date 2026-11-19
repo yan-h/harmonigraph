@@ -672,8 +672,12 @@ impl SpectrumConfig {
         // came back corrupt.
         self.low_midi = if self.low_midi.is_finite() { self.low_midi } else { floor };
         self.high_midi = if self.high_midi.is_finite() { self.high_midi } else { ceil };
-        self.low_midi = self.low_midi.clamp(floor, ceil - PITCH_RANGE_MIN_SPAN);
-        self.high_midi = self.high_midi.clamp(self.low_midi + PITCH_RANGE_MIN_SPAN, ceil);
+        (self.low_midi, self.high_midi) = harmonigraph_scene::clamp_span(
+            self.low_midi,
+            self.high_midi,
+            (floor, ceil),
+            PITCH_RANGE_MIN_SPAN,
+        );
         // And the same treatment for the two text scales, for the same reason
         // and against the same threat: their bars cannot produce a nonsense
         // value, a hand-edited blob can, and these multiply a FONT SIZE. A
@@ -777,8 +781,12 @@ impl SpectrumConfig {
         // spectrum — neither of which can produce either shape itself.
         self.floor_db = if self.floor_db.is_finite() { self.floor_db } else { LEVEL_MIN_DB };
         self.ceiling_db = if self.ceiling_db.is_finite() { self.ceiling_db } else { LEVEL_MAX_DB };
-        self.floor_db = self.floor_db.clamp(LEVEL_MIN_DB, LEVEL_MAX_DB - LEVEL_RANGE_MIN_SPAN);
-        self.ceiling_db = self.ceiling_db.clamp(self.floor_db + LEVEL_RANGE_MIN_SPAN, LEVEL_MAX_DB);
+        (self.floor_db, self.ceiling_db) = harmonigraph_scene::clamp_span(
+            self.floor_db,
+            self.ceiling_db,
+            (LEVEL_MIN_DB, LEVEL_MAX_DB),
+            LEVEL_RANGE_MIN_SPAN,
+        );
         self.volume_floor_db = if self.volume_floor_db.is_finite() {
             self.volume_floor_db
         } else {
@@ -789,10 +797,12 @@ impl SpectrumConfig {
         } else {
             fresh.volume_ceiling_db
         };
-        self.volume_floor_db =
-            self.volume_floor_db.clamp(LEVEL_MIN_DB, LEVEL_MAX_DB - LEVEL_RANGE_MIN_SPAN);
-        self.volume_ceiling_db =
-            self.volume_ceiling_db.clamp(self.volume_floor_db + LEVEL_RANGE_MIN_SPAN, LEVEL_MAX_DB);
+        (self.volume_floor_db, self.volume_ceiling_db) = harmonigraph_scene::clamp_span(
+            self.volume_floor_db,
+            self.volume_ceiling_db,
+            (LEVEL_MIN_DB, LEVEL_MAX_DB),
+            LEVEL_RANGE_MIN_SPAN,
+        );
         // And the heatmap's gradient, which `ViewConfig::sanitize` does for the
         // lattice's one door over. Asked of the type rather than restated, so
         // the pane and the file agree about which gradients are legal.

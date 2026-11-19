@@ -1,7 +1,7 @@
 //! The bridge between UI widgets and "wherever parameters actually live".
 //!
 //! In the plugin, automatable parameters live in the CLAP shell's parameter
-//! table and must be changed through its `GuiContext` so the host sees the
+//! table and must be changed through its `EditorHost` so the host sees the
 //! automation. In the standalone harness they're plain values. Panes only
 //! talk to this trait, so every pane works in both shells.
 //!
@@ -111,6 +111,11 @@ pub struct TuningInstance {
     pub max_delay: u32,
     pub delay_text: String,
     pub status: String,
+    /// Whether the row's name is drawn in the fault colour: before the host
+    /// first activates the instance, while a status bit is set, and while
+    /// missed corrections are counted (`docs/intent/tuning.md`). Decided
+    /// where the status is, rather than read back out of `status`'s wording.
+    pub faulted: bool,
     pub last_pitch: Option<(f64, f64)>,
 }
 

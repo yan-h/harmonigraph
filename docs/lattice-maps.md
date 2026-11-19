@@ -77,7 +77,7 @@ Shift with an arrow steps Coarse alone.
 Each changed lane is an ordinary host gesture,
 recorded like a drag of its control.
 Sevenths have no arrow and stay on their lanes.
-Arrows do nothing while another control holds the keyboard.
+Arrows do nothing while a text field has the keyboard.
 
 Select a saved map to report an ordinary host parameter gesture,
 or draw discrete held values for Map in Bitwig.

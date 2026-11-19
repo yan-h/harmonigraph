@@ -134,7 +134,7 @@ The Hub's own track is one of these.
 It embeds the same Tune every other row runs, so its notes are delayed by D and tuned by the same policy;
 what it does not have is a ring, because its copies are a direct call.
 
-Both classes come out of the one existing bundle, `nice_export_clap!(Harmonigraph, HarmonigraphTune)`, because a process-wide session is shared only inside one dylib.
+Both classes come out of the one existing bundle, `export_clap!(Harmonigraph, HarmonigraphTune)`, because a process-wide session is shared only inside one dylib.
 The loader scripts see the same bundle they always saw.
 
 ## The path of one note

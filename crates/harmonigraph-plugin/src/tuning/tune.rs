@@ -7,8 +7,8 @@
 //! draws it raw from then on (#1799); a late reply is dropped. That is the
 //! whole of the missed-deadline contract, and it is why this file has no
 //! settle, ready or coverage predicate in it.
-use nice_plug::events::{Input, InputValue, Output};
-use nice_plug::plugin::Boundary;
+use harmonigraph_clap::events::{Input, InputValue, Output};
+use harmonigraph_clap::plugin::Boundary;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 

@@ -1,13 +1,13 @@
-//! Macros for logging and debug assertions. [`nice_dbg!()`], [`nice_trace!()`], and the
-//! `nice_debug_assert_*!()` macros are compiled out during release builds, so they can be used for
-//! asserting adiditonal invariants in debug builds. Check the [`nice_log!()`] macro for more
-//! information on nice-plug's logger. None of the logging functions are realtime-safe, and you
+//! Macros for logging and debug assertions. [`shell_trace!()`] and the
+//! `shell_debug_assert*!()` macros are compiled out during release builds, so they can be used for
+//! asserting additional invariants in debug builds. Check the [`shell_log!()`] macro for more
+//! information on the logger. None of the logging functions are realtime-safe, and you
 //! should avoid using them during release builds in any of the functions that may be called from an
 //! audio thread.
 
 // NOTE: Exporting macros in Rust is a bit weird. `#[macro_export]` causes them to be exported to
 //       the crate root, but that makes it difficult to include just the macros without using
-//       `#[macro_use] extern crate nice-plug;`. That's why the macros are also re-exported from this
+//       `#[macro_use] extern crate harmonigraph_clap;`. That's why the macros are also re-exported from this
 //       module.
 
 /// Write something to the logger. This defaults to STDERR unless the user is running Windows and a
@@ -21,74 +21,51 @@
 /// - A file path, in which case the output gets appended to the end of that file which will be
 ///   created if necessary.
 #[macro_export]
-macro_rules! nice_log {
+macro_rules! shell_log {
     ($($args:tt)*) => (
         $crate::log::info!($($args)*)
     );
 }
 #[doc(inline)]
-pub use nice_log;
+pub use shell_log;
 
-/// Similar to `nice_log!()`, but less subtle. Used for printing warnings.
+/// Similar to `shell_log!()`, but less subtle. Used for printing warnings.
 #[macro_export]
-macro_rules! nice_warn {
+macro_rules! shell_warn {
     ($($args:tt)*) => (
         $crate::log::warn!($($args)*)
     );
 }
 #[doc(inline)]
-pub use nice_warn;
+pub use shell_warn;
 
-/// Similar to `nice_log!()`, but more scream-y. Used for printing fatal errors.
+/// Similar to `shell_log!()`, but more scream-y. Used for printing fatal errors.
 #[macro_export]
-macro_rules! nice_error {
+macro_rules! shell_error {
     ($($args:tt)*) => (
         $crate::log::error!($($args)*)
     );
 }
 #[doc(inline)]
-pub use nice_error;
+pub use shell_error;
 
-/// The same as `nice_log!()`, but with source and thread information. Like the
-/// `nice_debug_assert*!()` macros, this is only shown when compiling in debug mode.
+/// The same as `shell_log!()`, but with source and thread information. Like the
+/// `shell_debug_assert*!()` macros, this is only shown when compiling in debug mode.
 #[macro_export]
-macro_rules! nice_trace {
+macro_rules! shell_trace {
     ($($args:tt)*) => (
         $crate::util::permit_alloc(|| $crate::log::trace!($($args)*))
     );
 }
 #[doc(inline)]
-pub use nice_trace;
-
-/// Analogues to the `dbg!()` macro, but respecting the `NICE_LOG` environment variable and with all
-/// of the same logging features as the other `nice_*!()` macros. Like the `nice_debug_assert*!()`
-/// macros, this is only shown when compiling in debug mode, but the macro will still return the
-/// value in non-debug modes.
-#[macro_export]
-macro_rules! nice_dbg {
-    () => {
-        $crate::util::permit_alloc(|| $crate::log::debug!(""));
-    };
-    ($val:expr $(,)?) => {
-        // Match here acts as a let-binding: https://stackoverflow.com/questions/48732263/why-is-rusts-assert-eq-implemented-using-a-match/48732525#48732525
-        match $val {
-            tmp => {
-                $crate::util::permit_alloc(|| $crate::log::debug!("{} = {:#?}", stringify!($val), &tmp));
-                tmp
-            }
-        }
-    };
-    ($($val:expr),+ $(,)?) => { ($($crate::nice_dbg!($val)),+,) };
-}
-#[doc(inline)]
-pub use nice_dbg;
+pub use shell_trace;
 
 /// A `debug_assert!()` analogue that prints the error with line number information instead of
 /// panicking. During tests this is upgraded to a regular panicking `debug_assert!()`.
 ///
 /// TODO: Detect if we're running under a debugger, and trigger a break if we are
 #[macro_export]
-macro_rules! nice_debug_assert {
+macro_rules! shell_debug_assert {
     ($cond:expr $(,)?) => (
         #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if cfg!(test) {
@@ -107,12 +84,12 @@ macro_rules! nice_debug_assert {
     );
 }
 #[doc(inline)]
-pub use nice_debug_assert;
+pub use shell_debug_assert;
 
 /// An unconditional debug assertion failure, for if the condition has already been checked
-/// elsewhere. See [`nice_debug_assert!()`] for more information.
+/// elsewhere. See [`shell_debug_assert!()`] for more information.
 #[macro_export]
-macro_rules! nice_debug_assert_failure {
+macro_rules! shell_debug_assert_failure {
     () => (
         if cfg!(test) {
            debug_assert!(false, "Debug assertion failed");
@@ -129,12 +106,12 @@ macro_rules! nice_debug_assert_failure {
     );
 }
 #[doc(inline)]
-pub use nice_debug_assert_failure;
+pub use shell_debug_assert_failure;
 
 /// A `debug_assert_eq!()` analogue that prints the error with line number information instead of
-/// panicking. See [`nice_debug_assert!()`] for more information.
+/// panicking. See [`shell_debug_assert!()`] for more information.
 #[macro_export]
-macro_rules! nice_debug_assert_eq {
+macro_rules! shell_debug_assert_eq {
     ($left:expr, $right:expr $(,)?) => (
         #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if cfg!(test) {
@@ -153,28 +130,4 @@ macro_rules! nice_debug_assert_eq {
     );
 }
 #[doc(inline)]
-pub use nice_debug_assert_eq;
-
-/// A `debug_assert_ne!()` analogue that prints the error with line number information instead of
-/// panicking. See [`nice_debug_assert!()`] for more information.
-#[macro_export]
-macro_rules! nice_debug_assert_ne {
-    ($left:expr, $right:expr $(,)?) => (
-        #[allow(clippy::neg_cmp_op_on_partial_ord)]
-        if cfg!(test) {
-           debug_assert_ne!($left, $right);
-        } else if cfg!(debug_assertions) && $left == $right {
-            $crate::util::permit_alloc(|| $crate::log::warn!(concat!("Debug assertion failed: ", stringify!($left), " == ", stringify!($right))));
-        }
-    );
-    ($left:expr, $right:expr, $format:expr $(, $($args:tt)*)?) => (
-        #[allow(clippy::neg_cmp_op_on_partial_ord)]
-        if cfg!(test) {
-           debug_assert_ne!($left, $right, $format, $($($args)*)?);
-        } else if cfg!(debug_assertions) && $left == $right  {
-            $crate::util::permit_alloc(|| $crate::log::warn!(concat!("Debug assertion failed: ", stringify!($left), " == ", stringify!($right), ", ", $format), $($($args)*)?));
-        }
-    );
-}
-#[doc(inline)]
-pub use nice_debug_assert_ne;
+pub use shell_debug_assert_eq;

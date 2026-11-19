@@ -60,3 +60,10 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 
 - An edit to what `editor-state` saves, the window's size and the System tab's Own window choice, marks the Bitwig project modified too, through the same notice as `ui-state` (option A). #1824
 That a host-driven resize while the editor opens does not count, that a restore does not, and that the opening ends with the window's first frame are the implementer's reading, settled by the coordinating session, not Yan's answer: option A left the host resize open and named no restore.
+
+## 2026-11-18 (maintainability audit, #1861)
+
+Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
+
+- `read-plugin-state` may build and run Rust: it becomes a program beside the plugin that reads a project through the plugin's own restore code, `set_camera_movement` and `copy_host_owned`, keeping a raw dump, and the Python scrapers and the pre-#1685 Spiral fallback go. This supersedes the 2026-11-10 line that the extractor's overlay is tested against `copy_host_owned`: it calls the function instead. To be built. #1861 Q2, R2
+- Unselected Curve channel toggles (Hue, Brightness, Saturation) and Stars Solo layer buttons wear the same filled button as every other option, and the plain egui toggle is disallowed in the UI crate. #1861 Q3

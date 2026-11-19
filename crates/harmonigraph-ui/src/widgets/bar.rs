@@ -5,7 +5,7 @@
 //! it is written down, and one living inside a caller reads as that caller's
 //! own until the day it is changed for it.
 
-use egui::{Color32, CornerRadius, Response, Ui, Vec2};
+use egui::{Color32, CornerRadius, Rect, Response, Sense, Ui, Vec2};
 
 use crate::theme;
 
@@ -82,6 +82,24 @@ pub(super) fn elided_name(
 /// [`RangeBar`]: super::range::RangeBar
 pub(super) fn bar_width(ui: &Ui) -> f32 {
     ui.available_width().max(0.0)
+}
+
+/// A bar's row: the column's width ([`bar_width`]) and one row high, allocated
+/// outright rather than by the `interact_size` floor that catches settings
+/// rows, sensing `sense`. Every row-high bar allocates through here, which is
+/// also where a test sees where it went (`range_probe::placed`), so a new bar
+/// is in the settings sweeps by construction. `name` is what the sweeps call it.
+pub(super) fn allocate_row(ui: &mut Ui, name: &str, sense: Sense) -> (Rect, Response) {
+    let scale = theme::ui_scale(ui.ctx());
+    #[cfg(test)]
+    let offered = ui.available_rect_before_wrap().x_range();
+    #[cfg(not(test))]
+    let _ = name;
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(bar_width(ui), theme::row_height(scale)), sense);
+    #[cfg(test)]
+    super::range_probe::record_placed(name, rect, offered);
+    (rect, response)
 }
 
 /// The click that opens a [`ValueBar`]'s number for typing, named the way
@@ -484,6 +502,38 @@ mod tests {
             });
             let lit: Vec<bool> = grips(&shapes).iter().map(|&(_, lit)| lit).collect();
             assert_eq!(lit, [false, true], "handed {handed:?}, the unlit thumb was painted on top");
+        }
+    }
+
+    /// A bar's row is the room across its `Ui` and one row high at every
+    /// chrome scale, and the probe sees it with the room it was offered; a
+    /// bar inside a narrower column takes that column, not the page's.
+    #[test]
+    fn a_bar_row_fills_its_column_one_row_high_at_every_scale() {
+        for step in 0..=17u8 {
+            let scale = 0.75 + 0.05 * f32::from(step);
+            let ctx = crate::tests::probe::themed_scaled(scale);
+            let mut rows = Vec::new();
+            let placed = super::super::range_probe::placed(|| {
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    rows.push(allocate_row(ui, "Page", Sense::hover()).0);
+                    ui.indent("nested", |ui| {
+                        rows.push(allocate_row(ui, "Nested", Sense::hover()).0)
+                    });
+                });
+            });
+            let want = theme::row_height(scale);
+            assert_eq!(placed.len(), 2, "the probe saw {placed:?}");
+            for (row, seen) in rows.iter().zip(&placed) {
+                assert!(
+                    (row.height() - want).abs() < egui::emath::GUI_ROUNDING,
+                    "{} at scale {scale} is {}pt high, not {want}pt",
+                    seen.name,
+                    row.height()
+                );
+                assert_eq!(row.x_range(), seen.offered, "{} at scale {scale}", seen.name);
+            }
+            assert!(rows[1].left() > rows[0].left() && rows[1].right() == rows[0].right());
         }
     }
 }

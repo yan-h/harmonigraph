@@ -11,6 +11,6 @@ pub(crate) fn serialize_state_json(plugin_state: &PluginState) -> Result<Vec<u8>
 /// Decode a saved state, or `None` with a log line when it is not one.
 pub(crate) fn deserialize_json(state: &[u8]) -> Option<PluginState> {
     serde_json::from_slice(state)
-        .inspect_err(|err| crate::nice_error!("Error while deserializing state: {err}"))
+        .inspect_err(|err| crate::shell_error!("Error while deserializing state: {err}"))
         .ok()
 }

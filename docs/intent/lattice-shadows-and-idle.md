@@ -25,3 +25,10 @@ Yan’s decisions recorded for future drift audits.
 ## 2026-11-10 (maintainability audit, #1677)
 
 - A node's rim and swell stay decided twice, on the CPU for the shadow caster's box and in WGSL for the billboard, rather than computed once and shipped; the caster-box test added in #1682 guards the two copies. #1677 area 8 Q1
+
+## 2026-11-18 (maintainability audit, #1861)
+
+Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
+
+- The lattice's test-only single-target draw path (`fs_main`, `fs_plus`) and the direct-draw parity test are deleted; parity stays covered by the compose, occlusion and golden tests. #1861 Q6
+- Shader modules and pipelines are built once and shared, the tests' half first through the production adopt path, with the render suite timed before and after; tests whose subject is the device keep a fresh one. To be built. #1861 R6

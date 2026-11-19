@@ -12,11 +12,11 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::*;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
+use harmonigraph_clap::plugin::ParamValue;
 use harmonigraph_core::configuration::TuningAxis;
 use harmonigraph_core::tuning::microcents;
 use harmonigraph_core::SourceId;
 use harmonigraph_ui::params::ParamKey;
-use nice_plug::plugin::ParamValue;
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -188,8 +188,12 @@ impl Device {
         });
         device
     }
-    fn wrapper(&self) -> &nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph> {
+    fn wrapper(&self) -> &harmonigraph_clap::wrapper::clap::Wrapper<crate::Harmonigraph> {
         unsafe { &*((*self.plugin).plugin_data.cast()) }
+    }
+    /// The host's side of the editor, as the shell gave it to the plugin.
+    fn editor_host(&self) -> std::sync::Arc<dyn harmonigraph_clap::prelude::EditorHost> {
+        self.wrapper().test_inspect_plugin(|plugin| plugin.editor_host.clone().expect("a host"))
     }
     /// Run the host's main-thread callback, and count the times the project
     /// has been marked modified since the fixture began.
@@ -266,11 +270,7 @@ impl Device {
             value: values.table.spec(crate::Row::camera(key).index()).to_host(plain),
         })
     }
-    fn load(&self, state: PluginState, gui: bool) {
-        if gui {
-            self.wrapper().set_state_object_from_gui(state);
-            return;
-        }
+    fn load(&self, state: PluginState) {
         assert!(self.try_load(state));
     }
     fn try_load(&self, state: PluginState) -> bool {
@@ -425,28 +425,26 @@ fn plain(state: &PluginState, key: ParamKey) -> f32 {
 #[test]
 fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adoption() {
     let _scope = crate::test_scope::enter();
-    for gui in [false, true] {
-        let mut device = Device::new();
-        device.activate();
-        let settings = device.settings();
-        device.load(restored(&device, 690.0), gui);
-        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
-        device.load(restored(&device, 705.0), gui);
-        let now = shown(&settings);
-        assert!(now.view.unadopted.is_some());
-        assert_eq!(now.raw.three, microcents(705.0), "the newest restore is what shows");
-        assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
-        assert_eq!(saved(&device.wrapper().get_state_object()).axes[1], microcents(705.0));
-        device.run(1000, vec![], false);
-        let adopted = shown(&settings);
-        assert!(!adopted.view.unadopted.is_some());
-        assert_eq!(adopted.raw.three, microcents(705.0), "the queued UI edit came before it");
-        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
-        let marked = device.service();
-        device.run(1064, vec![], false);
-        assert_eq!(shown(&settings).raw.three, microcents(700.0));
-        assert!(device.service() > marked, "an applied UI edit marks the project modified");
-    }
+    let mut device = Device::new();
+    device.activate();
+    let settings = device.settings();
+    device.load(restored(&device, 690.0));
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
+    device.load(restored(&device, 705.0));
+    let now = shown(&settings);
+    assert!(now.view.unadopted.is_some());
+    assert_eq!(now.raw.three, microcents(705.0), "the newest restore is what shows");
+    assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
+    assert_eq!(saved(&device.wrapper().get_state_object()).axes[1], microcents(705.0));
+    device.run(1000, vec![], false);
+    let adopted = shown(&settings);
+    assert!(!adopted.view.unadopted.is_some());
+    assert_eq!(adopted.raw.three, microcents(705.0), "the queued UI edit came before it");
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
+    let marked = device.service();
+    device.run(1064, vec![], false);
+    assert_eq!(shown(&settings).raw.three, microcents(700.0));
+    assert!(device.service() > marked, "an applied UI edit marks the project modified");
 }
 
 /// The tuning pending label waits on the latest edit queued, not on the
@@ -534,8 +532,8 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
     });
     let mut state = device.wrapper().get_state_object();
     let engine = if pass_through { 0 } else { 1 };
-    state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(engine));
-    device.load(state, false);
+    state.params.insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(engine));
+    device.load(state);
     device.activate();
     let settings = device.settings();
     assert!(settings.submit(ConfigEdit { learning: Some(true), ..Default::default() }));
@@ -616,8 +614,8 @@ fn a_full_command_queue_keeps_accepted_state() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     let settings = device.settings();
-    device.load(restored(&device, 690.0), false);
-    device.load(restored(&device, 695.0), false);
+    device.load(restored(&device, 690.0));
+    device.load(restored(&device, 695.0));
     for _ in 0..126 {
         assert!(settings.submit(ConfigEdit::default()));
     }
@@ -656,14 +654,14 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
         let mut device = Device::new();
         if commands {
             let settings = device.settings();
-            device.load(restored(&device, 690.0), false);
-            device.load(restored(&device, 695.0), false);
+            device.load(restored(&device, 690.0));
+            device.load(restored(&device, 695.0));
             for _ in 0..126 {
                 assert!(settings.submit(ConfigEdit::default()));
             }
             device.activate();
             device.run(0, vec![], false);
-            device.load(restored(&device, 705.0), false);
+            device.load(restored(&device, 705.0));
             assert!(
                 shown(&settings).view.unadopted.is_some(),
                 "an accepted restore is still queued"
@@ -701,10 +699,7 @@ unsafe impl Sync for Device {}
 #[test]
 fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
     let _scope = crate::test_scope::enter();
-    for (gui, (meantone, marvel, learning)) in [false, true]
-        .into_iter()
-        .flat_map(|gui| [(gui, (true, false, true)), (gui, (false, true, false))])
-    {
+    for (meantone, marvel, learning) in [(true, false, true), (false, true, false)] {
         let mut device = Device::new();
         device.activate();
         let settings = device.settings();
@@ -712,7 +707,7 @@ fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
         let mut restoring = saved(&state);
         (restoring.meantone, restoring.marvel, restoring.learning) = (meantone, marvel, learning);
         state.fields.insert(MUSICAL_SETTINGS.into(), serde_json::to_string(&restoring).unwrap());
-        device.load(state, gui);
+        device.load(state);
         let readback = shown(&settings).view;
         assert!(readback.unadopted.is_some());
         let readback = readback.resolved;
@@ -760,7 +755,7 @@ fn a_field_that_does_not_parse_is_skipped_with_a_console_line() {
     state.fields.insert("lattice-maps".into(), "{not json".into());
     state.fields.insert("editor-state".into(), r#"{"size":[901,702]}"#.into());
     state.params.insert("map-fifths".into(), ParamValue::I32(3));
-    device.load(state, false);
+    device.load(state);
     assert_eq!(maps(&device), before, "the maps the instance held");
     let (size, fifths) = device.wrapper().test_inspect_plugin(|plugin| {
         (plugin.params.editor_state.size(), plugin.params.int(crate::Row::MapFifths))
@@ -779,12 +774,12 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     let mut device = Device::new();
     let settings = device.settings();
     let mut state = device.wrapper().get_state_object();
-    device.load(state.clone(), false);
+    device.load(state.clone());
     assert_eq!(settings.take_notice(), None, "a project saved since opens quietly");
     state.params.insert("tuning-three".into(), ParamValue::F32(696.0));
     state.params.insert("tuning-tolerance".into(), ParamValue::F32(3.0));
     state.fields.insert(MUSICAL_SETTINGS.into(), r#"{"meantone":false,"marvel":true}"#.into());
-    device.load(state, false);
+    device.load(state);
     assert_eq!(
         settings.take_notice().as_deref(),
         Some(
@@ -810,7 +805,7 @@ fn a_pending_restore_keeps_fault_and_refusal_status_visible() {
     let _scope = crate::test_scope::enter();
     let device = Device::new();
     let settings = device.settings();
-    device.load(restored(&device, 690.0), false);
+    device.load(restored(&device, 690.0));
     let mut applied = settings.published.load();
     applied.status = 2;
     settings.published.publish(applied);
@@ -829,7 +824,7 @@ fn a_pending_restore_keeps_fault_and_refusal_status_visible() {
 fn a_save_before_any_audio_stores_the_restore() {
     let _scope = crate::test_scope::enter();
     let device = Device::new();
-    device.load(restored(&device, 690.0), false);
+    device.load(restored(&device, 690.0));
     let saved = saved(&device.save());
     assert_eq!(saved.axes[TuningAxis::Three.index()], microcents(690.0));
     assert!(!saved.meantone && !saved.marvel, "the restore's links, not the fresh ones");
@@ -870,7 +865,7 @@ fn a_restore_and_a_reset_leave_the_project_unmodified() {
     device.activate();
     device.run(1000, vec![], false);
     let before = device.service();
-    device.load(restored(&device, 700.0), false);
+    device.load(restored(&device, 700.0));
     device.run(1064, vec![], false);
     assert_eq!(device.service(), before, "a restore is not an edit");
     crate::tuning::instances::edit(0, harmonigraph_ui::params::InstanceEdit::Reset);
@@ -895,7 +890,7 @@ fn a_ui_state_edit_marks_the_project_once_and_its_restore_does_not() {
     let mut state = device.wrapper().get_state_object();
     let blob = harmonigraph_ui::shell::close(&project);
     state.fields.insert("ui-state".into(), serde_json::to_string(&blob).unwrap());
-    device.load(state, false);
+    device.load(state);
     let installed = lock.lock().ui.picture.appearance.view.max_sevens;
     assert_eq!(installed, restored, "the restore installed");
     let _ = lock.end_window_session();
@@ -958,7 +953,7 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     saved.set_docked(true);
     let mut project = device.wrapper().get_state_object();
     project.fields.insert("editor-state".into(), serde_json::to_string(&*saved).unwrap());
-    device.load(project, false);
+    device.load(project);
     assert_eq!(state.size(), (900, 700), "the restore installed");
     frame();
     assert_eq!(device.service(), before + 2, "a restore");
@@ -985,7 +980,7 @@ fn a_restore_queued_behind_an_edit_applies_after_it() {
     let settings = device.settings();
     assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
     assert!(settings.submit(ConfigEdit::axis(TuningAxis::COffset, microcents(5.0))));
-    device.load(restored(&device, 690.0), false);
+    device.load(restored(&device, 690.0));
     assert!(settings.submit(ConfigEdit::axis(TuningAxis::Seven, microcents(980.0))));
     device.run(0, vec![], false);
     let raw = shown(&settings).raw;
@@ -1433,6 +1428,56 @@ fn a_host_reset_right_after_a_loop_wrap_keeps_the_take_whole() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A tuning edit before a host reset is in force after it, and the run the
+/// reset opens states it again at its start: each run carries the
+/// configuration it sounds in, so the resumed section does not lean on the
+/// reader joining it to the run before (#1832 review).
+#[test]
+fn a_tuning_edit_before_a_host_reset_opens_the_run_after_it() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-config-reset-edit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+    let block = 64.0 / 48000.0;
+    device.run_transport(0, vec![], false, None, Some(transport(1.0, 0)));
+    let edited = microcents(690.0);
+    assert!(device.settings().submit(ConfigEdit::axis(TuningAxis::Three, edited)));
+    device.run_transport(64, vec![], false, None, Some(transport(1.0 + block, 0)));
+    device.run_transport(128, vec![], false, None, Some(transport(1.0 + 2.0 * block, 0)));
+    unsafe { ((*device.plugin).reset.unwrap())(device.plugin) };
+    let mut raw = 192;
+    for i in 3..10 {
+        device.run_transport(raw, vec![], false, None, Some(transport(1.0 + i as f64 * block, 0)));
+        raw += 64;
+    }
+    capture.stop();
+    for _ in 0..12 {
+        let mut parked = transport(1.0 + 10.0 * block, 0);
+        parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        device.run_transport(raw, vec![], false, None, Some(parked));
+        raw += 64;
+    }
+    writer.stop();
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let configurations: Vec<_> = take.configurations.iter().map(|c| (c.t, c.axes[1])).collect();
+    let resumed = 1.0 + 3.0 * block;
+    assert!(
+        configurations.iter().any(|&(t, axis)| (t - resumed).abs() < 1e-9 && axis == edited),
+        "the run after the reset opens with the edit: {configurations:?}"
+    );
+    assert_eq!(configurations.last().map(|c| c.1), Some(edited), "{configurations:?}");
+    drop(writer);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Armed with the transport stopped, then sent back to the start before
 /// anything played — Bitwig's stop-returns-to-start, or a jump to bar 1 for an
 /// AtBar take. Under take v7 that move owed a split, and paying it from a pass
@@ -1590,7 +1635,7 @@ fn a_short_stopped_export_finishes_with_or_without_midi() {
         assert!(shared.lock().take.has_rolled());
         assert_eq!(shared.lock().take.captured() > 0, with_note);
         device.run_transport(320, vec![], false, None, Some(stopped(5.0)));
-        assert!(!shared.lock().take.hit_rewind(), "the restore records nothing and ends nothing");
+        assert!(!shared.lock().take.has_ended(), "the restore records nothing and ends nothing");
         shared.lock().poll_through_stop_debounce();
         assert!(!shared.lock().take.is_recording(), "stillness ends even one callback's take");
         device.finish_notes(384, if with_note { &[(10, 60)] } else { &[] });
@@ -1753,7 +1798,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         device.run_transport(0, events, false, None, Some(transport(5.0, 0)));
         assert!(shared.lock().take.has_rolled());
         if let Some(source) = &mut source {
-            source.begin(&nice_plug::plugin::Boundary {
+            source.begin(&harmonigraph_clap::plugin::Boundary {
                 steady_time: 0,
                 frames: 64,
                 transport: None,
@@ -1824,9 +1869,9 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         assert_eq!(&wav[44..], expected);
         if let Some(source) = &mut source {
             if source_state == 2 {
-                source.input(nice_plug::events::Input {
+                source.input(harmonigraph_clap::events::Input {
                     sample: 10,
-                    value: nice_plug::events::InputValue::Note {
+                    value: harmonigraph_clap::events::InputValue::Note {
                         kind: CLAP_EVENT_NOTE_ON,
                         note_id: 1,
                         port: 0,
@@ -1970,6 +2015,91 @@ fn a_configuration_applied_before_arming_records_once_as_the_takes_initial_value
     assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
 }
 
+/// Lost host input is judged at the callback that loses it: a take armed
+/// there fails, however the host goes on, and one armed after it refuses until
+/// a host reset clears the loss. A loss while no take is armed fails nothing,
+/// rather than refusing every later take until the plugin reloads, or a take
+/// whose Stop landed before it (#1832).
+#[test]
+fn lost_input_fails_the_take_armed_at_the_loss() {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Case {
+        /// The take closed, then the loss; a take armed after it.
+        AfterTheTake,
+        /// Lost while it records, stopped before the next callback.
+        WhileRecording,
+        /// Lost while armed and parked, stopped before the next callback.
+        WhileParked,
+        /// Lost while it records, and the host resets before the next.
+        ResetNext,
+        /// Stopped, then lost before a callback closed its run.
+        StoppedFirst,
+    }
+    /// One callback at `raw`, the transport playing or parked there.
+    fn play(device: &mut Device, raw: i64, playing: bool) {
+        let mut at = transport(raw as f64 / 48_000.0, 0);
+        if !playing {
+            at.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        }
+        device.run_transport(raw, vec![], false, None, Some(at));
+    }
+    /// One callback at `raw` whose input is lost: an event past its end.
+    fn lose(device: &mut Device, raw: i64) {
+        let lost = vec![note(10, 60, 64, CLAP_EVENT_NOTE_ON)];
+        let (status, _) = device.run_transport(raw, lost, false, None, None);
+        assert_eq!(status, CLAP_PROCESS_ERROR, "the fixture must lose the callback's input");
+    }
+    let _scope = crate::test_scope::enter();
+    for case in [
+        Case::AfterTheTake,
+        Case::WhileRecording,
+        Case::WhileParked,
+        Case::ResetNext,
+        Case::StoppedFirst,
+    ] {
+        let (mut device, capture) = recorded_device();
+        device.activate();
+        let dir = std::env::temp_dir()
+            .join(format!("harmonigraph-config-loss-{}-{case:?}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
+        capture.arm();
+        match case {
+            Case::AfterTheTake => {
+                play(&mut device, 0, true);
+                capture.stop();
+                play(&mut device, 64, true);
+                lose(&mut device, 128);
+                play(&mut device, 192, true);
+                assert!(!writer.failed(), "a loss after the take closed fails nothing");
+                capture.arm();
+                play(&mut device, 256, true);
+            }
+            Case::WhileRecording | Case::WhileParked => {
+                play(&mut device, 0, case == Case::WhileRecording);
+                lose(&mut device, 64);
+                capture.stop();
+                play(&mut device, 128, true);
+            }
+            Case::ResetNext => {
+                play(&mut device, 0, true);
+                lose(&mut device, 64);
+                unsafe { ((*device.plugin).reset.unwrap())(device.plugin) };
+            }
+            Case::StoppedFirst => {
+                play(&mut device, 0, true);
+                capture.stop();
+                lose(&mut device, 64);
+                play(&mut device, 128, true);
+            }
+        }
+        assert_eq!(writer.failed(), case != Case::StoppedFirst, "{case:?}");
+        drop(writer);
+        drop(device);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 fn canonical_publication_slots_and_loss_are_allocation_free() {
     let _scope = crate::test_scope::enter();
@@ -2027,7 +2157,7 @@ fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
         serde_json::to_string(&MusicalSettings { adaptive: policy.into(), ..Default::default() })
             .unwrap(),
     );
-    device.load(state, true);
+    device.load(state);
     let settings = device.settings();
     assert_eq!(shown(&settings).view.resolved.policy, policy);
     let saved: MusicalSettings =
@@ -2096,7 +2226,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     map.position = harmonigraph_core::LatticePos::new(50, -2, 1);
     let mut state = restored(&device, 696.5);
     state.fields.insert("lattice-maps".into(), serde_json::to_string(&document).unwrap());
-    state.params.insert("lattice-map".into(), nice_plug::plugin::ParamValue::I32(1));
+    state.params.insert("lattice-map".into(), harmonigraph_clap::plugin::ParamValue::I32(1));
     for (id, value) in [
         ("map-fifths", 0),
         ("map-thirds", 8),
@@ -2105,10 +2235,10 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         ("map-thirds-extension", -1),
         ("map-sevenths-extension", 1),
     ] {
-        state.params.insert(id.into(), nice_plug::plugin::ParamValue::I32(value));
+        state.params.insert(id.into(), harmonigraph_clap::plugin::ParamValue::I32(value));
     }
-    state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(2));
-    device.load(state, false);
+    state.params.insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(2));
+    device.load(state);
     device.wrapper().test_inspect_plugin(|plugin| {
         let preview = crate::lattice_maps::view(&plugin.params);
         assert_eq!(preview.playback.engine, TuningEngine::LatticeMap);
@@ -2136,7 +2266,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         ("map-sevenths-extension", 1),
     ] {
         assert!(
-            matches!(saved.params[id], nice_plug::plugin::ParamValue::I32(actual) if actual == value)
+            matches!(saved.params[id], harmonigraph_clap::plugin::ParamValue::I32(actual) if actual == value)
         );
     }
     device.run(0, vec![], false);
@@ -2147,7 +2277,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(playback.map, Some(map));
         assert_eq!(plugin.configuration.as_ref().unwrap().current().tuning.three, 696_500_000);
     });
-    let (context, _) = device.wrapper().test_gui_context("lattice-map");
+    let context = device.editor_host();
     let destination = map.position + harmonigraph_core::LatticePos::new(-3, 0, 0);
     let mut changed = map;
     assert!(changed.replace(destination), "the edit must change the captured geometry");
@@ -2229,7 +2359,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         let neighbour = LatticeMap { position: moved, ..changed };
         assert_eq!(playback.map, Some(neighbour), "new attacks are tuned by the neighbour");
     });
-    device.load(saved, false);
+    device.load(saved);
     device.wrapper().test_inspect_plugin(|plugin| {
         let preview = crate::lattice_maps::view(&plugin.params);
         assert!(!preview.editing() && !preview.can_undo, "undo never reaches a restored project");
@@ -2246,9 +2376,9 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     // Old or partial presets must not retain lanes from the current preset,
     // and repaired plain values must agree with host and editor readback.
     let mut partial = device.save();
-    partial.params.insert("map-fifths".into(), nice_plug::plugin::ParamValue::I32(50));
-    partial.params.insert("map-thirds".into(), nice_plug::plugin::ParamValue::I32(-50));
-    partial.params.insert("map-follow".into(), nice_plug::plugin::ParamValue::I32(1));
+    partial.params.insert("map-fifths".into(), harmonigraph_clap::plugin::ParamValue::I32(50));
+    partial.params.insert("map-thirds".into(), harmonigraph_clap::plugin::ParamValue::I32(-50));
+    partial.params.insert("map-follow".into(), harmonigraph_clap::plugin::ParamValue::I32(1));
     for id in [
         "map-fifths-extension",
         "map-thirds-extension",
@@ -2258,7 +2388,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     ] {
         partial.params.remove(id);
     }
-    device.load(partial, false);
+    device.load(partial);
     device.run(192, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {
         let preview = crate::lattice_maps::view(&plugin.params);
@@ -2271,9 +2401,12 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(preview.playback.follow, harmonigraph_core::lattice_map::Follow::Thirds);
     });
     let repaired = device.save();
-    assert!(matches!(repaired.params["map-follow"], nice_plug::plugin::ParamValue::I32(1)));
-    assert!(matches!(repaired.params["map-fifths"], nice_plug::plugin::ParamValue::I32(9)));
-    assert!(matches!(repaired.params["map-thirds"], nice_plug::plugin::ParamValue::I32(-9)));
+    assert!(matches!(repaired.params["map-follow"], harmonigraph_clap::plugin::ParamValue::I32(1)));
+    assert!(matches!(repaired.params["map-fifths"], harmonigraph_clap::plugin::ParamValue::I32(9)));
+    assert!(matches!(
+        repaired.params["map-thirds"],
+        harmonigraph_clap::plugin::ParamValue::I32(-9)
+    ));
 }
 
 /// A restore once stored an integer parameter's value unclamped, while the
@@ -2298,9 +2431,11 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
     .enumerate()
     {
         let mut state = device.save();
-        state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(engine));
-        state.params.insert("lattice-map".into(), nice_plug::plugin::ParamValue::I32(map));
-        device.load(state, false);
+        state
+            .params
+            .insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(engine));
+        state.params.insert("lattice-map".into(), harmonigraph_clap::plugin::ParamValue::I32(map));
+        device.load(state);
         device.run(64 * round as i64, vec![], false);
         device.wrapper().test_inspect_plugin(|plugin| {
             let preview = crate::lattice_maps::view(&plugin.params);
@@ -2315,7 +2450,7 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
         let repaired = device.save();
         assert!(matches!(
             (&repaired.params["tuning-engine"], &repaired.params["lattice-map"]),
-            (nice_plug::plugin::ParamValue::I32(e), nice_plug::plugin::ParamValue::I32(m))
+            (harmonigraph_clap::plugin::ParamValue::I32(e), harmonigraph_clap::plugin::ParamValue::I32(m))
                 if (*e, *m as usize) == (decoded.index(), slot)
         ));
     }
@@ -2329,8 +2464,10 @@ fn every_engine_records_a_tuning_edit_at_the_callback_that_applies_it() {
         let (mut device, mut capture) = recorded_device();
         device.activate();
         let mut state = restored(&device, 696.0);
-        state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(engine));
-        device.load(state, false);
+        state
+            .params
+            .insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(engine));
+        device.load(state);
         device.run(0, vec![], false);
         capture.arm();
         device.run(64, vec![], false);
@@ -2363,7 +2500,7 @@ fn camera_automation_is_captured_mid_song() {
     for (key, value) in ParamKey::CAMERA.into_iter().zip(initial) {
         saved.params.insert(key.id().into(), ParamValue::F32(value));
     }
-    device.load(saved, false);
+    device.load(saved);
     device.activate();
     let restored = device.save();
     for (key, value) in ParamKey::CAMERA.into_iter().zip(initial) {
@@ -2439,7 +2576,7 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
-    let (context, _) = device.wrapper().test_gui_context("camera-yaw");
+    let context = device.editor_host();
     let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
     let gestures = std::cell::Cell::default();
     let backend = crate::PluginParamBackend {
@@ -2473,7 +2610,6 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
         );
     }
     assert_eq!(gestures.get().open().count(), 0);
-    drop(context);
 }
 
 /// Every host gesture the editor holds open, a map-offset lane's as well as a
@@ -2488,7 +2624,7 @@ fn the_editors_gestures_end_once_when_it_stops_being_seen_or_closes() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
-    let (context, _) = device.wrapper().test_gui_context("camera-yaw");
+    let context = device.editor_host();
     let (params, lock) = device
         .wrapper()
         .test_inspect_plugin(|plugin| (plugin.params.clone(), plugin.editor_shared.clone()));
@@ -2547,7 +2683,6 @@ fn the_editors_gestures_end_once_when_it_stops_being_seen_or_closes() {
     events.extend(device.run(256, vec![], false).attempts);
     assert_eq!(count(&events, begins, lane_id), 3, "a lane's begin bypassed the registry");
     assert_eq!(count(&events, ends, lane_id), 3, "the close left a lane open");
-    drop(context);
 }
 
 /// The own window's close button tells the host through `EditorHost::closed`,
@@ -2558,7 +2693,7 @@ fn the_editors_gestures_end_once_when_it_stops_being_seen_or_closes() {
 fn the_close_button_tells_the_host_to_destroy_the_editor() {
     let _scope = crate::test_scope::enter();
     let device = Device::new();
-    let host = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_host.clone().unwrap());
+    let host = device.editor_host();
     assert!(host.closed(), "a host with a gui extension is told");
     assert_eq!(device.stats.closed.load(Ordering::Relaxed), 1);
     assert!(device.stats.closed_destroyed.load(Ordering::Relaxed));

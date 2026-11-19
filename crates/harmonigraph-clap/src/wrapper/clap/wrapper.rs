@@ -12,11 +12,10 @@
 //! a latency the running activation was asked to change, and that log line.
 
 use crate::audio_setup::{Audio, AuxStorage, BufferConfig, ProcessMode, Slices, audio};
-use crate::editor::{Editor, ParentWindowHandle};
+use crate::editor::{Editor, EditorHost};
 use crate::events::{self, InputValue, List, Output};
 use crate::params::{Report, Table};
 use crate::plugin::{Block, Boundary, Plugin, PluginState};
-use atomic_float::AtomicF32;
 use atomic_refcell::AtomicRefCell;
 use clap_sys::events::{clap_input_events, clap_output_events};
 use clap_sys::ext::audio_ports::{
@@ -27,8 +26,8 @@ use clap_sys::ext::audio_ports_config::{
     CLAP_EXT_AUDIO_PORTS_CONFIG, clap_audio_ports_config, clap_plugin_audio_ports_config,
 };
 use clap_sys::ext::gui::{
-    CLAP_EXT_GUI, CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11,
-    clap_gui_resize_hints, clap_host_gui, clap_plugin_gui, clap_window,
+    CLAP_EXT_GUI, CLAP_WINDOW_API_COCOA, clap_gui_resize_hints, clap_host_gui, clap_plugin_gui,
+    clap_window,
 };
 use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_host_latency, clap_plugin_latency};
 use clap_sys::ext::note_ports::{
@@ -69,13 +68,11 @@ use std::ffi::{CStr, c_void};
 use std::mem;
 use std::os::raw::c_char;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 
-use super::context::WrapperGuiContext;
 use super::descriptor::PluginDescriptor;
 use super::setup::Setup;
 use super::util::ClapPtr;
-use crate::wrapper::clap::EditorHost;
 use crate::wrapper::clap::util::{read_stream, write_stream};
 use crate::wrapper::state::{self};
 use crate::wrapper::util::{process_wrapper, strlcpy};
@@ -110,25 +107,18 @@ pub struct Wrapper<P: Plugin> {
     audio: AtomicBool,
     deferred_host_callback: AtomicBool,
     host_state: AtomicRefCell<Option<ClapPtr<clap_host_state>>>,
-    /// A reference to this object, upgraded to an `Arc<Self>` for the GUI context.
-    this: AtomicRefCell<Weak<Self>>,
 
     /// The wrapped plugin instance.
     plugin: Mutex<P>,
     /// The plugin's host parameters, fetched once at creation.
     pub(crate) params: Arc<Table>,
-    /// The plugin's editor, if it has one. This object does not do anything on its own, but we need
-    /// to instantiate this in advance so we don't need to lock the entire [`Plugin`] object when
-    /// creating an editor. Wrapped in an `AtomicRefCell` because it needs to be initialized late.
-    editor: AtomicRefCell<Option<Mutex<Box<dyn Editor>>>>,
-    /// A handle for the currently active editor instance. The plugin should implement `Drop` on
-    /// this handle for its closing behavior.
+    /// The plugin's editor, if it has one, made once with the plugin so the
+    /// host's `gui` calls never take the plugin's lock.
+    editor: OnceLock<Box<dyn Editor>>,
+    /// The attached editor, which closes when dropped. Locked only to read or
+    /// swap it, never across the editor's open or close: either can call the
+    /// host, or draw a frame on the spot.
     editor_handle: Mutex<Option<Box<dyn Any + Send>>>,
-    /// The DPI scaling factor as passed to the `IPlugViewContentScaleSupport::set_scale_factor()`
-    /// function. Defaults to 1.0, and will be kept there on macOS. When reporting and handling size
-    /// the sizes communicated to and from the DAW should be scaled by this factor since nice-plug's
-    /// APIs only deal in logical pixels.
-    editor_scaling_factor: AtomicF32,
 
     is_activated: AtomicBool,
     /// The current buffer configuration, containing the sample rate and the maximum block size.
@@ -192,18 +182,6 @@ impl<P: Plugin> Wrapper<P> {
         inspect(&self.plugin.lock())
     }
 
-    #[cfg(feature = "clap-boundary-tests")]
-    #[doc(hidden)]
-    pub fn test_gui_context(&self, id: &str) -> (Arc<dyn crate::context::gui::GuiContext>, usize) {
-        // Main-thread fixtures invoke the raw methods on this actual context,
-        // then drop it before destroying the device that owns its host callback.
-        let wrapper = self.this.borrow().upgrade().expect("live wrapper");
-        let row = (0..self.params.len())
-            .find(|&row| self.params.spec(row).id == id)
-            .expect("a parameter id");
-        (wrapper.make_gui_context(), row)
-    }
-
     /// # Safety
     ///
     /// `host_callback` needs to outlive the returned object.
@@ -227,14 +205,13 @@ impl<P: Plugin> Wrapper<P> {
             audio: AtomicBool::new(false),
             deferred_host_callback: AtomicBool::new(false),
             host_state: AtomicRefCell::new(None),
-            this: AtomicRefCell::new(Weak::new()),
 
             params: plugin.params(),
             plugin: Mutex::new(plugin),
-            // Initialized later as it needs a reference to the wrapper
-            editor: AtomicRefCell::new(None),
+            // Set below, once the plugin has its `EditorHost`, which needs
+            // the wrapper's `Arc`.
+            editor: OnceLock::new(),
             editor_handle: Mutex::new(None),
-            editor_scaling_factor: AtomicF32::new(1.0),
 
             is_activated: AtomicBool::new(false),
             current_buffer_config: AtomicCell::new(None),
@@ -336,10 +313,7 @@ impl<P: Plugin> Wrapper<P> {
             clap_plugin_tail: clap_plugin_tail { get: Some(Self::ext_tail_get) },
         };
 
-        // Finally, the wrapper needs to contain a reference to itself so we can create GuiContexts
-        // when opening plugin editors
         let wrapper = Arc::new(wrapper);
-        *wrapper.this.borrow_mut() = Arc::downgrade(&wrapper);
         if let Some(setup) = &wrapper.setup {
             let weak = Arc::downgrade(&wrapper);
             setup.install_wakeup(Box::new(move || {
@@ -355,51 +329,24 @@ impl<P: Plugin> Wrapper<P> {
 
         let mut plugin = wrapper.plugin.lock();
         plugin.editor_host(Arc::new(HostGui(Arc::downgrade(&wrapper))));
-        *wrapper.editor.borrow_mut() = plugin.editor().map(Mutex::new);
+        if let Some(editor) = plugin.editor() {
+            let _ = wrapper.editor.set(editor);
+        }
         drop(plugin);
 
         wrapper
     }
 
-    fn make_gui_context(self: Arc<Self>) -> Arc<WrapperGuiContext<P>> {
-        Arc::new(WrapperGuiContext {
-            wrapper: self,
-            #[cfg(debug_assertions)]
-            param_gesture_checker: Default::default(),
-        })
-    }
-
     /// Ask the host for a flush, for it to hear what the editor did. Safe
     /// from any thread but the audio one, where a flush is no use.
-    pub(super) fn request_flush(&self) {
+    fn request_flush(&self) {
         match &*self.host_params.borrow() {
             Some(host_params) => {
                 unsafe_clap_call! { host_params=>request_flush(&*self.host_callback) }
             }
             None => {
-                crate::nice_debug_assert_failure!("The host does not support parameters? What?")
+                crate::shell_debug_assert_failure!("The host does not support parameters? What?")
             }
-        }
-    }
-
-    /// Request a resize based on the editor's current reported size. As of CLAP 0.24 this can
-    /// safely be called from any thread. If this returns `false`, then the plugin should reset its
-    /// size back to the previous value.
-    pub fn request_resize(&self) -> bool {
-        match (self.host_gui.borrow().as_ref(), self.editor.borrow().as_ref()) {
-            (Some(host_gui), Some(editor)) => {
-                let (unscaled_width, unscaled_height) = editor.lock().size();
-                let scaling_factor = self.editor_scaling_factor.load(Ordering::Relaxed);
-
-                unsafe_clap_call! {
-                    host_gui=>request_resize(
-                        &*self.host_callback,
-                        (unscaled_width as f32 * scaling_factor).round() as u32,
-                        (unscaled_height as f32 * scaling_factor).round() as u32,
-                    )
-                }
-            }
-            _ => false,
         }
     }
 
@@ -416,12 +363,12 @@ impl<P: Plugin> Wrapper<P> {
         state
     }
 
-    /// Restore `state` from the main thread, as a load from the host does. Only
-    /// tests call this.
-    pub fn set_state_object_from_gui(&self, state: PluginState) {
-        if !self.restore(&state) {
-            crate::nice_error!("Prepared setup restore refused: invalid or full");
-        }
+    /// Restore `state` as a load from the host does, without its framing:
+    /// whether the setup took it.
+    #[cfg(feature = "clap-boundary-tests")]
+    #[doc(hidden)]
+    pub fn test_restore(&self, state: &PluginState) -> bool {
+        self.restore(state)
     }
 
     /// Ask the host for a main-thread call. Inside a process callback the
@@ -447,7 +394,7 @@ impl<P: Plugin> Wrapper<P> {
     fn restore(&self, state: &PluginState) -> bool {
         let prepared = match self.setup.as_ref().map(|setup| setup.prepare(state)) {
             Some(Err(reason)) => {
-                crate::nice_error!("Prepared setup restore refused: {reason}");
+                crate::shell_error!("Prepared setup restore refused: {reason}");
                 return false;
             }
             Some(Ok(prepared)) => Some(prepared),
@@ -525,7 +472,7 @@ impl<P: Plugin> Wrapper<P> {
     unsafe extern "C" fn destroy(plugin: *const clap_plugin) {
         assert!(!plugin.is_null() && unsafe { !(*plugin).plugin_data.is_null() });
         let this = unsafe { Arc::from_raw((*plugin).plugin_data as *mut Self) };
-        crate::nice_debug_assert_eq!(Arc::strong_count(&this), 1);
+        crate::shell_debug_assert_eq!(Arc::strong_count(&this), 1);
 
         this.plugin.lock().destroy();
         drop(this);
@@ -735,7 +682,7 @@ impl<P: Plugin> Wrapper<P> {
             &wrapper.clap_plugin_audio_ports_config as *const _ as *const c_void
         } else if id == CLAP_EXT_AUDIO_PORTS {
             &wrapper.clap_plugin_audio_ports as *const _ as *const c_void
-        } else if id == CLAP_EXT_GUI && wrapper.editor.borrow().is_some() {
+        } else if id == CLAP_EXT_GUI && wrapper.editor.get().is_some() {
             // Only report that we support this extension if the plugin has an editor
             &wrapper.clap_plugin_gui as *const _ as *const c_void
         } else if id == CLAP_EXT_LATENCY {
@@ -757,7 +704,7 @@ impl<P: Plugin> Wrapper<P> {
         } else if id == CLAP_EXT_TAIL {
             &wrapper.clap_plugin_tail as *const _ as *const c_void
         } else {
-            crate::nice_trace!("Host tried to query unknown extension {:?}", id);
+            crate::shell_trace!("Host tried to query unknown extension {:?}", id);
             std::ptr::null()
         }
     }
@@ -797,13 +744,13 @@ impl<P: Plugin> Wrapper<P> {
             if wrapper.host_latency.borrow().is_some() {
                 unsafe_clap_call! { &*wrapper.host_callback=>request_restart(&*wrapper.host_callback) };
             } else {
-                crate::nice_debug_assert_failure!("Host does not support the latency extension");
+                crate::shell_debug_assert_failure!("Host does not support the latency extension");
             }
         }
         if wrapper.transport_event.swap(false, Ordering::AcqRel)
             && !wrapper.transport_logged.swap(true, Ordering::AcqRel)
         {
-            crate::nice_warn!("{TRANSPORT_EVENT}");
+            crate::shell_warn!("{TRANSPORT_EVENT}");
             if let Some(setup) = &wrapper.setup {
                 setup.notice(TRANSPORT_EVENT);
             }
@@ -826,7 +773,7 @@ impl<P: Plugin> Wrapper<P> {
     ) -> bool {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, config);
         if index != 0 {
-            crate::nice_debug_assert_failure!(
+            crate::shell_debug_assert_failure!(
                 "Host tried to query out of bounds audio port config {}",
                 index
             );
@@ -908,23 +855,9 @@ impl<P: Plugin> Wrapper<P> {
         api: *const c_char,
         is_floating: bool,
     ) -> bool {
-        // We don't do standalone floating windows
-        if is_floating {
-            return false;
-        }
-
-        unsafe {
-            #[cfg(all(target_family = "unix", not(target_os = "macos")))]
-            if CStr::from_ptr(api) == CLAP_WINDOW_API_X11 {
-                return true;
-            }
-            #[cfg(target_os = "macos")]
-            if CStr::from_ptr(api) == CLAP_WINDOW_API_COCOA {
-                return true;
-            }
-        }
-
-        false
+        // Embedded in an AppKit view, on every platform the shell builds on,
+        // so a host can only create the editor where it can attach it.
+        !is_floating && unsafe { CStr::from_ptr(api) } == CLAP_WINDOW_API_COCOA
     }
 
     unsafe extern "C" fn ext_gui_get_preferred_api(
@@ -935,16 +868,7 @@ impl<P: Plugin> Wrapper<P> {
         check_null_ptr!(false, api, is_floating);
 
         unsafe {
-            #[cfg(all(target_family = "unix", not(target_os = "macos")))]
-            {
-                *api = CLAP_WINDOW_API_X11.as_ptr();
-            }
-            #[cfg(target_os = "macos")]
-            {
-                *api = CLAP_WINDOW_API_COCOA.as_ptr();
-            }
-
-            // We don't do standalone floating windows yet
+            *api = CLAP_WINDOW_API_COCOA.as_ptr();
             *is_floating = false;
         }
 
@@ -971,7 +895,7 @@ impl<P: Plugin> Wrapper<P> {
         if editor_handle.is_none() {
             true
         } else {
-            crate::nice_debug_assert_failure!(
+            crate::shell_debug_assert_failure!(
                 "Tried creating editor while the editor was already active"
             );
             false
@@ -982,34 +906,20 @@ impl<P: Plugin> Wrapper<P> {
         check_null_ptr!((), plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        let mut editor_handle = wrapper.editor_handle.lock();
-        if editor_handle.is_some() {
-            *editor_handle = None;
-        } else {
-            crate::nice_debug_assert_failure!(
+        // Out of the lock before it closes: the editor's close ends its
+        // gestures with the host.
+        let editor_handle = wrapper.editor_handle.lock().take();
+        if editor_handle.is_none() {
+            crate::shell_debug_assert_failure!(
                 "Tried destroying editor while the editor was not active"
             );
         }
+        drop(editor_handle);
     }
 
-    unsafe extern "C" fn ext_gui_set_scale(plugin: *const clap_plugin, scale: f64) -> bool {
-        check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data });
-        let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
-
-        // On macOS scaling is done by the OS, and all window sizes are in logical pixels
-        if cfg!(target_os = "macos") {
-            crate::nice_debug_assert_failure!(
-                "Ignoring host request to set explicit DPI scaling factor"
-            );
-            return false;
-        }
-
-        if wrapper.editor.borrow().as_ref().unwrap().lock().set_scale_factor(scale as f32) {
-            wrapper.editor_scaling_factor.store(scale as f32, std::sync::atomic::Ordering::Relaxed);
-            true
-        } else {
-            false
-        }
+    /// Refused: the editor's sizes are logical points, which the OS scales.
+    unsafe extern "C" fn ext_gui_set_scale(_plugin: *const clap_plugin, _scale: f64) -> bool {
+        false
     }
 
     unsafe extern "C" fn ext_gui_get_size(
@@ -1020,17 +930,8 @@ impl<P: Plugin> Wrapper<P> {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, width, height);
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        // For macOS the scaling factor is always 1
-        let (unscaled_width, unscaled_height) =
-            wrapper.editor.borrow().as_ref().unwrap().lock().size();
-        let scaling_factor = wrapper.editor_scaling_factor.load(Ordering::Relaxed);
-        unsafe {
-            (*width, *height) = (
-                (unscaled_width as f32 * scaling_factor).round() as u32,
-                (unscaled_height as f32 * scaling_factor).round() as u32,
-            );
-        }
-
+        let Some(editor) = wrapper.editor.get() else { return false };
+        unsafe { (*width, *height) = editor.size() };
         true
     }
 
@@ -1038,13 +939,10 @@ impl<P: Plugin> Wrapper<P> {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        // The editor decides whether it's resizable via `Editor::resize_hint()`.
-        match wrapper.editor.borrow().as_ref() {
-            Some(editor) => editor.lock().resize_hint().can_resize,
-            None => false,
-        }
+        wrapper.editor.get().is_some_and(|editor| editor.resizable())
     }
 
+    /// A resizable editor resizes freely on both axes.
     unsafe extern "C" fn ext_gui_get_resize_hints(
         plugin: *const clap_plugin,
         hints: *mut clap_gui_resize_hints,
@@ -1052,21 +950,18 @@ impl<P: Plugin> Wrapper<P> {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, hints);
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        let hint = match wrapper.editor.borrow().as_ref() {
-            Some(editor) => editor.lock().resize_hint(),
-            None => return false,
-        };
-        if !hint.can_resize {
+        if !wrapper.editor.get().is_some_and(|editor| editor.resizable()) {
             return false;
         }
-
-        let hints = unsafe { &mut *hints };
-        hints.can_resize_horizontally = hint.can_resize_horizontally;
-        hints.can_resize_vertically = hint.can_resize_vertically;
-        hints.preserve_aspect_ratio = hint.preserve_aspect_ratio;
-        hints.aspect_ratio_width = hint.aspect_ratio_width;
-        hints.aspect_ratio_height = hint.aspect_ratio_height;
-
+        unsafe {
+            *hints = clap_gui_resize_hints {
+                can_resize_horizontally: true,
+                can_resize_vertically: true,
+                preserve_aspect_ratio: false,
+                aspect_ratio_width: 1,
+                aspect_ratio_height: 1,
+            };
+        }
         true
     }
 
@@ -1092,73 +987,38 @@ impl<P: Plugin> Wrapper<P> {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        let scaling_factor = wrapper.editor_scaling_factor.load(Ordering::Relaxed);
-        // The host works in physical pixels; the editor works in logical pixels.
-        let logical_width = (width as f32 / scaling_factor).round() as u32;
-        let logical_height = (height as f32 / scaling_factor).round() as u32;
-
-        // Hand the new size to the editor. If there is no editor open, or the
-        // editor doesn't support being resized, this fails and we tell the host so.
-        match wrapper.editor.borrow().as_ref() {
-            Some(editor) => editor.lock().set_size(logical_width, logical_height),
-            None => false,
-        }
+        wrapper.editor.get().is_some_and(|editor| editor.set_size(width, height))
     }
 
+    /// Opens the editor under an AppKit view, the one window API the shell
+    /// offers; any other is refused.
     unsafe extern "C" fn ext_gui_set_parent(
         plugin: *const clap_plugin,
         window: *const clap_window,
     ) -> bool {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, window);
-        // For this function we need the underlying Arc so we can pass it to the editor
-        let wrapper = unsafe { Arc::from_raw((*plugin).plugin_data as *const Self) };
-
+        let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
         let window = unsafe { &*window };
 
-        let result = {
-            let mut editor_handle = wrapper.editor_handle.lock();
-            if editor_handle.is_none() {
-                let api = unsafe { CStr::from_ptr(window.api) };
-                let parent_handle = unsafe {
-                    if api == CLAP_WINDOW_API_X11 {
-                        #[allow(clippy::unnecessary_cast)]
-                        let w = window.specific.x11 as u32;
-                        ParentWindowHandle::X11Window(w)
-                    } else if api == CLAP_WINDOW_API_COCOA {
-                        ParentWindowHandle::AppKitNsView(window.specific.cocoa)
-                    } else if api == CLAP_WINDOW_API_WIN32 {
-                        ParentWindowHandle::Win32Hwnd(window.specific.win32)
-                    } else {
-                        crate::nice_debug_assert_failure!("Host passed an invalid API");
-                        return false;
-                    }
-                };
-
-                // This extension is only exposed when we have an editor
-                *editor_handle = Some(
-                    wrapper
-                        .editor
-                        .borrow()
-                        .as_ref()
-                        .unwrap()
-                        .lock()
-                        .spawn(parent_handle, wrapper.clone().make_gui_context()),
-                );
-
-                true
-            } else {
-                crate::nice_debug_assert_failure!(
-                    "Host tried to attach editor while the editor is already attached"
-                );
-
-                false
-            }
-        };
-
-        // Leak the Arc again since we only needed a clone to pass to the GuiContext
-        let _ = Arc::into_raw(wrapper);
-
-        result
+        if unsafe { CStr::from_ptr(window.api) } != CLAP_WINDOW_API_COCOA {
+            return false;
+        }
+        // This extension is only exposed when there is an editor.
+        let Some(editor) = wrapper.editor.get() else { return false };
+        if wrapper.editor_handle.lock().is_some() {
+            crate::shell_debug_assert_failure!(
+                "Host tried to attach editor while the editor is already attached"
+            );
+            return false;
+        }
+        // Out of the lock: opening can draw a frame on the spot, which can
+        // ask the host for a resize.
+        // SAFETY: CLAP calls `set_parent` on the main thread, and a `cocoa`
+        // window carries the host's `NSView`, alive while the editor is
+        // attached to it.
+        let handle = unsafe { editor.spawn(window.specific.cocoa) };
+        *wrapper.editor_handle.lock() = Some(handle);
+        true
     }
 
     unsafe extern "C" fn ext_gui_set_transient(
@@ -1406,7 +1266,7 @@ impl<P: Plugin> Wrapper<P> {
             // Even if the plugin has a hard realtime requirement, we'll still honor this
             CLAP_RENDER_OFFLINE => ProcessMode::Offline,
             n => {
-                crate::nice_debug_assert_failure!(
+                crate::shell_debug_assert_failure!(
                     "Unknown rendering mode '{}', defaulting to realtime",
                     n
                 );
@@ -1438,24 +1298,24 @@ impl<P: Plugin> Wrapper<P> {
                 // we need to prepend it to our actual state data.
                 let length_bytes = (serialized.len() as u64).to_le_bytes();
                 if !write_stream(unsafe { &*stream }, &length_bytes) {
-                    crate::nice_debug_assert_failure!(
+                    crate::shell_debug_assert_failure!(
                         "Error or end of stream while writing the state length to the stream."
                     );
                     return false;
                 }
                 if !write_stream(unsafe { &*stream }, &serialized) {
-                    crate::nice_debug_assert_failure!(
+                    crate::shell_debug_assert_failure!(
                         "Error or end of stream while writing the state buffer to the stream."
                     );
                     return false;
                 }
 
-                crate::nice_trace!("Saved state ({} bytes)", serialized.len());
+                crate::shell_trace!("Saved state ({} bytes)", serialized.len());
 
                 true
             }
             Err(err) => {
-                crate::nice_debug_assert_failure!("Could not save state: {:#}", err);
+                crate::shell_debug_assert_failure!("Could not save state: {:#}", err);
                 false
             }
         }
@@ -1472,7 +1332,7 @@ impl<P: Plugin> Wrapper<P> {
         // prepended the size in front of our JSON state
         let mut length_bytes = [0u8; 8];
         if !read_stream(unsafe { &*stream }, length_bytes.as_mut_slice()) {
-            crate::nice_debug_assert_failure!(
+            crate::shell_debug_assert_failure!(
                 "Error or end of stream while reading the state length from the stream."
             );
             return false;
@@ -1481,7 +1341,7 @@ impl<P: Plugin> Wrapper<P> {
 
         let mut read_buffer: Vec<u8> = Vec::with_capacity(length as usize);
         if !read_stream(unsafe { &*stream }, read_buffer.spare_capacity_mut()) {
-            crate::nice_debug_assert_failure!(
+            crate::shell_debug_assert_failure!(
                 "Error or end of stream while reading the state buffer from the stream."
             );
             return false;
@@ -1494,7 +1354,7 @@ impl<P: Plugin> Wrapper<P> {
             Some(state) => {
                 let success = wrapper.restore(&state);
                 if success {
-                    crate::nice_trace!("Loaded state ({} bytes)", read_buffer.len());
+                    crate::shell_trace!("Loaded state ({} bytes)", read_buffer.len());
                 }
 
                 success
@@ -1550,5 +1410,32 @@ impl<P: Plugin> EditorHost for HostGui<P> {
         let Some(host_gui) = host_gui.as_ref() else { return false };
         unsafe_clap_call! { host_gui=>closed(&*wrapper.host_callback, true) };
         true
+    }
+
+    fn request_resize(&self, (width, height): (u32, u32)) -> bool {
+        let Some(wrapper) = self.0.upgrade() else { return false };
+        let host_gui = wrapper.host_gui.borrow();
+        let Some(host_gui) = host_gui.as_ref() else { return false };
+        unsafe_clap_call! { host_gui=>request_resize(&*wrapper.host_callback, width, height) }
+    }
+
+    // Each writes the table at once and asks the host to flush, where the
+    // shell tells it what changed (#1814 Q1).
+    fn begin_set_parameter(&self, row: usize) {
+        let Some(wrapper) = self.0.upgrade() else { return };
+        wrapper.params.begin_edit(row);
+        wrapper.request_flush();
+    }
+
+    fn set_parameter(&self, row: usize, plain: f32) {
+        let Some(wrapper) = self.0.upgrade() else { return };
+        wrapper.params.edit(row, plain);
+        wrapper.request_flush();
+    }
+
+    fn end_set_parameter(&self, row: usize) {
+        let Some(wrapper) = self.0.upgrade() else { return };
+        wrapper.params.end_edit(row);
+        wrapper.request_flush();
     }
 }

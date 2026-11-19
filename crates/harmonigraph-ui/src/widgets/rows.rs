@@ -371,14 +371,7 @@ pub(crate) fn choice_buttons<T: Copy + PartialEq>(
 }
 
 /// One option of a choice group: a selectable button standing on its own fill.
-///
-/// The fill is laid down first and sized once the button is: an unselected
-/// option draws no fill of its own, and without one the options read as more
-/// words after the row's name rather than as the control beside it. One fill
-/// per option rather than one spanning them all, so the page shows through the
-/// gap between two options and a label of several words reads as one choice
-/// rather than as several. A button's fill rather than a value bar's well,
-/// which says "a range to drag" and is the one thing a bar is found by.
+/// A click selects `choice`.
 pub(crate) fn option_button<T: PartialEq>(
     ui: &mut Ui,
     value: &mut T,
@@ -386,9 +379,41 @@ pub(crate) fn option_button<T: PartialEq>(
     label: &str,
     hint: &str,
 ) -> egui::Response {
+    let mut response = filled_option(ui, *value == choice, label, hint);
+    if response.clicked() && *value != choice {
+        *value = choice;
+        response.mark_changed();
+    }
+    response
+}
+
+/// An option switched on and off by itself, rather than chosen from a group:
+/// the same filled button as [`option_button`], where a click flips `on`.
+/// What the Curve row's channels and the Stars solo layers are drawn with,
+/// in place of egui's `toggle_value`, which the crate's clippy configuration
+/// disallows because it draws no fill until hovered or on (#1873).
+pub(crate) fn toggle_button(ui: &mut Ui, on: &mut bool, label: &str, hint: &str) -> egui::Response {
+    let mut response = filled_option(ui, *on, label, hint);
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response
+}
+
+/// The button every option is drawn as, selected or not, with its hover.
+///
+/// The fill is laid down first and sized once the button is: an unselected
+/// option draws no fill of its own, and without one the options read as more
+/// words after the row's name rather than as the control beside it. One fill
+/// per option rather than one spanning them all, so the page shows through the
+/// gap between two options and a label of several words reads as one choice
+/// rather than as several. A button's fill rather than a value bar's well,
+/// which says "a range to drag".
+fn filled_option(ui: &mut Ui, selected: bool, label: &str, hint: &str) -> egui::Response {
     let radius = theme::control_radius(theme::ui_scale(ui.ctx()));
     let fill = ui.painter().add(egui::Shape::Noop);
-    let response = ui.selectable_value(value, choice, label);
+    let response = ui.add(egui::Button::selectable(selected, label));
     ui.painter().set(fill, egui::Shape::rect_filled(response.rect, radius, theme::widget()));
     if hint.is_empty() {
         response

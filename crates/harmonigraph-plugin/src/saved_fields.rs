@@ -12,9 +12,9 @@
 
 use std::sync::Arc;
 
-use nice_plug::plugin::PluginState;
-use nice_plug::prelude::nice_error;
-use nice_plug::wrapper::clap::setup::Prepared;
+use harmonigraph_clap::plugin::PluginState;
+use harmonigraph_clap::prelude::shell_error;
+use harmonigraph_clap::wrapper::clap::setup::Prepared;
 
 use crate::editor::EguiState;
 use crate::HarmonigraphParams;
@@ -35,7 +35,7 @@ pub(crate) fn save(params: &HarmonigraphParams, state: &mut PluginState) {
             Ok(json) => {
                 state.fields.insert(key.to_owned(), json);
             }
-            Err(error) => nice_error!("The saved field {key} could not be written: {error}"),
+            Err(error) => shell_error!("The saved field {key} could not be written: {error}"),
         }
     }
 }
@@ -74,7 +74,7 @@ fn parse<T: serde::de::DeserializeOwned>(
     let json = state.fields.get(key)?;
     serde_json::from_str(json)
         .inspect_err(|error| {
-            nice_error!("The saved field {key} could not be read: {error}");
+            shell_error!("The saved field {key} could not be read: {error}");
             notes.push(format!(
                 "This project's saved {key} could not be read, so it kept what it had: {error}."
             ));

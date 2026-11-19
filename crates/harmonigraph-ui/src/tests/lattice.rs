@@ -60,7 +60,7 @@ fn zoom_gesture_over_lattice_zooms_the_camera() {
 /// drafting choices remain available even when another projection is active.
 #[test]
 fn double_click_resets_lattice_navigation_but_keeps_drafting_choices() {
-    for projection in PROJECTIONS {
+    for projection in projections() {
         let mut state = fresh();
         let mut h = DockHarness::new();
         let at = egui::pos2(150.0, 150.0); // Inside the default Lattice section.

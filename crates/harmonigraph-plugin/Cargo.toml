@@ -35,7 +35,6 @@ harmonigraph-perf = { workspace = true }
 harmonigraph-record = { workspace = true }
 harmonigraph-render = { workspace = true }
 
-# Its library is `nice_plug`, the name the code below uses.
 harmonigraph-clap = { workspace = true }
 egui = { workspace = true }
 # The editor's device is made at activation, before any window, from the

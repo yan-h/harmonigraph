@@ -3,15 +3,15 @@
 //! through one queue the audio owner drains at each callback's start, and
 //! published through one seqlock. Learn over the held pitch classes the Hub in
 //! `tuning` reads from its rows applies on the audio thread directly.
+use harmonigraph_clap::plugin::PluginState;
+use harmonigraph_clap::prelude::*;
+use harmonigraph_clap::wrapper::clap::setup::{Prepared, Serviced, Setup};
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
 };
 use harmonigraph_core::tuning::{LearningState, PitchClass, TooManyClasses};
 use harmonigraph_core::{Tempered, Tuning};
 use harmonigraph_ui::params::ConfigurationView;
-use nice_plug::plugin::PluginState;
-use nice_plug::prelude::*;
-use nice_plug::wrapper::clap::setup::{Prepared, Serviced, Setup};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -316,7 +316,7 @@ impl Settings {
     fn prepare(self: &Arc<Self>, state: &PluginState) -> Result<Restore, &'static str> {
         let value: MusicalSettings = match state.fields.get(MUSICAL_SETTINGS) {
             Some(json) => serde_json::from_str(json).map_err(|error| {
-                nice_error!("Musical settings refused: {error}");
+                shell_error!("Musical settings refused: {error}");
                 "invalid musical settings"
             })?,
             None => MusicalSettings::default(),
@@ -356,7 +356,7 @@ impl Prepared for Restore {
         settings.restored.fetch_add(1, Ordering::AcqRel);
         if self.legacy {
             // The log keeps it for a project saved before an editor opens.
-            nice_error!("{LEGACY_AXES}");
+            shell_error!("{LEGACY_AXES}");
             settings.notify(LEGACY_AXES);
         }
     }
@@ -501,9 +501,17 @@ impl Owner {
         self.recording.reset(recorder);
         self.publish();
     }
-    /// Host input was lost: a take refuses its configuration until a reset.
-    pub fn fault(&mut self) {
+    /// Host input was lost in this callback. A take armed at it fails here,
+    /// whatever the host does next: this callback records nothing (it runs no
+    /// `play`), so judging at a later one missed a take disarmed before it, or
+    /// a loss the host's reset cleared first, and refused a take whose Stop
+    /// had landed before the loss. A take armed later refuses its
+    /// configuration until the host's reset clears the loss (#1832).
+    pub fn fault(&mut self, recorder: &harmonigraph_record::Recorder) {
         self.status |= ConfigurationView::INPUT_LOST;
+        if recorder.capture_recording_intent().is_armed() {
+            recorder.fail_configuration();
+        }
         self.publish();
     }
     pub fn recording_intent(&self) -> harmonigraph_record::configuration::RecordIntent {
@@ -517,7 +525,11 @@ impl Owner {
     }
 
     pub fn record(&mut self, recorder: &mut harmonigraph_record::Recorder, origin: Option<f64>) {
-        if self.status & ConfigurationView::INPUT_LOST != 0 && recorder.recording_epoch() != 0 {
+        // A take armed after lost input, before the host's reset clears it,
+        // refuses its configuration. One armed at the loss failed there
+        // (`fault`), and a loss while none is armed fails nothing (#1832).
+        let armed = self.recording.captured_intent.is_armed();
+        if self.status & ConfigurationView::INPUT_LOST != 0 && armed {
             recorder.fail_configuration();
         }
         let start = self.recording.block_start;
@@ -525,10 +537,11 @@ impl Owner {
         recorder.record(self.take_time(), origin);
         if recorder.recording() {
             // What the Hub assigned from, at the block's start and at each
-            // change inside it.
-            self.recording.configuration(recorder, start, self.in_force(start).config);
+            // change inside it. The recorder writes each only when it changed.
+            let clock = self.recording.presentation;
+            recorder.configuration(clock.at(start), self.in_force(start).config);
             for (sample, state) in self.maps.changes(start, end) {
-                self.recording.configuration(recorder, sample, state.config);
+                recorder.configuration(clock.at(sample), state.config);
             }
         }
         self.recording.registered(end);

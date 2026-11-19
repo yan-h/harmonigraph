@@ -1,12 +1,11 @@
+use std::ffi::c_void;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crossbeam::atomic::AtomicCell;
 use egui::Context;
 use egui_baseview::baseview::{Size, WindowHandle, WindowScalePolicy};
 use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, SizeSource};
-use nice_plug::prelude::{Editor, GuiContext, ParentWindowHandle, ResizeHint};
-use nice_plug::wrapper::clap::EditorHost;
+use harmonigraph_clap::prelude::{Editor, EditorHost};
 
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 
@@ -101,65 +100,37 @@ pub(crate) fn start_graphics(
 pub fn create(
     params: Arc<HarmonigraphParams>,
     shared: Arc<EditorLock>,
-    host: Option<Arc<dyn EditorHost>>,
-) -> Option<Box<dyn Editor>> {
-    Some(Box::new(LatticeEditor {
-        egui_state: params.editor_state.clone(),
-        params,
-        shared,
-        host,
-        // On macOS the system reports scaling; elsewhere a host that never
-        // calls set_scale_factor gets 1.0 (same policy as nih_plug_egui).
-        #[cfg(target_os = "macos")]
-        scaling_factor: AtomicCell::new(None),
-        #[cfg(not(target_os = "macos"))]
-        scaling_factor: AtomicCell::new(Some(1.0)),
-    }))
+    host: Arc<dyn EditorHost>,
+) -> Box<dyn Editor> {
+    Box::new(LatticeEditor { egui_state: params.editor_state.clone(), params, shared, host })
 }
 
 pub(super) struct LatticeEditor {
     egui_state: Arc<EguiState>,
     params: Arc<HarmonigraphParams>,
     shared: Arc<EditorLock>,
-    host: Option<Arc<dyn EditorHost>>,
-    scaling_factor: AtomicCell<Option<f32>>,
+    host: Arc<dyn EditorHost>,
 }
 
-/// baseview uses a different raw-window-handle version than nih-plug, so
-/// the parent handle needs adapting (verbatim from nih_plug_egui).
-struct ParentWindowHandleAdapter(ParentWindowHandle);
+/// The host's `NSView` as baseview takes a parent.
+struct HostView(*mut c_void);
 
-unsafe impl HasRawWindowHandle for ParentWindowHandleAdapter {
+unsafe impl HasRawWindowHandle for HostView {
     fn raw_window_handle(&self) -> RawWindowHandle {
-        match self.0 {
-            ParentWindowHandle::X11Window(window) => {
-                let mut handle = raw_window_handle::XcbWindowHandle::empty();
-                handle.window = window;
-                RawWindowHandle::Xcb(handle)
-            }
-            ParentWindowHandle::AppKitNsView(ns_view) => {
-                let mut handle = raw_window_handle::AppKitWindowHandle::empty();
-                handle.ns_view = ns_view;
-                RawWindowHandle::AppKit(handle)
-            }
-            ParentWindowHandle::Win32Hwnd(hwnd) => {
-                let mut handle = raw_window_handle::Win32WindowHandle::empty();
-                handle.hwnd = hwnd;
-                RawWindowHandle::Win32(handle)
-            }
-        }
+        let mut handle = raw_window_handle::AppKitWindowHandle::empty();
+        handle.ns_view = self.0;
+        RawWindowHandle::AppKit(handle)
     }
 }
 
 impl Editor for LatticeEditor {
-    fn spawn(
-        &self,
-        parent: ParentWindowHandle,
-        context: Arc<dyn GuiContext>,
-    ) -> Box<dyn std::any::Any + Send> {
+    /// # Safety
+    ///
+    /// `parent` is a live `NSView`, and the call is on the main thread.
+    unsafe fn spawn(&self, parent: *mut c_void) -> Box<dyn std::any::Any + Send> {
+        let context = self.host.clone();
         let egui_state = self.egui_state.clone();
-        let (unscaled_width, unscaled_height) = self.egui_state.size();
-        let scaling_factor = self.scaling_factor.load();
+        let (width, height) = self.egui_state.size();
         // Where the window collects a size the HOST gave it (a border drag),
         // before it builds the frame that has to be laid out at that size. It
         // used to be applied from inside the frame instead, which left every
@@ -211,7 +182,7 @@ impl Editor for LatticeEditor {
                     return as_size(applied);
                 }
                 let started = Instant::now();
-                let accepted = asking.request_resize();
+                let accepted = asking.request_resize(size);
                 let roundtrip = started.elapsed().as_secs_f64() * 1000.0;
                 resized.requested_size.store(None);
                 if let Some(mut shared) = logging.try_lock() {
@@ -263,14 +234,10 @@ impl Editor for LatticeEditor {
         graphics.shared_context = Some(self.shared.lock().gpu_context.clone());
         let closing_context = context.clone();
         let window = EguiWindow::open_parented(
-            &ParentWindowHandleAdapter(parent),
+            &HostView(parent),
             EguiWindowSettings::new()
-                .with_logical_size(Size::new(f64::from(unscaled_width), f64::from(unscaled_height)))
-                .with_scale_policy(
-                    scaling_factor
-                        .map(|factor| WindowScalePolicy::ScaleFactor(f64::from(factor)))
-                        .unwrap_or(WindowScalePolicy::SystemScaleFactor),
-                )
+                .with_logical_size(Size::new(f64::from(width), f64::from(height)))
+                .with_scale_policy(WindowScalePolicy::SystemScaleFactor)
                 .with_graphics_config(graphics)
                 .with_size_source(size_source)
                 .with_unseen_notice(unseen)
@@ -321,8 +288,8 @@ impl Editor for LatticeEditor {
     // window border on this hint. An in-window drag-corner fallback for
     // hosts that ignore it existed until mid-2026 — recover it from git
     // history (`resize_corner` in this file) if such a host turns up.
-    fn resize_hint(&self) -> ResizeHint {
-        ResizeHint::resizable()
+    fn resizable(&self) -> bool {
+        true
     }
 
     fn set_size(&self, width: u32, height: u32) -> bool {
@@ -351,15 +318,6 @@ impl Editor for LatticeEditor {
         self.egui_state.host_resized.store(Some(clamped));
         true
     }
-
-    fn set_scale_factor(&self, factor: f32) -> bool {
-        // Can't rescale while open (Ableton Live does this).
-        if self.egui_state.is_open() {
-            return false;
-        }
-        self.scaling_factor.store(Some(factor));
-        true
-    }
 }
 
 struct LatticeEditorHandle {
@@ -368,11 +326,11 @@ struct LatticeEditorHandle {
     pop_out: Arc<OwnWindow>,
     egui_state: Arc<EguiState>,
     shared: Arc<EditorLock>,
-    context: Arc<dyn GuiContext>,
+    context: Arc<dyn EditorHost>,
     window: WindowHandle,
 }
 
-// Off macOS, nice-plug still closes this raw-pointer handle from the host's
+// Off macOS, the shell still closes this raw-pointer handle from the host's
 // GUI thread. On macOS the returned MainThreadBound owns that guarantee.
 #[cfg(not(target_os = "macos"))]
 unsafe impl Send for LatticeEditorHandle {}
@@ -402,6 +360,21 @@ mod tests {
 
     use harmonigraph_render::startup::{Status, WindowStartup};
 
+    /// A host that answers nothing, as the shell's own does once the plugin
+    /// is gone.
+    struct NoHost;
+    impl harmonigraph_clap::prelude::EditorHost for NoHost {
+        fn closed(&self) -> bool {
+            false
+        }
+        fn request_resize(&self, _: (u32, u32)) -> bool {
+            false
+        }
+        fn begin_set_parameter(&self, _: usize) {}
+        fn set_parameter(&self, _: usize, _: f32) {}
+        fn end_set_parameter(&self, _: usize) {}
+    }
+
     /// A host resize while the open editor sits in its own window leaves the
     /// size the project saves, which is that window's; in the host's window it
     /// is the editor's size.
@@ -418,7 +391,7 @@ mod tests {
         );
         let params = Arc::new(crate::HarmonigraphParams::default());
         let lock = Arc::new(super::EditorLock::new(shared, Arc::default()));
-        let editor = super::create(params.clone(), lock, None).expect("an editor");
+        let editor = super::create(params.clone(), lock, Arc::new(NoHost));
         let state = &params.editor_state;
         let saved = state.size();
         let (width, height) = (saved.0 + 100, saved.1 + 50);

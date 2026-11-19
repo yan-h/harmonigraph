@@ -65,3 +65,9 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 - A gap in the heatmap's columns always draws as silence, however short: the one-slab hold, which repeated the previous slab across a gap of one or two slab widths (an analyzer refill, a host pause), is gone, as its frame-jitter case went with the sample-grid FFT (4fb12e57). At the fresh History duration a seam shows as one 256 ms stripe of silence. #1784 S1; Yan, 2026-11-14.
 - The spectrogram's dating guard is its debug assertion alone, as the stakes record asks of a case no producer writes: release builds no longer drop a backward column, reset the history on one or on a crash in the fold, or count either on the overlay. If a dating bug ever shipped, debug tests fail; in release a column dated backward averages into the open slab, and one dated far ahead erases the history and draws blank until Clear display history or until real time reaches that date. This supersedes the 2026-11-14 guard line above (#1758 Q A) and restores the 2026-11-02 line (#1635 Spectrum Q2). #1784 S2; Yan, 2026-11-14.
 - A frame reads the analysis lag from the settings rather than from a lag carried with each batch of columns, so for a frame or two after a switch to a shorter Frequency resolution the strip's newest edge can stop short of the now-line. #1784 S3; Yan, 2026-11-14.
+
+## 2026-11-18 (maintainability audit, #1861)
+
+Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
+
+- The spectrogram surfaces move from `spectrum.rs` into `spectrogram.rs`, so the dependency runs one way. The Tape heatmap's memo is built only keyed on a Tape revision count bumped when slabs settle, since Tape replaces slabs mid-history and the live check assumes an append-only pyramid. To be built. #1861 R4

@@ -570,18 +570,8 @@ fn a_tab_with_a_modifier_moves_no_focus_and_keeps_the_chrome() {
 fn every_tab_has_its_own_id_whatever_its_title_says() {
     let mut state = fresh();
     let params = RecordingBackend::default();
-    let tabs = [
-        panes::Tab::Lattice,
-        panes::Tab::Tuning,
-        panes::Tab::LatticeSettings,
-        panes::Tab::AnalyzerSettings,
-        panes::Tab::Mappings,
-        panes::Tab::System,
-        panes::Tab::Console,
-        panes::Tab::Spectral,
-        panes::Tab::Spiral,
-        panes::Tab::Video,
-    ];
+    let tabs: Vec<panes::Tab> =
+        workspace::Section::ALL.iter().flat_map(|section| section.tabs()).copied().collect();
     let viewer = panes::Viewer {
         state: &mut state.picture,
         interaction: &mut state.workspace.interaction,
@@ -609,7 +599,8 @@ fn the_picture_panes_do_not_scroll() {
         params: &params,
         now: 0.0,
     };
-    for tab in [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Spiral] {
+    let pictures = [workspace::Section::Lattice, workspace::Section::Analyzer];
+    for &tab in pictures.iter().flat_map(|section| section.tabs()) {
         assert_eq!(viewer.scroll_bars(&tab), [false, false], "{tab:?} is scrollable");
     }
     // Settings panes are lists and must stay reachable in a short column, but
