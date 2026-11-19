@@ -13,7 +13,7 @@
 use harmonigraph_core::spectrum::{bucket_pitch, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS};
 
 mod kernels;
-pub use kernels::fixed_frame;
+pub use kernels::{fixed_frame, fixed_frame_at};
 
 /// The default frame length (~0.26 s at 48 kHz), the UI's Balanced setting;
 /// its fresh one is Fast. The UI changes it through

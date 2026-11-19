@@ -216,6 +216,7 @@ pub fn silent_slab() -> SpectrogramSlab {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use harmonigraph_analysis::fixed_frame;
 
     fn flat(byte: BucketDb) -> SpectrogramSlab {
         Arc::from([byte; SPECTRUM_BINS])
@@ -248,7 +249,7 @@ mod tests {
 
     #[test]
     fn a_column_reads_the_frame_its_lag_places_around_its_centre() {
-        let config = AnalyzerConfig { sample_rate: 48_000.0, fft_size: 4096 };
+        let config = AnalyzerConfig { sample_rate: 48_000.0, fft_size: fixed_frame(4096) };
         let (frame, lag) = ColumnAnalyzer::reach(config);
         let mut analyzer = ColumnAnalyzer::default();
         let mut asked = None;

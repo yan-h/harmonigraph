@@ -119,6 +119,47 @@ pub const fn fixed_frame(listen: usize) -> usize {
     }
 }
 
+/// The listens [`fixed_frame`] gives a frame for, shortest first, an octave
+/// apart.
+const FIXED_LISTENS: [usize; 3] = [4096, 8192, 16_384];
+
+/// How many octaves [`fixed_frame_at`] moves a frame either way.
+const FRAME_OCTAVES: i32 = 3;
+
+/// The frame for `listen` at `sample_rate`: [`fixed_frame`], which is sized
+/// for 48 kHz, scaled by a power of two, the smallest that keeps it no more
+/// than about a tenth shorter in TIME than at 48 kHz: 44.1 and 48 kHz read
+/// the same frame and 88.2 and 96 kHz one twice as long, the same listen to
+/// within 9%, in a size the transform still takes fast. A rate between, 32 or
+/// 64 kHz, listens longer rather than shorter, so no rate reads the bottom of
+/// the axis worse than 48 kHz does; rounding to the nearest power instead
+/// halved the frame at 32 kHz and lost Fast's 22 to 28 Hz. Counted in
+/// samples, every setting read twice as blurry at 96 kHz, at half the lag,
+/// and Fast could not place 20 to 44 Hz at all there.
+///
+/// The rate comes from the host or a file's header, so the scale is held to
+/// [`FRAME_OCTAVES`] either way, 6 kHz through 384 kHz: an absurd rate must
+/// not grow the frame without bound.
+///
+/// # Panics
+///
+/// As [`fixed_frame`] does.
+pub fn fixed_frame_at(listen: usize, sample_rate: f32) -> usize {
+    let octaves = ((f64::from(sample_rate) / 48_000.0).log2() - 0.15).ceil();
+    let limit = f64::from(FRAME_OCTAVES);
+    let octaves = if octaves.is_nan() { 0 } else { octaves.clamp(-limit, limit) as i32 };
+    shifted(fixed_frame(listen), octaves)
+}
+
+/// `frame` moved `octaves` octaves.
+const fn shifted(frame: usize, octaves: i32) -> usize {
+    if octaves >= 0 {
+        frame << octaves
+    } else {
+        frame >> -octaves
+    }
+}
+
 /// How many frames long the transform is: the frame and a frame of zeros.
 ///
 /// A kernel sampled at whole bins is the transform of the frame times a
@@ -193,35 +234,70 @@ pub(crate) fn lag_samples(fft_size: usize) -> f64 {
 /// summed once for everything that asks about it: its sum, where its weight is
 /// centred relative to the listen's centre, and its spread about that.
 ///
-/// Memoized per frame for every frame a setting reads at: [`fixed_frame`]'s
-/// three, an octave apart up to three each way ([`MOMENT_FRAMES`]), which is
-/// what the UI's frame choice gives from 6 to 384 kHz. The sum is a
+/// Memoized per frame for every frame [`fixed_frame_at`] gives
+/// ([`MOMENT_FRAMES`]). The sum is a
 /// transcendental loop over the whole frame, 20 to 130 µs, and its callers
 /// ask every draw frame (the live heatmap's fresh edge), every Tape column
 /// and every export frame (#1831). Keyed on the frame alone, because nothing
 /// else reaches it: the listen's centre and spread are constants of the
 /// frame's length. Each slot holds the loop's own result for its size, so a
-/// memoized value is the one the loop gives, bit for bit. Any other size, as
-/// a test asks for, runs the loop.
+/// memoized value is the one the loop gives, bit for bit. Any other size
+/// runs the loop, which only this crate's tests ask for: anywhere else it is
+/// a frame size [`fixed_frame_at`] no longer gives, which would put the loop
+/// back on the main thread every draw frame, so it fails debug builds.
 fn fixed_moments(fft_size: usize) -> (f64, f64, f64) {
     static MEMO: [std::sync::OnceLock<(f64, f64, f64)>; MOMENT_FRAMES.len()] =
         [const { std::sync::OnceLock::new() }; MOMENT_FRAMES.len()];
     match MOMENT_FRAMES.iter().position(|&frame| frame == fft_size) {
         Some(slot) => *MEMO[slot].get_or_init(|| summed_moments(fft_size)),
-        None => summed_moments(fft_size),
+        None => {
+            // Constant per build by design: this crate's tests may miss,
+            // nothing else may.
+            #[allow(clippy::assertions_on_constants)]
+            {
+                debug_assert!(cfg!(test), "a {fft_size}-sample frame is not memoized");
+            }
+            summed_moments(fft_size)
+        }
     }
 }
 
-/// The frames [`fixed_moments`] keeps: 3·2^k from 768 to 196,608, every
-/// fixed frame shifted by up to three octaves either way.
-const MOMENT_FRAMES: [usize; 9] = {
-    let mut frames = [0; 9];
+/// The frames [`fixed_moments`] keeps: every frame [`fixed_frame_at`] gives,
+/// from the shortest listen's frame moved down [`FRAME_OCTAVES`] to the
+/// longest's moved up as far, an octave apart, 768 to 196,608 samples.
+const MOMENT_FRAMES: [usize; MOMENT_FRAME_COUNT] = {
+    let lowest = shifted(fixed_frame(FIXED_LISTENS[0]), -FRAME_OCTAVES);
+    let mut frames = [0; MOMENT_FRAME_COUNT];
     let mut k = 0;
     while k < frames.len() {
-        frames[k] = 3 << (8 + k);
+        frames[k] = lowest << k;
         k += 1;
     }
+    // Every listen at every octave lands on one of them: the listens' frames
+    // are an octave apart, so the run has no gap.
+    let mut listen = 0;
+    while listen < FIXED_LISTENS.len() {
+        let mut octaves = -FRAME_OCTAVES;
+        while octaves <= FRAME_OCTAVES {
+            let frame = shifted(fixed_frame(FIXED_LISTENS[listen]), octaves);
+            let mut k = 0;
+            while frames[k] != frame {
+                k += 1;
+                assert!(k < frames.len(), "a frame fixed_frame_at gives is not memoized");
+            }
+            octaves += 1;
+        }
+        listen += 1;
+    }
     frames
+};
+
+/// How many frames [`MOMENT_FRAMES`] holds: the octaves from its lowest to
+/// its highest, both included.
+const MOMENT_FRAME_COUNT: usize = {
+    let lowest = shifted(fixed_frame(FIXED_LISTENS[0]), -FRAME_OCTAVES);
+    let highest = shifted(fixed_frame(FIXED_LISTENS[FIXED_LISTENS.len() - 1]), FRAME_OCTAVES);
+    (highest / lowest).trailing_zeros() as usize + 1
 };
 
 /// [`fixed_moments`] summed afresh.
