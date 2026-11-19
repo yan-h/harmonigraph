@@ -179,11 +179,13 @@ fn exact_onset_and_audio_first_keep_surface_local_stable_poses() {
     assert_eq!(origin(&scene).slice_progress, [0.0; 11]);
 }
 
-/// Only the copy handed the window's Stars solo draws it: the working pane
-/// is, and the Video preview and an export are handed none, though all three
-/// compose from one state holding a solo (Yan, #1862).
+/// A copy's scene carries the Stars solo it is handed, never the one its
+/// state holds, so which copies draw the solo is decided by their callers:
+/// the working pane hands the window's, and the Video preview and an export
+/// hand `NO_SOLO` (Yan, #1862). Those call sites are what keep the preview
+/// free of it; this test does not reach them.
 #[test]
-fn only_the_copy_handed_the_windows_stars_solo_draws_it() {
+fn a_scene_carries_the_solo_its_copy_is_handed_not_the_states() {
     let mut state = crate::tests::probe::fresh_picture();
     let solo = [false, true, false, true, false];
     state.surfaces.star_solo.lattice = solo;
