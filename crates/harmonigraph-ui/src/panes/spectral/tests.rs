@@ -3628,6 +3628,7 @@ fn playhead_frames(
                     0,
                     1.0,
                     Navigation::Docked,
+                    state.shown(),
                     crate::panes::lattice::NO_SOLO,
                 );
             }
