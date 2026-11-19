@@ -8,3 +8,9 @@ Yan’s decisions recorded for future drift audits.
 - In Tape mode a press on the tape picture only cues, and pans nothing. Resolves #1738. #1784 T2
 - Cut the starved timer, the shown-first order of a whole-tape re-analysis and the meter re-anchor past a short pass's end, and prime the stretcher with the recording before the spot as read, without its walk across gaps. #1784 T3
 - 0.25× stays. Its test keeps loose tolerances, because the stretch crate exposes no seed for its phase randomisation. #1784 T4
+
+## 2026-11-18 (maintainability audit, #1861)
+
+Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
+
+- The Tape heatmap shares the spectrogram's folded grid, keyed on a Tape revision count bumped when slabs settle; folding `SongAxis` into `TimeAxis` is optional; #1837 and #1842 are fixed in their own PRs. To be built. #1861 R4

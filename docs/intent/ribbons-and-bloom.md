@@ -77,3 +77,10 @@ These settle the open questions from the first trial above.
 ## 2026-11-14 (premises audit, #1739)
 - A ribbon keeps its taper: Thickness can swell a ribbon along time under gain, pressure or timbre, for MPE controllers, rather than being one width per note. #1739 D7
 - Every lead is its own instance and history is clipped at the now-line, retiring the cap machinery #413 added and #1048 left as a clip guard; a test pins the now-line over the held-note seam. #1739, #1753
+
+## 2026-11-18 (maintainability audit, #1861)
+
+Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
+
+- The ignored roll timing probe uses fixed representative constants, so `DEFAULT_RIBBON_SEMITONES` leaves the render crate's public API and the two exact-default tests go. #1861 Q7
+- The roll does not hold the full frame rate past its Span for names and surround still sliding off the far edge: at short Spans they finish at the idle poll, a step too small to see. #1861 (#1835)
