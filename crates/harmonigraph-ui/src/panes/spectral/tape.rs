@@ -49,6 +49,14 @@ const LABEL_SPACING: f32 = 44.0;
 /// for three minutes) under one; that is left to the poll rather than paying
 /// a full redraw a refresh (#1673) for it (#1837).
 const PLAYHEAD_FULL_RATE_PX: f64 = 144.0;
+/// How long a playhead may stand at one value and still count as advancing.
+/// The host's position and the audition's both reach the editor once per
+/// audio block (about 11 ms at 512 frames and 48 kHz, more for larger
+/// blocks), so at 144 Hz several frames in a row can see the same value
+/// while the playhead runs on; a still frame there is no stall. A value held
+/// longer than this — a stalled input worker (AGENTS.md's stakes record) —
+/// stops holding full rate rather than drawing a still mark at it.
+const PLAYHEAD_STALL_SECONDS: f64 = 0.25;
 /// The thickness, in points, of the band along the low-pitch edge that marks
 /// what is recorded: the one place a gap reads apart from recorded silence.
 const COVERAGE_PT: f32 = 3.0;
@@ -75,7 +83,21 @@ impl Window {
     /// The whole recording, the reported position and what sounds, with a
     /// little room past the end.
     fn fit(view: &TapeView) -> Window {
-        let end = [view.end(), view.position, view.heard].into_iter().flatten().fold(0.0, f64::max);
+        Window::fitted(Window::reach(view, 0.0))
+    }
+
+    /// The end [`fit`](Self::fit) makes room for, `ahead` seconds on: the
+    /// recording's, and each playhead's moved on at the rate it runs
+    /// ([`rates`]).
+    fn reach(view: &TapeView, ahead: f64) -> f64 {
+        let (position_rate, heard_rate) = rates(view);
+        let position = view.position.map(|at| at + position_rate.unwrap_or(0.0) * ahead);
+        let heard = view.heard.map(|at| at + heard_rate * ahead);
+        [view.end(), position, heard].into_iter().flatten().fold(0.0, f64::max)
+    }
+
+    /// The stretch a fit to `end` shows.
+    fn fitted(end: f64) -> Window {
         let to = (end * 1.05).max(MIN_SECONDS * 4.0);
         Window { from: 0.0, to, zoomed: false, end: to }
     }
@@ -168,6 +190,12 @@ impl SongAxis {
 
     fn shows(&self, seconds: f64) -> bool {
         (self.window.from..=self.window.to).contains(&seconds)
+    }
+
+    /// Where song seconds `seconds` stand along the region, in points from
+    /// its near edge.
+    fn along(&self, seconds: f64) -> f64 {
+        (self.window.to - seconds) / self.window.seconds() * f64::from(self.region_len)
     }
 }
 
@@ -270,8 +298,7 @@ pub(super) fn draw(
     let view = &mut state.runtime.tape;
     coverage(painter, axes, view, &axis);
     let labels = ruler(painter, axes, view, &axis);
-    marks(painter, axes, view, &axis);
-    let moving = playhead_moving(view, &axis, painter.ctx().pixels_per_point());
+    let moving = marks(painter, axes, view, &axis, egui::Id::new(("tape-marks", surface)));
     state.surfaces.moving_this_frame.hold_if(crate::Reason::Playhead, moving);
     let view = &mut state.runtime.tape;
     let pointer = response.hover_pos().filter(|&p| axes.depth_at(p) >= split);
@@ -321,40 +348,89 @@ fn coverage(painter: &egui::Painter, axes: &Axes, view: &TapeView, axis: &SongAx
     }
 }
 
-/// The reported position (dim) and the audition's playhead (accent) over
-/// `axis`.
-fn marks(painter: &egui::Painter, axes: &Axes, view: &TapeView, axis: &SongAxis) {
-    let across = |seconds: f64, stroke: Stroke| {
-        if axis.shows(seconds) {
-            painter.line_segment(axes.across_pitch(axis.depth_of(seconds)), stroke);
-        }
-    };
-    if let Some(position) = view.position {
-        across(position, Stroke::new(theme::LINE_WIDTH, theme::text_dim()));
-    }
-    if let Some(heard) = view.heard {
-        across(heard, Stroke::new(theme::LINE_WIDTH, theme::accent()));
-    }
+/// The song seconds per second each playhead runs at: the reported position
+/// while the transport rolls (`None` while it stands), and the audition at the
+/// speed it was cued at, which a new choice of speed reaches only on its next
+/// cue (as the readout says).
+fn rates(view: &TapeView) -> (Option<f64>, f64) {
+    (view.rolling.then_some(1.0), view.audition.map_or(1.0, |audition| audition.speed))
 }
 
-/// Whether a playhead [`marks`] draws over `axis` still moves visibly: the
-/// audition's, at its speed, or the host's position while the transport
-/// rolls, on the stretch shown and crossing it at [`PLAYHEAD_FULL_RATE_PX`] or
-/// faster. Not the transport rolling or an audition playing as such, which
-/// would hold the editor at the display rate with the playhead off the stretch
-/// shown or under a pixel a refresh (#1837).
+/// What each playhead's mark last showed, and when that last changed, by the
+/// egui clock: whether it still advances.
+#[derive(Clone, Copy, Default)]
+struct Seen {
+    position: Option<(f64, f64)>,
+    heard: Option<(f64, f64)>,
+}
+
+/// The reported position (dim) and the audition's playhead (accent) over
+/// `axis`, the one painter both the pane and the overview draw them with.
 ///
-/// From the rates the playheads run at rather than from where they were last
-/// frame: a measured step is larger at the idle poll than at full rate, and
-/// would wake the editor only to let it fall back to the poll.
-fn playhead_moving(view: &TapeView, axis: &SongAxis, pixels_per_point: f32) -> bool {
-    let heard = view.heard.map(|at| (at, view.speed.factor()));
-    let position = view.position.filter(|_| view.rolling).map(|at| (at, 1.0));
-    let px_per_second = f64::from(pixels_per_point) / axis.seconds_per_point();
-    [heard, position]
-        .into_iter()
-        .flatten()
-        .any(|(at, rate)| axis.shows(at) && rate * px_per_second >= PLAYHEAD_FULL_RATE_PX)
+/// Answers whether a mark it drew still moves visibly, for the frame loop
+/// ([`Reason::Playhead`](crate::Reason::Playhead)), by one rule for both: on
+/// the stretch shown, still advancing (its value changed within
+/// [`PLAYHEAD_STALL_SECONDS`], kept under `seen`), and crossing the screen at
+/// [`PLAYHEAD_FULL_RATE_PX`] or faster on the axis as it moves
+/// ([`screen_speed`]). Not the transport rolling or an audition playing as
+/// such, which would hold the editor at the display rate with the playhead
+/// off the stretch shown, stalled, or under a pixel a refresh (#1837).
+fn marks(
+    painter: &egui::Painter,
+    axes: &Axes,
+    view: &TapeView,
+    axis: &SongAxis,
+    seen: egui::Id,
+) -> bool {
+    let ctx = painter.ctx();
+    let clock = ctx.input(|i| i.time);
+    let ppp = ctx.pixels_per_point();
+    let mut last = ctx.data(|d| d.get_temp::<Seen>(seen)).unwrap_or_default();
+    let (position_rate, heard_rate) = rates(view);
+    let mut moving = false;
+    let mut mark = |at: Option<f64>, rate: Option<f64>, last: &mut Option<(f64, f64)>, stroke| {
+        let Some(at) = at else {
+            *last = None;
+            return;
+        };
+        // First seen, it has not been seen to move.
+        let changed = match *last {
+            Some((value, since)) if value == at => since,
+            Some(_) => clock,
+            None => f64::NEG_INFINITY,
+        };
+        *last = Some((at, changed));
+        if !axis.shows(at) {
+            return;
+        }
+        painter.line_segment(axes.across_pitch(axis.depth_of(at)), stroke);
+        moving |= clock - changed <= PLAYHEAD_STALL_SECONDS
+            && rate.is_some_and(|rate| {
+                screen_speed(view, axis, at, rate, ppp) >= PLAYHEAD_FULL_RATE_PX
+            });
+    };
+    let dim = Stroke::new(theme::LINE_WIDTH, theme::text_dim());
+    mark(view.position, position_rate, &mut last.position, dim);
+    let accent = Stroke::new(theme::LINE_WIDTH, theme::accent());
+    mark(view.heard, Some(heard_rate), &mut last.heard, accent);
+    ctx.data_mut(|d| d.insert_temp(seen, last));
+    moving
+}
+
+/// How fast a mark at song seconds `at`, running at `rate`, crosses the
+/// screen, in device pixels a second: on the axis as it moves, from the rates
+/// the playheads run at rather than from where the mark was last frame (a step
+/// measured over the idle poll's gap is no measure of one at the display
+/// rate). A stretch zoomed or panned to stands still; a fitted one grows with
+/// whatever reaches its end, so a playhead that sets the end, as the
+/// position does while it records, stands still on screen while the song
+/// moves under it.
+fn screen_speed(view: &TapeView, axis: &SongAxis, at: f64, rate: f64, ppp: f32) -> f64 {
+    const AHEAD: f64 = 0.1;
+    let later =
+        if axis.window.zoomed { axis.window } else { Window::fitted(Window::reach(view, AHEAD)) };
+    let then = SongAxis { window: later, ..*axis };
+    (then.along(at + rate * AHEAD) - axis.along(at)).abs() / AHEAD * f64::from(ppp)
 }
 
 /// The tape's spectrogram over the far region, at the pyramid level whose
@@ -711,8 +787,7 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
     heatmap(&painter, &axes, &scale, state, &axis, surface, overview_id(surface));
     let view = &state.runtime.tape;
     coverage(&painter, &axes, view, &axis);
-    marks(&painter, &axes, view, &axis);
-    let moving = playhead_moving(view, &axis, ui.ctx().pixels_per_point());
+    let moving = marks(&painter, &axes, view, &axis, id.with("marks"));
     state.surfaces.moving_this_frame.hold_if(crate::Reason::Playhead, moving);
     let view = &state.runtime.tape;
     // The rest of the song dimmed, and the stretch shown outlined.

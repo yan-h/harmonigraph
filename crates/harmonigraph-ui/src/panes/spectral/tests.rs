@@ -3568,37 +3568,128 @@ fn the_overview_box_moves_the_stretch_shown_and_its_ends_resize_it() {
     assert_eq!(state.runtime.tape.request, None, "a drag on the overview is not a cue");
 }
 
-/// A Tape mode playhead holds the editor at full rate only while it crosses
-/// the stretch shown fast enough to step visibly at the idle poll: not while
-/// it is off that stretch, parked, or crawling across the whole song (#1837).
-/// Nothing else in the fixture moves, so the frame's report is the playhead's.
+/// Which parts of the Tape picture [`playhead_frames`] draws.
+#[derive(Clone, Copy)]
+enum Drawn {
+    Overview,
+    Pane,
+}
+
+/// `frames` frames of `part` alone, 1/60 s apart on `ctx`'s clock, each first
+/// moving the playheads on at the rates they run when `advance` (the
+/// audition's at its cue's speed, the position while the transport rolls).
+/// Whether the last frame held the loop for a playhead; nothing else in the
+/// fixture moves.
+fn playhead_frames(
+    ctx: &egui::Context,
+    state: &mut PictureState,
+    part: Drawn,
+    frames: usize,
+    advance: bool,
+) -> bool {
+    let dt = 1.0 / 60.0;
+    for _ in 0..frames {
+        let tape = &mut state.runtime.tape;
+        if advance {
+            let speed = tape.audition.map_or(1.0, |audition| audition.speed);
+            tape.heard = tape.heard.map(|at| at + speed * dt);
+            tape.position = tape.position.map(|at| if tape.rolling { at + dt } else { at });
+        }
+        state.surfaces.moving_this_frame = Default::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+            time: Some(ctx.input(|i| i.time) + dt),
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| match part {
+            Drawn::Overview => tape::overview(ui, STRIP, state, 0),
+            Drawn::Pane => {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                spectral_pane(
+                    &mut child,
+                    state,
+                    100.0,
+                    0,
+                    1.0,
+                    Navigation::Docked,
+                    crate::panes::lattice::NO_SOLO,
+                );
+            }
+        });
+    }
+    state.surfaces.moving_this_frame.holds(crate::Reason::Playhead)
+}
+
+/// [`on_tape`] auditioning from 1 s at `speed`, on fine pixels, as the
+/// Retina display is, with the region zoomed to its narrowest 2 s when
+/// `zoomed`: there a playhead at full speed is well past a pixel a refresh,
+/// and across the whole 42 s song well under it.
+fn auditioning(speed: f64, zoomed: bool) -> (egui::Context, PictureState) {
+    let ctx = themed();
+    ctx.set_pixels_per_point(4.0);
+    let mut state = on_tape();
+    state.runtime.tape.audition =
+        Some(crate::tape::Audition { clock: 0.0, song: 1.0, speed, until: None });
+    state.runtime.tape.heard = Some(1.0);
+    if zoomed {
+        overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(2.0)));
+        let (from, to) = shown(&ctx);
+        assert!(from == 0.0 && (to - 2.0).abs() < 0.3, "the fixture shows {from}..{to}");
+    }
+    (ctx, state)
+}
+
+/// A Tape mode playhead in the pane holds the editor at full rate only while
+/// it visibly crosses the stretch shown (#1837): advancing, on the stretch,
+/// and fast enough on screen at the speed its audition was cued at.
 #[test]
 fn a_tape_playhead_holds_full_rate_only_while_it_visibly_crosses_the_stretch_shown() {
-    let moving = |zoomed: bool, heard: Option<f64>, rolling: bool| {
+    let (ctx, mut state) = auditioning(1.0, true);
+    assert!(playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true), "the audition idled");
+    // Its value standing still, as a stalled input worker leaves it.
+    let stalled = playhead_frames(&ctx, &mut state, Drawn::Pane, 30, false);
+    assert!(!stalled, "a playhead that stopped advancing held the loop");
+
+    let (ctx, mut state) = auditioning(1.0, true);
+    state.runtime.tape.heard = Some(30.0);
+    let off = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
+    assert!(!off, "an audition off the stretch shown held the loop");
+
+    // Cued at a quarter speed, with Double chosen since: it plays on at a
+    // quarter until it is cued again.
+    let (ctx, mut state) = auditioning(0.25, true);
+    state.runtime.tape.speed = crate::tape::Speed::Double;
+    let slow = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
+    assert!(!slow, "the speed chosen, not the audition's, held the loop");
+
+    let (ctx, mut state) = auditioning(1.0, false);
+    let crawl = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
+    assert!(!crawl, "a playhead crawling over the whole song held the loop");
+
+    let (ctx, mut state) = auditioning(1.0, true);
+    state.runtime.tape.heard = None;
+    state.runtime.tape.rolling = true;
+    state.runtime.tape.position = Some(1.0);
+    assert!(playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true), "the transport idled");
+}
+
+/// The overview's playhead, drawn alone, by the same rule as the pane's: on a
+/// short recording its fitted strip moves a playhead visibly, and a recording
+/// whose end the position sets grows with it, so the mark stands still on
+/// screen while the song runs under it (#1837).
+#[test]
+fn the_overview_playhead_holds_full_rate_only_while_it_moves_on_screen() {
+    let short = |end: f64, position: f64| {
         let ctx = themed();
-        // Fine pixels, as the Retina display is, so the zoomed stretch's
-        // playhead is well past a pixel a frame and the whole song's well
-        // under it.
-        ctx.set_pixels_per_point(4.0);
+        ctx.set_pixels_per_point(8.0);
         let mut state = on_tape();
-        state.runtime.tape.position = Some(1.0);
-        state.runtime.tape.rolling = rolling;
-        if zoomed {
-            // The box's late end pulled in to the 2 s the region zooms to.
-            overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(2.0)));
-            let (from, to) = shown(&ctx);
-            assert!(from == 0.0 && (to - 2.0).abs() < 0.3, "the fixture shows {from}..{to}");
-        }
-        state.runtime.tape.heard = heard;
-        state.surfaces.moving_this_frame = Default::default();
-        overview_frames(&ctx, &mut state, vec![vec![]]);
-        state.surfaces.moving_this_frame.holds(crate::Reason::Playhead)
+        state.runtime.tape.spans[0].end = end;
+        state.runtime.tape.rolling = true;
+        state.runtime.tape.position = Some(position);
+        playhead_frames(&ctx, &mut state, Drawn::Overview, 5, true)
     };
-    assert!(moving(true, Some(1.0), false), "an audition crossing a zoomed stretch idled");
-    assert!(moving(true, None, true), "the rolling transport's playhead idled");
-    assert!(!moving(true, Some(30.0), false), "an audition off the stretch shown held it");
-    assert!(!moving(true, None, false), "a parked playhead held it");
-    assert!(!moving(false, Some(1.0), false), "a playhead crawling over the whole song held it");
+    assert!(short(9.0, 5.0), "the position crossing a short strip idled");
+    assert!(!short(9.0, 9.0), "a position standing at the end it sets held the loop");
 }
 
 /// The pane's sideways scroll pans the song only as far as the strip's end,
