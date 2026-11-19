@@ -1,22 +1,11 @@
 //! Production exported-factory fixtures. The real CLAP entry point, real
 //! endpoint capacities and real recorder fanout, without opening an editor.
 use super::*;
+use crate::test_device::{header, Device, Host, Input};
 use clap_sys::{
-    audio_buffer::clap_audio_buffer,
     events::*,
-    ext::{
-        latency::{clap_host_latency, clap_plugin_latency, CLAP_EXT_LATENCY},
-        params::{clap_plugin_params, CLAP_EXT_PARAMS},
-        track_info::{
-            clap_host_track_info, clap_plugin_track_info, clap_track_info, CLAP_EXT_TRACK_INFO,
-            CLAP_EXT_TRACK_INFO_COMPAT, CLAP_TRACK_INFO_HAS_TRACK_NAME,
-        },
-    },
-    factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID},
-    host::clap_host,
-    plugin::clap_plugin,
+    ext::track_info::{clap_plugin_track_info, CLAP_EXT_TRACK_INFO, CLAP_EXT_TRACK_INFO_COMPAT},
     process::*,
-    version::CLAP_VERSION,
 };
 use event::Event;
 
@@ -28,121 +17,21 @@ mod learning_tests;
 mod map_tests;
 #[path = "musical_tests.rs"]
 mod musical_tests;
-use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
-#[derive(Default)]
-struct Host {
-    track_info: bool,
-    track_info_compat: bool,
-    track_name: std::sync::Mutex<Option<String>>,
-    callbacks: AtomicUsize,
-    restarts: AtomicUsize,
-    latency_changes: AtomicUsize,
-    /// The plugin, so the notification below can do what a host does with one:
-    /// read the value the moment it is told there is a new one.
-    plugin: AtomicPtr<clap_plugin>,
-    observed_latency: AtomicUsize,
-    /// Set only across `clap_plugin::activate`. CLAP lets the latency change
-    /// during that call and nowhere else, so a host is entitled to discard a
-    /// notification that arrives with this clear.
-    activating: AtomicBool,
-    /// Notifications this host would have been right to discard.
-    out_of_phase: AtomicUsize,
+/// The tuning suites' host, which answers latency alone; a fixture that
+/// reads the track name adds track info.
+fn host() -> Host {
+    Host::new().latency()
 }
-unsafe extern "C" fn extension(host: *const clap_host, id: *const c_char) -> *const c_void {
-    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
-    let id = unsafe { CStr::from_ptr(id) };
-    if stats.track_info
-        && id
-            == if stats.track_info_compat {
-                CLAP_EXT_TRACK_INFO_COMPAT
-            } else {
-                CLAP_EXT_TRACK_INFO
-            }
-    {
-        &HOST_TRACK_INFO as *const _ as *const c_void
-    } else if id == CLAP_EXT_LATENCY {
-        &HOST_LATENCY as *const _ as *const c_void
-    } else {
-        ptr::null()
-    }
+/// A Hub on [`host`], initialized and not yet active.
+fn hub() -> Device {
+    Device::hub(host())
 }
-static HOST_TRACK_INFO: clap_host_track_info = clap_host_track_info { get: Some(track_info) };
-unsafe extern "C" fn track_info(host: *const clap_host, info: *mut clap_track_info) -> bool {
-    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
-    let name = stats.track_name.lock().unwrap();
-    let Some(name) = &*name else {
-        return false;
-    };
-    let info = unsafe { &mut *info };
-    info.flags = CLAP_TRACK_INFO_HAS_TRACK_NAME;
-    for (target, byte) in info.name.iter_mut().zip(name.bytes()) {
-        *target = byte as c_char;
-    }
-    true
-}
-static HOST_LATENCY: clap_host_latency = clap_host_latency { changed: Some(latency_changed) };
-unsafe extern "C" fn latency_changed(host: *const clap_host) {
-    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
-    stats.latency_changes.fetch_add(1, Ordering::Relaxed);
-    if !stats.activating.load(Ordering::Relaxed) {
-        stats.out_of_phase.fetch_add(1, Ordering::Relaxed);
-    }
-    let plugin = stats.plugin.load(Ordering::Relaxed);
-    if !plugin.is_null() {
-        stats.observed_latency.store(latency_of(plugin) as usize, Ordering::Relaxed);
-    }
-}
-fn latency_of(plugin: *const clap_plugin) -> u32 {
-    let latency = unsafe {
-        &*((*plugin).get_extension.unwrap()(plugin, CLAP_EXT_LATENCY.as_ptr())
-            .cast::<clap_plugin_latency>())
-    };
-    unsafe { latency.get.unwrap()(plugin) }
-}
-unsafe extern "C" fn restart(host: *const clap_host) {
-    unsafe { &*((*host).host_data.cast::<Host>()) }.restarts.fetch_add(1, Ordering::Relaxed);
-}
-unsafe extern "C" fn request(_: *const clap_host) {}
-unsafe extern "C" fn callback(host: *const clap_host) {
-    unsafe { &*((*host).host_data.cast::<Host>()) }.callbacks.fetch_add(1, Ordering::Relaxed);
-}
-fn factory() -> &'static clap_plugin_factory {
-    static ENTRY: std::sync::Once = std::sync::Once::new();
-    ENTRY.call_once(|| {
-        assert!(unsafe { crate::clap_entry.init.unwrap()(c"fixture.clap".as_ptr()) })
-    });
-    unsafe { &*(crate::clap_entry.get_factory.unwrap()(CLAP_PLUGIN_FACTORY_ID.as_ptr()).cast()) }
-}
-#[derive(Clone, Copy)]
-enum Input {
-    Note(clap_event_note),
-    Expression(clap_event_note_expression),
-    Midi(clap_event_midi),
-    Param(clap_event_param_value),
-    Transport(clap_event_transport),
-}
-impl Input {
-    fn header(&self) -> &clap_event_header {
-        match self {
-            Self::Note(e) => &e.header,
-            Self::Expression(e) => &e.header,
-            Self::Midi(e) => &e.header,
-            Self::Param(e) => &e.header,
-            Self::Transport(e) => &e.header,
-        }
-    }
-}
-fn header<T>(kind: u16, time: u32) -> clap_event_header {
-    clap_event_header {
-        size: std::mem::size_of::<T>() as u32,
-        time,
-        space_id: 0,
-        type_: kind,
-        flags: 0,
-    }
+/// A Tune on [`host`], initialized and not yet active.
+fn tune() -> Device {
+    Device::tune(host())
 }
 fn note(id: i32, channel: i16, key: i16, time: u32, on: bool) -> Input {
     Input::Note(clap_event_note {
@@ -176,8 +65,7 @@ fn raw_midi(data: [u8; 3], time: u32) -> Input {
     })
 }
 fn hub_wrapper(device: &Device) -> &harmonigraph_clap::wrapper::clap::Wrapper<crate::Harmonigraph> {
-    assert!(!device.tuner);
-    unsafe { &*((*device.plugin).plugin_data.cast()) }
+    device.wrapper()
 }
 /// The Hub's tuning configuration, as the editor submits to and reads it.
 fn settings(device: &Device) -> std::sync::Arc<crate::configuration::Settings> {
@@ -187,13 +75,7 @@ fn inspect_hub<R>(device: &Device, f: impl FnOnce(&hub::Hub) -> R) -> R {
     hub_wrapper(device).test_inspect_plugin(|plugin| f(plugin.aggregation.as_ref().unwrap()))
 }
 fn inspect_tune<R>(device: &Device, f: impl FnOnce(&tune::Tune) -> R) -> R {
-    assert!(device.tuner);
-    let wrapper = unsafe {
-        &*((*device.plugin)
-            .plugin_data
-            .cast::<harmonigraph_clap::wrapper::clap::Wrapper<plugin::HarmonigraphTune>>())
-    };
-    wrapper.test_inspect_plugin(|plugin| f(plugin.tune.as_ref().unwrap()))
+    device.tune_wrapper().test_inspect_plugin(|plugin| f(plugin.tune.as_ref().unwrap()))
 }
 fn transport(time: u32, tempo: f64) -> Input {
     let mut event: clap_event_transport = unsafe { std::mem::zeroed() };
@@ -214,90 +96,6 @@ fn timeline(seconds: f64, playing: bool) -> clap_event_transport {
     event.song_pos_seconds = (seconds * 2_147_483_648.0) as i64;
     event
 }
-unsafe extern "C" fn size(events: *const clap_input_events) -> u32 {
-    unsafe { &*((*events).ctx.cast::<Vec<Input>>()) }.len() as u32
-}
-unsafe extern "C" fn get(events: *const clap_input_events, index: u32) -> *const clap_event_header {
-    (unsafe { &*((*events).ctx.cast::<Vec<Input>>()) })[index as usize].header()
-}
-#[derive(Default)]
-struct Sink {
-    values: Vec<(u32, Event)>,
-    rejected: Vec<(u32, Event)>,
-    attempts: usize,
-    reject_kind: Option<u16>,
-    reject_attempt: Option<usize>,
-    callback_nanos: u128,
-    /// What the callback returned to the host.
-    status: clap_process_status,
-    /// Every kind of event the host took, note or parameter. The chronological
-    /// floor is the plugin's contract now, and this is what holds it to that:
-    /// both `time` expressions in `Tune::schedule` clamp differently, so a
-    /// future edit to either could otherwise ship an unsorted CLAP output list
-    /// with the suite green.
-    accepted_time: u32,
-}
-unsafe extern "C" fn push(
-    output: *const clap_output_events,
-    header: *const clap_event_header,
-) -> bool {
-    let sink = unsafe { &mut *((*output).ctx.cast::<Sink>()) };
-    let header = unsafe { &*header };
-    sink.attempts += 1;
-    let reject = sink.reject_kind == Some(header.type_)
-        || sink.reject_kind == Some(u16::MAX)
-        || sink.reject_attempt == Some(sink.attempts);
-    if !reject {
-        assert!(
-            header.time >= sink.accepted_time,
-            "CLAP output must be sorted by time: {} after {}",
-            header.time,
-            sink.accepted_time
-        );
-        sink.accepted_time = header.time;
-    }
-    let value = match header.type_ {
-        CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE | CLAP_EVENT_NOTE_END => {
-            let e = unsafe { &*(header as *const clap_event_header).cast::<clap_event_note>() };
-            Event::Note {
-                kind: header.type_,
-                id: e.note_id,
-                port: e.port_index,
-                channel: e.channel,
-                key: e.key,
-                velocity: e.velocity,
-                flags: header.flags,
-            }
-        }
-        CLAP_EVENT_NOTE_EXPRESSION => {
-            let e = unsafe {
-                &*(header as *const clap_event_header).cast::<clap_event_note_expression>()
-            };
-            Event::Expression {
-                kind: e.expression_id,
-                id: e.note_id,
-                port: e.port_index,
-                channel: e.channel,
-                key: e.key,
-                value: e.value,
-                flags: header.flags,
-            }
-        }
-        CLAP_EVENT_MIDI => {
-            let e = unsafe { &*(header as *const clap_event_header).cast::<clap_event_midi>() };
-            Event::Midi { port: e.port_index, data: e.data, flags: header.flags }
-        }
-        _ => return !reject,
-    };
-    if reject {
-        assert!(sink.rejected.len() < sink.rejected.capacity());
-        sink.rejected.push((header.time, value));
-        return false;
-    }
-    assert!(sink.values.len() < sink.values.capacity());
-    sink.values.push((header.time, value));
-    true
-}
 /// A host parameter event by string id, at its CLAP value: a stepped
 /// parameter's step index.
 fn parameter(id: &str, value: f64, time: u32) -> Input {
@@ -312,255 +110,6 @@ fn parameter(id: &str, value: f64, time: u32) -> Input {
         value,
     })
 }
-struct Device {
-    plugin: *const clap_plugin,
-    _host: Box<clap_host>,
-    _stats: Box<Host>,
-    tuner: bool,
-    active: bool,
-}
-impl Device {
-    fn new(tuner: bool) -> Self {
-        Self::with_host(tuner, Host::default())
-    }
-    fn with_host(tuner: bool, host: Host) -> Self {
-        let mut stats = Box::new(host);
-        let host = Box::new(clap_host {
-            clap_version: CLAP_VERSION,
-            host_data: (&mut *stats as *mut Host).cast(),
-            name: c"Aggregation fixture".as_ptr(),
-            vendor: c"test".as_ptr(),
-            url: c"".as_ptr(),
-            version: c"1".as_ptr(),
-            get_extension: Some(extension),
-            request_restart: Some(restart),
-            request_process: Some(request),
-            request_callback: Some(callback),
-        });
-        let plugin = unsafe {
-            factory().create_plugin.unwrap()(
-                factory(),
-                &*host,
-                if tuner { c"com.yan-h.harmonigraph-tune" } else { c"com.yan-h.harmonigraph" }
-                    .as_ptr(),
-            )
-        };
-        assert!(!plugin.is_null());
-        stats.plugin.store(plugin.cast_mut(), Ordering::Relaxed);
-        assert!(unsafe { (*plugin).init.unwrap()(plugin) });
-        let device = Self { plugin, _host: host, _stats: stats, tuner, active: false };
-        if !tuner {
-            device.select_adaptive();
-        }
-        device
-    }
-    /// Note retuning defaults to Pass through; these fixtures are about the
-    /// adaptive correction, so the Hub starts with it selected. The Hub adopts
-    /// a flush at its next process boundary, ahead of that callback's events,
-    /// and the adaptive tests failing without it is what shows it lands.
-    fn select_adaptive(&self) {
-        let events = vec![parameter("tuning-engine", 1.0, 0)];
-        let input = clap_input_events {
-            ctx: (&events as *const Vec<Input>).cast_mut().cast(),
-            size: Some(size),
-            get: Some(get),
-        };
-        let mut sink = Sink {
-            values: Vec::with_capacity(64),
-            rejected: Vec::with_capacity(64),
-            ..Default::default()
-        };
-        let output =
-            clap_output_events { ctx: (&mut sink as *mut Sink).cast(), try_push: Some(push) };
-        unsafe { (self.params().flush.unwrap())(self.plugin, &input, &output) };
-    }
-    /// D is `multiplier x max_frames`, so the format a fixture activates at is
-    /// also the delay it plays against: 512 frames at the default 1x is the
-    /// 512 samples this delay used to be fixed at. Callbacks stay whatever
-    /// size the fixture drives; this is only the advertised maximum.
-    fn activate(&mut self) {
-        self.activate_format(48000.0, 512);
-    }
-    fn activate_format(&mut self, rate: f64, frames: u32) {
-        self._stats.activating.store(true, Ordering::Relaxed);
-        let activated = unsafe { (*self.plugin).activate.unwrap()(self.plugin, rate, 1, frames) };
-        self._stats.activating.store(false, Ordering::Relaxed);
-        assert!(activated);
-        assert!(unsafe { (*self.plugin).start_processing.unwrap()(self.plugin) });
-        self.active = true;
-    }
-    fn deactivate(&mut self) {
-        assert!(self.active);
-        unsafe {
-            (*self.plugin).stop_processing.unwrap()(self.plugin);
-            (*self.plugin).deactivate.unwrap()(self.plugin);
-        }
-        self.active = false;
-    }
-    fn reactivate_format(&mut self, rate: f64, frames: u32) {
-        self.deactivate();
-        self.activate_format(rate, frames);
-    }
-    /// `clap_plugin::reset`, which a host calls on one instance when it wants
-    /// that instance's state discarded. It reaches this module as
-    /// `Plugin::reset`.
-    fn host_reset(&self) {
-        unsafe {
-            (*self.plugin).reset.unwrap()(self.plugin);
-        }
-    }
-    fn recorded_hub() -> (Self, harmonigraph_record::testing::Capture) {
-        let (recorder, capture) = harmonigraph_record::testing::channel();
-        crate::configuration::inject_recorder(recorder);
-        (Self::new(false), capture)
-    }
-    fn main(&self) {
-        unsafe {
-            (*self.plugin).on_main_thread.unwrap()(self.plugin);
-        }
-    }
-    fn params(&self) -> &clap_plugin_params {
-        unsafe {
-            &*((*self.plugin).get_extension.unwrap()(self.plugin, CLAP_EXT_PARAMS.as_ptr()).cast())
-        }
-    }
-    fn latency(&self) -> u32 {
-        latency_of(self.plugin)
-    }
-    fn tune_wrapper(&self) -> &harmonigraph_clap::wrapper::clap::Wrapper<plugin::HarmonigraphTune> {
-        assert!(self.tuner);
-        unsafe { &*((*self.plugin).plugin_data.cast()) }
-    }
-    fn shared(&self) -> std::sync::Arc<setup::Shared> {
-        if self.tuner {
-            self.tune_wrapper().test_inspect_plugin(|plugin| plugin.shared.clone())
-        } else {
-            let wrapper = unsafe {
-                &*((*self.plugin)
-                    .plugin_data
-                    .cast::<harmonigraph_clap::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-            };
-            wrapper
-                .test_inspect_plugin(|plugin| plugin.aggregation.as_ref().unwrap().shared.clone())
-        }
-    }
-    fn run(&self, raw: i64, events: Vec<Input>, reject_kind: Option<u16>) -> Sink {
-        self.run_select(raw, events, reject_kind, None)
-    }
-    fn run_select(
-        &self,
-        raw: i64,
-        events: Vec<Input>,
-        reject_kind: Option<u16>,
-        reject_attempt: Option<usize>,
-    ) -> Sink {
-        self.run_format(raw, events, reject_kind, reject_attempt, 64)
-    }
-    fn run_format(
-        &self,
-        raw: i64,
-        events: Vec<Input>,
-        reject_kind: Option<u16>,
-        reject_attempt: Option<usize>,
-        frames: u32,
-    ) -> Sink {
-        self.run_status(raw, events, reject_kind, reject_attempt, frames, false)
-    }
-    fn run_status(
-        &self,
-        raw: i64,
-        events: Vec<Input>,
-        reject_kind: Option<u16>,
-        reject_attempt: Option<usize>,
-        frames: u32,
-        expect_error: bool,
-    ) -> Sink {
-        self.run_callback(raw, events, (reject_kind, reject_attempt), (frames, expect_error), None)
-    }
-    fn run_callback(
-        &self,
-        raw: i64,
-        events: Vec<Input>,
-        rejection: (Option<u16>, Option<usize>),
-        format: (u32, bool),
-        transport: Option<clap_event_transport>,
-    ) -> Sink {
-        let (reject_kind, reject_attempt) = rejection;
-        let (frames, expect_error) = format;
-        assert!(frames > 0 && frames <= 512);
-        let input = clap_input_events {
-            ctx: (&events as *const Vec<Input>).cast_mut().cast(),
-            size: Some(size),
-            get: Some(get),
-        };
-        let mut sink = Sink {
-            // Comfortably past EMIT_PER_CALLBACK, which is what bounds one
-            // callback's note output; a sink too small to hold it aborts under
-            // the allocation guard rather than reporting what overflowed.
-            values: Vec::with_capacity(640),
-            rejected: Vec::with_capacity(640),
-            attempts: 0,
-            reject_kind,
-            reject_attempt,
-            callback_nanos: 0,
-            status: CLAP_PROCESS_ERROR,
-            accepted_time: 0,
-        };
-        let output =
-            clap_output_events { ctx: (&mut sink as *mut Sink).cast(), try_push: Some(push) };
-        let mut left = [0f32; 512];
-        let mut right = [0f32; 512];
-        let mut side_left = [0f32; 512];
-        let mut side_right = [0f32; 512];
-        let mut channels = [left.as_mut_ptr(), right.as_mut_ptr()];
-        let mut side = [side_left.as_mut_ptr(), side_right.as_mut_ptr()];
-        let audio = clap_audio_buffer {
-            data32: channels.as_mut_ptr(),
-            data64: ptr::null_mut(),
-            channel_count: 2,
-            latency: 0,
-            constant_mask: 0,
-        };
-        let inputs = [audio, clap_audio_buffer { data32: side.as_mut_ptr(), ..audio }];
-        let mut out_audio = audio;
-        let process = clap_process {
-            steady_time: raw,
-            frames_count: frames,
-            transport: transport.as_ref().map_or(ptr::null(), |value| value as *const _),
-            audio_inputs: if self.tuner { ptr::null() } else { inputs.as_ptr() },
-            audio_outputs: if self.tuner { ptr::null_mut() } else { &mut out_audio },
-            audio_inputs_count: if self.tuner { 0 } else { 2 },
-            audio_outputs_count: if self.tuner { 0 } else { 1 },
-            in_events: &input,
-            out_events: &output,
-        };
-        // assert_process_allocs guards this entire exported callback, including
-        // the wrapper. Nesting a second guard defeats its diagnostic permit.
-        let started = std::time::Instant::now();
-        let status = unsafe { (*self.plugin).process.unwrap()(self.plugin, &process) };
-        sink.callback_nanos = started.elapsed().as_nanos();
-        sink.status = status;
-        assert_eq!(
-            status == CLAP_PROCESS_ERROR,
-            expect_error,
-            "tuner={} raw={raw} frames={frames}",
-            self.tuner
-        );
-        sink
-    }
-}
-impl Drop for Device {
-    fn drop(&mut self) {
-        unsafe {
-            if self.active {
-                (*self.plugin).stop_processing.unwrap()(self.plugin);
-                (*self.plugin).deactivate.unwrap()(self.plugin);
-            }
-            (*self.plugin).destroy.unwrap()(self.plugin);
-        }
-    }
-}
-
 /// One Hub and one Tune, at 48 kHz and 512-frame callbacks, so D is 512
 /// samples at the default 1x. `step` runs the Tune and then the Hub, which is
 /// the order that lets a 1x note make its own deadline.
@@ -570,10 +119,11 @@ struct Pair {
     raw: i64,
 }
 impl Pair {
+    /// The Hub runs the Adaptive engine.
     fn new() -> Self {
-        let mut hub = Device::new(false);
+        let mut hub = hub().with_adaptive();
         hub.activate();
-        let mut tune = Device::new(true);
+        let mut tune = tune();
         tune.activate();
         Self { hub, tune, raw: 0 }
     }
@@ -604,7 +154,7 @@ fn tuning_of(output: &[(u32, Event)]) -> Option<f64> {
 fn tune_and_hub_diagnostics_publish_once_per_audio_interval() {
     let _scope = crate::test_scope::enter();
     for tuner in [true, false] {
-        let mut device = Device::new(tuner);
+        let mut device = if tuner { tune() } else { hub().with_adaptive() };
         device.activate_format(48_000.0, 64);
         let shared = device.shared();
         assert_eq!(shared.diagnostics.test_publications(), (0, (!tuner).then_some(0)));
@@ -663,7 +213,7 @@ fn an_onset_without_its_correction_emits_uncorrected_and_counts_the_miss() {
     let _scope = crate::test_scope::enter();
     // No Hub in the process at all: the request has nowhere to go, which is
     // the cheapest way to reach the uncorrected path from outside.
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     assert!(tune.run(0, vec![note(1, 0, 60, 0, true)], None).values.is_empty());
     let output = tune.run(512, vec![], None).values;
@@ -681,7 +231,7 @@ fn an_onset_without_its_correction_emits_uncorrected_and_counts_the_miss() {
 #[test]
 fn an_unpaired_tune_passes_notes_through_uncorrected() {
     let _scope = crate::test_scope::enter();
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     let phrase = [60, 64, 67];
     let mut emitted = Vec::new();
@@ -707,11 +257,11 @@ fn an_unpaired_tune_passes_notes_through_uncorrected() {
 fn initial_expressions_survive_unpaired_and_missed_reply_fallback() {
     let _scope = crate::test_scope::enter();
     for paired in [false, true] {
-        let mut hub = paired.then(|| Device::new(false));
+        let mut hub = paired.then(|| hub().with_adaptive());
         if let Some(hub) = &mut hub {
             hub.activate();
         }
-        let mut tune = Device::new(true);
+        let mut tune = tune();
         tune.activate();
         let input = vec![note(7, 0, 57, 0, true), expression(7, 0.25, 0), expression(7, 0.5, 0)];
         assert!(tune.run(0, input, None).values.is_empty());
@@ -743,9 +293,9 @@ fn initial_expressions_survive_unpaired_and_missed_reply_fallback() {
 fn a_late_reply_publishes_its_history_before_the_snapshot_that_covers_it() {
     use harmonigraph_core::{canonical::CanonicalEvent, NoteTracker};
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     assert!(tune.run(0, vec![note(7, 0, 57, 0, true)], None).values.is_empty());
     assert_eq!(tune.run(512, vec![], None).values.len(), 1, "emitted uncorrected, on time");
@@ -830,11 +380,11 @@ fn initial_expression_order_and_identity_match_in_both_production_routes() {
             (vec![note(-1, 0, 57, 0, true), addressed(-1, -1, 0, 57, 0.5)], vec![0.5]),
         ];
         for (input, players) in cases {
-            let (mut hub, mut capture) = Device::recorded_hub();
+            let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
             hub.activate();
             musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
             hub.shared().set_retune(true);
-            let mut tune = (!direct).then(|| Device::new(true));
+            let mut tune = (!direct).then(|| tune());
             let output = if let Some(tune) = &mut tune {
                 tune.activate();
                 tune.run(0, input, None);
@@ -891,9 +441,9 @@ fn a_same_sample_wildcard_initializes_each_addressed_onset() {
         (8, -1, -1, [0.0, 0.5]),
         (-1, 1, -1, [0.0, 0.0]),
     ] {
-        let (mut hub, mut capture) = Device::recorded_hub();
+        let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
         hub.activate();
-        let mut tune = Device::new(true);
+        let mut tune = tune();
         tune.activate();
         tune.shared().set_retune(false);
         let Input::Expression(mut broadcast) = expression(id, 0.5, 0) else { unreachable!() };
@@ -1047,10 +597,10 @@ fn missed_corrections_survive_a_stop_and_clear_at_reset_or_reactivation() {
 #[test]
 fn a_late_reply_draws_the_note_raw_from_the_miss_on() {
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
     musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     let dir = std::env::temp_dir().join(format!("harmonigraph-late-miss-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -1117,10 +667,10 @@ fn a_late_reply_draws_the_note_raw_from_the_miss_on() {
 #[test]
 fn a_miss_read_a_callback_late_is_withdrawn_at_that_callbacks_start() {
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
     musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     let at = |raw: i64| Some(timeline(1.0 + raw as f64 / 48_000.0, true));
     let hub_block = |raw: i64| hub.run_callback(raw, vec![], (None, None), (512, false), at(raw));
@@ -1160,7 +710,7 @@ fn a_miss_read_a_callback_late_is_withdrawn_at_that_callbacks_start() {
 fn an_invalid_first_callback_does_not_pin_the_presentation_clock() {
     let onset = |invalid_first: bool| {
         let _scope = crate::test_scope::enter();
-        let (mut hub, mut capture) = Device::recorded_hub();
+        let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
         hub.activate();
         if invalid_first {
             hub.run_status(-1, vec![], None, None, 64, true);
@@ -1185,10 +735,10 @@ fn an_invalid_first_callback_does_not_pin_the_presentation_clock() {
 #[test]
 fn a_miss_for_a_released_voice_changes_nothing() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     hub.run(0, vec![], None);
     tune.run(0, vec![note(1, 0, 64, 0, true)], None);
@@ -1299,11 +849,11 @@ fn the_cut_releases_every_held_voice_and_neutralises_the_pedals() {
 #[test]
 fn a_record_arriving_after_its_sample_was_sequenced_is_still_assigned() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
-    let mut early = Device::new(true);
+    let mut early = tune();
     early.activate();
-    let mut late = Device::new(true);
+    let mut late = tune();
     late.activate();
     // The early Tune plays and the Hub sequences that sample.
     early.run(0, vec![note(1, 0, 60, 0, true)], None);
@@ -1326,8 +876,8 @@ fn a_record_arriving_after_its_sample_was_sequenced_is_still_assigned() {
 #[test]
 fn a_tune_run_after_the_hub_has_its_last_notes_in_a_stopped_take() {
     let _scope = crate::test_scope::enter();
-    let (hub, mut capture) = Device::recorded_hub();
-    let (mut hub, mut tune) = (hub, Device::new(true));
+    let (hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
+    let (mut hub, mut tune) = (hub, tune());
     hub.activate();
     tune.activate();
     let dir = std::env::temp_dir().join(format!("harmonigraph-tune-after-{}", std::process::id()));
@@ -1367,8 +917,8 @@ fn a_tune_run_after_the_hub_has_its_last_notes_in_a_stopped_take() {
 #[test]
 fn lowering_a_tunes_delay_while_recording_makes_a_take_the_reader_refuses() {
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
-    let mut tune = Device::new(true);
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
+    let mut tune = tune();
     tune.shared().request_delay(4);
     hub.activate();
     tune.activate();
@@ -1409,7 +959,7 @@ fn lowering_a_tunes_delay_while_recording_makes_a_take_the_reader_refuses() {
 #[test]
 fn an_armed_take_whose_transport_never_rolled_draws_no_note() {
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
     let dir =
         std::env::temp_dir().join(format!("harmonigraph-never-rolled-{}", std::process::id()));
@@ -1450,7 +1000,7 @@ fn a_tune_attaching_cuts_every_track_already_playing() {
     let mut pair = Pair::new();
     pair.step(vec![note(1, 0, 60, 0, true)]);
     assert!(tuning_of(&pair.idle()).is_some());
-    let mut joining = Device::new(true);
+    let mut joining = tune();
     joining.activate();
     let cut = pair.idle();
     assert!(
@@ -1468,11 +1018,11 @@ fn a_tune_attaching_cuts_every_track_already_playing() {
 fn destroy_leaves_no_registry_entry() {
     let _scope = crate::test_scope::enter();
     let session = session::session();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     assert_ne!(session.hub(), 0);
     for _ in 0..3 {
-        let mut tune = Device::new(true);
+        let mut tune = tune();
         tune.activate();
         let held: Vec<_> = (0..TUNERS as u8).filter(|slot| session.row(*slot).held()).collect();
         assert_eq!(held.len(), 1, "exactly one row is claimed at a time");
@@ -1493,11 +1043,11 @@ fn destroy_leaves_no_registry_entry() {
 #[test]
 fn a_second_hub_is_a_fault_status_and_never_a_silence() {
     let _scope = crate::test_scope::enter();
-    let mut first = Device::new(false);
+    let mut first = hub().with_adaptive();
     first.activate();
-    let mut second = Device::new(false);
+    let mut second = hub().with_adaptive();
     second.activate();
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     tune.run(0, vec![note(1, 0, 60, 0, true)], None);
     first.run(0, vec![], None);
@@ -1514,7 +1064,7 @@ fn a_second_hub_is_a_fault_status_and_never_a_silence() {
 #[test]
 fn the_hub_asks_to_be_kept_running_with_nothing_paired_or_sounding() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    let mut hub = hub().with_adaptive();
     hub.activate();
     assert_eq!(hub.run(0, vec![], None).status, CLAP_PROCESS_CONTINUE);
 }
@@ -1525,7 +1075,7 @@ fn the_hub_asks_to_be_kept_running_with_nothing_paired_or_sounding() {
 #[test]
 fn the_delay_is_saved_and_reported_as_latency_before_any_hub_exists() {
     let _scope = crate::test_scope::enter();
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     assert_eq!(tune.latency(), 0, "no activation has advertised a format yet");
     tune.activate_format(48000.0, 256);
     assert_eq!(tune.latency(), 256);
@@ -1533,7 +1083,7 @@ fn the_delay_is_saved_and_reported_as_latency_before_any_hub_exists() {
     tune.reactivate_format(48000.0, 256);
     assert_eq!(tune.latency(), 4 * 256, "the new multiplier is adopted at the reactivation");
     let saved = tune.tune_wrapper().get_state_object();
-    let mut reopened = Device::new(true);
+    let mut reopened = Device::tune(host());
     assert!(reopened.tune_wrapper().test_restore(&saved));
     reopened.activate_format(48000.0, 256);
     assert_eq!(reopened.latency(), 4 * 256, "a reopened project reports the saved delay");
@@ -1546,11 +1096,11 @@ fn the_delay_is_saved_and_reported_as_latency_before_any_hub_exists() {
 #[test]
 fn latency_is_announced_once_during_activation_and_a_change_asks_one_restart() {
     let _scope = crate::test_scope::enter();
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     // (notifications, notifications outside an activation, restarts, the
     // latency the host read when notified)
     let seen = |device: &Device| {
-        let stats = &device._stats;
+        let stats = device.host();
         (
             stats.latency_changes.load(Ordering::Relaxed),
             stats.out_of_phase.load(Ordering::Relaxed),
@@ -1638,9 +1188,9 @@ fn a_host_reset_on_one_tune_cuts_it_out_of_the_hubs_context() {
 #[test]
 fn the_display_shows_the_schedule_rather_than_the_input() {
     let _scope = crate::test_scope::enter();
-    let (mut hub, capture) = Device::recorded_hub();
+    let (mut hub, capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     tune.run_format(0, vec![note(1, 0, 60, 64, true)], None, None, 512);
     hub.run_format(0, vec![], None, None, 512);
@@ -1669,9 +1219,9 @@ fn the_display_shows_the_schedule_rather_than_the_input() {
 fn a_tunes_pressure_reaches_the_display_as_an_expression() {
     use harmonigraph_take::{CanonicalRecord, ExpressionKind, NoteKind};
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     let pressure = Input::Expression(clap_event_note_expression {
         header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, 64),
@@ -1703,12 +1253,12 @@ fn a_tunes_pressure_reaches_the_display_as_an_expression() {
 fn an_onset_past_the_held_ceiling_is_refused_before_copy_and_output() {
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
     // A Just lattice, so the frozen correction below is a real one: on the
     // default 12-TET lattice the 12-TET keyboard keeps every key at its pitch.
     musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     let mut pair = Pair { hub, tune, raw: 0 };
     let input: Vec<_> =
@@ -1846,9 +1396,9 @@ fn a_same_key_retrigger_forgets_the_lifetime_it_replaced_from_policy_context() {
 #[test]
 fn a_full_hub_refuses_assignment_before_replying_to_a_locally_admitted_note() {
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     let mut pair = Pair { hub, tune, raw: 0 };
     pair.step((0..HELD_PER_SOURCE).map(|key| note(key as i32, 0, key as i16, 0, true)).collect());
@@ -1892,9 +1442,9 @@ fn a_full_hub_refuses_assignment_before_replying_to_a_locally_admitted_note() {
 #[test]
 fn a_full_local_line_refuses_onset_and_release_before_copying() {
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
-    let mut tune = Device::new(true);
+    let mut tune = tune();
     tune.activate();
     tune.shared().request_delay(16);
     tune.reactivate_format(48000.0, 512);
@@ -1964,9 +1514,9 @@ fn missing_steady_time_rejects_the_callback_before_note_admission() {
 fn a_departed_source_answers_after_a_display_gap() {
     use harmonigraph_core::{canonical::CanonicalEvent, NoteTracker, SourceId};
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
-    let mut tune = Some(Device::new(true));
+    let mut tune = Some(tune());
     tune.as_mut().unwrap().activate();
     let mut raw = 0;
     let step = |hub: &mut Device, tune: &Option<Device>, raw: &mut i64, input: Vec<Input>| {
@@ -2038,7 +1588,7 @@ fn a_departed_source_answers_after_a_display_gap() {
 fn a_channel_bend_on_a_held_note_reaches_the_display_and_the_take() {
     use harmonigraph_core::NoteTracker;
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
     let mut raw = 0;
     let mut step = |input: Vec<Input>| {
@@ -2079,7 +1629,7 @@ fn a_channel_bend_on_a_held_note_reaches_the_display_and_the_take() {
 fn channel_bend_fanout_overflow_is_not_silent() {
     use harmonigraph_take::CanonicalRecord;
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     hub.activate();
     capture.arm();
     hub.run(0, (0..64).map(|key| note(key, 0, key as i16, 0, true)).collect(), None);
@@ -2192,8 +1742,8 @@ fn a_paused_take_reads_whole_with_a_tunes_records_sounding_in_the_pause() {
     ];
     for (name, steps, expected) in cases {
         let _scope = crate::test_scope::enter();
-        let (mut hub, mut capture) = Device::recorded_hub();
-        let mut tune = Device::new(true);
+        let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
+        let mut tune = tune();
         hub.activate();
         tune.activate();
         capture.arm();
@@ -2239,8 +1789,8 @@ fn a_paused_take_reads_whole_with_a_tunes_records_sounding_in_the_pause() {
 fn a_tune_note_restated_by_a_snapshot_stays_one_note_with_its_history() {
     use harmonigraph_take::CanonicalRecord;
     let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
-    let mut tune = Device::new(true);
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
+    let mut tune = tune();
     hub.activate();
     tune.activate();
     let dir =

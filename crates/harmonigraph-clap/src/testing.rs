@@ -532,6 +532,11 @@ impl Device {
         }
         self.active = false;
     }
+    /// Record that a fixture activated (and started processing) or
+    /// deactivated the plugin through its vtable, so the drop matches.
+    pub fn set_active(&mut self, active: bool) {
+        self.active = active;
+    }
     /// `clap_plugin::reset`.
     pub fn reset(&self) {
         unsafe { ((*self.plugin).reset.unwrap())(self.plugin) };

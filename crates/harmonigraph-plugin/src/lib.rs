@@ -93,6 +93,8 @@ static ALLOCATOR: harmonigraph_perf::heap::Counting<nice_assert_no_alloc::AllocD
     );
 
 #[cfg(test)]
+mod test_device;
+#[cfg(test)]
 mod test_scope;
 mod tuning;
 use tuning::plugin::HarmonigraphTune;
@@ -732,7 +734,7 @@ impl Default for Harmonigraph {
         let (take, mut take_control) = harmonigraph_record::channel();
         let consumer = take_control.take_display().expect("one display consumer");
         #[cfg(test)]
-        let take = configuration::injected_recorder().unwrap_or(take);
+        let take = test_device::injected_recorder().unwrap_or(take);
         let params = Arc::new(HarmonigraphParams::default());
         let (tape, tape_worker) = tape::channel(params.clone());
         let aggregation = tuning::hub::Hub::new();
