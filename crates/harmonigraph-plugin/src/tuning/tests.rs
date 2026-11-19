@@ -940,6 +940,28 @@ fn a_full_copy_ring_costs_a_correction_rather_than_a_note() {
     assert_ne!(pair.status() & session::RING_FULL, 0);
 }
 
+/// A transport Stop as Bitwig sends one, the callback's own transport going
+/// not-playing with nothing in the list, is a cut: the Tune's held note gets
+/// its Note-Off in that callback.
+#[test]
+fn a_stop_in_the_callbacks_own_transport_cuts_held_notes() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    let block = |pair: &mut Pair, input: Vec<Input>, playing: bool| {
+        let at = Some(timeline(pair.raw as f64 / 48_000.0, playing));
+        let sink = pair.tune.run_callback(pair.raw, input, (None, None), (512, false), at);
+        pair.hub.run_callback(pair.raw, vec![], (None, None), (512, false), at);
+        pair.raw += 512;
+        sink.values
+    };
+    block(&mut pair, vec![note(1, 0, 60, 0, true)], true);
+    let sounded = block(&mut pair, vec![], true);
+    assert!(sounded.iter().any(|(_, event)| event.attack().is_some()), "{sounded:?}");
+    assert!(!sounded.iter().any(|(_, event)| event.release()), "still held");
+    let stopped = block(&mut pair, vec![], false);
+    assert!(stopped.iter().any(|(_, event)| event.release()), "the Stop cut: {stopped:?}");
+}
+
 /// The missed-correction count is advice about the delay, read when playing
 /// stops, so a transport Stop keeps it while its cut clears the fault bits.
 /// Reset all voices and a reactivation clear it, a Reset landing right behind
