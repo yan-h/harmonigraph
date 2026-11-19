@@ -1365,14 +1365,20 @@ impl Targets {
         // the starfield's two are cleared whole each frame before anything
         // reads them, so a carried one holds nothing a fresh one would not.
         // The starfield's atlas and image are carried each on its own size,
-        // so a Stars resolution drag reallocates the image alone.
+        // so a Stars resolution drag reallocates the image alone. The history
+        // is carried as its two views, its active index and its frame: its
+        // bindings named the old light and starfield image, and dropping them
+        // here lets those go before their replacements are built.
         let (carried, carried_memory, carried_tone, (carried_atlas, carried_image)) = previous
             .map_or(Default::default(), |previous| {
                 let held = previous.shape.stars.zip(star_shape);
                 let (atlas, image) = previous.stars.map(|s| (s.atlas, s.image)).unzip();
                 (
                     previous.tile.filter(|_| previous.shape.tile == tile_texels),
-                    previous.memory.filter(|_| previous.shape.memory == memory_size),
+                    previous
+                        .memory
+                        .filter(|_| previous.shape.memory == memory_size)
+                        .map(|m| (m.views, m.index, m.frame)),
                     previous.tone.filter(|_| previous.shape.tone == tone_size),
                     (
                         atlas.filter(|_| held.is_some_and(|(was, is)| was.atlas == is.atlas)),
@@ -1396,16 +1402,17 @@ impl Targets {
                 }),
             )
         });
-        let memory_views = memory_size.map(|size| {
-            carried_memory.as_ref().map_or_else(
-                || {
+        let (memory_views, memory_index, memory_frame) = match carried_memory {
+            Some((views, index, frame)) => (Some(views), index, frame),
+            None => (
+                memory_size.map(|size| {
                     ["color_memory_a", "color_memory_b"]
                         .map(|label| formatted(label, size, MEMORY_FORMAT))
-                },
-                |m| m.views.clone(),
-            )
-        });
-        let (memory_index, memory_frame) = carried_memory.map_or((1, None), |m| (m.index, m.frame));
+                }),
+                1,
+                None,
+            ),
+        };
         // Reused whenever it is already the right shape, key and all, so a
         // rebuild the LIGHT's size forced costs no walk at all.
         let tile = tile_texels.map(|texels| {
