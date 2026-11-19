@@ -126,6 +126,7 @@ fn central_edits_include_harmonigraph_and_use_each_tuners_host_latency() {
     let rows = instances::snapshots();
     assert_eq!(rows.len(), 2);
     assert!(rows[0].is_hub);
+    assert!(rows.iter().all(|row| !row.faulted), "an activated, clean pair draws no fault");
     for row in &rows {
         instances::edit(row.id, InstanceEdit::Retune(false));
         instances::edit(row.id, InstanceEdit::Show(false));

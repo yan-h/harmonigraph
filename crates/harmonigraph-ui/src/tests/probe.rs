@@ -227,6 +227,7 @@ pub(crate) fn tuning_instances() -> Vec<crate::params::TuningInstance> {
                 "Tuning delay 1x buffer - 512 samples / 10.67 ms".to_owned()
             },
             status: "No faults".to_owned(),
+            faulted: false,
             last_pitch: Some((6000.0, 5986.3)),
         })
         .collect()

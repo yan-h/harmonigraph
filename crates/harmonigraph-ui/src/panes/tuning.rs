@@ -669,7 +669,7 @@ fn instance_controls(
     }
     let mut identity = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
         let name = egui::RichText::new(&row.display_name);
-        let name = if row.status != "No faults" { name.color(theme::armed()) } else { name };
+        let name = if row.faulted { name.color(theme::armed()) } else { name };
         let galley = egui::WidgetText::from(name).into_galley(
             ui,
             Some(egui::TextWrapMode::Truncate),
