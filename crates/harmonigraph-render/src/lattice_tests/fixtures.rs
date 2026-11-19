@@ -510,8 +510,6 @@ pub(super) fn probe_octave_layout() -> harmonigraph_scene::OctaveLayout {
     harmonigraph_scene::octave_layout(5, 60.0)
 }
 
-/// Bloom must add light (halo energy over the bloom-off output) —
-/// and only when asked: strength 0 keeps the parity test above valid.
 /// One big centered node, sounding, with one octave slot lit: a clean
 /// backdrop for measuring how much of the picture a mark actually
 /// covers. parity_scene deliberately overlaps its nodes, which hides
