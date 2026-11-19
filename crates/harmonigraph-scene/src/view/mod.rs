@@ -1284,10 +1284,14 @@ impl ViewConfig {
         // than by name, so a group added at step 7 arrives sanitized. The width
         // is what every caster's quad is grown by — a number from outside the
         // bar is a quad nothing can fill — and the depth is a SHARE of the
-        // frame, so the unit interval.
+        // frame, so the unit interval. Destructured whole, so a field added to
+        // `ShadowStyle` does not build until it is repaired from its group's
+        // fresh value here too (#1847 was Spread, left to the clamp's 0).
         for (style, fresh) in self.shadow.groups_mut().into_iter().zip(fresh.shadow.groups()) {
-            style.width = finite_or(style.width, fresh.width);
-            style.depth = finite_or(style.depth, fresh.depth);
+            let crate::ShadowStyle { width, spread, depth } = style;
+            *width = finite_or(*width, fresh.width);
+            *spread = finite_or(*spread, fresh.spread);
+            *depth = finite_or(*depth, fresh.depth);
         }
         self.shadow = self.shadow.clamped();
         self.hide_behind = finite_or(self.hide_behind, fresh.hide_behind)
