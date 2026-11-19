@@ -335,9 +335,6 @@ impl AudioMaps {
         self.followed.store(pack(offset), std::sync::atomic::Ordering::Release);
     }
     pub fn begin(&mut self, boundary: &Boundary) {
-        if boundary.steady_time < self.start + i64::from(self.frames) {
-            self.history.clear();
-        }
         self.start = boundary.steady_time;
         self.frames = boundary.frames;
     }

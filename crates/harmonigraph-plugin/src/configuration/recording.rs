@@ -5,8 +5,10 @@
 use harmonigraph_record::{configuration::RecordIntent, Recorder};
 
 /// The Hub's mapping from its samples to the take's presentation clock,
-/// anchored once at activation. A run states where it opens on it, and every
-/// delta is timed on it, so the two must be one function.
+/// pinned at the first valid callback after activation (`Hub::anchor`). The
+/// shell's steady clock runs on across a host reset, so one pin serves the
+/// whole activation. A run states where it opens on it, and every delta is
+/// timed on it, so the two must be one function.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Presentation {
     pub anchor: Option<(i64, f64)>,
@@ -65,8 +67,10 @@ impl Recording {
         }
     }
 
-    /// A host reset cuts the clock. A run open across it ends here and opens
-    /// again on the new clock.
+    /// A host reset cuts the take. A run open across it ends here, and the
+    /// next one opens at or after that end on the same clock, even where the
+    /// host restarts its steady counter, which the shell runs on across
+    /// (`Boundary::steady_time`).
     pub fn reset(&mut self, recorder: &mut Recorder) {
         self.end_run(recorder);
         *self = Self::default();
