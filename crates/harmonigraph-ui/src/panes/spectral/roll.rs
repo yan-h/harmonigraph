@@ -337,6 +337,14 @@ pub(super) struct RollSource<'a> {
 }
 
 impl<'a> RollSource<'a> {
+    /// The notes run on past the region's near edge, which bounds what is
+    /// drawn as the far edge does: wherever the near edge is not the
+    /// now-line, past which nothing has sounded yet. A separate reading of
+    /// the same field, for the cull and the crop rather than the lead.
+    pub(super) fn near_bounded(&self) -> bool {
+        !self.now_line
+    }
+
     /// This source draws `note`. A recording keeps every source's notes, so
     /// the tracker's Show switches (`shown`) say which to draw, for Tape
     /// mode's roll as for the live one.
@@ -679,20 +687,20 @@ fn source_instances(
     let minimum = f64::from(2.0 * min_half_depth) * per_point;
     let gap = density::GAP_PT * f64::from(point_scale.max(0.0)) * per_point;
     let band = minimum + 2.0 * gap;
-    // And at the near edge where it is no now-line (Tape mode, where `lead`
-    // is off): the tape's roll runs on past the stretch shown, where the live
-    // roll ends at now. The same ink and band, mirrored: a note decides the
-    // ends of the one before it only by starting within a cut and a floored
-    // length of that one's stop, so one starting later changes nothing that
-    // is on the pane.
-    let near = if source.now_line { f64::INFINITY } else { time.origin + ink_seconds + band };
+    // And at the near edge where it bounds the notes (Tape mode): the tape's
+    // roll runs on past the stretch shown, where the live roll ends at now.
+    // The same ink and band, mirrored: a note decides the ends of the one
+    // before it only by starting within a cut and a floored length of that
+    // one's stop, so one starting later changes nothing that is on the pane.
+    let near_edge = if source.near_bounded() { time.origin + ink_seconds } else { f64::INFINITY };
     let mut notes: Vec<&RollNote> = roll
         .notes()
         .filter(|note| source.plays(state.roll(), note))
         .filter(|note| {
-            note.stop(now) >= edge - band || lead_alpha(note, now, cfg.roll_lead_release) > 0.0
+            note.stop(now) >= edge - band
+                || (source.now_line && lead_alpha(note, now, cfg.roll_lead_release) > 0.0)
         })
-        .filter(|note| note.start <= near)
+        .filter(|note| note.start <= near_edge + band)
         .collect();
     notes.sort_unstable_by(|a, b| a.start.total_cmp(&b.start).then_with(|| a.key().cmp(&b.key())));
 
@@ -774,16 +782,24 @@ fn source_instances(
             // contain: a detached dot a few points off the ribbon's own end,
             // wearing the full outline, which is all a box with no length is.
             //
-            if t1 < edge {
+            if t1 < edge || t0 > near_edge {
                 continue;
             }
-            let cropped_t0 = t0.max(edge);
-            let p0 = if cropped_t0 > t0 && t1 > t0 {
-                p0 + (p1 - p0) * ((cropped_t0 - t0) / (t1 - t0)) as f32
-            } else {
-                p0
+            // Cropped to the ink's reach at either edge, on the segment's own
+            // line, so what stays draws the pitch it sounded at.
+            let at = |t: f64| {
+                if t1 > t0 {
+                    p0 + (p1 - p0) * ((t - t0) / (t1 - t0)) as f32
+                } else {
+                    p0
+                }
             };
-            let t0 = cropped_t0;
+            let (cropped_t0, cropped_t1) = (t0.max(edge), t1.min(near_edge));
+            let (p0, p1) = (
+                if cropped_t0 > t0 { at(cropped_t0) } else { p0 },
+                if cropped_t1 < t1 { at(cropped_t1) } else { p1 },
+            );
+            let (t0, t1) = (cropped_t0, cropped_t1);
             // Unclamped: `edge` already bounds how far past the region these
             // can reach, and clamping is what squashed the leaving ribbon
             // against the far end rather than letting it slide out.
@@ -2406,6 +2422,52 @@ mod tests {
             assert!((bent.fade[1] - 0.25).abs() < 1e-5, "{bent:?}");
             assert!((bent.taper[2] - 1.5 / 2.8).abs() < 1e-5, "{bent:?}");
         }
+    }
+
+    /// Where the near edge bounds the notes (Tape mode), a bend running on
+    /// past it is cropped there as at the far edge (#1849): its box stops an
+    /// ink overhang past the region rather than at the bend's own end, and
+    /// what stays draws the bend's own pitch inside the region.
+    #[test]
+    fn a_bend_crossing_the_near_edge_is_cropped_there_on_its_pitch() {
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.note_cut = 0.0;
+        // C4 glides an octave up from 2 s to 18 s and is released at 20 s.
+        let tracker = &mut state.runtime.tracker;
+        tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
+        tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
+            time: 18.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones: 12.0 },
+        });
+        tracker.handle_event(NoteEvent::off(20.0, SourceId::DIRECT, 0, 60));
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 400.0));
+        let axes = Axes::new(rect, &state.appearance.spectrum);
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        // A stretch of song 0..10 s shown, with the glide running on 8 s past
+        // its near edge.
+        let time = TimeAxis { split: 0.5, depth_span: 0.5, window: 10.0, origin: 10.0, now: 30.0 };
+        let source = RollSource { roll: state.roll(), time, now_line: false, live_during: None };
+        let width = Width::of(&state, &axes, &scale, 1.0);
+        let notes = source_instances(&axes, &scale, &width, &state, &source, PPP, 1.0).notes;
+        let bent = notes
+            .iter()
+            .find(|note| note.shear != 0.0)
+            .expect("the glide crosses the near edge and is drawn");
+        let center = egui::pos2(bent.center[0], bent.center[1]);
+        // Its newer end along depth, toward the near edge, which runs against
+        // the depth axis.
+        let reach = (center - axes.at(0.5, time.split)).dot(axes.dir_depth()) - bent.half_extent[1];
+        let ink = Quad::new(surround(&state, 1.0), 1.0 / PPP).depth(0.5 * MIN_LENGTH_PT);
+        assert!(reach >= -ink - 0.01, "the box runs {reach} pt past the region, ink {ink}");
+        // On the glide's own pitch inside the region: 64.5 at 8 s.
+        let target = axes.at(scale.t_of(64.5), time.depth_of_unclamped(8.0));
+        let along = (target - center).dot(axes.dir_depth());
+        let drawn = center + axes.dir_depth() * along + axes.dir_pitch() * (bent.shear * along);
+        assert!(drawn.distance(target) < 0.01, "the crop draws {drawn:?}, not {target:?}");
     }
 
     /// A bend that FINISHED before the region begins leaves nothing at the
