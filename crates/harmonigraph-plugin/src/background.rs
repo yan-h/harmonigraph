@@ -861,7 +861,7 @@ mod tests {
     #[test]
     fn the_ring_holds_many_polls_of_audio_at_any_rate_a_host_offers() {
         // The worst case the plugin's layout allows: the fastest rate a host
-        // offers against the most channels `AUDIO_IO_LAYOUTS` declares.
+        // offers against the most channels `Plugin::PORTS` declares.
         const FASTEST_RATE: f64 = 192_000.0;
         const CHANNELS: f64 = 2.0;
         let span = crate::AUDIO_RING_CAPACITY as f64 / CHANNELS / FASTEST_RATE;

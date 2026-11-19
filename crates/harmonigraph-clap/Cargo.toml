@@ -40,8 +40,7 @@ assert_process_allocs = ["dep:nice-assert-no-alloc"]
 name = "nice_plug"
 path = "src/lib.rs"
 # No doc-tests, as in harmonigraph-plugin (#1181). The vendored tree never ran
-# them, and of the five upstream examples four are `ignore`d and the fifth
-# (`Plugin::AUDIO_IO_LAYOUTS`) names `nice_plug_core`, which is gone.
+# them, and the crate keeps no examples in its docs.
 doctest = false
 
 [[test]]

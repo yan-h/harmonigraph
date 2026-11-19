@@ -110,7 +110,7 @@ use tuning::plugin::HarmonigraphTune;
 /// inside the span this holds; see `SHUT_POLL` there.
 pub(crate) const AUDIO_RING_CAPACITY: usize = 131_072;
 
-/// Sample rate assumed until the host reports the real one in `initialize`.
+/// Sample rate assumed until the host reports the real one in `activate`.
 /// Held in two representations (the f64 `sample_rate` field and the f32 bit
 /// pattern in `sample_rate_bits`), so derive both from one constant.
 const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
@@ -748,9 +748,9 @@ impl Default for Harmonigraph {
         let settings = params.settings.clone();
         editor.ui.on_edit(move || settings.changed());
         let editor_shared = Arc::new(editor::EditorLock::new(editor, params.ui_state.inbox()));
-        // From HERE, not from `initialize` or the editor: the point of the
+        // From HERE, not from `activate` or the editor: the point of the
         // thread is to cover the stretches nothing else does, and both of those
-        // are stretches. `initialize` runs on activation, so a suspended plugin
+        // are stretches. `activate` runs on activation, so a suspended plugin
         // would go dark; the editor is the very thing being covered for. It
         // also installs a project's saved settings before any window is built,
         // through the lock both share (#324).
@@ -1899,7 +1899,7 @@ mod tests {
 
     /// The whole path through the real input worker: rolling blocks reach the
     /// tape through the analyzer's ring, and a Tape mode cue plays them back
-    /// into the main buffer, with `KeepAlive` while it sounds; the transport
+    /// into the main buffer while it sounds; the transport
     /// starting cuts it and the output is the input again.
     #[test]
     fn a_tape_tab_cue_plays_back_what_the_worker_recorded() {

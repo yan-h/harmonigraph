@@ -114,7 +114,7 @@ fn descriptor(channels: &mut [*mut f32; 2]) -> clap_audio_buffer {
 /// count it declares (#638); no main output leaves the callback without
 /// audio, and the output untouched.
 #[test]
-fn omitted_auxiliary_inputs_are_silent_and_omitted_outputs_untouched() {
+fn omitted_auxiliary_inputs_are_silent_and_a_missing_main_output_has_no_audio() {
     let device = Device::new();
     for (block, (frames, auxiliary, channels, output)) in [
         (32, true, 2, true),

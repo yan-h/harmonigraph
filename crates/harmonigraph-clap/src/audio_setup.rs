@@ -67,7 +67,7 @@ pub struct BufferConfig {
     /// sized buffers up to this size, or between the minimum and the maximum buffer size if both
     /// are set.
     pub max_buffer_size: u32,
-    /// The current processing mode. The host will reinitialize the plugin any time this changes.
+    /// The current processing mode. The host reactivates the plugin any time this changes.
     pub process_mode: ProcessMode,
 }
 

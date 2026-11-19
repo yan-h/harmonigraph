@@ -1419,7 +1419,7 @@ impl<P: Plugin> Wrapper<P> {
         let activated = wrapper.is_activated.load(Ordering::SeqCst);
         if previous_mode != mode && activated {
             // We may change process mode while activated. In that case, restart the audio processor
-            // so the plugin can react to the process mode change in `Plugin::initialize`.
+            // so the plugin can react to the process mode change in `Plugin::activate`.
             unsafe_clap_call! { &*wrapper.host_callback=>request_restart(&*wrapper.host_callback) };
         }
 

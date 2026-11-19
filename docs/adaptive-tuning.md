@@ -175,7 +175,7 @@ Tunes run no assignment policy and hold no copy of the Hub's state.
 
 The Hub's own MIDI takes exactly that path.
 It embeds a Tune whose ring is a direct call, so its track is assigned by the same policy and published through the same row as any other.
-That Tune runs at zero delay: its correction is queued at the input boundary before any sub-block of the same callback is scheduled, so the round trip needs none.
+That Tune runs at zero delay: its correction is queued at the input boundary before the same callback is scheduled, so the round trip needs none.
 There is no second observation path to keep in step with the first.
 
 Work is bounded per callback and runs to completion inside it.
@@ -654,8 +654,8 @@ the shell then writes the callback's automation into the table, and `process` wa
 That order is the rule a note before a mid-block Lattice Map point depends on: the timeline's entry at the callback's start is the seed `begin` reads, and each automation event lands in it at its own sample.
 A transport event inside the host's list reaches the Hub and the Tune at its sample;
 the tape, a take's origin and the analyzer read the callback's own transport, once.
-Bitwig sends no such event, at 44.1 or 48 kHz, through loops, seeks, export and tempo automation;
-one that arrives is logged once to the Console.
+Bitwig was measured sending none at 44.1 kHz through loops, seeks and export (`archive/tuning-probe-bitwig.md`), and at 48 kHz under tempo automation (PR #1830);
+44.1 kHz under tempo automation is unmeasured, and one that arrives is logged once to the Console.
 
 The [CLAP boundary audit](audits/clap-boundary-1415.md) records the lock ownership and allocation-check reach of the input pool this replaced.
 The owned-parameter mailbox it audited went with #1756, and the pool, its cursors and its walks with #1814.
