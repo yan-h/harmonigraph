@@ -656,8 +656,8 @@ impl Default for ShadowStyle {
     /// default. Deliberate rather than residual (#719) — "a shadow with nothing
     /// said about it" and "what this group opens on" are different questions, so
     /// the two answers are under no obligation to draw the same fresh picture.
-    /// `a_shadow_group_missing_one_field_fills_it_from_the_bare_style` in the UI
-    /// persist tests holds it, beside the missing-group sweep.
+    /// `a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest` in the UI
+    /// persist tests holds it, with each group named in its `nested_defaults`.
     fn default() -> ShadowStyle {
         ShadowStyle {
             // Numbers first chosen for contour shadows (removed in #1499),

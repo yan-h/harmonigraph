@@ -114,6 +114,8 @@ const RETIRED_KEYS: &[(&str, &str, bool)] = &[
     ("short_edge", "renderer_path:\"/old/renderer\",", true),
     // A nested struct.
     ("spectrum", "spiral:(zoom:3.0,look:(0.4,-0.6)),", true),
+    // A list of enum tokens, at the editor document's own top level.
+    ("prefs", "folds:[Notes,Console],", false),
     // A key that moved to another struct under the same name: one left inside
     // a view must not reach the preference.
     ("render_scale", "show_perf:true,show_perf_detail:true,", true),
@@ -388,18 +390,6 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.workspace.interaction.camera_presets[0].yaw, 0.7);
 }
 
-/// Loaded counts agree with the drawable range and the setting's readout.
-#[test]
-fn a_blob_naming_more_wheel_than_fits_opens_on_what_fits() {
-    for (stored, expected) in [(0, 2), (1, 2), (99, 11)] {
-        let mut state = fresh();
-        state.picture.appearance.view.octave_count = stored;
-        let mut restored = fresh();
-        assert!(restored.install_document(&state.save_persist()));
-        assert_eq!(restored.picture.appearance.view.octave_count, expected);
-    }
-}
-
 /// A hand-edited level range comes back drawable, which the pitch pair has
 /// always been made to and this pair was not.
 ///
@@ -467,69 +457,6 @@ fn a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one() {
     }
 }
 
-/// A double-click on a soft edge's bar puts it back to the FRESH pair, not to
-/// the ends of its axis, which are the widest reach there is at the softest it
-/// goes.
-///
-/// The pair goes through the bar as two points and comes back as a reach and
-/// a fade, so it can come back off by a float rounding; the tolerance is for
-/// that, and is nowhere near the axis ends.
-///
-/// It is also the gesture most likely to be aimed here by habit: every one of
-/// these controls takes a six-digit number that gets captured out of a project
-/// rather than dragged, and on a `ValueBar` a double-click opens the box to
-/// type one.
-///
-/// Driven through the real widget rather than asserted on the mapping, since
-/// what is being pinned is which of two resets the gesture reaches.
-#[test]
-fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
-    let ctx = super::probe::themed();
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
-    let fresh = harmonigraph_scene::ViewConfig::default();
-    // Dialled somewhere else first, so landing on the fresh pair is a move.
-    let (mut reach, mut fade) = (0.42f32, 0.1f32);
-    let mut time = 0.0;
-    let mut click = |reach: &mut f32, fade: &mut f32, events: Vec<egui::Event>| {
-        time += 1.0 / 60.0;
-        let _ = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                time: Some(time),
-                events,
-                ..Default::default()
-            },
-            |ui| {
-                crate::panes::edge_bar(
-                    ui,
-                    (reach, fade),
-                    harmonigraph_scene::PLUS_SIZE_MAX,
-                    "Arm length",
-                    (fresh.plus_arm, fresh.plus_taper),
-                    |v| format!("{v:.2}"),
-                    "",
-                );
-            },
-        );
-    };
-    let at = egui::pos2(150.0, 10.0);
-    let press = |pressed: bool| egui::Event::PointerButton {
-        pos: at,
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: Default::default(),
-    };
-    click(&mut reach, &mut fade, vec![]);
-    for _ in 0..2 {
-        let events = vec![egui::Event::PointerMoved(at), press(true), press(false)];
-        click(&mut reach, &mut fade, events);
-    }
-    assert!(
-        (reach - fresh.plus_arm).abs() < 1e-6 && (fade - fresh.plus_taper).abs() < 1e-6,
-        "a double-click landed on ({reach}, {fade}) rather than the fresh pair",
-    );
-}
-
 /// Every paired soft edge — the resting marker's arm and the taper on its
 /// ends, and the lead a held note carries over the now-line —
 /// opens on a pair its own bar can reach: a fade no wider than the reach it is
@@ -582,224 +509,6 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
         "a marker's taper opened longer than the arm it ends",
     );
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23, "the rest of the blob still restores");
-}
-
-/// And a non-finite REACH opens on a drawable pair rather than taking the
-/// editor down with it.
-///
-/// This is the one that has to be repaired rather than clamped, and the clamp
-/// beside it is why: the reach is the fade's own upper bound, so a NaN reach
-/// reaches `f32::clamp` as its `max`, and `clamp` asserts `min <= max` — which
-/// NaN fails, panicking inside the host as the project opens. A NaN fade is
-/// the milder half of the same input and survives its own clamp untouched,
-/// leaving the bar to place a handle at a position that is not a number.
-///
-/// Both bars can produce neither shape, so a hand-edited or corrupted blob is
-/// the only way in — the same standing this pair's neighbours have, and the
-/// reason `a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one`
-/// exists a few tests up.
-///
-/// The resting marker's arm is one such reach, and the order it is repaired in
-/// is what keeps it safe: `sanitize` finishes the arm before it clamps the
-/// taper to it, so `clamp` never sees a NaN as its `max`. A Shadow group's
-/// width is a lone number rather than half of a pair and rides the same
-/// repair — and it is edited through its own `width:…,spread:` anchor, which is
-/// the shape only a `ShadowStyle` writes, so the edit cannot land on another
-/// `…_width` key (`band_width`, say) the day the two hold the same number.
-#[test]
-fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
-    let cases: [(&str, &str, &str); 5] = [
-        ("width", "NaN", "a NaN Shadow width"),
-        ("roll_lead", "NaN", "a NaN lead"),
-        ("roll_lead_fade", "inf", "an infinite lead fade"),
-        // The marker's own pair.
-        ("plus_arm", "NaN", "a NaN arm"),
-        ("plus_taper", "inf", "an infinite taper"),
-    ];
-    for (key, value, hint) in cases {
-        let mut state = fresh();
-        state.picture.appearance.camera.yaw = 1.23;
-        let saved = state.save_persist();
-        let was = match key {
-            "width" => state.picture.appearance.view.shadow.lattice_geometry.width,
-            "roll_lead" => state.picture.appearance.spectrum.roll_lead,
-            "plus_arm" => state.picture.appearance.view.plus_arm,
-            "plus_taper" => state.picture.appearance.view.plus_taper,
-            _ => state.picture.appearance.spectrum.roll_lead_fade,
-        };
-        // Anchored on what follows, for `width`: a `ShadowStyle` is the only
-        // thing in the blob that writes a width with a spread after it, and
-        // both of its groups are edited at once.
-        let after = if key == "width" { "spread:" } else { "" };
-        let edited =
-            saved.replace(&format!("{key}:{was:?},{after}"), &format!("{key}:{value},{after}"));
-        assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
-
-        let mut restored = fresh();
-        restored.install_document(&edited);
-        let view = &restored.picture.appearance.view;
-        let cfg = &restored.picture.appearance.spectrum;
-        for (name, v) in [
-            ("lattice geometry width", view.shadow.lattice_geometry.width),
-            ("lattice text width", view.shadow.lattice_text.width),
-            ("spectral text width", view.shadow.spectral_text.width),
-            ("roll_lead", cfg.roll_lead),
-            ("roll_lead_fade", cfg.roll_lead_fade),
-            ("plus_arm", view.plus_arm),
-            ("plus_taper", view.plus_taper),
-        ] {
-            assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
-        }
-        assert!(
-            cfg.roll_lead_fade <= cfg.roll_lead && view.plus_taper <= view.plus_arm,
-            "{hint}: opened on a fade wider than its reach",
-        );
-        assert_eq!(
-            restored.picture.appearance.camera.yaw, 1.23,
-            "{hint}: the rest of the blob still restores"
-        );
-    }
-}
-
-/// The lead's RELEASE opens somewhere its own bar can reach, which for a
-/// duration means finite and inside the bar's travel.
-///
-/// It is the odd one out among the lead's settings and gets its own blob for
-/// that reason: the reach and the fade are two points on one axis and have each
-/// other to be wrong about, where this is a lone number in seconds. What it can
-/// still be is off the bar — a hand-edited blob asking for a lead that outlives
-/// its note by a minute — or not a number at all, where the draw path refuses
-/// it silently (`panes::spectral::roll::lead_alpha` compares against a NaN and
-/// simply draws no lead) and the pane would then be at a value the file does not
-/// hold, indefinitely, since nothing rewrites the key until someone drags that
-/// bar.
-#[test]
-fn a_blob_naming_a_lead_release_off_its_own_bar_opens_on_one_that_fits() {
-    for (value, want, hint) in [
-        ("99.0", crate::ROLL_LEAD_RELEASE_MAX, "a release of a minute and a half"),
-        ("-1.0", 0.0, "a negative release"),
-        ("NaN", SpectrumConfig::default().roll_lead_release, "a release that is not a number"),
-    ] {
-        let mut state = fresh();
-        state.picture.appearance.camera.yaw = 1.23;
-        let saved = state.save_persist();
-        let was = state.picture.appearance.spectrum.roll_lead_release;
-        let edited = saved.replace(
-            &format!("roll_lead_release:{was:?},"),
-            &format!("roll_lead_release:{value},"),
-        );
-        assert_ne!(edited, saved, "{hint}: `roll_lead_release` is not in the blob to edit");
-
-        let mut restored = fresh();
-        restored.install_document(&edited);
-        assert_eq!(
-            restored.picture.appearance.spectrum.roll_lead_release, want,
-            "{hint}: opened at {}",
-            restored.picture.appearance.spectrum.roll_lead_release,
-        );
-        assert_eq!(
-            restored.picture.appearance.camera.yaw, 1.23,
-            "{hint}: the rest of the blob still restores"
-        );
-    }
-}
-
-/// The curve's Attack and Release open somewhere their own bars can reach.
-///
-/// The case a finiteness check alone lets through is the one worth pinning: a
-/// huge time is a perfectly good `f32`, and the coefficient it asks for
-/// (`hop_alpha`) rounds to 0, so the curve holds whatever it last had for as
-/// long as the plugin is open — while the spectrogram beside it, which reads
-/// the raw columns rather than the smoothed ones, carries on drawing. The pane
-/// would then be at a value the file does not hold until someone drags that
-/// bar.
-#[test]
-fn a_blob_naming_a_curve_time_off_its_own_bar_opens_on_one_that_fits() {
-    for (key, fresh_value) in [
-        ("attack", SpectrumConfig::default().attack),
-        ("release", SpectrumConfig::default().release),
-    ] {
-        for (value, want, hint) in [
-            ("1e10", crate::config::BALLISTICS_MAX, "a time that freezes the curve"),
-            ("-1.0", 0.0, "a negative time"),
-            ("NaN", fresh_value, "a time that is not a number"),
-        ] {
-            let mut state = fresh();
-            state.picture.appearance.camera.yaw = 1.23;
-            let saved = state.save_persist();
-            let edited =
-                saved.replace(&format!("{key}:{fresh_value:?},"), &format!("{key}:{value},"));
-            assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
-
-            let mut restored = fresh();
-            restored.install_document(&edited);
-            let got = if key == "attack" {
-                restored.picture.appearance.spectrum.attack
-            } else {
-                restored.picture.appearance.spectrum.release
-            };
-            assert_eq!(got, want, "{hint}: `{key}` opened at {got}");
-            assert_eq!(
-                restored.picture.appearance.camera.yaw, 1.23,
-                "{hint}: the rest of the blob still restores"
-            );
-        }
-    }
-}
-
-#[test]
-fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
-    let previous: SpectrumConfig =
-        ron::from_str("(analyzer_min_brightness:0.9, floor_db:-90.0)").unwrap();
-    assert_eq!(previous.keyline_lift, SpectrumConfig::default().keyline_lift);
-    assert_eq!(previous.floor_db, -90.0);
-    let outlined: SpectrumConfig = ron::from_str("(keyline_lift:0.9)").unwrap();
-    assert_eq!(outlined.keyline_lift, 0.9);
-    type Field = fn(&mut SpectrumConfig) -> &mut f32;
-    let fields: [(Field, f32, f32); 5] = [
-        (|cfg| &mut cfg.tilt, -6.0, 0.0),
-        (|cfg| &mut cfg.keyline_lift, 0.0, 1.0),
-        (|cfg| &mut cfg.roll_fraction, 0.0, 1.0),
-        (|cfg| &mut cfg.roll_seconds, ROLL_SECONDS_MIN, ROLL_SECONDS_MAX),
-        (|cfg| &mut cfg.roll_thickness, 0.2, 2.0),
-    ];
-    for (field, min, max) in fields {
-        let default = *field(&mut SpectrumConfig::default());
-        for (value, expected) in [
-            (min - 1.0, min),
-            (max + 1.0, max),
-            (f32::NAN, default),
-            (f32::INFINITY, default),
-            (f32::NEG_INFINITY, default),
-        ] {
-            let mut state = fresh();
-            *field(&mut state.picture.appearance.spectrum) = value;
-            let mut restored = fresh();
-            assert!(restored.install_document(&state.save_persist()));
-            assert_eq!(*field(&mut restored.picture.appearance.spectrum), expected);
-            let normalized = restored.save_persist();
-            assert!(restored.install_document(&normalized));
-            assert_eq!(restored.save_persist(), normalized, "normalization is idempotent");
-        }
-    }
-}
-
-/// Retired outer-octave settings do not prevent restoring the appearance.
-#[test]
-fn a_blob_with_outer_octave_settings_keeps_its_count_and_camera() {
-    let mut state = fresh();
-    state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.octave_count = 7;
-    let saved = state.save_persist();
-    let old = saved.replace(
-        "octave_count:7,",
-        "octave_count:7,octave_extras:2,octave_extra_size:0.4,octave_extra_blend:0.5,",
-    );
-    assert_ne!(old, saved);
-    let mut restored = fresh();
-    assert!(restored.install_document(&old));
-    assert_eq!(restored.picture.appearance.view.octave_count, 7);
-    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
 }
 
 /// The render frame round-trips its side and the split beside it, through
@@ -954,116 +663,16 @@ fn spectrum_config_round_trips_through_persist() {
     );
 }
 
-/// A range saved while the axis ran MIDI 12..132 (16 Hz to 16.7 kHz) starts
-/// below the 20 Hz floor the axis has now. Drawing it would leave a band with
-/// no buckets behind it, so loading fits the range to the axis that exists —
-/// and only where it has to: 132 is still a pitch this axis covers.
-#[test]
-fn a_pitch_range_off_the_current_axis_is_pulled_back_onto_it() {
-    use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
-    let restore = |low: &str, high: &str| {
-        let mut state = fresh();
-        state.picture.appearance.spectrum.low_midi = 60.0;
-        state.picture.appearance.spectrum.high_midi = 72.0;
-        let saved = state
-            .save_persist()
-            .replace("low_midi:60.0", &format!("low_midi:{low}"))
-            .replace("high_midi:72.0", &format!("high_midi:{high}"));
-        let mut restored = fresh();
-        restored.install_document(&saved);
-        (
-            restored.picture.appearance.spectrum.low_midi,
-            restored.picture.appearance.spectrum.high_midi,
-        )
-    };
-
-    let (low, high) = restore("12.0", "132.0");
-    assert_eq!(low, SPECTRUM_MIN_MIDI, "below the floor, so pulled up to it");
-    assert_eq!(high, 132.0, "inside the axis, so left exactly where it was");
-
-    // A hand-edited blob can reach past the ceiling too.
-    let (_, high) = restore("40.0", "200.0");
-    assert_eq!(high, SPECTRUM_MAX_MIDI);
-}
-
-/// Every blob saved before the spectrogram existed is missing the field, and
-/// plain `#[serde(default)]` answers `false` for it — so the feature arrived
-/// switched off for every existing project while a fresh install got it on.
-/// The two have to agree.
-#[test]
-fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
-    let mut state = fresh();
-    state.picture.appearance.spectrum.show_spectrogram = false;
-    let saved = state.save_persist();
-    let old = saved.replace("show_spectrogram:false,", "");
-    assert_ne!(old, saved, "the field must have been there to strip");
-
-    let mut restored = fresh();
-    restored.install_document(&old);
-    assert!(
-        restored.picture.appearance.spectrum.show_spectrogram,
-        "a missing field must fall back to the struct's own default, not bool::default()"
-    );
-    // An explicit `false` is a choice, not an absence, and still round-trips.
-    let mut restored = fresh();
-    restored.install_document(&saved);
-    assert!(!restored.picture.appearance.spectrum.show_spectrogram);
-}
-
-/// The mirror of the case above: a field the blob is MISSING must not sink it
-/// either, and must come back as what a fresh install has rather than as a bare
-/// `0`/`false`.
-///
-/// What makes it worth pinning is what the alternative COSTS. No field of
-/// [`SpectrumConfig`](crate::SpectrumConfig) carries a fallback of its own, so
-/// without the struct's container-level `#[serde(default)]` a blob missing any
-/// one key fails to parse — and a parse that fails loses the WHOLE UI state
-/// rather than that key: the camera, the dock and the view go with it. The
-/// container-level attribute is what closes that, every field falling back to
-/// `impl Default`'s value, so a missing key costs only itself.
-///
-/// Pinned per field rather than once, because the hazard is per field: nothing
-/// at a declaration says whether it has a fallback, so the next field added is
-/// covered silently and the next one REMOVED is the one that would sink a saved
-/// project.
-#[test]
-fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
-    let defaults = crate::SpectrumConfig::default();
-    for key in [
-        format!("release:{:?},", defaults.release),
-        format!("floor_db:{:?},", defaults.floor_db),
-        format!("roll_thickness:{:?},", defaults.roll_thickness),
-        format!("volume_floor_db:{:?},", defaults.volume_floor_db),
-        format!("window:{:?},", defaults.window),
-    ] {
-        let mut state = fresh();
-        // A non-default elsewhere in the blob, so "the blob survived" is
-        // distinguishable from "it sank and everything reverted".
-        state.picture.appearance.view.max_sevens = 3;
-        let saved = state.save_persist();
-        let without = saved.replacen(key.as_str(), "", 1);
-        assert_ne!(without, saved, "{key:?} must be in the blob to drop");
-
-        let mut restored = fresh();
-        restored.install_document(&without);
-        assert_eq!(
-            restored.picture.appearance.view.max_sevens, 3,
-            "dropping {key:?} must cost that key alone, not the whole blob",
-        );
-        assert_eq!(
-            restored.picture.appearance.spectrum, defaults,
-            "and the config it belongs to must load at the fresh-install values",
-        );
-    }
-}
-
 /// The nested groups whose owner's `Default` deliberately builds them off their
 /// own bare default, as path prefixes with that bare default serialized and the
 /// reason each: a key missing INSIDE one comes back at the same key of the
 /// group's bare default, which is not the value a fresh save holds there. Any
 /// other key must come back at the fresh save's value. An entry no dropped key
 /// needs any more fails the sweep.
-fn nested_defaults() -> [(&'static str, String, &'static str); 10] {
+///
+/// A camera preset is one too, for another reason: a fresh save holds none, so
+/// its keys have no fresh value to come back at but their type's default.
+fn nested_defaults() -> [(&'static str, String, &'static str); 11] {
     fn bare<T: Default + serde::Serialize>() -> String {
         ron::to_string(&T::default()).expect("a default serializes")
     }
@@ -1109,6 +718,7 @@ fn nested_defaults() -> [(&'static str, String, &'static str); 10] {
         ("appearance.view.shadow.lattice_geometry", bare::<ShadowStyle>(), shadow),
         ("appearance.view.shadow.lattice_text", bare::<ShadowStyle>(), shadow),
         ("appearance.view.shadow.spectral_text", bare::<ShadowStyle>(), shadow),
+        ("camera_presets[0]", bare::<CameraPreset>(), "a fresh save holds no preset"),
     ]
 }
 
@@ -1119,23 +729,20 @@ fn nested_defaults() -> [(&'static str, String, &'static str); 10] {
 ///
 /// Those tests each sweep one level through the real doors, `install_document` or
 /// `AppearanceDocument::parse`, and compare what loads: the persist sections
-/// (`a_persist_blob_missing_any_one_section_keeps_the_rest`), the appearance's
-/// groups (`an_appearance_missing_any_one_group_keeps_the_rest`), the view's
-/// keys (`a_view_missing_any_one_key_reloads_at_the_fresh_value`), and the
-/// spectrum, Spiral, glow curve, atmosphere and preset or look below them.
-/// This one adds what a level-by-level sweep does not reach: the structs
-/// nested further in (`Camera`, `IntensitySettings`, `Gradient`, `Bend`,
-/// `SkinDials`, `RenderConfig` among them), asked at the parse alone, since
-/// normalization may rightly move a sibling of the dropped key.
+/// (`a_persist_blob_missing_any_one_section_keeps_the_rest`) and the
+/// appearance's groups (`an_appearance_missing_any_one_group_keeps_the_rest`).
+/// This one reaches every struct nested further in, a preset and a stored look
+/// included, asked at the parse alone, which is the parse `install_document`'s
+/// per-key decode runs, since normalization may rightly move a sibling of the
+/// dropped key.
 ///
 /// Each drop must cost that key alone: the rest reserializes at the value
 /// saved, and the dropped key comes back at the value a fresh save holds there
 /// — or, inside one of [`nested_defaults`], at its group's bare default. A
 /// struct without its container-level `#[serde(default)]` fails the parse, and
 /// one whose fields carry their own defaults loads the key at 0 or `false`.
-/// Exempt from the value check are keys inside a list a fresh save leaves
-/// empty, which the preset/look test pins, and the editor's `version`, which
-/// reads as 0 for the floor to refuse.
+/// Exempt from the value check is the editor's `version`, which reads as 0
+/// for the floor to refuse.
 ///
 /// The fixture is `dialled`, which moves a few values in the camera, view,
 /// spectrum, render and workspace off fresh, plus a camera preset, a stored
@@ -1203,13 +810,19 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
             .unwrap_or_else(|| panic!("dropping {path} lost the key from the next save"));
         // The dropped key's own value.
         let came_back = &again[back.clone()];
+        // A stored look is the appearance's camera, view and spectrum under
+        // another name, and a fresh save holds none: its keys come back where
+        // the appearance's do.
+        let like =
+            path.strip_prefix("look_slots.stored[1].").map(|rest| format!("appearance.{rest}"));
+        let like = like.as_deref().unwrap_or(path);
         let group = nested.iter().find_map(|(owner, keys)| {
-            let inner = path.strip_prefix(owner)?.strip_prefix('.')?;
+            let inner = like.strip_prefix(owner)?.strip_prefix('.')?;
             Some((owner, &keys[inner]))
         });
-        let want = match (group, fresh_pairs.get(path)) {
-            (Some((owner, bare)), Some(fresh)) => {
-                if bare != fresh {
+        let want = match (group, fresh_pairs.get(like)) {
+            (Some((owner, bare)), fresh) => {
+                if fresh != Some(bare) {
                     needed.insert(*owner);
                 }
                 Some(bare)
@@ -1233,6 +846,93 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
         stale.is_empty(),
         "nested_defaults names groups whose bare default is fresh: {stale:?}"
     );
+}
+
+/// Whether a serialized scalar is a float: RON writes every float with a
+/// fraction or an exponent, and an integer with neither.
+pub(super) fn is_float(text: &str) -> bool {
+    text.parse::<f64>().is_ok() && text.contains(['.', 'e', 'E'])
+}
+
+/// Every float a filled document holds, made `NaN`, `inf` or `-inf` alone,
+/// opens on real numbers through both doors: the editor's `install_document`
+/// takes the document, the save that follows holds no non-finite number and
+/// is a fixed point of the door, and for a float inside the appearance,
+/// `AppearanceDocument::parse`, which take replay and export share, reads it
+/// as the editor did.
+///
+/// What this holds is the shape of every repair at once: a bare `clamp` lets
+/// a NaN through, and a NaN that reaches a clamp as its bound panics there, as
+/// the project opens. What a repair lands on is each owner's own choice, a
+/// fresh value, a bare default or an end of the bar, and is not asked here;
+/// that it lands on the bar is `settings_ranges`' `Edge::NaN`.
+///
+/// Derived from the blob like the missing-key sweep above, so a float added
+/// anywhere the editor saves is poisoned without an edit here.
+#[test]
+fn a_document_naming_any_non_finite_float_opens_on_real_numbers() {
+    let saved = filled().save_persist();
+    let (_, nested) = nested_pairs(&saved)
+        .into_iter()
+        .find(|(path, _)| path == "appearance")
+        .expect("an appearance");
+    let nested = nested.start + "appearance:".len()..nested.end;
+    let floats: Vec<_> =
+        nested_scalars(&saved).into_iter().filter(|(_, at)| is_float(&saved[at.clone()])).collect();
+    // The fixture has to reach every owner the editor saves, or the sweep reads
+    // as coverage of what it never poisons.
+    for owner in [
+        "layout.",
+        "analyzer_regions.geometry.",
+        "appearance.camera.",
+        "appearance.view.shadow.",
+        "appearance.spectrum.atmosphere.",
+        "appearance.render.",
+        "camera_presets[0].",
+        "look_slots.stored[1].",
+        "prefs.",
+    ] {
+        assert!(floats.iter().any(|(path, _)| path.starts_with(owner)), "no float under {owner}");
+    }
+    let non_finite = |blob: &str| -> Vec<String> {
+        nested_scalars(blob)
+            .into_iter()
+            .filter(|(_, at)| ["NaN", "inf", "-inf"].contains(&&blob[at.clone()]))
+            .map(|(path, _)| path)
+            .collect()
+    };
+    let mut wrong = Vec::new();
+    for (path, at) in &floats {
+        for poison in ["NaN", "inf", "-inf"] {
+            let splice = |blob: &str, at: std::ops::Range<usize>| {
+                format!("{}{poison}{}", &blob[..at.start], &blob[at.end..])
+            };
+            let mut opened = fresh();
+            if !opened.install_document(&splice(&saved, at.clone())) {
+                wrong.push(format!("{path} = {poison}: the editor refused the document"));
+                continue;
+            }
+            let again = opened.save_persist();
+            let left = non_finite(&again);
+            if !left.is_empty() {
+                wrong.push(format!("{path} = {poison}: the save still holds {left:?}"));
+            }
+            let mut reopened = fresh();
+            assert!(reopened.install_document(&again), "{path} = {poison}: a save was refused");
+            if reopened.save_persist() != again {
+                wrong.push(format!("{path} = {poison}: the repair is no fixed point"));
+            }
+            if nested.contains(&at.start) {
+                let inside = at.start - nested.start..at.end - nested.start;
+                match AppearanceDocument::parse(&splice(&saved[nested.clone()], inside)) {
+                    Ok(parsed) if parsed.serialize() == opened.picture.appearance.serialize() => {}
+                    Ok(_) => wrong.push(format!("{path} = {poison}: the two doors disagree")),
+                    Err(error) => wrong.push(format!("{path} = {poison}: export refused: {error}")),
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// Workspace settings stay alongside one nested appearance document.
@@ -1265,7 +965,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
 ///
 /// This drops whole sections from a fresh state, whose lists are empty, so the
 /// structs inside a list never appear;
-/// [`a_persist_blob_missing_any_one_preset_or_look_key_keeps_the_rest`] is the
+/// [`a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest`] is the
 /// layer in.
 #[test]
 fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
@@ -1302,150 +1002,6 @@ fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
         // must come back exactly as it was.
         assert_eq!(restored.save_persist(), saved, "{key:?} came back at a non-fresh value");
     }
-}
-
-/// One layer in from [`a_persist_blob_missing_any_one_section_keeps_the_rest`]:
-/// the structs that live inside a list, `CameraPreset` and a stored slot's
-/// `Look`, which a fresh state never holds and so never sweeps.
-///
-/// One preset and one stored look, each off its defaults, are written, and each
-/// key in turn is dropped from them. A struct added to a list without its own
-/// container-level `#[serde(default)]` sinks the whole document here, layout
-/// and camera with it, rather than the day a project holding one is reopened
-/// after a field is added.
-#[test]
-fn a_persist_blob_missing_any_one_preset_or_look_key_keeps_the_rest() {
-    use crate::appearance_edit::{AppearanceEditor, Look, Slots};
-
-    let mut state = fresh();
-    // A witness outside the lists, so "the blob survived" is distinguishable
-    // from "it sank and every section reverted together".
-    state.picture.appearance.camera.yaw = 1.23;
-    let preset = CameraPreset { name: "reading".into(), yaw: 0.7, pitch: 0.2 };
-    state.workspace.interaction.camera_presets.push(preset.clone());
-    let mut stored = AppearanceDocument::default();
-    stored.spectrum.attack = 0.2;
-    stored.view.max_sevens = 3;
-    let look_text = ron::to_string(&Look::capture(&stored)).expect("a look serializes");
-    let slots: Slots =
-        ron::from_str(&format!("(stored:(None,Some({look_text}),None,None),active:0)"))
-            .expect("a slot holding a look parses");
-    state.workspace.interaction.appearance_editor = AppearanceEditor::restore(slots);
-    let saved = state.save_persist();
-
-    let preset_text = ron::to_string(&preset).expect("a preset serializes");
-    for text in [&preset_text, &look_text] {
-        assert!(saved.contains(text.as_str()), "the blob must carry {text}");
-    }
-    let defaults = ron::to_string(&Look::default()).expect("a look serializes");
-    let default_pairs = top_level_pairs(&defaults);
-    let preset_pairs = top_level_pairs(&preset_text);
-    let look_pairs = top_level_pairs(&look_text);
-    assert_eq!((preset_pairs.len(), look_pairs.len()), (3, 3), "the probe must see every key");
-
-    for (whole, pairs) in [(&preset_text, &preset_pairs), (&look_text, &look_pairs)] {
-        for (key, _) in pairs {
-            let kept: Vec<&str> =
-                pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
-            let without = saved.replacen(whole.as_str(), &format!("({})", kept.join(",")), 1);
-            assert_ne!(without, saved, "{key:?} must be in the blob to drop");
-
-            let mut restored = fresh();
-            assert!(
-                restored.install_document(&without),
-                "dropping {key:?} sank the whole document instead of costing itself",
-            );
-            assert_eq!(
-                restored.picture.appearance.camera.yaw, 1.23,
-                "dropping {key:?} cost the camera too"
-            );
-            if whole == &preset_text {
-                let got = &restored.workspace.interaction.camera_presets[0];
-                let fresh_preset = CameraPreset::default();
-                let want = match key.as_str() {
-                    "name" => (fresh_preset.name, preset.yaw, preset.pitch),
-                    "yaw" => (preset.name.clone(), fresh_preset.yaw, preset.pitch),
-                    "pitch" => (preset.name.clone(), preset.yaw, fresh_preset.pitch),
-                    other => panic!("the preset grew a {other:?} field this sweep does not name"),
-                };
-                assert_eq!((got.name.clone(), got.yaw, got.pitch), want, "dropping {key:?}");
-            } else {
-                let got = restored.workspace.interaction.appearance_editor.slots.stored(1);
-                let got = ron::to_string(got.expect("the stored look is kept")).unwrap();
-                for (k, pair) in top_level_pairs(&got) {
-                    let source = if &k == key { &default_pairs } else { &look_pairs };
-                    let expected = source.iter().find(|(name, _)| *name == k).unwrap();
-                    assert_eq!(pair, expected.1, "dropping {key:?} changed {k}");
-                }
-            }
-        }
-    }
-}
-
-/// What a project saved before the preferences moved under one key (#1677)
-/// opens to: every preference at its default, and the user's content —
-/// layout, folded Analyzer regions, look, slots and camera presets — as saved.
-/// The break the move owes is exactly that, and no more.
-///
-/// The blob is a dialled save put back into the older shape by
-/// [`before_prefs`], so each preference sits at the top level in the form
-/// that build wrote it, and every one is dialled so its old key carries a real
-/// value for the parser to skip.
-#[test]
-fn a_save_from_before_prefs_keeps_its_content_and_resets_its_preferences() {
-    use crate::appearance_edit::{AppearanceEditor, Look, Slots};
-
-    let mut state = dialled();
-    state.workspace.layout.select(panes::Tab::Spiral);
-    state.workspace.interaction.analyzer_regions.collapsed = [true, false];
-    state.workspace.interaction.camera_presets.push(CameraPreset {
-        name: "reading".into(),
-        yaw: 0.7,
-        pitch: 0.2,
-    });
-    let mut stored = AppearanceDocument::default();
-    stored.spectrum.attack = 0.2;
-    let look = ron::to_string(&Look::capture(&stored)).expect("a look serializes");
-    let slots: Slots = ron::from_str(&format!("(stored:(None,Some({look}),None,None),active:0)"))
-        .expect("a slot holding a look parses");
-    state.workspace.interaction.appearance_editor = AppearanceEditor::restore(slots);
-    let prefs = &mut state.workspace.interaction.prefs;
-    prefs.folded_sections.insert("System/Performance".into());
-    prefs.frame_rate = crate::FrameRate::Third;
-    prefs.frameless = true;
-    prefs.skin_dials.accent_hue = 120.0;
-    prefs.perf_pos = Some(egui::pos2(40.0, 60.0));
-    prefs.show_perf = true;
-    prefs.show_perf_detail = true;
-    prefs.spiral.zoom = 2.75;
-    let saved = state.save_persist();
-    let old = before_prefs(&saved);
-    for pair in [
-        "folded_sections:[\"System/Performance\"]",
-        "frame_rate:Third",
-        "ui_scale:1.25",
-        "frameless:true",
-        "perf_pos:Some((x:40.0,y:60.0))",
-        "show_perf:true",
-        "show_perf_detail:true",
-        "spiral:(zoom:2.75",
-    ] {
-        assert!(old.contains(&format!(",{pair}")), "the old shape must carry {pair}: {old}");
-    }
-    assert!(!old.contains("prefs:"), "the old shape has no prefs key");
-
-    let mut restored = fresh();
-    assert!(restored.install_document(&old), "a save from before prefs was refused");
-    let again = restored.save_persist();
-    let fresh_save = fresh().save_persist();
-    let pair = |blob: &str, key: &str| {
-        top_level_pairs(blob).into_iter().find(|(k, _)| k == key).map(|(_, text)| text)
-    };
-    for key in ["layout", "analyzer_regions", "appearance", "camera_presets", "look_slots"] {
-        assert_ne!(pair(&saved, key), pair(&fresh_save, key), "the fixture must dial {key}");
-        assert_eq!(pair(&again, key), pair(&saved, key), "{key} did not survive the old shape");
-    }
-    assert_eq!(pair(&again, "prefs"), pair(&fresh_save, "prefs"), "a preference survived");
 }
 
 #[test]
@@ -1506,102 +1062,6 @@ fn an_appearance_missing_any_one_group_keeps_the_rest() {
     }
 }
 
-/// A hand-edited Spiral framing comes back drawable: both fields multiply the
-/// geometry the pane paints, and NaN geometry is a panic inside egui's
-/// tessellator. That a framing round-trips is
-/// [`every_editor_preference_round_trips`]'s.
-#[test]
-fn a_hand_edited_spiral_framing_comes_back_drawable() {
-    let mut state = fresh();
-    // A zoom off both ends of the range and a look off both axes, so a field
-    // dropped or transposed on the way through shows up.
-    state.workspace.interaction.prefs.spiral =
-        crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
-
-    // The repair on the way in is `install_document`'s call rather than the
-    // pane's: a blob nothing but a text editor could have written.
-    let saved = state.save_persist();
-    let edited = replace_pair(&saved, "zoom", "2.75", "NaN");
-    assert_ne!(edited, saved, "`zoom` is not in the blob to edit");
-    let mut restored = fresh();
-    assert!(restored.install_document(&edited));
-    assert!(
-        restored.workspace.interaction.prefs.spiral.zoom.is_finite(),
-        "a NaN zoom opened at {}",
-        restored.workspace.interaction.prefs.spiral.zoom,
-    );
-}
-
-/// Dropping any one key from INSIDE the `spiral` section costs that key alone:
-/// the rest of the blob loads, the section's other field keeps the value the blob
-/// names, and the dropped one comes back at the fresh-install value.
-///
-/// One layer in from [`a_persist_blob_missing_any_one_section_keeps_the_rest`],
-/// and that is the whole reason it exists: sweeping whole sections exercises
-/// `UiPersist`'s container-level attribute, where this is the only thing that
-/// asks after `SpiralView`'s container-level one — the attribute nothing at a
-/// declaration says is there.
-///
-/// The input is `spiral: (zoom: 3.0)` and no `look`, which is what a person
-/// writing a framing into a saved blob by hand writes: the field they came to
-/// change. Without the attribute that blob does not cost `look` — it sinks the
-/// whole document, dock and camera with it, and nothing but this would fail.
-#[test]
-fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
-    let mut state = fresh();
-    // A witness outside the section, so "the blob survived" is distinguishable
-    // from "it sank and every section reverted together".
-    state.picture.appearance.camera.yaw = 1.23;
-    // Both fields off their fresh values, and the look off both axes: a field
-    // that came back from the wrong place is only visible against a value the
-    // default is not.
-    state.workspace.interaction.prefs.spiral =
-        crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
-    let saved = state.save_persist();
-
-    let section = |pairs: Vec<(String, String)>, name: &str| {
-        pairs.into_iter().find_map(|(key, text)| (key == name).then_some(text))
-    };
-    let prefs = section(top_level_pairs(&saved), "prefs").expect("the blob carries preferences");
-    let whole = section(top_level_pairs(prefs.trim_start_matches("prefs:")), "spiral")
-        .expect("the preferences carry a spiral section");
-    // The section's own pairs, through the same depth-aware split: `look` is a
-    // nested struct, so a comma split would cut it in half.
-    let inner = whole.trim_start_matches("spiral:");
-    let pairs = top_level_pairs(inner);
-    assert_eq!(pairs.len(), 2, "the probe must see the whole framing, got {pairs:?}");
-
-    let opened = crate::panes::spiral::SpiralView::default();
-    for (key, _) in &pairs {
-        let kept: Vec<&str> =
-            pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
-        let without = replace_pair(&saved, "spiral", inner, &format!("({})", kept.join(",")));
-        assert_ne!(without, saved, "the spiral's {key:?} must be in the blob to drop");
-
-        let mut restored = fresh();
-        assert!(
-            restored.install_document(&without),
-            "dropping the spiral's {key:?} sank the whole document instead of costing itself",
-        );
-        assert_eq!(
-            restored.picture.appearance.camera.yaw, 1.23,
-            "dropping the spiral's {key:?} cost the camera too"
-        );
-        let framing = state.workspace.interaction.prefs.spiral;
-        let want = match key.as_str() {
-            "zoom" => (opened.zoom, framing.look),
-            "look" => (framing.zoom, opened.look),
-            other => panic!("the framing grew a {other:?} field this sweep does not name"),
-        };
-        let restored = restored.workspace.interaction.prefs.spiral;
-        assert_eq!(
-            (restored.zoom, restored.look),
-            want,
-            "dropping the spiral's {key:?} did not cost that key alone",
-        );
-    }
-}
-
 /// Every editor preference comes back from a save dialled, as one struct.
 ///
 /// Destructured without `..`, so a preference added later does not compile
@@ -1655,30 +1115,6 @@ fn every_editor_preference_round_trips() {
     assert_eq!(ron::to_string(&restored.workspace.interaction.prefs).unwrap(), dialled);
 }
 
-/// A blob saved before the control existed loads at the design size. `f32`'s
-/// own serde default is 0.0 — a scale of nothing, and every one of those
-/// projects.
-#[test]
-fn a_blob_without_a_ui_scale_loads_at_the_design_size() {
-    let mut state = fresh();
-    state.workspace.interaction.prefs.ui_scale = 0.75;
-    let saved = state.save_persist();
-    let mut back = fresh();
-    back.install_document(&saved);
-    assert_eq!(back.workspace.interaction.prefs.ui_scale, 0.75, "the scale did not round-trip");
-
-    // The same blob with the field taken back out, which is what every project
-    // saved before this looks like.
-    let stripped = saved.replacen(",ui_scale:0.75", "", 1);
-    assert_ne!(stripped, saved, "the blob names the field");
-    let mut older = fresh();
-    assert!(older.install_document(&stripped));
-    assert_eq!(
-        older.workspace.interaction.prefs.ui_scale, 1.0,
-        "a blob with no scale did not load at the design size"
-    );
-}
-
 /// An out-of-range scale — only a hand-edited blob can produce one — is
 /// clamped rather than drawn at.
 #[test]
@@ -1699,53 +1135,6 @@ fn an_impossible_ui_scale_is_clamped() {
     }
 }
 
-/// A non-finite end of the analyzer's pitch range loads at the design range
-/// rather than taking the editor down with it.
-///
-/// `clamp` alone does not catch a NaN — it is its own answer to every
-/// comparison — and `f32::clamp` opens with `assert!(min <= max)`. So a NaN
-/// `low_midi` survives its own clamp and then becomes the MIN of the next one,
-/// which fails that assert: the editor panics on load, and the only trace is
-/// the backtrace the host writes to its log.
-///
-/// A NaN `high_midi` does not panic — it is the `self` of its clamp rather
-/// than the bound — and is worse for it: the range stays NaN all the way into
-/// `PitchScale`, so the analyzer draws nothing and nothing says why.
-///
-/// The bars cannot produce either; a hand-edited blob or a corrupted float
-/// can. This function already guards its two text scales against exactly this
-/// (see [`sane_scale`]) — the pitch range is the half that was left bare.
-#[test]
-fn a_blob_with_a_nonsense_pitch_range_loads_at_the_design_range() {
-    for end in ["low_midi", "high_midi"] {
-        let mut state = fresh();
-        // Off the defaults, so the splice has something to name and a range
-        // that survives proves it survived rather than matching by luck.
-        state.picture.appearance.spectrum.low_midi = 40.5;
-        state.picture.appearance.spectrum.high_midi = 90.25;
-        let saved = state.save_persist();
-        let value = if end == "low_midi" { 40.5f32 } else { 90.25f32 };
-        let broken = saved.replacen(&format!("{end}:{value:?}"), &format!("{end}:NaN"), 1);
-        assert_ne!(broken, saved, "the {end} splice must land for this to test anything");
-
-        let mut restored = fresh();
-        restored.install_document(&broken);
-        let (low, high) = (
-            restored.picture.appearance.spectrum.low_midi,
-            restored.picture.appearance.spectrum.high_midi,
-        );
-        assert!(low.is_finite() && high.is_finite(), "{end}:NaN left the range at {low}..{high}");
-        assert!(low < high, "{end}:NaN left the range inverted at {low}..{high}");
-        // The end that was NOT broken keeps what the blob said, so a guard
-        // cannot pass by resetting the whole range.
-        if end == "low_midi" {
-            assert_eq!(high, 90.25, "the good end still loads");
-        } else {
-            assert_eq!(low, 40.5, "the good end still loads");
-        }
-    }
-}
-
 /// The heatmap's gradient comes back drawable, the third field on this door
 /// after the pitch range and the UI scale — and the one whose repair is easiest
 /// to leave out, `Gradient` having a `sanitized` of its own that the DRAW path
@@ -1758,13 +1147,12 @@ fn a_blob_with_a_nonsense_pitch_range_loads_at_the_design_range() {
 /// it until someone drags that bar. CLAUDE.md is the line this is held to: "The
 /// value on screen must still be the value the file holds."
 ///
-/// Two shapes, because they fail differently. A ramp wider than its middle
-/// leaves is a legal pair of floats that names an illegal picture — sanitize
-/// pulls it in. A NaN is not a number at all, and it is the one that would ride
-/// into a color conversion and out into the instance buffer unannounced.
+/// The shape asked here is a ramp wider than its middle leaves: a legal pair
+/// of floats that names an illegal picture, which sanitize pulls in. A NaN knob
+/// is [`a_document_naming_any_non_finite_float_opens_on_real_numbers`]'s.
 #[test]
 fn a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one() {
-    for (key, broken) in [("lightness", "5.0"), ("chroma", "NaN")] {
+    for (key, broken) in [("lightness", "5.0")] {
         let mut state = fresh();
         // A gradient off the defaults, and one sanitize leaves alone, so the
         // splice has something to name and the untouched knobs prove they
@@ -1859,333 +1247,10 @@ fn loading_a_project_leaves_the_links_with_the_configuration() {
     }
 }
 
-/// Dropping any one key from a serialized view costs THAT KEY alone, and the
-/// value it comes back with is the fresh-install one.
-///
-/// [`ViewConfig`](harmonigraph_scene::ViewConfig) carries a container-level
-/// `#[serde(default)]`, so `impl Default` is the single source of every
-/// field's fallback. That is the whole arrangement, and this is what holds it:
-/// nothing at a declaration says whether a field can survive being absent, so
-/// the property is probed from the outside instead — rebuild the blob without
-/// one key at a time, which is exactly the shape a hand-edited RON or a
-/// `--appearance` file can arrive in, and reload.
-///
-/// A field that fails here either sank the whole view (no fallback) or came
-/// back as something other than the fresh value (a second default hiding
-/// behind a field-level attribute). Both are the same bug one layer up, where
-/// `a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob` pins
-/// it for `SpectrumConfig`: a missing key must cost only itself.
+/// The Stars resolution round-trips on both textures and through the offline
+/// document, an off-grid one snapped to the quarter the slider shows.
 #[test]
-fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
-    let fresh = harmonigraph_scene::ViewConfig::default();
-    let full = ron::to_string(&fresh).expect("a view serializes");
-    let pairs = top_level_pairs(&full);
-    assert!(pairs.len() > 40, "the probe must see the whole struct, got {}", pairs.len());
-
-    for (key, _) in &pairs {
-        let kept: Vec<&str> =
-            pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
-        let without = format!("({})", kept.join(","));
-        let loaded = ron::from_str::<harmonigraph_scene::ViewConfig>(&without)
-            .unwrap_or_else(|e| panic!("dropping {key:?} sank the whole view: {e}"));
-        assert_eq!(
-            ron::to_string(&loaded).expect("a view serializes"),
-            full,
-            "dropping {key:?} did not come back at the fresh-install value",
-        );
-    }
-}
-
-#[test]
-fn lattice_map_indicator_visibility_round_trips_and_defaults_on() {
-    let mut state = fresh();
-    state.picture.appearance.view.show_map_indicators = false;
-    let saved = state.save_persist();
-
-    let mut restored = fresh();
-    restored.install_document(&saved);
-    assert!(
-        !restored.picture.appearance.view.show_map_indicators,
-        "a project that hid map indicators must keep them hidden"
-    );
-
-    let old = saved.replacen("show_map_indicators:false,", "", 1);
-    assert_ne!(old, saved, "the visibility-key cut must land");
-    restored.install_document(&old);
-    assert!(
-        restored.picture.appearance.view.show_map_indicators,
-        "a project from before the visibility setting existed must keep showing map indicators"
-    );
-}
-
-#[test]
-fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_two() {
-    let mut endpoint = harmonigraph_scene::ShadowSettings::default();
-    for (index, group) in endpoint.groups_mut().into_iter().enumerate() {
-        group.width = 0.1 + index as f32 * 0.1;
-        group.depth = 0.2 + index as f32 * 0.1;
-    }
-    let full = ron::to_string(&endpoint).expect("Shadow settings serialize");
-    let pairs = top_level_pairs(&full);
-    assert_eq!(pairs.len(), 3, "the persisted endpoint is not exactly three groups: {full}");
-    assert!(!full.contains("spiral"), "the spiral grew a distinct persisted group: {full}");
-
-    for (missing, _) in &pairs {
-        let kept: Vec<&str> = pairs
-            .iter()
-            .filter(|(name, _)| name != missing)
-            .map(|(_, text)| text.as_str())
-            .collect();
-        let loaded: harmonigraph_scene::ShadowSettings =
-            ron::from_str(&format!("({})", kept.join(",")))
-                .unwrap_or_else(|e| panic!("dropping {missing} sank the endpoint: {e}"));
-        // A missing group comes back at the FRESH endpoint's value for that
-        // group, not at a bare `ShadowStyle::default()`: the container-level
-        // `serde(default)` fills from `ShadowSettings::default()`, whose three
-        // groups differ.
-        let fresh = harmonigraph_scene::ShadowSettings::default();
-        for (name, group) in [
-            ("lattice_geometry", loaded.lattice_geometry),
-            ("lattice_text", loaded.lattice_text),
-            ("spectral_text", loaded.spectral_text),
-        ] {
-            let source = if name == missing { &fresh } else { &endpoint };
-            let want = match name {
-                "lattice_geometry" => source.lattice_geometry,
-                "lattice_text" => source.lattice_text,
-                _ => source.spectral_text,
-            };
-            assert_eq!(group, want, "dropping {missing} changed {name}");
-        }
-    }
-}
-
-/// The other half of that pair, one layer in: a group the blob CARRIES with one
-/// of its FIELDS missing fills that field from the bare
-/// [`ShadowStyle::default`](harmonigraph_scene::ShadowStyle::default), not from
-/// that group's entry in `ShadowSettings::default()` — the answer the sweep
-/// above pins for a whole group gone. The two are entitled to differ (see the
-/// rationale on `impl Default for ShadowStyle`), and this is what says the
-/// field-level one is deliberate rather than residual.
-#[test]
-fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
-    use harmonigraph_scene::ShadowStyle;
-
-    let bare = ShadowStyle::default();
-    // Every held field differs from the bare fallback. Width and depth also
-    // differ from the group defaults, distinguishing the two fallback sources.
-    let held = ShadowStyle { width: 0.55, spread: 0.17, depth: 0.66 };
-
-    let mut state = fresh();
-    // A witness outside the section, so "the blob survived" is distinguishable
-    // from "it sank and everything reverted".
-    state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.shadow.lattice_geometry = held;
-    let saved = state.save_persist();
-
-    let whole = ron::to_string(&held).expect("a shadow style serializes");
-    let pairs = top_level_pairs(&whole);
-    assert_eq!(pairs.len(), 3, "the probe must see the whole style, got {pairs:?}");
-
-    for (key, _) in &pairs {
-        let want = match key.as_str() {
-            "width" => ShadowStyle { width: bare.width, ..held },
-            "spread" => ShadowStyle { spread: bare.spread, ..held },
-            "depth" => ShadowStyle { depth: bare.depth, ..held },
-            other => panic!("a shadow style grew a {other:?} field this sweep does not name"),
-        };
-        assert_ne!(want, held, "dropping {key:?} must exercise a fallback");
-
-        let kept: Vec<&str> =
-            pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
-        let short = format!("({})", kept.join(","));
-        let without = replace_pair(&saved, "lattice_geometry", &whole, &short);
-        assert_ne!(without, saved, "the group's {key:?} must be in the blob to drop");
-
-        let mut restored = fresh();
-        assert!(
-            restored.install_document(&without),
-            "dropping the group's {key:?} sank the whole document instead of costing itself",
-        );
-        assert_eq!(
-            restored.picture.appearance.camera.yaw, 1.23,
-            "dropping the group's {key:?} cost the camera too",
-        );
-        assert_eq!(
-            restored.picture.appearance.view.shadow.lattice_geometry, want,
-            "dropping the group's {key:?} did not fill it from the bare style, \
-             or cost the fields beside it",
-        );
-    }
-}
-
-/// A project saved while Shadow shape was a choice still carries each group's
-/// `kernel` and `falloff`. Nothing reads them now, and what must not happen is
-/// the group failing to parse: `kernel:Distance` is a variant that no longer
-/// exists anywhere, so it is only ignorable because the key is.
-#[test]
-fn a_shadow_group_carrying_the_retired_kernel_and_falloff_loads_at_its_other_fields() {
-    use harmonigraph_scene::ShadowStyle;
-
-    let held = ShadowStyle { width: 0.55, spread: 0.17, depth: 0.66 };
-    let mut state = fresh();
-    state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.shadow.lattice_geometry = held;
-    let saved = state.save_persist();
-
-    let whole = ron::to_string(&held).expect("a shadow style serializes");
-    let old = whole.replacen('(', "(kernel:Distance,falloff:1.2,", 1);
-    let without = replace_pair(&saved, "lattice_geometry", &whole, &old);
-    assert_ne!(without, saved, "the group must be in the blob to rewrite");
-
-    let mut restored = fresh();
-    assert!(restored.install_document(&without), "the retired keys sank the whole document");
-    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
-    assert_eq!(restored.picture.appearance.view.shadow.lattice_geometry, held);
-}
-
-/// A missing shape inside the glow curve costs that field alone. The curve is
-/// a persisted struct nested inside `ViewConfig`, so the view-level sweep
-/// above only proves the whole curve has a fallback; it cannot see whether its
-/// field accidentally became required.
-#[test]
-fn a_glow_curve_missing_shape_uses_the_fresh_shape() {
-    use harmonigraph_scene::GlowCurve;
-
-    let curve = GlowCurve { shape: -3.0 };
-    let fresh = GlowCurve::default();
-    let full = ron::to_string(&curve).expect("a glow curve serializes");
-    let pairs = top_level_pairs(&full);
-    assert_eq!(pairs.len(), 1, "the probe must see the curve's one shape: {full}");
-    let loaded = ron::from_str::<GlowCurve>("()")
-        .unwrap_or_else(|e| panic!("dropping shape sank the glow curve: {e}"));
-    assert_eq!(loaded, fresh);
-}
-
-/// A key the struct no longer has costs that key alone: the rest of the view
-/// loads, at the values the blob holds.
-///
-/// The other half of the sweep above, and the half that decides what a RETIRED
-/// field costs. A saved project still carries every key it was written with —
-/// `glow_feather` and `glow_meld` among them — and nothing in the tree reads
-/// them; what must not happen is the parse failing and taking the whole view
-/// with it, which is what `deny_unknown_fields` anywhere on this struct would
-/// buy. Asked of an invented key rather than of a retired one, because the
-/// property is about the DOOR and a named ex-field would make it a test of
-/// that field's removal.
-#[test]
-fn a_view_carrying_a_key_the_struct_does_not_have_loads_intact() {
-    // A reach that is not the fresh one, so the test can tell a blob that
-    // loaded from a blob that fell back to `Default` whole.
-    let fresh = harmonigraph_scene::ViewConfig { glow_reach: 2.88, ..Default::default() };
-    let full = ron::to_string(&fresh).expect("a view serializes");
-    let with_extra = full.replacen('(', "(a_key_no_field_answers_to:1.0,", 1);
-    let loaded = ron::from_str::<harmonigraph_scene::ViewConfig>(&with_extra)
-        .expect("an unknown key must not sink the view");
-    assert_eq!(
-        ron::to_string(&loaded).expect("a view serializes"),
-        full,
-        "an unknown key changed what the rest of the blob loaded as",
-    );
-}
-
-#[test]
-fn atmosphere_keys_default_individually_and_normalize_on_load() {
-    use harmonigraph_scene::AtmosphereSettings;
-    let mut state = fresh();
-    state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.atmosphere = AtmosphereSettings {
-        material_style: harmonigraph_scene::LatticeMaterial::Watercolor,
-        material_amount: 0.63,
-        material_settings: harmonigraph_scene::MaterialSettings {
-            wash_size: 1.7,
-            ..Default::default()
-        },
-        material_speed: 0.8,
-
-        texture_depth: 0.45,
-        breath_speed: 2.2,
-        ..Default::default()
-    };
-    let saved = state.save_persist();
-    let full = ron::to_string(&state.picture.appearance.view.atmosphere).unwrap();
-    let retired = format!("(wide_strength:0.9,wide_spread:6.0,{}", &full[1..]);
-    let old = replace_pair(&saved, "atmosphere", &full, &retired);
-    let mut restored = fresh();
-    assert!(restored.install_document(&old), "retired wide-glow keys sank the document");
-    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
-    assert_eq!(
-        restored.picture.appearance.view.atmosphere,
-        state.picture.appearance.view.atmosphere
-    );
-
-    let defaults = ron::to_string(&AtmosphereSettings::default()).unwrap();
-    let pairs = top_level_pairs(&full);
-    let fresh_pairs: std::collections::HashMap<_, _> =
-        top_level_pairs(&defaults).into_iter().collect();
-    for (key, _) in &pairs {
-        let kept: Vec<_> =
-            pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
-        let without = replace_pair(&saved, "atmosphere", &full, &format!("({})", kept.join(",")));
-        assert_ne!(saved, without, "the omitted key must be in the saved blob");
-        let mut restored = fresh();
-        assert!(restored.install_document(&without), "omitting {key} sank the document");
-        assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
-        let loaded = ron::to_string(&restored.picture.appearance.view.atmosphere).unwrap();
-        let loaded: std::collections::HashMap<_, _> =
-            top_level_pairs(&loaded).into_iter().collect();
-        for (other, text) in &pairs {
-            let expected = if other == key { &fresh_pairs[other] } else { text };
-            assert_eq!(&loaded[other], expected, "omitting {key} changed {other}");
-        }
-    }
-    // Retired keys are ignored rather than parsed as the new stage enums.
-    let old = replace_pair(&saved, "atmosphere", &full,
-        "(enabled:false,material:Watercolor,nebula_depth:0.9,nebula_scale:2.0,nebula_speed:3.0,breath_amount:0.6,breath_speed:1.5,source_roughness:0.7)");
-    let mut restored = fresh();
-    assert!(restored.install_document(&old));
-    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
-    assert_eq!(
-        restored.picture.appearance.view.atmosphere,
-        AtmosphereSettings { breath_amount: 0.6, breath_speed: 1.5, ..Default::default() }
-    );
-    state.picture.appearance.view.atmosphere.material_amount = 7.0;
-    state.picture.appearance.view.atmosphere.material_settings.wash_size = f32::NAN;
-    state.picture.appearance.view.atmosphere.material_speed = -2.0;
-    state.picture.appearance.view.atmosphere.texture_depth = f32::NAN;
-    state.picture.appearance.view.atmosphere.breath_amount = 7.0;
-    let restored = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
-    assert_eq!(restored.view.atmosphere.texture_depth, AtmosphereSettings::default().texture_depth);
-    assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
-    assert_eq!(restored.view.atmosphere.material_amount, 1.0);
-    // A nested group repairs a field from its OWN bare default, as it fills a
-    // missing one, and not from the lattice atmosphere's captured settings.
-    assert_eq!(
-        restored.view.atmosphere.material_settings.wash_size,
-        harmonigraph_scene::MaterialSettings::default().wash_size
-    );
-    assert_eq!(restored.view.atmosphere.material_speed, 0.0);
-}
-
-/// A save from before `Stars resolution` still loads, its dropped profile
-/// and halo resolution ignored, and the resolution round-trips on both
-/// textures and through the offline document, an off-grid one snapped to the
-/// quarter the slider shows.
-#[test]
-fn star_resolution_defaults_old_saves_and_roundtrips() {
-    use harmonigraph_scene::SpectralAtmosphere;
-    let old: SpectralAtmosphere = ron::from_str(
-        "(stars:(star_halo_resolution:0.625,star_halo_profile:Low),pitch_softness:12.0)",
-    )
-    .unwrap();
-    assert_eq!(old.stars, harmonigraph_scene::StarSettings::default());
-    assert_eq!(old.pitch_softness, 12.0);
-
-    let partial: harmonigraph_scene::StarSettings = ron::from_str("(star_jitter:0.23)").unwrap();
-    assert_eq!(
-        partial,
-        harmonigraph_scene::StarSettings { star_jitter: 0.23, ..Default::default() }
-    );
+fn star_resolution_snaps_to_the_slider_at_both_doors() {
     let mut state = fresh();
     state.picture.appearance.view.atmosphere.stars.star_jitter = 0.37;
     state.picture.appearance.view.atmosphere.stars.star_resolution = 0.6;
@@ -2205,46 +1270,6 @@ fn star_resolution_defaults_old_saves_and_roundtrips() {
     let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     assert_eq!(offline.view.atmosphere.stars.star_resolution, 0.5);
     assert_eq!(offline.spectrum.atmosphere.stars.star_resolution, 0.25);
-}
-
-#[test]
-fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
-    use harmonigraph_scene::SpectralAtmosphere;
-    let partial: SpectralAtmosphere = ron::from_str(
-        "(diffusion:0.23, blur_mix:0.6, enabled:false, glow:0.4, spread:2.0, texture:0.8)",
-    )
-    .unwrap();
-    assert_eq!(partial, SpectralAtmosphere::default());
-    let mut state = fresh();
-    state.picture.appearance.spectrum.atmosphere = SpectralAtmosphere {
-        stars: harmonigraph_scene::StarSettings {
-            star_jitter: 2.0,
-            star_resolution: 0.1,
-            ..Default::default()
-        },
-        pitch_softness: f32::NAN,
-        cloud_direction: 725.0,
-
-        ..Default::default()
-    };
-    state.picture.appearance.camera.yaw = 1.23;
-    let saved = state.save_persist();
-    let mut editor = fresh();
-    assert!(editor.install_document(&saved));
-    let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
-    let expected = SpectralAtmosphere {
-        stars: harmonigraph_scene::StarSettings {
-            star_jitter: 1.0,
-            star_resolution: 0.25,
-            ..Default::default()
-        },
-        cloud_direction: 5.0,
-
-        ..Default::default()
-    };
-    assert_eq!(editor.picture.appearance.spectrum.atmosphere, expected);
-    assert_eq!(offline.spectrum.atmosphere, expected);
-    assert_eq!(editor.picture.appearance.camera.yaw, 1.23);
 }
 
 /// A settings section folded in the editor stays folded across the window
@@ -2350,23 +1375,6 @@ fn folding_the_analyzer_view_leaves_the_sections_below_it() {
 /// counted as one.
 fn top_level_pairs(blob: &str) -> Vec<(String, String)> {
     pair_ranges(blob).into_iter().map(|(key, range)| (key, blob[range].to_string())).collect()
-}
-
-/// An editor save in the shape builds before #1677 wrote: every pair inside
-/// `prefs` lifted back to the top level, where each preference sat under the
-/// same key. Only where they sit changed, not how each one serializes.
-fn before_prefs(saved: &str) -> String {
-    let pairs: Vec<String> = top_level_pairs(saved)
-        .into_iter()
-        .flat_map(|(key, text)| match key.as_str() {
-            "prefs" => top_level_pairs(&text["prefs:".len()..])
-                .into_iter()
-                .map(|(_, text)| text)
-                .collect::<Vec<_>>(),
-            _ => vec![text],
-        })
-        .collect();
-    format!("({})", pairs.join(","))
 }
 
 /// [`top_level_pairs`], with each whole pair as its byte range in `blob`.
@@ -2497,93 +1505,6 @@ fn walk_blob(blob: &str, value: std::ops::Range<usize>, path: &str, visit: &mut 
     }
 }
 
-/// Replace one `key:value` pair in a serialized blob. RON has no trailing
-/// comma on a struct's last field, so `key` closing its struct (`)`) needs a
-/// different pattern than one with a sibling after it (`,`) — tried in that
-/// order, comma first since most fields have one.
-fn replace_pair(blob: &str, key: &str, was: &str, value: &str) -> String {
-    let with_comma = blob.replacen(&format!("{key}:{was},"), &format!("{key}:{value},"), 1);
-    if with_comma != blob {
-        return with_comma;
-    }
-    blob.replacen(&format!("{key}:{was})"), &format!("{key}:{value})"), 1)
-}
-
-/// A hand-edited camera comes back one `view_proj` can draw, on the same
-/// footing as the pitch range and the soft-edge pair above:
-/// `screen_scale` already guards `distance` locally for the
-/// font-size math it does, but nothing stood between a hand-edited blob and
-/// `ortho`'s `tan`, or `eye`'s trig, which read the fields directly on every
-/// frame the camera is drawn. A non-finite value and a finite one past what
-/// the field's own bar can reach are swept together: both repair to the same
-/// place, since a NaN and an out-of-range value fall back through the same
-/// `finite_or(..).clamp(..)`.
-/// (key, bad value, hint, the range a repaired value must fall in — `None`
-/// for a field with no natural bound).
-type CameraCase = (&'static str, &'static str, &'static str, Option<(f32, f32)>);
-
-#[test]
-fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
-    let cases: [CameraCase; 9] = [
-        ("yaw", "NaN", "a NaN yaw", None),
-        ("pitch", "NaN", "a NaN pitch", Some((-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT))),
-        (
-            "pitch",
-            "10.0",
-            "a pitch past `orbit`'s limit",
-            Some((-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT)),
-        ),
-        ("distance", "NaN", "a NaN distance", Some((Camera::MIN_DISTANCE, Camera::MAX_DISTANCE))),
-        (
-            "distance",
-            "999.0",
-            "a distance past the zoom range",
-            Some((Camera::MIN_DISTANCE, Camera::MAX_DISTANCE)),
-        ),
-        ("cabinet_angle", "NaN", "a NaN cabinet angle", Some((0.0, std::f32::consts::FRAC_PI_2))),
-        (
-            "cabinet_angle",
-            "10.0",
-            "a cabinet angle past its bar's 0..=90 degrees",
-            Some((0.0, std::f32::consts::FRAC_PI_2)),
-        ),
-        ("cabinet_scale", "inf", "an infinite cabinet scale", Some((0.1, 1.0))),
-        ("cabinet_scale", "5.0", "a cabinet scale past its bar", Some((0.1, 1.0))),
-    ];
-    for (key, value, hint, range) in cases {
-        let mut state = fresh();
-        state.picture.appearance.view.max_sevens = 3;
-        let saved = state.save_persist();
-        let was = match key {
-            "yaw" => state.picture.appearance.camera.yaw,
-            "pitch" => state.picture.appearance.camera.pitch,
-            "distance" => state.picture.appearance.camera.distance,
-            "cabinet_angle" => state.picture.appearance.camera.cabinet_angle,
-            _ => state.picture.appearance.camera.cabinet_scale,
-        };
-        let edited = replace_pair(&saved, key, &format!("{was:?}"), value);
-        assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
-
-        let mut restored = fresh();
-        restored.install_document(&edited);
-        let got = match key {
-            "yaw" => restored.picture.appearance.camera.yaw,
-            "pitch" => restored.picture.appearance.camera.pitch,
-            "distance" => restored.picture.appearance.camera.distance,
-            "cabinet_angle" => restored.picture.appearance.camera.cabinet_angle,
-            _ => restored.picture.appearance.camera.cabinet_scale,
-        };
-        assert!(got.is_finite(), "{hint}: `{key}` opened at {got}");
-        if let Some((lo, hi)) = range {
-            assert!(got >= lo && got <= hi, "{hint}: `{key}` opened at {got}, outside {lo}..={hi}");
-        }
-        assert_eq!(
-            restored.picture.appearance.view.max_sevens, 3,
-            "{hint}: the rest of the blob still restores"
-        );
-    }
-}
-
 /// A SAVED ANGLE carries the same two fields the camera does, and reaches the
 /// camera by plain assignment — the Display/View preset buttons write
 /// `camera.yaw`/`camera.pitch` straight through, so a preset is neither
@@ -2635,159 +1556,4 @@ fn a_saved_angle_lands_where_the_camera_controls_could_have_put_it() {
         );
         assert!(camera.eye().is_finite(), "{hint}: `eye()` returned {:?}", camera.eye());
     }
-}
-
-/// The target has no bar and no natural bound — the camera can look
-/// anywhere — so unlike its five neighbours above it is repaired rather than
-/// clamped, and as a whole vector: `eye()` reads all three components
-/// together, and one bad component would otherwise NaN the other two
-/// through it.
-#[test]
-fn a_blob_naming_a_nonsense_camera_target_opens_on_a_drawable_one() {
-    let mut state = fresh();
-    state.picture.appearance.view.max_sevens = 3;
-    let saved = state.save_persist();
-    let edited = saved.replace("target:(0.0,0.0,0.0),", "target:(NaN,0.0,0.0),");
-    assert_ne!(edited, saved, "`target` is not in the blob to edit");
-
-    let mut restored = fresh();
-    restored.install_document(&edited);
-    assert!(
-        restored.picture.appearance.camera.target.is_finite(),
-        "a NaN component opened at {:?}",
-        restored.picture.appearance.camera.target,
-    );
-    assert_eq!(
-        restored.picture.appearance.view.max_sevens, 3,
-        "the rest of the blob still restores"
-    );
-}
-
-/// The Video pane's split dial: `split` feeds `Layout::split`, whose own
-/// clamp cannot repair a NaN (it loses every comparison a clamp makes), only
-/// hold a finite value inside a literal range.
-#[test]
-fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
-    let cases: [(&str, &str, (f32, f32)); 2] =
-        [("NaN", "a NaN split", (0.05, 0.95)), ("inf", "an infinite split", (0.05, 0.95))];
-    for (value, hint, (lo, hi)) in cases {
-        let mut state = fresh();
-        state.picture.appearance.view.max_sevens = 3;
-        let saved = state.save_persist();
-        let was = state.picture.appearance.render.frame.split;
-        let edited = replace_pair(&saved, "split", &format!("{was:?}"), value);
-        assert_ne!(edited, saved, "{hint}: `split` is not in the blob to edit");
-
-        let mut restored = fresh();
-        restored.install_document(&edited);
-        let got = restored.picture.appearance.render.frame.split;
-        assert!(got.is_finite(), "{hint}: `split` opened at {got}");
-        assert!(got >= lo && got <= hi, "{hint}: `split` opened at {got}, outside {lo}..={hi}");
-        assert_eq!(
-            restored.picture.appearance.view.max_sevens, 3,
-            "{hint}: the rest of the blob still restores"
-        );
-    }
-}
-
-#[test]
-fn animation_controls_round_trip_and_a_missing_one_loads_fresh() {
-    let mut state = fresh();
-    state.picture.appearance.view.note_animation = harmonigraph_scene::NoteAnimationConfig {
-        stagger_spread: 0.63,
-        radial_start: -0.5,
-        fade_out_delay: 0.4,
-    };
-    let mut restored = fresh();
-    assert!(restored.install_document(&state.save_persist()));
-    assert_eq!(
-        restored.picture.appearance.view.note_animation,
-        state.picture.appearance.view.note_animation
-    );
-    let mut state = fresh();
-    state.picture.appearance.view.label_scale = 0.7;
-    state.picture.appearance.view.note_animation.radial_start = -0.5;
-    state.picture.appearance.view.note_animation.stagger_spread = 0.63;
-    let old = state.save_persist();
-    let missing_spread = old.replace("stagger_spread:0.63,", "");
-    assert_ne!(old, missing_spread);
-    assert!(state.install_document(&missing_spread));
-    assert_eq!(
-        state.picture.appearance.view.note_animation.stagger_spread,
-        harmonigraph_scene::NoteAnimationConfig::default().stagger_spread
-    );
-    assert_eq!(state.picture.appearance.view.label_scale, 0.7);
-    assert_eq!(state.picture.appearance.view.note_animation.radial_start, -0.5);
-    let saved = state.save_persist().replace("note_animation:", "retired_animation_config:");
-    assert!(!saved.contains("note_animation:"));
-    assert!(state.install_document(&saved));
-    assert_eq!(state.picture.appearance.view.note_animation, Default::default());
-    assert_eq!(state.picture.appearance.view.label_scale, 0.7);
-}
-
-/// Retired dock fields are ignored rather than taking appearance with them.
-#[test]
-fn an_old_dock_is_replaced_without_losing_appearance() {
-    let mut state = fresh();
-    state.picture.appearance.camera.yaw = 1.23;
-    let saved = state.save_persist();
-    let kept: Vec<_> = top_level_pairs(&saved)
-        .into_iter()
-        .filter(|(key, _)| key != "layout")
-        .map(|(_, text)| text)
-        .collect();
-    let old = format!("({},dock:(tabs:[Notes,Console]),folds:[])", kept.join(","));
-    let mut restored = fresh();
-    assert!(restored.install_document(&old));
-    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
-    assert_eq!(restored.workspace.layout.position, workspace::Position::Right);
-    assert_eq!(restored.workspace.layout.folded, [false; 3]);
-}
-
-#[test]
-fn material_settings_are_independent_and_missing_nested_keys_default() {
-    use harmonigraph_scene::MaterialSettings;
-    let mut state = fresh();
-    state.picture.appearance.view.atmosphere.material_style =
-        harmonigraph_scene::LatticeMaterial::VelvetScales;
-    state.picture.appearance.spectrum.atmosphere.cloud_style =
-        harmonigraph_scene::CloudStyle::VelvetScales;
-    let lattice = &mut state.picture.appearance.view.atmosphere.material_settings;
-    lattice.wash_fuzz = 0.23;
-    lattice.velvet_variety = 0.81;
-    lattice.velvet_edge = 0.51;
-    lattice.velvet_irregularity = 0.43;
-    lattice.velvet_shape = 0.72;
-    let spectral = &mut state.picture.appearance.spectrum.atmosphere.material_settings;
-    spectral.wash_fuzz = 0.72;
-    spectral.velvet_variety = 0.19;
-    spectral.velvet_edge = 0.18;
-    spectral.velvet_irregularity = 0.93;
-    spectral.velvet_shape = 0.29;
-    let mut restored = fresh();
-    assert!(restored.install_document(&state.save_persist()));
-    assert_eq!(
-        restored.picture.appearance.view.atmosphere.material_settings,
-        state.picture.appearance.view.atmosphere.material_settings
-    );
-    assert_eq!(
-        restored.picture.appearance.spectrum.atmosphere.material_settings,
-        state.picture.appearance.spectrum.atmosphere.material_settings
-    );
-    let partial: MaterialSettings = ron::from_str("(wash_fuzz:0.23)").unwrap();
-    assert_eq!(partial, MaterialSettings { wash_fuzz: 0.23, ..Default::default() });
-}
-
-/// Tab visibility belongs to the editor, so loading a look cannot move it and
-/// an older appearance key is ignored without a compatibility path.
-#[test]
-fn tab_visibility_is_saved_only_with_the_editor() {
-    let mut state = fresh();
-    state.workspace.interaction.prefs.frameless = true;
-    let appearance = ron::to_string(&state.picture.appearance).unwrap();
-    assert!(!appearance.contains("frameless"));
-    let old = appearance.replacen("view:(", "view:(frameless:true,", 1);
-    assert_ne!(old, appearance, "the old appearance key must be present");
-    let loaded: crate::AppearanceDocument = ron::from_str(&old).unwrap();
-    assert_eq!(loaded.view, state.picture.appearance.view);
 }

@@ -31,7 +31,7 @@
 //! clamps and semantic unit mappings.
 
 use super::harness::{materials, projections, set_optional_sections, textures, SETTINGS_PANES};
-use super::persist::{nested_pairs, nested_scalars};
+use super::persist::{is_float, nested_pairs, nested_scalars};
 use super::probe::{fresh, themed};
 use crate::widgets::range_probe::{collect, Visit};
 use crate::*;
@@ -53,6 +53,10 @@ enum Edge {
     /// from the DAW moving a default rather than by anyone hand-editing a
     /// blob.
     Fresh,
+    /// Every float not a number: each must come back on its bar, whatever
+    /// value its repair picks. The integers stay fresh, since no integer is
+    /// one.
+    NaN,
 }
 
 /// The saved blob of a fresh state with every dialled value poisoned to the
@@ -70,8 +74,9 @@ enum Edge {
 fn poisoned(edge: Edge) -> String {
     let mut saved = fresh();
     let (v, n) = match edge {
-        Edge::Low => (-1.0e6f32, i32::MIN),
-        Edge::High => (1.0e6, i32::MAX),
+        Edge::Low => (-1.0e6f32, Some(i32::MIN)),
+        Edge::High => (1.0e6, Some(i32::MAX)),
+        Edge::NaN => (f32::NAN, None),
         Edge::Fresh => return saved.save_persist(),
     };
     // What a blob cannot say is a float: an integer, whose type sets the edge
@@ -87,10 +92,12 @@ fn poisoned(edge: Edge) -> String {
             *source.weight_mut(target) = Some(v);
         }
     }
-    a.view.min_sevens = n;
-    a.view.max_sevens = n;
-    a.view.center_sevens = n;
-    a.view.octave_count = if matches!(edge, Edge::Low) { 0 } else { u32::MAX };
+    if let Some(n) = n {
+        a.view.min_sevens = n;
+        a.view.max_sevens = n;
+        a.view.center_sevens = n;
+        a.view.octave_count = if matches!(edge, Edge::Low) { 0 } else { u32::MAX };
+    }
     let mut blob = saved.save_persist();
     let mut floats: Vec<_> = nested_scalars(&blob)
         .into_iter()
@@ -107,12 +114,6 @@ fn poisoned(edge: Edge) -> String {
         blob.replace_range(range, &text);
     }
     blob
-}
-
-/// Whether a serialized scalar is a float: RON writes every float with a
-/// fraction or an exponent, and an integer with neither.
-fn is_float(text: &str) -> bool {
-    text.parse::<f64>().is_ok() && text.contains(['.', 'e', 'E'])
 }
 
 /// The poisoned state through its real shared load boundary, with the owners
@@ -248,8 +249,9 @@ fn backend(edge: Edge, meantone: bool, marvel: bool) -> Backend {
     let mut policy = PolicyConfig::default();
     // `Fresh` leaves the host's own defaults standing, for the reason `poison`
     // leaves the appearance standing: what it asks is whether a first-ever
-    // load reads out values its bars can show.
-    if edge != Edge::Fresh {
+    // load reads out values its bars can show. `NaN` does too, since every
+    // policy field is an integer.
+    if matches!(edge, Edge::Low | Edge::High) {
         for (_, push) in POLICY {
             push(&mut policy, edge == Edge::High);
         }
@@ -421,6 +423,10 @@ fn loaded_settings_high_fit_real_bars() {
 #[test]
 fn fresh_settings_fit_real_bars() {
     check(Edge::Fresh);
+}
+#[test]
+fn loaded_settings_nan_fit_real_bars() {
+    check(Edge::NaN);
 }
 
 /// A fresh appearance is a fixed point of the door it loads through: nothing
