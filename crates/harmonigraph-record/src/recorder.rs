@@ -11,7 +11,7 @@ use harmonigraph_take::ParamKey;
 use parking_lot::Mutex;
 
 use crate::{configuration, publication};
-use render_job::{spawn_render, Progress, RenderControl, RenderRequest};
+use render_job::{spawn_render, Progress, RenderControl};
 
 mod lifecycle;
 mod render_job;
@@ -223,7 +223,7 @@ impl TakeLatches {
 pub struct Recorder {
     /// Pins the writer independently from all GUI Control clones, so a take
     /// still recording after editor teardown keeps its writer.
-    _writer_lifetime: Option<mpsc::Sender<Command>>,
+    _writer_lifetime: mpsc::Sender<Command>,
     fence: Arc<RecordFence>,
     publication: publication::Publisher,
     /// The display's own copy of every canonical report, published from here
@@ -243,11 +243,18 @@ pub struct Recorder {
     /// Interleaved input samples, recorded beside every take's notes.
     audio: rtrb::Producer<f32>,
     dropped: Arc<AtomicU64>,
-    /// Last value written per parameter, so only changes are recorded.
-    /// Reset to NaN on arm so the take's first block writes a full set — a
-    /// take that inherited "no change since last time" would replay with the
-    /// default camera.
+    /// Last value written per parameter in the open run, so only changes are
+    /// recorded. Reset to NaN as each run opens, so its first block writes a
+    /// full set: a run that inherited "no change since last time" would
+    /// replay with the default camera wherever the reader could not reach the
+    /// run before it, and the first run of a take has no run before it.
     last_params: [f32; ParamKey::ALL.len()],
+    /// The configuration last written in the open run, for the same reason
+    /// and with the same reset as [`last_params`](Self::last_params): each run
+    /// opens with the configuration in force, a take's first run included,
+    /// and an unchanged one is not written again inside it. One owner beside
+    /// `last_params`, rather than a second cache in the plugin (#1832).
+    last_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
     lifecycle: State,
     /// Independent position/duration and bar observations, including rejected scrubs.
     history: History,
@@ -279,13 +286,14 @@ impl Recorder {
     ///
     /// The one place the struct is spelled: the writer's `channel` and both
     /// test fixtures used to write it out whole, so each new field was three
-    /// edits (#1129, #901, #850, #849).
+    /// edits (#1129, #901, #850, #849). Its one caller is the writer's
+    /// `endpoints`.
     fn new(
         producer: rtrb::Producer<Entry>,
         audio: rtrb::Producer<f32>,
         publication: publication::Publisher,
         display: publication::Publisher,
-        writer_lifetime: Option<mpsc::Sender<Command>>,
+        writer_lifetime: mpsc::Sender<Command>,
     ) -> Recorder {
         Recorder {
             _writer_lifetime: writer_lifetime,
@@ -298,6 +306,7 @@ impl Recorder {
             audio,
             dropped: Arc::default(),
             last_params: [f32::NAN; ParamKey::ALL.len()],
+            last_configuration: None,
             lifecycle: State::Disarmed,
             history: History::default(),
             rolling: Arc::default(),
@@ -426,7 +435,6 @@ impl Recorder {
     fn update_armed(&mut self, armed: bool) -> bool {
         let (action, _) = self.advance(Observation::Armed(armed));
         if action == Action::Arm {
-            self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.run_opened = false;
             self.latches.clear();
         }
@@ -622,9 +630,6 @@ impl Recorder {
         self.fence.boundary_pause.reach();
         intent
     }
-    pub fn recording_epoch(&self) -> u64 {
-        self.fence.epoch()
-    }
     pub fn fail_configuration(&self) {
         self.fence.fail();
     }
@@ -634,6 +639,8 @@ impl Recorder {
         self.run = self.run.wrapping_add(1);
         self.open = Some(OpenRun { serial: self.run, take: self.armed_epoch });
         self.run_opened = true;
+        self.last_params = [f32::NAN; ParamKey::ALL.len()];
+        self.last_configuration = None;
         self.push(Entry::Run { at, song });
     }
     /// Close the open run, if one is, at the presentation time of its first
@@ -643,16 +650,30 @@ impl Recorder {
             self.push(Entry::RunEnd { at });
         }
     }
+    /// The configuration in force from presentation time `t`, written when it
+    /// differs from the one the open run last wrote. Nothing is written, or
+    /// remembered as written, while no run is open: the reader drops a record
+    /// outside every run, and remembering one would cost the next run its
+    /// opening configuration.
     pub fn configuration(
         &mut self,
         t: f64,
         resolved: harmonigraph_core::configuration::ResolvedConfig,
     ) {
-        self.push(Entry::Configuration(harmonigraph_take::ConfigurationRecord::new(t, resolved)));
+        if self.open.is_some() && self.last_configuration != Some(resolved) {
+            self.last_configuration = Some(resolved);
+            self.push(Entry::Configuration(harmonigraph_take::ConfigurationRecord::new(
+                t, resolved,
+            )));
+        }
     }
 
-    /// Record raw parameter mirrors at plugin-block granularity.
+    /// Record raw parameter mirrors at plugin-block granularity, while a run
+    /// is open, for the reason [`configuration`](Self::configuration) gives.
     pub fn params(&mut self, t: f64, values: [f32; ParamKey::ALL.len()]) {
+        if self.open.is_none() {
+            return;
+        }
         for (i, value) in values.into_iter().enumerate() {
             if self.last_params[i] != value {
                 self.last_params[i] = value;
@@ -746,24 +767,12 @@ impl Control {
         self.latches.captured.load(Ordering::Relaxed)
     }
 
-    /// Whether the audio thread saw the transport go backwards and ended the
-    /// take — the GUI's cue to stop recording and render it.
-    pub fn hit_rewind(&self) -> bool {
-        self.latches.end() == Some(End::Rewind)
-    }
-
     /// The bar to end the take at, or `None` for every trigger but
     /// `AtBar`. Called at every poll of the take's end, like
     /// [`set_end_at_rewind`](Self::set_end_at_rewind), so a mid-take change
     /// of mind reaches the audio thread.
     pub fn set_stop_bar(&self, bar: Option<f64>) {
         self.latches.stop_at_bar.set(bar);
-    }
-
-    /// Whether the audio thread played the take through its stop bar and ended
-    /// it there — the GUI's cue to stop recording and render.
-    pub fn hit_stop_bar(&self) -> bool {
-        self.latches.end() == Some(End::Bar)
     }
 
     /// An audio-owned completion remains authoritative even if the GUI's
@@ -797,8 +806,13 @@ impl Control {
     /// recorded), and the renderer takes the output size from it alone: `size`
     /// is only what the Exports list shows for the job.
     pub fn queue_export(&self, path: std::path::PathBuf, appearance: String, size: [u32; 2]) {
-        let request = RenderRequest { appearance: Some(appearance) };
-        spawn_render(request, path, Some(size), self.progress.clone(), self.render.clone());
+        spawn_render(
+            Some(appearance),
+            path,
+            Some(size),
+            self.progress.clone(),
+            self.render.clone(),
+        );
     }
     pub fn export_jobs(&self) -> Vec<harmonigraph_take::render::ExportJob> {
         self.render.snapshots(&self.progress)
