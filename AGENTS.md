@@ -219,7 +219,8 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 
 - A Note fade dragged within about two Fades after a zero-length note: the pulse's lattice off moves with the bar, so dragged longer it can hold the pulse again, which arrives a second time; a glitch while dragging.
 - A press Clear took while held, once its voice's fade ends: it leaves the replay, so a reset or a surface opened then (a Video preview) cuts the rest of its lattice departure.
-- A fade a baseline withdrew (rule 6) and the fresh press it opened share an identity: the replay is rebuilt on every frame for about one replay horizon, main-thread time only.
+- A fade a baseline withdrew (rule 6) and the fresh press it opened share an identity: the replay is rebuilt on every frame for about one replay horizon, main-thread time only, measured at about 0.08 ms more a frame (0.12 ms against 0.04 ms for the motion step, a six-note chord over the default window's 345 nodes) for 88 frames at 144 Hz at the shipped Fade, longer at a longer one.
+- At the 4,096-note cap with no older pulse in `past`, `enforce_cap` evicts a pulse as it is filed, so a reset or a surface opened then loses the rest of its lattice departure; it takes about 4.5 notes a second sustained for 15 minutes to reach the cap.
 - A released note whose off is stamped ahead of the display clock: its node leaves on the frame that sees the off, early by as much as the audio leads the clock.
 
 ## Backwards compatibility is not a constraint
