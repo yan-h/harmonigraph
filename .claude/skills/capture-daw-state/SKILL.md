@@ -11,14 +11,20 @@ The analyzer's own knobs are the Settings column's Analyzer tab, not the Analyze
 The exact values are recoverable:
 
 ```sh
-./read-plugin-state.py            # newest project: params, camera, view
-./read-plugin-state.py --rust     # view fields as an impl Default body
-./read-plugin-state.py --appearance project.bwproject > appearance.ron
+./read-plugin-state               # newest project: params, fields, editor settings
+./read-plugin-state --rust        # view fields as an impl Default body
+./read-plugin-state --appearance project.bwproject > appearance.ron
+./read-plugin-state --raw         # what the file holds, before any restore
 ```
+
+It is the `read-plugin-state` example in `crates/harmonigraph-plugin`, which reads each instance through the plugin's own restore (`harmonigraph_plugin::saved_state`),
+so everything but `--raw` is what the plugin loads: values clamped, retired keys gone, the camera the host's.
+The wrapper builds it in release first, a few minutes in a fresh worktree and seconds after, with the build's output on stderr.
+`--raw` prints the saved params and fields as stored, `ui-state` decoded to its RON, for a persistence bug, where what the file holds is the question.
 
 The UI state (`layout`, the editor preferences under `prefs` such as `folded_sections`, static camera geometry, ViewConfig) is saved as the editor shows it, window open or not (`UiState`, `crates/harmonigraph-plugin/src/editor/persist.rs`).
 Camera movement belongs to the five `camera-*` host parameters;
-the camera snapshot in `ui-state` can lag automation while the editor is closed, so the script overlays the saved host parameters in every output, as the live editor does.
+the camera snapshot in `ui-state` can lag automation while the editor is closed, so every output but `--raw` lays the saved host parameters over it, as each editor frame does.
 A project saved with the window open by a build from before #1301 holds the values of the last window close instead, and nothing warns;
 if the numbers look stale, ask Yan to save it again from a current build.
 Host-automatable params (the Lattice Map and its lanes, camera movement) were never affected,
@@ -26,20 +32,19 @@ which is why such a project can show fresh params next to a stale or missing `ui
 
 The tuning axes, their links, Learn and the adaptive policy are not params (#1795):
 the plugin saves them in its `musical-settings` field, the axes in microcents in `TuningAxis::index` order,
-and the script prints that field as saved under `--- settings ---`.
-A param the current build does not declare, such as a `tuning-*` one in a project saved before then, is labelled so, since the plugin ignores it on load.
+and the reader prints that field, as the plugin saves it after the restore, under `--- fields ---` with `editor-state` (the window), `lattice-maps` and `tuning-instance`.
+A param the current build does not declare, such as a `tuning-*` one in a project saved before then, is listed as ignored on load, and `--raw` shows its value.
 
 ## Where the projects live
 
 Not `~/Documents/Bitwig Studio/Projects` (that's empty) —
-they're under `~/Library/CloudStorage/GoogleDrive-*/My Drive/music/`, which Spotlight does not index, so the script globs that folder as well as asking `mdfind`.
+they're under `~/Library/CloudStorage/GoogleDrive-*/My Drive/music/`, which Spotlight does not index, so the reader walks that folder as well as asking `mdfind`.
 Auto-backups count as saves.
 
 A project using adaptive tuning holds more instances than the editor's:
 each **Harmonigraph Tune** (its own plugin, `com.yan-h.harmonigraph-tune`) has no param and no `ui-state`, by design;
-its Tuning delay is `delay` in its `tuning-instance` field, which the script prints.
-The script prints every instance numbered, and labels a Tune as one;
-the one with the `appearance` block is the editor's.
+its Tuning delay is `delay` in its `tuning-instance` field, which the reader prints.
+The reader prints every instance numbered and named, Harmonigraph or Harmonigraph Tune.
 An output showing only Tune instances means the scan stopped short, not that the window was never closed.
 
 ## Scope check before you edit any default
@@ -63,7 +68,7 @@ A golden that moves anyway is a fixture still reading a default, so pin that fix
 
 ## Using `--appearance`
 
-The script's header documents the `.bwproject` container format, for when the script itself needs fixing.
+The example's header documents the `.bwproject` container format, for when the scan itself needs fixing.
 The version-7 editor save nests camera, view, spectrum and the whole video configuration under `appearance`;
 the Spiral's framing is an editor preference under `prefs` beside it, so `--appearance` leaves it out.
 `--appearance` writes that document, with the saved host camera parameters applied, for `harmonigraph-offline --appearance FILE`, and requires exactly one editor appearance in the project.

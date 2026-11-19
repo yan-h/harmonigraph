@@ -25,6 +25,13 @@ startup-probe =["objc2-app-kit/NSApplication", "objc2-app-kit/NSEvent", "objc2-a
 name = "editor-startup"
 required-features = ["startup-probe"]
 
+# A Bitwig project's saved state, read through the plugin's own restore
+# (#1867); `./read-plugin-state` at the repository root runs it. Its test
+# covers the project scan, and runs with this package's.
+[[example]]
+name = "read-plugin-state"
+test = true
+
 [dependencies]
 harmonigraph-core = { workspace = true }
 harmonigraph-take = { workspace = true }
@@ -73,3 +80,7 @@ harmonigraph-record = { workspace = true, features = ["test-support"] }
 harmonigraph-ui = { workspace = true, features = ["testing"] }
 # Which device the startup job compiles on, for the activation test.
 harmonigraph-render = { workspace = true, features = ["test-support"] }
+# The read-plugin-state example: Bitwig's compressed sections, and the
+# editor's view printed as RON.
+flate2 = "1"
+ron = { workspace = true }

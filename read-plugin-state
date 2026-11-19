@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Read the plugin's settings back out of a saved Bitwig project, through the
+# plugin's own restore: the read-plugin-state example in
+# crates/harmonigraph-plugin, whose doc says what each option prints.
+# The first run in a fresh worktree builds the plugin in release, a few
+# minutes; later runs reuse that build. The build writes to stderr only, so
+# `--appearance > appearance.ron` holds the document alone.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+"$here/session-lifecycle.sh" run -- cargo build --release --quiet \
+  --manifest-path "$here/Cargo.toml" -p harmonigraph-plugin --example read-plugin-state >&2
+exec "${CARGO_TARGET_DIR:-$here/target}/release/examples/read-plugin-state" "$@"

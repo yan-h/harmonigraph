@@ -61,7 +61,7 @@ use std::path::{Path, PathBuf};
 /// - An appearance version bump fails the offline parse; edit the number.
 ///
 /// Re-pinning the whole look, say to a newer DAW capture through
-/// `./read-plugin-state.py --appearance`, moves every frame. That goes in a PR
+/// `./read-plugin-state --appearance`, moves every frame. That goes in a PR
 /// of its own.
 pub const LOOK: &str = include_str!("../look.ron");
 

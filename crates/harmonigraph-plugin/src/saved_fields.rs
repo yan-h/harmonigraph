@@ -20,9 +20,9 @@ use crate::editor::SavedWindow;
 use crate::HarmonigraphParams;
 use harmonigraph_ui::lattice_maps::MapDocument;
 
-const LATTICE_MAPS: &str = "lattice-maps";
-const EDITOR_STATE: &str = "editor-state";
-const UI_STATE: &str = "ui-state";
+pub(crate) const LATTICE_MAPS: &str = "lattice-maps";
+pub(crate) const EDITOR_STATE: &str = "editor-state";
+pub(crate) const UI_STATE: &str = "ui-state";
 
 /// Write the three fields into `state`. The maps' lock and the editor's lock
 /// are taken one after the other, never nested.

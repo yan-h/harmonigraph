@@ -463,7 +463,11 @@ impl Table {
     /// modulation as it is. A value the editor set and the host has not been
     /// told is dropped: the restore supersedes it, and the host reads the
     /// restored state by rescanning (Yan, 2026-11-18).
-    pub(crate) fn restore(&self, saved: &BTreeMap<String, ParamValue>) {
+    ///
+    /// Public for the plugin's `read-plugin-state` example, which reads a
+    /// project through this restore rather than a copy of its rules; the
+    /// wrapper's restore is its one caller in a plugin.
+    pub fn restore(&self, saved: &BTreeMap<String, ParamValue>) {
         for row in &self.rows {
             // A finished click goes whole; a gesture still open keeps its
             // begin, for the end the editor will send.

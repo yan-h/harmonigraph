@@ -213,6 +213,10 @@ pub(super) fn clamp_delay(value: u32) -> u32 {
     value.clamp(1, super::DELAY_MULTIPLIER_MAX as u32)
 }
 
+/// The saved field every instance's own settings are stored in, the Hub's
+/// and each Tune's.
+pub(crate) const INSTANCE_FIELD: &str = "tuning-instance";
+
 /// Arc adapter, so the wrapper's main-thread service reaches this instance.
 pub struct Adapter(pub Arc<Shared>);
 
@@ -254,7 +258,7 @@ impl Setup for Adapter {
         *self.0.track_name.lock().unwrap() = name.unwrap_or_default().to_owned();
     }
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
-        let settings = match state.fields.get("tuning-instance") {
+        let settings = match state.fields.get(INSTANCE_FIELD) {
             Some(json) => {
                 let settings: InstanceSettings = serde_json::from_str(json).map_err(|error| {
                     harmonigraph_clap::shell_error!("Tuning instance settings refused: {error}");
@@ -279,9 +283,7 @@ impl Setup for Adapter {
             name: self.0.name.lock().unwrap().clone(),
             delay: (!self.0.is_hub()).then(|| self.0.requested_multiplier.load(Ordering::Acquire)),
         };
-        state
-            .fields
-            .insert("tuning-instance".to_owned(), serde_json::to_string(&settings).unwrap());
+        state.fields.insert(INSTANCE_FIELD.to_owned(), serde_json::to_string(&settings).unwrap());
     }
     fn install_wakeup(&self, wake: Box<dyn Fn() + Send + Sync>) {
         assert!(self.0.wake.set(wake.into()).is_ok());

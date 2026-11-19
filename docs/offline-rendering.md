@@ -54,7 +54,7 @@ see [What is and isn't captured](#what-is-and-isnt-captured).
 For an explicit replacement file:
 
 ```sh
-./read-plugin-state.py --appearance project.bwproject > appearance.ron
+./read-plugin-state --appearance project.bwproject > appearance.ron
 ./target/release/harmonigraph-offline piece.take --appearance appearance.ron --out piece.mp4
 # Or synthesize a look without a DAW project:
 cargo run -p harmonigraph-ui --example appearance -- min_sevens=-1 max_sevens=1 > appearance.ron
