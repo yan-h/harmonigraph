@@ -33,6 +33,9 @@ struct Host {
     /// `gui.closed` calls, and whether the last asked for destruction.
     closed: AtomicUsize,
     closed_destroyed: AtomicBool,
+    /// The sizes `gui.request_resize` asked for, and whether it grants them.
+    resizes: std::sync::Mutex<Vec<(u32, u32)>>,
+    grants_resize: AtomicBool,
 }
 unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const c_void {
     let id = unsafe { CStr::from_ptr(id) };
@@ -63,8 +66,10 @@ static PARAMS: clap_host_params =
     clap_host_params { rescan: Some(rescan), clear: Some(clear), request_flush: Some(request) };
 static STATE: clap_host_state = clap_host_state { mark_dirty: Some(dirty) };
 unsafe extern "C" fn hints(_: *const clap_host) {}
-unsafe extern "C" fn resize(_: *const clap_host, _: u32, _: u32) -> bool {
-    false
+unsafe extern "C" fn resize(host: *const clap_host, width: u32, height: u32) -> bool {
+    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
+    stats.resizes.lock().unwrap().push((width, height));
+    stats.grants_resize.load(Ordering::Relaxed)
 }
 unsafe extern "C" fn show_hide(_: *const clap_host) -> bool {
     false
@@ -194,6 +199,10 @@ impl Device {
     /// The host's side of the editor, as the shell gave it to the plugin.
     fn editor_host(&self) -> std::sync::Arc<dyn harmonigraph_clap::prelude::EditorHost> {
         self.wrapper().test_inspect_plugin(|plugin| plugin.editor_host.clone().expect("a host"))
+    }
+    /// The editor's state lock, which the window's size source logs under.
+    fn editor_lock(&self) -> std::sync::Arc<crate::editor::EditorLock> {
+        self.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone())
     }
     /// Run the host's main-thread callback, and count the times the project
     /// has been marked modified since the fixture began.
@@ -905,8 +914,9 @@ fn a_ui_state_edit_marks_the_project_once_and_its_restore_does_not() {
 
 /// A resize or an Own window switch, what `editor-state` saves, has the host
 /// mark the project modified, once per change; a host's resize while the
-/// editor opens marks nothing, nor does a restore (#1824). `frame` is what
-/// the end of each editor frame does, and the editor opens docked, where a
+/// editor opens marks nothing, nor does a restore, whose resize lands at the
+/// next frame (#1824). `frame` is what each editor frame does, the window's
+/// size source and then the frame's end, and the editor opens docked, where a
 /// host's `set_size` is the editor's size.
 /// A notice only sets a flag the host services, so the device is serviced
 /// after every frame: notices from two frames would otherwise read as one.
@@ -914,6 +924,7 @@ fn a_ui_state_edit_marks_the_project_once_and_its_restore_does_not() {
 fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not() {
     let _scope = crate::test_scope::enter();
     let device = Device::new();
+    device.stats.grants_resize.store(true, Ordering::Relaxed);
     let gui = unsafe {
         &*(((*device.plugin).get_extension.unwrap())(device.plugin, CLAP_EXT_GUI.as_ptr())
             .cast::<clap_plugin_gui>())
@@ -925,7 +936,14 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     }
     let state = device.wrapper().test_inspect_plugin(|plugin| plugin.params.editor_state.clone());
     let settings = device.settings();
-    let frame = || state.report_edit(|| settings.changed());
+    let (host, lock) = (device.editor_host(), device.editor_lock());
+    let opened = std::cell::Cell::new(None);
+    let frame = || {
+        if let Some(opened) = opened.get() {
+            crate::editor::next_size(&state, opened, host.as_ref(), &lock);
+        }
+        state.report_edit(|| settings.changed());
+    };
     let resize = |grow: u32| {
         let (width, height) = state.size();
         let size = (width + grow, height + grow);
@@ -934,7 +952,8 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     };
     let before = device.service();
     state.set_docked(true);
-    state.set_open(true);
+    opened.set(Some(state.open()));
+    state.settle();
     resize(40);
     frame();
     assert_eq!(device.service(), before, "a resize while the editor opens");
@@ -949,25 +968,103 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     frame();
     assert_eq!(device.service(), before + 2, "once");
 
-    let saved = crate::editor::EguiState::from_size(900, 700);
-    saved.set_docked(true);
+    let saved = crate::editor::SavedWindow { size: (900, 700), docked: true };
     let mut project = device.wrapper().get_state_object();
-    project.fields.insert("editor-state".into(), serde_json::to_string(&*saved).unwrap());
+    project.fields.insert("editor-state".into(), serde_json::to_string(&saved).unwrap());
     device.load(project);
-    assert_eq!(state.size(), (900, 700), "the restore installed");
     frame();
+    assert_eq!(state.size(), (900, 700), "the restore installed");
     assert_eq!(device.service(), before + 2, "a restore");
 
     // Closed, then reopened: a frame the own window draws as the view moves
-    // into it comes before the opening is recorded.
-    state.set_open(false);
+    // into it comes before the opening is settled.
+    state.close();
+    opened.set(Some(state.open()));
     resize(20);
     frame();
     assert_eq!(device.service(), before + 2, "a resize while the view moves in");
-    state.set_open(true);
+    state.settle();
     resize(20);
     frame();
     assert_eq!(device.service(), before + 2, "a resize while the editor opens again");
+}
+
+/// Bitwig's border drag stops at the editor's limits, the answer to
+/// `gui.adjust_size`, and a host size outside them is refused, the editor
+/// keeping its own (Yan, #1814). Docked and open, where a host size inside
+/// them is the editor's.
+#[test]
+fn a_border_drag_stops_at_the_editors_limits_and_a_size_outside_them_is_refused() {
+    let _scope = crate::test_scope::enter();
+    let device = Device::new();
+    let gui = unsafe {
+        &*(((*device.plugin).get_extension.unwrap())(device.plugin, CLAP_EXT_GUI.as_ptr())
+            .cast::<clap_plugin_gui>())
+    };
+    let (mut api, mut floating) = (ptr::null(), false);
+    unsafe {
+        assert!((gui.get_preferred_api.unwrap())(device.plugin, &mut api, &mut floating));
+        assert!((gui.create.unwrap())(device.plugin, api, false));
+    }
+    let state = device.wrapper().test_inspect_plugin(|plugin| plugin.params.editor_state.clone());
+    state.set_docked(true);
+    state.set_open(true);
+    let adjust = |(mut width, mut height): (u32, u32)| {
+        assert!(unsafe { (gui.adjust_size.unwrap())(device.plugin, &mut width, &mut height) });
+        (width, height)
+    };
+    let set_size = |(width, height): (u32, u32)| unsafe {
+        (gui.set_size.unwrap())(device.plugin, width, height)
+    };
+    let limits = crate::editor::LIMITS;
+    assert_eq!(adjust((1, 1)), limits.min, "a drag below the minimum");
+    assert_eq!(adjust((u32::MAX, u32::MAX)), limits.max, "a drag past the maximum");
+    let inside = (limits.min.0 + 1, limits.max.1 - 1);
+    assert_eq!(adjust(inside), inside, "a drag inside them");
+
+    let kept = state.size();
+    for outside in [(limits.min.0 - 1, limits.min.1), (limits.max.0, limits.max.1 + 1)] {
+        assert!(!set_size(outside), "{outside:?} was taken");
+        assert_eq!(state.size(), kept, "a refused size replaced the editor's");
+    }
+    assert!(set_size(limits.min), "the minimum itself");
+    assert_eq!(state.size(), limits.min);
+}
+
+/// A restore while the editor is open (a preset, Bitwig's undo) resizes its
+/// window to the restored size at the next frame, through the host, and
+/// marks nothing (Yan, #1814); until then the editor keeps the size its
+/// window has. `frame` is the window's size source and the frame's end.
+#[test]
+fn a_restore_while_the_editor_is_open_resizes_its_window_at_the_next_frame() {
+    let _scope = crate::test_scope::enter();
+    let device = Device::new();
+    device.stats.grants_resize.store(true, Ordering::Relaxed);
+    let state = device.wrapper().test_inspect_plugin(|plugin| plugin.params.editor_state.clone());
+    let settings = device.settings();
+    let (host, lock) = (device.editor_host(), device.editor_lock());
+    state.set_docked(true);
+    let opened = state.open();
+    let frame = || {
+        let laid_out = crate::editor::next_size(&state, opened, host.as_ref(), &lock);
+        state.report_edit(|| settings.changed());
+        laid_out
+    };
+    frame();
+    let kept = state.size();
+    let restored = (kept.0 + 120, kept.1 + 80);
+    let saved = crate::editor::SavedWindow { size: restored, docked: true };
+    let mut project = device.wrapper().get_state_object();
+    project.fields.insert("editor-state".into(), serde_json::to_string(&saved).unwrap());
+    let marks = device.service();
+
+    device.load(project);
+    assert_eq!(state.size(), kept, "resized before the window's next frame");
+    assert!(device.stats.resizes.lock().unwrap().is_empty(), "the host asked before the frame");
+    assert_eq!(frame(), Some(restored), "the frame was not laid out at the restored size");
+    assert_eq!(*device.stats.resizes.lock().unwrap(), [restored], "the host asked");
+    assert_eq!(state.size(), restored, "the window took the restored size");
+    assert_eq!(device.service(), marks, "a restore marked the project");
 }
 
 /// The queue keeps arrival order across kinds: an edit queued before a restore

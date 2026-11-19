@@ -8,7 +8,7 @@
 
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_ui::{
-    begin_frame, draw_pane, AppearanceDocument, Layout, PictureState, SpectrogramRender,
+    begin_frame, draw_panes, AppearanceDocument, Layout, PictureState, SpectrogramRender,
 };
 
 use crate::wav::Audio;
@@ -231,10 +231,7 @@ pub fn render(
         // background is the render pass's clear color rather than a
         // painted rect.
         let output = context.run_ui(frame_input(screen, now, max_texture_side), |ui| {
-            for (surface, (pane, rect)) in placements.iter().enumerate() {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                draw_pane(&mut child, *pane, &mut state, now, surface);
-            }
+            draw_panes(ui, &placements, &mut state, now);
             // Last, over the gaps the panes left: the seam that keeps the
             // lattice and the spectral pane from reading as one field.
             settings.layout.paint_dividers(ui.painter(), &placements);
@@ -1001,10 +998,13 @@ mod tests {
     /// the drift — the stars' lives, built up off `now` as well — and it is the one
     /// texture that does not go through the shared palette lookup, so it is a
     /// second draw path rather than a second setting of this one.
+    ///
+    /// No other style: every texture drifts on the pane's one `Travel`, so a
+    /// third would read the wash's clock again at four more device startups.
     #[test]
     fn rendering_a_drifting_wash_twice_is_byte_identical() {
         use harmonigraph_scene::CloudStyle;
-        for style in [CloudStyle::Watercolor, CloudStyle::Stars, CloudStyle::VelvetScales] {
+        for style in [CloudStyle::Watercolor, CloudStyle::Stars] {
             drifting_texture_renders_twice_to_the_same_bytes(style);
         }
     }
@@ -1026,11 +1026,10 @@ mod tests {
             a.time_softness = 120.0;
             // Fast enough that a second of render carries the field a visible
             // way: at 1x the whole run is a fraction of one glob. The
-            // stars take their own speed, and their nearest at its top is as
-            // visible.
+            // stars take their own speed, every depth at its top as visible.
             a.cloud_speed = speed;
-            *a.stars.star_speed.last_mut().unwrap() =
-                speed.min(harmonigraph_scene::SPECTRAL_STAR_SPEED_MAX);
+            a.stars.star_speed = [speed.min(harmonigraph_scene::SPECTRAL_STAR_SPEED_MAX);
+                harmonigraph_scene::star_plan::STAR_DEPTHS];
             let mut take = transient_take(0.0);
             take.header.appearance = Some(state.appearance.serialize());
             take
@@ -1085,6 +1084,244 @@ mod tests {
         );
         assert!(first[mid] != bare[mid], "{style:?} drew the untextured frame {mid}");
         assert!(first[mid] != still[mid], "{style:?}'s clock moved nothing in frame {mid}");
+    }
+
+    /// The light field holds the newest slab across the analyzer divider, so the
+    /// texture beside it is as bright as it is further in. It used to be silence
+    /// past the divider, which the reduced field's filtering and every star
+    /// centred there pulled into a dark seam a few pixels wide.
+    ///
+    /// Colour memory, on as the look ships, widened that seam (8 pixels against
+    /// 5, #1540), so the claim is held at the fresh pickup and release as well as
+    /// with the memory off, under Watercolor as well as Stars, each measured over
+    /// its own seam's width.
+    ///
+    /// Drawn from the golden set's shot, but kept out of its module: it compares
+    /// nothing against a base, and `golden` is the filter `tools/golden-diff.py`
+    /// draws by, so under it its 80 frames ran on every golden draw (#1853).
+    #[test]
+    fn textures_hold_their_light_up_to_the_analyzer() {
+        use harmonigraph_scene::CloudStyle;
+        let shot = crate::golden::Shot { size: [480, 240], range: (36.0, 96.0) };
+        let fresh = harmonigraph_scene::SpectralAtmosphere::default();
+        for (style, memory) in [
+            (CloudStyle::Stars, false),
+            (CloudStyle::Stars, true),
+            (CloudStyle::Watercolor, false),
+            (CloudStyle::Watercolor, true),
+        ] {
+            let take = shot.dialled(|a| {
+                let atmosphere = &mut a.spectrum.atmosphere;
+                atmosphere.cloud_style = style;
+                if memory {
+                    (atmosphere.color_pickup, atmosphere.color_release) =
+                        (fresh.color_pickup, fresh.color_release);
+                }
+                a.spectrum.roll_fraction = 0.65;
+            });
+            let Some(frame) = crate::golden::last_frame(&shot, take) else {
+                eprintln!("skipping textures_hold_their_light_up_to_the_analyzer: no usable GPU");
+                return;
+            };
+            let [w, h] = shot.size.map(|n| n as usize);
+            let mean = |columns: std::ops::Range<usize>| {
+                let n = columns.len() * h * 3;
+                let sum: u32 = columns
+                    .flat_map(|x| {
+                        (0..h).flat_map(move |y| (0..3).map(move |c| (y * w + x) * 4 + c))
+                    })
+                    .map(|i| u32::from(frame[i]))
+                    .sum();
+                sum as f32 / n as f32
+            };
+            // `dialled` draws full-bleed, so the region is exactly the pane's
+            // first `roll_fraction` of its width and the divider is drawn at its
+            // edge. A margin there would move both windows off the seam.
+            let divider = (0.65 * w as f32).round() as usize;
+            let seam = if memory { 8 } else { 5 };
+            let (edge, inside) =
+                (mean(divider - 1 - seam..divider - 1), mean(divider - 60..divider - 20));
+            assert!(
+                edge > 0.95 * inside,
+                "{style:?}, memory {memory}: the newest edge {edge} against {inside} further in"
+            );
+        }
+    }
+
+    /// The frame the composed-export tests draw, in points.
+    const COMPOSED: egui::Vec2 = egui::vec2(1280.0, 720.0);
+
+    /// A composed frame's state with every input the off-lattice band reads
+    /// pinned rather than fresh: the camera whole, a perspective one at
+    /// `distance`; just tuning, where distinct nodes are distinct pitches (the
+    /// 12-TET default finds a match for any pitch within six fifths); and a
+    /// spectral pane with the Analyzer, where the band is drawn, at half its
+    /// depth over 55..73. Set after `begin_frame`, which syncs the camera from
+    /// the host's parameters.
+    fn composed_state(distance: f32, now: f64) -> PictureState {
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
+        begin_frame(&mut state, &crate::replay::ReplayParams::default(), now);
+        let camera = &mut state.appearance.camera;
+        camera.projection = harmonigraph_scene::Projection::Perspective;
+        (camera.yaw, camera.pitch, camera.distance) = (0.4, 0.3, distance);
+        camera.target = Default::default();
+        state.runtime.tuning = harmonigraph_core::Tuning::just();
+        state.appearance.view.fade_time = 0.0;
+        let spectrum = &mut state.appearance.spectrum;
+        spectrum.orientation = harmonigraph_ui::SpectralOrientation::Left;
+        (spectrum.low_midi, spectrum.high_midi) = (55.0, 73.0);
+        (spectrum.show_roll, spectrum.roll_fraction) = (true, 0.5);
+        state
+    }
+
+    /// Hold middle C bent onto `node`'s own pitch, which is what a retuned
+    /// keyboard or an MPE part does and the only way to sound one.
+    fn sound(state: &mut PictureState, node: harmonigraph_core::LatticePos) {
+        use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
+        let semitones = state.runtime.tuning.pitch_class(node).to_cents() / 100.0;
+        let tracker = &mut state.runtime.tracker;
+        tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones },
+        });
+    }
+
+    /// Draw `placements` as an export does, and count the off-lattice bands
+    /// the spectral pane paints; with the rects the lattice's paint callbacks
+    /// were given, which is the rect it drew its window in.
+    fn composed_frame(
+        state: &mut PictureState,
+        placements: &[(harmonigraph_ui::Pane, egui::Rect)],
+        now: f64,
+    ) -> (usize, Vec<egui::Rect>) {
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, COMPOSED);
+        let output = context.run_ui(frame_input(screen, now, 8192), |ui| {
+            draw_panes(ui, placements, state, now);
+        });
+        let band = harmonigraph_ui::theme::picture_off_scale().gamma_multiply(0.3);
+        let shapes = || output.shapes.iter().map(|s| &s.shape);
+        let bands = shapes().filter(|s| matches!(s, egui::Shape::Rect(r) if r.fill == band));
+        let callbacks = shapes().filter_map(|s| match s {
+            egui::Shape::Callback(callback) => Some(callback.rect),
+            _ => None,
+        });
+        (bands.count(), callbacks.collect())
+    }
+
+    /// The rect a placement's lattice is drawn in: what egui allocates it
+    /// inside the placement, snapped to its 1/32-point grid.
+    fn allocated(placement: egui::Rect) -> egui::Rect {
+        let mut rect = egui::Rect::NOTHING;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, COMPOSED);
+        let _ = egui::Context::default().run_ui(frame_input(screen, 0.0, 8192), |ui| {
+            let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(placement));
+            rect = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover()).0;
+        });
+        rect
+    }
+
+    fn window_in(state: &PictureState, rect: egui::Rect) -> harmonigraph_scene::DrawnWindow {
+        state.appearance.view.scrolled(&state.appearance.camera, rect.width() / rect.height())
+    }
+
+    /// An exported frame's spectral pane describes the lattice drawn beside it
+    /// in that frame, from the first frame on (#1833). Read from the frame
+    /// before, frame 0 had only the reach, which a zoomed-out perspective lattice
+    /// draws far past, so a note the lattice lit wore the off-lattice band.
+    #[test]
+    fn an_exported_frame_flags_nothing_its_own_lattice_draws() {
+        use harmonigraph_core::LatticePos;
+        let now = 0.05;
+        let mut state = composed_state(harmonigraph_scene::Camera::MAX_DISTANCE, now);
+        let placements = Layout::split(harmonigraph_ui::LatticeSide::Right, 0.36).resolve(COMPOSED);
+        let (_, lattice) = placements[0];
+        let window = window_in(&state, allocated(lattice));
+        let reach = state.appearance.view.reach();
+        let far = [
+            LatticePos::new(0, window.min.fives, 0),
+            LatticePos::new(0, window.max.fives, 0),
+            LatticePos::new(window.min.threes, 0, 0),
+            LatticePos::new(window.max.threes, 0, 0),
+        ]
+        .into_iter()
+        .find(|&pos| window.contains(pos) && !reach.contains(pos))
+        .expect("a zoomed-out perspective lattice draws nothing the reach cannot name");
+        sound(&mut state, far);
+
+        // The fixture reaches the band: with no lattice in the frame, the
+        // pane asks the reach and flags the note.
+        let alone = [placements[1]];
+        assert_eq!(composed_frame(&mut state, &alone, now).0, 1, "the note is not off the reach");
+
+        let (bands, _) = composed_frame(&mut state, &placements, now);
+        assert_eq!(bands, 0, "the lattice lights this note and frame 0 flags it as off it");
+    }
+
+    /// The spectral pane describes the window the lattice drew in the rect egui
+    /// allocated it, not one worked out from the placement beside it. The two
+    /// differ by under 1/32 point (460.8 points against 460.8125 at this
+    /// layout's 36%), which is enough at a column's cutoff for a held note's
+    /// node to be drawn and flagged, or flagged and not drawn, for a whole
+    /// export. The split is the one nearest 36% where the two windows part, and
+    /// the note is on a node one has and the other has not.
+    #[test]
+    fn an_exported_frame_describes_the_window_its_lattice_drew() {
+        use harmonigraph_core::LatticePos;
+        let now = 0.05;
+        let mut state = composed_state(10.0, now);
+        let lattice = |split: f32| {
+            Layout::split(harmonigraph_ui::LatticeSide::Right, split).resolve(COMPOSED)[0].1
+        };
+        let windows = |split: f32| {
+            let placement = lattice(split);
+            (window_in(&state, placement), window_in(&state, allocated(placement)))
+        };
+        // Each step where the placement's window changes, narrowed to the two
+        // adjacent splits on either side of the change; one of them has the
+        // allocated rect's window already changed or not yet.
+        let (split, (placed, drawn)) = (0..200)
+            .map(|step| 0.36 + 0.001 * step as f32)
+            .filter(|&split| windows(split).0 != windows(split + 0.001).0)
+            .flat_map(|mut low| {
+                let mut high = low + 0.001;
+                for _ in 0..40 {
+                    let middle = 0.5 * (low + high);
+                    if windows(middle).0 == windows(low).0 {
+                        low = middle;
+                    } else {
+                        high = middle;
+                    }
+                }
+                [low, high]
+            })
+            .map(|split| (split, windows(split)))
+            .find(|(_, (placed, drawn))| placed != drawn)
+            .expect("no split near 36% where the allocated rect draws another window");
+        let span = |a: i32, b: i32, c: i32, d: i32| a.min(c)..=b.max(d);
+        let node = span(placed.min.threes, placed.max.threes, drawn.min.threes, drawn.max.threes)
+            .flat_map(|threes| {
+                span(placed.min.fives, placed.max.fives, drawn.min.fives, drawn.max.fives)
+                    .map(move |fives| LatticePos::new(threes, fives, 0))
+            })
+            .find(|&pos| placed.contains(pos) != drawn.contains(pos))
+            .expect("the windows differ in a sheet other than the home one");
+        sound(&mut state, node);
+
+        let placements =
+            Layout::split(harmonigraph_ui::LatticeSide::Right, split).resolve(COMPOSED);
+        let (bands, callbacks) = composed_frame(&mut state, &placements, now);
+        assert!(
+            callbacks.contains(&allocated(placements[0].1)),
+            "the lattice drew in none of {callbacks:?}, so `allocated` is not its rect",
+        );
+        let flagged = usize::from(!drawn.contains(node));
+        assert_eq!(bands, flagged, "the band describes another window than the one drawn");
     }
 
     #[test]

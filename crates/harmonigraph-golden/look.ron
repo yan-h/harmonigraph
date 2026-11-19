@@ -254,19 +254,4 @@
         volume_floor_db: -68.13718,
         volume_ceiling_db: -35.144592,
     ),
-    render: (
-        trigger: OnTransportStop,
-        stop_bar: 65.0,
-        spectrogram: WholeVideo,
-        frame: (
-            aspect_w: 16,
-            aspect_h: 9,
-            split: 0.36334875,
-            lattice: Right,
-        ),
-        short_edge: 1440,
-        tail: 0.0,
-        encoder: Hardware,
-        archive: false,
-    ),
 )

@@ -75,7 +75,7 @@ fn the_ui_scale_shrinks_the_panel_chrome() {
 /// spectrogram measure everything off the pane they land in, so a laptop
 /// dialling its panel down is not quietly composing a different picture — and
 /// the offline renderer, which reaches the same panes through
-/// [`draw_pane`](crate::draw_pane) on a context that is never told a scale,
+/// [`draw_panes`](crate::draw_panes) on a context that is never told a scale,
 /// cannot disagree with what the plugin showed. The determinism test would not
 /// catch it if one did: it renders everything at one scale.
 #[test]
@@ -100,7 +100,8 @@ fn the_ui_scale_leaves_the_picture_alone() {
         let screen = egui::vec2(600.0, 400.0);
         let out = super::probe::frame_full(&super::probe::themed_scaled(scale), screen, |ui| {
             crate::begin_frame(&mut state.picture, &backend, 1.0);
-            crate::draw_pane(ui, crate::Pane::Spectral, &mut state.picture, 1.0, 0);
+            let full = [(crate::Pane::Spectral, ui.max_rect())];
+            crate::draw_panes(ui, &full, &mut state.picture, 1.0);
         });
         // Debug rather than the shapes themselves: they hold floats and
         // texture handles and are not `PartialEq`, and a difference anywhere

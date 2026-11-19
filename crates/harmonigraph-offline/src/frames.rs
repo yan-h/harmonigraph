@@ -390,20 +390,19 @@ mod tests {
         assert_eq!(value.a, 1.0);
     }
 
-    /// The standing setup every probe below shares: a headless renderer, a
-    /// themed context at one scale, and the single-pane lattice layout all of
-    /// them shoot through.
+    /// The standing setup the frame tests below share: a headless renderer, a
+    /// themed context at one scale, and the single-pane lattice layout.
     ///
-    /// It exists for the `RawInput` rather than for the line count. Each probe
-    /// used to build one by hand, and the field that decides whether a probe is
+    /// It exists for the `RawInput` rather than for the line count. Each test
+    /// used to build one by hand, and the field that decides whether a frame is
     /// a picture of what the EXPORT draws is invisible by its absence —
     /// `max_texture_side`, issue #368. [`Self::frame`] therefore goes through
     /// [`crate::render::frame_input`], the render loop's own constructor, so a
-    /// field added there arrives here rather than being forgotten eight times.
+    /// field added there arrives here rather than being forgotten in each.
     ///
-    /// What stays with each probe is its `PictureState`: the ground, the
+    /// What stays with each test is its `PictureState`: the ground, the
     /// tuning, the clocks, the notes and the dial under test are the reading
-    /// conditions, and those are the expensive part of a probe rather than the
+    /// conditions, and those are the expensive part of a test rather than the
     /// plumbing this holds.
     struct ProbeSheet {
         renderer: Renderer,
@@ -451,10 +450,7 @@ mod tests {
                 crate::render::frame_input(self.screen, now, self.renderer.max_texture_side());
             let placements = &self.placements;
             let output = self.context.run_ui(input, |ui| {
-                for (surface, (pane, rect)) in placements.iter().enumerate() {
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                    harmonigraph_ui::draw_pane(&mut child, *pane, state, now, surface);
-                }
+                harmonigraph_ui::draw_panes(ui, placements, state, now);
             });
             let primitives = self.context.tessellate(output.shapes, self.pixels_per_point);
             self.renderer.render_to_vec(
@@ -465,14 +461,9 @@ mod tests {
             )
         }
 
-        /// [`Self::frame`], written to `target/scratch/<name>.png`.
-        fn shoot(&mut self, state: &mut PictureState, now: f64, name: &str) {
-            let bytes = self.frame(state, now);
-            self.save(&bytes, name);
-        }
-
-        /// Write already-drawn pixels and print where they went, which is what
-        /// makes a probe readable under `--nocapture`.
+        /// Write already-drawn pixels to `target/scratch/<name>.png` and print
+        /// where they went, which is what makes the evidence readable under
+        /// `--nocapture`.
         fn save(&self, bytes: &[u8], name: &str) {
             let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
             std::fs::create_dir_all(&dir).expect("a scratch directory");
@@ -488,9 +479,6 @@ mod tests {
             eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
         }
     }
-
-    /// The five-note chord (G3 C4 E4 G4 B4) most probes here are read under.
-    const CHORD: [u8; 5] = [55, 60, 64, 67, 71];
 
     /// Hold `notes` down from t = 0 at full velocity.
     fn hold(state: &mut PictureState, notes: &[u8]) {
@@ -621,22 +609,6 @@ mod tests {
         }
     }
 
-    /// Which of the ring's readings a shot is of: none of them (the MIDI
-    /// picture alone), the raw spectrum at a given Range, the fold, or the fold
-    /// at a stated Gate — how loud a node's loudest wedge must read for that
-    /// node to wear a ring at all.
-    #[derive(Clone, Copy)]
-    enum Shot {
-        Midi,
-        Spectrum(f32),
-        Fold,
-        Gate(f32),
-    }
-
-    /// A sawtooth at MIDI `midi`, one second of it: every harmonic to Nyquist
-    /// at amplitude 1/k, which is the signal the whole spectral-lattice family
-    /// is judged on — its constellation is PREDICTED by the harmonic series
-    /// rather than measured (see `panes::spectral_fold`'s own tests).
     /// Mono `samples` analyzed into `state`'s spectrum as one run, its newest
     /// frame heard at `now`.
     fn analyze(
@@ -653,6 +625,8 @@ mod tests {
             .feed_source(samples, 1, rate, origin, cfg, |delivery| spectrum.apply(delivery, cfg));
     }
 
+    /// A sawtooth at MIDI `midi`, one second of it: every harmonic to Nyquist
+    /// at amplitude 1/k, a sound with energy across the analyzer's axis.
     fn sawtooth(midi: f32, rate: f32) -> Vec<f32> {
         let f = harmonigraph_core::spectrum::midi_to_hz(midi);
         (0..rate as usize)
@@ -667,222 +641,6 @@ mod tests {
                 sum
             })
             .collect()
-    }
-
-    /// The node glow's picture, written to `target/scratch/` — a sweep of the
-    /// Reach against the Strength, which is what decides whether the light is
-    /// an accent on each node or a field the lattice sits in.
-    ///
-    /// A probe: it asserts nothing, the verdict being a look rather than a
-    /// number. Kept and `#[ignore]`d for the same reason the ring's is: the
-    /// expensive part is the reading conditions rather than the plumbing. The
-    /// chord is read under the DEFAULT tuning, `Tuning::just()` putting a whole
-    /// chord on one node and so leaving nothing for a halo to overlap; the
-    /// camera is at the far distance, several nodes on screen, because a field
-    /// is a claim about what light does BETWEEN nodes; the note Fade and the
-    /// light's own clock are off, so one frame is the whole picture rather than
-    /// a shot of an envelope part way through; and the ground is the skin's
-    /// panel rather than the fixture's near-black, which is what a wash is
-    /// actually laid over in the DAW.
-    ///
-    /// The Strength comes down as the Reach goes up, deliberately: the light is
-    /// SCREEN-blended, so a wide flat halo on every node of a chord saturates
-    /// to white at a strength that was right for an accent, and the shots would
-    /// then be a picture of the clamp.
-    ///
-    /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture node_glow
-    /// ```
-    #[test]
-    #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_node_glow_draws_a_picture() {
-        const SIZE: [u32; 2] = [1200, 1000];
-        const PPP: f32 = 2.0;
-        const NOW: f64 = 1.0;
-
-        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
-            eprintln!("no usable GPU adapter; nothing rendered");
-            return;
-        };
-        let mut state = PictureState::new(FORMAT);
-        // The DAW's own lattice ground rather than the fixture's near-black, so
-        // what the light lands on here is what it lands on there.
-        state.set_background((24, 25, 29));
-        state.appearance.view.fade_time = 0.0;
-        // The light's own clock off: one frame is the whole picture, and a
-        // halo part way through its attack is a shot of the ballistics.
-        state.appearance.view.glow_attack = 0.0;
-        state.appearance.view.glow_release = 0.0;
-        hold(&mut state, &CHORD);
-
-        let fresh = harmonigraph_scene::ViewConfig::default();
-        let shots: Vec<(f32, f32)> = vec![
-            (fresh.glow_reach, fresh.glow_strength),
-            (2.0, 1.0),
-            (4.0, 1.0),
-            (4.0, 0.6),
-            (8.0, 0.4),
-        ];
-        let home = state.appearance.camera;
-        for (reach, strength) in shots {
-            state.appearance.camera = home;
-            state.appearance.camera.zoom_by(2.5);
-            state.appearance.view.glow_reach = reach;
-            state.appearance.view.glow_strength = strength;
-            let name =
-                format!("node-glow-reach{:.0}-strength{:.0}", reach * 100.0, strength * 100.0);
-            sheet.shoot(&mut state, NOW, &name);
-        }
-    }
-
-    /// The SHADOW against the OCTAVE GAP, written to `target/scratch/`: what a
-    /// node casts between its slices as the angular padding widens.
-    ///
-    /// A probe: it asserts nothing, the verdict being a look. A node's shadow
-    /// is a blur of its own ink, so a wide gap is a gap in the shadow too, and
-    /// what a number cannot say is whether a node with the field coming through
-    /// it still reads as one object rather than as a ring of unrelated marks.
-    ///
-    /// The reading conditions, which are the expensive part: the Reach up at a
-    /// Strength that does NOT climb with it, since the light is screen-blended
-    /// and a wide halo on every node of a chord saturates to white at a strength
-    /// that was right for an accent; the light's own clock off, so one frame is
-    /// the whole picture rather than a shot of the ballistics; the DAW's ground
-    /// rather than the fixture's near-black; and a zoom that puts one node's
-    /// slices across a good part of the frame.
-    ///
-    /// `PROBE_TAG` names the shots, which is what makes a BEFORE and an AFTER of
-    /// one look: shoot under one tag, change what the node casts from, shoot
-    /// under another.
-    ///
-    /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture the_shadow_against
-    /// ```
-    #[test]
-    #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_shadow_against_the_shared_gap() {
-        const SIZE: [u32; 2] = [1200, 1000];
-        const PPP: f32 = 2.0;
-        const NOW: f64 = 1.0;
-
-        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
-            eprintln!("no usable GPU adapter; nothing rendered");
-            return;
-        };
-        let mut state = PictureState::new(FORMAT);
-        state.set_background((24, 25, 29));
-        state.appearance.view.fade_time = 0.0;
-        state.appearance.view.glow_attack = 0.0;
-        state.appearance.view.glow_release = 0.0;
-        state.appearance.view.glow_reach = 2.0;
-        state.appearance.view.glow_strength = 1.0;
-        hold(&mut state, &CHORD);
-
-        let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "after".to_string());
-
-        let home = state.appearance.camera;
-        for gap in [0.05f32, 0.1, 0.2] {
-            state.appearance.camera = home;
-            state.appearance.camera.zoom_by(3.5);
-            state.appearance.view.ring_gap = gap;
-            sheet.shoot(&mut state, NOW, &format!("gap{:.0}-{tag}", gap * 100.0));
-        }
-    }
-
-    /// The resting marker field's picture, written to `target/scratch/` — a
-    /// sweep of the three bars that shape a cross: how far its arms reach, how
-    /// thick they are, and how much of each end fades out. Together they decide
-    /// whether the lattice at rest is a field of marks or a field of objects.
-    ///
-    /// A probe: it asserts nothing, the verdict being a look rather than a
-    /// number, and it is kept and `#[ignore]`d for the reason the two below it
-    /// are — the reading conditions are the expensive part.
-    ///
-    /// Those conditions: NOTHING sounding, because the subject is what an
-    /// unplayed lattice draws and a chord over it is exactly the thing that
-    /// hides it; the camera pulled back so several rows are on screen, a field
-    /// being a claim about regularity rather than about one marker; and the
-    /// skin's panel as the ground rather than the fixture's near-black, because
-    /// the markers are the ground's own grey a step above it and the whole
-    /// judgement is how far above.
-    ///
-    /// One shot holds a held chord, and it is the one that answers the
-    /// question the arm bar is really for: a node arriving has to COVER its own
-    /// marker rather than grow out of one, which is a comparison between the
-    /// arm's reach and where the node's rings start.
-    ///
-    /// Two shots are the NAMES, which take a marker off the position they
-    /// stand on (`NodeInstance::name_level`): one under Past with a memory
-    /// behind it, where names and markers share the field, and one under All,
-    /// where the names take the whole of it. That pair is the reading the rule
-    /// is for, and neither can be judged from a shot with no type in it.
-    ///
-    /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture resting_markers
-    /// ```
-    #[test]
-    #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_resting_markers_draw_a_picture() {
-        const SIZE: [u32; 2] = [1200, 1000];
-        const PPP: f32 = 2.0;
-        const NOW: f64 = 1.0;
-
-        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
-            eprintln!("no usable GPU adapter; nothing rendered");
-            return;
-        };
-
-        let fresh = harmonigraph_scene::ViewConfig::default();
-        use harmonigraph_scene::NoteNames;
-        // Arm length, label scale (which sets the arm's width), taper, whether
-        // a chord is held over it, and which names show. The smallest arms
-        // earn their shots: a marker's edge is the rings' band, which is a
-        // fixed number of PIXELS, so it is at the bottom of the arm bar that
-        // the band is most of the marker and the shape has the least room to
-        // be the shape it claims.
-        let scale = fresh.label_scale;
-        let shots: Vec<(f32, f32, f32, bool, NoteNames)> = vec![
-            // The fresh marker, then the ends of the arm bar, then the two
-            // pictures the naming rule makes of the field.
-            (fresh.plus_arm, scale, fresh.plus_taper, false, NoteNames::Played),
-            (0.05, scale, fresh.plus_taper, false, NoteNames::Played),
-            (0.5, scale, fresh.plus_taper, false, NoteNames::Played),
-            (fresh.plus_arm, scale, fresh.plus_taper, true, NoteNames::Past),
-            (fresh.plus_arm, scale, fresh.plus_taper, false, NoteNames::All),
-            // The width, across the label scale's span at one arm: the
-            // thinnest cross and the heaviest.
-            (fresh.plus_arm, 0.3, fresh.plus_taper, false, NoteNames::Played),
-            (fresh.plus_arm, 3.0, fresh.plus_taper, false, NoteNames::Played),
-            // The taper, across its whole span: a square end, half the arm,
-            // and an arm that fades the whole way from the crossing.
-            (fresh.plus_arm, scale, 0.0, false, NoteNames::Played),
-            (fresh.plus_arm, scale, 0.5 * fresh.plus_arm, false, NoteNames::Played),
-            (fresh.plus_arm, scale, fresh.plus_arm, false, NoteNames::Played),
-        ];
-        for (size, label_scale, taper, chord, names) in shots {
-            let mut state = PictureState::new(FORMAT);
-            state.appearance.view.note_names = names;
-            // The DAW's own lattice ground rather than the fixture's near-black:
-            // the markers are a step above the panel and nothing else here says
-            // how big a step that reads as.
-            state.set_background((24, 25, 29));
-            state.appearance.view.fade_time = 0.0;
-            if chord {
-                hold(&mut state, &CHORD);
-            }
-            state.appearance.camera.zoom_by(2.5);
-            state.appearance.view.plus_arm = size;
-            state.appearance.view.label_scale = label_scale;
-            state.appearance.view.plus_taper = taper;
-            let name = format!(
-                "plus-arm{:.0}-scale{:.0}-taper{:.0}{}-{names:?}",
-                size * 100.0,
-                label_scale * 100.0,
-                taper * 100.0,
-                if chord { "-chord" } else { "" },
-            );
-            sheet.shoot(&mut state, NOW, &name);
-        }
     }
 
     /// A node is a LAMP with a sheet behind it, not a hole: its own middle is
@@ -981,313 +739,6 @@ mod tests {
         );
     }
 
-    /// The audio ring's picture, written to `target/scratch/` — the only way
-    /// to LOOK at this change without the DAW.
-    ///
-    /// A visual probe: it checks that each shot enables its subject, while
-    /// #381's visual verdict remains Yan's, at the plugin. It is kept, and kept
-    /// `#[ignore]`d, because the reading conditions are the expensive part
-    /// rather than the plumbing — #351 measured that the fresh extents draw a
-    /// C3 saw as a haze of comma neighbours, so a picture taken at them says
-    /// nothing about the ring, and the two settings below (extents 4 × 3, the
-    /// Analyzer's floor at −35 dB) are what make the constellation legible.
-    /// Rebuilding those from the issue costs more than the rest of this put
-    /// together.
-    ///
-    /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture audio_ring
-    /// ```
-    ///
-    /// Same note held as sounding, so both pictures are on screen at once: the
-    /// held C3 lights its own node's band, and the ring inside it reads the
-    /// saw's own spectrum around each of that node's octaves. That holds under
-    /// either reading — the ring never replaces the MIDI picture.
-    ///
-    /// The RANGE sweep is what the fresh value was chosen against, and it is
-    /// the reason this writes more than two shots: the setting decides whether
-    /// a wedge is a zoom on the node's own pitch or a copy of the whole wheel,
-    /// and the two ends look nothing alike.
-    #[test]
-    #[ignore = "a visual probe: writes PNGs for inspection"]
-    fn the_audio_ring_draws_a_picture() {
-        const SIZE: [u32; 2] = [1200, 1000];
-        // Retina-ish, so the wedges and the note names are resolved rather
-        // than aliased — this is a picture to be looked at, not a fixture to
-        // be measured.
-        const PPP: f32 = 2.0;
-        const RATE: f32 = 48_000.0;
-        // A second in: long enough that the analyzer's window is full of the
-        // steady spectrum rather than of its own attack.
-        const NOW: f64 = 1.0;
-
-        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
-            eprintln!("no usable GPU adapter; nothing rendered");
-            return;
-        };
-        let mut state = PictureState::new(FORMAT);
-        state.set_background(sheet.background);
-        // Just intonation, which is what the panel is aimed at: a partial of a
-        // just-tuned note lands ON its node rather than near it.
-        state.runtime.tuning = harmonigraph_core::Tuning::just();
-        // #351's reading conditions, and the reason this probe exists. Its
-        // "pull the extents in" is a ZOOM here: the drawn window is whatever
-        // the camera is looking at, and the extents set the naming
-        // reach rather than the picture's edge — so the way to have fewer
-        // nodes on screen is to look at fewer of them. The floor is the other
-        // half, and it is unchanged: at −60 dB the comma neighbours haze over
-        // the constellation.
-        state.appearance.view.extent_threes = 4;
-        state.appearance.view.extent_fives = 3;
-        state.appearance.spectrum.floor_db = -35.0;
-        // The Analyzer's own Attack and Release. Both off here, so the picture
-        // is the spectrum of the second that was pushed rather than a function
-        // of how many hops this fixture happened to feed.
-        state.appearance.spectrum.attack = 0.0;
-        state.appearance.spectrum.release = 0.0;
-        // Fully lit at once: an envelope would put the MIDI half of the
-        // picture part way through its arrival.
-        state.appearance.view.fade_time = 0.0;
-        hold(&mut state, &[48]);
-        let cfg = state.appearance.spectrum;
-        analyze(&mut state, &sawtooth(48.0, RATE), RATE, NOW, &cfg);
-
-        // Two distances, because the two questions are asked at different
-        // ones. Whether the constellation READS is a question about a screen
-        // full of nodes; whether the ring sits clear of the core and the
-        // octave band, and what one wedge is actually showing, is one about a
-        // single node — and at reading distance a wedge is a dozen pixels.
-        //
-        // The Range sweep runs at both, because the setting trades exactly
-        // between them: narrow is legible close up and a smear at distance,
-        // and the octave end is one picture repeated on every node, which only
-        // shows on a screen full of them.
-        //
-        // The FOLD rides along at both distances, because it is the other half
-        // of the selector and the pair only means anything side by side: the
-        // same wedges in the same annulus, one flat per octave and one a
-        // window across it. Which of the two reads better is the judgement
-        // this probe exists to put in front of a person.
-        //
-        // The GATE sweep runs at the far distance alone, and that is its
-        // subject rather than a saving: what it decides is which of a screenful
-        // of nodes is worth a ring, and one node up close has nothing to say
-        // about that. Its low end is the gate off — a ring on every node in
-        // view, silence included — which is what the sweep is read against.
-        let fresh_range = state.appearance.view.spectral_ring_range;
-        let mut shots: Vec<(f32, &str, Shot)> = Vec::new();
-        for (zoom, at) in [(2.5f32, ""), (9.0, "-close")] {
-            shots.push((zoom, at, Shot::Midi));
-            for range in [50.0f32, fresh_range, 600.0, 1200.0] {
-                shots.push((zoom, at, Shot::Spectrum(range)));
-            }
-            shots.push((zoom, at, Shot::Fold));
-        }
-        for gate in [0.0f32, 0.25, 0.4, 0.6] {
-            shots.push((2.5, "", Shot::Gate(gate)));
-        }
-
-        let home = state.appearance.camera;
-        for (zoom, at, shot) in shots {
-            let source = match shot {
-                Shot::Midi => "audio-ring-off".to_string(),
-                Shot::Fold => "audio-ring-fold".to_string(),
-                Shot::Spectrum(range) => {
-                    state.appearance.view.spectral_ring_range = range;
-                    format!("audio-ring-{range:.0}c")
-                }
-                Shot::Gate(gate) => format!("audio-ring-gate-{:.0}", gate * 100.0),
-            };
-            // Every other shot is of the ring's own reading, so they are taken
-            // at the gate OFF: a node held back would read as a reading that
-            // says nothing there, which is the one thing those shots are for.
-            state.appearance.view.spectral_ring_gate = match shot {
-                Shot::Gate(gate) => gate,
-                _ => 0.0,
-            };
-            // The ring's WIDTH is what turns it off, so the MIDI shot dials it
-            // to nothing rather than picking a reading that says "none" — and
-            // the octave band closes in over the space it leaves, which is the
-            // MIDI picture the stack draws.
-            state.appearance.view.spectral_ring_width = match shot {
-                Shot::Midi => 0.0,
-                _ => 0.1,
-            };
-            state.appearance.view.spectral_reading = match shot {
-                Shot::Fold | Shot::Midi | Shot::Gate(_) => {
-                    harmonigraph_scene::SpectralReading::Fold
-                }
-                Shot::Spectrum(_) => harmonigraph_scene::SpectralReading::Spectrum,
-            };
-            assert_eq!(state.appearance.view.spectral_ring_draws(), !matches!(shot, Shot::Midi));
-            // From the fresh camera each time: the pane pans the view's center
-            // with the camera, so a zoom applied on top of the last one would
-            // compound.
-            state.appearance.camera = home;
-            // And from a fresh ring, for the same reason one step further on:
-            // every shot here is taken at ONE clock, so a ring carried over
-            // from the shot before would still be standing where that shot's
-            // Gate put it (both halves step against the clock, so a second
-            // frame at the same moment moves nothing). These are pictures of
-            // settings rather than frames of an animation, and a fresh ring is
-            // what the first frame of each of them draws.
-            //
-            // BOTH halves, which is why it is one call: the carried levels are
-            // the grid the wedges read and the fade is whether the annulus is
-            // there at all. Clearing the fade alone leaves the Fold shots and
-            // the whole Gate sweep drawn over the RAW spectrum's grid — the
-            // one measured first — which reads as the gate admitting far more
-            // than it does, and by more the higher the gate is set.
-            state.reset_ring();
-            state.appearance.camera.zoom_by(zoom);
-            sheet.shoot(&mut state, NOW, &format!("{source}{at}"));
-        }
-    }
-
-    /// **A released note letting go of its light**, written to
-    /// `target/scratch/`: one frame per moment of one note's release, across
-    /// the Shadow depth.
-    ///
-    /// A probe: it asserts nothing, the verdict being a look. What it is for is
-    /// the one thing the stills beside it cannot show — a picture that is right
-    /// while a note is held and wrong on the way out. The two clocks are why
-    /// there is such a picture at all: a node's layers run on the note Fade and
-    /// its light runs on the Glow release (`panes::glow_fade` in
-    /// harmonigraph-ui), so every release has a stretch of full halo over
-    /// fading ink, and whatever the two do to each other happens there and
-    /// nowhere else.
-    ///
-    /// The DEPTH is what is swept, because it is what the stretch is worst at:
-    /// it decides how much of the frame a caster's ink is still worth
-    /// (`shadow_through` in lattice.wgsl), and the ink is the half that is
-    /// leaving. Shot at the fresh setting first as the reference, then at its
-    /// top.
-    ///
-    /// Reading conditions as [`the_node_glow_draws_a_picture`] sets them, with
-    /// the two clocks left RUNNING rather than switched off, which is the whole
-    /// subject here.
-    ///
-    /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture released_note
-    /// ```
-    #[test]
-    #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn a_released_note_lets_go_of_its_light() {
-        const SIZE: [u32; 2] = [900, 900];
-        const PPP: f32 = 2.0;
-        const STEP: f64 = 1.0 / 30.0;
-        // Long enough that the note is settled at full before it is let go: the
-        // Fade's attack runs the same second its release does, and a shot of a
-        // note still arriving says nothing about one leaving.
-        const OFF: f64 = 1.5;
-
-        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
-            eprintln!("no usable GPU adapter; nothing rendered");
-            return;
-        };
-
-        // (tag, depth). The first is the fresh setting, as the reference.
-        let shots: Vec<(&str, f32)> = vec![("fresh", 0.85), ("deep", 1.0)];
-        // Moments of the release, and one of the hold ahead of it as the
-        // reference.
-        let want: Vec<f64> =
-            [-0.05, 0.1, 0.25, 0.4, 0.6, 0.9, 1.5, 2.5].iter().map(|t| OFF + t).collect();
-
-        for (tag, depth) in shots {
-            let mut state = PictureState::new(FORMAT);
-            state.set_background((24, 25, 29));
-            state.appearance.view.glow_reach = 1.5;
-            state.appearance.view.glow_strength = 1.0;
-            for style in state.appearance.view.shadow.groups_mut() {
-                style.width = 0.16;
-                style.depth = depth;
-            }
-            state.appearance.camera.zoom_by(2.0);
-            hold(&mut state, &[60]);
-            let mut released = false;
-            let mut now = 0.0f64;
-            let mut shot = 0usize;
-            while shot < want.len() {
-                if !released && now >= OFF {
-                    state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::off(
-                        now,
-                        harmonigraph_core::SourceId::DIRECT,
-                        0,
-                        60,
-                    ));
-                    released = true;
-                }
-                // Every step is DRAWN and only the wanted ones are kept: the
-                // picture is a function of the clock the frames before it ran
-                // on, so skipping the draw between two shots would change what
-                // the second of them shows.
-                let bytes = sheet.frame(&mut state, now);
-                if now + STEP * 0.5 >= want[shot] {
-                    sheet.save(&bytes, &format!("release-{tag}-t{:03.0}", (now - OFF) * 100.0));
-                    shot += 1;
-                }
-                now += STEP;
-            }
-        }
-    }
-
-    /// The marker field under a tilted camera, written to `target/scratch/` —
-    /// the picture the draw order is for.
-    ///
-    /// A probe: it asserts nothing, the verdict being a look. What it is a look
-    /// AT is which crosses a node's disc covers. Nodes and markers are both
-    /// camera-facing billboards at a fixed world size while the sheet they
-    /// stand on foreshortens, so face-on a node's disc reaches about its own
-    /// cell and the only cross under it is its own — tilt the sheet and one
-    /// disc spans a dozen positions, most of them NEARER the eye than the node.
-    ///
-    /// Five cameras, and the first two are the control: cabinet and a gentle
-    /// perspective, where the whole field could be drawn under the whole sheet
-    /// and no pixel would know. The other three are where the order shows.
-    ///
-    /// The names are OFF, a marker being what a name replaces
-    /// (`derive_pluses`): with them on, every position this is about is named
-    /// and ships no cross at all. The ground is the skin's panel rather than
-    /// the fixture's near-black, which is what the field is actually read
-    /// against.
-    ///
-    /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture marker_depth
-    /// ```
-    #[test]
-    #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_marker_depth_order_draws_a_picture() {
-        const SIZE: [u32; 2] = [1200, 1000];
-        const PPP: f32 = 2.0;
-        const NOW: f64 = 1.0;
-
-        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
-            eprintln!("no usable GPU adapter; nothing rendered");
-            return;
-        };
-
-        for (tag, pitch, yaw) in [
-            ("cabinet", 0.3f32, 0.4f32),
-            ("flat", 0.3, 0.4),
-            ("tilt", 1.15, 0.4),
-            ("edge", 1.42, 0.4),
-            ("yaw", 0.3, 1.42),
-        ] {
-            let mut state = PictureState::new(FORMAT);
-            state.set_background((24, 25, 29));
-            state.appearance.view.fade_time = 0.0;
-            hold(&mut state, &CHORD);
-            state.appearance.camera.projection = if tag == "cabinet" {
-                harmonigraph_scene::Projection::Cabinet
-            } else {
-                harmonigraph_scene::Projection::Perspective
-            };
-            state.appearance.camera.pitch = pitch;
-            state.appearance.camera.yaw = yaw;
-            state.appearance.camera.zoom_by(1.6);
-            sheet.shoot(&mut state, NOW, &format!("marker-depth-{tag}"));
-        }
-    }
-
     /// A resize holds one size's targets at a time (#1508). Every target keyed
     /// on a pane's size — the lattice's offscreen set, the roll's and the
     /// spectral cloud's — is dropped before its replacement
@@ -1329,7 +780,7 @@ mod tests {
         let mut state = PictureState::new(FORMAT);
         // Notes for the roll and a second of sound for the cloud, neither of
         // which builds a target without.
-        hold(&mut state, &CHORD);
+        hold(&mut state, &[55, 60, 64, 67, 71]);
         let mut now = 1.0;
         let cfg = state.appearance.spectrum;
         analyze(&mut state, &sawtooth(55.0, RATE), RATE, now, &cfg);
@@ -1347,10 +798,7 @@ mod tests {
                 let input =
                     crate::render::frame_input(screen, now, sheet.renderer.max_texture_side());
                 let output = sheet.context.run_ui(input, |ui| {
-                    for (surface, (pane, rect)) in layout.resolve(points).into_iter().enumerate() {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                        harmonigraph_ui::draw_pane(&mut child, pane, &mut state, now, surface);
-                    }
+                    harmonigraph_ui::draw_panes(ui, &layout.resolve(points), &mut state, now);
                 });
                 let primitives = sheet.context.tessellate(output.shapes, 1.0);
                 let clear = egui::Color32::BLACK;
