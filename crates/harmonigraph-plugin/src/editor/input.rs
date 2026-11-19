@@ -33,19 +33,26 @@ pub(crate) struct LiveInput {
     audio_position: Option<(u64, u64)>,
     /// Presentation seconds of the retained run’s frame zero, before mapping.
     audio_origin: f64,
-    /// The audio the last [`Self::take`] moved out of the ring, in buffers
-    /// kept for the next, so a step allocates only when it needs more than
-    /// any before it.
-    taken: Taken,
+    /// What a [`Taken`] carries, in buffers kept from one to the next, so a
+    /// step allocates only when it needs more than any before it.
+    scratch: Scratch,
     /// The analysis over this input, dated from `audio_origin`.
     analysis: harmonigraph_ui::SpectrumAnalysis,
     recorder: crate::tape::notes::Recorder,
 }
 
-/// The audio one [`LiveInput::take`] moved out of the ring: what
-/// [`LiveInput::analyze`] runs over without the lock.
+/// The audio one [`LiveInput::take`] moved out of the ring, until
+/// [`Taken::give`] hands what [`Taken::analyze`] made of it to the spectrum:
+/// a borrow of the input, so the three run in that order, once each, and
+/// nothing else drains the input in between. A step holds it across the
+/// lock's release, which is where the FFTs run.
+pub(crate) struct Taken<'a> {
+    input: &'a mut LiveInput,
+}
+
+/// [`Taken`]'s buffers.
 #[derive(Default)]
-pub(crate) struct Taken {
+struct Scratch {
     /// The settings when the audio was taken, which analyze it and smooth
     /// the curve it moves.
     config: harmonigraph_ui::SpectrumConfig,
@@ -57,7 +64,7 @@ pub(crate) struct Taken {
     deliveries: Vec<harmonigraph_ui::Delivery>,
 }
 
-/// One callback's block of [`Taken::samples`].
+/// One callback's block of [`Scratch::samples`].
 struct TakenBlock {
     /// The block starts a new retained source run.
     restart: bool,
@@ -69,12 +76,13 @@ struct TakenBlock {
     block: crate::audio_ingress::Block,
 }
 
-impl Taken {
+impl Taken<'_> {
     /// Each block's descriptor and samples, in drain order.
     pub(crate) fn blocks(&self) -> impl Iterator<Item = (crate::audio_ingress::Block, &[f32])> {
+        let scratch = &self.input.scratch;
         let mut start = 0;
-        self.blocks.iter().map(move |block| {
-            let samples = &self.samples[start..start + block.len];
+        scratch.blocks.iter().map(move |block| {
+            let samples = &scratch.samples[start..start + block.len];
             start += block.len;
             (block.block, samples)
         })
@@ -83,13 +91,51 @@ impl Taken {
     pub(crate) fn clocked_blocks(
         &self,
     ) -> impl Iterator<Item = (crate::audio_ingress::Block, f64)> + '_ {
-        let offset = self.offset;
-        self.blocks.iter().map(move |taken| (taken.block, taken.block.presentation() + offset))
+        let scratch = &self.input.scratch;
+        let offset = scratch.offset;
+        scratch.blocks.iter().map(move |taken| (taken.block, taken.block.presentation() + offset))
     }
     /// Whether this step found audio, and has analyzed none of it yet.
     #[cfg(test)]
     pub(crate) fn unanalyzed_audio(&self) -> bool {
-        !self.blocks.is_empty() && self.deliveries.is_empty()
+        let scratch = &self.input.scratch;
+        !scratch.blocks.is_empty() && scratch.deliveries.is_empty()
+    }
+    /// The columns the analysis has made so far, as `(time, power)`.
+    #[cfg(test)]
+    pub(crate) fn columns(&self) -> Vec<(f64, Vec<f32>)> {
+        (self.input.scratch.deliveries.iter())
+            .filter_map(harmonigraph_ui::Delivery::column)
+            .map(|column| (column.time(), column.power().to_vec()))
+            .collect()
+    }
+    /// Run the FFTs over what was taken, with no lock held.
+    pub(crate) fn analyze(&mut self) {
+        let LiveInput { analysis, scratch, .. } = &mut *self.input;
+        let mut start = 0;
+        for block in &scratch.blocks {
+            if block.restart {
+                analysis.restart();
+                scratch.deliveries.push(harmonigraph_ui::Delivery::Restart);
+            }
+            let samples = &scratch.samples[start..start + block.len];
+            start += block.len;
+            analysis.feed_source(
+                samples,
+                block.block.format.channels,
+                block.block.format.sample_rate,
+                block.origin,
+                &scratch.config,
+                |delivery| scratch.deliveries.push(delivery),
+            );
+        }
+    }
+    /// Hand what [`Self::analyze`] made to the spectrum. Whether that brought
+    /// sound back to a spectrum gone still
+    /// ([`AudioSpectrum::give`](harmonigraph_ui::AudioSpectrum::give)).
+    pub(crate) fn give(self, runtime: &mut harmonigraph_ui::VisualRuntime) -> bool {
+        let scratch = &mut self.input.scratch;
+        runtime.spectrum.give(scratch.deliveries.drain(..), &scratch.config)
     }
 }
 
@@ -103,7 +149,7 @@ impl LiveInput {
             audio_consumer,
             audio_position: None,
             audio_origin: 0.0,
-            taken: Taken::default(),
+            scratch: Scratch::default(),
             analysis: Default::default(),
             recorder: Default::default(),
         }
@@ -149,7 +195,7 @@ impl LiveInput {
     /// heartbeat has given that offset, leaving the audio in the ring as
     /// before, and when the ring held none.
     ///
-    /// Always drains AND (in [`Self::analyze`]) always feeds. There is no
+    /// Always drains AND (in [`Taken::analyze`]) always feeds. There is no
     /// display state that makes the samples unwanted: the curve and the
     /// spectrogram read this one analyzer, the curve is always drawn, and
     /// feeding it is also what drives smooth repaint while anything it heard
@@ -158,16 +204,16 @@ impl LiveInput {
         &mut self,
         clock: &DisplayClock,
         picture: &harmonigraph_ui::PictureState,
-    ) -> Option<&Taken> {
-        // One clock conversion per take, shared with note delivery and made
-        // in the same hold, observed and then mapped as a frame's drain did.
-        let offset = clock.mapper.offset?;
-        let audio = &mut self.taken;
-        // Emptied here rather than once given, so what a step that panicked
-        // before giving left behind is never given again.
+    ) -> Option<Taken<'_>> {
+        let audio = &mut self.scratch;
+        // Emptied at every take rather than once given, so what a step that
+        // panicked before giving left behind is never given again.
         audio.samples.clear();
         audio.blocks.clear();
         audio.deliveries.clear();
+        // One clock conversion per take, shared with note delivery and made
+        // in the same hold, observed and then mapped as a frame's drain did.
+        let offset = clock.mapper.offset?;
         audio.config = picture.appearance.spectrum;
         audio.offset = offset;
         self.audio_consumer.drain(|block, samples| {
@@ -187,28 +233,7 @@ impl LiveInput {
         });
         // Nothing to analyze: spare the caller a second hold to give back
         // nothing.
-        (!self.taken.blocks.is_empty()).then_some(&self.taken)
-    }
-    /// Run the FFTs over what [`Self::take`] moved out, with no lock held.
-    pub(crate) fn analyze(&mut self) {
-        let Self { analysis, taken: audio, .. } = self;
-        let mut start = 0;
-        for block in &audio.blocks {
-            if block.restart {
-                analysis.restart();
-                audio.deliveries.push(harmonigraph_ui::Delivery::Restart);
-            }
-            let samples = &audio.samples[start..start + block.len];
-            start += block.len;
-            analysis.feed_source(
-                samples,
-                block.block.format.channels,
-                block.block.format.sample_rate,
-                block.origin,
-                &audio.config,
-                |delivery| audio.deliveries.push(delivery),
-            );
-        }
+        (!self.scratch.blocks.is_empty()).then_some(Taken { input: self })
     }
     /// The lag the analysis runs at, which tells a test the resolution it
     /// analyzes under.
@@ -224,20 +249,9 @@ impl LiveInput {
         self.analysis = Default::default();
         self.audio_position = None;
     }
-    /// What the last [`Self::take`] that found audio moved out.
-    pub(crate) fn taken(&self) -> &Taken {
-        &self.taken
-    }
-    /// Hand what [`Self::analyze`] made to the spectrum. Whether that brought
-    /// sound back to a spectrum gone still
-    /// ([`AudioSpectrum::give`](harmonigraph_ui::AudioSpectrum::give)).
-    pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime) -> bool {
-        let audio = &mut self.taken;
-        runtime.spectrum.give(audio.deliveries.drain(..), &audio.config)
-    }
     /// The locked half of a step: the notes into the tracker and their
     /// marks into `marks` ([`Self::drain_into_tracker`]), then the audio out
-    /// of its ring, for [`Self::analyze`] then [`Self::give`].
+    /// of its ring, for [`Taken::analyze`] then [`Taken::give`].
     /// Input feeding does not prune: its callers age the picture after it,
     /// the input worker in the same hold and a frame in `begin_frame`.
     pub(crate) fn take(
@@ -246,7 +260,7 @@ impl LiveInput {
         picture: &mut harmonigraph_ui::PictureState,
         marks: &mut Vec<(f64, crate::tape::notes::Mark)>,
         now: f64,
-    ) -> Option<&Taken> {
+    ) -> Option<Taken<'_>> {
         self.drain_into_tracker(clock, picture, marks, now);
         self.take_audio(clock, picture)
     }
@@ -260,9 +274,9 @@ impl LiveInput {
         marks: &mut Vec<(f64, crate::tape::notes::Mark)>,
         now: f64,
     ) {
-        if self.take(clock, picture, marks, now).is_some() {
-            self.analyze();
-            self.give(&mut picture.runtime);
+        if let Some(mut taken) = self.take(clock, picture, marks, now) {
+            taken.analyze();
+            taken.give(&mut picture.runtime);
         }
     }
     /// [`Self::drain`] with a delivery tap: the columns its analysis made, as
@@ -274,15 +288,12 @@ impl LiveInput {
         picture: &mut harmonigraph_ui::PictureState,
         now: f64,
     ) -> Vec<(f64, Vec<f32>)> {
-        if self.take(clock, picture, &mut Vec::new(), now).is_none() {
+        let Some(mut taken) = self.take(clock, picture, &mut Vec::new(), now) else {
             return Vec::new();
-        }
-        self.analyze();
-        let columns = (self.taken.deliveries.iter())
-            .filter_map(harmonigraph_ui::Delivery::column)
-            .map(|column| (column.time(), column.power().to_vec()))
-            .collect();
-        self.give(&mut picture.runtime);
+        };
+        taken.analyze();
+        let columns = taken.columns();
+        taken.give(&mut picture.runtime);
         columns
     }
 }
@@ -490,7 +501,7 @@ mod tests {
             );
         }
         drain_audio(&mut input, &mut shared, 5.0);
-        let spare = input.taken();
+        let spare = &input.scratch;
         assert!(spare.deliveries.capacity() >= frames / block, "the step must take every block");
         let held = spare.deliveries.capacity() * size_of::<harmonigraph_ui::Delivery>();
         assert!(held < 100_000, "the spare delivery list holds {held} bytes");

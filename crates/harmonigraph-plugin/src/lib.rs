@@ -139,8 +139,9 @@ pub struct Harmonigraph {
     audio_producer: audio_ingress::Producer,
     /// Current rate for recording controls only; queued audio carries its own.
     sample_rate_bits: Arc<AtomicU32>,
-    /// State shared with the editor; created eagerly so the ring buffer's
-    /// consumer end has somewhere to live before the GUI opens.
+    /// State shared with the editor; created eagerly, since the input worker
+    /// drains into it, and installs a host restore through it, before the
+    /// GUI opens.
     editor_shared: Arc<editor::EditorLock>,
     /// The host's side of the editor, given before the editor is made: the
     /// editor's parameter edits, its resize requests and its own window's
@@ -1066,16 +1067,16 @@ mod tests {
     use super::*;
 
     /// How long a "the analyzer has done the work" assertion waits before it
-    /// gives up — on the analyzer, or on the machine, which is a distinction
-    /// [`columns_after`] keeps rather than resolves.
+    /// gives up — on the analyzer, or on the machine, a distinction a wait
+    /// cannot resolve, so its failure message must not claim either.
     ///
     /// Two orders of magnitude over the 20 ms poll, because what has to be
     /// bounded is not how fast the analyzer works but how long the scheduler
     /// may ignore it: on a shared CI runner a round can simply fail to happen
     /// inside any window a fixed sleep would pick, which is what took main red
     /// at `f9cbc4e0` on a tree that had already passed (#598). Nothing healthy
-    /// ever spends this — [`columns_after`] returns on the round that
-    /// lands — so it costs the suite only when it is about to fail anyway.
+    /// ever spends this — a wait returns on the round that lands — so it
+    /// costs the suite only when it is about to fail anyway.
     const ANALYSIS_DEADLINE: Duration = Duration::from_secs(5);
 
     /// The global allocator this profile is meant to have is the one that
@@ -1100,41 +1101,6 @@ mod tests {
                     std::hint::black_box(Box::new(0u64))
                 });
             assert!(measured.allocations > 0, "a debug build runs without nice-plug's allocator");
-        }
-    }
-
-    /// A column count above `before`, or `None` if
-    /// [`ANALYSIS_DEADLINE`] passes without one.
-    ///
-    /// **`None` does not mean the wiring is broken, and a caller must not word
-    /// it that way.** An expired deadline says only that no column arrived in
-    /// five seconds, which a flag nobody watches and a runner that never
-    /// scheduled the thread produce alike; telling those two apart is exactly
-    /// what a deadline gives up in exchange for not being a fixed sleep. The
-    /// distinction is worth the `Option`, because #598 cost a session partly
-    /// by asserting a cause in its failure message that its evidence did not
-    /// support.
-    ///
-    /// Sound only for asserting that work HAS happened. The reverse claim —
-    /// that the analyzer left a ring alone — is not waitable at all, because
-    /// every wait ends in "not yet", and a thread the scheduler forgot looks
-    /// exactly like a thread correctly holding off. Those assertions keep a
-    /// fixed settle and are commented where they stand.
-    fn columns_after(plugin: &Harmonigraph, before: u64) -> Option<u64> {
-        let started = Instant::now();
-        loop {
-            let columns = plugin.editor_shared.lock().ui.picture.runtime.spectrum.columns_taken();
-            if columns > before {
-                return Some(columns);
-            }
-            if started.elapsed() >= ANALYSIS_DEADLINE {
-                return None;
-            }
-            // Deliberately NOT `POLL`: a test written to stop being flaky
-            // should not sample in lockstep with the thread it is watching.
-            // Half the period leaves the two with no phase relationship to get
-            // wrong, and costs nothing.
-            std::thread::sleep(background::POLL / 2);
         }
     }
 
@@ -1241,18 +1207,26 @@ mod tests {
         };
 
         let mut plugin = Harmonigraph::default();
+        let state = plugin.params.editor_state.clone();
+        state.pass_request.take();
         // What the host does when it restores a project, and all it does: no
         // editor, no activation, just the field.
         restore(&plugin, &blob);
         // A Precise frame is 24,576 samples; this is more than one frameful,
         // so the analyzer cannot come out of the drain empty.
         publish_test_audio(&mut plugin, 40_000);
-        assert!(
-            columns_after(&plugin, 0).is_some(),
-            "nothing was analyzed in {ANALYSIS_DEADLINE:?}: either the restored blob \
-             reaches nothing without an editor, or this runner never scheduled the \
-             analyzer",
-        );
+        // Waited for without taking the editor lock, which would install the
+        // restore itself: the worker asks for a pass once it has given the
+        // first sound to the spectrum, and nothing else here asks for one.
+        let started = Instant::now();
+        while !state.pass_request.take() {
+            assert!(
+                started.elapsed() < ANALYSIS_DEADLINE,
+                "nothing was analyzed in {ANALYSIS_DEADLINE:?}, or this runner never \
+                 scheduled the analyzer",
+            );
+            std::thread::sleep(background::POLL / 2);
+        }
 
         // The analysis is the worker's own, so read it once the worker has
         // stopped and handed it back.
