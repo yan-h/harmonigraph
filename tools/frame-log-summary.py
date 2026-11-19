@@ -383,9 +383,11 @@ def report_first_note(run, evs, t0):
     usual = median(fr['tick_ms'] for fr in run if fr['submitted'])
     print(f'    costliest frames, main-thread ms (this opening\'s median {usual:.2f}):')
     for fr in sorted(s['frames'], key=lambda fr: -fr['tick_ms'])[:3]:
+        # A reveal's frame has no link target to be early or late against.
+        when = (f"submitted {(fr['submitted'] - fr['target']) * 1000:+.2f} ms from its target"
+                if fr['timestamp'] else 'painted at the reveal, not paced by the link')
         print(f"      +{(fr['t'] - note) * 1000:.0f} ms: tick {fr['tick_ms']:.2f} "
-              f"(render {fr['render_ms']:.2f}), submitted "
-              f"{(fr['submitted'] - fr['target']) * 1000:+.2f} ms from its target")
+              f"(render {fr['render_ms']:.2f}), {when}")
 
 
 def report_exports(run, evs, t0):
