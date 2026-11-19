@@ -1485,8 +1485,15 @@ fn a_tuning_edit_before_a_host_reset_opens_the_run_after_it() {
 /// left unpinned would time before the release ahead of it: before the fix
 /// that take refused to read, and notes only before the reset landed three
 /// blocks late.
+///
+/// 256 blocks before the reset, because by then the plugin's summed block
+/// durations have run past the Hub's steady-time mapping by more than the
+/// take's song time can hide: the reset's marker for the direct source,
+/// stamped from the sum, sorted after the resumed onset and ended it at once,
+/// though it sounds for two blocks.
 #[test]
 fn a_host_reset_that_restarts_the_steady_counter_records_as_one_that_does_not() {
+    const BEFORE: i64 = 256;
     let block = 64.0 / 48000.0;
     let record = |restart: bool, after: bool| {
         let _scope = crate::test_scope::enter();
@@ -1505,13 +1512,16 @@ fn a_host_reset_that_restarts_the_steady_counter_records_as_one_that_does_not() 
         assert!(device.settings().submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0))));
         let released = vec![note(10, 60, 30, CLAP_EVENT_NOTE_OFF)];
         device.run_transport(64, released, false, None, Some(transport(1.0 + block, 0)));
-        device.run_transport(128, vec![], false, None, Some(transport(1.0 + 2.0 * block, 0)));
+        for i in 2..BEFORE {
+            let position = transport(1.0 + i as f64 * block, 0);
+            device.run_transport(i * 64, vec![], false, None, Some(position));
+        }
         unsafe { ((*device.plugin).reset.unwrap())(device.plugin) };
-        let mut raw = if restart { 0 } else { 192 };
-        for i in 3..10 {
-            let events = match i {
-                3 if after => vec![note(11, 64, 0, CLAP_EVENT_NOTE_ON)],
-                5 if after => vec![note(11, 64, 0, CLAP_EVENT_NOTE_OFF)],
+        let mut raw = if restart { 0 } else { BEFORE * 64 };
+        for i in BEFORE..BEFORE + 7 {
+            let events = match i - BEFORE {
+                0 if after => vec![note(11, 64, 0, CLAP_EVENT_NOTE_ON)],
+                2 if after => vec![note(11, 64, 0, CLAP_EVENT_NOTE_OFF)],
                 _ => vec![],
             };
             let position = transport(1.0 + i as f64 * block, 0);
@@ -1520,7 +1530,7 @@ fn a_host_reset_that_restarts_the_steady_counter_records_as_one_that_does_not() 
         }
         capture.stop();
         for _ in 0..12 {
-            let mut parked = transport(1.0 + 10.0 * block, 0);
+            let mut parked = transport(1.0 + (BEFORE + 7) as f64 * block, 0);
             parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
             device.run_transport(raw, vec![], false, None, Some(parked));
             raw += 64;
@@ -1541,6 +1551,13 @@ fn a_host_reset_that_restarts_the_steady_counter_records_as_one_that_does_not() 
         let ran_on = record(false, after);
         assert_eq!(ran_on.0 .0.len(), 1, "the fixture holds the note before the reset");
         assert_eq!(ran_on.0 .1.len(), usize::from(after), "and the one after it only when asked");
+        if let [(start, Some(end))] = ran_on.0 .1[..] {
+            let struck = 1.0 + BEFORE as f64 * block;
+            assert!(
+                (start - struck).abs() < 1e-9 && (end - (struck + 2.0 * block)).abs() < 1e-9,
+                "the note after the reset sounds for its two blocks: {start}..{end}"
+            );
+        }
         assert_eq!(record(true, after), ran_on, "notes after the reset: {after}");
     }
 }

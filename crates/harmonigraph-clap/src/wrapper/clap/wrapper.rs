@@ -67,7 +67,7 @@ use std::any::Any;
 use std::ffi::{CStr, c_void};
 use std::mem;
 use std::os::raw::c_char;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
 use super::descriptor::PluginDescriptor;
@@ -92,6 +92,46 @@ const TRANSPORT_EVENT: &str = "The host sent a transport event inside a block. H
      the transport once, at each block's start, so the tape, a take's timing and the analyzer may \
      lag that change by up to one block. Please report the host (#1814).";
 
+/// The steady clock the plugin reads: the host's counter, run on across a
+/// restart.
+///
+/// CLAP lets a host restart its steady counter at a reset. A valid callback
+/// whose counter falls below where the last valid one ended starts at that
+/// end instead, and the offset that takes stays on every later callback, so
+/// [`Boundary::steady_time`] and every event's sample run on within an
+/// activation: nothing keyed on them sees time go back (#1881). A counter that
+/// runs on is never offset, and a forward jump passes through as it comes.
+/// Audio thread only, apart from the activation that resets it.
+#[derive(Default)]
+struct SteadyClock {
+    /// What a restart added to the host's counter.
+    offset: i64,
+    /// Where the last valid callback ended, on this clock.
+    next: Option<i64>,
+    /// This activation has reported a restart.
+    reported: bool,
+}
+
+impl SteadyClock {
+    /// A valid callback's start on this clock, and, for the activation's
+    /// first restart, the host's jump: where its counter should have been
+    /// and where it was.
+    fn run_on(&mut self, host: i64, frames: u32) -> (i64, Option<(i64, i64)>) {
+        let mut start = host.saturating_add(self.offset);
+        let mut jump = None;
+        if let Some(next) = self.next.filter(|&next| start < next) {
+            if !self.reported {
+                self.reported = true;
+                jump = Some((next - self.offset, host));
+            }
+            self.offset += next - start;
+            start = next;
+        }
+        self.next = Some(start.saturating_add(i64::from(frames)));
+        (start, jump)
+    }
+}
+
 pub struct Wrapper<P: Plugin> {
     setup: Option<Arc<dyn Setup>>,
     setup_pending: AtomicBool,
@@ -102,6 +142,13 @@ pub struct Wrapper<P: Plugin> {
     transport_event: AtomicBool,
     /// [`TRANSPORT_EVENT`] has been logged.
     transport_logged: AtomicBool,
+    steady: AtomicRefCell<SteadyClock>,
+    /// A process callback found the host's steady counter gone back, for the
+    /// main thread's line: once an activation, with where the counter should
+    /// have been and where it was.
+    steady_restart: AtomicBool,
+    steady_expected: AtomicI64,
+    steady_given: AtomicI64,
     /// A process callback is running, so a main-thread request waits for its
     /// end rather than calling the host from inside it.
     audio: AtomicBool,
@@ -202,6 +249,10 @@ impl<P: Plugin> Wrapper<P> {
             flush_fault: AtomicBool::new(false),
             transport_event: AtomicBool::new(false),
             transport_logged: AtomicBool::new(false),
+            steady: AtomicRefCell::new(SteadyClock::default()),
+            steady_restart: AtomicBool::new(false),
+            steady_expected: AtomicI64::new(0),
+            steady_given: AtomicI64::new(0),
             audio: AtomicBool::new(false),
             deferred_host_callback: AtomicBool::new(false),
             host_state: AtomicRefCell::new(None),
@@ -506,6 +557,7 @@ impl<P: Plugin> Wrapper<P> {
         drop(plugin);
 
         *wrapper.aux_storage.borrow_mut() = AuxStorage::new(&P::PORTS, max_frames_count);
+        *wrapper.steady.borrow_mut() = SteadyClock::default();
         wrapper.current_buffer_config.store(Some(buffer_config));
         // The one place the reported latency moves and the one place the host
         // is told it has. Whatever this activation adopts -- requested during
@@ -601,8 +653,20 @@ impl<P: Plugin> Wrapper<P> {
             }
             _ => List::EMPTY,
         };
+        let steady_time = if valid {
+            let (start, jump) = self.steady.borrow_mut().run_on(process.steady_time, frames);
+            if let Some((expected, given)) = jump {
+                self.steady_expected.store(expected, Ordering::Relaxed);
+                self.steady_given.store(given, Ordering::Relaxed);
+                self.steady_restart.store(true, Ordering::Release);
+                self.deferred_host_callback.store(true, Ordering::Release);
+            }
+            start
+        } else {
+            process.steady_time
+        };
         let boundary = Boundary {
-            steady_time: process.steady_time,
+            steady_time,
             frames,
             transport: unsafe { process.transport.as_ref() }.map(|&transport| transport.into()),
             valid,
@@ -753,6 +817,19 @@ impl<P: Plugin> Wrapper<P> {
             crate::shell_warn!("{TRANSPORT_EVENT}");
             if let Some(setup) = &wrapper.setup {
                 setup.notice(TRANSPORT_EVENT);
+            }
+        }
+        if wrapper.steady_restart.swap(false, Ordering::AcqRel) {
+            let line = format!(
+                "The host restarted its steady sample counter: a block began at {} where {} was \
+                 due. Harmonigraph runs its clock on from where it was, so the timing of notes \
+                 and takes holds; this is said once per activation (#1881).",
+                wrapper.steady_given.load(Ordering::Relaxed),
+                wrapper.steady_expected.load(Ordering::Relaxed),
+            );
+            crate::shell_warn!("{line}");
+            if let Some(setup) = &wrapper.setup {
+                setup.notice(&line);
             }
         }
     }

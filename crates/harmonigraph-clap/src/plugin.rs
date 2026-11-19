@@ -108,7 +108,12 @@ pub trait Plugin: Default + Send + 'static {
 /// What a process callback is, before its events are read.
 #[derive(Clone, Copy, Debug)]
 pub struct Boundary {
-    /// The first sample on the host's steady clock.
+    /// The first sample on the instance's steady clock: the host's counter,
+    /// run on across a restart. A valid boundary whose host counter falls
+    /// below where the last valid one ended starts at that end, and keeps the
+    /// offset after, so steady time never goes back within an activation;
+    /// every event's sample is read from it. An invalid boundary carries the
+    /// host's value as given (#1881).
     pub steady_time: i64,
     pub frames: u32,
     /// The callback's own transport, as at its first sample.
