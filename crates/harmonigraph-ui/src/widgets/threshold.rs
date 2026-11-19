@@ -10,7 +10,7 @@ pub(crate) fn threshold(
     hysteresis: &mut f32,
     fresh: (f32, f32),
 ) -> egui::Response {
-    use harmonigraph_scene::SPECTRAL_HYSTERESIS_MAX;
+    use harmonigraph_scene::{SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX};
     let plot = Plot::with_fields(ui, "Ring threshold", 3);
     // Include the full negative extent of the stored band. Clipping it at zero
     // would silently discard hysteresis when the opening threshold is lowered.
@@ -18,14 +18,21 @@ pub(crate) fn threshold(
     let value = |x: f32| x * (1.0 + SPECTRAL_HYSTERESIS_MAX) - SPECTRAL_HYSTERESIS_MAX;
     let (_, next) = plot.handle(ui, "Turn on", x(*gate), 0.8);
     if let Some(p) = next {
-        *gate = value(p.x).clamp(0.0, 1.0);
+        *gate = value(p.x).clamp(SPECTRAL_GATE_MIN, SPECTRAL_GATE_MAX);
     }
     let (_, next) = plot.handle(ui, "Hysteresis below turn-on", x(*gate - *hysteresis), 0.2);
     if let Some(p) = next {
         *hysteresis = (*gate - value(p.x)).clamp(0.0, SPECTRAL_HYSTERESIS_MAX);
     }
     plot.fields(ui, |ui| {
-        value_bar(ui, (gate, fresh.0), 0.0..=1.0, ["Ring threshold", "On"], 100.0, "%");
+        value_bar(
+            ui,
+            (gate, fresh.0),
+            SPECTRAL_GATE_MIN..=SPECTRAL_GATE_MAX,
+            ["Ring threshold", "On"],
+            100.0,
+            "%",
+        );
         value_bar(
             ui,
             (hysteresis, fresh.1),

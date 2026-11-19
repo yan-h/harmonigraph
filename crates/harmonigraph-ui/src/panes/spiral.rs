@@ -204,7 +204,7 @@ const NAME_GRAIN_CENTS: f32 = 10.0;
 /// the inner turn the room the outer one has at the fit; eight leaves headroom
 /// past that for a reader going in on one turn. Past it a pane holds a couple of
 /// turns and no spiral, which is a picture this one has stopped being.
-const ZOOM: (f32, f32) = (1.0, 8.0);
+pub(crate) const ZOOM: (f32, f32) = (1.0, 8.0);
 
 /// How far off centre the pane may look, in units of the drawn disc's outer
 /// radius — 1 puts the RIM under the pane's centre.

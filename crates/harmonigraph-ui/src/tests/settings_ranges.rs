@@ -569,7 +569,7 @@ const EXEMPT: &[(&[&str], Held, &str)] = &[
     ),
     (
         &["prefs.spiral.zoom"],
-        Held::Range(1.0, 8.0),
+        Held::Range(crate::panes::spiral::ZOOM.0 as f64, crate::panes::spiral::ZOOM.1 as f64),
         "the Spiral's framing, set on the picture itself",
     ),
     (
