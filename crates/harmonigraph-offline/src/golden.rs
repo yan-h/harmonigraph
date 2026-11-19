@@ -355,7 +355,7 @@ fn the_pinned_look_pins_every_drawn_field() {
     let pinned = keys(harmonigraph_golden::LOOK);
     let missing: Vec<_> = keys(&pinned_look().serialize())
         .into_iter()
-        .filter(|path| !path.starts_with(".render") && !pinned.contains(path))
+        .filter(|path| path != ".render" && !path.starts_with(".render.") && !pinned.contains(path))
         .collect();
     assert!(missing.is_empty(), "look.ron draws these at their Default: {missing:#?}");
 }
