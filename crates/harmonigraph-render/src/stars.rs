@@ -246,7 +246,8 @@ pub(crate) fn star_layout(settings: harmonigraph_scene::StarSettings, aspect: f3
 /// depth is soloed, only the soloed ones are. A hidden slice keeps baking and
 /// updating its colour history, so a toggle keeps the look and costs the
 /// whole field, and a flag on a depth `Star layers` leaves out counts for
-/// nothing. The solo is no part of the look (#1828): an export draws none.
+/// nothing and comes back, lit, with its depth (Yan, #1862). The solo is no
+/// part of the look (#1828): only the editor's working panes are handed one.
 pub(crate) fn soloed(
     mut slices: [StarSlice; STAR_SLICES],
     solo: [bool; STAR_SLICES],

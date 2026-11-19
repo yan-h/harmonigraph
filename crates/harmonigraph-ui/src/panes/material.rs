@@ -114,11 +114,6 @@ pub(super) fn stars(
             "How many depths of stars drift at their own speeds. They are drawn one over another, layer 1 at the back, and fewer layers drop the front-most. Which looks far is up to their values: smaller, denser, slower stars read as farther away. Each keeps its own size, spacing, speed and solid share, set under Per layer, and a layer taken away keeps them for when it comes back. Fewer layers cost less.",
         )
         .show(ui);
-    // Solo is held per depth, and a solo left on a layer the count takes away
-    // would come back on, unseen, when the count brings it back.
-    if layers as u32 != atmosphere.star_layers {
-        *solo = Default::default();
-    }
     atmosphere.star_layers = layers as u32;
     crate::widgets::star_layers(ui, atmosphere, pane);
     star_solo(ui, atmosphere.star_layers, solo);
