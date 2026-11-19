@@ -42,6 +42,25 @@ pub(crate) fn lattice_order(p: &LatticePos) -> (i32, i32, i32) {
     (p.threes, p.fives, p.sevens)
 }
 
+impl Scene {
+    /// Where the node at `pos` sits in [`nodes`](Scene::nodes), if the scene
+    /// draws it: the nodes are in lattice order, off-pane light owners merged
+    /// among the window's, so this is a search rather than a window index.
+    pub fn node_index(&self, pos: LatticePos) -> Option<usize> {
+        self.nodes
+            .binary_search_by_key(&lattice_order(&pos), |n| lattice_order(&n.lattice_pos))
+            .ok()
+    }
+}
+
+/// How large a node `centered` steps from the window center draws: smaller by
+/// [`ViewConfig::sevens_size`] for each sheet off the home one, by distance
+/// rather than signed depth (see `sevens_size`). The renderer floors it at
+/// [`MIN_NODE_SCALE`](crate::MIN_NODE_SCALE) wherever it sizes a quad.
+pub(crate) fn sheet_scale(view: &ViewConfig, centered: LatticePos) -> f32 {
+    view.sevens_size.powi(centered.sevens.unsigned_abs() as i32)
+}
+
 /// Build the regular window and selected off-pane light owners in lattice order.
 /// Extra owners share the ordinary node derivation and animation path.
 /// The caller supplies unique positions outside `window`, within its remaining
@@ -101,14 +120,10 @@ pub fn derive_scene_with_extra(
 
         // The sevens layer: how far off the home sheet this node sits
         // decides how small it draws.
-        // Distance, not signed depth — the home sheet is the ground, and a
-        // sheet in front of it is no more the subject than one behind (see
-        // `ViewConfig::sevens_size`).
-        let sheets = centered.sevens.unsigned_abs();
         nodes.push(NodeInstance::at(
             pos,
             world_pos,
-            view.sevens_size.powi(sheets as i32),
+            sheet_scale(view, centered),
             pos.sevens == view.center_sevens,
             node_cents,
             hovered == Some(pos),

@@ -4,10 +4,10 @@
 //!
 //! What the Video pane's Frame notes button does, in geometry.
 
-use glam::{Vec2, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 use harmonigraph_core::{LatticePos, PitchClass, Tuning};
 
-use crate::derive::marker_world;
+use crate::derive::{marker_world, sheet_scale};
 use crate::{lattice_to_world, Camera, ViewConfig};
 
 /// How far past the rim of the outermost framed node the picture runs, in
@@ -234,8 +234,20 @@ fn recentred(camera: &Camera, nodes: &[(Vec3, f32)], aspect: f32) -> Option<Vec3
 /// outermost ring reaches in world units, at the size `derive_scene` gives the
 /// node's sheet.
 fn footprint(view: &ViewConfig, centered: LatticePos) -> (Vec3, f32) {
-    let size = view.sevens_size.powi(centered.sevens.unsigned_abs() as i32);
-    (lattice_to_world(centered), marker_world(view.rings().outer) * size)
+    (lattice_to_world(centered), marker_world(view.rings().outer) * sheet_scale(view, centered))
+}
+
+/// The clip-space corners of a camera-facing quad of half-size `radius` round
+/// `center`, as a node's billboard is drawn: `axes` is the camera's
+/// [`right_up`](Camera::right_up) and `transform` its `view_proj`.
+pub(crate) fn billboard_corners(
+    transform: Mat4,
+    (right, up): (Vec3, Vec3),
+    center: Vec3,
+    radius: f32,
+) -> [Vec4; 4] {
+    [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]
+        .map(|(x, y)| transform * (center + (right * x + up * y) * radius).extend(1.0))
 }
 
 /// The NDC rectangle the nodes' billboards cover, each `(center, radius)`
@@ -244,12 +256,11 @@ fn footprint(view: &ViewConfig, centered: LatticePos) -> (Vec3, f32) {
 /// this distance, which is not the same as being inside it.
 fn extent(camera: &Camera, nodes: &[(Vec3, f32)], aspect: f32) -> Option<(Vec2, Vec2)> {
     let transform = camera.view_proj(aspect);
-    let (right, up) = camera.right_up();
+    let axes = camera.right_up();
     let mut lo = Vec2::splat(f32::INFINITY);
     let mut hi = Vec2::splat(f32::NEG_INFINITY);
     for &(p, r) in nodes {
-        for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-            let clip: Vec4 = transform * (p + (right * x + up * y) * r).extend(1.0);
+        for clip in billboard_corners(transform, axes, p, r) {
             if clip.w <= 0.0 || clip.z < 0.0 {
                 return None;
             }

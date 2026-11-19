@@ -14,6 +14,7 @@ members = [
     "crates/harmonigraph-standalone",
     "crates/harmonigraph-plugin",
     "crates/harmonigraph-clap",
+    "crates/harmonigraph-state-reader",
     "xtask",
 ]
 # The vendored crate is its own workspace, only referenced via [patch].

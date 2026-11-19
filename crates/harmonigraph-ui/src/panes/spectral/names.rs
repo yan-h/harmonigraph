@@ -154,8 +154,8 @@ const REPEAT_GAP: f32 = 7.8;
 /// spelling and position: expression and scrolling must not create new labels.
 #[derive(Default)]
 pub(crate) struct Thinning {
-    visible: HashSet<(harmonigraph_core::VoiceKey, u64)>,
-    suppressed: HashSet<(harmonigraph_core::VoiceKey, u64)>,
+    visible: HashSet<harmonigraph_core::PressId>,
+    suppressed: HashSet<harmonigraph_core::PressId>,
     now: Option<f64>,
     layout: Option<ThinningLayout>,
 }
@@ -417,7 +417,7 @@ pub(super) fn plan(
         if !rect.intersects(axes.rect) {
             continue;
         }
-        let id = (note.key(), note.start.to_bits());
+        let id = note.id();
         // Its standing, read once here rather than in every comparison of the
         // sort below: with thousands of candidates over a long Span, hashing
         // `visible` per comparison was most of this pass.

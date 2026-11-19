@@ -19,6 +19,8 @@ mod configuration;
 mod editor;
 mod lattice_maps;
 mod saved_fields;
+/// What a saved state loads as, for the `read-plugin-state` tool.
+pub mod saved_state;
 mod tape;
 
 /// Identity of this plugin build, supplied to the shared performance overlay.

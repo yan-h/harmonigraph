@@ -26,4 +26,4 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
 
 - A zero-length note (the roll's Rule 1) pulses on the lattice too, as the rule says and the Spiral and the note band already do. Fixed with #1838. #1861 Q5
-- Off-pane halo owner selection moves into `harmonigraph-scene` beside the rules it restates, taking an ownership predicate since the glow fade lives in the UI crate, and the lattice motion step reads the scene's own view. To be built after #1838. #1861 R5
+- Off-pane halo owner selection moves into `harmonigraph-scene` beside the rules it restates, taking an ownership predicate since the glow fade lives in the UI crate, and the lattice motion step reads the scene's own view. Built with #1838 in PR #1882. #1861 R5

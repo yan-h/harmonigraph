@@ -671,6 +671,15 @@ impl SharedState {
             .unwrap_or_default()
     }
 
+    /// [`save_persist`](Self::save_persist) laid out for a person to read,
+    /// one field to a line down to `depth` levels of nesting: what the
+    /// `read-plugin-state` tool prints a project's editor settings as.
+    pub fn save_persist_pretty(&self, depth: usize) -> String {
+        let config = ron::ser::PrettyConfig::new().depth_limit(depth);
+        let persist = UiPersist::capture(&self.workspace, &self.picture.appearance);
+        ron::ser::to_string_pretty(&persist, config).unwrap_or_default()
+    }
+
     /// What a host save stores: the live settings, serialized, or `""` for an
     /// editor nobody has opened since it was fresh. The live state is the
     /// only copy of the settings: a restore installs into it, a save

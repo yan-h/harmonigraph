@@ -24,6 +24,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use harmonigraph_ui::SharedState;
 use parking_lot::{Mutex, MutexGuard};
 
 use super::gestures::Gestures;
@@ -60,9 +61,7 @@ impl EditorLock {
         &self,
         mut guard: MutexGuard<'a, EditorShared>,
     ) -> MutexGuard<'a, EditorShared> {
-        if let Some(document) = self.inbox.take() {
-            guard.ui.install_document(&document);
-        }
+        self.inbox.install_pending(&mut guard.ui);
         guard
     }
 
@@ -140,8 +139,15 @@ impl Inbox {
         mail.fallback = document;
     }
 
-    fn take(&self) -> Option<Arc<str>> {
-        self.0.lock().pending.take()
+    /// Install the newest restore waiting into `ui`, if any: the document,
+    /// and whether its settings were installed
+    /// ([`SharedState::install_document`]). Called by every holder of the
+    /// editor lock, and by the plugin's state reader (`saved_state`), which
+    /// has no editor around its state.
+    pub(crate) fn install_pending(&self, ui: &mut SharedState) -> Option<(Arc<str>, bool)> {
+        let document = self.0.lock().pending.take()?;
+        let installed = ui.install_document(&document);
+        Some((document, installed))
     }
 
     pub(crate) fn fallback(&self) -> Arc<str> {

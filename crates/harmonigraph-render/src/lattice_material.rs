@@ -686,7 +686,13 @@ mod tests {
                         "fixture missed the atlas floor"
                     );
                 }
-                for (path, edited) in nudges(base, AtmosphereSettings::sanitized) {
+                // And a breathing brought to a stop, which a nudge never
+                // reaches: it holds where it had got to.
+                let stopped = AtmosphereSettings { breath_speed: 0.0, ..base };
+                let cases = nudges(base, AtmosphereSettings::sanitized)
+                    .into_iter()
+                    .chain([("breath_speed stopped".to_owned(), stopped)]);
+                for (path, edited) in cases {
                     if let Some(resources) = resources.get_mut::<LatticeResources>() {
                         resources.panes.remove(&0);
                     }

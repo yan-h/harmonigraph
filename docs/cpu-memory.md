@@ -100,7 +100,7 @@ So the steady growth reported in #1511 is the history filling, and it stops at t
   `heap` shows only what is live.
 - **Seed the standalone with a session's look.**
   The harness stores the same `ui-state` RON the plugin saves, under the key `harmonigraph-ui-state` in `$HOME/Library/Application Support/Harmonigraph-—-dev-harness/app.ron`.
-  `read-plugin-state.py`'s `find_states` reads it out of a `.bwproject`.
+  `./read-plugin-state --raw` prints it out of a `.bwproject`.
 - **Measure audio-side construction in a release test.**
   The release test binary counts through `RUST_HEAP` too, so the live count around a constructor is its allocation.
   A dropped recorder channel is freed by its writer thread on its next poll (every 20 ms), not at the drop.

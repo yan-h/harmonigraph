@@ -256,7 +256,7 @@ fn a_chord_at_a_wide_reach() -> Scene {
 
 /// The captured live view.
 ///
-/// Read out of a live Bitwig project with `./read-plugin-state.py` (the
+/// Read out of a live Bitwig project with `./read-plugin-state` (the
 /// `capture-daw-state` skill) on 2026-08-28. It fixes the captured Shadow width,
 /// full depth and window centred one fifth along.
 ///

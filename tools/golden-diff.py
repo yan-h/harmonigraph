@@ -75,9 +75,9 @@ TESTS = ["cargo", "test", "--no-fail-fast", "-p", "harmonigraph-render",
 # changes will skip the comparison and reuse a cached "no move".
 NOT_DRAWN_DIRS = ("docs/", ".github/", ".claude/", ".agents/", ".githooks/", "tools/",
                   "crates/harmonigraph-plugin/", "crates/harmonigraph-clap/",
-                  "crates/harmonigraph-standalone/", "xtask/")
+                  "crates/harmonigraph-standalone/", "crates/harmonigraph-state-reader/", "xtask/")
 NOT_DRAWN_FILES = ("ci.sh", "load-plugin.sh", "build-pr.sh", "session-lifecycle.sh",
-                   "read-plugin-state.py", "loc-report.py", "sample-hang.sh")
+                   "read-plugin-state", "loc-report.py", "sample-hang.sh")
 NOT_DRAWN_SUFFIXES = (".md",)
 
 

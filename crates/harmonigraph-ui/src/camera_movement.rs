@@ -34,8 +34,7 @@ impl AppearanceDocument {
     ///
     /// The one list of them. A look (`appearance_edit::Look`) resets these on
     /// capture and keeps the live document's on apply, so undo and the slots
-    /// never carry the host's camera; `read-plugin-state.py` keeps a copy,
-    /// joined to this body by its test.
+    /// never carry the host's camera.
     ///
     /// [`set_camera_movement`]: Self::set_camera_movement
     pub(crate) fn copy_host_owned(

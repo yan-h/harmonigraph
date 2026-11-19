@@ -2,8 +2,9 @@
 .DS_Store
 .claude/settings.local.json
 .claude/worktrees/
-# read-plugin-state.py leaves these behind; the rule belongs here rather than
-# in .git/info/exclude, which is per-clone and so protects nobody else.
+# A Python test that loads a script as a module leaves these behind; the rule
+# belongs here rather than in .git/info/exclude, which is per-clone and so
+# protects nobody else.
 __pycache__/
 
 # The overnight retry harness (retry-overnight.sh, itself per-clone) touches

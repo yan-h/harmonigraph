@@ -1,0 +1,26 @@
+[package]
+name = "harmonigraph-state-reader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+description = "Reads a Bitwig project's saved plugin state through the plugin's own restore"
+
+# `./read-plugin-state` at the repository root runs it (#1867). A crate of its
+# own rather than an example of the plugin's, so it builds on the plugin's
+# normal dependency edge, which a handoff's release build already compiled,
+# and not with the plugin's dev-dependencies' test features.
+[[bin]]
+name = "read-plugin-state"
+path = "src/main.rs"
+
+[dependencies]
+harmonigraph-plugin = { path = "../harmonigraph-plugin" }
+harmonigraph-clap = { workspace = true }
+harmonigraph-ui = { workspace = true }
+serde_json = "1"
+# Bitwig's compressed sections.
+flate2 = "1"
+# The editor's view printed as RON for `--rust`.
+ron = { workspace = true }

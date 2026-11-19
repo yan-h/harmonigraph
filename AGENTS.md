@@ -215,6 +215,14 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 - The host refusing an onset's tuning expression after accepting its note sends no miss, and the Tune's held voice keeps the correction, so the player's later per-note tuning jumps to the corrected pitch. Bitwig does not refuse output events.
 - A miss the Hub reads a pass late, with a Tuning delay long enough that the withdrawal lands more than 50 ms after the onset: the ribbon moves to the raw pitch, while a name anchored at the onset keeps the corrected spelling for the note's life (`RollNote::settled_pitch` follows a bend only within `RollNote::SETTLE`), in the editor and in an export; a name a few cents off, or spelled the other way (Yan, #1804).
 
+**Cases the lattice motion goes without** (PR #1882), each with its cost when it occurs:
+
+- A Note fade dragged within about two Fades after a zero-length note: the pulse's lattice off moves with the bar, so dragged longer it can hold the pulse again, which arrives a second time; a glitch while dragging.
+- A press Clear took while held, once its voice's fade ends: it leaves the replay, so a reset or a surface opened then (a Video preview) cuts the rest of its lattice departure.
+- A fade a baseline withdrew (rule 6) and the fresh press it opened share an identity: the replay is rebuilt on every frame for about one replay horizon, main-thread time only, measured at about 0.08 ms more a frame (0.12 ms against 0.04 ms for the motion step, a six-note chord over the default window's 345 nodes) for 88 frames at 144 Hz at the shipped Fade, longer at a longer one.
+- At the 4,096-note cap with no older pulse in `past`, `enforce_cap` evicts a pulse as it is filed, so a reset or a surface opened then loses the rest of its lattice departure; it takes about 4.5 notes a second sustained for 15 minutes to reach the cap.
+- A released note whose off is stamped ahead of the display clock: its node leaves on the frame that sees the off, early by as much as the audio leads the clock.
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
