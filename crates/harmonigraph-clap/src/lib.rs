@@ -73,6 +73,7 @@
 // nice-plug-core's root, merged in: its modules sit at this crate's root, where
 // nice-plug's `pub use nice_plug_core::*` used to put them.
 pub mod audio_setup;
+pub mod bitwig_probe;
 pub mod buffer;
 pub mod context;
 pub mod editor;

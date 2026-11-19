@@ -1650,6 +1650,10 @@ impl<P: ClapPlugin> Wrapper<P> {
     ) -> bool {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
+        crate::bitwig_probe::line(
+            P::NAME,
+            &format!("activate rate={sample_rate} frames={min_frames_count}..{max_frames_count}"),
+        );
 
         let audio_io_layout = wrapper.current_audio_io_layout.load();
         let buffer_config = BufferConfig {
@@ -2259,6 +2263,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             if serviced.modified {
                 if let Some(state) = wrapper.host_state.borrow().as_ref() {
                     unsafe_clap_call! { state=>mark_dirty(&*wrapper.host_callback) };
+                    crate::bitwig_probe::line(P::NAME, "mark_dirty");
                 }
             }
         }
@@ -3033,6 +3038,7 @@ impl<P: ClapPlugin> Wrapper<P> {
     ) -> bool {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, stream);
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
+        let probe_start = std::time::Instant::now();
 
         match state::serialize_state_json(&wrapper.get_state_object()) {
             Ok(serialized) => {
@@ -3053,6 +3059,15 @@ impl<P: ClapPlugin> Wrapper<P> {
                 }
 
                 crate::nice_trace!("Saved state ({} bytes)", serialized.len());
+                crate::bitwig_probe::line(
+                    P::NAME,
+                    &format!(
+                        "save bytes={} took={:.2}ms {}",
+                        serialized.len(),
+                        probe_start.elapsed().as_secs_f64() * 1e3,
+                        crate::bitwig_probe::transport_counts(),
+                    ),
+                );
 
                 true
             }
@@ -3097,6 +3112,10 @@ impl<P: ClapPlugin> Wrapper<P> {
                 let success = wrapper.restore(&state);
                 if success {
                     crate::nice_trace!("Loaded state ({} bytes)", read_buffer.len());
+                    crate::bitwig_probe::line(
+                        P::NAME,
+                        &format!("load bytes={}", read_buffer.len()),
+                    );
                 }
 
                 success

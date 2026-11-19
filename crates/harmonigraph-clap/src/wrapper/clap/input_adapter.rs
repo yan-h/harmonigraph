@@ -208,6 +208,9 @@ impl<P: ClapPlugin> Wrapper<P> {
                     break;
                 }
             };
+            if boundary.is_some() && matches!(value, InputValue::Transport(_)) {
+                crate::bitwig_probe::transport(header.time);
+            }
             self.owned_input
                 .lock()
                 .as_mut()
