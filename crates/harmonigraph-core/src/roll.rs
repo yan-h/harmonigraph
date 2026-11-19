@@ -711,30 +711,6 @@ impl NoteRoll {
         self.timeline().filter(|n| !self.hides(n.source))
     }
 
-    /// The most recent moment any remembered note was sounding — `now`
-    /// while anything is held — or `None` if the roll is empty.
-    ///
-    /// This is how a display decides whether it still has to animate: a
-    /// roll scrolls for as long as its window reaches back to something,
-    /// which outlasts the last voice's release fade. `past` is
-    /// release-ordered, so its latest release is the one on the end; `fading`
-    /// is scanned, which for a roll the tracker prunes is a fade's worth of
-    /// notes.
-    pub fn latest_activity(&self, now: Time) -> Option<Time> {
-        let shown = |n: &&RollNote| !n.off_timeline && !self.hides(n.source);
-        if self.live.values().any(|n| shown(&n)) {
-            return Some(now);
-        }
-        let past = self.past.iter().rev().find(|n| !self.hides(n.source));
-        let past = past.and_then(RollNote::departed);
-        self.fading
-            .iter()
-            .filter(shown)
-            .filter_map(RollNote::departed)
-            .chain(past)
-            .reduce(Time::max)
-    }
-
     pub fn len(&self) -> usize {
         self.timeline().count()
     }
@@ -1159,8 +1135,8 @@ mod tests {
 
     /// Two sources mapped onto the clock by their own offsets: one's release
     /// can ARRIVE after a later release of the other's. The roll still reads
-    /// as release order — the latest release is the latest activity, and the
-    /// older release ages out on time rather than waiting behind the newer.
+    /// as release order: the older release ages out on time rather than
+    /// waiting behind the newer.
     /// Both fades have ended by the first prune, so the order read is the
     /// finished notes'.
     #[test]
@@ -1172,7 +1148,6 @@ mod tests {
         tracker.handle_event(NoteEvent::off(10.0, a, 0, 60));
         tracker.handle_event(NoteEvent::off(2.0, b, 0, 60)); // arrives last, released first
         tracker.prune(20.0, &Envelope::default());
-        assert_eq!(tracker.roll().latest_activity(20.0), Some(10.0));
         tracker.prune(2.0 + NoteRoll::MAX_AGE + 1.0, &Envelope::default());
         let left: Vec<_> = tracker.roll().notes().map(|n| n.end).collect();
         assert_eq!(left, [Some(10.0)], "the older release is forgotten on time");

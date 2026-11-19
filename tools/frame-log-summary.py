@@ -5,33 +5,22 @@ The log comes from the plugin's `--features frame-log` build
 (`egui-baseview/src/frame_log.rs` in egui-plugin-window), one CSV per host process in
 `~/Library/Logs/Harmonigraph/`. With no path, the newest log there is read.
 
-The run is split into phases at every change of the chosen Editor frame rate
-(the `chosen` column) and at every frame the display link did not ask for, so
-the time an unseen editor runs no frames, and the reveal's frame after it,
-count in no phase. A log recorded before an unseen editor stopped running
-frames (egui-plugin-window #4) carries a 10 Hz watchdog's frames there
-instead, and splits the same way. A log written before the `chosen` column existed is read as chosen at
-its `divisor`, which holds for one recorded before #1692 slowed a still
-editor's link; one recorded between the two cannot be told apart, so record
-it again. A log written before the `divisor` column existed is read as all
-Display rate.
+The run is split into phases at every change of the Editor frame rate
+divisor (the `divisor` column) and at every frame the display link did not
+ask for, so the time an unseen editor runs no frames, and the reveal's frame
+after it, count in no phase.
 
-A tick row's `divisor` is the pacing of the interval that led to that frame.
-In a log recorded between #1692 and #1747 that was the chosen rate, or a
-multiple of it while a still editor's link was slowed to its poll. So each
-glass gap is measured against its own frame's divisor, not one per phase: the
-frame after a first note was paced at the chosen rate though the note's own
-frame was paced at the poll's. Since #1747 the link runs at the chosen rate
-throughout and a still editor's frames return before the UI runs, logged as
-tick rows with nothing submitted; the log has no `chosen` or `woken` column,
-and every frame reads as paced at the chosen rate.
+A tick row's `divisor` is the chosen rate the display link paced that frame
+at. The link runs at it throughout: a still editor's frames return before the
+UI runs, logged as tick rows with nothing submitted, and refreshes spent on
+them are idle time rather than misses. A log written before #1747, with
+`chosen` and `woken` columns or a link slowed past the Quarter rate, is
+refused: record it again.
 
 Per phase, counted in the display's refreshes:
 - missed refreshes: a glass gap longer than the divisor that paced it
-  (a stall) misses each refresh beyond it. In a log from between #1692 and
-  #1747, an input event restored the chosen rate between frames and the next
-  refresh drew, so a frame that log marks `woken` is held to the link's own
-  gap instead, up to the slowed interval it cut short;
+  (a stall) misses each refresh beyond it. After idle ticks, the frame drawn
+  was due one divisor after the last of them;
 - jumps: a glass gap of the expected spacing whose link timestamps are
   further apart, so the content stepped further than the glass did;
 - the p99 gap between presents paced at the chosen rate, in ms;
@@ -50,9 +39,9 @@ submitted after the target anyway) or late GPU.
 `--events` reports instead on the moments the editor's own `event` rows mark
 (#1670), across every window and every time the editor was opened:
 - still: each stretch where nothing kept the editor animating, so nothing on
-  screen could move, and how often it drew, against the rate it draws at when
-  animating, and how many link frames a second drew nothing and what they
-  cost the main thread. A transport left stopped reaches one once the last
+  screen could move, and how often it drew, against the rate each of its
+  phases offers frames at, and how many link frames a second drew nothing and
+  what they cost the main thread. A transport left stopped reaches one once the last
   sound has scrolled out of the Span, since silence does not count as audible
   audio;
 - first note: the frames in the second and a half after the first note of
@@ -65,7 +54,6 @@ usage: python3 -I tools/frame-log-summary.py [LOG] [--window ID]
 """
 
 import argparse
-import bisect
 import csv
 import glob
 import os
@@ -73,9 +61,8 @@ import statistics
 import sys
 from collections import Counter
 
-# A gap past this between link-paced frames ends a phase: baseview's
-# `LINK_SILENCE`, past which its watchdog drew in logs from before an unseen
-# editor stopped running frames.
+# A gap past this between link-paced frames ends a phase: an unseen editor
+# runs no frames, so the time it was unseen is in no phase.
 LINK_SILENCE = 0.1
 # A still stretch shorter than this says little about idling.
 SILENCE_MIN = 60.0
@@ -107,10 +94,18 @@ def read(path):
     ticks, gpu_end, presented, events = {}, {}, {}, []
     with open(path, newline='') as file:
         reader = csv.DictReader(file)
-        has_divisor = 'divisor' in (reader.fieldnames or ())
+        columns = set(reader.fieldnames or ())
+        retired = f'{path}: written before #1747 changed the log; record a fresh one'
+        if 'divisor' not in columns or {'chosen', 'woken'} & columns:
+            sys.exit(retired)
         for row in reader:
             frame = int(row['frame'])
             if row['kind'] == 'tick':
+                # The link paces only at a rate the Editor frame rate setting
+                # offers; a larger divisor is a still editor's link slowed to
+                # its poll, which only a log from before #1747 holds.
+                if row['divisor'] and int(row['divisor']) not in RATES:
+                    sys.exit(retired)
                 ticks.setdefault(row['window'], []).append(row)
             elif row['kind'] == 'gpu':
                 gpu_end[frame] = float(row['gpu_end'])
@@ -118,7 +113,7 @@ def read(path):
                 presented[frame] = float(row['presented'])
             elif row['kind'] == 'event':
                 events.append((frame, float(row['t']), row['event']))
-    return ticks, gpu_end, presented, events, has_divisor
+    return ticks, gpu_end, presented, events
 
 
 def frame(row, gpu_end, presented):
@@ -134,9 +129,8 @@ def frame(row, gpu_end, presented):
         'render_ms': float(row['render_ms']),
         'acquire_ms': float(row['acquire_ms']),
         'submitted': float(row['submitted']),
-        'divisor': int(row.get('divisor') or 1),
-        'chosen': int(row.get('chosen') or row.get('divisor') or 1),
-        'woken': int(row.get('woken') or 0),
+        # A reveal's frame, which the link did not pace, logs none.
+        'divisor': int(row['divisor'] or 1),
         'gpu_end': gpu_end.get(f, 0.0),
         'presented': presented.get(f),
     }
@@ -149,13 +143,13 @@ def phases(frames):
     for fr in frames:
         if fr['timestamp'] == 0.0:
             # A frame the link did not ask for: one painted as the window is
-            # revealed, or in an older log the watchdog's.
+            # revealed.
             if current:
                 out.append(current)
             current = []
             continue
         if current and (
-            fr['chosen'] != current[-1]['chosen']
+            fr['divisor'] != current[-1]['divisor']
             or fr['timestamp'] - current[-1]['timestamp'] > LINK_SILENCE
         ):
             out.append(current)
@@ -180,7 +174,7 @@ def cause(fr, refresh):
 
 def measure(phase):
     """One phase's counts, in a form that sums across phases."""
-    divisor = phase[0]['chosen']
+    divisor = phase[0]['divisor']
     refresh = statistics.median(fr['refresh'] for fr in phase)
     m = {
         'divisor': divisor,
@@ -196,11 +190,15 @@ def measure(phase):
         'gaps_ms': [],
         'depth': Counter(),
     }
-    previous, dropped = None, False
+    # `idled`: the last link frame since `previous` that ran no UI pass, the
+    # refreshes up to which were idle time rather than a miss. Kept rather
+    # than starting over, so a frame drawn at a chrome cue's 30 Hz is still
+    # measured against when it was due.
+    previous, idled, dropped = None, None, False
     for fr in phase:
         if not fr['submitted']:
-            # Nothing to draw: the next glass gap is idle time, not a miss.
-            previous, dropped = None, False
+            if previous is not None:
+                idled = fr
             continue
         if not fr['presented']:
             m['unshown'] += 1
@@ -211,19 +209,20 @@ def measure(phase):
             glass = round((fr['presented'] - previous['presented']) / refresh)
             link = round((fr['timestamp'] - previous['timestamp']) / refresh)
             m['refreshes'] += glass
-            # A woken frame ran on the first refresh after the event, no later
-            # than the end of the interval it cut short.
-            expected = min(link, fr['woken']) if fr['woken'] else fr['divisor']
-            if expected == fr['chosen']:
-                # An idle poll's gap is its pacing, not a slow present.
+            if idled is None:
+                expected = fr['divisor']
                 m['gaps_ms'].append((fr['presented'] - previous['presented']) * 1000)
+            else:
+                # Due one divisor after the last idle tick.
+                idle = round((idled['timestamp'] - previous['timestamp']) / refresh)
+                expected = idle + fr['divisor']
             if glass > expected:
                 m['missed'] += glass - expected
                 why = 'dropped before it' if dropped else cause(fr, refresh)
                 m['stalls'].append((fr, glass, why))
             elif link > expected:
                 m['jumps'] += 1
-        previous = fr
+        previous, idled = fr, None
         dropped = False
     return m
 
@@ -285,8 +284,7 @@ def stretch(frames, start, end):
     drawn = sum(1 for fr in inside if fr['submitted'])
     # Visible: the time the display link paced frames, less every gap of
     # over UNSHOWN_GAP between drawn ones. A minimized or covered editor runs
-    # no frames (in an older log, only the watchdog's, and a covered one's
-    # presents refused), so neither says how often it asks to draw while it is
+    # no frames, so says nothing about how often it asks to draw while it is
     # seen.
     visible, paced = 0.0, 0
     for p in runs:
@@ -309,22 +307,12 @@ def median(values):
     return statistics.median(values) if values else float('nan')
 
 
-def full_rate(frames, evs):
-    """The rate the link offers frames at while something animates, from the
-    frames it paced then: in a log from between #1692 and #1747 a still
-    editor's link was slowed to its poll, so its frames would read as the
-    poll's rate. Since, every link frame is at the chosen rate."""
-    busy = [(a, b) for a, b, reasons in timeline(evs, frames[-1]['t'], 'animating') if reasons]
-    starts = [a for a, _ in busy]
-
-    def animating(t):
-        i = bisect.bisect_right(starts, t) - 1
-        return i >= 0 and t < busy[i][1]
-
-    paced = [fr for fr in frames if fr['timestamp'] and animating(fr['t'])]
-    if not paced:
-        return float('nan')
-    return 1 / median(fr['refresh'] * fr['divisor'] for fr in paced)
+def full_rates(frames):
+    """The rate the link offers frames at in each phase among `frames`, at
+    that phase's divisor: the rate the editor draws at there while something
+    animates, the link pacing a still editor's frames at it too."""
+    return [1 / (statistics.median(fr['refresh'] for fr in p) * p[0]['divisor'])
+            for p in phases(frames)]
 
 
 def openings(ticks, gpu_end, presented, events):
@@ -359,7 +347,6 @@ def timeline(evs, end, kind):
 
 def report_silence(run, evs, t0):
     end = run[-1]['t']
-    full = full_rate(run, evs)
     found = False
     for start, stop, reasons in timeline(evs, end, 'animating'):
         if reasons or stop - start < SILENCE_MIN:
@@ -371,24 +358,25 @@ def report_silence(run, evs, t0):
             print('    the editor was hidden for nearly all of it')
             continue
         drawn = s['frames']
+        full = sorted({round(r) for r in full_rates([fr for fr in run if start <= fr['t'] < stop])})
         print(f"    drew {s['visible_fps']:.0f} frames/s over {s['visible']:.0f} s visible, "
-              f"against {full:.0f} when animating; "
+              f"against {'/'.join(map(str, full))} when animating; "
               f"tick {median(fr['tick_ms'] for fr in drawn):.2f} ms, "
               f"render {median(fr['render_ms'] for fr in drawn):.2f} ms, "
               f"submit to GPU done "
               f"{median((fr['gpu_end'] - fr['submitted']) * 1000 for fr in drawn if fr['gpu_end']):.2f} ms"
               f" (medians)")
-        # A link frame that drew nothing: since #1747 one that ran no UI pass,
-        # before it one whose pass ran and drew nothing.
+        # A link frame that drew nothing: one that ran no UI pass.
         idle = [fr for fr in run
                 if start <= fr['t'] < stop and fr['timestamp'] and not fr['submitted']]
         print(f"    {len(idle) / (stop - start):.0f} link frames/s drew nothing, costing "
               f"{sum(fr['tick_ms'] for fr in idle) / (stop - start):.2f} ms/s of main thread "
               f"(tick {median(fr['tick_ms'] for fr in idle):.3f} ms median)")
-        if s['visible_fps'] > full / 2:
+        # Which deadline won is not logged: the idle poll, a chrome cue's
+        # 30 Hz (#1872) or something else asking. Only a rate near the link's
+        # says something.
+        if full and s['visible_fps'] > min(full) / 2:
             print('    -> draws at full rate with nothing animating: something else asks for frames')
-        elif s['visible_fps'] < 30:
-            print('    -> idles at the 20 Hz poll')
     if not found:
         print(f'  still: no stretch of {SILENCE_MIN:.0f} s or more with nothing animating')
 
@@ -416,9 +404,11 @@ def report_first_note(run, evs, t0):
     usual = median(fr['tick_ms'] for fr in run if fr['submitted'])
     print(f'    costliest frames, main-thread ms (this opening\'s median {usual:.2f}):')
     for fr in sorted(s['frames'], key=lambda fr: -fr['tick_ms'])[:3]:
+        # A reveal's frame has no link target to be early or late against.
+        when = (f"submitted {(fr['submitted'] - fr['target']) * 1000:+.2f} ms from its target"
+                if fr['timestamp'] else 'painted at the reveal, not paced by the link')
         print(f"      +{(fr['t'] - note) * 1000:.0f} ms: tick {fr['tick_ms']:.2f} "
-              f"(render {fr['render_ms']:.2f}), submitted "
-              f"{(fr['submitted'] - fr['target']) * 1000:+.2f} ms from its target")
+              f"(render {fr['render_ms']:.2f}), {when}")
 
 
 def report_exports(run, evs, t0):
@@ -432,8 +422,6 @@ def report_exports(run, evs, t0):
             busy[-1]['stop'] = stop
             busy[-1]['most'] = max(busy[-1]['most'], int(words[0]))
         else:
-            # A log from a build that named the pane's Encoder after the count
-            # still reads: the word is ignored, as it was not what ran.
             busy.append({'start': start, 'stop': stop, 'most': int(words[0])})
     quiet_since = run[0]['t']
     for b in busy:
@@ -481,7 +469,7 @@ def main():
     args = parser.parse_args()
 
     path = args.log or newest_log()
-    ticks, gpu_end, presented, events, has_divisor = read(path)
+    ticks, gpu_end, presented, events = read(path)
     if not ticks:
         sys.exit(f'{path}: no tick rows')
     print(path)
@@ -494,16 +482,14 @@ def main():
     window = args.window or max(ticks, key=lambda w: len(ticks[w]))
     if window not in ticks:
         sys.exit(f'no window {window}')
-    if not has_divisor:
-        print('no divisor column: every link frame is read as Display rate')
 
     frames = [frame(row, gpu_end, presented) for row in ticks[window]]
     frames.sort(key=lambda fr: fr['frame'])
     t0 = frames[0]['t']
     frames = [fr for fr in frames if args.start <= fr['t'] - t0 <= args.end]
     measured = [measure(p) for p in phases(frames)]
-    # A phase with no two consecutive presents (a lone frame, such as one
-    # between an older log's watchdog frames) has no glass gap to measure.
+    # A phase with no two consecutive presents (a lone frame) has no glass
+    # gap to measure.
     measured = [m for m in measured if m['refreshes']]
     print(f'window {window}: {len(frames)} frames, {len(measured)} phases\n')
 

@@ -220,7 +220,7 @@ pub(super) fn strip_depths(
 /// per-pixel level read.
 ///
 /// Reports whether what it drew is still moving, off the run and the slab it
-/// drew ([`Moving`](crate::Moving)): what the editor's frame loop stays awake
+/// drew ([`Animating`](crate::Animating)): what the editor's frame loop stays awake
 /// for. A frame that draws no run reports nothing, and so does a frame
 /// that does not draw the heatmap at all.
 #[allow(clippy::too_many_arguments)]
@@ -287,7 +287,10 @@ pub(crate) fn draw_spectrogram(
     // unless a tilt lifts silence off it, when every column's edges show.
     let reach = time.window() + layout.bucket + cfg.atmosphere.tail();
     let moving = if silence_shows(&cfg) { Some(newest) } else { spectrum.last_audible().column };
-    state.surfaces.moving_this_frame.audible(moving.is_some_and(|t| t + reach >= now));
+    state
+        .surfaces
+        .moving_this_frame
+        .hold_if(crate::Reason::Audible, moving.is_some_and(|t| t + reach >= now));
     // The painter's own clip is what bounds the heatmap: the quads reach past
     // the pane wherever the oldest slab starts before the region, and the callback draws against the whole
     // surface and leaves the scissor egui set from this rect alone.
