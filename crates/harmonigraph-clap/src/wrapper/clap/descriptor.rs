@@ -3,7 +3,7 @@ use clap_sys::version::CLAP_VERSION;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
-use crate::wrapper::clap::ClapPlugin;
+use crate::plugin::Plugin;
 
 /// A static descriptor for a plugin. This is used in both the descriptor and on the plugin object
 /// itself.
@@ -34,7 +34,7 @@ unsafe impl Sync for PluginDescriptor {}
 
 impl PluginDescriptor {
     /// Construct the plugin descriptor for a specific CLAP plugin.
-    pub fn for_plugin<P: ClapPlugin>() -> Self {
+    pub fn for_plugin<P: Plugin>() -> Self {
         let mut descriptor = Self {
             clap_id: CString::new(P::CLAP_ID).expect("`CLAP_ID` contained null bytes"),
             name: CString::new(P::NAME).expect("`NAME` contained null bytes"),

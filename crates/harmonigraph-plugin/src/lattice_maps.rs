@@ -6,7 +6,6 @@ use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine};
 use harmonigraph_core::LatticePos;
 use harmonigraph_ui::lattice_maps::*;
 use nice_plug::prelude::*;
-use nice_plug::wrapper::clap::configuration::{ConfigurationBoundary, InputValue, OwnedInput};
 use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -126,12 +125,6 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     let mut editor = params.map_editor.lock();
     editor.restore(params.settings.restored());
     let adopted = *params.map_playback.lock();
-    // An arrow press that has landed, or any other change to the lanes,
-    // retires the memo of what the last press sent.
-    let lanes = offsets(params);
-    if editor.translated.is_some_and(|(read, _)| read != lanes) {
-        editor.translated = None;
-    }
     let offsets = offsets(params);
     let requested = MapSelection::requested(params);
     let selected = requested.slot;
@@ -144,14 +137,14 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     };
     // Intent is compared before following is added: the Hub's own movement is
     // not host state waiting for audio to adopt it.
-    let pending = playback != adopted;
+    let unadopted = (playback != adopted).then_some(playback);
     let followed = followed(params);
     let shown = MapPlayback { map: requested.followed_by(followed).placed(&document), ..playback };
     MapView {
         playback: shown,
         offsets,
         followed,
-        pending,
+        unadopted,
         names: editor.names(&document),
         edit_shape: editor.edit_shape,
         can_undo: playback.map.is_some() && editor.can_undo(selected),
@@ -198,12 +191,10 @@ pub fn edit(params: &crate::HarmonigraphParams, host: &dyn GuiContext, edit: Map
             host.set_parameter(lane_row(axis, lane).index(), value as f32);
             false
         }
+        // From the lanes as they are: an editor set reaches them at once, so
+        // a second press before the next callback builds on the first.
         MapEdit::Translate(step, lane) => {
-            let seen = offsets(params);
-            let from = match params.map_editor.lock().translated {
-                Some((read, sent)) if read == seen => sent,
-                _ => seen,
-            };
+            let from = offsets(params);
             if let Some(to) = from.translated(step, lane) {
                 for ((axis, lane, before), (_, _, after)) in
                     from.lanes().into_iter().zip(to.lanes())
@@ -212,7 +203,6 @@ pub fn edit(params: &crate::HarmonigraphParams, host: &dyn GuiContext, edit: Map
                         set(lane_row(axis, lane), after);
                     }
                 }
-                params.map_editor.lock().translated = Some((seen, to));
             }
             false
         }
@@ -315,7 +305,11 @@ pub struct AudioMaps {
     bank_revision: Option<Revision>,
     pub playback: MapPlayback,
     history: VecDeque<Entry>,
-    pub boundary: ConfigurationBoundary,
+    /// The current callback's first sample and length.
+    start: i64,
+    frames: u32,
+    /// The host parameters, for their decoding of an automation value.
+    table: Arc<Table>,
     engine_revision: u64,
     offsets: MapOffsets,
 }
@@ -329,13 +323,9 @@ impl AudioMaps {
             bank_revision: None,
             playback: MapPlayback::default(),
             history: VecDeque::with_capacity(HISTORY),
-            boundary: ConfigurationBoundary {
-                steady_time: 0,
-                frames: 0,
-                sample_rate: 44100.0,
-                transport_seconds: None,
-                playing: false,
-            },
+            start: 0,
+            frames: 0,
+            table: params.table.clone(),
             engine_revision: 0,
             offsets: MapOffsets::default(),
         }
@@ -344,11 +334,12 @@ impl AudioMaps {
     pub fn publish_followed(&self, offset: LatticePos) {
         self.followed.store(pack(offset), std::sync::atomic::Ordering::Release);
     }
-    pub fn begin(&mut self, boundary: ConfigurationBoundary) {
-        if boundary.steady_time < self.boundary.steady_time + i64::from(self.boundary.frames) {
+    pub fn begin(&mut self, boundary: &Boundary) {
+        if boundary.steady_time < self.start + i64::from(self.frames) {
             self.history.clear();
         }
-        self.boundary = boundary;
+        self.start = boundary.steady_time;
+        self.frames = boundary.frames;
     }
     pub fn adopt(&mut self, config: ResolvedConfig, seed: Seed) {
         // Copies only fixed geometry, never names or heap storage, on audio —
@@ -378,7 +369,7 @@ impl AudioMaps {
         self.playback.offset = self.offsets.total();
         self.set_follow(Follow::from_index(seed.follow));
         self.resolve();
-        self.push(self.boundary.steady_time, config);
+        self.push(self.start, config);
     }
     fn set_engine(&mut self, engine: TuningEngine) {
         if self.playback.engine != engine {
@@ -410,30 +401,26 @@ impl AudioMaps {
             *published = self.playback;
         }
     }
-    pub fn observe(&mut self, event: OwnedInput, config: ResolvedConfig) {
-        if let InputValue::Parameter { id, value, modulation: false } = event.value {
-            if !value.is_finite() {
-                return;
-            }
-            if id == nice_plug::wrapper::hash_param_id(Row::LatticeMap.id()) {
-                self.playback.selected = map_slot(value.round() as i32);
-            } else if id == nice_plug::wrapper::hash_param_id(Row::TuningEngine.id()) {
-                self.set_engine(TuningEngine::from_index(value.round() as i32));
-            } else if id == nice_plug::wrapper::hash_param_id(Row::MapFollow.id()) {
-                self.set_follow(Follow::from_index(value.round() as i32));
-            } else {
-                // CLAP stepped values are indices from zero, unlike saved/plain params.
-                let step = (value.round() as i32).clamp(0, 2 * OFFSET_LIMIT) - OFFSET_LIMIT;
-                let lane = LANES.into_iter().find(|&(axis, grain)| {
-                    id == nice_plug::wrapper::hash_param_id(lane_row(axis, grain).id())
-                });
+    /// An automation event at its own sample, decoded by the parameter table
+    /// as the shell decodes the same event into the table: the timeline and
+    /// what the host reads back hold one value (#1814).
+    pub fn observe(&mut self, event: Input, config: ResolvedConfig) {
+        let InputValue::Parameter { id, value, modulation: false } = event.value else { return };
+        let Some((row, plain)) = self.table.decode(id, value) else { return };
+        let plain = plain as i32;
+        match Row::ALL[row] {
+            Row::LatticeMap => self.playback.selected = map_slot(plain),
+            Row::TuningEngine => self.set_engine(TuningEngine::from_index(plain)),
+            Row::MapFollow => self.set_follow(Follow::from_index(plain)),
+            row => {
+                let lane = LANES.into_iter().find(|&(axis, grain)| lane_row(axis, grain) == row);
                 let Some((axis, grain)) = lane else { return };
-                *self.offsets.lane_mut(axis, grain) = step;
+                *self.offsets.lane_mut(axis, grain) = plain;
                 self.playback.offset = self.offsets.total();
             }
-            self.resolve();
-            self.push(event.sample.unwrap_or(self.boundary.steady_time), config);
         }
+        self.resolve();
+        self.push(event.sample, config);
     }
     /// The state the latest observation leaves, under `config`: what an attack
     /// the history no longer reaches is assigned from.
@@ -458,7 +445,7 @@ impl AudioMaps {
     }
     pub fn at(&self, sample: i64) -> Option<AttackState> {
         // Never extrapolate through a host callback whose automation is unknown.
-        if sample >= self.boundary.steady_time + i64::from(self.boundary.frames) {
+        if sample >= self.start + i64::from(self.frames) {
             return None;
         }
         let end = self.history.partition_point(|entry| entry.sample <= sample);
@@ -485,6 +472,7 @@ impl AudioMaps {
 mod tests {
     use super::*;
     use harmonigraph_core::configuration::ConfigReducer;
+    use harmonigraph_core::lattice_map::TuningEngine;
 
     /// A history filled to its `HISTORY` cap, one entry per sample. A window
     /// queried in the middle then has thousands of entries on either side of
@@ -568,6 +556,50 @@ mod tests {
         maps.adopt(config, Seed::read(&params));
         assert_eq!(maps.bank[0], None, "a delete must reach the audio thread's bank");
         assert_eq!(maps.bank[1], Some(second));
+    }
+
+    /// An automation value a hair below a half step selects the slot the
+    /// table holds for it, which `f64` rounding of the host value would not
+    /// (#1814): the timeline and what the host reads back agree.
+    #[test]
+    fn the_observer_decodes_automation_as_the_table_does() {
+        let params = crate::HarmonigraphParams::default();
+        let mut maps = AudioMaps::new(&params);
+        let config = ConfigReducer::default().resolved();
+        let id = nice_plug::wrapper::hash_param_id(Row::LatticeMap.id());
+        let value: f64 = 2.4999999;
+        assert_eq!(value.round(), 2.0);
+        assert_eq!(params.table.decode(id, value), Some((Row::LatticeMap.index(), 3.0)));
+        let parameter = InputValue::Parameter { id, value, modulation: false };
+        maps.observe(Input { sample: 0, value: parameter }, config);
+        assert_eq!(maps.playback.selected, 3);
+    }
+
+    /// The map's pending label waits on what the parameters request, not on
+    /// the map following moves: with following moving it every frame, an
+    /// unadopted request still lights the label after the wait (#1814 Q2).
+    #[test]
+    fn the_map_label_waits_on_the_request_while_following_moves_the_map() {
+        use harmonigraph_ui::{PendingLabel, PENDING_AFTER};
+        let params = crate::HarmonigraphParams::default();
+        params.set(Row::TuningEngine, TuningEngine::LatticeMap.index() as f32);
+        params.set(Row::MapFollow, Follow::Thirds.index() as f32);
+        params.set(Row::MapFifths, 3.0);
+        let start = std::time::Instant::now();
+        let mut label = PendingLabel::default();
+        let frames = 1 + (PENDING_AFTER.as_millis() / 16) as i32;
+        let shown: Vec<bool> = (0..=frames)
+            .map(|frame| {
+                // The Hub moves the map a third every frame.
+                let moved = LatticePos::new(0, frame, 0);
+                params.map_followed.store(pack(moved), std::sync::atomic::Ordering::Release);
+                let view = view(&params);
+                assert_eq!(view.followed, moved, "the fixture moves the map");
+                let at = start + std::time::Duration::from_millis(16 * frame as u64);
+                label.shown(view.unadopted, at)
+            })
+            .collect();
+        assert!(!shown[0] && shown[frames as usize], "{shown:?}");
     }
 
     #[test]

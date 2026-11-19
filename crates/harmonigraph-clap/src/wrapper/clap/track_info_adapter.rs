@@ -10,7 +10,7 @@ use clap_sys::ext::track_info::{
     CLAP_TRACK_INFO_HAS_TRACK_NAME, clap_host_track_info, clap_track_info,
 };
 
-impl<P: ClapPlugin> Wrapper<P> {
+impl<P: Plugin> Wrapper<P> {
     pub(super) fn refresh_track_name(&self) {
         let Some(setup) = &self.setup else {
             return;

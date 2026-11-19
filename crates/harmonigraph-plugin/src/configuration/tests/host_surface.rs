@@ -7,8 +7,8 @@
 //!
 //! Everything here goes through the C ABI alone, except the editor's write,
 //! which goes through the editor's own parameter backend. The read-back after
-//! an editor write is taken after one process callback, so the pin holds the
-//! rounding and not today's lag before the plugin holds the value (#1814 Q1).
+//! an editor write is taken after one process callback, which reports it to
+//! the host; the table holds the value from the write on (#1814 Q1).
 //!
 //! The typed-text lines pin what the host's entry box does today, defects
 //! included: Lattice Map parses typed text as the index from 0 while its label

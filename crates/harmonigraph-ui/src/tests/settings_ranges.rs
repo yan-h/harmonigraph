@@ -238,7 +238,7 @@ fn backend_with(
         config: params::ConfigurationView {
             resolved: reducer.resolved(),
             status: 0,
-            pending: false,
+            unadopted: None,
         },
         host,
     }

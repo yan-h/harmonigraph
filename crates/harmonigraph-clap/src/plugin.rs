@@ -1,256 +1,154 @@
-//! Traits and structs describing plugins and editors. This includes extension structs for features
-//! that are specific to one or more plugin-APIs.
+//! The plugin a CLAP shell wraps: what it declares, and the calls the shell
+//! makes into it, on the main thread and per process callback.
 
 use std::sync::Arc;
 
 mod state;
 pub use state::*;
 
-use crate::{
-    audio_setup::{AudioIOLayout, AuxiliaryBuffers, BufferConfig},
-    buffer::Buffer,
-    context::{gui::AsyncExecutor, init::InitContext, process::ProcessContext},
-    editor::Editor,
-    midi::{MidiConfig, sysex::SysExMessage},
-    params::Table,
-};
+use crate::audio_setup::{Audio, BufferConfig, Ports};
+use crate::editor::Editor;
+use crate::events::{Input, InputValue, List, Output, Transport};
+use crate::params::Table;
+use crate::wrapper::clap::EditorHost;
+use crate::wrapper::clap::features::ClapFeature;
+use crate::wrapper::clap::setup::Setup;
 
-/// A function that can execute a plugin's [`BackgroundTask`][Plugin::BackgroundTask]s. A plugin can
-/// dispatch these tasks from the `initialize()` function, the `process()` function, or the GUI, so
-/// they can be deferred for later to avoid blocking realtime contexts.
-pub type TaskExecutor<P> = Box<dyn Fn(<P as Plugin>::BackgroundTask) + Send>;
-
-/// The main plugin trait covering functionality common across most plugin formats. Most formats
-/// also have another trait with more specific data and functionality that needs to be implemented
-/// before the plugin can be exported to that format. The wrappers will use this to expose the
-/// plugin in a particular plugin format.
+/// A CLAP plugin. The shell owns the host's side of every call; the plugin
+/// owns everything musical.
 ///
-/// nice-plug is semi-declarative, meaning that most information about a plugin is defined
-/// declaratively but it also doesn't shy away from maintaining state when that is the path of least
-/// resistance. As such, the definitions on this trait fall in one of the following classes:
+/// Per process callback the shell calls, in this order:
 ///
-/// - `Plugin` objects are stateful. During their lifetime the plugin API wrappers will call the
-///   various lifecycle methods defined below, with the `initialize()`, `reset()`, and `process()`
-///   functions being the most important ones.
-/// - Most of the rest of the trait statically describes the plugin. You will find this done in
-///   three different ways:
-///   - Most of this data, including the supported audio IO layouts, is simple enough that it can be
-///     defined through compile-time constants.
-///   - Some of the data is queried through a method as doing everything at compile time would
-///     impose a lot of restrictions on code structure and meta programming without any real
-///     benefits. In those cases the trait defines a method that is queried once and only once,
-///     immediately after instantiating the `Plugin` through `Plugin::default()`. Examples of these
-///     methods are [`Plugin::params()`] and [`Plugin::editor()`].
-///   - Some of the data is defined through associated types. Rust currently sadly does not support
-///     default values for associated types, but all of these types can be set to `()` if you wish
-///     to ignore them. Examples of these types are [`Plugin::SysExMessage`] and
-///     [`Plugin::BackgroundTask`].
-/// - Finally, there are some functions that return extension structs and handlers, similar to how
-///   the `params()` function returns a data structure describing the plugin's parameters. Examples
-///   of these are the [`Plugin::editor()`] and [`Plugin::task_executor()`] functions, and they're
-///   also called once and only once after the plugin object has been created. This allows the audio
-///   thread to have exclusive access to the `Plugin` object, and it makes it easier to compose
-///   these extension structs since they're more loosely coupled to a specific `Plugin`
-///   implementation.
+/// 1. [`Plugin::begin`] with the callback's [`Boundary`]. The parameter table
+///    still holds what it held before the callback, so a value read here is
+///    the one in force at the callback's first sample.
+/// 2. The shell writes the callback's parameter events into the table.
+///    Automation therefore never reaches the table before `begin` has read it
+///    (#1814's ordering rule): a note before a mid-block automation point is
+///    shaped by the value before it.
+/// 3. [`Plugin::process`] with the [`Block`]: the events, the audio and the
+///    output list. Skipped for a boundary that is not [`Boundary::valid`].
+/// 4. [`Plugin::end`].
 ///
-/// The main thing you need to do is declare a [`Table`] of all of your parameters.
-/// The plugin also needs a `Default` implementation so it can be initialized. Most of the other
-/// functionality is optional and comes with default trait method implementations.
+/// All four run inside the process allocation guard.
 #[allow(unused_variables)]
 pub trait Plugin: Default + Send + 'static {
-    /// The plugin's name.
     const NAME: &'static str;
-    /// The name of the plugin's vendor.
     const VENDOR: &'static str;
-    /// A URL pointing to the plugin's web page.
     const URL: &'static str;
-    /// The vendor's email address.
-    const EMAIL: &'static str;
-
-    /// Semver compatible version string (e.g. `0.0.1`). Hosts likely won't do anything with this,
-    /// but just in case they do this should only contain decimals values and dots.
+    /// Semver compatible version string (e.g. `0.0.1`).
     const VERSION: &'static str;
 
-    /// The plugin's supported audio IO layouts. The first config will be used as the default config
-    /// if the host doesn't or can't select an alternative configuration. Because of that it's
-    /// recommended to begin this slice with a stereo layout. For maximum compatibility with the
-    /// different plugin formats this default layout should also include all of the plugin's
-    /// auxiliary input and output ports, if the plugin has any. If the slice is empty, then the
-    /// plugin will not have any audio IO.
-    ///
-    /// Both [`AudioIOLayout`] and [`PortNames`][crate::audio_setup::PortNames] have
-    /// `.const_default()` functions for compile-time equivalents to `Default::default()`:
-    ///
-    /// ```
-    /// # use nice_plug_core::audio_setup::{AudioIOLayout, new_nonzero_u32};
-    /// # use std::num::NonZeroU32;
-    /// const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
-    ///     main_input_channels: NonZeroU32::new(2),
-    ///     main_output_channels: NonZeroU32::new(2),
-    ///
-    ///     aux_input_ports: &[new_nonzero_u32(2)],
-    ///
-    ///     ..AudioIOLayout::const_default()
-    /// }];
-    /// ```
-    ///
-    /// # Note
-    ///
-    /// Some plugin hosts, like Ableton Live, don't support MIDI-only plugins and may refuse to load
-    /// plugins with no main output or with zero main output channels.
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout];
+    /// A unique id, in reverse domain name notation.
+    const CLAP_ID: &'static str;
+    const CLAP_DESCRIPTION: Option<&'static str>;
+    const CLAP_MANUAL_URL: Option<&'static str>;
+    const CLAP_SUPPORT_URL: Option<&'static str>;
+    /// Keywords the host may sort the plugin by.
+    const CLAP_FEATURES: &'static [ClapFeature];
 
-    /// Whether the plugin accepts note events, and what which events it wants to receive. If this
-    /// is set to [`MidiConfig::None`], then the plugin won't receive any note events.
-    const MIDI_INPUT: MidiConfig = MidiConfig::None;
-    /// Whether the plugin can output note events. If this is set to [`MidiConfig::None`], then the
-    /// plugin won't have a note output port. When this is set to another value, then in most hosts
-    /// the plugin will consume all note and MIDI CC input. If you don't want that, then you will
-    /// need to forward those events yourself.
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::None;
-    /// If enabled, the audio processing cycle may be split up into multiple smaller chunks if
-    /// parameter values change occur in the middle of the buffer. Depending on the host these
-    /// blocks may be as small as a single sample. Bitwig Studio sends at most one parameter change
-    /// every 64 samples.
-    const SAMPLE_ACCURATE_AUTOMATION: bool = false;
+    /// The audio ports.
+    const PORTS: Ports;
+    /// Whether the plugin has a note input and a note output port, each
+    /// speaking the CLAP and MIDI dialects.
+    const NOTE_PORTS: bool = false;
 
-    /// If this is set to true, then the plugin will report itself as having a hard realtime
-    /// processing requirement when the host asks for it. Supported hosts will never ask the plugin
-    /// to do offline processing.
-    const HARD_REALTIME_ONLY: bool = false;
-
-    /// The plugin's SysEx message type if it supports sending or receiving MIDI SysEx messages, or
-    /// `()` if it does not. This type can be a struct or enum wrapping around one or more message
-    /// types, and the [`SysExMessage`] trait is then used to convert between this type and basic
-    /// byte buffers. The [`MIDI_INPUT`][Self::MIDI_INPUT] and [`MIDI_OUTPUT`][Self::MIDI_OUTPUT]
-    /// fields need to be set to [`MidiConfig::Basic`] or above to be able to send and receive
-    /// SysEx.
-    type SysExMessage: SysExMessage;
-
-    /// A type encoding the different background tasks this plugin wants to run, or `()` if it
-    /// doesn't have any background tasks. This is usually set to an enum type. The task type should
-    /// not contain any heap allocated data like [`Vec`]s and [`Box`]es. Tasks can be send using the
-    /// methods on the various [`*Context`][crate::context] objects.
-    //
-    // NOTE: Sadly it's not yet possible to default this and the `async_executor()` function to
-    //       `()`: https://github.com/rust-lang/rust/issues/29661
-    type BackgroundTask: Send;
-    /// A function that executes the plugin's tasks. When implementing this you will likely want to
-    /// pattern match on the task type, and then send any resulting data back over a channel or
-    /// triple buffer. See [`BackgroundTask`][Self::BackgroundTask].
-    ///
-    /// Queried only once immediately after the plugin instance is created. This function takes
-    /// `&mut self` to make it easier to move data into the closure.
-    fn task_executor(&mut self) -> TaskExecutor<Self> {
-        // In the default implementation we can simply ignore the value
-        Box::new(|_| ())
-    }
-
-    /// The plugin's host parameters, in the order the host lists them. A save stores
-    /// each row's value under its stable id, so an id never changes.
-    ///
-    /// Queried only once immediately after the plugin instance is created.
+    /// The host parameters. Queried once, after creation.
     fn params(&self) -> Arc<Table>;
-
-    /// Returns an extension struct for interacting with the plugin's editor, if it has one. Later
-    /// the host may call [`Editor::spawn()`] to create an editor instance. To read the current
-    /// parameter values, you will need to clone and move the `Arc` containing your [`Table`]
-    /// into the editor. You can later modify the parameters through the
-    /// [`GuiContext`][crate::context::gui::GuiContext] after the editor GUI has been created.
-    /// nice-plug comes with wrappers for several common GUI frameworks that may have their own ways
-    /// of interacting with parameters. See the repo's readme for more information.
-    ///
-    /// Queried only once immediately after the plugin instance is created. This function takes
-    /// `&mut self` to make it easier to move data into the `Editor` implementation.
-    fn editor(&mut self, async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+    /// Plugin-owned saved settings, prepared before and committed after a
+    /// restore. Queried once, after creation, and used independently of the
+    /// plugin's lock.
+    fn setup(&self) -> Option<Arc<dyn Setup>> {
+        None
+    }
+    /// Called once, before [`Plugin::editor`], with the host's side of the
+    /// editor: the editor is the host's to destroy, so an editor with a close
+    /// button of its own tells the host through this (#1607, #1609).
+    fn editor_host(&mut self, host: Arc<dyn EditorHost>) {}
+    /// The editor, if the plugin has one. Queried once, after creation.
+    fn editor(&mut self) -> Option<Box<dyn Editor>> {
         None
     }
 
-    //
-    // The following functions follow the lifetime of the plugin.
-    //
+    // The main thread. Never during a process callback; do not call the host.
 
-    /// Initialize the plugin for the given audio IO configuration. From this point onwards the
-    /// audio IO layouts and the buffer sizes are fixed until this function is called again.
-    ///
-    /// Before this point, the plugin should not have done any expensive initialization. Please
-    /// don't be that plugin that takes twenty seconds to scan.
-    ///
-    /// After this function [`reset()`][Self::reset()] will always be called. If you need to clear
-    /// state, such as filters or envelopes, then you should do so in that function instead.
-    ///
-    /// - If you need to access this information in your process function, then you can copy the
-    ///   values to your plugin instance's object.
-    /// - If the plugin is being restored from an old state,
-    ///   then that state will have already been restored at this point.
-    /// - If based on those parameters (or for any reason whatsoever) the plugin needs to introduce
-    ///   latency, then you can do so here using the process context.
-    /// - Depending on how the host restores plugin state, this function may be called multiple
-    ///   times in rapid succession. It may thus be useful to check if the initialization work for
-    ///   the current bufffer and audio IO configurations has already been performed first.
-    /// - If the plugin fails to initialize for whatever reason, then this should return `false`.
-    fn initialize(
-        &mut self,
-        audio_io_layout: &AudioIOLayout,
-        buffer_config: &BufferConfig,
-        context: &mut impl InitContext<Self>,
-    ) -> bool {
+    fn init(&mut self) -> bool {
         true
     }
+    /// The host activates the plugin at `config`.
+    fn activate(&mut self, config: &BufferConfig) -> bool {
+        true
+    }
+    /// The latency the plugin wants, in samples. The shell reads it after
+    /// `activate`, and tells the host before the activation returns, and
+    /// after each `process`: a change while active asks the host for the
+    /// restart that adopts it, since CLAP publishes a latency only across an
+    /// activation (#615).
+    fn latency(&self) -> u32 {
+        0
+    }
+    /// Main-thread service while deactivated, also just before activation.
+    fn inactive(&mut self) {}
+    fn destroy(&mut self) {}
 
-    /// Clear internal state such as filters and envelopes. This is always called after
-    /// [`initialize()`][Self::initialize()], and it may also be called at any other time from the
-    /// audio thread. You should thus not do any allocations in this function.
+    // The audio thread's lifecycle, inside the allocation guard.
+
+    /// Processing stops.
+    fn stop(&mut self) {}
+    /// Discard what is sounding; also called when processing starts.
     fn reset(&mut self) {}
 
-    /// Process audio. The host's input buffers have already been copied to the output buffers if
-    /// they are not processing audio in place (most hosts do however). All channels are also
-    /// guaranteed to contain the same number of samples. Lastly, denormals have already been taken
-    /// case of by nice-plug, and you can optionally enable the `assert_process_allocs` feature to
-    /// abort the program when any allocation occurs in the process function while running in debug
-    /// mode.
-    ///
-    /// The framework provides convenient iterators on the [`Buffer`] object to process audio either
-    /// either per-sample per-channel, or per-block per-channel per-sample. The first approach is
-    /// preferred for plugins that don't require block-based processing because of their use of
-    /// per-sample SIMD or excessive branching.
-    ///
-    /// The `context` object contains context information as well as callbacks for working with note
-    /// events. The [`AuxiliaryBuffers`] contain the plugin's sidechain input buffers and
-    /// auxiliary output buffers if it has any.
-    ///
-    /// TODO: Provide a way to access auxiliary input channels if the IO configuration is
-    ///       asymmetric
-    fn process(
-        &mut self,
-        buffer: &mut Buffer,
-        aux: &mut AuxiliaryBuffers,
-        context: &mut impl ProcessContext<Self>,
-    ) -> ProcessStatus;
+    // One process callback, inside the allocation guard.
 
-    /// Called when the plugin is deactivated. The host will call
-    /// [`initialize()`][Self::initialize()] again before the plugin resumes processing audio. These
-    /// two functions will not be called when the host only temporarily stops processing audio. You
-    /// can clean up or deallocate resources here. In most cases you can safely ignore this.
-    ///
-    /// There is no one-to-one relationship between calls to `initialize()` and `deactivate()`.
-    /// `initialize()` may be called more than once before `deactivate()` is called, for instance
-    /// when restoring state while the plugin is still activate.
-    fn deactivate(&mut self) {}
+    fn begin(&mut self, boundary: &Boundary) {}
+    fn process(&mut self, block: &mut Block<'_>);
+    fn end(&mut self) {}
 }
 
-/// Indicates the current situation after the plugin has processed audio.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProcessStatus {
-    /// Something went wrong while processing audio.
-    Error(&'static str),
-    /// The plugin has finished processing audio. When the input is silent, the host may suspend the
-    /// plugin to save resources as it sees fit.
-    Normal,
-    /// The plugin has a (reverb) tail with a specific length in samples.
-    Tail(u32),
-    /// This plugin will continue to produce sound regardless of whether or not the input is silent,
-    /// and should thus not be deactivated by the host. This is essentially the same as having an
-    /// infinite tail.
-    KeepAlive,
+/// What a process callback is, before its events are read.
+#[derive(Clone, Copy, Debug)]
+pub struct Boundary {
+    /// The first sample on the host's steady clock.
+    pub steady_time: i64,
+    pub frames: u32,
+    /// The callback's own transport, as at its first sample.
+    pub transport: Option<Transport>,
+    /// The boundary itself can be used: a steady time from zero, and from 1
+    /// to the activation's maximum frames. [`Plugin::process`] is called only
+    /// for a valid one.
+    pub valid: bool,
+    /// The callback's input is lost: its list failed validation, or a flush
+    /// since the last callback failed it. [`Plugin::process`] then reads no
+    /// events and writes to an output that refuses everything, and the shell
+    /// returns an error to the host.
+    pub input_lost: bool,
+}
+
+/// One process callback, as [`Plugin::process`] reads and writes it.
+pub struct Block<'a> {
+    pub boundary: Boundary,
+    pub(crate) events: List<'a>,
+    pub output: Output<'a>,
+    /// `None` when the input is lost, whose audio the host discards, and
+    /// when there is no main output to write the audio to: the plugin
+    /// declares none, or the host gave fewer channels than it declares.
+    pub audio: Option<Audio<'a>>,
+}
+
+impl<'a> Block<'a> {
+    /// Every event of the callback in order: the callback's own transport
+    /// first, at its first sample, then the host's list. As often as needed:
+    /// each walk reads the host's list afresh. Empty when the input is lost.
+    pub fn events(&self) -> impl Iterator<Item = Input> + use<'a> {
+        let start = self.boundary.steady_time;
+        let transport = self
+            .boundary
+            .transport
+            .filter(|_| !self.boundary.input_lost)
+            .map(|transport| (0, InputValue::Transport(transport)));
+        transport
+            .into_iter()
+            .chain(self.events.values())
+            .map(move |(offset, value)| Input { sample: start + i64::from(offset), value })
+    }
 }

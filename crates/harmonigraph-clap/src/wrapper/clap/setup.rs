@@ -17,13 +17,15 @@ pub trait Setup: Send + Sync {
     fn track_name_changed(&self, _name: Option<&str>) {}
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str>;
     fn save(&self, state: &mut PluginState);
-    /// Called during construction. The callback schedules independent main
-    /// work even when the generic task queue is full and defers host reentry
-    /// until any enclosing performance callback's runtime borrows have ended.
+    /// Called during construction. The callback asks the host for a
+    /// main-thread call, deferred past any process callback it runs in.
     fn install_wakeup(&self, wake: Box<dyn Fn() + Send + Sync>);
     /// Main-thread service of registry returns and setup notifications. What
     /// it reports, the wrapper tells the host after this call has returned.
     fn service(&self) -> Serviced;
+    /// Main thread: a line about the host the user should see, which the
+    /// shell has already written to the log.
+    fn notice(&self, _line: &str) {}
 }
 
 /// What a setup's service changed since the last call.

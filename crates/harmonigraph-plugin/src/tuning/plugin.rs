@@ -1,7 +1,6 @@
 //! The production companion. No analyzer, audio rings, recorder, dock, shared
 //! visualization state or GPU editor is constructed for this CLAP class.
 use nice_plug::prelude::*;
-use nice_plug::wrapper::clap::{configuration::OwnedInput, performance as api};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -45,13 +44,15 @@ impl Plugin for HarmonigraphTune {
     const NAME: &'static str = "Harmonigraph Tune";
     const VENDOR: &'static str = "Yan Han";
     const URL: &'static str = env!("CARGO_PKG_HOMEPAGE");
-    const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout::const_default()];
-    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
-    type SysExMessage = ();
-    type BackgroundTask = ();
+    const CLAP_ID: &'static str = "com.yan-h.harmonigraph-tune";
+    const CLAP_DESCRIPTION: Option<&'static str> = Some("Shared harmonic session note companion");
+    const CLAP_MANUAL_URL: Option<&'static str> = None;
+    const CLAP_SUPPORT_URL: Option<&'static str> =
+        Some("https://github.com/yan-h/harmonigraph/issues");
+    const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::NoteEffect, ClapFeature::Utility];
+    const PORTS: Ports = Ports::NONE;
+    const NOTE_PORTS: bool = true;
     /// A Tune exports no host parameter. Its Tuning delay is a saved setting
     /// (`setup::InstanceSettings`): a change needs the host to reactivate the
     /// Tune, so it cannot usefully be automated, and the saved value is there
@@ -59,51 +60,23 @@ impl Plugin for HarmonigraphTune {
     fn params(&self) -> Arc<Table> {
         Arc::new(Table::empty())
     }
-    fn initialize(
-        &mut self,
-        _: &AudioIOLayout,
-        _: &BufferConfig,
-        context: &mut impl InitContext<Self>,
-    ) -> bool {
-        // Activation order is `clap_main_activate` then `initialize`, so the
-        // frames this reports against are the ones the delay was just built
-        // from, and the request equals the delay this activation adopted.
-        // Publishing it here is what makes it the host's number. Nothing about
-        // pairing is consulted: a Tune that has never seen a Hub still reports
-        // the latency its own saved multiplier implies.
-        context.set_latency_samples(self.requested_latency());
-        true
-    }
-    #[cfg(target_os = "macos")]
-    fn editor(&mut self, _: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        Some(Box::new(super::native::NativeEditor { shared: self.shared.clone() }))
-    }
-    fn process(
-        &mut self,
-        _buffer: &mut Buffer,
-        _aux: &mut AuxiliaryBuffers,
-        _context: &mut impl ProcessContext<Self>,
-    ) -> ProcessStatus {
-        ProcessStatus::KeepAlive
-    }
-}
-
-impl ClapPlugin for HarmonigraphTune {
-    const CLAP_ID: &'static str = "com.yan-h.harmonigraph-tune";
-    const CLAP_DESCRIPTION: Option<&'static str> = Some("Shared harmonic session note companion");
-    const CLAP_MANUAL_URL: Option<&'static str> = None;
-    const CLAP_SUPPORT_URL: Option<&'static str> =
-        Some("https://github.com/yan-h/harmonigraph/issues");
-    const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::NoteEffect, ClapFeature::Utility];
-    const CLAP_PERFORMANCE: bool = true;
-    fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
+    fn setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
         Some(Arc::new(setup::Adapter(self.shared.clone())))
     }
-    fn clap_main_init(&mut self) -> bool {
+    #[cfg(target_os = "macos")]
+    fn editor(&mut self) -> Option<Box<dyn Editor>> {
+        Some(Box::new(super::native::NativeEditor { shared: self.shared.clone() }))
+    }
+    fn init(&mut self) -> bool {
         self.tune().register();
         true
     }
-    fn clap_main_activate(&mut self, config: &BufferConfig) -> bool {
+    /// The delay is built from the format the host just advertised, and the
+    /// latency asked for is that delay: the shell tells the host while the
+    /// activation is still in progress, which is what makes it the host's
+    /// number. Nothing about pairing is consulted: a Tune that has never seen
+    /// a Hub still reports the latency its own saved multiplier implies.
+    fn activate(&mut self, config: &BufferConfig) -> bool {
         self.frames = config.max_buffer_size;
         let multiplier = self.multiplier();
         self.shared.active_multiplier.store(multiplier, Ordering::Release);
@@ -111,63 +84,36 @@ impl ClapPlugin for HarmonigraphTune {
         self.tune().activate(f64::from(config.sample_rate), config.max_buffer_size, multiplier);
         true
     }
+    /// A changed multiplier is a changed latency, which the shell turns into
+    /// a host restart request WITHOUT changing what the host reads: the
+    /// delay is adopted at that reactivation and never mid-activation, so a
+    /// reported latency that ran ahead of it would ask the host to
+    /// compensate for a delay no note is being given.
+    fn latency(&self) -> u32 {
+        self.requested_latency()
+    }
     /// Destruction gives the row back. The records this Tune left in its ring
     /// carry an epoch the attach that follows has already moved past, so the
     /// Hub refuses them and no drain, seal or acknowledgement is owed.
-    fn clap_main_destroy(&mut self) {
+    fn destroy(&mut self) {
         self.tune.take().unwrap().retire();
     }
-    fn clap_performance_stop(&mut self) {
+    fn stop(&mut self) {
         self.tune().stop();
     }
-    fn clap_performance_reset(&mut self) {
+    fn reset(&mut self) {
         self.tune().stop();
     }
-    fn clap_performance_begin(&mut self, callback: api::Callback, _output: &mut api::Output<'_>) {
-        self.tune().begin(callback);
+    fn begin(&mut self, boundary: &Boundary) {
+        self.tune().begin(boundary);
     }
-    fn clap_performance_input(&mut self, input: OwnedInput) {
-        self.tune().input(input);
+    fn process(&mut self, block: &mut Block<'_>) {
+        for input in block.events() {
+            self.tune().input(input);
+        }
+        self.tune().schedule(&mut block.output);
     }
-    fn clap_performance_process(
-        &mut self,
-        _buffer: &mut Buffer,
-        _aux: &mut AuxiliaryBuffers,
-        context: &mut impl ProcessContext<Self>,
-        block: api::Block,
-        output: &mut api::Output<'_>,
-    ) -> ProcessStatus {
-        // A changed multiplier is a changed latency, and nice-plug turns that
-        // into a host restart request WITHOUT changing what the host reads:
-        // the delay is adopted at that reactivation and never mid-activation,
-        // so a reported latency that ran ahead of it would ask the host to
-        // compensate for a delay no note is being given. Repeating the same
-        // number costs one atomic swap and asks for nothing.
-        context.set_latency_samples(self.requested_latency());
-        self.tune().schedule(block, output);
-        ProcessStatus::KeepAlive
-    }
-    /// The whole callback's remaining horizon, emitted at its final sample.
-    /// `start` is the chronological floor the sub-blocks already passed, not a
-    /// new interval: the wrapper's parameter output for the last sub-block is
-    /// pinned there too, so anything emitted before it would unsort the list.
-    fn clap_performance_finalize(
-        &mut self,
-        callback: api::Callback,
-        _status: i32,
-        output: &mut api::Output<'_>,
-    ) {
-        self.tune().schedule(
-            api::Block {
-                callback,
-                start: callback.frames.saturating_sub(1),
-                frames: 1,
-                transport: callback.transport,
-            },
-            output,
-        );
-    }
-    fn clap_performance_end(&mut self, _callback: api::Callback, _summary: api::Summary) {
+    fn end(&mut self) {
         self.tune().end();
     }
 }

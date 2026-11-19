@@ -499,7 +499,7 @@ fn draw_map_overlay(
     } else {
         String::new()
     };
-    let label = if maps.is_some_and(|maps| maps.pending) {
+    let label = if maps.is_some() && state.runtime.maps_pending {
         if label.is_empty() {
             "Pending audio adoption".into()
         } else {
@@ -889,7 +889,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            pending: false,
+            unadopted: None,
             names: Default::default(),
             edit_shape: false,
             can_undo: false,
@@ -928,7 +928,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            pending: false,
+            unadopted: None,
             names: Default::default(),
             edit_shape: true,
             can_undo: false,
@@ -996,7 +996,7 @@ mod tests {
             playback: MapPlayback { engine: TuningEngine::LatticeMap, ..Default::default() },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            pending: false,
+            unadopted: None,
             names: Default::default(),
             edit_shape: false,
             can_undo: false,
@@ -1100,7 +1100,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            pending: false,
+            unadopted: None,
             names: Default::default(),
             edit_shape: true,
             can_undo: false,
@@ -1167,7 +1167,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: LatticePos::ORIGIN,
-            pending: false,
+            unadopted: None,
             names: Default::default(),
             edit_shape: true,
             can_undo: false,
@@ -1208,7 +1208,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: LatticePos::ORIGIN,
-            pending: false,
+            unadopted: None,
             names: Default::default(),
             edit_shape: false,
             can_undo: false,

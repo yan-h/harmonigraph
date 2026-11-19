@@ -11,7 +11,6 @@ use harmonigraph_core::{Tempered, Tuning};
 use harmonigraph_ui::params::ConfigurationView;
 use nice_plug::plugin::PluginState;
 use nice_plug::prelude::*;
-use nice_plug::wrapper::clap::configuration::*;
 use nice_plug::wrapper::clap::setup::{Prepared, Serviced, Setup};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -254,17 +253,19 @@ impl Settings {
         let applied = self.published.load();
         let status = applied.status
             | if self.rejected.load(Ordering::Acquire) { ConfigurationView::QUEUE_FULL } else { 0 };
+        // The latest edit queued, while the audio owner has not applied it.
+        let latest = producer.next_id - 1;
+        let unadopted = (latest > applied.applied).then_some(latest);
         if let Some((id, settings)) = producer.shadow {
             if applied.applied < id {
                 let reducer = settings.reducer();
                 let mut resolved = reducer.resolved();
                 resolved.revision = applied.resolved.revision;
-                return (reducer.raw(), ConfigurationView { resolved, status, pending: true });
+                return (reducer.raw(), ConfigurationView { resolved, status, unadopted });
             }
             producer.shadow = None;
         }
-        let pending = producer.next_id - 1 > applied.applied;
-        (applied.raw, ConfigurationView { resolved: applied.resolved, status, pending })
+        (applied.raw, ConfigurationView { resolved: applied.resolved, status, unadopted })
     }
 
     pub fn view(&self) -> ConfigurationView {
@@ -408,6 +409,10 @@ impl Setup for HubSetup {
         serviced.text |= settings.text.swap(false, Ordering::AcqRel);
         serviced
     }
+    /// A line about the host, for the editor's Console.
+    fn notice(&self, line: &str) {
+        self.params.settings.notify(line);
+    }
 }
 
 mod recording;
@@ -460,7 +465,7 @@ impl Owner {
     /// its own sample.
     pub fn begin(
         &mut self,
-        boundary: ConfigurationBoundary,
+        boundary: &Boundary,
         seed: crate::lattice_maps::Seed,
         recorder: &harmonigraph_record::Recorder,
     ) {
@@ -501,15 +506,11 @@ impl Owner {
         self.status |= ConfigurationView::INPUT_LOST;
         self.publish();
     }
-    pub fn segment(&mut self, start: u32, frames: u32) {
-        self.recording.block_start = self.maps.boundary.steady_time + i64::from(start);
-        self.recording.block_frames = frames;
-    }
     pub fn recording_intent(&self) -> harmonigraph_record::configuration::RecordIntent {
         self.recording.captured_intent
     }
 
-    /// The take's presentation time at this sub-block's start, on the Hub's
+    /// The take's presentation time at this callback's start, on the Hub's
     /// own mapping: what a parameter recorded here is timed at.
     pub fn take_time(&self) -> f64 {
         self.recording.presentation.at(self.recording.block_start)
@@ -523,7 +524,7 @@ impl Owner {
         let end = start + i64::from(self.recording.block_frames);
         recorder.record(self.take_time(), origin);
         if recorder.recording() {
-            // What the Hub assigned from, at the segment's start and at each
+            // What the Hub assigned from, at the block's start and at each
             // change inside it.
             self.recording.configuration(recorder, start, self.in_force(start).config);
             for (sample, state) in self.maps.changes(start, end) {
@@ -541,8 +542,8 @@ impl Owner {
     /// `TOO_MANY_CLASSES` reports this evaluation alone rather than latching,
     /// so it clears as soon as what is held allows Learn again.
     ///
-    /// Learn applies at the block's start after the walk has pushed later
-    /// samples, so it is not pushed into the history: the next `begin`
+    /// Learn applies at the block's start after the observer has pushed
+    /// later samples, so it is not pushed into the history: the next `begin`
     /// carries it.
     pub fn group_end(
         &mut self,

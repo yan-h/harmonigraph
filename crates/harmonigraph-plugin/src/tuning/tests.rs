@@ -357,8 +357,7 @@ impl Device {
     /// Note retuning defaults to Pass through; these fixtures are about the
     /// adaptive correction, so the Hub starts with it selected. The Hub adopts
     /// a flush at its next process boundary, ahead of that callback's events,
-    /// so the value is not readable here; the adaptive tests failing without
-    /// it is what shows it lands.
+    /// and the adaptive tests failing without it is what shows it lands.
     fn select_adaptive(&self) {
         let events = vec![parameter("tuning-engine", 1.0, 0)];
         let input = clap_input_events {
@@ -404,7 +403,7 @@ impl Device {
     }
     /// `clap_plugin::reset`, which a host calls on one instance when it wants
     /// that instance's state discarded. It reaches this module as
-    /// `clap_performance_reset`.
+    /// `Plugin::reset`.
     fn host_reset(&self) {
         unsafe {
             (*self.plugin).reset.unwrap()(self.plugin);
@@ -633,6 +632,28 @@ fn an_input_emits_at_its_own_sample_plus_the_delay_with_its_correction() {
     assert_eq!(output[0].0, 17, "input offset 17 plus D lands at offset 17 of the next callback");
     assert!(tuning_of(&output).is_some());
     assert_eq!(pair.misses(), 0);
+}
+
+/// A note the host refuses is kept, not lost: it goes out at the start of the
+/// next callback, with its tuning.
+#[test]
+fn a_refused_note_goes_out_at_the_start_of_the_next_callback() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    assert!(pair.step(vec![note(1, 0, 60, 17, true)]).is_empty(), "nothing emits before D");
+    let refused = pair.tune.run(pair.raw, vec![], Some(CLAP_EVENT_NOTE_ON));
+    pair.hub.run(pair.raw, vec![], None);
+    pair.raw += 512;
+    let onset =
+        |event: &Event| matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_ON, key: 60, .. });
+    assert!(refused.rejected.iter().any(|(_, event)| onset(event)), "the host refused it");
+    assert!(!refused.values.iter().any(|(_, event)| onset(event)));
+    let output = pair.idle();
+    assert!(
+        output.iter().any(|(time, event)| *time == 0 && onset(event)),
+        "the refused note goes out at offset 0 of the next callback: {output:?}"
+    );
+    assert!(tuning_of(&output).is_some(), "with its tuning");
 }
 
 /// An onset whose correction has not arrived by its own deadline emits at raw
@@ -939,6 +960,28 @@ fn a_full_copy_ring_costs_a_correction_rather_than_a_note() {
     assert!(tuning_of(&output).is_none(), "its copy never reached the Hub");
     assert_eq!(pair.misses(), 1);
     assert_ne!(pair.status() & session::RING_FULL, 0);
+}
+
+/// A transport Stop as Bitwig sends one, the callback's own transport going
+/// not-playing with nothing in the list, is a cut: the Tune's held note gets
+/// its Note-Off in that callback.
+#[test]
+fn a_stop_in_the_callbacks_own_transport_cuts_held_notes() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    let block = |pair: &mut Pair, input: Vec<Input>, playing: bool| {
+        let at = Some(timeline(pair.raw as f64 / 48_000.0, playing));
+        let sink = pair.tune.run_callback(pair.raw, input, (None, None), (512, false), at);
+        pair.hub.run_callback(pair.raw, vec![], (None, None), (512, false), at);
+        pair.raw += 512;
+        sink.values
+    };
+    block(&mut pair, vec![note(1, 0, 60, 0, true)], true);
+    let sounded = block(&mut pair, vec![], true);
+    assert!(sounded.iter().any(|(_, event)| event.attack().is_some()), "{sounded:?}");
+    assert!(!sounded.iter().any(|(_, event)| event.release()), "still held");
+    let stopped = block(&mut pair, vec![], false);
+    assert!(stopped.iter().any(|(_, event)| event.release()), "the Stop cut: {stopped:?}");
 }
 
 /// The missed-correction count is advice about the delay, read when playing
@@ -1462,6 +1505,47 @@ fn the_delay_is_saved_and_reported_as_latency_before_any_hub_exists() {
     reopened.tune_wrapper().set_state_object_from_gui(saved);
     reopened.activate_format(48000.0, 256);
     assert_eq!(reopened.latency(), 4 * 256, "a reopened project reports the saved delay");
+}
+
+/// The #615 latency protocol, as the host sees it: one notification per
+/// activation that moves the latency, sent during that activation, and no
+/// restart until the plugin asks for a different latency, then one. A restart
+/// requested at activation stalls Bitwig's next offline bounce (#615).
+#[test]
+fn latency_is_announced_once_during_activation_and_a_change_asks_one_restart() {
+    let _scope = crate::test_scope::enter();
+    let mut tune = Device::new(true);
+    // (notifications, notifications outside an activation, restarts, the
+    // latency the host read when notified)
+    let seen = |device: &Device| {
+        let stats = &device._stats;
+        (
+            stats.latency_changes.load(Ordering::Relaxed),
+            stats.out_of_phase.load(Ordering::Relaxed),
+            stats.restarts.load(Ordering::Relaxed),
+            stats.observed_latency.load(Ordering::Relaxed),
+        )
+    };
+    let mut raw = 0;
+    let mut play = |device: &Device| {
+        for _ in 0..3 {
+            device.run_format(raw, vec![], None, None, 256);
+            raw += 256;
+            device.main();
+        }
+    };
+    tune.activate_format(48000.0, 256);
+    assert_eq!(seen(&tune), (1, 0, 0, 256), "announced during the activation, no restart");
+    play(&tune);
+    assert_eq!(seen(&tune), (1, 0, 0, 256), "the same latency asks for nothing");
+    tune.shared().request_delay(4);
+    play(&tune);
+    assert_eq!(seen(&tune), (1, 0, 1, 256), "a new latency asks one restart and waits for it");
+    assert_eq!(tune.latency(), 256, "the host reads the running activation's latency");
+    tune.reactivate_format(48000.0, 256);
+    assert_eq!(seen(&tune), (2, 0, 1, 4 * 256), "the reactivation announces the new one");
+    play(&tune);
+    assert_eq!(seen(&tune), (2, 0, 1, 4 * 256));
 }
 
 /// A host format change is a cut: the notes standing in the line were

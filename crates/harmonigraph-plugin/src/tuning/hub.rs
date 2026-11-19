@@ -16,8 +16,8 @@ use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GR
 use harmonigraph_core::tuning::PitchClass;
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
-use nice_plug::wrapper::clap::configuration::OwnedInput;
-use nice_plug::wrapper::clap::performance as api;
+use nice_plug::events::{Input, InputValue, Output, Transport};
+use nice_plug::plugin::Boundary;
 
 use super::event::Event;
 use super::session::{self, Copied, HubEnds, Reply};
@@ -26,10 +26,6 @@ use super::tune::Tune;
 use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_VOICES, TUNERS};
 
 type Owner = crate::configuration::Owner;
-
-/// `CLAP_TRANSPORT_HAS_SECONDS_TIMELINE`, which the wrapper hands over as a
-/// bare flag word rather than as a clap-sys type.
-const HAS_SECONDS: u32 = 1 << 2;
 
 /// One observation of the host's seconds timeline: where the song was, at
 /// which steady sample.
@@ -310,7 +306,7 @@ pub struct Hub {
     pending_loss: Option<f64>,
     sequencer: Box<Sequencer>,
     rate: f64,
-    callback: Option<api::Callback>,
+    callback: Option<Boundary>,
     anchor: Option<(i64, f64)>,
     /// The last observation of the host's seconds timeline, for loop and
     /// seek detection.
@@ -372,14 +368,14 @@ impl Hub {
         self.anchor = None;
         self.seconds = None;
         // No delay at all: the Hub's own input is already at the Hub, and its
-        // correction is queued at the input boundary before any sub-block of
-        // the same callback is scheduled, so the round trip needs none.
+        // correction is queued at the input boundary before the same
+        // callback is scheduled, so the round trip needs none.
         self.tune.activate(rate, frames, 0);
         self.shared.publish_format(rate, frames);
     }
 
-    pub fn begin(&mut self, callback: api::Callback, owner: &mut Owner, presentation: f64) {
-        self.callback = Some(callback);
+    pub fn begin(&mut self, callback: &Boundary, owner: &mut Owner, presentation: f64) {
+        self.callback = Some(*callback);
         if self.anchor.is_none() {
             self.anchor = Some((callback.steady_time, presentation));
         }
@@ -403,9 +399,9 @@ impl Hub {
         self.detect_loop(callback);
         // Adopt even on callbacks with no note input, so silence expiry below
         // uses the policy rather than the last onset's configuration. It is
-        // the policy the previous callback left: the wrapper reduces this
-        // callback's queued editor edits after `begin`, so an edit governs
-        // expiry from the callback after it arrives.
+        // the policy the previous callback left: the configuration owner
+        // reduces this callback's queued editor edits after `begin`, so an
+        // edit governs expiry from the callback after it arrives.
         self.sequencer.config = owner.current().into();
         // Silence expires released memory against the completed input
         // frontier, which is this callback's start: everything before it has
@@ -487,24 +483,17 @@ impl Hub {
     /// and an export that reports not playing while its position climbs. What
     /// a jump does then is the `reset_loop` control's business, at the next
     /// attack.
-    fn detect_loop(&mut self, callback: api::Callback) {
-        let Some(transport) = callback.transport else {
-            return;
-        };
-        self.observe_seconds(
-            transport.flags,
-            transport.song_pos_seconds,
-            Some(callback.steady_time),
-        );
+    fn detect_loop(&mut self, callback: &Boundary) {
+        if let Some(transport) = callback.transport {
+            self.observe_seconds(&transport, callback.steady_time);
+        }
     }
 
     /// One observation of the host's seconds timeline against elapsed samples.
-    /// `song_pos_seconds` is CLAP fixed point, 1/2^31 of a second.
-    fn observe_seconds(&mut self, flags: u32, song_pos_seconds: i64, sample: Option<i64>) {
-        let (Some(sample), true) = (sample, self.rate > 0.0 && flags & HAS_SECONDS != 0) else {
+    fn observe_seconds(&mut self, transport: &Transport, sample: i64) {
+        let (Some(song), true) = (transport.seconds(), self.rate > 0.0) else {
             return;
         };
-        let song = song_pos_seconds as f64 / 2_147_483_648.0;
         if let Some(previous) = self.seconds {
             let moved = song - previous.song;
             let elapsed = (sample - previous.sample) as f64 / self.rate;
@@ -515,19 +504,17 @@ impl Hub {
         self.seconds = Some(Seconds { song, sample });
     }
 
-    pub fn input(&mut self, input: OwnedInput) {
+    pub fn input(&mut self, input: Input) {
         // A host may supply the transport as the callback's own value, as an
         // input event, or as both. The seek this is looking for has to be
         // found in whichever one arrives.
-        if let nice_plug::wrapper::clap::configuration::InputValue::Transport(transport) =
-            input.value
-        {
-            self.observe_seconds(transport.flags, transport.song_pos_seconds, input.sample);
+        if let InputValue::Transport(transport) = input.value {
+            self.observe_seconds(&transport, input.sample);
         }
         self.tune.input(input);
     }
-    pub fn schedule(&mut self, block: api::Block, output: &mut api::Output<'_>) {
-        self.tune.schedule(block, output);
+    pub fn schedule(&mut self, output: &mut Output<'_>) {
+        self.tune.schedule(output);
     }
 
     /// The audio engine stopping, or a host reset. Both are a session cut,
@@ -598,7 +585,7 @@ impl Hub {
     /// key, is left alone.
     ///
     /// Never before this callback's start: a snapshot an earlier callback
-    /// published for the row, timed at a later sub-block, covers the voice
+    /// published for the row, timed later in its callback, covers the voice
     /// with its correction, and a withdrawal timed before it would sort ahead
     /// of it on read.
     fn withdraw_misses(&mut self) {
@@ -1066,7 +1053,7 @@ impl Hub {
 
     /// Everything this callback scheduled, out to both lanes, each delta timed
     /// where it sounds. The take places it by that time, so nothing here waits
-    /// for a sub-block or asks which run a delta belongs to.
+    /// for a later block or asks which run a delta belongs to.
     fn flush(&mut self, recorder: &mut Recorder) {
         for position in 0..self.pending.len() {
             let item = self.pending[position];
@@ -1130,11 +1117,9 @@ impl Hub {
     /// or take reads after a gap and a take reads at the start of every run.
     /// It reconstructs no history.
     ///
-    /// A run that ends in a later sub-block of this callback pushes its end
-    /// after this, so the take's lanes hold everything collected before it. One
-    /// that ends at this callback's start pushed its end before this, but what
-    /// this callback collected was played in it or a callback before by a Tune
-    /// that lags, and sounds a delay later, at or after that end.
+    /// A run that ends at this callback's start pushed its end before this,
+    /// but what this callback collected was played in it or a callback before
+    /// by a Tune that lags, and sounds a delay later, at or after that end.
     pub fn publish(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
         self.flush(recorder);
         if self.callback.is_some() {
@@ -1145,12 +1130,11 @@ impl Hub {
     /// Pay every snapshot a row owes and can state now, one lane at a time.
     ///
     /// Both callers reach the run latch below, and `end` never re-opens what
-    /// `publish` opened: it reads the same sub-block's run, which `opened`
+    /// `publish` opened: it reads the same callback's run, which `opened`
     /// already holds.
     fn snapshots(&mut self, owner: &Owner, recorder: &mut Recorder) {
-        // Snapshots are timed at the sub-block being processed, not the
-        // callback's start: a run a mid-callback transport event opens is this
-        // sub-block's, and its opening snapshot must fall inside it.
+        // Snapshots are timed at the block's start, where a run the block
+        // opens begins.
         let block = owner.recording.block_start;
         let time = self.presentation(block);
         // Every recording run — the take's first, and each resume — opens with
@@ -1218,7 +1202,8 @@ impl Hub {
         self.rows.iter().any(|row| row.live && row.retune & 1 != 0)
     }
     pub fn end(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
-        // A callback no sub-block reached still publishes what it sequenced.
+        // A callback whose audio did not run still publishes what it
+        // sequenced.
         self.flush(recorder);
         // A snapshot owed and refused for room is owed now, not a callback
         // later that may never come.

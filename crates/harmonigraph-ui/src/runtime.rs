@@ -4,6 +4,57 @@
 use crate::params::ParamBackend;
 use crate::{AudioSpectrum, Console};
 use harmonigraph_core::{NoteTracker, PitchClass, Tuning};
+use std::time::{Duration, Instant};
+
+/// How long one requested state may go unadopted by the audio thread before
+/// the editor says so (#1814 Q2). An edit reaches the plugin's state at once
+/// and the audio thread adopts it at its next callback, so during a drag
+/// every frame's edit is unadopted for part of a frame: a label shown at once
+/// would flicker. With audio stopped the label waits this long, then stays
+/// until audio adopts the edit.
+pub const PENDING_AFTER: Duration = Duration::from_millis(100);
+
+/// Whether one request has gone unadopted for [`PENDING_AFTER`]. The timer is
+/// keyed on the request as its source names it (the latest queued edit's id,
+/// or the map state the parameters ask for before following moves it), so a
+/// drag, which requests anew every frame, never lights it, and following,
+/// which is no request, never restarts it.
+#[derive(Debug)]
+pub struct PendingLabel<K> {
+    since: Option<(K, Instant)>,
+}
+impl<K> Default for PendingLabel<K> {
+    fn default() -> Self {
+        Self { since: None }
+    }
+}
+impl<K> PendingLabel<K> {
+    /// Move the wait's start back by [`PENDING_AFTER`], as if it had begun
+    /// that long ago.
+    #[cfg(test)]
+    fn backdate(&mut self) {
+        if let Some((_, since)) = &mut self.since {
+            *since -= PENDING_AFTER;
+        }
+    }
+}
+impl<K: PartialEq + Copy> PendingLabel<K> {
+    /// Whether to show the label, given the request the audio thread has not
+    /// adopted yet, `None` once it has adopted everything, which clears it.
+    pub fn shown(&mut self, unadopted: Option<K>, now: Instant) -> bool {
+        let Some(requested) = unadopted else {
+            self.since = None;
+            return false;
+        };
+        match self.since {
+            Some((key, since)) if key == requested => now.duration_since(since) >= PENDING_AFTER,
+            _ => {
+                self.since = Some((requested, now));
+                false
+            }
+        }
+    }
+}
 
 /// Synchronous input, analysis and history, independent of any viewport.
 pub struct VisualRuntime {
@@ -33,7 +84,14 @@ pub struct VisualRuntime {
     pub replayed_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
     pub adaptive_policy: harmonigraph_core::configuration::PolicyConfig,
     pub configuration_status: u32,
-    pub configuration_pending: bool,
+    /// Show "Tuning change pending audio adoption": the configuration the
+    /// editor requested has gone unadopted for [`PENDING_AFTER`].
+    pub configuration_pending_shown: bool,
+    configuration_unadopted: PendingLabel<u64>,
+    /// Show the map's "pending audio adoption": the map state the parameters
+    /// request has gone unadopted for [`PENDING_AFTER`].
+    pub maps_pending: bool,
+    maps_unadopted: PendingLabel<crate::lattice_maps::MapPlayback>,
     /// Held pitch classes the last learn ran against (change detection).
     pub(crate) last_learned_classes: Option<Vec<PitchClass>>,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
@@ -69,7 +127,10 @@ impl Default for VisualRuntime {
             replayed_configuration: None,
             adaptive_policy: Default::default(),
             configuration_status: 0,
-            configuration_pending: false,
+            configuration_pending_shown: false,
+            configuration_unadopted: PendingLabel::default(),
+            maps_pending: false,
+            maps_unadopted: PendingLabel::default(),
             last_learned_classes: None,
             spectrum: AudioSpectrum::default(),
             ring_fade: harmonigraph_scene::RingFade::default(),
@@ -116,12 +177,29 @@ impl VisualRuntime {
         if let Some(owned) = owned {
             self.apply_resolved(owned.resolved);
             self.configuration_status = owned.status;
-            self.configuration_pending = owned.pending;
+            self.configuration_pending_shown =
+                self.configuration_unadopted.shown(owned.unadopted, Instant::now());
         } else if let Some(recorded) = self.replayed_configuration {
             self.apply_resolved(recorded);
         } else {
             self.apply_resolved(self.config_reducer.resolved());
         }
+    }
+
+    /// Both pending labels' waits, as if they began [`PENDING_AFTER`] ago:
+    /// for a test that draws a label without waiting for it.
+    #[cfg(test)]
+    pub(crate) fn backdate_pending_labels(&mut self) {
+        self.configuration_unadopted.backdate();
+        self.maps_unadopted.backdate();
+    }
+
+    /// Keep this frame's map view, and decide its pending label.
+    pub fn observe_maps(&mut self, maps: Option<crate::lattice_maps::MapView>) {
+        self.maps_pending = maps
+            .as_ref()
+            .is_some_and(|view| self.maps_unadopted.shown(view.unadopted, Instant::now()));
+        self.lattice_maps = maps;
     }
 
     fn apply_resolved(&mut self, config: harmonigraph_core::configuration::ResolvedConfig) {
@@ -151,7 +229,6 @@ impl VisualRuntime {
         edit: harmonigraph_core::configuration::ConfigEdit,
     ) {
         if let Some(accepted) = params.submit_tuning(edit) {
-            self.configuration_pending = accepted;
             if !accepted {
                 self.console.log("Tuning command refused: configuration storage is full");
             }
@@ -194,5 +271,27 @@ impl VisualRuntime {
             self.console.log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
         }
         self.last_learned_classes = Some(classes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One state unadopted for the whole wait lights the label, and adoption
+    /// clears it; a drag's state, new every frame, never does.
+    #[test]
+    fn a_pending_label_waits_for_one_requested_state() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut label = PendingLabel::default();
+        assert!(!label.shown(Some(1), at(0)));
+        assert!(!label.shown(Some(1), at(99)));
+        assert!(label.shown(Some(1), at(100)), "unadopted for the whole wait");
+        assert!(!label.shown(None, at(150)), "adopted");
+        assert!(!label.shown(Some(1), at(160)), "the wait starts again");
+        for frame in 0..30 {
+            assert!(!label.shown(Some(frame), at(200 + 16 * frame as u64)), "a drag");
+        }
     }
 }

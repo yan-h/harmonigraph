@@ -130,12 +130,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "anymap3"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb5dfbc6d8d2675589ccbe4d0fd61df2419075625f8c1a62325e718e2b0049f9"
-
-[[package]]
 name = "arboard"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1457,7 +1451,6 @@ name = "harmonigraph-clap"
 version = "0.6.1"
 dependencies = [
  "anyhow",
- "anymap3",
  "atomic_float",
  "atomic_refcell",
  "backtrace",
@@ -1465,12 +1458,10 @@ dependencies = [
  "clap-sys",
  "crossbeam",
  "log",
- "midi-consts",
  "nice-assert-no-alloc",
  "nice-log",
  "parking_lot",
  "raw-window-handle 0.5.2",
- "rtrb",
  "serde",
  "serde_json",
 ]
@@ -2119,12 +2110,6 @@ checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
 ]
-
-[[package]]
-name = "midi-consts"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f2dd5c7f8aaf48a76e389068ab25ed80bdbc226b887f9013844c415698c9952"
 
 [[package]]
 name = "midir"

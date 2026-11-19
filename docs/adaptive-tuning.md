@@ -175,7 +175,7 @@ Tunes run no assignment policy and hold no copy of the Hub's state.
 
 The Hub's own MIDI takes exactly that path.
 It embeds a Tune whose ring is a direct call, so its track is assigned by the same policy and published through the same row as any other.
-That Tune runs at zero delay: its correction is queued at the input boundary before any sub-block of the same callback is scheduled, so the round trip needs none.
+That Tune runs at zero delay: its correction is queued at the input boundary before the same callback is scheduled, so the round trip needs none.
 There is no second observation path to keep in step with the first.
 
 Work is bounded per callback and runs to completion inside it.
@@ -642,47 +642,41 @@ failing to mark an affected one is not.
 
 ## The framework boundary
 
-The CLAP wrapper in `crates/harmonigraph-clap` (formerly vendored nice-plug) supplies what the plugin cannot get for itself:
+The CLAP shell in `crates/harmonigraph-clap` supplies what the plugin cannot get for itself, each straight from a CLAP struct (#1814):
 
-- **Provenance.** Every input carries absolute sample, enclosing callback start and length, sub-block, flush and batch flags — because the wrapper splits a host callback on transport and automation, and two sub-blocks can both report offset zero.
-- **Steady time**, which nice-plug-core's `Transport` did not expose.
-- **Lossless CLAP identity**, since `NoteEvent::PolyTuning` carries `f32` and drops the note id, flags and `f64`.
-- **Per-event host-acceptance feedback**, because `send_event` throws the result away and a plugin that owns downstream note ownership cannot infer acceptance.
-It is now the return value of the push rather than a later completion, which is why the callback that chose the event is the one that hears about it.
+- **Steady time**, `clap_process.steady_time`, which every input's sample counts from.
+- **Lossless CLAP identity**: an input is the CLAP event's own value, raw note id, signed wildcard addresses, `f64` value and header flags.
+- **Per-event host acceptance**: `Output::push` returns the host's answer to `try_push`, so the callback that chose the event is the one that hears about it.
 
-The [CLAP boundary audit](audits/clap-boundary-1415.md) records the lock ownership, input-pool reuse argument and allocation-check reach.
-The owned-parameter mailbox it audited went with #1756:
-its notification, gesture and modulation layers existed only to make the tuning axes host-automatable.
-What the wrapper keeps of configuration is the walk, which hands the plugin each callback's boundary and then every owned input in order with its exact sample.
+Nothing splits a host callback, so an input needs no provenance beyond its sample.
+The plugin's `begin` sees the callback's boundary, with the parameter table as the callback found it;
+the shell then writes the callback's automation into the table, and `process` walks the inputs in order, the callback's own transport first.
+That order is the rule a note before a mid-block Lattice Map point depends on: the timeline's entry at the callback's start is the seed `begin` reads, and each automation event lands in it at its own sample.
+A transport event inside the host's list reaches the Hub and the Tune at its sample;
+the tape, a take's origin and the analyzer read the callback's own transport, once.
+Bitwig was measured sending none at 44.1 kHz through loops, seeks and export (`archive/tuning-probe-bitwig.md`), and at 48 kHz under tempo automation (PR #1830);
+44.1 kHz under tempo automation is unmeasured, and one that arrives is logged once to the Console.
+
+The [CLAP boundary audit](audits/clap-boundary-1415.md) records the lock ownership and allocation-check reach of the input pool this replaced.
+The owned-parameter mailbox it audited went with #1756, and the pool, its cursors and its walks with #1814.
 The plugin's own edit queue snapshots its queued prefix once per callback, so concurrent edits and restores cannot extend audio-thread work indefinitely.
 
-Removed from it during the #712 simplification:
-the retain-and-acknowledge input contract (`Consumption::Pending`), the legacy input walker, and a second complete notification emitter reachable only from fixtures.
-Kept, against an earlier plan to remove them:
-the three input cursors, which turned out to be one progress mark per consumer over a single shared pool rather than the retain machinery —
-giving each consumer its own copy would add cost and a mechanism instead of removing one.
-
 **The output scheduler is gone** ([#789](https://github.com/yan-h/harmonigraph/issues/789), after [#786](https://github.com/yan-h/harmonigraph/issues/786) and [#788](https://github.com/yan-h/harmonigraph/issues/788) had already emptied it of callers).
-`Group`, `Lane`, `Token`, `Completion`, `Disposition`, the ready heap, the cell pool and the emergency lane are deleted, and with them the `clap_performance_prepare` and `clap_performance_complete` hooks that had nothing left to decide.
-`Output` is now a borrow of the host's `clap_output_events` with one method:
+`Group`, `Lane`, `Token`, `Completion`, `Disposition`, the ready heap, the cell pool and the emergency lane are deleted, and with them the hooks that had nothing left to decide.
+`Output` is a borrow of the host's `clap_output_events` with one method:
 `push(value, time)` calls `try_push` and hands back the host's answer.
-The normal lane's 512 was doing two jobs besides the scheduler's, and both are kept where they belong.
-It bounded the wrapper's own parameter output per callback, which is now `PARAMETER_OUTPUT_ATTEMPTS` and counts nothing the plugin pushes.
-It also bounded the plugin's output per callback, which is now Tune's own `EMIT_PER_CALLBACK`:
+The plugin's output per callback is bounded by Tune's own `EMIT_PER_CALLBACK`:
 the delay line and the cut bound the backlog but not the burst, so without it the first callback after a stretch of blind or refusing ones would spend every held event's host call inline on the audio thread.
 
-What that moves to the plugin is the chronological floor.
-A CLAP output list is sorted by time, so Tune keeps its own cursor and emits at `max(cursor, block.start)` —
+What that leaves to the plugin is the chronological floor.
+A CLAP output list is sorted by time, so Tune keeps its own cursor and emits at `max(cursor, start)` —
 which it can, because the delay line already emits in due order.
 
-The two halves no longer share that cursor, and the ordering they used to negotiate by interleaving on time is settled once instead:
-**the wrapper's own parameter output follows the plugin's, at the high-water mark of what the callback has already put on the wire.** Which side gives way is the decision.
-A note's offset is the output's content;
-a parameter report only has to be recorded in order, so where the two would cross it is the parameter that moves later.
-The wrapper's output is the editor's own host-parameter edits, which have no source sample of their own, so each takes the mark.
+**The editor's own host-parameter edits go out at offset 0, ahead of the plugin's output.** An edit writes the parameter table when it is made, so the value is already in the table when the next callback's `begin` reads it, and offset 0 is when it took effect;
+the shell reports each edited row's gesture and current value then, or at a flush before it, stopping at the first refusal.
 
 An error exit is the one place the plugin's output goes dark:
-invalid input, a missing host list and `CLAP_PROCESS_ERROR` all give `clap_performance_finalize` a writer that refuses everything, so the Tune retains its flush for a callback the host will read instead of spending it on one it has already lost.
+a lost input gives `process` no events and an output that refuses everything, so the Tune retains what it would have emitted for a callback the host will read instead of spending it on one it has already lost.
 
 ## Setting it up in Bitwig
 

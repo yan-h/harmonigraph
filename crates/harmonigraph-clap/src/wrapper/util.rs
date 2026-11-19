@@ -4,7 +4,6 @@ use std::os::raw::c_char;
 
 use crate::util::permit_alloc;
 
-pub(crate) mod buffer_management;
 #[cfg(debug_assertions)]
 pub(crate) mod context_checks;
 
@@ -55,35 +54,6 @@ pub fn strlcpy(dest: &mut [c_char], src: &str) {
     let copy_len = cmp::min(dest.len() - 1, src.len());
     dest[..copy_len].copy_from_slice(&src_bytes_signed[..copy_len]);
     dest[copy_len] = 0;
-}
-
-/// Clamp an input event's timing to the buffer length. Emits a debug assertion failure if it was
-/// out of bounds.
-#[inline]
-pub fn clamp_input_event_timing(timing: u32, total_buffer_len: u32) -> u32 {
-    // If `total_buffer_len == 0`, then 0 is a valid timing
-    let last_valid_index = total_buffer_len.saturating_sub(1);
-
-    crate::nice_debug_assert!(
-        timing <= last_valid_index,
-        "Input event is out of bounds, will be clamped to the buffer's size"
-    );
-
-    timing.min(last_valid_index)
-}
-
-/// Clamp an output event's timing to the buffer length. Emits a debug assertion failure if it was
-/// out of bounds.
-#[inline]
-pub fn clamp_output_event_timing(timing: u32, total_buffer_len: u32) -> u32 {
-    let last_valid_index = total_buffer_len.saturating_sub(1);
-
-    crate::nice_debug_assert!(
-        timing <= last_valid_index,
-        "Output event is out of bounds, will be clamped to the buffer's size"
-    );
-
-    timing.min(last_valid_index)
 }
 
 /// Set up the logger so that the `nice_*!()` logging and assertion macros log output to a

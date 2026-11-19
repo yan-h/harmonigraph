@@ -1,8 +1,6 @@
 //! A context passed to a plugin's editor.
 
-use std::sync::Arc;
-
-use crate::plugin::{Plugin, PluginState};
+use crate::plugin::PluginState;
 
 use super::PluginApi;
 
@@ -47,69 +45,4 @@ pub trait GuiContext: Send + Sync + 'static {
     /// host. If the plugin is currently processing audio, then the parameter values will be
     /// restored at the end of the current processing cycle.
     fn set_state(&self, state: PluginState);
-}
-
-/// An way to run background tasks from the plugin's GUI, equivalent to the
-/// [`ProcessContext::execute_background()`][crate::context::process::ProcessContext::execute_background()]
-/// and [`ProcessContext::execute_gui()`][crate::context::process::ProcessContext::execute_gui()]
-/// functions. This is passed directly to [`Plugin::editor()`] so the plugin can move it into its
-/// editor and use it later.
-///
-/// # Note
-///
-/// This is only intended to be used from the GUI. Use the methods on
-/// [`InitContext`][crate::context::init::InitContext] and
-/// [`ProcessContext`][crate::context::process::ProcessContext] to run tasks during the `initialize()`
-/// and `process()` functions.
-//
-// NOTE: This is separate from `GuiContext` because adding a type parameter there would clutter up a
-//       lot of structs, and may even be incompatible with the way certain GUI libraries work.
-pub struct AsyncExecutor<P: Plugin> {
-    pub(crate) execute_background: Arc<dyn Fn(P::BackgroundTask) + Send + Sync>,
-    pub(crate) execute_gui: Arc<dyn Fn(P::BackgroundTask) + Send + Sync>,
-}
-
-impl<P: Plugin> AsyncExecutor<P> {
-    pub fn new(
-        execute_background: Arc<dyn Fn(P::BackgroundTask) + Send + Sync>,
-        execute_gui: Arc<dyn Fn(P::BackgroundTask) + Send + Sync>,
-    ) -> Self {
-        Self { execute_background, execute_gui }
-    }
-}
-
-// Can't derive this since Rust then requires `P` to also be `Clone`able
-impl<P: Plugin> Clone for AsyncExecutor<P> {
-    fn clone(&self) -> Self {
-        Self {
-            execute_background: self.execute_background.clone(),
-            execute_gui: self.execute_gui.clone(),
-        }
-    }
-}
-
-impl<P: Plugin> AsyncExecutor<P> {
-    /// Execute a task on a background thread using `[Plugin::task_executor]`. This allows you to
-    /// defer expensive tasks for later without blocking either the process function or the GUI
-    /// thread. As long as creating the `task` is realtime-safe, this operation is too.
-    ///
-    /// # Note
-    ///
-    /// Scheduling the same task multiple times will cause those duplicate tasks to pile up. Try to
-    /// either prevent this from happening, or check whether the task still needs to be completed in
-    /// your task executor.
-    pub fn execute_background(&self, task: P::BackgroundTask) {
-        (self.execute_background)(task);
-    }
-
-    /// Execute a task on a background thread using `[Plugin::task_executor]`.
-    ///
-    /// # Note
-    ///
-    /// Scheduling the same task multiple times will cause those duplicate tasks to pile up. Try to
-    /// either prevent this from happening, or check whether the task still needs to be completed in
-    /// your task executor.
-    pub fn execute_gui(&self, task: P::BackgroundTask) {
-        (self.execute_gui)(task);
-    }
 }

@@ -63,7 +63,7 @@ pub(super) fn engine_view(
         playback: crate::lattice_maps::MapPlayback { engine, ..Default::default() },
         offsets: Default::default(),
         followed: harmonigraph_core::LatticePos::ORIGIN,
-        pending: false,
+        unadopted: None,
         names: crate::lattice_maps::MapDocument::default().names(),
         edit_shape: false,
         can_undo: false,
@@ -85,7 +85,7 @@ pub(super) fn lattice_map_view() -> crate::lattice_maps::MapView {
     view.followed = LatticePos { threes: -2, fives: 1, sevens: 0 };
     view.offsets.fine = LatticePos { threes: -7, fives: 3, sevens: -1 };
     view.offsets.extension = LatticePos { threes: -1, fives: 0, sevens: 2 };
-    view.pending = true;
+    view.unadopted = Some(view.playback);
     view.edit_shape = true;
     view.can_undo = true;
     view.full = true;
@@ -597,6 +597,10 @@ pub(super) fn open_settings_pane(
     let frame = |state: &mut SharedState, now: f64, events: Vec<egui::Event>| {
         tab_body_with(ctx, state, case.pane, (width, PANE_HEIGHT), now, &backend, events).shapes
     };
+    frame(state, now, vec![]);
+    // The pending notices wait for one request to go unadopted that long:
+    // past it, so the page draws them too.
+    state.picture.runtime.backdate_pending_labels();
     let mut shapes = frame(state, now, vec![]);
     let mut opened = 0;
     while let Some(at) = closed_fold(&shapes) {

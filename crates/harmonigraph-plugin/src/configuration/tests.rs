@@ -22,7 +22,6 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 mod host_surface;
-mod state_goldens;
 
 #[derive(Default)]
 struct Host {
@@ -88,7 +87,6 @@ enum Input {
     Param(clap_event_param_value),
     Note(clap_event_note),
     Tuning(clap_event_note_expression),
-    Transport(clap_event_transport),
     Mod(clap_event_param_mod),
 }
 impl Input {
@@ -98,7 +96,6 @@ impl Input {
             Self::Mod(e) => &e.header,
             Self::Note(e) => &e.header,
             Self::Tuning(e) => &e.header,
-            Self::Transport(e) => &e.header,
         }
     }
 }
@@ -436,13 +433,13 @@ fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adopt
         assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
         device.load(restored(&device, 705.0), gui);
         let now = shown(&settings);
-        assert!(now.view.pending);
+        assert!(now.view.unadopted.is_some());
         assert_eq!(now.raw.three, microcents(705.0), "the newest restore is what shows");
         assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
         assert_eq!(saved(&device.wrapper().get_state_object()).axes[1], microcents(705.0));
         device.run(1000, vec![], false);
         let adopted = shown(&settings);
-        assert!(!adopted.view.pending);
+        assert!(!adopted.view.unadopted.is_some());
         assert_eq!(adopted.raw.three, microcents(705.0), "the queued UI edit came before it");
         assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
         let marked = device.service();
@@ -450,6 +447,26 @@ fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adopt
         assert_eq!(shown(&settings).raw.three, microcents(700.0));
         assert!(device.service() > marked, "an applied UI edit marks the project modified");
     }
+}
+
+/// The tuning pending label waits on the latest edit queued, not on the
+/// configuration audio last applied: with audio stopped, a second edit
+/// restarts the wait the first began (#1814 Q2).
+#[test]
+fn the_tuning_label_waits_on_the_latest_queued_edit() {
+    use harmonigraph_ui::{PendingLabel, PENDING_AFTER};
+    let settings = Settings::default();
+    let start = std::time::Instant::now();
+    let at = |ms: u64| start + std::time::Duration::from_millis(ms);
+    let mut label = PendingLabel::default();
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
+    assert!(!label.shown(settings.view().unadopted, at(0)));
+    let later = PENDING_AFTER.as_millis() as u64 / 2;
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(701.0))));
+    assert!(!label.shown(settings.view().unadopted, at(later)));
+    let first_wait = PENDING_AFTER.as_millis() as u64;
+    assert!(!label.shown(settings.view().unadopted, at(first_wait)), "the wait restarted");
+    assert!(label.shown(settings.view().unadopted, at(later + first_wait)));
 }
 
 #[test]
@@ -467,7 +484,10 @@ fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
         for comma in harmonigraph_core::Comma::ALL.into_iter().rev() {
             assert!(settings.submit(ConfigEdit::temper(comma, false, linked.tuning)));
         }
-        assert!(shown(&settings).view.pending, "the switches are one pending audio adoption");
+        assert!(
+            shown(&settings).view.unadopted.is_some(),
+            "the switches are one pending audio adoption"
+        );
         device.run(64, vec![], false);
         let released = shown(&settings);
         assert_eq!(released.view.resolved.modes.tempered, Tempered::default());
@@ -624,33 +644,9 @@ fn a_full_command_queue_keeps_accepted_state() {
     assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
     device.run(64, vec![], false);
     let now = shown(&settings);
-    assert!(!now.view.pending);
+    assert!(!now.view.unadopted.is_some());
     assert_eq!(now.raw.three, microcents(705.0));
     assert_eq!(now.view.status, 8, "the deliberately rejected submission remains visible");
-}
-
-#[test]
-fn one_owned_input_pool_reaches_2048_in_a_callback_and_refuses_growth_past_it() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    let events = (0..2048).map(|_| device.param(ParamKey::CameraDistance, 6.0, 0)).collect();
-    device.run(0, events, false);
-    assert_eq!(shown(&device.settings()).view.status, 0);
-    let (status, _) = device.run_status(
-        64,
-        (0..2049).map(|_| device.param(ParamKey::CameraDistance, 7.0, 0)).collect(),
-        false,
-    );
-    assert_eq!(status, CLAP_PROCESS_ERROR);
-    assert_eq!(shown(&device.settings()).view.status & 2, 2);
-    // Exercise the host's recovery boundary after proving capacity
-    // exhaustion, so this fixture does not leave an unresolved global owner.
-    unsafe {
-        ((*device.plugin).reset.unwrap())(device.plugin);
-    }
-    device.run(128, vec![], false);
-    assert_eq!(shown(&device.settings()).view.status, 0);
 }
 
 #[test]
@@ -668,19 +664,16 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
             device.activate();
             device.run(0, vec![], false);
             device.load(restored(&device, 705.0), false);
-            assert!(shown(&settings).view.pending, "an accepted restore is still queued");
+            assert!(
+                shown(&settings).view.unadopted.is_some(),
+                "an accepted restore is still queued"
+            );
         } else {
             device.activate();
-            device.run(
-                0,
-                (0..2048).map(|_| device.param(ParamKey::CameraDistance, 6.0, 0)).collect(),
-                false,
-            );
-            let (status, _) = device.run_status(
-                64,
-                (0..2049).map(|_| device.param(ParamKey::CameraDistance, 7.0, 0)).collect(),
-                false,
-            );
+            device.run(0, vec![device.param(ParamKey::CameraDistance, 6.0, 0)], false);
+            // Timed past the block's end: the list is invalid, its input lost.
+            let lost = vec![device.param(ParamKey::CameraDistance, 7.0, 64)];
+            let (status, _) = device.run_status(64, lost, false);
             assert_eq!(status, CLAP_PROCESS_ERROR);
             assert_eq!(shown(&device.settings()).view.status & 2, 2);
         }
@@ -721,7 +714,7 @@ fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
         state.fields.insert(MUSICAL_SETTINGS.into(), serde_json::to_string(&restoring).unwrap());
         device.load(state, gui);
         let readback = shown(&settings).view;
-        assert!(readback.pending);
+        assert!(readback.unadopted.is_some());
         let readback = readback.resolved;
         let restored_modes = TuningModes {
             tempered: Tempered { syntonic: meantone, septimal_kleisma: marvel },
@@ -1760,12 +1753,12 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         device.run_transport(0, events, false, None, Some(transport(5.0, 0)));
         assert!(shared.lock().take.has_rolled());
         if let Some(source) = &mut source {
-            source.begin(nice_plug::wrapper::clap::performance::Callback {
+            source.begin(&nice_plug::plugin::Boundary {
                 steady_time: 0,
                 frames: 64,
                 transport: None,
-                input_status: nice_plug::wrapper::clap::performance::InputStatus::Complete,
-                output_available: true,
+                valid: true,
+                input_lost: false,
             });
             if source_state == 1 {
                 source.end();
@@ -1831,15 +1824,9 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         assert_eq!(&wav[44..], expected);
         if let Some(source) = &mut source {
             if source_state == 2 {
-                source.input(nice_plug::wrapper::clap::configuration::OwnedInput {
-                    sample: Some(10),
-                    event_index: 0,
-                    offset: 10,
-                    enclosing_start: Some(0),
-                    enclosing_frames: 64,
-                    flush: false,
-                    batch: 0,
-                    value: nice_plug::wrapper::clap::configuration::InputValue::Note {
+                source.input(nice_plug::events::Input {
+                    sample: 10,
+                    value: nice_plug::events::InputValue::Note {
                         kind: CLAP_EVENT_NOTE_ON,
                         note_id: 1,
                         port: 0,
@@ -1981,52 +1968,6 @@ fn a_configuration_applied_before_arming_records_once_as_the_takes_initial_value
     assert_eq!(configs.len(), 1, "only the take's initial value is recorded");
     assert_eq!(configs[0].axes[1], 698_000_000);
     assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
-}
-
-#[test]
-fn stop_during_parked_callback_cannot_close_its_later_playing_segment() {
-    let _scope = crate::test_scope::enter();
-    let (mut device, mut capture) = recorded_device();
-    device.activate();
-    capture.arm();
-    let dir = std::env::temp_dir()
-        .join(format!("harmonigraph-config-stop-segment-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
-    let mut parked = transport(0.0, 0);
-    parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
-    let mut events = vec![note(9, 48, 0, CLAP_EVENT_NOTE_ON), Input::Transport(transport(0.0, 32))];
-    events.extend((0..9).map(|i| device.param(ParamKey::CameraDistance, 6.0 + 0.1 * i as f32, 40)));
-    events.push(note(10, 60, 40, CLAP_EVENT_NOTE_ON));
-    capture.pause_boundary(true);
-    std::thread::scope(|scope| {
-        let callback = scope.spawn(|| device.run_transport(0, events, false, None, Some(parked)).0);
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !capture.boundary_entered()
-            && !callback.is_finished()
-            && std::time::Instant::now() < until
-        {
-            std::thread::yield_now();
-        }
-        let entered = capture.boundary_entered();
-        capture.stop();
-        writer.stop();
-        capture.pause_boundary(false);
-        assert_ne!(callback.join().unwrap(), CLAP_PROCESS_ERROR);
-        assert!(entered, "fixture must stop after the actual callback captures armed intent");
-    });
-    writer.drain(&mut capture);
-    assert!(writer.finished.is_none(), "the playing segment's run is still open");
-    device.run_transport(64, vec![], false, None, Some(transport(32.0 / 48000.0, 0)));
-    writer.drain(&mut capture);
-    assert!(!writer.failed());
-    assert!(writer.finished.is_some());
-    assert_eq!(std::fs::read(path.with_extension("wav")).unwrap().len(), 44 + 32 * 2 * 4);
-    drop(writer);
-    device.finish_notes(128, &[(9, 48), (10, 60)]);
-    drop(device);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -2175,7 +2116,10 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(preview.playback.offset, preview.offsets.total());
         assert!(!Arc::ptr_eq(&original_names, &preview.names));
         assert_eq!(&preview.names[1], &(1, "Distant passage".into()));
-        assert!(preview.pending, "restored intent must be visible before audio adoption");
+        assert!(
+            preview.unadopted.is_some(),
+            "restored intent must be visible before audio adoption"
+        );
     });
     let saved = device.save();
     let recalled: MapDocument = serde_json::from_str(&saved.fields["lattice-maps"]).unwrap();
@@ -2208,7 +2152,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     let mut changed = map;
     assert!(changed.replace(destination), "the edit must change the captured geometry");
     device.wrapper().test_inspect_plugin(|plugin| {
-        assert!(!crate::lattice_maps::view(&plugin.params).pending);
+        assert!(!crate::lattice_maps::view(&plugin.params).unadopted.is_some());
         let edit = |action| crate::lattice_maps::edit(&plugin.params, context.as_ref(), action);
         let dirty = &plugin.params.settings.modified;
         dirty.store(false, std::sync::atomic::Ordering::Release);
@@ -2229,7 +2173,10 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
             Some(LatticeMap { position: harmonigraph_core::LatticePos::ORIGIN, ..changed }),
             "an edit is saved to the selected map itself"
         );
-        assert!(preview.pending, "editing follows intent before audio adopts the shape");
+        assert!(
+            preview.unadopted.is_some(),
+            "editing follows intent before audio adopts the shape"
+        );
         edit(MapEdit::Undo);
         let undone = crate::lattice_maps::view(&plugin.params);
         assert_eq!(undone.playback.map, Some(map));
@@ -2287,7 +2234,10 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         let preview = crate::lattice_maps::view(&plugin.params);
         assert!(!preview.editing() && !preview.can_undo, "undo never reaches a restored project");
         assert_eq!(preview.playback.map, Some(map));
-        assert!(preview.pending, "audio still holds the edited shape until its next callback");
+        assert!(
+            preview.unadopted.is_some(),
+            "audio still holds the edited shape until its next callback"
+        );
     });
     device.run(128, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {

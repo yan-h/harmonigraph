@@ -1,10 +1,10 @@
-//! Missing inputs are silent; missing outputs leave the callback unprocessed.
+//! Missing inputs are silent; a missing output leaves the callback without audio.
 use clap_sys::{
     audio_buffer::clap_audio_buffer,
     factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory},
     host::clap_host,
     plugin::clap_plugin,
-    process::{CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, clap_process},
+    process::{CLAP_PROCESS_CONTINUE, clap_process},
     version::CLAP_VERSION,
 };
 use nice_plug::prelude::*;
@@ -21,56 +21,35 @@ impl Plugin for AuxiliaryFixture {
     const NAME: &'static str = "Auxiliary fixture";
     const VENDOR: &'static str = "fixture";
     const URL: &'static str = "";
-    const EMAIL: &'static str = "";
     const VERSION: &'static str = "1";
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
-        main_input_channels: Some(new_nonzero_u32(2)),
-        main_output_channels: Some(new_nonzero_u32(2)),
-        aux_input_ports: &[new_nonzero_u32(2)],
-        aux_output_ports: &[new_nonzero_u32(2)],
-        ..AudioIOLayout::const_default()
-    }];
-    type SysExMessage = ();
-    type BackgroundTask = ();
-
-    fn params(&self) -> Arc<Table> {
-        Arc::new(Table::empty())
-    }
-
-    fn process(
-        &mut self,
-        buffer: &mut Buffer,
-        auxiliary: &mut AuxiliaryBuffers,
-        _: &mut impl ProcessContext<Self>,
-    ) -> ProcessStatus {
-        // Report a malformed slice outside the FFI callback, before using any
-        // iterator whose safety relies on samples() matching the slice length.
-        if auxiliary.inputs[0]
-            .as_slice_immutable()
-            .iter()
-            .any(|channel| channel.len() != buffer.samples())
-        {
-            return ProcessStatus::Error("auxiliary input length differs from callback length");
-        }
-        for (main, input) in buffer.as_slice().iter_mut().zip(auxiliary.inputs[0].as_slice()) {
-            for (sample, sidechain) in main.iter_mut().zip(input.iter()) {
-                *sample += sidechain;
-            }
-        }
-        for channel in auxiliary.outputs[0].as_slice() {
-            channel.fill(0.75);
-        }
-        ProcessStatus::Normal
-    }
-}
-
-impl ClapPlugin for AuxiliaryFixture {
     const CLAP_ID: &'static str = "fixture.auxiliary";
     const CLAP_DESCRIPTION: Option<&'static str> = None;
     const CLAP_MANUAL_URL: Option<&'static str> = None;
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect];
+    const PORTS: Ports = Ports { main_input: 2, main_output: 2, aux_inputs: &[(2, "Sidechain")] };
+
+    fn params(&self) -> Arc<Table> {
+        Arc::new(Table::empty())
+    }
+
+    /// Adds the sidechain into the main output.
+    fn process(&mut self, block: &mut Block<'_>) {
+        let Some(Audio { main, aux }) = block.audio.as_mut() else { return };
+        let frames = block.boundary.frames as usize;
+        // Report a malformed slice outside the FFI callback.
+        assert!(
+            main.iter().chain(aux[0].iter()).all(|channel| channel.len() == frames),
+            "a channel's length differs from the callback's"
+        );
+        for (main, input) in main.iter_mut().zip(aux[0].iter()) {
+            for (sample, sidechain) in main.iter_mut().zip(input.iter()) {
+                *sample += sidechain;
+            }
+        }
+    }
 }
+
 nice_export_clap!(AuxiliaryFixture);
 
 unsafe extern "C" fn extension(_: *const clap_host, _: *const c_char) -> *const c_void {
@@ -130,16 +109,21 @@ fn descriptor(channels: &mut [*mut f32; 2]) -> clap_audio_buffer {
     }
 }
 
+/// The sidechain the host gives, port by port and channel by channel, and
+/// silence for what it leaves out, without reading a descriptor past the
+/// count it declares (#638); no main output leaves the callback without
+/// audio, and the output untouched.
 #[test]
-fn omitted_auxiliary_descriptors_are_not_read_or_written() {
+fn omitted_auxiliary_inputs_are_silent_and_a_missing_main_output_has_no_audio() {
     let device = Device::new();
-    for (block, (frames, input_present, output_present)) in [
-        (32, true, true),
-        (64, false, true),
-        (16, true, false),
-        (64, false, false),
-        (64, true, true),
-        (32, false, true),
+    for (block, (frames, auxiliary, channels, output)) in [
+        (32, true, 2, true),
+        // After a full port, so a channel left as it was fails.
+        (16, true, 1, true),
+        (64, false, 2, true),
+        (64, true, 2, false),
+        (64, true, 2, true),
+        (32, false, 2, true),
     ]
     .into_iter()
     .enumerate()
@@ -147,41 +131,43 @@ fn omitted_auxiliary_descriptors_are_not_read_or_written() {
         let mut main_input = [[0.25; 64]; 2];
         let mut auxiliary_input = [[0.5; 64]; 2];
         let mut main_output = [[-1.0; 64]; 2];
-        let mut auxiliary_output = [[-1.0; 64]; 2];
         let mut main_in = main_input.each_mut().map(|c| c.as_mut_ptr());
         let mut aux_in = auxiliary_input.each_mut().map(|c| c.as_mut_ptr());
         let mut main_out = main_output.each_mut().map(|c| c.as_mut_ptr());
-        let mut aux_out = auxiliary_output.each_mut().map(|c| c.as_mut_ptr());
         // The second descriptor is outside the DECLARED array when the port is
         // omitted. Keep backing memory valid so a one-past read fails on signal
         // values rather than invoking undefined behaviour or relying on a crash.
-        let inputs = [descriptor(&mut main_in), descriptor(&mut aux_in)];
-        let mut outputs = [descriptor(&mut main_out), descriptor(&mut aux_out)];
+        let inputs = [
+            descriptor(&mut main_in),
+            clap_audio_buffer { channel_count: channels, ..descriptor(&mut aux_in) },
+        ];
+        let mut outputs = [descriptor(&mut main_out)];
         let process = clap_process {
             steady_time: block as i64 * 64,
             frames_count: frames as u32,
             transport: ptr::null(),
             audio_inputs: inputs.as_ptr(),
             audio_outputs: outputs.as_mut_ptr(),
-            audio_inputs_count: 1 + u32::from(input_present),
-            audio_outputs_count: 1 + u32::from(output_present),
+            audio_inputs_count: 1 + u32::from(auxiliary),
+            audio_outputs_count: u32::from(output),
             in_events: ptr::null(),
             out_events: ptr::null(),
         };
         assert_eq!(
             unsafe { ((*device.plugin).process.unwrap())(device.plugin, &process) },
-            CLAP_PROCESS_CONTINUE_IF_NOT_QUIET,
+            CLAP_PROCESS_CONTINUE,
         );
-        // Missing output storage makes the wrapper skip Plugin::process(),
-        // after copying main input to output, just as for a missing main bus.
-        let mut expected_main = [-1.0; 64];
-        expected_main[..frames].fill(if input_present && output_present { 0.75 } else { 0.25 });
-        assert_eq!(main_output, [expected_main; 2], "auxiliary input present={input_present}");
-        let mut expected_auxiliary = [-1.0; 64];
-        expected_auxiliary[..frames].fill(if output_present { 0.75 } else { -1.0 });
+        let expected = |sidechain: bool| {
+            let mut expected = [-1.0; 64];
+            if output {
+                expected[..frames].fill(if auxiliary && sidechain { 0.75 } else { 0.25 });
+            }
+            expected
+        };
         assert_eq!(
-            auxiliary_output, [expected_auxiliary; 2],
-            "auxiliary output present={output_present}"
+            main_output,
+            [expected(true), expected(channels > 1)],
+            "auxiliary input present={auxiliary}, channels {channels}, output present={output}"
         );
         assert_eq!(auxiliary_input, [[0.5; 64]; 2], "host input must stay unchanged");
     }

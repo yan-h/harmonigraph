@@ -221,7 +221,7 @@ impl Viewer<'_> {
     fn body(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Lattice => {
-                self.state.runtime.lattice_maps = self.params.lattice_maps();
+                self.state.runtime.observe_maps(self.params.lattice_maps());
                 lattice_pane(ui, self.state, self.now, DOCKED_SURFACE);
                 if let Some(destination) = self.state.runtime.map_destination.take() {
                     self.params

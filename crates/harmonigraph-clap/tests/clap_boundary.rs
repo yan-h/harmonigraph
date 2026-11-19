@@ -1,326 +1,145 @@
-//! Real exported factory, declared stereo main and auxiliary input, exact raw
-//! hooks and scripted host acceptance. Runs independently of the tuning probe.
-use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_host_latency};
+//! The shell's process callback, flush and editor writes, through the real
+//! exported factory with a fixture plugin that records what it is handed.
 use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory};
 use clap_sys::{
-    audio_buffer::clap_audio_buffer, events::*, host::clap_host, plugin::clap_plugin, process::*,
-    version::CLAP_VERSION,
+    audio_buffer::clap_audio_buffer, events::*, ext::params::*, host::clap_host,
+    plugin::clap_plugin, process::*, version::CLAP_VERSION,
 };
 use nice_plug::prelude::*;
-use nice_plug::wrapper::clap::{configuration::*, performance as perf};
+use nice_plug::wrapper::clap::setup::{Prepared, Serviced, Setup};
 use std::{
     ffi::{CStr, c_char, c_void},
     ptr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
-type GuiEdit = Box<dyn Fn(&[f32])>;
-
 static SERIAL: Mutex<()> = Mutex::new(());
-static CONSTRUCTION: Mutex<Option<Arc<Control>>> = Mutex::new(None);
-#[derive(Clone, Copy)]
-struct Instruction {
-    callback: usize,
-    block: u32,
-    time: u32,
-    value: InputValue,
-}
-struct Control {
-    script: Vec<Instruction>,
-    gui: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
-    tasks_run: AtomicUsize,
-    host_callbacks: AtomicUsize,
-    plugin: AtomicUsize,
-    pause_audio: AtomicBool,
-    pause_begin: AtomicBool,
-    audio_entered: AtomicBool,
-    audio_resume: AtomicBool,
-    observed: Mutex<Observed>,
-    final_flush: bool,
-    process_error: bool,
-    statuses: Vec<ProcessStatus>,
-    misuse: bool,
-    restarts: AtomicUsize,
-    latency_changes: AtomicUsize,
-}
-#[derive(Default)]
+static OBSERVED: Mutex<Observed> = Mutex::new(Observed::new());
+/// `Setup::notice` calls.
+static NOTICES: AtomicUsize = AtomicUsize::new(0);
+
+/// What the fixture saw of its callbacks, in order.
 struct Observed {
-    inputs: Vec<OwnedInput>,
-    configuration: Vec<OwnedInput>,
-    blocks: Vec<(i64, u32, u32)>,
-    summaries: Vec<perf::Summary>,
-    callbacks: Vec<perf::Callback>,
-    /// The host's answer to each push the fixture made, in push order.
+    /// Each `begin`'s boundary flags and the table's value there.
+    begins: Vec<(bool, bool, f32)>,
+    /// Each `process`'s events and the table's value there.
+    events: Vec<Input>,
+    processed: Vec<f32>,
+    /// The host's answer to each note the fixture pushed.
     pushes: Vec<bool>,
-    legacy: usize,
-    finals: usize,
-    faults: usize,
-    tails_before_process: Vec<u32>,
+    /// Whether each `process` had audio.
+    audio: Vec<bool>,
 }
-impl Default for Control {
-    fn default() -> Self {
+impl Observed {
+    const fn new() -> Self {
         Self {
-            script: vec![],
-            gui: Mutex::new(None),
-            tasks_run: AtomicUsize::new(0),
-            host_callbacks: AtomicUsize::new(0),
-            plugin: AtomicUsize::new(0),
-            pause_audio: AtomicBool::new(false),
-            pause_begin: AtomicBool::new(false),
-            audio_entered: AtomicBool::new(false),
-            audio_resume: AtomicBool::new(false),
-            observed: Mutex::new(Observed {
-                inputs: Vec::with_capacity(8000),
-                configuration: Vec::with_capacity(5000),
-                blocks: Vec::with_capacity(5000),
-                summaries: Vec::with_capacity(100),
-                callbacks: Vec::with_capacity(100),
-                pushes: Vec::with_capacity(3000),
-                tails_before_process: Vec::with_capacity(16),
-                ..Default::default()
-            }),
-            final_flush: false,
-            process_error: false,
-            statuses: vec![],
-            misuse: false,
-            restarts: AtomicUsize::new(0),
-            latency_changes: AtomicUsize::new(0),
+            begins: Vec::new(),
+            events: Vec::new(),
+            processed: Vec::new(),
+            pushes: Vec::new(),
+            audio: Vec::new(),
         }
     }
+    /// Room for every test's callbacks, so the guarded callback never
+    /// allocates.
+    fn reset(&mut self) {
+        *self = Self {
+            begins: Vec::with_capacity(64),
+            events: Vec::with_capacity(64),
+            processed: Vec::with_capacity(64),
+            pushes: Vec::with_capacity(64),
+            audio: Vec::with_capacity(64),
+        };
+    }
 }
-struct Fixture<const CONFIG: bool, const PERFORMANCE: bool> {
+
+fn observed() -> std::sync::MutexGuard<'static, Observed> {
+    OBSERVED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+struct Fixture {
     params: Arc<Table>,
-    control: Arc<Control>,
-    callback: usize,
-    processed: usize,
 }
-impl<const C: bool, const P: bool> Default for Fixture<C, P> {
+impl Default for Fixture {
     fn default() -> Self {
-        Self {
-            params: Arc::new(Table::new([Spec::float("axis", "Axis", 0.0, 0.0, 1.0)])),
-            control: CONSTRUCTION
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_ref()
-                .unwrap()
-                .clone(),
-            callback: 0,
-            processed: 0,
+        Self { params: Arc::new(Table::new([Spec::float("axis", "Axis", 0.0, 0.0, 1.0)])) }
+    }
+}
+
+/// The setup's one saved field: opaque to the shell, which only frames it.
+static FIELD: Mutex<String> = Mutex::new(String::new());
+
+struct FixtureSetup;
+struct Field(Option<String>);
+impl Prepared for Field {
+    fn commit(self: Box<Self>) {
+        if let Some(field) = self.0 {
+            *FIELD.lock().unwrap_or_else(|e| e.into_inner()) = field;
         }
     }
 }
-impl<const C: bool, const P: bool> Plugin for Fixture<C, P> {
+impl Setup for FixtureSetup {
+    fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
+        Ok(Box::new(Field(state.fields.get("field").cloned())))
+    }
+    fn save(&self, state: &mut PluginState) {
+        let field = FIELD.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        state.fields.insert("field".into(), field);
+    }
+    fn install_wakeup(&self, _: Box<dyn Fn() + Send + Sync>) {}
+    fn service(&self) -> Serviced {
+        Serviced::default()
+    }
+    fn notice(&self, _: &str) {
+        NOTICES.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Plugin for Fixture {
     const NAME: &'static str = "Boundary fixture";
     const VENDOR: &'static str = "fixture";
     const URL: &'static str = "";
-    const EMAIL: &'static str = "";
     const VERSION: &'static str = "1";
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
-        main_input_channels: Some(new_nonzero_u32(2)),
-        main_output_channels: Some(new_nonzero_u32(2)),
-        aux_input_ports: &[new_nonzero_u32(2)],
-        ..AudioIOLayout::const_default()
-    }];
-    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
-    const SAMPLE_ACCURATE_AUTOMATION: bool = true;
-    type SysExMessage = ();
-    type BackgroundTask = ();
-    fn editor(&mut self, executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        *self.control.gui.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(Box::new(move || executor.execute_gui(())));
-        None
-    }
-    fn task_executor(&mut self) -> nice_plug::plugin::TaskExecutor<Self> {
-        let control = self.control.clone();
-        Box::new(move |()| {
-            control.tasks_run.fetch_add(1, Ordering::Relaxed);
-        })
-    }
-    fn params(&self) -> Arc<Table> {
-        self.params.clone()
-    }
-    fn initialize(
-        &mut self,
-        _: &AudioIOLayout,
-        _: &BufferConfig,
-        context: &mut impl InitContext<Self>,
-    ) -> bool {
-        context.set_latency_samples(512);
-        true
-    }
-    fn process(
-        &mut self,
-        _: &mut Buffer,
-        _: &mut AuxiliaryBuffers,
-        context: &mut impl ProcessContext<Self>,
-    ) -> ProcessStatus {
-        while let Some(event) = context.next_event() {
-            self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).legacy += 1;
-            context.send_event(event);
-        }
-        let status =
-            self.control.statuses.get(self.processed).copied().unwrap_or(ProcessStatus::Normal);
-        if !self.control.statuses.is_empty() {
-            let plugin = self.control.plugin.load(Ordering::Relaxed) as *const clap_plugin;
-            self.control
-                .observed
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .tails_before_process
-                .push(tail_samples(plugin));
-        }
-        self.processed += 1;
-        status
-    }
-}
-impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
-    const CLAP_ID: &'static str = if C && P {
-        "fixture.combined"
-    } else if C {
-        "fixture.configuration"
-    } else if P {
-        "fixture.performance"
-    } else {
-        "fixture.legacy"
-    };
+    const CLAP_ID: &'static str = "fixture.boundary";
     const CLAP_DESCRIPTION: Option<&'static str> = None;
     const CLAP_MANUAL_URL: Option<&'static str> = None;
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::NoteEffect];
-    const CLAP_CONFIGURATION: bool = C;
-    const CLAP_PERFORMANCE: bool = P;
-    fn clap_configuration_fault(&mut self) {
-        self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).faults += 1;
-    }
-    fn clap_configuration_observe(&mut self, input: OwnedInput) {
-        self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).configuration.push(input);
-    }
-    fn clap_performance_begin(&mut self, callback: perf::Callback, _: &mut perf::Output<'_>) {
-        self.callback += 1;
-        self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).callbacks.push(callback);
-        if self.control.pause_begin.swap(false, Ordering::AcqRel) {
-            self.control.audio_entered.store(true, Ordering::Release);
-            while !self.control.audio_resume.load(Ordering::Acquire) {
-                std::thread::yield_now();
-            }
-        }
-    }
-    fn clap_performance_input(&mut self, input: OwnedInput) {
-        self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.push(input);
-    }
-    fn clap_performance_process(
-        &mut self,
-        b: &mut Buffer,
-        a: &mut AuxiliaryBuffers,
-        context: &mut impl ProcessContext<Self>,
-        block: perf::Block,
-        output: &mut perf::Output<'_>,
-    ) -> ProcessStatus {
-        self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).blocks.push((
-            block.callback.steady_time,
-            block.start,
-            block.frames,
-        ));
-        if self.control.pause_audio.swap(false, Ordering::AcqRel) {
-            self.control.audio_entered.store(true, Ordering::Release);
-            while !self.control.audio_resume.load(Ordering::Acquire) {
-                std::thread::yield_now();
-            }
-        }
-        let status = self.process(b, a, context);
-        if self.control.misuse {
-            context.send_event(NoteEvent::NoteOff {
-                timing: 0,
-                voice_id: None,
-                channel: 0,
-                note: 60,
-                velocity: 0.0,
-            });
-        }
-        for instruction in &self.control.script {
-            if instruction.callback == self.callback && instruction.block == block.start {
-                let accepted = output.push(instruction.value, instruction.time);
-                self.control
-                    .observed
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .pushes
-                    .push(accepted);
-            }
-        }
-        if self.control.process_error { ProcessStatus::Error("fixture") } else { status }
-    }
-    fn clap_performance_finalize(
-        &mut self,
-        callback: perf::Callback,
-        _: clap_process_status,
-        output: &mut perf::Output<'_>,
-    ) {
-        let mut observed = self.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-        observed.finals += 1;
-        if self.control.final_flush {
-            // The callback's last sample: the only offset a final flush can
-            // take without preceding output the sub-blocks already pushed.
-            let time = callback.frames.saturating_sub(1);
-            observed.pushes.push(output.push(note(CLAP_EVENT_NOTE_CHOKE), time));
-        }
-    }
-    fn clap_performance_end(&mut self, _: perf::Callback, summary: perf::Summary) {
-        self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).summaries.push(summary);
-    }
-}
-nice_export_clap!(Fixture<true, true>, Fixture<false, true>, Fixture<false, false>, Fixture<true, false>);
+    const PORTS: Ports = Ports { main_input: 2, main_output: 2, aux_inputs: &[] };
+    const NOTE_PORTS: bool = true;
 
-fn note(kind: u16) -> InputValue {
-    InputValue::Note {
-        kind,
-        note_id: 567,
-        port: 0,
-        channel: 2,
-        key: 61,
-        velocity: 0.765432198765,
-        flags: CLAP_EVENT_IS_LIVE,
+    fn params(&self) -> Arc<Table> {
+        self.params.clone()
+    }
+    fn setup(&self) -> Option<Arc<dyn Setup>> {
+        Some(Arc::new(FixtureSetup))
+    }
+    fn begin(&mut self, boundary: &Boundary) {
+        observed().begins.push((boundary.valid, boundary.input_lost, self.params.float(0)));
+    }
+    fn process(&mut self, block: &mut Block<'_>) {
+        let mut observed = observed();
+        observed.events.extend(block.events());
+        observed.processed.push(self.params.float(0));
+        observed.audio.push(block.audio.is_some());
+        let note = InputValue::Note {
+            kind: CLAP_EVENT_NOTE_ON,
+            note_id: 1,
+            port: 0,
+            channel: 0,
+            key: 60,
+            velocity: 1.0,
+            flags: 0,
+        };
+        let pushed = block.output.push(note, 0);
+        observed.pushes.push(pushed);
     }
 }
-fn tuning() -> InputValue {
-    InputValue::Expression {
-        expression: CLAP_NOTE_EXPRESSION_TUNING,
-        note_id: 567,
-        port: 0,
-        channel: 2,
-        key: 61,
-        value: 0.123456789123,
-        flags: CLAP_EVENT_DONT_RECORD,
-    }
-}
-fn nan_velocity() -> InputValue {
-    match note(CLAP_EVENT_NOTE_OFF) {
-        InputValue::Note { kind, note_id, port, channel, key, flags, .. } => {
-            InputValue::Note { kind, note_id, port, channel, key, velocity: f64::NAN, flags }
-        }
-        _ => unreachable!(),
-    }
-}
-fn infinite_tuning() -> InputValue {
-    match tuning() {
-        InputValue::Expression { expression, note_id, port, channel, key, flags, .. } => {
-            InputValue::Expression {
-                expression,
-                note_id,
-                port,
-                channel,
-                key,
-                value: f64::INFINITY,
-                flags,
-            }
-        }
-        _ => unreachable!(),
-    }
-}
+nice_export_clap!(Fixture);
+
 fn header<T>(kind: u16, time: u32) -> clap_event_header {
     clap_event_header {
         size: std::mem::size_of::<T>() as u32,
@@ -331,97 +150,98 @@ fn header<T>(kind: u16, time: u32) -> clap_event_header {
     }
 }
 #[derive(Clone, Copy)]
-enum Input {
+enum Event {
     Note(clap_event_note),
-    Expression(clap_event_note_expression),
-    Midi(clap_event_midi),
-    Transport(clap_event_transport),
     Param(clap_event_param_value),
+    Transport(clap_event_transport),
+    SysEx(clap_event_midi_sysex),
     Header(clap_event_header),
 }
-impl Input {
-    fn header(&self) -> &clap_event_header {
+impl Event {
+    /// A pointer to the whole event, as a host hands one over: a pointer
+    /// to only its header field could not read the rest (Miri).
+    fn header(&self) -> *const clap_event_header {
         match self {
-            Self::Note(e) => &e.header,
-            Self::Expression(e) => &e.header,
-            Self::Midi(e) => &e.header,
-            Self::Transport(e) => &e.header,
-            Self::Param(e) => &e.header,
+            Self::Note(e) => (e as *const clap_event_note).cast(),
+            Self::Param(e) => (e as *const clap_event_param_value).cast(),
+            Self::Transport(e) => (e as *const clap_event_transport).cast(),
+            Self::SysEx(e) => (e as *const clap_event_midi_sysex).cast(),
             Self::Header(e) => e,
         }
     }
 }
-fn on(time: u32) -> Input {
-    Input::Note(clap_event_note {
-        header: header::<clap_event_note>(CLAP_EVENT_NOTE_ON, time),
-        note_id: 567,
+fn note(kind: u16, time: u32) -> Event {
+    Event::Note(clap_event_note {
+        header: header::<clap_event_note>(kind, time),
+        note_id: 7,
         port_index: 0,
-        channel: 2,
-        key: 61,
-        velocity: 0.765432198765,
+        channel: 0,
+        key: 64,
+        velocity: 0.5,
     })
 }
-fn transport(time: u32, playing: bool, position: i64) -> Input {
-    Input::Transport(clap_event_transport {
-        header: header::<clap_event_transport>(CLAP_EVENT_TRANSPORT, time),
-        flags: CLAP_TRANSPORT_HAS_SECONDS_TIMELINE
-            | if playing { CLAP_TRANSPORT_IS_PLAYING } else { 0 },
-        song_pos_seconds: position,
-        tempo: 143.123456789,
-        tempo_inc: 0.000001,
-        ..unsafe { std::mem::zeroed() }
+fn param(value: f64, time: u32) -> Event {
+    Event::Param(clap_event_param_value {
+        header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, time),
+        param_id: nice_plug::wrapper::hash_param_id("axis"),
+        cookie: ptr::null_mut(),
+        note_id: -1,
+        port_index: -1,
+        channel: -1,
+        key: -1,
+        value,
     })
+}
+fn transport(time: u32) -> clap_event_transport {
+    clap_event_transport {
+        header: header::<clap_event_transport>(CLAP_EVENT_TRANSPORT, time),
+        flags: CLAP_TRANSPORT_IS_PLAYING,
+        ..unsafe { std::mem::zeroed() }
+    }
 }
 unsafe extern "C" fn input_size(list: *const clap_input_events) -> u32 {
-    unsafe { &*((*list).ctx.cast::<Vec<Input>>()) }.len() as u32
+    unsafe { &*((*list).ctx.cast::<Vec<Event>>()) }.len() as u32
 }
 unsafe extern "C" fn input_get(
     list: *const clap_input_events,
     index: u32,
 ) -> *const clap_event_header {
-    (unsafe { &*((*list).ctx.cast::<Vec<Input>>()) })[index as usize].header()
+    (unsafe { &*((*list).ctx.cast::<Vec<Event>>()) })[index as usize].header()
 }
-unsafe extern "C" fn restart(host: *const clap_host) {
-    unsafe { &*((*host).host_data.cast::<Control>()) }.restarts.fetch_add(1, Ordering::Relaxed);
+fn list(events: &Vec<Event>) -> clap_input_events {
+    clap_input_events {
+        ctx: (events as *const Vec<Event>).cast_mut().cast(),
+        size: Some(input_size),
+        get: Some(input_get),
+    }
 }
-unsafe extern "C" fn latency_changed(host: *const clap_host) {
-    unsafe { &*((*host).host_data.cast::<Control>()) }
-        .latency_changes
-        .fetch_add(1, Ordering::Relaxed);
+
+#[derive(Default)]
+struct Host {
+    callbacks: AtomicUsize,
 }
-static LATENCY: clap_host_latency = clap_host_latency { changed: Some(latency_changed) };
 unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const c_void {
-    if unsafe { CStr::from_ptr(id) } == CLAP_EXT_LATENCY {
-        (&LATENCY as *const clap_host_latency).cast()
-    } else if unsafe { CStr::from_ptr(id) } == clap_sys::ext::params::CLAP_EXT_PARAMS {
-        (&PARAMS as *const clap_sys::ext::params::clap_host_params).cast()
+    if unsafe { CStr::from_ptr(id) } == CLAP_EXT_PARAMS {
+        (&PARAMS as *const clap_host_params).cast()
     } else {
         ptr::null()
     }
 }
 unsafe extern "C" fn host_callback(host: *const clap_host) {
-    unsafe { &*((*host).host_data.cast::<Control>()) }
-        .host_callbacks
-        .fetch_add(1, Ordering::Relaxed);
+    unsafe { &*((*host).host_data.cast::<Host>()) }.callbacks.fetch_add(1, Ordering::Relaxed);
 }
 unsafe extern "C" fn rescan(_: *const clap_host, _: u32) {}
 unsafe extern "C" fn clear(_: *const clap_host, _: u32, _: u32) {}
-static PARAMS: clap_sys::ext::params::clap_host_params = clap_sys::ext::params::clap_host_params {
-    rescan: Some(rescan),
-    clear: Some(clear),
-    request_flush: Some(request),
-};
 unsafe extern "C" fn request(_: *const clap_host) {}
-#[derive(Clone, Copy, Debug)]
-struct Attempt {
-    kind: u16,
-    time: u32,
-    accepted: bool,
-    value: Option<InputValue>,
-}
+static PARAMS: clap_host_params =
+    clap_host_params { rescan: Some(rescan), clear: Some(clear), request_flush: Some(request) };
+
+/// What the host's output list was offered, as (type, time, value), and
+/// whether it took each.
 struct Sink {
+    /// The answer to each offer in turn; past its end, yes.
     script: Vec<bool>,
-    attempts: Vec<Attempt>,
+    offers: Vec<(u16, u32, f64, bool)>,
 }
 unsafe extern "C" fn push(
     list: *const clap_output_events,
@@ -429,259 +249,173 @@ unsafe extern "C" fn push(
 ) -> bool {
     let sink = unsafe { &mut *((*list).ctx.cast::<Sink>()) };
     let header = unsafe { &*event };
-    let accepted = sink.script.get(sink.attempts.len()).copied().unwrap_or(true);
+    let accepted = sink.script.get(sink.offers.len()).copied().unwrap_or(true);
     let value = match header.type_ {
-        CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE => {
-            let e = unsafe { &*event.cast::<clap_event_note>() };
-            Some(InputValue::Note {
-                kind: header.type_,
-                note_id: e.note_id,
-                port: e.port_index,
-                channel: e.channel,
-                key: e.key,
-                velocity: e.velocity,
-                flags: header.flags,
-            })
-        }
-        CLAP_EVENT_NOTE_EXPRESSION => {
-            let e = unsafe { &*event.cast::<clap_event_note_expression>() };
-            Some(InputValue::Expression {
-                expression: e.expression_id,
-                note_id: e.note_id,
-                port: e.port_index,
-                channel: e.channel,
-                key: e.key,
-                value: e.value,
-                flags: header.flags,
-            })
-        }
-        CLAP_EVENT_MIDI => {
-            let e = unsafe { &*event.cast::<clap_event_midi>() };
-            Some(InputValue::Midi { port: e.port_index, data: e.data, flags: header.flags })
-        }
-        _ => None,
+        CLAP_EVENT_PARAM_VALUE => unsafe { (*event.cast::<clap_event_param_value>()).value },
+        _ => f64::NAN,
     };
-    assert!(sink.attempts.len() < sink.attempts.capacity());
-    sink.attempts.push(Attempt { kind: header.type_, time: header.time, accepted, value });
+    assert!(sink.offers.len() < sink.offers.capacity());
+    sink.offers.push((header.type_, header.time, value, accepted));
     accepted
 }
+
+/// The host's structs are raw pointers the plugin holds on to, freed at the
+/// end: a `Box` moved after the plugin took its pointer would end that
+/// pointer's reach (Miri).
 struct Device {
     plugin: *const clap_plugin,
-    _host: Box<clap_host>,
-    control: Arc<Control>,
+    host: *mut Host,
+    clap_host: *mut clap_host,
     sink: Sink,
-    transport: Option<clap_event_transport>,
 }
-
-fn tail_samples(plugin: *const clap_plugin) -> u32 {
-    use clap_sys::ext::tail::{CLAP_EXT_TAIL, clap_plugin_tail};
-    unsafe {
-        let tail = ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_TAIL.as_ptr())
-            .cast::<clap_plugin_tail>();
-        assert!(!tail.is_null());
-        ((*tail).get.unwrap())(plugin)
-    }
-}
-
-#[test]
-fn exported_tail_tracks_processed_subblocks_and_processing_lifecycle() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(
-        Control {
-            statuses: vec![
-                ProcessStatus::Tail(17),
-                ProcessStatus::Normal,
-                ProcessStatus::KeepAlive,
-                ProcessStatus::Error("fixture"),
-                ProcessStatus::Tail(23),
-                ProcessStatus::Tail(41),
-            ],
-            ..Default::default()
-        },
-        c"fixture.performance",
-    );
-    assert_eq!(tail_samples(d.plugin), 0);
-    for (index, (result, tail)) in [
-        (CLAP_PROCESS_CONTINUE, 17),
-        (CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, 0),
-        (CLAP_PROCESS_CONTINUE, u32::MAX),
-        (CLAP_PROCESS_ERROR, 0),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        assert_eq!(d.run(index as i64 * 64, 64, vec![], true), result);
-        assert_eq!(tail_samples(d.plugin), tail);
-    }
-    // Querying from the second subblock must see the first one's published tail.
-    assert_eq!(d.run(256, 64, vec![transport(32, false, 0)], true), CLAP_PROCESS_CONTINUE);
-    assert_eq!(tail_samples(d.plugin), 41);
-    assert_eq!(
-        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).tails_before_process,
-        [0, 17, 0, u32::MAX, 0, 23],
-    );
-    // An invalid input fails before plugin processing, so it cannot replace the
-    // last processed result. A plugin-returned Error above does replace it.
-    assert_eq!(d.run(320, 64, vec![on(64)], true), CLAP_PROCESS_ERROR);
-    assert_eq!(tail_samples(d.plugin), 41);
-    unsafe {
-        ((*d.plugin).reset.unwrap())(d.plugin);
-        assert_eq!(tail_samples(d.plugin), 41);
-        ((*d.plugin).stop_processing.unwrap())(d.plugin);
-        assert_eq!(tail_samples(d.plugin), 41);
-        assert!(((*d.plugin).start_processing.unwrap())(d.plugin));
-        assert_eq!(tail_samples(d.plugin), 0);
-    }
-}
-// Fixtures move only the serialized process call to a worker and return the
-// device before main-thread lifecycle/destruction. The host/owned sink stay pinned.
-unsafe impl Send for Device {}
 impl Device {
-    fn gui<const C: bool, const P: bool>(&self) -> impl Fn(&[f32]) + use<C, P> {
-        let wrapper = unsafe {
-            &*((*self.plugin)
-                .plugin_data
-                .cast::<nice_plug::wrapper::clap::Wrapper<Fixture<C, P>>>())
-        };
-        let (context, row) = wrapper.test_gui_context("axis");
-        move |values| {
-            context.begin_set_parameter(row);
-            for &value in values {
-                context.set_parameter(row, value);
-            }
-            context.end_set_parameter(row);
-        }
-    }
-    fn new(control: Control, id: &CStr) -> Self {
-        let control = Arc::new(control);
-        // Some platforms lazily allocate the std mutex on its first lock. Initialize this
-        // fixture-only observation storage before any allocation-guarded audio callback.
-        drop(control.observed.lock().unwrap_or_else(|e| e.into_inner()));
-        *CONSTRUCTION.lock().unwrap_or_else(|e| e.into_inner()) = Some(control.clone());
-        let host = Box::new(clap_host {
+    fn new() -> Self {
+        observed().reset();
+        let host = Box::into_raw(Box::<Host>::default());
+        let clap_host = Box::into_raw(Box::new(clap_host {
             clap_version: CLAP_VERSION,
-            host_data: Arc::as_ptr(&control) as *mut c_void,
+            host_data: host.cast(),
             name: c"fixture".as_ptr(),
             vendor: c"fixture".as_ptr(),
             url: c"".as_ptr(),
             version: c"1".as_ptr(),
             get_extension: Some(extension),
-            request_restart: Some(restart),
+            request_restart: Some(request),
             request_process: Some(request),
             request_callback: Some(host_callback),
-        });
+        }));
         let factory = unsafe { (clap_entry.get_factory.unwrap())(CLAP_PLUGIN_FACTORY_ID.as_ptr()) }
             .cast::<clap_plugin_factory>();
-        let plugin = unsafe { ((*factory).create_plugin.unwrap())(factory, &*host, id.as_ptr()) };
-        CONSTRUCTION.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let plugin = unsafe {
+            ((*factory).create_plugin.unwrap())(factory, clap_host, c"fixture.boundary".as_ptr())
+        };
         assert!(!plugin.is_null());
-        control.plugin.store(plugin as usize, Ordering::Relaxed);
         assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
         assert!(unsafe { ((*plugin).activate.unwrap())(plugin, 48000.0, 1, 64) });
         assert!(unsafe { ((*plugin).start_processing.unwrap())(plugin) });
         Self {
             plugin,
-            _host: host,
-            control,
-            sink: Sink { script: vec![], attempts: Vec::with_capacity(5000) },
-            transport: None,
+            host,
+            clap_host,
+            sink: Sink { script: vec![], offers: Vec::with_capacity(64) },
         }
     }
     fn run(
         &mut self,
-        start: i64,
-        frames: u32,
-        input: Vec<Input>,
-        output: bool,
+        steady: i64,
+        events: Vec<Event>,
+        transport: Option<clap_event_transport>,
     ) -> clap_process_status {
-        let list = clap_input_events {
-            ctx: (&input as *const Vec<Input>) as *mut c_void,
-            size: Some(input_size),
-            get: Some(input_get),
-        };
-        let sink =
+        let input = list(&events);
+        let output =
             clap_output_events { ctx: (&mut self.sink as *mut Sink).cast(), try_push: Some(push) };
-        let mut audio = [[0.0f32; 64]; 6];
+        let mut audio = [[0.0f32; 64]; 4];
         let mut pointers: Vec<_> = audio.iter_mut().map(|c| c.as_mut_ptr()).collect();
-        let buffers = [
-            clap_audio_buffer {
-                data32: pointers.as_mut_ptr(),
-                data64: ptr::null_mut(),
-                channel_count: 2,
-                latency: 0,
-                constant_mask: 0,
-            },
-            clap_audio_buffer {
-                data32: unsafe { pointers.as_mut_ptr().add(2) },
-                data64: ptr::null_mut(),
-                channel_count: 2,
-                latency: 0,
-                constant_mask: 0,
-            },
-        ];
-        let mut out = clap_audio_buffer {
-            data32: unsafe { pointers.as_mut_ptr().add(4) },
+        let inputs = clap_audio_buffer {
+            data32: pointers.as_mut_ptr(),
             data64: ptr::null_mut(),
             channel_count: 2,
             latency: 0,
             constant_mask: 0,
         };
+        let mut outputs =
+            clap_audio_buffer { data32: unsafe { pointers.as_mut_ptr().add(2) }, ..inputs };
         let process = clap_process {
-            steady_time: start,
-            frames_count: frames,
-            transport: self.transport.as_ref().map_or(ptr::null(), |t| t),
-            audio_inputs: buffers.as_ptr(),
-            audio_outputs: &mut out,
-            audio_inputs_count: 2,
+            steady_time: steady,
+            frames_count: 64,
+            transport: transport.as_ref().map_or(ptr::null(), |t| t),
+            audio_inputs: &inputs,
+            audio_outputs: &mut outputs,
+            audio_inputs_count: 1,
             audio_outputs_count: 1,
-            in_events: &list,
-            out_events: if output { &sink } else { ptr::null() },
+            in_events: &input,
+            out_events: &output,
         };
         unsafe { ((*self.plugin).process.unwrap())(self.plugin, &process) }
     }
-    fn flush(&self, input: Vec<Input>) {
-        use clap_sys::ext::params::*;
-        let params = unsafe {
-            &*(((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_PARAMS.as_ptr())
-                .cast::<clap_plugin_params>())
-        };
-        let list = clap_input_events {
-            ctx: (&input as *const Vec<Input>) as *mut c_void,
-            size: Some(input_size),
-            get: Some(input_get),
-        };
+    fn params(&self) -> &clap_plugin_params {
         unsafe {
-            (params.flush.unwrap())(self.plugin, &list, ptr::null());
+            &*(((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_PARAMS.as_ptr())
+                .cast())
         }
     }
-    fn param(&self, time: u32) -> Input {
-        use clap_sys::ext::params::{CLAP_EXT_PARAMS, clap_param_info, clap_plugin_params};
-        let params = unsafe {
-            &*(((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_PARAMS.as_ptr())
-                .cast::<clap_plugin_params>())
-        };
-        let mut info: clap_param_info = unsafe { std::mem::zeroed() };
-        assert!(unsafe { (params.get_info.unwrap())(self.plugin, 0, &mut info) });
-        Input::Param(clap_event_param_value {
-            header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, time),
-            param_id: info.id,
-            cookie: ptr::null_mut(),
-            note_id: -1,
-            port_index: -1,
-            channel: -1,
-            key: -1,
-            value: 0.5,
-        })
-    }
-    fn parameter_value(&self, id: u32) -> f64 {
-        use clap_sys::ext::params::{CLAP_EXT_PARAMS, clap_plugin_params};
-        let params = unsafe {
-            &*(((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_PARAMS.as_ptr())
-                .cast::<clap_plugin_params>())
-        };
-        let mut value = 0.0;
-        assert!(unsafe { (params.get_value.unwrap())(self.plugin, id, &mut value) });
+    fn value(&self) -> f64 {
+        let mut value = f64::NAN;
+        let id = nice_plug::wrapper::hash_param_id("axis");
+        assert!(unsafe { (self.params().get_value.unwrap())(self.plugin, id, &mut value) });
         value
+    }
+    fn flush(&self, events: Vec<Event>) {
+        let input = list(&events);
+        unsafe { (self.params().flush.unwrap())(self.plugin, &input, ptr::null()) };
+    }
+    /// A flush whose output is the device's sink.
+    fn flush_to_sink(&mut self, events: Vec<Event>) {
+        let input = list(&events);
+        let output =
+            clap_output_events { ctx: (&mut self.sink as *mut Sink).cast(), try_push: Some(push) };
+        unsafe { (self.params().flush.unwrap())(self.plugin, &input, &output) };
+    }
+    /// Load `json` through the CLAP state extension, framed as a save is.
+    fn load(&self, json: &[u8]) {
+        use clap_sys::ext::state::{CLAP_EXT_STATE, clap_plugin_state};
+        use clap_sys::stream::clap_istream;
+        unsafe extern "C" fn read(
+            stream: *const clap_istream,
+            data: *mut c_void,
+            size: u64,
+        ) -> i64 {
+            let bytes = unsafe { &mut *((*stream).ctx.cast::<&[u8]>()) };
+            let count = bytes.len().min(size as usize);
+            unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), data.cast(), count) };
+            *bytes = &bytes[count..];
+            count as i64
+        }
+        let framed = [&(json.len() as u64).to_le_bytes()[..], json].concat();
+        let mut unread = &framed[..];
+        let stream = clap_istream { ctx: (&mut unread as *mut &[u8]).cast(), read: Some(read) };
+        let state = unsafe {
+            &*(((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_STATE.as_ptr())
+                .cast::<clap_plugin_state>())
+        };
+        assert!(unsafe { (state.load.unwrap())(self.plugin, &stream) });
+    }
+    /// What the host's list was offered since the last call, in order, each
+    /// gesture or note by name and each value by its number.
+    fn told(&mut self) -> Vec<String> {
+        // Cleared rather than taken: the sink keeps its room for the next
+        // guarded callback.
+        let told = self
+            .sink
+            .offers
+            .iter()
+            .map(|&(kind, _, value, _)| match kind {
+                CLAP_EVENT_PARAM_GESTURE_BEGIN => "begin".to_owned(),
+                CLAP_EVENT_PARAM_GESTURE_END => "end".to_owned(),
+                CLAP_EVENT_PARAM_VALUE => format!("{value}"),
+                _ => "note".to_owned(),
+            })
+            .collect();
+        self.sink.offers.clear();
+        told
+    }
+    /// The editor's side of the fixture's one parameter.
+    fn editor(&self) -> (Arc<dyn GuiContext>, usize) {
+        let wrapper = unsafe {
+            &*((*self.plugin).plugin_data.cast::<nice_plug::wrapper::clap::Wrapper<Fixture>>())
+        };
+        wrapper.test_gui_context("axis")
+    }
+    fn main(&self) {
+        unsafe { ((*self.plugin).on_main_thread.unwrap())(self.plugin) };
+    }
+    fn tail(&self) -> u32 {
+        use clap_sys::ext::tail::{CLAP_EXT_TAIL, clap_plugin_tail};
+        unsafe {
+            let tail = ((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_TAIL.as_ptr())
+                .cast::<clap_plugin_tail>();
+            ((*tail).get.unwrap())(self.plugin)
+        }
     }
 }
 impl Drop for Device {
@@ -690,666 +424,323 @@ impl Drop for Device {
             ((*self.plugin).stop_processing.unwrap())(self.plugin);
             ((*self.plugin).deactivate.unwrap())(self.plugin);
             ((*self.plugin).destroy.unwrap())(self.plugin);
-        }
-    }
-}
-fn instructions(values: impl IntoIterator<Item = (u32, InputValue)>) -> Vec<Instruction> {
-    values
-        .into_iter()
-        .map(|(time, value)| Instruction { callback: 1, block: 0, time, value })
-        .collect()
-}
-
-#[test]
-fn native_gui_admission_survives_missing_output_and_rejected_notification_retries() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for combined in [false, true] {
-        let mut d = Device::new(
-            Control::default(),
-            if combined { c"fixture.combined" } else { c"fixture.performance" },
-        );
-        let gui: GuiEdit = if combined {
-            Box::new(d.gui::<true, true>())
-        } else {
-            Box::new(d.gui::<false, true>())
-        };
-        gui(&[1.0]);
-        d.run(0, 8, vec![], true);
-        d.sink.attempts.clear();
-        gui(&[0.0]);
-        let Input::Param(mut host_on) = d.param(1) else { unreachable!() };
-        host_on.value = 1.0;
-        d.run(8, 8, vec![Input::Param(host_on), on(2)], false);
-        assert!(d.sink.attempts.is_empty());
-        assert_eq!(d.parameter_value(host_on.param_id), 1.0);
-        // Repeated Begin refusal cannot hide the Off from local input or pin
-        // the following host On/note. Then reject the old Set twice as well.
-        d.sink.script = vec![false, false, true, false, false, true, true];
-        for start in [16, 24, 32, 40, 48, 56] {
-            d.run(start, 8, vec![], true);
-            assert_eq!(d.parameter_value(host_on.param_id), 1.0);
-        }
-        assert_eq!(
-            d.sink.attempts.iter().map(|a| (a.kind, a.accepted)).collect::<Vec<_>>(),
-            vec![
-                (CLAP_EVENT_PARAM_GESTURE_BEGIN, false),
-                (CLAP_EVENT_PARAM_GESTURE_BEGIN, false),
-                (CLAP_EVENT_PARAM_GESTURE_BEGIN, true),
-                (CLAP_EVENT_PARAM_VALUE, false),
-                (CLAP_EVENT_PARAM_VALUE, false),
-                (CLAP_EVENT_PARAM_VALUE, true),
-                (CLAP_EVENT_PARAM_GESTURE_END, true),
-            ]
-        );
-        let observed = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-        assert_eq!(observed.inputs.len(), 4);
-        assert_eq!(
-            observed.inputs[1].value,
-            InputValue::Parameter { id: host_on.param_id, value: 0.0, modulation: false }
-        );
-        assert_eq!(observed.inputs[1].sample, Some(8));
-        assert_eq!(
-            observed.inputs[2].value,
-            InputValue::Parameter { id: host_on.param_id, value: 1.0, modulation: false }
-        );
-        assert!(matches!(observed.inputs[3].value, InputValue::Note { .. }));
-        if combined {
-            assert_eq!(observed.configuration, observed.inputs);
-        }
-        drop(observed);
-        drop(gui);
-    }
-}
-
-#[test]
-fn native_gui_waits_behind_full_input_and_gestures_spend_capture_budget() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.performance");
-    let gui = d.gui::<false, true>();
-    d.run(0, 8, vec![on(0); INPUT_SCAN], false);
-    gui(&[0.25]);
-    // A host batch that fills the scan leaves no cell for a GUI entry, so the
-    // change waits for a callback with room rather than displacing input.
-    d.run(8, 8, vec![on(0); INPUT_SCAN], true);
-    assert!(d.sink.attempts.is_empty());
-    assert_eq!(
-        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(),
-        2 * INPUT_SCAN
-    );
-    // Only one work/cell remains after reserving this host batch: Begin uses
-    // that credit, so Set must wait even though Begin needs no payload cell.
-    d.run(16, 8, vec![on(0); INPUT_SCAN - 1], true);
-    assert_eq!(d.sink.attempts.len(), 1);
-    assert_eq!(d.sink.attempts[0].kind, CLAP_EVENT_PARAM_GESTURE_BEGIN);
-    assert_eq!(
-        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(),
-        3 * INPUT_SCAN - 1
-    );
-    let Input::Transport(t) = transport(0, true, 42) else { unreachable!() };
-    d.transport = Some(t);
-    d.run(24, 8, vec![on(1)], true);
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    let tail = &o.inputs[3 * INPUT_SCAN - 1..];
-    assert_eq!(tail.len(), 3);
-    assert!(matches!(tail[0].value, InputValue::Transport(_)));
-    assert!(matches!(tail[1].value, InputValue::Parameter { value: 0.25, .. }));
-    assert!(matches!(tail[2].value, InputValue::Note { .. }));
-    assert_eq!(tail[1].sample, Some(24));
-    drop(o);
-    drop(gui);
-}
-
-#[test]
-fn native_gui_flush_is_untimed_and_invalid_host_capture_does_not_commit_admission() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.performance");
-    let gui = d.gui::<false, true>();
-    gui(&[0.25]);
-    assert_eq!(
-        d.run(
-            0,
-            8,
-            vec![Input::Header(header::<clap_event_header>(CLAP_EVENT_MIDI_SYSEX, 0))],
-            true
-        ),
-        CLAP_PROCESS_ERROR
-    );
-    assert!(d.sink.attempts.is_empty());
-    d.flush(vec![d.param(57)]);
-    assert!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.is_empty());
-    let Input::Param(host) = d.param(1) else { unreachable!() };
-    assert_eq!(d.parameter_value(host.param_id), 0.0);
-    d.run(100, 8, vec![on(2)], true);
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(o.inputs.len(), 3);
-    assert!(matches!(o.inputs[0].value, InputValue::Parameter { value: 0.25, .. }));
-    assert!(o.inputs[0].flush);
-    assert_eq!(o.inputs[0].sample, Some(100));
-    assert_eq!(o.inputs[0].enclosing_start, None);
-    assert_eq!(o.inputs[0].enclosing_frames, 0);
-    assert_eq!(o.inputs[0].offset, 0);
-    assert_eq!(o.inputs[1].offset, 57);
-    assert_eq!(d.parameter_value(host.param_id), 0.5);
-    drop(o);
-    d.run(108, 8, vec![], true);
-    assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(), 3);
-    drop(gui);
-}
-
-#[test]
-fn native_gui_arrival_after_snapshot_waits_through_configuration_subblocks_and_error_exit() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for mode in 0..3 {
-        let early_error = mode == 2;
-        let mut d = Device::new(
-            Control { process_error: mode != 0, ..Default::default() },
-            c"fixture.combined",
-        );
-        let gui = d.gui::<true, true>();
-        let control = d.control.clone();
-        if early_error {
-            control.pause_begin.store(true, Ordering::Release);
-        } else {
-            control.pause_audio.store(true, Ordering::Release);
-        }
-        let input = if early_error {
-            vec![Input::Header(header::<clap_event_header>(CLAP_EVENT_MIDI_SYSEX, 0))]
-        } else {
-            vec![d.param(2), transport(4, true, 99), on(6)]
-        };
-        let worker = std::thread::spawn(move || {
-            assert_eq!(
-                d.run(0, 8, input, true),
-                if mode == 0 { CLAP_PROCESS_CONTINUE_IF_NOT_QUIET } else { CLAP_PROCESS_ERROR }
-            );
-            d
-        });
-        while !control.audio_entered.load(Ordering::Acquire) {
-            std::thread::yield_now();
-        }
-        gui(&[0.25]);
-        control.audio_resume.store(true, Ordering::Release);
-        let mut d = worker.join().unwrap();
-        let previous = {
-            let o = control.observed.lock().unwrap_or_else(|e| e.into_inner());
-            assert!(
-                o.inputs
-                    .iter()
-                    .all(|i| !matches!(i.value, InputValue::Parameter { value: 0.25, .. }))
-            );
-            assert_eq!(o.configuration, o.inputs);
-            if mode == 0 {
-                assert_eq!(o.blocks.iter().map(|b| b.1).collect::<Vec<_>>(), vec![0, 2, 4]);
-            }
-            if mode == 1 {
-                assert_eq!(o.blocks.iter().map(|b| b.1).collect::<Vec<_>>(), vec![0]);
-            }
-            o.inputs.len()
-        };
-        assert!(d.sink.attempts.is_empty());
-        let Input::Transport(t) = transport(0, true, 100) else { unreachable!() };
-        d.transport = Some(t);
-        d.run(8, 8, vec![d.param(1), on(2)], true);
-        let o = control.observed.lock().unwrap_or_else(|e| e.into_inner());
-        let next = &o.inputs[previous..];
-        assert_eq!(next.len(), 4);
-        assert!(matches!(next[0].value, InputValue::Transport(_)));
-        assert!(matches!(next[1].value, InputValue::Parameter { value: 0.25, .. }));
-        assert_eq!(next[1].sample, Some(8));
-        assert!(matches!(next[2].value, InputValue::Parameter { value: 0.5, .. }));
-        assert!(matches!(next[3].value, InputValue::Note { .. }));
-        assert_eq!(o.configuration, o.inputs);
-        drop(o);
-        d.run(16, 8, vec![], true);
-        assert_eq!(
-            control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(),
-            previous + 5
-        );
-        drop(gui);
-    }
-}
-
-#[test]
-fn native_gui_nonperformance_paths_keep_direct_parameter_delivery() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for configuration in [false, true] {
-        let mut d = Device::new(
-            Control::default(),
-            if configuration { c"fixture.configuration" } else { c"fixture.legacy" },
-        );
-        let gui: GuiEdit = if configuration {
-            Box::new(d.gui::<true, false>())
-        } else {
-            Box::new(d.gui::<false, false>())
-        };
-        gui(&[0.25]);
-        d.run(0, 8, vec![], true);
-        assert_eq!(
-            d.sink.attempts.iter().map(|a| a.kind).collect::<Vec<_>>(),
-            vec![
-                CLAP_EVENT_PARAM_GESTURE_BEGIN,
-                CLAP_EVENT_PARAM_VALUE,
-                CLAP_EVENT_PARAM_GESTURE_END
-            ]
-        );
-        assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).legacy, 0);
-        let Input::Param(p) = d.param(0) else { unreachable!() };
-        assert_eq!(d.parameter_value(p.param_id), 0.25);
-        drop(gui);
-    }
-}
-
-#[test]
-fn native_gui_full_notification_bank_wraps_without_reapplying_its_admitted_prefix() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.performance");
-    let gui = d.gui::<false, true>();
-    // Exactly 2,048 notification entries: Begin + 2,046 Sets + End.
-    gui(&vec![0.25; INPUT_SCAN - 2]);
-    d.run(0, 8, vec![], true);
-    assert_eq!(d.sink.attempts.len(), 512);
-    assert_eq!(
-        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(),
-        INPUT_SCAN - 2
-    );
-    // Refill all 512 released cells across the physical wrap. The original
-    // 1,536 notifications still await the host but have already entered input.
-    gui(&vec![0.75; 510]);
-    for start in [8, 16, 24, 32, 40] {
-        d.run(start, 8, vec![], true);
-    }
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(o.inputs.len(), INPUT_SCAN - 2 + 510);
-    assert!(
-        o.inputs[..INPUT_SCAN - 2]
-            .iter()
-            .all(|i| matches!(i.value, InputValue::Parameter { value: 0.25, .. })
-                && i.sample == Some(0))
-    );
-    assert!(
-        o.inputs[INPUT_SCAN - 2..]
-            .iter()
-            .all(|i| matches!(i.value, InputValue::Parameter { value: 0.75, .. })
-                && i.sample == Some(8))
-    );
-    assert_eq!(d.sink.attempts.len(), INPUT_SCAN + 512);
-    drop(o);
-    drop(gui);
-}
-
-#[test]
-fn owned_input_has_exact_subblocks_transport_and_no_duplicate_consumer() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.combined");
-    d.run(
-        100,
-        64,
-        vec![
-            on(0),
-            transport(16, false, 123456),
-            on(16),
-            transport(32, true, 987654),
-            on(32),
-            on(63),
-        ],
-        true,
-    );
-    assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).configuration.len(), 6);
-    d.run(164, 7, vec![on(0), on(6)], true);
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(o.configuration.len(), 8);
-    assert_eq!(o.inputs.len(), 8);
-    assert_eq!(o.legacy, 0);
-    assert_eq!(o.blocks, [(100, 0, 16), (100, 16, 16), (100, 32, 32), (164, 0, 7)]);
-    assert_eq!(
-        o.inputs.iter().map(|e| e.sample.unwrap()).collect::<Vec<_>>(),
-        [100, 116, 116, 132, 132, 163, 164, 170]
-    );
-    let InputValue::Transport(t) = o.inputs[1].value else { panic!() };
-    assert_eq!(t.song_pos_seconds, 123456);
-    assert_eq!(t.tempo, 143.123456789);
-    assert_eq!(o.inputs[1].enclosing_start, Some(100));
-    assert_eq!(o.inputs[1].offset, 16);
-}
-
-#[test]
-fn raw_signed_addresses_and_f64_are_preserved() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.performance");
-    d.run(
-        0,
-        8,
-        vec![
-            Input::Note(clap_event_note {
-                header: header::<clap_event_note>(CLAP_EVENT_NOTE_OFF, 1),
-                note_id: -1,
-                port_index: -1,
-                channel: -1,
-                key: -1,
-                velocity: 0.123456789123,
-            }),
-            Input::Expression(clap_event_note_expression {
-                header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, 2),
-                expression_id: CLAP_NOTE_EXPRESSION_TUNING,
-                note_id: 9001,
-                port_index: -1,
-                channel: -1,
-                key: -1,
-                value: 0.123456789123,
-            }),
-            Input::Midi(clap_event_midi {
-                header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 3),
-                port_index: 0,
-                data: [0xb0, 64, 127],
-            }),
-        ],
-        true,
-    );
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert!(matches!(
-        o.inputs[0].value,
-        InputValue::Note {
-            port: -1,
-            channel: -1,
-            key: -1,
-            note_id: -1,
-            velocity: 0.123456789123,
-            ..
-        }
-    ));
-    assert!(matches!(
-        o.inputs[1].value,
-        InputValue::Expression { note_id: 9001, value: 0.123456789123, .. }
-    ));
-    assert_eq!(o.legacy, 0);
-}
-
-#[test]
-fn one_batch_scan_limit_includes_nonperformance_events() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d =
-        Device::new(Control { final_flush: true, ..Default::default() }, c"fixture.combined");
-    let mut input = vec![on(0); INPUT_SCAN - 1];
-    input[0] = d.param(0);
-    input.push(transport(32, false, 100));
-    assert_ne!(d.run(0, 64, input, true), CLAP_PROCESS_ERROR);
-    // A parameter and a transport occupy the same scan as note input.
-    assert_eq!(
-        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).configuration.len(),
-        INPUT_SCAN
-    );
-    assert_eq!(d.run(64, 64, vec![on(0); INPUT_SCAN + 1], true), CLAP_PROCESS_ERROR);
-    assert_eq!(
-        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).callbacks[1].input_status,
-        perf::InputStatus::Full
-    );
-    assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).finals, 2);
-    // Only the callback whose input was captured carries the final flush; the
-    // Full one finalizes with a blind writer.
-    assert_eq!(d.sink.attempts.len(), 1);
-    let mut d =
-        Device::new(Control { final_flush: true, ..Default::default() }, c"fixture.performance");
-    assert_eq!(d.run(0, 64, vec![on(0); INPUT_SCAN + 1], true), CLAP_PROCESS_ERROR);
-    assert!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.is_empty());
-    assert!(d.sink.attempts.is_empty());
-}
-
-#[test]
-fn pushed_values_reach_the_host_with_exact_fields_and_times() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let midi = InputValue::Midi { port: 0, data: [0x90, 61, 100], flags: CLAP_EVENT_IS_LIVE };
-    let mut d = Device::new(
-        Control {
-            script: instructions([
-                (5, note(CLAP_EVENT_NOTE_ON)),
-                (5, tuning()),
-                (47, midi),
-                // No output encoding exists for any of these, so the host never
-                // sees them and the caller is told so. The last two are the
-                // staging validator's checks, which live here now: a note type
-                // CLAP has no event for, and a magnitude it cannot carry.
-                (47, InputValue::Parameter { id: 1, value: 0.5, modulation: false }),
-                (47, InputValue::Other),
-                (47, note(7)),
-                (47, nan_velocity()),
-                (47, infinite_tuning()),
-            ]),
-            ..Default::default()
-        },
-        c"fixture.performance",
-    );
-    d.run(0, 64, vec![], true);
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(o.pushes, [true, true, true, false, false, false, false, false]);
-    assert_eq!(
-        d.sink.attempts.iter().map(|a| (a.kind, a.time)).collect::<Vec<_>>(),
-        [(CLAP_EVENT_NOTE_ON, 5), (CLAP_EVENT_NOTE_EXPRESSION, 5), (CLAP_EVENT_MIDI, 47)]
-    );
-    assert_eq!(d.sink.attempts[0].value, Some(note(CLAP_EVENT_NOTE_ON)));
-    assert_eq!(d.sink.attempts[1].value, Some(tuning()));
-    assert_eq!(d.sink.attempts[2].value, Some(midi));
-}
-
-#[test]
-fn host_refusal_reaches_the_caller_and_does_not_inhibit_the_callback() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(
-        Control {
-            script: instructions([
-                (5, note(CLAP_EVENT_NOTE_ON)),
-                (5, tuning()),
-                (6, note(CLAP_EVENT_NOTE_OFF)),
-            ]),
-            ..Default::default()
-        },
-        c"fixture.performance",
-    );
-    d.sink.script = vec![true, false];
-    d.run(0, 64, vec![], true);
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    // The refusal is the caller's to act on. Nothing behind it is suppressed:
-    // the wrapper keeps no inhibition state of its own any more.
-    assert_eq!(o.pushes, [true, false, true]);
-    assert_eq!(d.sink.attempts.len(), 3);
-    assert!(!d.sink.attempts[1].accepted);
-}
-
-#[test]
-fn missing_output_and_error_exits_finalize_with_a_blind_writer() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for (missing, invalid, error) in
-        [(true, false, false), (false, true, false), (false, false, true), (false, false, false)]
-    {
-        let mut d = Device::new(
-            Control { final_flush: true, process_error: error, ..Default::default() },
-            c"fixture.performance",
-        );
-        d.run(0, 64, if invalid { vec![on(64)] } else { vec![] }, !missing);
-        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-        assert_eq!(o.finals, 1);
-        assert_eq!(o.summaries.len(), 1);
-        if missing || invalid || error {
-            // A callback the host has already lost gets a writer that refuses
-            // everything, so the plugin retains its flush instead of spending it.
-            assert_eq!(o.pushes, [false]);
-            assert!(d.sink.attempts.is_empty());
-        } else {
-            assert_eq!(o.pushes, [true]);
-            assert_eq!(
-                (d.sink.attempts.last().unwrap().kind, d.sink.attempts.last().unwrap().time),
-                (CLAP_EVENT_NOTE_CHOKE, 63)
-            );
+            drop(Box::from_raw(self.clap_host));
+            drop(Box::from_raw(self.host));
         }
     }
 }
 
-#[test]
-fn parameter_output_follows_its_subblock_notes_at_the_subblock_end() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut script =
-        instructions([(0, note(CLAP_EVENT_NOTE_OFF)), (31, note(CLAP_EVENT_NOTE_OFF))]);
-    script.push(Instruction { callback: 1, block: 32, time: 40, value: note(CLAP_EVENT_NOTE_OFF) });
-    let mut d = Device::new(Control { script, ..Default::default() }, c"fixture.combined");
-    let gui = d.gui::<true, true>();
-    gui(&[0.75]);
-    // A transport event at 32 splits the callback into [0,32) and [32,64).
-    d.run(0, 64, vec![transport(32, false, 0)], true);
-    // Every parameter event lands on its sub-block's last sample, after the
-    // notes of that sub-block and before the notes of the next one, so the
-    // whole list is sorted without either half knowing the other's times.
-    let wire: Vec<_> = d.sink.attempts.iter().map(|a| (a.kind, a.time)).collect();
-    assert_eq!(
-        wire,
-        [
-            (CLAP_EVENT_NOTE_OFF, 0),
-            (CLAP_EVENT_NOTE_OFF, 31),
-            (CLAP_EVENT_PARAM_GESTURE_BEGIN, 31),
-            (CLAP_EVENT_PARAM_VALUE, 31),
-            (CLAP_EVENT_PARAM_GESTURE_END, 31),
-            (CLAP_EVENT_NOTE_OFF, 40),
-        ]
-    );
-    assert!(wire.windows(2).all(|pair| pair[0].1 <= pair[1].1));
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// No tail before a processed callback; an infinite one after, since the
+/// plugin keeps the host running; a lost callback changes neither, and a new
+/// processing run starts with none.
 #[test]
-fn unsupported_input_and_legacy_send_misuse_are_explicit() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control { misuse: true, ..Default::default() }, c"fixture.performance");
-    d.run(0, 64, vec![], true);
-    assert!(
-        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).summaries[0]
-            .legacy_send_misuse
-    );
-    assert!(d.sink.attempts.is_empty());
-    d.run(64, 64, vec![Input::Header(header::<clap_event_header>(CLAP_EVENT_MIDI_SYSEX, 0))], true);
-    assert_eq!(
-        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).callbacks[1].input_status,
-        perf::InputStatus::Unsupported
-    );
-}
-
-#[test]
-fn allocated_boundary_layouts_fit_declared_budgets() {
-    assert!(std::mem::size_of::<Option<OwnedInput>>() <= 192);
-    assert_eq!(std::mem::align_of::<Option<OwnedInput>>(), 8);
-    // The output side allocates nothing now: `Output` is two borrows -- the
-    // host's list and the callback's high-water mark -- so the input pool is
-    // the whole of the boundary's storage.
-    assert!(std::mem::size_of::<perf::Output<'_>>() <= 16);
-    println!(
-        "input={} input_pool={}",
-        std::mem::size_of::<Option<OwnedInput>>(),
-        INPUT_SCAN * std::mem::size_of::<Option<OwnedInput>>(),
-    );
-}
-
-#[test]
-fn flush_loss_reaches_owner_and_next_process_boundary() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for id in [c"fixture.combined", c"fixture.configuration"] {
-        let mut d = Device::new(Control::default(), id);
-        d.flush(vec![d.param(57); INPUT_SCAN]);
-        d.flush(vec![d.param(58)]);
-        assert!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).faults > 0);
-        assert_eq!(d.run(100, 64, vec![], true), CLAP_PROCESS_ERROR);
-        if id == c"fixture.combined" {
-            assert_eq!(
-                d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).callbacks[0]
-                    .input_status,
-                perf::InputStatus::Full
-            );
-        }
-    }
-    for (input, expected) in [
-        (vec![on(0); INPUT_SCAN + 1], perf::InputStatus::Full),
-        (
-            vec![Input::Header(header::<clap_event_header>(CLAP_EVENT_MIDI_SYSEX, 0))],
-            perf::InputStatus::Unsupported,
-        ),
-    ] {
-        let mut d = Device::new(Control::default(), c"fixture.performance");
-        d.flush(input);
-        assert_eq!(d.run(0, 64, vec![], true), CLAP_PROCESS_ERROR);
-        assert_eq!(
-            d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).callbacks[0].input_status,
-            expected
-        );
-    }
-}
-
-#[test]
-fn retained_flush_parameter_is_applied_before_error_recovery_acknowledges_it() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.performance");
-    let Input::Param(parameter) = d.param(57) else { unreachable!() };
-    d.flush(vec![Input::Param(parameter)]);
-    d.flush(vec![on(0); INPUT_SCAN + 1]);
-    assert_eq!(d.run(100, 64, vec![], true), CLAP_PROCESS_ERROR);
-    {
-        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-        assert_eq!(o.inputs.len(), 1);
-        let input = o.inputs[0];
-        assert!(input.flush);
-        assert_eq!(input.offset, 57);
-        assert_eq!(input.sample, Some(100));
-        assert_eq!(input.enclosing_start, None);
-        assert_eq!(input.enclosing_frames, 0);
-        assert_eq!(input.event_index, 0);
-        assert_eq!(
-            input.value,
-            InputValue::Parameter { id: parameter.param_id, value: 0.5, modulation: false }
-        );
-    }
-    assert_eq!(d.parameter_value(parameter.param_id), 0.5);
-    assert_eq!(d.run(164, 64, vec![], true), CLAP_PROCESS_CONTINUE_IF_NOT_QUIET);
-    assert_eq!(d.parameter_value(parameter.param_id), 0.5);
-    assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(), 1);
-}
-
-#[test]
-fn deferred_gui_producer_finishing_after_audio_still_wakes_host() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.performance");
-    let entered = Arc::new(AtomicBool::new(false));
-    let resume = Arc::new(AtomicBool::new(false));
-    let hook_entered = entered.clone();
-    let hook_resume = resume.clone();
-    let wrapper = unsafe {
-        &*((*d.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<Fixture<false, true>>>())
-    };
-    wrapper.test_on_deferred_gui_observation(move || {
-        hook_entered.store(true, Ordering::Release);
-        while !hook_resume.load(Ordering::Acquire) {
-            std::thread::yield_now();
-        }
-    });
-    d.control.pause_audio.store(true, Ordering::Release);
-    d.control.host_callbacks.store(0, Ordering::Release);
-    let control = d.control.clone();
-    std::thread::scope(|scope| {
-        let producer = scope.spawn(|| {
-            while !control.audio_entered.load(Ordering::Acquire) {
-                std::thread::yield_now();
-            }
-            (control.gui.lock().unwrap_or_else(|e| e.into_inner()).as_ref().unwrap())();
-        });
-        let release_audio = scope.spawn(|| {
-            while !entered.load(Ordering::Acquire) {
-                std::thread::yield_now();
-            }
-            control.audio_resume.store(true, Ordering::Release);
-        });
-        d.run(0, 64, vec![], true);
-        resume.store(true, Ordering::Release);
-        producer.join().unwrap();
-        release_audio.join().unwrap();
-    });
-    assert!(control.host_callbacks.load(Ordering::Acquire) > 0);
+fn the_tail_is_infinite_once_a_callback_is_processed() {
+    let _serial = serial();
+    let mut d = Device::new();
+    assert_eq!(d.tail(), 0);
+    assert_eq!(d.run(0, vec![note(CLAP_EVENT_NOTE_ON, 64)], None), CLAP_PROCESS_ERROR);
+    assert_eq!(d.tail(), 0, "a lost callback is not processed");
+    assert_eq!(d.run(64, vec![], None), CLAP_PROCESS_CONTINUE);
+    assert_eq!(d.tail(), u32::MAX);
+    assert_eq!(d.run(128, vec![note(CLAP_EVENT_NOTE_ON, 64)], None), CLAP_PROCESS_ERROR);
+    assert_eq!(d.tail(), u32::MAX);
     unsafe {
-        ((*d.plugin).on_main_thread.unwrap())(d.plugin);
+        ((*d.plugin).reset.unwrap())(d.plugin);
+        assert_eq!(d.tail(), u32::MAX);
+        ((*d.plugin).stop_processing.unwrap())(d.plugin);
+        assert_eq!(d.tail(), u32::MAX);
+        assert!(((*d.plugin).start_processing.unwrap())(d.plugin));
     }
-    assert_eq!(control.tasks_run.load(Ordering::Relaxed), 1);
+    assert_eq!(d.tail(), 0);
+}
+
+/// `begin` reads the table as the callback found it, and `process` reads it
+/// with the callback's automation applied (#1814's ordering rule).
+#[test]
+fn begin_reads_the_table_before_the_callbacks_automation() {
+    let _serial = serial();
+    let mut d = Device::new();
+    assert_eq!(d.run(0, vec![param(0.75, 10)], None), CLAP_PROCESS_CONTINUE);
+    let observed = observed();
+    assert_eq!(observed.begins, [(true, false, 0.0)]);
+    assert_eq!(observed.processed, [0.75]);
+    assert_eq!(observed.audio, [true]);
+    assert_eq!(observed.events.len(), 1, "the automation reaches the plugin as an event too");
+    assert_eq!(observed.events[0].sample, 10);
+}
+
+/// SysEx, an event outside the core space and a per-note parameter value are
+/// skipped; the callback and the Note-Off after them are not (#1814 Q3).
+#[test]
+fn an_event_the_plugin_does_not_read_is_skipped() {
+    let _serial = serial();
+    let mut d = Device::new();
+    let sysex = Event::SysEx(clap_event_midi_sysex {
+        header: header::<clap_event_midi_sysex>(CLAP_EVENT_MIDI_SYSEX, 1),
+        port_index: 0,
+        buffer: ptr::null(),
+        size: 0,
+    });
+    let foreign =
+        Event::Header(clap_event_header { space_id: 9, ..header::<clap_event_header>(0, 2) });
+    let Event::Param(mut per_note) = param(0.75, 3) else { unreachable!() };
+    per_note.note_id = 7;
+    let events = vec![
+        note(CLAP_EVENT_NOTE_ON, 0),
+        sysex,
+        foreign,
+        Event::Param(per_note),
+        note(CLAP_EVENT_NOTE_OFF, 4),
+    ];
+    assert_eq!(d.run(0, events, None), CLAP_PROCESS_CONTINUE);
+    let observed = observed();
+    let kinds: Vec<_> = observed
+        .events
+        .iter()
+        .map(|input| match input.value {
+            InputValue::Note { kind, .. } => (kind, input.sample),
+            other => panic!("{other:?} should have been skipped"),
+        })
+        .collect();
+    assert_eq!(kinds, [(CLAP_EVENT_NOTE_ON, 0), (CLAP_EVENT_NOTE_OFF, 4)]);
+    assert_eq!(observed.processed, [0.0], "the per-note value reached no row");
+}
+
+/// A list out of time order loses the callback's input whole: nothing reaches
+/// the table or the plugin, which is told, and every push it makes fails.
+#[test]
+fn an_invalid_list_loses_the_callbacks_input() {
+    let _serial = serial();
+    let mut d = Device::new();
+    let events = vec![note(CLAP_EVENT_NOTE_ON, 5), param(0.5, 3)];
+    assert_eq!(d.run(0, events, Some(transport(0))), CLAP_PROCESS_ERROR);
+    assert_eq!(d.value(), 0.0);
+    let observed = observed();
+    assert_eq!(observed.begins, [(true, true, 0.0)]);
+    assert!(observed.events.is_empty(), "not even the callback's transport");
+    assert_eq!(observed.pushes, [false]);
+    assert_eq!(observed.audio, [false], "no audio to record or analyze");
+    assert!(d.sink.offers.is_empty());
+}
+
+/// A flush's value is the table's before the flush returns (#1814 Q1); a flush
+/// whose list fails validation applies nothing and loses the next callback's
+/// input, and only that one.
+#[test]
+fn a_flush_applies_at_once_and_a_failed_one_loses_the_next_input() {
+    let _serial = serial();
+    let mut d = Device::new();
+    d.flush(vec![param(0.5, 0)]);
+    assert_eq!(d.value(), 0.5, "read straight after the flush");
+    let Event::Param(mut short) = param(0.25, 0) else { unreachable!() };
+    short.header.size = 8;
+    d.flush(vec![Event::Param(short)]);
+    assert_eq!(d.value(), 0.5);
+    assert_eq!(d.run(0, vec![note(CLAP_EVENT_NOTE_ON, 0)], None), CLAP_PROCESS_ERROR);
+    assert_eq!(d.run(64, vec![note(CLAP_EVENT_NOTE_ON, 0)], None), CLAP_PROCESS_CONTINUE);
+    let observed = observed();
+    assert_eq!(observed.begins, [(true, true, 0.5), (true, false, 0.5)]);
+    assert_eq!(observed.events.len(), 1, "the second callback's note only");
+}
+
+/// An editor edit is the table's at once (#1814 Q1), and the host hears it at
+/// the next callback at offset 0, gesture and value, ahead of the plugin's
+/// own output. A refusal stops the report, which the next callback repeats.
+#[test]
+fn an_editor_edit_applies_at_once_and_reaches_the_host_at_offset_zero() {
+    let _serial = serial();
+    let mut d = Device::new();
+    let wrapper =
+        unsafe { &*((*d.plugin).plugin_data.cast::<nice_plug::wrapper::clap::Wrapper<Fixture>>()) };
+    let (context, row) = wrapper.test_gui_context("axis");
+    let edit = |value| {
+        context.begin_set_parameter(row);
+        context.set_parameter(row, value);
+        context.end_set_parameter(row);
+    };
+    // (type, time, whether the host took it), and the values offered.
+    let offers = |sink: &mut Sink| -> (Vec<(u16, u32, bool)>, Vec<f64>) {
+        // Cleared rather than taken: the sink keeps its room for the next
+        // guarded callback.
+        let offers = sink.offers.clone();
+        sink.offers.clear();
+        let values = offers.iter().map(|o| o.2).filter(|v| !v.is_nan()).collect();
+        (offers.into_iter().map(|(kind, time, _, taken)| (kind, time, taken)).collect(), values)
+    };
+    let reported = [
+        (CLAP_EVENT_PARAM_GESTURE_BEGIN, 0, true),
+        (CLAP_EVENT_PARAM_VALUE, 0, true),
+        (CLAP_EVENT_PARAM_GESTURE_END, 0, true),
+        (CLAP_EVENT_NOTE_ON, 0, true),
+    ];
+    edit(0.25);
+    assert_eq!(d.value(), 0.25, "read straight after the edit");
+    d.run(0, vec![], None);
+    assert_eq!(offers(&mut d.sink), (reported.to_vec(), vec![0.25]), "the plugin's output after");
+
+    edit(0.5);
+    d.sink.script = vec![false];
+    d.run(64, vec![], None);
+    let refused = vec![(CLAP_EVENT_PARAM_GESTURE_BEGIN, 0, false), (CLAP_EVENT_NOTE_ON, 0, true)];
+    assert_eq!(offers(&mut d.sink), (refused, vec![]));
+    d.sink.script = vec![];
+    d.run(128, vec![], None);
+    assert_eq!(offers(&mut d.sink), (reported.to_vec(), vec![0.5]), "told again");
+    drop(context);
+}
+
+/// A transport event in the host's list reaches the plugin at its sample,
+/// after the callback's own transport, and asks the main thread to say so
+/// once per instance.
+#[test]
+fn a_transport_event_in_the_list_reaches_the_plugin_and_is_noticed_once() {
+    let _serial = serial();
+    NOTICES.store(0, Ordering::Relaxed);
+    let mut d = Device::new();
+    let events = vec![Event::Transport(transport(5))];
+    assert_eq!(d.run(64, events.clone(), Some(transport(0))), CLAP_PROCESS_CONTINUE);
+    let samples: Vec<_> = observed()
+        .events
+        .iter()
+        .map(|input| {
+            assert!(matches!(input.value, InputValue::Transport(_)));
+            input.sample
+        })
+        .collect();
+    assert_eq!(samples, [64, 69]);
+    let callbacks = unsafe { &(*d.host).callbacks };
+    assert_eq!(callbacks.load(Ordering::Relaxed), 1, "the main thread is asked");
+    d.main();
+    assert_eq!(NOTICES.load(Ordering::Relaxed), 1);
+    d.run(128, events, Some(transport(0)));
+    d.main();
+    assert_eq!(NOTICES.load(Ordering::Relaxed), 1, "once");
+}
+
+/// The bytes a save writes and a load reads, those the shell owns: an 8-byte
+/// little-endian length, then the version, each parameter's unmodulated value
+/// under its id, and each field the setup writes as a JSON string the shell
+/// does not read. Saved projects hold exactly these, so a change is a change
+/// to every project.
+#[test]
+fn a_save_is_framed_json_of_the_version_the_parameters_and_the_fields() {
+    use clap_sys::ext::state::{CLAP_EXT_STATE, clap_plugin_state};
+    use clap_sys::stream::{clap_istream, clap_ostream};
+    unsafe extern "C" fn write(stream: *const clap_ostream, data: *const c_void, size: u64) -> i64 {
+        let bytes = unsafe { &mut *((*stream).ctx.cast::<Vec<u8>>()) };
+        bytes.extend_from_slice(unsafe { std::slice::from_raw_parts(data.cast(), size as usize) });
+        size as i64
+    }
+    unsafe extern "C" fn read(stream: *const clap_istream, data: *mut c_void, size: u64) -> i64 {
+        let bytes = unsafe { &mut *((*stream).ctx.cast::<&[u8]>()) };
+        let count = bytes.len().min(size as usize);
+        unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), data.cast(), count) };
+        *bytes = &bytes[count..];
+        count as i64
+    }
+    let _serial = serial();
+    let d = Device::new();
+    let state = unsafe {
+        &*(((*d.plugin).get_extension.unwrap())(d.plugin, CLAP_EXT_STATE.as_ptr())
+            .cast::<clap_plugin_state>())
+    };
+    *FIELD.lock().unwrap() = r#"{"opaque":[1,2]}"#.into();
+    d.flush(vec![param(0.5, 0)]);
+    let json =
+        br#"{"version":"1","params":{"axis":{"f32":0.5}},"fields":{"field":"{\"opaque\":[1,2]}"}}"#;
+    let mut saved = Vec::new();
+    let stream = clap_ostream { ctx: (&mut saved as *mut Vec<u8>).cast(), write: Some(write) };
+    assert!(unsafe { (state.save.unwrap())(d.plugin, &stream) });
+    assert_eq!(saved[..8], (json.len() as u64).to_le_bytes());
+    assert_eq!(std::str::from_utf8(&saved[8..]).unwrap(), std::str::from_utf8(json).unwrap());
+
+    let json = br#"{"version":"0","params":{"axis":{"f32":0.25}},"fields":{"field":"x"}}"#;
+    let framed = [&(json.len() as u64).to_le_bytes()[..], json].concat();
+    let mut unread = &framed[..];
+    let stream = clap_istream { ctx: (&mut unread as *mut &[u8]).cast(), read: Some(read) };
+    assert!(unsafe { (state.load.unwrap())(d.plugin, &stream) });
+    assert_eq!(d.value(), 0.25);
+    assert_eq!(*FIELD.lock().unwrap(), "x", "the field reached the setup as it was saved");
+}
+
+/// A gesture the editor holds open across callbacks is told once, and ends
+/// when the editor ends it.
+#[test]
+fn a_gesture_held_open_across_callbacks_ends_when_the_editor_ends_it() {
+    let _serial = serial();
+    let mut d = Device::new();
+    let (context, row) = d.editor();
+    context.begin_set_parameter(row);
+    context.set_parameter(row, 0.25);
+    d.run(0, vec![], None);
+    assert_eq!(d.told(), ["begin", "0.25", "note"]);
+    d.run(64, vec![], None);
+    assert_eq!(d.told(), ["note"], "still open");
+    context.end_set_parameter(row);
+    d.run(128, vec![], None);
+    assert_eq!(d.told(), ["end", "note"]);
+    drop(context);
+}
+
+/// Host automation of the row an editor edit is pending on takes effect in
+/// callback order, and the host is told the value the editor set, not its
+/// own (Yan, 2026-11-18): here the first callback's report is refused, so
+/// the automation writes the row before the report the host takes.
+#[test]
+fn the_editor_value_is_told_though_automation_wrote_the_row() {
+    let _serial = serial();
+    let mut d = Device::new();
+    let (context, row) = d.editor();
+    context.begin_set_parameter(row);
+    context.set_parameter(row, 0.25);
+    context.end_set_parameter(row);
+    d.sink.script = vec![false];
+    d.run(0, vec![param(0.75, 3)], None);
+    assert_eq!(d.told(), ["begin", "note"], "refused");
+    assert_eq!(d.value(), 0.75);
+    assert_eq!(observed().processed, [0.75]);
+    d.sink.script = vec![];
+    d.run(64, vec![], None);
+    assert_eq!(d.told(), ["begin", "0.25", "end", "note"]);
+    drop(context);
+}
+
+/// A flush tells the host what the editor did, the editor's value though the
+/// flush's own value wrote the row, and the next callback does not tell it
+/// again.
+#[test]
+fn a_flush_tells_the_editor_value_though_its_own_wrote_the_row() {
+    let _serial = serial();
+    let mut d = Device::new();
+    let (context, row) = d.editor();
+    context.begin_set_parameter(row);
+    context.set_parameter(row, 0.25);
+    context.end_set_parameter(row);
+    d.flush_to_sink(vec![param(0.75, 0)]);
+    assert_eq!(d.told(), ["begin", "0.25", "end"]);
+    assert_eq!(d.value(), 0.75);
+    d.run(0, vec![], None);
+    assert_eq!(d.told(), ["note"]);
+    drop(context);
+}
+
+/// A restore drops an edit the host was not told: the host reads the
+/// restored state by rescanning (Yan, 2026-11-18).
+#[test]
+fn a_restore_drops_an_edit_the_host_was_not_told() {
+    let _serial = serial();
+    let mut d = Device::new();
+    let (context, row) = d.editor();
+    context.begin_set_parameter(row);
+    context.set_parameter(row, 0.25);
+    context.end_set_parameter(row);
+    d.load(br#"{"version":"1","params":{"axis":{"f32":0.5}},"fields":{}}"#);
+    d.run(0, vec![], None);
+    assert_eq!(d.told(), ["note"]);
+    assert_eq!(d.value(), 0.5);
+    drop(context);
 }
