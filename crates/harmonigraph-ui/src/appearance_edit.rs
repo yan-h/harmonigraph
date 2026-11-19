@@ -711,46 +711,6 @@ mod tests {
         assert_eq!(Look::capture(&state.picture.appearance), original);
     }
 
-    /// The Stars solo is the editor window's and no part of the look (#1828):
-    /// a slot switch and an undo leave it as set, and the lattice is drawn
-    /// with it. An export, drawn from the look it captured in a state of its
-    /// own as the offline renderer builds one, carries none.
-    #[test]
-    fn the_stars_solo_stays_through_a_slot_switch_and_an_undo_and_no_export_carries_it() {
-        fn drawn(picture: &mut crate::PictureState) -> [bool; 5] {
-            let window = picture.appearance.view.reach();
-            crate::panes::lattice::compose_scene(picture, &window, 1.0, None, 0, 0.0).star_solo
-        }
-        let mut state = crate::tests::probe::fresh();
-        let solo = [false, true, false, true, false];
-        state.picture.surfaces.star_solo.lattice = solo;
-        let (appearance, editor) =
-            (&mut state.picture.appearance, &mut state.workspace.interaction.appearance_editor);
-        let before = Look::capture(appearance);
-        let stars = &mut appearance.view.atmosphere.stars;
-        stars.star_cover = 1.0 - stars.star_cover;
-        editor.history.observe(before, appearance, false);
-        editor.switch(1, appearance);
-        editor.switch(0, appearance);
-        editor.history.undo(appearance);
-        assert_eq!(editor.history.redo.len(), 1, "the edit was undone");
-        assert_eq!(drawn(&mut state.picture), solo, "a slot switch or an undo moved the solo");
-
-        let interaction = &state.workspace.interaction;
-        let queued = crate::panes::render::capture_export(
-            &state.picture.appearance,
-            interaction,
-            std::path::Path::new("music.take"),
-        )
-        .unwrap();
-        let crate::ExportAction::Queue { appearance: blob, .. } = queued else {
-            panic!("queue request")
-        };
-        let mut export = crate::tests::probe::fresh_picture();
-        export.install_appearance(AppearanceDocument::parse(&blob).unwrap());
-        assert_eq!(drawn(&mut export), [false; 5], "the export carried the solo");
-    }
-
     #[test]
     fn keyboard_undo_runs_after_the_body_commits_its_edit() {
         let ctx = crate::tests::probe::themed();

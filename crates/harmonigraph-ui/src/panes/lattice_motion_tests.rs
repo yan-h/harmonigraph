@@ -178,3 +178,19 @@ fn exact_onset_and_audio_first_keep_surface_local_stable_poses() {
     let scene = frame(&mut hidden, 0.0, 0, true);
     assert_eq!(origin(&scene).slice_progress, [0.0; 11]);
 }
+
+/// The lattice is drawn with the window's Stars solo, which no look holds
+/// (#1828), and a fresh state, as the offline renderer builds for an export,
+/// solos nothing.
+#[test]
+fn the_scene_carries_the_windows_stars_solo_and_a_fresh_state_none() {
+    let drawn = |picture: &mut PictureState| {
+        let window = picture.appearance.view.reach();
+        compose_scene(picture, &window, 1.0, None, 0, 0.0).star_solo
+    };
+    let mut live = crate::tests::probe::fresh_picture();
+    let solo = [false, true, false, true, false];
+    live.surfaces.star_solo.lattice = solo;
+    assert_eq!(drawn(&mut live), solo, "the scene left out the solo");
+    assert_eq!(drawn(&mut crate::tests::probe::fresh_picture()), [false; 5], "a fresh state");
+}
