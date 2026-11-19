@@ -306,7 +306,7 @@ impl Pump {
 
 /// A failure the writer found: keep its cause, and point the status line at
 /// it, so [`Control::status`] reads the whole failure ("recording incomplete:
-/// <cause>; no render started") from the pass that found it. Writing the bare
+/// `<cause>`; no render started") from the pass that found it. Writing the bare
 /// cause there instead showed it without the rest until the next GUI refresh,
 /// or, after a Stop, until the take sealed (#1843).
 fn fail_with(fence: &RecordFence, status: &Mutex<String>, cause: String) {
