@@ -1464,6 +1464,47 @@ fn the_delay_is_saved_and_reported_as_latency_before_any_hub_exists() {
     assert_eq!(reopened.latency(), 4 * 256, "a reopened project reports the saved delay");
 }
 
+/// The #615 latency protocol, as the host sees it: one notification per
+/// activation that moves the latency, sent during that activation, and no
+/// restart until the plugin asks for a different latency, then one. A restart
+/// requested at activation stalls Bitwig's next offline bounce (#615).
+#[test]
+fn latency_is_announced_once_during_activation_and_a_change_asks_one_restart() {
+    let _scope = crate::test_scope::enter();
+    let mut tune = Device::new(true);
+    // (notifications, notifications outside an activation, restarts, the
+    // latency the host read when notified)
+    let seen = |device: &Device| {
+        let stats = &device._stats;
+        (
+            stats.latency_changes.load(Ordering::Relaxed),
+            stats.out_of_phase.load(Ordering::Relaxed),
+            stats.restarts.load(Ordering::Relaxed),
+            stats.observed_latency.load(Ordering::Relaxed),
+        )
+    };
+    let mut raw = 0;
+    let mut play = |device: &Device| {
+        for _ in 0..3 {
+            device.run_format(raw, vec![], None, None, 256);
+            raw += 256;
+            device.main();
+        }
+    };
+    tune.activate_format(48000.0, 256);
+    assert_eq!(seen(&tune), (1, 0, 0, 256), "announced during the activation, no restart");
+    play(&tune);
+    assert_eq!(seen(&tune), (1, 0, 0, 256), "the same latency asks for nothing");
+    tune.shared().request_delay(4);
+    play(&tune);
+    assert_eq!(seen(&tune), (1, 0, 1, 256), "a new latency asks one restart and waits for it");
+    assert_eq!(tune.latency(), 256, "the host reads the running activation's latency");
+    tune.reactivate_format(48000.0, 256);
+    assert_eq!(seen(&tune), (2, 0, 1, 4 * 256), "the reactivation announces the new one");
+    play(&tune);
+    assert_eq!(seen(&tune), (2, 0, 1, 4 * 256));
+}
+
 /// A host format change is a cut: the notes standing in the line were
 /// scheduled against a delay that no longer exists. It is the SESSION's cut,
 /// not the reactivating Tune's own — the Note-Offs it owes go to the host and
