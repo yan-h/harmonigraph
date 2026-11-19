@@ -787,9 +787,12 @@ mod tests {
         // which builds a target without.
         hold(&mut state, &[55, 60, 64, 67, 71]);
         // A lit Watercolor glow, whose tile is sized on the pane, at the
-        // texture size the sizes above were picked for.
+        // texture size and render scale the sizes above were picked for: at
+        // a render scale of 0.5, a valid setting, the shadow atlas does not
+        // grow between them.
         let view = &mut state.appearance.view;
         (view.glow_reach, view.glow_strength) = (1.0, 1.0);
+        view.render_scale = 1.0;
         view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
         view.atmosphere.material_amount = 1.0;
         view.atmosphere.material_settings.wash_size = 1.459_047_9;
