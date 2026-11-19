@@ -2,7 +2,7 @@
 //! exported factory with a fixture plugin that records what it is handed.
 use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory};
 use clap_sys::{
-    audio_buffer::clap_audio_buffer, events::*, ext::params::*, host::clap_host,
+    audio_buffer::clap_audio_buffer, events::*, ext::gui::*, ext::params::*, host::clap_host,
     plugin::clap_plugin, process::*, version::CLAP_VERSION,
 };
 use harmonigraph_clap::prelude::*;
@@ -12,7 +12,7 @@ use std::{
     ptr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicPtr, AtomicUsize, Ordering},
     },
 };
 
@@ -125,6 +125,10 @@ impl Plugin for Fixture {
     fn editor_host(&mut self, host: Arc<dyn EditorHost>) {
         self.host = Some(host);
     }
+    fn editor(&mut self) -> Option<Box<dyn Editor>> {
+        let host = self.host.clone()?;
+        Some(Box::new(FixtureEditor { host, size: Mutex::new(OPENED) }))
+    }
     fn begin(&mut self, boundary: &Boundary) {
         observed().begins.push((boundary.valid, boundary.input_lost, self.params.float(0)));
     }
@@ -147,6 +151,46 @@ impl Plugin for Fixture {
     }
 }
 export_clap!(Fixture);
+
+/// The fixture editor's size before it opens, and the size it asks the host
+/// for as it opens.
+const OPENED: (u32, u32) = (800, 600);
+const RESIZED: (u32, u32) = (900, 650);
+
+/// An editor that, as it opens, asks the host for [`RESIZED`], as a fold in
+/// Harmonigraph's asks from its first frame, and takes the size when the
+/// host agrees.
+struct FixtureEditor {
+    host: Arc<dyn EditorHost>,
+    size: Mutex<(u32, u32)>,
+}
+impl FixtureEditor {
+    fn size_lock(&self) -> std::sync::MutexGuard<'_, (u32, u32)> {
+        self.size.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+impl Editor for FixtureEditor {
+    /// # Safety
+    ///
+    /// None needed: the fixture never touches `parent`.
+    unsafe fn spawn(&self, _parent: *mut c_void) -> Box<dyn std::any::Any + Send> {
+        // No lock held across the host's answer, which may re-enter.
+        if self.host.request_resize(RESIZED) {
+            *self.size_lock() = RESIZED;
+        }
+        Box::new(())
+    }
+    fn size(&self) -> (u32, u32) {
+        *self.size_lock()
+    }
+    fn resizable(&self) -> bool {
+        true
+    }
+    fn set_size(&self, width: u32, height: u32) -> bool {
+        *self.size_lock() = (width, height);
+        true
+    }
+}
 
 fn header<T>(kind: u16, time: u32) -> clap_event_header {
     clap_event_header {
@@ -227,10 +271,16 @@ fn list(events: &Vec<Event>) -> clap_input_events {
 #[derive(Default)]
 struct Host {
     callbacks: AtomicUsize,
+    /// The plugin, for a host callback that calls back into it.
+    plugin: AtomicPtr<clap_plugin>,
+    /// The last `request_resize`.
+    resize: Mutex<Option<Resize>>,
 }
 unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const c_void {
     if unsafe { CStr::from_ptr(id) } == CLAP_EXT_PARAMS {
         (&PARAMS as *const clap_host_params).cast()
+    } else if unsafe { CStr::from_ptr(id) } == CLAP_EXT_GUI {
+        (&GUI as *const clap_host_gui).cast()
     } else {
         ptr::null()
     }
@@ -243,6 +293,50 @@ unsafe extern "C" fn clear(_: *const clap_host, _: u32, _: u32) {}
 unsafe extern "C" fn request(_: *const clap_host) {}
 static PARAMS: clap_host_params =
     clap_host_params { rescan: Some(rescan), clear: Some(clear), request_flush: Some(request) };
+
+/// A `request_resize` as the host heard it: the size asked for, and the
+/// plugin's answers to `gui.get_size` and `gui.set_size(asked)` made from
+/// inside it, as a host that resizes at once does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Resize {
+    asked: (u32, u32),
+    reported: (u32, u32),
+    set: bool,
+}
+unsafe extern "C" fn request_resize(host: *const clap_host, width: u32, height: u32) -> bool {
+    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
+    let plugin = stats.plugin.load(Ordering::Acquire).cast_const();
+    let gui = unsafe { plugin_gui(plugin) };
+    let mut reported = (0, 0);
+    assert!(unsafe { (gui.get_size.unwrap())(plugin, &mut reported.0, &mut reported.1) });
+    let set = unsafe { (gui.set_size.unwrap())(plugin, width, height) };
+    let resize = Resize { asked: (width, height), reported, set };
+    *stats.resize.lock().unwrap_or_else(|e| e.into_inner()) = Some(resize);
+    true
+}
+unsafe extern "C" fn gui_noop(_: *const clap_host) {}
+unsafe extern "C" fn gui_refuse(_: *const clap_host) -> bool {
+    false
+}
+unsafe extern "C" fn gui_closed(_: *const clap_host, _: bool) {}
+static GUI: clap_host_gui = clap_host_gui {
+    resize_hints_changed: Some(gui_noop),
+    request_resize: Some(request_resize),
+    request_show: Some(gui_refuse),
+    request_hide: Some(gui_refuse),
+    closed: Some(gui_closed),
+};
+/// The plugin's gui extension.
+///
+/// # Safety
+///
+/// `plugin` is a live plugin with an editor.
+unsafe fn plugin_gui(plugin: *const clap_plugin) -> &'static clap_plugin_gui {
+    unsafe {
+        &*((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_GUI.as_ptr())
+            .cast::<clap_plugin_gui>()
+    }
+}
 
 /// What the host's output list was offered, as (type, time, value), and
 /// whether it took each.
@@ -298,6 +392,7 @@ impl Device {
             ((*factory).create_plugin.unwrap())(factory, clap_host, c"fixture.boundary".as_ptr())
         };
         assert!(!plugin.is_null());
+        unsafe { &*host }.plugin.store(plugin.cast_mut(), Ordering::Release);
         assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
         assert!(unsafe { ((*plugin).activate.unwrap())(plugin, 48000.0, 1, 64) });
         assert!(unsafe { ((*plugin).start_processing.unwrap())(plugin) });
@@ -414,7 +509,10 @@ impl Device {
                 .plugin_data
                 .cast::<harmonigraph_clap::wrapper::clap::Wrapper<Fixture>>())
         };
-        (wrapper.test_inspect_plugin(|fixture| fixture.host.clone()).expect("a host"), 0)
+        let (host, table) =
+            wrapper.test_inspect_plugin(|fixture| (fixture.host.clone(), fixture.params.clone()));
+        let row = (0..table.len()).find(|&row| table.spec(row).id == "axis").expect("a row");
+        (host.expect("a host"), row)
     }
     fn main(&self) {
         unsafe { ((*self.plugin).on_main_thread.unwrap())(self.plugin) };
@@ -751,4 +849,30 @@ fn a_restore_drops_an_edit_the_host_was_not_told() {
     assert_eq!(d.told(), ["note"]);
     assert_eq!(d.value(), 0.5);
     drop(context);
+}
+
+/// The editor's open path, through `gui.set_parent`: a resize the editor
+/// asks for as it opens reaches the host at the size asked, and the host may
+/// call the plugin's `gui.get_size` and `gui.set_size` from inside that
+/// request, as Bitwig echoes a resize, without the shell holding a lock they
+/// wait on. The editor then has the size.
+#[test]
+fn a_resize_asked_as_the_editor_opens_reaches_the_host_which_may_reenter() {
+    let _serial = serial();
+    let d = Device::new();
+    let gui = unsafe { plugin_gui(d.plugin) };
+    let (mut api, mut floating) = (ptr::null(), false);
+    unsafe {
+        assert!((gui.get_preferred_api.unwrap())(d.plugin, &mut api, &mut floating));
+        assert!((gui.create.unwrap())(d.plugin, api, false));
+        // The fixture's editor never touches the view.
+        let window = clap_window { api, specific: clap_window_handle { cocoa: ptr::null_mut() } };
+        assert!((gui.set_parent.unwrap())(d.plugin, &window));
+    }
+    let resize = *unsafe { &*d.host }.resize.lock().unwrap_or_else(|e| e.into_inner());
+    assert_eq!(resize, Some(Resize { asked: RESIZED, reported: OPENED, set: true }));
+    let mut size = (0, 0);
+    assert!(unsafe { (gui.get_size.unwrap())(d.plugin, &mut size.0, &mut size.1) });
+    assert_eq!(size, RESIZED, "the editor's size after the round trip");
+    unsafe { (gui.destroy.unwrap())(d.plugin) };
 }
