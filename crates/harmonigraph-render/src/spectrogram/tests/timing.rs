@@ -245,6 +245,7 @@ fn cloud_costs_by_style_and_dial() {
     for frame in 0..frames + WARM_UP {
         for case in &mut cases {
             let Case {
+                name: case_name,
                 turn,
                 cb,
                 resources,
@@ -266,9 +267,25 @@ fn cloud_costs_by_style_and_dial() {
                     // `blur only` and `watercolor, no blur` turn on it.
                     pitch_softness: 35.0,
                     time_softness: 120.0,
+                    // The tide line on, at the fresh look's strength, rather
+                    // than whatever the fresh look holds next.
+                    wash_pool: 4.0,
                     ..Default::default()
                 };
                 turn(&mut settings);
+                // Each case draws the effects its name says, before any
+                // override below replays other dials over it: one that did
+                // not would be timed under a name it does not draw.
+                let effects = settings.sanitized().effects();
+                match *case_name {
+                    "blur only" => {
+                        assert!(effects.soft && !effects.cloud, "blur only: {effects:?}")
+                    }
+                    "watercolor, no blur" => {
+                        assert!(effects.cloud && !effects.soft, "no blur: {effects:?}")
+                    }
+                    _ => assert!(effects.cloud && effects.soft, "{case_name}: {effects:?}"),
+                }
                 // After the turn, so each case uses the requested blur step.
                 if let Some(blur_time_step) = blur_time_step {
                     settings.blur_time_step = blur_time_step;
@@ -336,17 +353,15 @@ fn cloud_costs_by_style_and_dial() {
             .atmosphere
             .filter(|a| a.settings.sanitized().effects().light())
             .map(|a| atmosphere::source_size(size, ppp, a));
-        // Every case but `plain` draws a light field, `blur only` by its
-        // softness alone; one that does not is the plain heatmap measured
-        // under another name.
-        assert_eq!(
-            source.is_some(),
-            case.turn.is_some(),
-            "{} draws no light field: its timings are the plain heatmap's",
-            case.name
-        );
+        // The overrides can turn every effect of a case off (both softnesses
+        // at zero under `blur only`), which then times the plain heatmap:
+        // said beside its figures rather than refused.
+        let path = match (case.turn, source) {
+            (Some(_), None) => " (overrides draw the plain heatmap)",
+            _ => "",
+        };
         eprintln!(
-            "{} / {:.2} / {:.1}: {}; wall {:.3}; CPU {:.3}; source px {:?}",
+            "{}{path} / {:.2} / {:.1}: {}; wall {:.3}; CPU {:.3}; source px {:?}",
             case.name,
             case.fill,
             case.history_seconds,
