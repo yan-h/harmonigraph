@@ -3,76 +3,56 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use crossbeam::atomic::AtomicCell;
+use plugin_own_window::{EditorSize, Opened};
 use serde::{Deserialize, Serialize};
 
 use super::lock::{EditorLock, Inbox};
 
-/// Window size persistence, modeled on nih_plug_egui's `EguiState`.
-#[derive(Debug, Serialize, Deserialize)]
+/// The editor's window: its size and the own window, which egui-plugin-window's
+/// [`EditorSize`] owns, and the System tab's Own window choice, which the
+/// project saves beside the size.
+#[derive(Debug)]
 pub struct EguiState {
-    /// Size in logical pixels (before DPI scaling).
-    #[serde(with = "atomic_cell")]
-    pub(super) size: AtomicCell<(u32, u32)>,
-    #[serde(skip)]
-    pub(super) requested_size: AtomicCell<Option<(u32, u32)>>,
-    /// A size the host already applied to the parent window (native border
-    /// drag); the child view and render surface must be brought to match,
-    /// WITHOUT the request_resize round-trip used for plugin-initiated
-    /// resizes.
-    ///
-    /// Collected by the window's size source (see [`LatticeEditor::spawn`](super::window::LatticeEditor))
-    /// rather than in the frame, because the frame has to be LAID OUT at this
-    /// size, and by the time the frame is running it is too late to say so.
-    #[serde(skip)]
-    pub(super) host_resized: AtomicCell<Option<(u32, u32)>>,
-    #[serde(skip)]
-    open: AtomicBool,
+    /// The size the host accepted or the own window gave, the host's
+    /// negotiation of it, and the own window itself.
+    pub(super) window: Arc<EditorSize>,
     /// How a thread that changes what the open window shows asks it to draw
     /// that on its next frame (see [`Self::request_pass`]).
-    #[serde(skip)]
     pub(crate) pass_request: egui_baseview::PassRequest,
-    /// The editor kept in the host's window rather than its own (see
-    /// `pop_out`), from the System tab. Saved with the project; a project
+    /// The editor kept in the host's window rather than its own, from the
+    /// System tab. Saved with the project; a project
     /// from before it was opens in the editor's own window, which is the
     /// default.
-    #[serde(default)]
     docked: AtomicBool,
-    /// The editor's view is in its own window right now, which then has the
-    /// say over its size (see `pop_out`). Set as the view moves, on the main
-    /// thread, where a host `set_size` also arrives (a CLAP `gui` call), so
-    /// the two are ordered. Here because the editor that receives `set_size`
-    /// does not hold the window, whose state is bound to the main thread; not
-    /// [`Self::docked`], the setting, which the move follows a run-loop turn
-    /// later, and which reads "own window" on a platform that offers none.
-    #[serde(skip)]
-    in_own_window: AtomicBool,
     /// The size and the Own window choice as the host was last told a save
-    /// holds them, by a report or a restore ([`Self::report_edit`]); `None`
-    /// from a close or an opening until the next frame ends (#1824).
-    #[serde(skip)]
-    told: AtomicCell<Option<Saved>>,
+    /// holds them, by a report ([`Self::report_edit`]); `None` from a close,
+    /// an opening or a restore until the next frame ends (#1824).
+    told: AtomicCell<Option<SavedWindow>>,
 }
 
-/// What the `editor-state` save holds: the size, and whether the editor is
-/// kept in the host's window.
-type Saved = ((u32, u32), bool);
+/// What the `editor-state` save holds, `{"size":[w,h],"docked":b}`: the size
+/// in logical points, and whether the editor is kept in the host's window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SavedWindow {
+    pub(crate) size: (u32, u32),
+    #[serde(default)]
+    pub(crate) docked: bool,
+}
 
 impl EguiState {
     pub fn from_size(width: u32, height: u32) -> Arc<EguiState> {
         Arc::new(EguiState {
-            size: AtomicCell::new((width, height)),
-            requested_size: AtomicCell::new(None),
-            host_resized: AtomicCell::new(None),
-            open: AtomicBool::new(false),
+            window: EditorSize::new(super::NAME, (width, height), super::LIMITS),
             pass_request: Default::default(),
             docked: AtomicBool::new(false),
-            in_own_window: AtomicBool::new(false),
             told: AtomicCell::new(None),
         })
     }
 
+    /// The size the host last accepted, or the own window gave, in logical
+    /// points: what a save writes and what the window has.
     pub fn size(&self) -> (u32, u32) {
-        self.size.load()
+        self.window.size()
     }
 
     pub(super) fn docked(&self) -> bool {
@@ -83,48 +63,48 @@ impl EguiState {
         self.docked.store(docked, Ordering::Relaxed);
     }
 
-    pub(super) fn in_own_window(&self) -> bool {
-        self.in_own_window.load(Ordering::Relaxed)
-    }
-
-    pub(super) fn set_in_own_window(&self, own: bool) {
-        self.in_own_window.store(own, Ordering::Relaxed);
-    }
-
-    /// Whether the editor's size is its own window's, which the project
-    /// saves, so that a host `set_size`, which then sizes only the host's
-    /// window, must not replace it: while the editor is open, whether its view
-    /// is in its own window; before the host attaches it (CLAP allows
-    /// `set_size` before `set_parent`), whether it will open there, which the
-    /// saved choice says where the platform offers one (Yan decided the own
-    /// window opens at the size its project saved, egui-plugin-window#12).
-    pub(super) fn owns_size(&self) -> bool {
-        if self.is_open() {
-            self.in_own_window()
-        } else {
-            super::OWN_WINDOW_OFFERED && !self.docked()
-        }
-    }
-
+    /// Whether the host has the editor attached.
+    ///
+    /// Not only the host's business: [`crate::background`] reads it to decide
+    /// how often to poll, and the tape whether its roll is drawn.
     pub fn is_open(&self) -> bool {
-        self.open.load(Ordering::Acquire)
+        self.window.is_open()
     }
 
-    /// Record that the window has opened or closed.
-    ///
-    /// Named rather than stored inline because it is not only the host's
-    /// business: [`crate::background`] reads it to decide how often to poll,
-    /// and the tape whether its roll is drawn, so the two transitions are a
-    /// seam between threads and not just a bit.
-    ///
-    /// Either starts the next window's settle, so that what the host and the
-    /// own window size while it opens is no edit ([`Self::report_edit`]): from
-    /// the close, for a frame the own window draws on the spot as the view
-    /// moves into it, inside `Editor::spawn` before the opening is recorded;
-    /// and again at the opening, for the frames after.
-    pub(crate) fn set_open(&self, open: bool) {
+    /// The host attached the editor, before its window opens: the token its
+    /// size source hands to [`EditorSize::next_frame`].
+    pub(crate) fn open(&self) -> Opened {
+        self.window.open()
+    }
+
+    /// Start the window's settle ([`Self::report_edit`]) again, after the one
+    /// the last close started, once the editor has opened, so that what the
+    /// host and the own window size while it opens is no edit: the first
+    /// frame after this only takes the size and the choice as told. Called
+    /// after the view moves into its own window, which can draw a frame on
+    /// the spot, and before the host's own `set_size` that follows an attach.
+    pub(crate) fn settle(&self) {
         self.told.store(None);
-        self.open.store(open, Ordering::Release);
+    }
+
+    /// The editor is closing, before baseview closes the view: the own window
+    /// closes, a size asked for and not yet negotiated is installed for the
+    /// save and the next open ([`EditorSize::close`]), and the next window's
+    /// settle starts.
+    pub(crate) fn close(&self) {
+        self.window.close();
+        self.told.store(None);
+    }
+
+    /// Open or close the editor as the host's attach and destroy do, with no
+    /// window: for tests of what reads whether it is open.
+    #[cfg(test)]
+    pub(crate) fn set_open(&self, open: bool) {
+        if open {
+            self.open();
+        } else {
+            self.close();
+        }
     }
 
     /// Ask the open window to run its UI on its next frame, from any thread.
@@ -141,55 +121,37 @@ impl EguiState {
 
 impl EguiState {
     /// Take what a restore saved: the size and the docked choice, the two
-    /// fields the `editor-state` save holds.
-    /// A restore is no edit: it is what the host was told, unless no frame has
-    /// ended since a close or an opening, whose next frame takes it as told.
-    pub(crate) fn restore(&self, saved: EguiState) {
-        self.size.store(saved.size.load());
-        self.set_docked(saved.docked());
-        self.told.store(self.told.load().map(|_| self.saved()));
+    /// fields the `editor-state` save holds. With the editor shut the size is
+    /// installed at once; open, the window is resized to it at its next frame
+    /// ([`EditorSize::request_size`]), and a save until then holds the size
+    /// the window has.
+    /// A restore is no edit: the frame that applies it only takes the result
+    /// as told, whatever the host or the own window made of the size.
+    pub(crate) fn restore(&self, saved: SavedWindow) {
+        self.window.request_size(saved.size);
+        self.set_docked(saved.docked);
+        self.told.store(None);
     }
 
-    fn saved(&self) -> Saved {
-        (self.size(), self.docked())
+    /// What the `editor-state` save holds now.
+    pub(crate) fn saved(&self) -> SavedWindow {
+        SavedWindow { size: self.size(), docked: self.docked() }
     }
 
     /// Call `notice` if the size or the Own window choice moved since the
     /// host was last told what a save holds of them, and take them as told:
     /// at the end of every editor frame, so that a resize or an Own window
     /// switch marks the project modified as an edit to `ui-state` does
-    /// (#1824), once per frame that moved them. The first frame after a close
-    /// or an opening only takes them as told, so what the host and the own
-    /// window set while the editor opens, such as a host's `set_size` before
-    /// or after it attaches the editor and the own window's move out, marks
-    /// nothing.
+    /// (#1824), once per frame that moved them. The first frame after a close,
+    /// an opening or a restore only takes them as told, so what the host and
+    /// the own window set while the editor opens, such as a host's `set_size`
+    /// before or after it attaches the editor and the own window's move out,
+    /// and the resize a restore makes, mark nothing.
     pub(crate) fn report_edit(&self, notice: impl FnOnce()) {
         let now = self.saved();
         if self.told.swap(Some(now)).is_some_and(|told| told != now) {
             notice();
         }
-    }
-}
-
-/// An `AtomicCell` saved as the value it holds.
-mod atomic_cell {
-    use crossbeam::atomic::AtomicCell;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S, T>(cell: &AtomicCell<T>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-        T: Serialize + Copy,
-    {
-        cell.load().serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<AtomicCell<T>, D::Error>
-    where
-        D: Deserializer<'de>,
-        T: Deserialize<'de> + Copy,
-    {
-        T::deserialize(deserializer).map(AtomicCell::new)
     }
 }
 
@@ -297,7 +259,8 @@ mod tests {
     fn the_own_window_choice_is_saved_and_defaults_to_own() {
         let docked = EguiState::from_size(800, 600);
         docked.set_docked(true);
-        let saved = serde_json::to_string(&*docked).unwrap();
+        let saved = serde_json::to_string(&docked.saved()).unwrap();
+        assert_eq!(saved, r#"{"size":[800,600],"docked":true}"#, "the bytes a project holds");
         let restored = EguiState::from_size(1, 1);
         restored.restore(serde_json::from_str(&saved).unwrap());
         assert!(restored.docked());
