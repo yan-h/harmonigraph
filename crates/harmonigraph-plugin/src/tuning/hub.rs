@@ -16,7 +16,7 @@ use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GR
 use harmonigraph_core::tuning::PitchClass;
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
-use nice_plug::events::{Input, InputValue, Output};
+use nice_plug::events::{Input, InputValue, Output, Transport};
 use nice_plug::plugin::Boundary;
 
 use super::event::Event;
@@ -26,10 +26,6 @@ use super::tune::Tune;
 use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_VOICES, TUNERS};
 
 type Owner = crate::configuration::Owner;
-
-/// `CLAP_TRANSPORT_HAS_SECONDS_TIMELINE`, which the shell hands over as a
-/// bare flag word rather than as a clap-sys type.
-const HAS_SECONDS: u32 = 1 << 2;
 
 /// One observation of the host's seconds timeline: where the song was, at
 /// which steady sample.
@@ -488,23 +484,16 @@ impl Hub {
     /// a jump does then is the `reset_loop` control's business, at the next
     /// attack.
     fn detect_loop(&mut self, callback: &Boundary) {
-        let Some(transport) = callback.transport else {
-            return;
-        };
-        self.observe_seconds(
-            transport.flags,
-            transport.song_pos_seconds,
-            Some(callback.steady_time),
-        );
+        if let Some(transport) = callback.transport {
+            self.observe_seconds(&transport, callback.steady_time);
+        }
     }
 
     /// One observation of the host's seconds timeline against elapsed samples.
-    /// `song_pos_seconds` is CLAP fixed point, 1/2^31 of a second.
-    fn observe_seconds(&mut self, flags: u32, song_pos_seconds: i64, sample: Option<i64>) {
-        let (Some(sample), true) = (sample, self.rate > 0.0 && flags & HAS_SECONDS != 0) else {
+    fn observe_seconds(&mut self, transport: &Transport, sample: i64) {
+        let (Some(song), true) = (transport.seconds(), self.rate > 0.0) else {
             return;
         };
-        let song = song_pos_seconds as f64 / 2_147_483_648.0;
         if let Some(previous) = self.seconds {
             let moved = song - previous.song;
             let elapsed = (sample - previous.sample) as f64 / self.rate;
@@ -520,7 +509,7 @@ impl Hub {
         // input event, or as both. The seek this is looking for has to be
         // found in whichever one arrives.
         if let InputValue::Transport(transport) = input.value {
-            self.observe_seconds(transport.flags, transport.song_pos_seconds, Some(input.sample));
+            self.observe_seconds(&transport, input.sample);
         }
         self.tune.input(input);
     }

@@ -23,9 +23,6 @@ use super::{
 /// outlive the note-offs beside them, so a cut that left one down would hold
 /// the very voices it just released.
 const PEDALS: [u8; 3] = [64, 66, 69];
-/// `CLAP_TRANSPORT_IS_PLAYING`, which the shell hands over as a bare flag
-/// word rather than as a clap-sys type.
-const IS_PLAYING: u32 = 1 << 4;
 
 /// One retained input, waiting for its own emission time.
 #[derive(Clone, Copy)]
@@ -281,7 +278,7 @@ impl Tune {
     }
 
     /// The audio engine stopping, or a host reset on this instance. Neither is
-    /// a transport Stop — that is the `IS_PLAYING` falling edge in
+    /// a transport Stop — that is the playing flag's falling edge in
     /// [`Self::input`] — so released memory is not theirs to clear. What they
     /// owe is the cut every other trigger takes, announced so the Hub lets go
     /// of the voices this ends.
@@ -311,7 +308,7 @@ impl Tune {
         // transport Stop reaches a plugin only as this flag, so its falling
         // edge is where the cut for one has to be taken.
         if let InputValue::Transport(transport) = input.value {
-            let playing = transport.flags & IS_PLAYING != 0;
+            let playing = transport.playing();
             if self.playing && !playing {
                 // Every row sees the same falling edge in the same callback,
                 // so exactly one of them announces it: the Hub's own. A bump

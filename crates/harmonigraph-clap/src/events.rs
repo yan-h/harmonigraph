@@ -15,6 +15,7 @@
 //! monophonic either.
 
 use clap_sys::events::*;
+use clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR};
 use std::mem::size_of;
 
 /// The host's transport, as the callback carries it and as an event in the
@@ -35,6 +36,50 @@ pub struct Transport {
     pub bar_number: i32,
     pub tsig_num: u16,
     pub tsig_denom: u16,
+}
+
+impl Transport {
+    fn has(&self, flag: u32) -> bool {
+        self.flags & flag != 0
+    }
+
+    pub fn playing(&self) -> bool {
+        self.has(CLAP_TRANSPORT_IS_PLAYING)
+    }
+
+    /// The song position in seconds, if the host gives a seconds timeline.
+    pub fn seconds(&self) -> Option<f64> {
+        self.has(CLAP_TRANSPORT_HAS_SECONDS_TIMELINE)
+            .then(|| self.song_pos_seconds as f64 / CLAP_SECTIME_FACTOR as f64)
+    }
+
+    /// The song position in quarter notes, if the host gives a beats
+    /// timeline.
+    pub fn beats(&self) -> Option<f64> {
+        self.has(CLAP_TRANSPORT_HAS_BEATS_TIMELINE).then(|| beats(self.song_pos_beats))
+    }
+
+    /// Quarter notes per minute, if the host gives a tempo.
+    pub fn tempo(&self) -> Option<f64> {
+        self.has(CLAP_TRANSPORT_HAS_TEMPO).then_some(self.tempo)
+    }
+
+    /// The time signature's numerator and denominator, if the host gives one.
+    pub fn time_signature(&self) -> Option<(u16, u16)> {
+        self.has(CLAP_TRANSPORT_HAS_TIME_SIGNATURE).then_some((self.tsig_num, self.tsig_denom))
+    }
+
+    /// The current bar, from 0 at the song's first, and where it starts in
+    /// quarter notes. CLAP puts these behind no flag, so a host that fills
+    /// in none of them gives bar 0 starting at beat 0.
+    pub fn bar(&self) -> (i32, f64) {
+        (self.bar_number, beats(self.bar_start))
+    }
+}
+
+/// CLAP's fixed-point beats as quarter notes.
+fn beats(value: i64) -> f64 {
+    value as f64 / CLAP_BEATTIME_FACTOR as f64
 }
 
 impl From<clap_event_transport> for Transport {

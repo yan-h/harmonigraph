@@ -37,8 +37,6 @@ harmonigraph-render = { workspace = true }
 
 # Its library is `nice_plug`, the name the code below uses.
 harmonigraph-clap = { workspace = true }
-# The CLAP structs the shell hands over: the callback's transport.
-clap-sys = "0.5.0"
 egui = { workspace = true }
 # The editor's device is made at activation, before any window, from the
 # window's own setup (`editor::start_graphics`).
@@ -68,6 +66,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 [dev-dependencies]
 harmonigraph-clap = { workspace = true, features = ["clap-boundary-tests"] }
 nice-assert-no-alloc = { workspace = true }
+clap-sys = "0.5.0"
 # The process fixture arms the real Recorder but captures into memory, so a
 # test can reach take audio without writing into ~/Music.
 harmonigraph-record = { workspace = true, features = ["test-support"] }

@@ -8,13 +8,12 @@ pub use state::*;
 
 use crate::audio_setup::{Audio, BufferConfig, Ports};
 use crate::editor::Editor;
-use crate::events::{Input, InputValue, List, Output};
+use crate::events::{Input, InputValue, List, Output, Transport};
 use crate::midi::MidiConfig;
 use crate::params::Table;
 use crate::wrapper::clap::EditorHost;
 use crate::wrapper::clap::features::ClapFeature;
 use crate::wrapper::clap::setup::Setup;
-use clap_sys::events::clap_event_transport;
 
 /// A CLAP plugin. The shell owns the host's side of every call; the plugin
 /// owns everything musical.
@@ -120,7 +119,7 @@ pub struct Boundary {
     pub frames: u32,
     pub sample_rate: f64,
     /// The callback's own transport, as at its first sample.
-    pub transport: Option<clap_event_transport>,
+    pub transport: Option<Transport>,
     /// The boundary itself can be used: a steady time from zero, and from 1
     /// to the activation's maximum frames. [`Plugin::process`] is called only
     /// for a valid one.
@@ -153,7 +152,7 @@ impl<'a> Block<'a> {
             .boundary
             .transport
             .filter(|_| !self.boundary.input_lost)
-            .map(|transport| (0, InputValue::Transport(transport.into())));
+            .map(|transport| (0, InputValue::Transport(transport)));
         transport
             .into_iter()
             .chain(self.events.values())

@@ -662,7 +662,7 @@ impl<P: Plugin> Wrapper<P> {
             steady_time: process.steady_time,
             frames,
             sample_rate: config.map_or(44100.0, |config| f64::from(config.sample_rate)),
-            transport: unsafe { process.transport.as_ref() }.copied(),
+            transport: unsafe { process.transport.as_ref() }.map(|&transport| transport.into()),
             valid,
             input_lost,
         };

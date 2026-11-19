@@ -603,25 +603,20 @@ pub(crate) struct Transport {
 
 impl Transport {
     /// No transport is one that reports nothing and is not playing.
-    fn read(transport: Option<&clap_sys::events::clap_event_transport>) -> Self {
-        use clap_sys::events::*;
-        use clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR};
+    fn read(transport: Option<&nice_plug::events::Transport>) -> Self {
         let Some(t) = transport else { return Self::default() };
-        let has = |flag| t.flags & flag != 0;
-        let beats = |value: i64| value as f64 / CLAP_BEATTIME_FACTOR as f64;
-        let signature = has(CLAP_TRANSPORT_HAS_TIME_SIGNATURE);
+        let signature = t.time_signature();
+        // The bar is always given: see `bar_position` for one that is zero.
+        let (bar, bar_start) = t.bar();
         Self {
-            playing: has(CLAP_TRANSPORT_IS_PLAYING),
-            tempo: has(CLAP_TRANSPORT_HAS_TEMPO).then_some(t.tempo),
-            time_sig_numerator: signature.then_some(i32::from(t.tsig_num)),
-            time_sig_denominator: signature.then_some(i32::from(t.tsig_denom)),
-            pos_seconds: has(CLAP_TRANSPORT_HAS_SECONDS_TIMELINE)
-                .then(|| t.song_pos_seconds as f64 / CLAP_SECTIME_FACTOR as f64),
-            pos_beats: has(CLAP_TRANSPORT_HAS_BEATS_TIMELINE).then(|| beats(t.song_pos_beats)),
-            // CLAP puts the bar behind no flag, so a host that fills in none
-            // of it reads as bar 0 starting at beat 0: see `bar_position`.
-            bar_start_pos_beats: Some(beats(t.bar_start)),
-            bar_number: Some(t.bar_number),
+            playing: t.playing(),
+            tempo: t.tempo(),
+            time_sig_numerator: signature.map(|(numerator, _)| i32::from(numerator)),
+            time_sig_denominator: signature.map(|(_, denominator)| i32::from(denominator)),
+            pos_seconds: t.seconds(),
+            pos_beats: t.beats(),
+            bar_start_pos_beats: Some(bar_start),
+            bar_number: Some(bar),
         }
     }
 
