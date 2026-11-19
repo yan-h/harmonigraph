@@ -461,7 +461,7 @@ impl Axes {
 /// spectrum owns all of it. The spectrogram shares the roll's region and time
 /// axis, so it carves out the same share.
 pub(super) fn spectrum_share(cfg: &crate::SpectrumConfig) -> f32 {
-    if cfg.show_roll || cfg.show_spectrogram {
+    if cfg.has_far_region() {
         (1.0 - cfg.roll_fraction).clamp(0.0, 1.0)
     } else {
         1.0

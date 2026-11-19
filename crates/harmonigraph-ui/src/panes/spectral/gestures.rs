@@ -272,7 +272,7 @@ pub(crate) fn hold_spectrum(state: &mut PictureState, pane: egui::Vec2) {
     // No far region is no divider — there is nothing to take a resize. The hold
     // is left standing rather than dropped, so turning the spectrogram back on
     // returns the picture it was turned off at.
-    if !(cfg.show_roll || cfg.show_spectrogram) {
+    if !cfg.has_far_region() {
         return;
     }
     let share = spectrum_share(&cfg);

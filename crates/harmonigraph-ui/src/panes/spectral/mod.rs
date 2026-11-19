@@ -241,7 +241,7 @@ pub(crate) fn spectral_pane(
     // take it rather than reading the config themselves, so the band a hand
     // grabs is the line the picture shows.
     let at_split = regions.map_or_else(|| spectrum_split(state, surface), |r| r.split);
-    let divider = (regions.is_none() && (cfg.show_roll || cfg.show_spectrogram))
+    let divider = (regions.is_none() && cfg.has_far_region())
         .then(|| drag_split(ui, &axes, state, surface, at_split));
     let drag_navigates = orientation_drag.as_ref().is_none_or(|d| d.navigating);
     // The stretch of song Tape mode shows, which the drags below may move.

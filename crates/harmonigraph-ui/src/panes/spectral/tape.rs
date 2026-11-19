@@ -208,12 +208,7 @@ pub(super) fn editor(navigation: Navigation) -> bool {
 /// with a far region to draw it in.
 pub(super) fn active(state: &PictureState, navigation: Navigation) -> bool {
     let view = &state.runtime.tape;
-    view.present && view.showing && editor(navigation) && room(&state.appearance.spectrum)
-}
-
-/// The pane has a far region: the roll or the spectrogram is on.
-fn room(cfg: &crate::SpectrumConfig) -> bool {
-    cfg.show_roll || cfg.show_spectrogram
+    view.present && view.showing && editor(navigation) && state.appearance.spectrum.has_far_region()
 }
 
 fn window_id(surface: usize) -> egui::Id {
@@ -621,7 +616,7 @@ fn ruler(
 /// picture as a cue. With no far region to draw the tape in, the line says
 /// what would make room for it.
 pub(super) fn controls(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState) {
-    let room = room(&state.appearance.spectrum);
+    let room = state.appearance.spectrum.has_far_region();
     let view = &mut state.runtime.tape;
     let ui_scale = theme::ui_scale(ui.ctx());
     ui.painter().rect_filled(rect, 0.0, theme::header());

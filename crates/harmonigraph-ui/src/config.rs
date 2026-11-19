@@ -608,6 +608,12 @@ impl SpectrumConfig {
         }
     }
 
+    /// The Analyzer has a far region: the roll or the spectrogram is on,
+    /// which share it and its time axis.
+    pub(crate) fn has_far_region(&self) -> bool {
+        self.show_roll || self.show_spectrogram
+    }
+
     /// The analyzer these settings ask for at `sample_rate`: the window's
     /// frame.
     pub fn analyzer(&self, sample_rate: f32) -> harmonigraph_analysis::AnalyzerConfig {
