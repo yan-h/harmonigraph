@@ -913,8 +913,7 @@ impl Plugin for Harmonigraph {
     const PORTS: Ports =
         Ports { main_input: 2, main_output: 2, aux_inputs: &[(2, "Visualization Input")] };
 
-    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
+    const NOTE_PORTS: bool = true;
 
     fn params(&self) -> Arc<Table> {
         self.params.table.clone()

@@ -52,8 +52,7 @@ impl Plugin for HarmonigraphTune {
         Some("https://github.com/yan-h/harmonigraph/issues");
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::NoteEffect, ClapFeature::Utility];
     const PORTS: Ports = Ports::NONE;
-    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
+    const NOTE_PORTS: bool = true;
     /// A Tune exports no host parameter. Its Tuning delay is a saved setting
     /// (`setup::InstanceSettings`): a change needs the host to reactivate the
     /// Tune, so it cannot usefully be automated, and the saved value is there

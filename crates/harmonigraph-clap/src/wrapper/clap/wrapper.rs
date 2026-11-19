@@ -14,7 +14,6 @@
 use crate::audio_setup::{Audio, AuxStorage, BufferConfig, ProcessMode, Slices, audio};
 use crate::editor::{Editor, ParentWindowHandle};
 use crate::events::{self, InputValue, List, Output};
-use crate::midi::MidiConfig;
 use crate::params::{Report, Table};
 use crate::plugin::{Block, Boundary, Plugin, PluginState};
 use atomic_float::AtomicF32;
@@ -535,7 +534,7 @@ impl<P: Plugin> Wrapper<P> {
     unsafe extern "C" fn activate(
         plugin: *const clap_plugin,
         sample_rate: f64,
-        min_frames_count: u32,
+        _min_frames_count: u32,
         max_frames_count: u32,
     ) -> bool {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data });
@@ -543,7 +542,6 @@ impl<P: Plugin> Wrapper<P> {
 
         let buffer_config = BufferConfig {
             sample_rate: sample_rate as f32,
-            min_buffer_size: Some(min_frames_count),
             max_buffer_size: max_frames_count,
             process_mode: wrapper.current_process_mode.load(),
         };
@@ -575,7 +573,6 @@ impl<P: Plugin> Wrapper<P> {
         check_null_ptr!((), plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        wrapper.plugin.lock().deactivate();
         wrapper.is_activated.store(false, Ordering::SeqCst);
         wrapper.plugin.lock().inactive();
     }
@@ -589,7 +586,6 @@ impl<P: Plugin> Wrapper<P> {
         process_wrapper(|| {
             let mut plugin = wrapper.plugin.lock();
             plugin.reset();
-            plugin.start();
         });
         true
     }
@@ -661,7 +657,6 @@ impl<P: Plugin> Wrapper<P> {
         let boundary = Boundary {
             steady_time: process.steady_time,
             frames,
-            sample_rate: config.map_or(44100.0, |config| f64::from(config.sample_rate)),
             transport: unsafe { process.transport.as_ref() }.map(|&transport| transport.into()),
             valid,
             input_lost,
@@ -746,9 +741,7 @@ impl<P: Plugin> Wrapper<P> {
             &wrapper.clap_plugin_gui as *const _ as *const c_void
         } else if id == CLAP_EXT_LATENCY {
             &wrapper.clap_plugin_latency as *const _ as *const c_void
-        } else if id == CLAP_EXT_NOTE_PORTS
-            && (P::MIDI_INPUT >= MidiConfig::Basic || P::MIDI_OUTPUT >= MidiConfig::Basic)
-        {
+        } else if id == CLAP_EXT_NOTE_PORTS && P::NOTE_PORTS {
             &wrapper.clap_plugin_note_ports as *const _ as *const c_void
         } else if (id == CLAP_EXT_TRACK_INFO || id == CLAP_EXT_TRACK_INFO_COMPAT)
             && wrapper.setup.is_some()
@@ -1205,8 +1198,7 @@ impl<P: Plugin> Wrapper<P> {
 
     unsafe extern "C" fn ext_note_ports_count(_plugin: *const clap_plugin, is_input: bool) -> u32 {
         match is_input {
-            true if P::MIDI_INPUT >= MidiConfig::Basic => 1,
-            false if P::MIDI_OUTPUT >= MidiConfig::Basic => 1,
+            _ if P::NOTE_PORTS => 1,
             _ => 0,
         }
     }
@@ -1218,7 +1210,7 @@ impl<P: Plugin> Wrapper<P> {
         info: *mut clap_note_port_info,
     ) -> bool {
         match (index, is_input) {
-            (0, true) if P::MIDI_INPUT >= MidiConfig::Basic => {
+            (0, true) if P::NOTE_PORTS => {
                 unsafe {
                     *info = std::mem::zeroed();
                 }
@@ -1233,14 +1225,11 @@ impl<P: Plugin> Wrapper<P> {
 
                 true
             }
-            (0, false) if P::MIDI_OUTPUT >= MidiConfig::Basic => {
+            (0, false) if P::NOTE_PORTS => {
                 unsafe { *info = std::mem::zeroed() };
 
                 let info = unsafe { &mut *info };
                 info.id = 0;
-                // If `P::MIDI_OUTPUT < MidiConfig::MidiCCs` we'll throw away MIDI CCs, pitch bend
-                // messages, and other messages that are not basic note on, off and polyphonic
-                // pressure messages. This way the behavior is the same as the VST3 wrapper.
                 info.supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI;
                 info.preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
                 strlcpy(&mut info.name, "Note Output");
@@ -1399,10 +1388,11 @@ impl<P: Plugin> Wrapper<P> {
         false
     }
 
+    /// Both plugins render offline as they do live.
     unsafe extern "C" fn ext_render_has_hard_realtime_requirement(
         _plugin: *const clap_plugin,
     ) -> bool {
-        P::HARD_REALTIME_ONLY
+        false
     }
 
     unsafe extern "C" fn ext_render_set(

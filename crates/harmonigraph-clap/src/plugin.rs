@@ -9,7 +9,6 @@ pub use state::*;
 use crate::audio_setup::{Audio, BufferConfig, Ports};
 use crate::editor::Editor;
 use crate::events::{Input, InputValue, List, Output, Transport};
-use crate::midi::MidiConfig;
 use crate::params::Table;
 use crate::wrapper::clap::EditorHost;
 use crate::wrapper::clap::features::ClapFeature;
@@ -50,11 +49,9 @@ pub trait Plugin: Default + Send + 'static {
 
     /// The audio ports.
     const PORTS: Ports;
-    /// Whether the plugin has a note input and a note output port.
-    const MIDI_INPUT: MidiConfig = MidiConfig::None;
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::None;
-    /// Reported to the host's render extension.
-    const HARD_REALTIME_ONLY: bool = false;
+    /// Whether the plugin has a note input and a note output port, each
+    /// speaking the CLAP and MIDI dialects.
+    const NOTE_PORTS: bool = false;
 
     /// The host parameters. Queried once, after creation.
     fn params(&self) -> Arc<Table>;
@@ -90,15 +87,12 @@ pub trait Plugin: Default + Send + 'static {
     fn latency(&self) -> u32 {
         0
     }
-    fn deactivate(&mut self) {}
     /// Main-thread service while deactivated, also just before activation.
     fn inactive(&mut self) {}
     fn destroy(&mut self) {}
 
     // The audio thread's lifecycle, inside the allocation guard.
 
-    /// Processing starts, after a [`Plugin::reset`].
-    fn start(&mut self) {}
     /// Processing stops.
     fn stop(&mut self) {}
     /// Discard what is sounding; also called when processing starts.
@@ -117,7 +111,6 @@ pub struct Boundary {
     /// The first sample on the host's steady clock.
     pub steady_time: i64,
     pub frames: u32,
-    pub sample_rate: f64,
     /// The callback's own transport, as at its first sample.
     pub transport: Option<Transport>,
     /// The boundary itself can be used: a steady time from zero, and from 1

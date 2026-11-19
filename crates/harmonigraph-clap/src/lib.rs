@@ -17,7 +17,6 @@ pub mod audio_setup;
 pub mod context;
 pub mod editor;
 pub mod events;
-pub mod midi;
 pub mod params;
 pub mod plugin;
 pub mod util;

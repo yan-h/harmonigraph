@@ -10,7 +10,6 @@ pub use crate::context::PluginApi;
 pub use crate::context::gui::GuiContext;
 pub use crate::editor::{Editor, Modifiers, ParentWindowHandle, ResizeHint, VirtualKeyCode};
 pub use crate::events::{Input, InputValue, Output, Transport};
-pub use crate::midi::MidiConfig;
 pub use crate::params::{Spec, Table};
 pub use crate::plugin::PluginState;
 pub use crate::plugin::{Block, Boundary, Plugin};

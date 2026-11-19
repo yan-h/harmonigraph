@@ -100,8 +100,7 @@ impl Plugin for Fixture {
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::NoteEffect];
     const PORTS: Ports = Ports { main_input: 2, main_output: 2, aux_inputs: &[] };
-    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
+    const NOTE_PORTS: bool = true;
 
     fn params(&self) -> Arc<Table> {
         self.params.clone()

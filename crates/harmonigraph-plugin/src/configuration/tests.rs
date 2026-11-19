@@ -1663,7 +1663,6 @@ fn deactivated_stop_finishes_without_another_process_callback() {
             source.begin(&nice_plug::plugin::Boundary {
                 steady_time: 0,
                 frames: 64,
-                sample_rate: 48_000.0,
                 transport: None,
                 valid: true,
                 input_lost: false,
