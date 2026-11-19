@@ -257,6 +257,9 @@ impl Targets {
             image: stars::star_image_size(size, stars),
         };
         if held.as_ref().is_none_or(|t| t.allocation != allocation) {
+            // Dropped before the new one is built, so a Stars setting change
+            // never holds both sets of targets at once.
+            *held = None;
             *held = Some(Self::new(device, pipelines, source, allocation));
         }
         let held = held.as_mut().unwrap();

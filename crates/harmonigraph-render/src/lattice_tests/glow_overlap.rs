@@ -491,7 +491,7 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
         shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
             .material_tile
             .as_ref()
-            .map(|tile| tile.geometry_binding())
+            .map(|tile| (tile.binding(), tile.bakes()))
     };
     let original_tile = geometry(&shooter).unwrap();
     scene.glow_clock = Some(8.0);
@@ -560,11 +560,11 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
         ..Default::default()
     };
     let tile = |shooter: &Shooter| {
-        shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
+        let tile = shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
             .material_tile
             .as_ref()
-            .unwrap()
-            .geometry_binding()
+            .unwrap();
+        (tile.binding(), tile.bakes())
     };
     type Turn = fn(&mut MaterialSettings);
     for (style, label, rebake, turn) in [
@@ -598,7 +598,9 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
                 "brightness must preserve premultiplied coverage"
             );
         }
-        assert_eq!(before_tile != tile(&shooter), rebake, "{style:?}/{label}: tile invalidation");
+        let (binding, bakes) = tile(&shooter);
+        assert_eq!(binding, before_tile.0, "{style:?}/{label}: a turn rebakes in place");
+        assert_eq!(bakes != before_tile.1, rebake, "{style:?}/{label}: tile invalidation");
         let changed = before
             .as_chunks::<4>()
             .0
