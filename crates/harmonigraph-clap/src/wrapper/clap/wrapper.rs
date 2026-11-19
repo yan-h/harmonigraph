@@ -100,7 +100,16 @@ const TRANSPORT_EVENT: &str = "The host sent a transport event inside a block. H
 /// end instead, and the offset that takes stays on every later callback, so
 /// [`Boundary::steady_time`] and every event's sample run on within an
 /// activation: nothing keyed on them sees time go back (#1881). A counter that
-/// runs on is never offset, and a forward jump passes through as it comes.
+/// runs on is never offset, and a forward jump passes through as it comes. An
+/// invalid callback with a counter takes the offset too, so every boundary is
+/// on one clock, but moves nothing.
+///
+/// Each activation starts the clock over, so across one it may go back. What a
+/// plugin keys on steady time relies on `start_processing`, which calls
+/// [`Plugin::reset`], to clear it before the next callback; in Harmonigraph
+/// that clears the configuration history (`Owner::reset`, then
+/// `AudioMaps::reset`).
+///
 /// Audio thread only, apart from the activation that resets it.
 #[derive(Default)]
 struct SteadyClock {
@@ -129,6 +138,11 @@ impl SteadyClock {
         }
         self.next = Some(start.saturating_add(i64::from(frames)));
         (start, jump)
+    }
+
+    /// An invalid callback's counter, on this clock without moving it.
+    fn at(&self, host: i64) -> i64 {
+        host.saturating_add(self.offset)
     }
 }
 
@@ -662,6 +676,8 @@ impl<P: Plugin> Wrapper<P> {
                 self.deferred_host_callback.store(true, Ordering::Release);
             }
             start
+        } else if process.steady_time >= 0 {
+            self.steady.borrow().at(process.steady_time)
         } else {
             process.steady_time
         };
@@ -822,8 +838,9 @@ impl<P: Plugin> Wrapper<P> {
         if wrapper.steady_restart.swap(false, Ordering::AcqRel) {
             let line = format!(
                 "The host restarted its steady sample counter: a block began at {} where {} was \
-                 due. Harmonigraph runs its clock on from where it was, so the timing of notes \
-                 and takes holds; this is said once per activation (#1881).",
+                 due. This instance runs its clock on from where it was. Where another \
+                 Harmonigraph or Tune did not see the same restart, note timing across them may \
+                 be off until the plugin is reloaded. Said once per activation (#1881).",
                 wrapper.steady_given.load(Ordering::Relaxed),
                 wrapper.steady_expected.load(Ordering::Relaxed),
             );

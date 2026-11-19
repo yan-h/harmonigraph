@@ -415,6 +415,16 @@ impl Device {
         events: Vec<Event>,
         transport: Option<clap_event_transport>,
     ) -> clap_process_status {
+        self.run_frames(steady, 64, events, transport)
+    }
+    /// A callback of `frames`, at most the 64 the buffers hold.
+    fn run_frames(
+        &mut self,
+        steady: i64,
+        frames: u32,
+        events: Vec<Event>,
+        transport: Option<clap_event_transport>,
+    ) -> clap_process_status {
         let input = list(&events);
         let output =
             clap_output_events { ctx: (&mut self.sink as *mut Sink).cast(), try_push: Some(push) };
@@ -431,7 +441,7 @@ impl Device {
             clap_audio_buffer { data32: unsafe { pointers.as_mut_ptr().add(2) }, ..inputs };
         let process = clap_process {
             steady_time: steady,
-            frames_count: 64,
+            frames_count: frames,
             transport: transport.as_ref().map_or(ptr::null(), |t| t),
             audio_inputs: &inputs,
             audio_outputs: &mut outputs,
@@ -735,21 +745,27 @@ fn a_transport_event_in_the_list_reaches_the_plugin_and_is_noticed_once() {
 /// CLAP lets a host restart its steady counter at a reset. The shell runs it
 /// on: a valid callback whose counter falls below where the last valid one
 /// ended starts there, and keeps that offset, its events included. A counter
-/// that runs on or jumps ahead passes through, and an invalid callback's is
-/// handed over as given. The activation's first restart asks the main thread
-/// to say so, once (#1881).
+/// that runs on or jumps ahead passes through. An invalid callback's counter
+/// takes the offset without moving the clock, and one of -1 is handed over as
+/// given. The activation's first restart asks the main thread to say so, once
+/// (#1881).
 #[test]
 fn a_restarted_steady_counter_runs_on_and_is_noticed_once() {
     let _serial = serial();
     NOTICES.store(0, Ordering::Relaxed);
     let mut d = Device::new();
-    for steady in [0, 64, 1000, -1, 0, 64, 0] {
-        let events = if steady == 64 { vec![note(CLAP_EVENT_NOTE_ON, 5)] } else { vec![] };
-        d.run(steady, events, None);
+    // Zero frames make a callback invalid with its counter in hand.
+    for (steady, frames) in [(0, 64), (64, 64), (1000, 64), (-1, 64), (0, 64), (64, 64), (0, 64)]
+        .into_iter()
+        .chain([(64, 0), (64, 64)])
+    {
+        let events =
+            if (steady, frames) == (64, 64) { vec![note(CLAP_EVENT_NOTE_ON, 5)] } else { vec![] };
+        d.run_frames(steady, frames, events, None);
     }
-    assert_eq!(observed().steady, [0, 64, 1000, -1, 1064, 1128, 1192]);
+    assert_eq!(observed().steady, [0, 64, 1000, -1, 1064, 1128, 1192, 1256, 1256]);
     let samples: Vec<_> = observed().events.iter().map(|input| input.sample).collect();
-    assert_eq!(samples, [69, 1133], "an event's sample is read from the boundary's");
+    assert_eq!(samples, [69, 1133, 1261], "an event's sample is read from the boundary's");
     d.main();
     assert_eq!(NOTICES.load(Ordering::Relaxed), 1, "two restarts, one line");
 }

@@ -113,7 +113,8 @@ pub struct Boundary {
     /// below where the last valid one ended starts at that end, and keeps the
     /// offset after, so steady time never goes back within an activation;
     /// every event's sample is read from it. An invalid boundary carries the
-    /// host's value as given (#1881).
+    /// host's value with the same offset, or as given when it is negative
+    /// (#1881).
     pub steady_time: i64,
     pub frames: u32,
     /// The callback's own transport, as at its first sample.
