@@ -7,13 +7,32 @@ use serde::{Deserialize, Serialize};
 
 use super::lock::{EditorLock, Inbox};
 
-/// Window size persistence, modeled on nih_plug_egui's `EguiState`.
-#[derive(Debug, Serialize, Deserialize)]
+/// What the `editor-state` save holds: the window's size in logical pixels
+/// (before DPI scaling), and whether the editor is kept in the host's window
+/// rather than its own (`pop_out`), from the System tab. A blob missing either
+/// key opens that key at its default, the design size or the own window, as
+/// every other saved struct does.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct SavedWindow {
+    pub(crate) size: (u32, u32),
+    pub(crate) docked: bool,
+}
+
+impl Default for SavedWindow {
+    fn default() -> SavedWindow {
+        SavedWindow { size: super::DEFAULT_SIZE, docked: false }
+    }
+}
+
+/// The editor window's state shared between threads: what the
+/// `editor-state` save holds ([`SavedWindow`]), and the size requests and
+/// open state the window, the host and the input worker pass between them.
+/// Modeled on nih_plug_egui's `EguiState`.
+#[derive(Debug)]
 pub struct EguiState {
     /// Size in logical pixels (before DPI scaling).
-    #[serde(with = "atomic_cell")]
     pub(super) size: AtomicCell<(u32, u32)>,
-    #[serde(skip)]
     pub(super) requested_size: AtomicCell<Option<(u32, u32)>>,
     /// A size the host already applied to the parent window (native border
     /// drag); the child view and render surface must be brought to match,
@@ -23,19 +42,13 @@ pub struct EguiState {
     /// Collected by the window's size source (see [`LatticeEditor::spawn`](super::window::LatticeEditor))
     /// rather than in the frame, because the frame has to be LAID OUT at this
     /// size, and by the time the frame is running it is too late to say so.
-    #[serde(skip)]
     pub(super) host_resized: AtomicCell<Option<(u32, u32)>>,
-    #[serde(skip)]
     open: AtomicBool,
     /// How a thread that changes what the open window shows asks it to draw
     /// that on its next frame (see [`Self::request_pass`]).
-    #[serde(skip)]
     pub(crate) pass_request: egui_baseview::PassRequest,
     /// The editor kept in the host's window rather than its own (see
-    /// `pop_out`), from the System tab. Saved with the project; a project
-    /// from before it was opens in the editor's own window, which is the
-    /// default.
-    #[serde(default)]
+    /// `pop_out`), from the System tab ([`SavedWindow::docked`]).
     docked: AtomicBool,
     /// The editor's view is in its own window right now, which then has the
     /// say over its size (see `pop_out`). Set as the view moves, on the main
@@ -44,18 +57,12 @@ pub struct EguiState {
     /// does not hold the window, whose state is bound to the main thread; not
     /// [`Self::docked`], the setting, which the move follows a run-loop turn
     /// later, and which reads "own window" on a platform that offers none.
-    #[serde(skip)]
     in_own_window: AtomicBool,
     /// The size and the Own window choice as the host was last told a save
     /// holds them, by a report or a restore ([`Self::report_edit`]); `None`
     /// from a close or an opening until the next frame ends (#1824).
-    #[serde(skip)]
-    told: AtomicCell<Option<Saved>>,
+    told: AtomicCell<Option<SavedWindow>>,
 }
-
-/// What the `editor-state` save holds: the size, and whether the editor is
-/// kept in the host's window.
-type Saved = ((u32, u32), bool);
 
 impl EguiState {
     pub fn from_size(width: u32, height: u32) -> Arc<EguiState> {
@@ -140,18 +147,18 @@ impl EguiState {
 }
 
 impl EguiState {
-    /// Take what a restore saved: the size and the docked choice, the two
-    /// fields the `editor-state` save holds.
+    /// Take what a restore saved.
     /// A restore is no edit: it is what the host was told, unless no frame has
     /// ended since a close or an opening, whose next frame takes it as told.
-    pub(crate) fn restore(&self, saved: EguiState) {
-        self.size.store(saved.size.load());
-        self.set_docked(saved.docked());
+    pub(crate) fn restore(&self, saved: SavedWindow) {
+        self.size.store(saved.size);
+        self.set_docked(saved.docked);
         self.told.store(self.told.load().map(|_| self.saved()));
     }
 
-    fn saved(&self) -> Saved {
-        (self.size(), self.docked())
+    /// What the `editor-state` save holds now.
+    pub(crate) fn saved(&self) -> SavedWindow {
+        SavedWindow { size: self.size(), docked: self.docked() }
     }
 
     /// Call `notice` if the size or the Own window choice moved since the
@@ -168,28 +175,6 @@ impl EguiState {
         if self.told.swap(Some(now)).is_some_and(|told| told != now) {
             notice();
         }
-    }
-}
-
-/// An `AtomicCell` saved as the value it holds.
-mod atomic_cell {
-    use crossbeam::atomic::AtomicCell;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S, T>(cell: &AtomicCell<T>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-        T: Serialize + Copy,
-    {
-        cell.load().serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<AtomicCell<T>, D::Error>
-    where
-        D: Deserializer<'de>,
-        T: Deserialize<'de> + Copy,
-    {
-        T::deserialize(deserializer).map(AtomicCell::new)
     }
 }
 
@@ -291,22 +276,22 @@ impl UiState {
 mod tests {
     use super::*;
 
-    /// The System tab's Own window choice is saved with the window size, and a
-    /// project saved before it existed opens in the editor's own window.
+    /// The System tab's Own window choice is saved with the window size, in
+    /// the shape every earlier build wrote, and a project saved before it
+    /// existed opens in the editor's own window.
     #[test]
     fn the_own_window_choice_is_saved_and_defaults_to_own() {
         let docked = EguiState::from_size(800, 600);
         docked.set_docked(true);
-        let saved = serde_json::to_string(&*docked).unwrap();
+        let saved = serde_json::to_string(&docked.saved()).unwrap();
+        assert_eq!(saved, r#"{"size":[800,600],"docked":true}"#);
         let restored = EguiState::from_size(1, 1);
         restored.restore(serde_json::from_str(&saved).unwrap());
         assert!(restored.docked());
         assert_eq!(restored.size(), (800, 600));
 
-        let mut old: serde_json::Value = serde_json::from_str(&saved).unwrap();
-        old.as_object_mut().unwrap().remove("docked");
         let restored = EguiState::from_size(1, 1);
-        restored.restore(serde_json::from_value(old).unwrap());
+        restored.restore(serde_json::from_str(r#"{"size":[800,600]}"#).unwrap());
         assert!(!restored.docked());
     }
 }

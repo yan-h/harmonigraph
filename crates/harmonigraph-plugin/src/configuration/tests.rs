@@ -952,7 +952,7 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     let saved = crate::editor::EguiState::from_size(900, 700);
     saved.set_docked(true);
     let mut project = device.wrapper().get_state_object();
-    project.fields.insert("editor-state".into(), serde_json::to_string(&*saved).unwrap());
+    project.fields.insert("editor-state".into(), serde_json::to_string(&saved.saved()).unwrap());
     device.load(project);
     assert_eq!(state.size(), (900, 700), "the restore installed");
     frame();

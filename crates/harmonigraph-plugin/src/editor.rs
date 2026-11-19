@@ -18,6 +18,7 @@ mod window;
 
 pub(crate) use lock::open_window_session;
 pub use lock::EditorLock;
+pub(crate) use persist::SavedWindow;
 pub use persist::{EguiState, UiState};
 pub use shared::EditorShared;
 pub use window::create;
