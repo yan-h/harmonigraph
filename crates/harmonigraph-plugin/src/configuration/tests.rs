@@ -1481,8 +1481,10 @@ fn a_tuning_edit_before_a_host_reset_opens_the_run_after_it() {
 /// CLAP lets a host restart its steady counter at a reset. A take recorded
 /// across one reads exactly as it does when the counter runs on: its notes and
 /// configurations land where they would have, on both sides of the reset
-/// (#1881). Before the fix, notes on both sides refused to read and notes only
-/// before it landed three blocks late.
+/// (#1881). The note after it is struck in the first block, which a restart
+/// left unpinned would time before the release ahead of it: before the fix
+/// that take refused to read, and notes only before the reset landed three
+/// blocks late.
 #[test]
 fn a_host_reset_that_restarts_the_steady_counter_records_as_one_that_does_not() {
     let block = 64.0 / 48000.0;
@@ -1508,8 +1510,8 @@ fn a_host_reset_that_restarts_the_steady_counter_records_as_one_that_does_not() 
         let mut raw = if restart { 0 } else { 192 };
         for i in 3..10 {
             let events = match i {
-                5 if after => vec![note(11, 64, 0, CLAP_EVENT_NOTE_ON)],
-                7 if after => vec![note(11, 64, 0, CLAP_EVENT_NOTE_OFF)],
+                3 if after => vec![note(11, 64, 0, CLAP_EVENT_NOTE_ON)],
+                5 if after => vec![note(11, 64, 0, CLAP_EVENT_NOTE_OFF)],
                 _ => vec![],
             };
             let position = transport(1.0 + i as f64 * block, 0);
