@@ -2,7 +2,6 @@
 //! exports. All interesting logic lives in the `harmonigraph-*` crates; this
 //! crate only adapts them to the plugin world.
 
-use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -700,7 +699,7 @@ fn tape_meter(transport: &Transport) -> Option<harmonigraph_ui::tape::Meter> {
 }
 
 /// Which input plane the take's right channel reads from. A take's WAV is
-/// always stereo, matching AUDIO_IO_LAYOUTS, so a mono input is duplicated
+/// always stereo, matching the plugin's ports, so a mono input is duplicated
 /// rather than written as half a frame — which would desync every frame after
 /// it.
 fn take_right_channel(channels: usize) -> usize {
@@ -710,8 +709,7 @@ fn take_right_channel(channels: usize) -> usize {
 /// One stereo frame for the take WAV, from the same selected buffer the live
 /// analyzer reads. The caller has already established that the buffer has at
 /// least one channel and that `frame` is in range.
-fn take_stereo_frame(input: &Buffer<'_>, frame: usize) -> [f32; TAKE_CHANNELS] {
-    let planes = input.as_slice_immutable();
+fn take_stereo_frame(planes: &[&mut [f32]], frame: usize) -> [f32; TAKE_CHANNELS] {
     [planes[0][frame], planes[take_right_channel(planes.len())][frame]]
 }
 
@@ -720,7 +718,7 @@ fn take_stereo_frame(input: &Buffer<'_>, frame: usize) -> [f32; TAKE_CHANNELS] {
 /// put the live and offline pictures on opposite inputs. Missing auxiliary data
 /// falls back only as a defensive layout guard; an advertised but unrouted
 /// sidechain is a real zero-filled buffer and remains silence.
-fn selected_analysis_input<'a, T>(
+fn selected_analysis_input<'a, T: ?Sized>(
     main: &'a T,
     sidechain: Option<&'a T>,
     input: AnalysisInput,
@@ -790,9 +788,9 @@ impl Harmonigraph {
     /// The audio body of one callback, after the Hub has sequenced its input:
     /// the take, the tape and the analyzer, all on the transport at the
     /// block's start.
-    fn play(&mut self, transport: &Transport, buffer: &mut Buffer, aux: &mut AuxiliaryBuffers) {
+    fn play(&mut self, transport: &Transport, audio: Audio<'_>) {
         let block_start = self.samples_processed;
-        let block_samples = buffer.samples();
+        let block_samples = audio.main.first().map_or(0, |channel| channel.len());
         // EVERY block, armed or not. `is_armed` is an edge detector, not a
         // getter: it advances the lifecycle and clears the recorder's per-take
         // state on the arming edge. Skipping it on a disarmed block means the
@@ -851,11 +849,11 @@ impl Harmonigraph {
                 rate: self.sample_rate,
                 enabled: selected == AnalysisInput::Main && !self.offline,
             },
-            buffer.as_slice(),
+            audio.main,
         );
-        let analysis_input = selected_analysis_input(&*buffer, aux.inputs.first(), selected);
-        let channels = analysis_input.channels();
-        let planes = analysis_input.as_slice_immutable();
+        let sidechain = audio.aux.first().map(|planes| &**planes);
+        let planes = selected_analysis_input(&*audio.main, sidechain, selected);
+        let channels = planes.len();
         self.audio_producer.publish(
             block_samples,
             audio_ingress::Format {
@@ -887,7 +885,7 @@ impl Harmonigraph {
             if self.take.wants_audio() && channels > 0 {
                 let wanted = block_samples * TAKE_CHANNELS;
                 let mut interleaved =
-                    (0..block_samples).flat_map(|frame| take_stereo_frame(analysis_input, frame));
+                    (0..block_samples).flat_map(|frame| take_stereo_frame(planes, frame));
                 self.take.audio(&mut interleaved, wanted);
             }
         }
@@ -917,16 +915,8 @@ impl Plugin for Harmonigraph {
     // mixdown (see `play`, and `interleaved_reservation` for what that
     // costs). MIDI goes out through the Hub, which delays it by D and states
     // each note's tuning (see `tuning`).
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
-        main_input_channels: NonZeroU32::new(2),
-        main_output_channels: NonZeroU32::new(2),
-        aux_input_ports: &[new_nonzero_u32(2)],
-        // nice-plug 0.1.5's `main_output_name` accidentally reads
-        // `main_input`, so leave both main names unset to get the distinct
-        // generated Input/Output pair. The sidechain name is unaffected.
-        names: PortNames { aux_inputs: &["Visualization Input"], ..PortNames::const_default() },
-        ..AudioIOLayout::const_default()
-    }];
+    const PORTS: Ports =
+        Ports { main_input: 2, main_output: 2, aux_inputs: &[(2, "Visualization Input")] };
 
     const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
     const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
@@ -1063,9 +1053,9 @@ impl Plugin for Harmonigraph {
         hub.schedule(&mut block.output);
         // A lost input has no audio: nothing records, and the host discards
         // the callback.
-        if let Some(audio) = block.audio.as_mut() {
+        if let Some(audio) = block.audio.take() {
             let transport = Transport::read(block.boundary.transport.as_ref());
-            self.play(&transport, audio.main, &mut audio.aux);
+            self.play(&transport, audio);
         }
     }
 
@@ -1119,18 +1109,6 @@ mod tests {
             });
             assert!(measured.allocations > 0, "a debug build runs without nice-plug's allocator");
         }
-    }
-
-    fn stereo_buffer<'a>(left: &'a mut [f32], right: &'a mut [f32]) -> Buffer<'a> {
-        assert_eq!(left.len(), right.len());
-        let frames = left.len();
-        let mut buffer = Buffer::default();
-        // SAFETY: both slices stay borrowed for the returned buffer's lifetime,
-        // and the assertion above establishes nice-plug's equal-length contract.
-        unsafe {
-            buffer.set_slices(frames, |channels| *channels = vec![left, right]);
-        }
-        buffer
     }
 
     /// A column count above `before`, or `None` if
@@ -1617,22 +1595,6 @@ mod tests {
     }
 
     /// The descriptor is what makes the host show its sidechain routing control.
-    /// One named stereo auxiliary bus is the whole contract; adding a second or
-    /// silently narrowing it to mono would make the first-buffer choice in
-    /// `process` disagree with what the host presents.
-    #[test]
-    fn the_audio_layout_exposes_one_named_stereo_sidechain() {
-        let [layout] = Harmonigraph::AUDIO_IO_LAYOUTS else {
-            panic!("the plugin exposes more than its one fixed audio layout")
-        };
-        assert_eq!(layout.main_input_channels.map(NonZeroU32::get), Some(2));
-        assert_eq!(layout.main_output_channels.map(NonZeroU32::get), Some(2));
-        assert_eq!(layout.main_input_name(), "Input");
-        assert_eq!(layout.main_output_name(), "Output");
-        assert_eq!(layout.aux_input_ports, &[new_nonzero_u32(2)]);
-        assert_eq!(layout.aux_input_name(0).as_deref(), Some("Visualization Input"));
-    }
-
     /// Reach the feature through the callback the host actually invokes. The
     /// main and sidechain samples are all distinct, so selecting either wrong
     /// plane or accidentally writing into the pass-through cannot hide behind
@@ -1656,12 +1618,10 @@ mod tests {
         let expected_sidechain = [11.0, 21.0, 12.0, 22.0, 13.0, 23.0, 14.0, 24.0];
 
         {
-            let mut main = stereo_buffer(&mut main_left, &mut main_right);
-            let sidechain = stereo_buffer(&mut sidechain_left, &mut sidechain_right);
-            let mut inputs = [sidechain];
-            let mut outputs = [];
-            let mut aux = AuxiliaryBuffers { inputs: &mut inputs, outputs: &mut outputs };
-            plugin.play(&Transport::default(), &mut main, &mut aux);
+            let mut main = [&mut main_left[..], &mut main_right[..]];
+            let mut sidechain = [&mut sidechain_left[..], &mut sidechain_right[..]];
+            let mut aux = [&mut sidechain[..]];
+            plugin.play(&Transport::default(), Audio { main: &mut main, aux: &mut aux });
         }
 
         assert_eq!(main_left, expected_main_left, "process changed the main left pass-through");
@@ -1831,13 +1791,12 @@ mod tests {
         let shared = &mut *shared;
         let mut left = vec![0.5; 10_000];
         let mut right = vec![-0.5; 10_000];
-        let mut audio = stereo_buffer(&mut left, &mut right);
         let mut transport = Transport::default();
-        let mut aux = AuxiliaryBuffers { inputs: &mut [], outputs: &mut [] };
         for (playing, position) in [(true, Some(100_000.0)), (true, Some(0.0)), (false, None)] {
             transport.playing = playing;
             transport.pos_seconds = position.map(|samples: f64| samples / 48_000.0);
-            plugin.play(&transport, &mut audio, &mut aux);
+            let mut main = [&mut left[..], &mut right[..]];
+            plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
         }
         let columns = shared.input.drain_columns(
             &mut shared.ui.picture.runtime,
@@ -1855,8 +1814,8 @@ mod tests {
         plugin.reset();
         let mut left = [0.0; 384];
         let mut right = [0.0; 384];
-        let mut audio = stereo_buffer(&mut left, &mut right);
-        plugin.play(&transport, &mut audio, &mut aux);
+        let mut main = [&mut left[..], &mut right[..]];
+        plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
         shared.input.drain(
             &mut shared.ui.picture.runtime,
             &shared.ui.picture.appearance,
@@ -1885,11 +1844,8 @@ mod tests {
         right: &mut [f32],
     ) {
         let transport = Transport { pos_seconds: Some(position), playing, ..Default::default() };
-        let mut main = stereo_buffer(left, right);
-        let mut inputs: [Buffer; 0] = [];
-        let mut outputs = [];
-        let mut aux = AuxiliaryBuffers { inputs: &mut inputs, outputs: &mut outputs };
-        plugin.play(&transport, &mut main, &mut aux);
+        let mut main = [left, right];
+        plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
     }
 
     /// Click in Tape mode, and wait until the input worker has passed the

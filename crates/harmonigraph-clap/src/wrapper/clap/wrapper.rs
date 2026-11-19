@@ -11,12 +11,12 @@
 //! process callback in flight, and serves three flags: the setup's service,
 //! a latency the running activation was asked to change, and that log line.
 
-use crate::audio_setup::{AudioIOLayout, AuxiliaryBuffers, BufferConfig, ProcessMode};
+use crate::audio_setup::{Audio, AuxStorage, BufferConfig, ProcessMode, Slices, audio};
 use crate::editor::{Editor, ParentWindowHandle};
 use crate::events::{self, InputValue, List, Output};
 use crate::midi::MidiConfig;
 use crate::params::{Report, Table};
-use crate::plugin::{Audio, Block, Boundary, Latency, LatencyState, Plugin, PluginState};
+use crate::plugin::{Block, Boundary, Latency, LatencyState, Plugin, PluginState};
 use atomic_float::AtomicF32;
 use atomic_refcell::AtomicRefCell;
 use clap_sys::events::{
@@ -72,9 +72,7 @@ use clap_sys::ext::track_info::{
 use std::any::Any;
 use std::ffi::{CStr, c_void};
 use std::mem;
-use std::num::NonZeroU32;
 use std::os::raw::c_char;
-use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -85,7 +83,6 @@ use super::util::ClapPtr;
 use crate::wrapper::clap::EditorHost;
 use crate::wrapper::clap::util::{read_stream, write_stream};
 use crate::wrapper::state::{self};
-use crate::wrapper::util::buffer_management::{BufferManager, ChannelPointers};
 use crate::wrapper::util::{process_wrapper, strlcpy};
 
 /// The line a transport event in the host's list leaves, once per instance.
@@ -129,9 +126,6 @@ pub struct Wrapper<P: Plugin> {
     editor_scaling_factor: AtomicF32,
 
     is_activated: AtomicBool,
-    /// The current IO configuration, modified through the `clap_plugin_audio_ports_config`
-    /// extension. Initialized to the plugin's first audio IO configuration.
-    current_audio_io_layout: AtomicCell<AudioIOLayout>,
     /// The current buffer configuration, containing the sample rate and the maximum block size.
     /// Will be set in `clap_plugin::activate()`.
     current_buffer_config: AtomicCell<Option<BufferConfig>>,
@@ -146,9 +140,8 @@ pub struct Wrapper<P: Plugin> {
     /// request an active plugin makes waits there, and the host keeps reading
     /// the latency this activation runs, until the next one adopts it (#615).
     latency: LatencyState,
-    /// A data structure that helps manage and create buffers for all of the plugin's inputs and
-    /// outputs based on channel pointers provided by the host.
-    buffer_manager: AtomicRefCell<BufferManager>,
+    /// What the auxiliary inputs are copied into, sized at activation.
+    aux_storage: AtomicRefCell<AuxStorage>,
 
     // We'll query all of the host's extensions upfront
     host_callback: ClapPtr<clap_host>,
@@ -210,6 +203,7 @@ impl<P: Plugin> Wrapper<P> {
     ///
     /// `host_callback` needs to outlive the returned object.
     pub unsafe fn new(host_callback: *const clap_host) -> Arc<Self> {
+        P::PORTS.check();
         let plugin = P::default();
         let plugin_descriptor: Box<PluginDescriptor> =
             Box::new(PluginDescriptor::for_plugin::<P>());
@@ -238,19 +232,12 @@ impl<P: Plugin> Wrapper<P> {
             editor_scaling_factor: AtomicF32::new(1.0),
 
             is_activated: AtomicBool::new(false),
-            current_audio_io_layout: AtomicCell::new(
-                P::AUDIO_IO_LAYOUTS.first().copied().unwrap_or_default(),
-            ),
             current_buffer_config: AtomicCell::new(None),
             current_process_mode: AtomicCell::new(ProcessMode::Realtime),
             processed: AtomicBool::new(false),
             latency: LatencyState::default(),
-            // This is initialized just before calling `Plugin::initialize()` so that during the
-            // process call buffers can be initialized without any allocations
-            buffer_manager: AtomicRefCell::new(BufferManager::for_audio_io_layout(
-                0,
-                AudioIOLayout::default(),
-            )),
+            // Sized at activation, so a callback allocates nothing.
+            aux_storage: AtomicRefCell::new(AuxStorage::new(&P::PORTS, 0)),
 
             host_callback,
 
@@ -581,7 +568,6 @@ impl<P: Plugin> Wrapper<P> {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        let audio_io_layout = wrapper.current_audio_io_layout.load();
         let buffer_config = BufferConfig {
             sample_rate: sample_rate as f32,
             min_buffer_size: Some(min_frames_count),
@@ -601,10 +587,7 @@ impl<P: Plugin> Wrapper<P> {
         // Release the plugin lock before host callbacks.
         drop(plugin);
 
-        // This preallocates enough space so we can transform all of the host's raw channel
-        // pointers into a set of `Buffer` objects for the plugin's main and auxiliary IO
-        *wrapper.buffer_manager.borrow_mut() =
-            BufferManager::for_audio_io_layout(max_frames_count as usize, audio_io_layout);
+        *wrapper.aux_storage.borrow_mut() = AuxStorage::new(&P::PORTS, max_frames_count);
         wrapper.current_buffer_config.store(Some(buffer_config));
         // The one place the reported latency moves and the one place the host
         // is told it has. Whatever this activation adopts -- requested during
@@ -720,26 +703,14 @@ impl<P: Plugin> Wrapper<P> {
         plugin.begin(&boundary);
         // After `begin`: see `Plugin`'s ordering rule.
         self.write_parameters(list);
-        if valid {
-            let mut buffer_manager = self.buffer_manager.borrow_mut();
+        if valid && input_lost {
             // A lost callback's audio is left as the host gave it.
-            let audio = if input_lost {
-                None
-            } else {
-                unsafe { self.buffers(&mut buffer_manager, process) }
-            };
-            let mut block = Block {
-                boundary,
-                events: list,
-                output: unsafe { Output::new(process.out_events, !input_lost) },
-                audio,
-                latency: Latency {
-                    state: &self.latency,
-                    active: true,
-                    wake: Some(&self.deferred_host_callback),
-                },
-            };
-            plugin.process(&mut block);
+            plugin.process(&mut unsafe { self.block(boundary, list, process, None) });
+        } else if valid {
+            let mut storage = self.aux_storage.borrow_mut();
+            let mut slices = Slices::default();
+            let audio = unsafe { audio(&P::PORTS, process, &mut storage, &mut slices) };
+            plugin.process(&mut unsafe { self.block(boundary, list, process, audio) });
         }
         plugin.end();
         drop(plugin);
@@ -752,121 +723,29 @@ impl<P: Plugin> Wrapper<P> {
         }
     }
 
-    /// The callback's audio, or `None` if an output the layout declares is
-    /// missing or short: then there is nothing to write the audio to.
+    /// The plugin's view of one callback around `audio`. Its output refuses
+    /// everything when the input is lost.
     ///
     /// # Safety
-    /// `process` and its buffers must be valid for `'a`.
-    unsafe fn buffers<'a>(
-        &self,
-        buffer_manager: &'a mut BufferManager,
-        process: &clap_process,
-    ) -> Option<Audio<'a>> {
-        let layout = self.current_audio_io_layout.load();
-        let has_main_input = layout.main_input_channels.is_some();
-        let has_main_output = layout.main_output_channels.is_some();
-        let aux_input_start_idx = if has_main_input { 1 } else { 0 };
-        let aux_output_start_idx = if has_main_output { 1 } else { 0 };
-        let frames = process.frames_count as usize;
-        // The buffer manager preallocated buffer slices for all the IO and
-        // storage for any auxiliary inputs.
-        let buffers = unsafe {
-            buffer_manager.create_buffers(0, frames, |buffer_source| {
-                // Explicitly take plugins with no main output that does have auxiliary
-                // outputs into account. Shouldn't happen, but if we just start copying
-                // audio here then that would result in unsoundness.
-                if process.audio_outputs_count > 0
-                    && !process.audio_outputs.is_null()
-                    && !(*process.audio_outputs).data32.is_null()
-                    && has_main_output
-                {
-                    let audio_output = &*process.audio_outputs;
-                    let ptrs = NonNull::new(audio_output.data32).unwrap();
-                    let num_channels = audio_output.channel_count as usize;
-
-                    *buffer_source.main_output_channel_pointers =
-                        Some(ChannelPointers { ptrs, num_channels });
-                }
-
-                if process.audio_inputs_count > 0
-                    && !process.audio_inputs.is_null()
-                    && !(*process.audio_inputs).data32.is_null()
-                    && has_main_input
-                {
-                    let audio_input = &*process.audio_inputs;
-                    let ptrs = NonNull::new(audio_input.data32).unwrap();
-                    let num_channels = audio_input.channel_count as usize;
-
-                    *buffer_source.main_input_channel_pointers =
-                        Some(ChannelPointers { ptrs, num_channels });
-                }
-
-                if !process.audio_inputs.is_null() {
-                    for (aux_input_no, aux_input_channel_pointers) in
-                        buffer_source.aux_input_channel_pointers.iter_mut().enumerate()
-                    {
-                        let aux_input_idx = aux_input_no + aux_input_start_idx;
-                        // Stop at the host's declared count, before reading the
-                        // one-past descriptor (#638). An omitted input keeps
-                        // the silent-buffer fallback in `create_buffers`.
-                        if aux_input_idx >= process.audio_inputs_count as usize {
-                            break;
-                        }
-
-                        let audio_input = &*process.audio_inputs.add(aux_input_idx);
-                        match NonNull::new(audio_input.data32) {
-                            Some(ptrs) => {
-                                let num_channels = audio_input.channel_count as usize;
-
-                                *aux_input_channel_pointers =
-                                    Some(ChannelPointers { ptrs, num_channels });
-                            }
-                            None => continue,
-                        }
-                    }
-                }
-
-                if !process.audio_outputs.is_null() {
-                    for (aux_output_no, aux_output_channel_pointers) in
-                        buffer_source.aux_output_channel_pointers.iter_mut().enumerate()
-                    {
-                        let aux_output_idx = aux_output_no + aux_output_start_idx;
-                        // As for the inputs (#638). An omitted output keeps the
-                        // skip-processing behaviour and its storage is untouched.
-                        if aux_output_idx >= process.audio_outputs_count as usize {
-                            break;
-                        }
-
-                        let audio_output = &*process.audio_outputs.add(aux_output_idx);
-                        match NonNull::new(audio_output.data32) {
-                            Some(ptrs) => {
-                                let num_channels = audio_output.channel_count as usize;
-
-                                *aux_output_channel_pointers =
-                                    Some(ChannelPointers { ptrs, num_channels });
-                            }
-                            None => continue,
-                        }
-                    }
-                }
-            })
-        };
-
-        // If the host does not provide outputs or if it does not provide the
-        // required number of channels, `create_buffers` set one or more of the
-        // output buffers to empty slices since there is no storage to point them
-        // to. The auxiliary input buffers always point to valid storage.
-        let valid = buffers
-            .main_buffer
-            .as_slice_immutable()
-            .iter()
-            .chain(buffers.aux_outputs.iter().flat_map(|buffer| buffer.as_slice_immutable().iter()))
-            .all(|slice| !slice.is_empty());
-        crate::nice_debug_assert!(valid);
-        valid.then_some(Audio {
-            main: buffers.main_buffer,
-            aux: AuxiliaryBuffers { inputs: buffers.aux_inputs, outputs: buffers.aux_outputs },
-        })
+    /// `process`'s output list must be valid for `'a`.
+    unsafe fn block<'a>(
+        &'a self,
+        boundary: Boundary,
+        events: List<'a>,
+        process: &'a clap_process,
+        audio: Option<Audio<'a>>,
+    ) -> Block<'a> {
+        Block {
+            boundary,
+            events,
+            output: unsafe { Output::new(process.out_events, !boundary.input_lost) },
+            audio,
+            latency: Latency {
+                state: &self.latency,
+                active: true,
+                wake: Some(&self.deferred_host_callback),
+            },
+        }
     }
 
     unsafe extern "C" fn get_extension(
@@ -959,10 +838,13 @@ impl<P: Plugin> Wrapper<P> {
         }
     }
 
+    /// One layout, which the host cannot change; the extension stays
+    /// answered, since whether Bitwig reads its absence differently is
+    /// unmeasured.
     unsafe extern "C" fn ext_audio_ports_config_count(plugin: *const clap_plugin) -> u32 {
         check_null_ptr!(0, plugin, unsafe { (*plugin).plugin_data });
 
-        P::AUDIO_IO_LAYOUTS.len() as u32
+        1
     }
 
     unsafe extern "C" fn ext_audio_ports_config_get(
@@ -971,56 +853,28 @@ impl<P: Plugin> Wrapper<P> {
         config: *mut clap_audio_ports_config,
     ) -> bool {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, config);
-
-        // This function directly maps to `P::AUDIO_IO_LAYOUTS`, and we thus also don't need to
-        // access the `wrapper` instance
-        match P::AUDIO_IO_LAYOUTS.get(index as usize) {
-            Some(audio_io_layout) => {
-                let name = audio_io_layout.name();
-
-                let main_input_channels = audio_io_layout.main_input_channels.map(NonZeroU32::get);
-                let main_output_channels =
-                    audio_io_layout.main_output_channels.map(NonZeroU32::get);
-                let input_port_type = match main_input_channels {
-                    Some(1) => CLAP_PORT_MONO.as_ptr(),
-                    Some(2) => CLAP_PORT_STEREO.as_ptr(),
-                    _ => std::ptr::null(),
-                };
-                let output_port_type = match main_output_channels {
-                    Some(1) => CLAP_PORT_MONO.as_ptr(),
-                    Some(2) => CLAP_PORT_STEREO.as_ptr(),
-                    _ => std::ptr::null(),
-                };
-
-                unsafe { *config = std::mem::zeroed() };
-
-                let config = unsafe { &mut *config };
-                config.id = index;
-                strlcpy(&mut config.name, &name);
-                config.input_port_count = (if main_input_channels.is_some() { 1 } else { 0 }
-                    + audio_io_layout.aux_input_ports.len())
-                    as u32;
-                config.output_port_count = (if main_output_channels.is_some() { 1 } else { 0 }
-                    + audio_io_layout.aux_output_ports.len())
-                    as u32;
-                config.has_main_input = main_input_channels.is_some();
-                config.main_input_channel_count = main_input_channels.unwrap_or_default();
-                config.main_input_port_type = input_port_type;
-                config.has_main_output = main_output_channels.is_some();
-                config.main_output_channel_count = main_output_channels.unwrap_or_default();
-                config.main_output_port_type = output_port_type;
-
-                true
-            }
-            None => {
-                crate::nice_debug_assert_failure!(
-                    "Host tried to query out of bounds audio port config {}",
-                    index
-                );
-
-                false
-            }
+        if index != 0 {
+            crate::nice_debug_assert_failure!(
+                "Host tried to query out of bounds audio port config {}",
+                index
+            );
+            return false;
         }
+
+        let ports = P::PORTS;
+        unsafe { *config = std::mem::zeroed() };
+        let config = unsafe { &mut *config };
+        config.id = 0;
+        strlcpy(&mut config.name, ports.name());
+        config.input_port_count = ports.inputs();
+        config.output_port_count = ports.outputs();
+        config.has_main_input = ports.main_input > 0;
+        config.main_input_channel_count = ports.main_input;
+        config.main_input_port_type = port_type(ports.main_input);
+        config.has_main_output = ports.main_output > 0;
+        config.main_output_channel_count = ports.main_output;
+        config.main_output_port_type = port_type(ports.main_output);
+        true
     }
 
     unsafe extern "C" fn ext_audio_ports_config_select(
@@ -1028,44 +882,18 @@ impl<P: Plugin> Wrapper<P> {
         config_id: clap_id,
     ) -> bool {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data });
-        let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        // We use the vector indices for the config ID
-        match P::AUDIO_IO_LAYOUTS.get(config_id as usize) {
-            Some(audio_io_layout) => {
-                wrapper.current_audio_io_layout.store(*audio_io_layout);
-
-                true
-            }
-            None => {
-                crate::nice_debug_assert_failure!(
-                    "Host tried to select out of bounds audio port config {}",
-                    config_id
-                );
-
-                false
-            }
-        }
+        config_id == 0
     }
 
     unsafe extern "C" fn ext_audio_ports_count(plugin: *const clap_plugin, is_input: bool) -> u32 {
         check_null_ptr!(0, plugin, unsafe { (*plugin).plugin_data });
-        let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        let audio_io_layout = wrapper.current_audio_io_layout.load();
-        if is_input {
-            let main_ports = if audio_io_layout.main_input_channels.is_some() { 1 } else { 0 };
-            let aux_ports = audio_io_layout.aux_input_ports.len();
-
-            (main_ports + aux_ports) as u32
-        } else {
-            let main_ports = if audio_io_layout.main_output_channels.is_some() { 1 } else { 0 };
-            let aux_ports = audio_io_layout.aux_output_ports.len();
-
-            (main_ports + aux_ports) as u32
-        }
+        if is_input { P::PORTS.inputs() } else { P::PORTS.outputs() }
     }
 
+    /// Inputs are numbered from 0, the main one first, and outputs after
+    /// them; the main input and output are an in-place pair.
     unsafe extern "C" fn ext_audio_ports_get(
         plugin: *const clap_plugin,
         index: u32,
@@ -1073,94 +901,33 @@ impl<P: Plugin> Wrapper<P> {
         info: *mut clap_audio_port_info,
     ) -> bool {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, info);
-        let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        let num_input_ports = unsafe { Self::ext_audio_ports_count(plugin, true) };
-        let num_output_ports = unsafe { Self::ext_audio_ports_count(plugin, false) };
-        if (is_input && index >= num_input_ports) || (!is_input && index >= num_output_ports) {
-            crate::nice_debug_assert_failure!(
-                "Host tried to query information for out of bounds audio port {} (input: {})",
-                index,
-                is_input
-            );
-
-            return false;
-        }
-
-        let current_audio_io_layout = wrapper.current_audio_io_layout.load();
-        let has_main_input = current_audio_io_layout.main_input_channels.is_some();
-        let has_main_output = current_audio_io_layout.main_output_channels.is_some();
-
-        // Whether this port is a main port or an auxiliary (sidechain) port
-        let is_main_port =
-            index == 0 && ((is_input && has_main_input) || (!is_input && has_main_output));
-
-        // We'll number the ports in a linear order from `0..num_input_ports` and
-        // `num_input_ports..(num_input_ports + num_output_ports)`
-        let stable_id = if is_input { index } else { index + num_input_ports };
-        let pair_stable_id = match (is_input, is_main_port) {
-            // Ports are named linearly with inputs coming before outputs, so this is the index of
-            // the first output port
-            (true, true) if has_main_output => num_input_ports,
+        let ports = P::PORTS;
+        let (has_main_input, has_main_output) = (ports.main_input > 0, ports.main_output > 0);
+        let main = index == 0 && if is_input { has_main_input } else { has_main_output };
+        let (name, channels) = match (is_input, main) {
+            (true, true) => ("Input", ports.main_input),
+            (false, true) => ("Output", ports.main_output),
+            (true, false) => {
+                match ports.aux_inputs.get((index - u32::from(has_main_input)) as usize) {
+                    Some(&(channels, name)) => (name, channels),
+                    None => return false,
+                }
+            }
+            (false, false) => return false,
+        };
+        unsafe { *info = std::mem::zeroed() };
+        let info = unsafe { &mut *info };
+        info.id = if is_input { index } else { index + ports.inputs() };
+        strlcpy(&mut info.name, name);
+        info.flags = if main { CLAP_AUDIO_PORT_IS_MAIN } else { 0 };
+        info.channel_count = channels;
+        info.port_type = port_type(channels);
+        info.in_place_pair = match (is_input, main) {
+            (true, true) if has_main_output => ports.inputs(),
             (false, true) if has_main_input => 0,
             _ => CLAP_INVALID_ID,
         };
-
-        let channel_count = match (index, is_input) {
-            (0, true) if has_main_input => {
-                current_audio_io_layout.main_input_channels.unwrap().get()
-            }
-            (0, false) if has_main_output => {
-                current_audio_io_layout.main_output_channels.unwrap().get()
-            }
-            // `index` is off by one for the auxiliary ports if the plugin has a main port
-            (n, true) if has_main_input => {
-                current_audio_io_layout.aux_input_ports[n as usize - 1].get()
-            }
-            (n, false) if has_main_output => {
-                current_audio_io_layout.aux_output_ports[n as usize - 1].get()
-            }
-            (n, true) => current_audio_io_layout.aux_input_ports[n as usize].get(),
-            (n, false) => current_audio_io_layout.aux_output_ports[n as usize].get(),
-        };
-
-        let port_type = match channel_count {
-            1 => CLAP_PORT_MONO.as_ptr(),
-            2 => CLAP_PORT_STEREO.as_ptr(),
-            _ => std::ptr::null(),
-        };
-
-        unsafe { *info = std::mem::zeroed() };
-
-        let info = unsafe { &mut *info };
-        info.id = stable_id;
-        match (is_input, is_main_port) {
-            (true, true) => strlcpy(&mut info.name, &current_audio_io_layout.main_input_name()),
-            (false, true) => strlcpy(&mut info.name, &current_audio_io_layout.main_output_name()),
-            (true, false) => {
-                let aux_input_idx = if has_main_input { index - 1 } else { index } as usize;
-                strlcpy(
-                    &mut info.name,
-                    &current_audio_io_layout
-                        .aux_input_name(aux_input_idx)
-                        .expect("Out of bounds auxiliary input port"),
-                );
-            }
-            (false, false) => {
-                let aux_output_idx = if has_main_output { index - 1 } else { index } as usize;
-                strlcpy(
-                    &mut info.name,
-                    &current_audio_io_layout
-                        .aux_output_name(aux_output_idx)
-                        .expect("Out of bounds auxiliary output port"),
-                );
-            }
-        };
-        info.flags = if is_main_port { CLAP_AUDIO_PORT_IS_MAIN } else { 0 };
-        info.channel_count = channel_count;
-        info.port_type = port_type;
-        info.in_place_pair = pair_stable_id;
-
         true
     }
 
@@ -1772,6 +1539,15 @@ impl<P: Plugin> Wrapper<P> {
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
         if wrapper.processed.load(Ordering::Acquire) { u32::MAX } else { 0 }
+    }
+}
+
+/// The CLAP port type for `channels`: mono, stereo, or none named.
+fn port_type(channels: u32) -> *const c_char {
+    match channels {
+        1 => CLAP_PORT_MONO.as_ptr(),
+        2 => CLAP_PORT_STEREO.as_ptr(),
+        _ => std::ptr::null(),
     }
 }
 

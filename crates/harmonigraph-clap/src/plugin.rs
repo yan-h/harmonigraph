@@ -7,8 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 mod state;
 pub use state::*;
 
-use crate::audio_setup::{AudioIOLayout, AuxiliaryBuffers, BufferConfig};
-use crate::buffer::Buffer;
+use crate::audio_setup::{Audio, BufferConfig, Ports};
 use crate::editor::Editor;
 use crate::events::{Input, InputValue, List, Output};
 use crate::midi::MidiConfig;
@@ -51,8 +50,8 @@ pub trait Plugin: Default + Send + 'static {
     /// Keywords the host may sort the plugin by.
     const CLAP_FEATURES: &'static [ClapFeature];
 
-    /// The audio port layouts; the first is the default.
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout];
+    /// The audio ports.
+    const PORTS: Ports;
     /// Whether the plugin has a note input and a note output port.
     const MIDI_INPUT: MidiConfig = MidiConfig::None;
     const MIDI_OUTPUT: MidiConfig = MidiConfig::None;
@@ -127,20 +126,14 @@ pub struct Boundary {
     pub input_lost: bool,
 }
 
-/// The audio a callback carries.
-pub struct Audio<'a> {
-    pub main: &'a mut Buffer<'a>,
-    pub aux: AuxiliaryBuffers<'a>,
-}
-
 /// One process callback, as [`Plugin::process`] reads and writes it.
 pub struct Block<'a> {
     pub boundary: Boundary,
     pub(crate) events: List<'a>,
     pub output: Output<'a>,
     /// `None` when the input is lost, whose audio the host discards, and
-    /// when the host gave fewer output channels than the layout declares, so
-    /// there is nothing to write the audio to.
+    /// when there is no main output to write the audio to: the plugin
+    /// declares none, or the host gave fewer channels than it declares.
     pub audio: Option<Audio<'a>>,
     pub(crate) latency: Latency<'a>,
 }

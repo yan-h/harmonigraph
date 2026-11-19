@@ -3,7 +3,7 @@
 Harmonigraph's CLAP shell:
 the plugin framework nice-plug, which harmonigraph used to vendor, together with the two registry crates it built on, now owned here (#1814 step 4).
 
-- **`src/`** is nice-plug 0.1.10 (its CLAP wrapper and state glue) and nice-plug-core 0.1.5 (buffers, the editor context, the debug macros), merged into one crate, with the layers #1814 has since replaced.
+- **`src/`** is nice-plug 0.1.10 (its CLAP wrapper and state glue) and nice-plug-core 0.1.5 (the editor context, the debug macros), merged into one crate, with the layers #1814 has since replaced.
   nice-plug-core's modules sit at the crate root, where nice-plug's `pub use nice_plug_core::*` used to put them.
 - **`src/params.rs`** is harmonigraph's own (#1814 step 5): one fixed table of host parameters, which replaced nice-plug-core's parameter types and nice-plug-derive's `Params` and `Enum` derives.
 - **`tests/`** drive an exported fixture plugin through `clap-sys`: the process callback, flush and editor writes (`clap_boundary.rs`), and the auxiliary bounds (`clap_auxiliary.rs`).
@@ -51,7 +51,11 @@ Each change's reason is a comment at the code it explains; this is the map.
   A save stores each row's unmodulated value under its id; a restore sets every row by one rule (missing, wrong-typed or an unknown variant takes the default, out of range is clamped) and logs once the ids no row has.
   The editor sets a row through `GuiContext` by its index.
 - **Activation notification ordering** (`Wrapper::activate`, #615): a latency is published only during an activation, and a change while active asks for a restart.
-- **Auxiliary descriptor bounds and storage sizing** (`Wrapper::buffers` and `BufferManager::create_buffers`, #638), reached by `tests/clap_auxiliary.rs`.
+- **The audio** (`src/audio_setup.rs`, #1814 step 6).
+  A plugin declares one fixed `Ports`: main input and output channels, and named auxiliary inputs.
+  A callback's `Audio` is the main output's channels, holding the main input (copied unless the host processes in place), and each auxiliary input's channels, copied into storage sized at activation, or silence for a port or channel the host left out.
+  nice-plug's `Buffer`, `AuxiliaryBuffers`, buffer manager and `AudioIOLayout` went, and auxiliary outputs with them, which no plugin declared.
+- **Auxiliary descriptor bounds and storage sizing** (`audio_setup::audio`, #638), reached by `tests/clap_auxiliary.rs`.
 - **The tail**: none before a processed callback, infinite after (`Wrapper::ext_tail_get`), checked by `tests/clap_boundary.rs`.
 - **Track info** (`src/wrapper/clap/track_info_adapter.rs`, #1426).
 - **Editor host** (`Plugin::editor_host`, #1607, #1609), and `gui.show`/`gui.hide` refused as upstream does (`Wrapper::ext_gui_show`).

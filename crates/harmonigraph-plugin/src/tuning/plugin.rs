@@ -51,7 +51,7 @@ impl Plugin for HarmonigraphTune {
     const CLAP_SUPPORT_URL: Option<&'static str> =
         Some("https://github.com/yan-h/harmonigraph/issues");
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::NoteEffect, ClapFeature::Utility];
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout::const_default()];
+    const PORTS: Ports = Ports::NONE;
     const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
     const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
     /// A Tune exports no host parameter. Its Tuning delay is a saved setting
