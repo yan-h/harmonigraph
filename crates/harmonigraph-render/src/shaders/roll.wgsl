@@ -154,7 +154,7 @@ struct VertexOut {
 /// holds none. The roll's culls in the UI ask `Quad` for this same reach.
 @vertex
 fn vs_note_cut(@builtin(vertex_index) vertex: u32, note: NoteInput) -> VertexOut {
-    return note_vertex(vertex, note, cut_reach() + locals.feather);
+    return note_vertex(vertex, note, surround_reach(locals.surround) + locals.feather);
 }
 
 /// The BODY layers' quad — the core layer, the body holdout and the bloom's
@@ -258,41 +258,10 @@ fn local(in: VertexOut) -> vec2<f32> {
     return vec2<f32>(dot(delta, locals.pitch_dir), dot(delta, locals.depth_dir));
 }
 
-/// Coverage of everything on the near side of `edge`: how much of a
-/// one-pixel-wide window centered on the signed distance `d` lands inside it.
-///
-/// A box filter along the distance gradient, which is exact for a straight
-/// edge and is what makes a shape thinner than a pixel come out FAINTER rather
-/// than snapping to a full pixel — the same bargain epaint's feathering makes,
-/// so a hairline ribbon reads the way it does through the tessellator.
+/// [`surround_inside`] at one pixel of whatever is being drawn into: the
+/// bodies' antialiasing and the cut's alike.
 fn inside(d: f32, edge: f32) -> f32 {
-    let f = max(locals.feather, 1e-6);
-    return clamp((edge - d) / f + 0.5, 0.0, 1.0);
-}
-
-/// The backdrop cut's reach past a note's edge, in points. 0 while the cut is
-/// off.
-fn cut_reach() -> f32 {
-    return select(0.0, locals.surround.cut.y, locals.surround.cut.x > 0.0);
-}
-
-/// How much of the picture the cut takes `d` points off the note's edge, as a
-/// share of its amount: [`surround_ramp`] over the cut's reach, and nothing
-/// from `reach` on.
-///
-/// Read off the distance rather than a blur of the note's silhouette, which is
-/// the point of it: a blur of a ribbon thinner than its σ never reaches full
-/// strength, so the surround all but vanished round exactly the hairline notes
-/// that need one, and spread into a wide smear round a fat one. Here a note's
-/// edge is equally held at every ribbon width. The amount itself is laid on in
-/// [`fs_note_surround`], one amount for every note, so it changes no note's
-/// rank against another's.
-fn cut_coverage(in: VertexOut, d: f32) -> f32 {
-    let reach = cut_reach();
-    if reach <= 0.0 {
-        return 0.0;
-    }
-    return surround_fade_at(locals.surround, d) * inside(d, reach);
+    return surround_inside(d, edge, locals.feather);
 }
 
 /// How much of the ribbon survives at this fragment: 1 across a NOTE, and
@@ -319,7 +288,7 @@ fn cut_coverage(in: VertexOut, d: f32) -> f32 {
 /// spectral pane clips that cap off, its budget past the now-line being the
 /// lead itself; a caller who wants the cap has only to leave it room.)
 ///
-/// The fade is floored at one pixel, [`cut_coverage`]'s bargain for its
+/// The fade is floored at one pixel, [`surround_inside`]'s bargain for its
 /// reason: a sub-pixel ramp is an aliased edge. The caller keeps it within the
 /// box, so a fade dialled past the lead's length fades it whole.
 ///
@@ -530,9 +499,9 @@ struct NoteCut {
 /// is used at the two long edges would meet in the middle and cut the note
 /// itself.
 ///
-/// Masked by the note's OWN fill. `cut_coverage` clamps the distance at the
-/// note's edge, so without the mask the cut runs whole across the interior and
-/// a note drawn in anything less than an opaque color has a slab of black
+/// Masked by the note's OWN fill. [`surround_cut_coverage`] clamps the
+/// distance at the note's edge, so without the mask the cut runs whole across
+/// the interior and a note drawn in anything less than an opaque color has a slab of black
 /// under it. Masked too by every OTHER body ([`body_held`]), so over a
 /// neighbour the cut is held out rather than left for that neighbour's body to
 /// cover only as far as its opacity does.
@@ -546,7 +515,7 @@ struct NoteCut {
 /// tint's fade alike.
 fn cut_strength(in: VertexOut, rim: Rim) -> NoteCut {
     if !rim.live { return NoteCut(0.0, 0.0); }
-    let wrap = cut_coverage(in, rim.d) * rim.keep * rim.lead;
+    let wrap = surround_cut_coverage(locals.surround, rim.d, locals.feather) * rim.keep * rim.lead;
     let fade = surround_fade_at(locals.surround, rim.d) * rim.lead;
     return NoteCut(in.aura.a * wrap * along(in, in.fade), fade);
 }

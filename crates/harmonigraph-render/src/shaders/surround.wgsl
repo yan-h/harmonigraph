@@ -39,6 +39,45 @@ fn surround_fade_at(surround: SurroundCut, d: f32) -> f32 {
     return surround_ramp(surround.cut.z, max(d, 0.0) / surround.cut.y);
 }
 
+/// The cut's reach past a note's edge, in points. 0 while the cut is off.
+fn surround_reach(surround: SurroundCut) -> f32 {
+    return select(0.0, surround.cut.y, surround.cut.x > 0.0);
+}
+
+/// Coverage of everything on the near side of `edge`: how much of a window
+/// `feather` points wide (one pixel of whatever is drawn into), centered on
+/// the signed distance `d`, lands inside it.
+///
+/// A box filter along the distance gradient, which is exact for a straight
+/// edge and is what makes a shape thinner than a pixel come out FAINTER rather
+/// than snapping to a full pixel — the same bargain epaint's feathering makes,
+/// so a hairline ribbon reads the way it does through the tessellator. The
+/// note's own edge reads it at an `edge` of 0, and the cut's far end at its
+/// reach.
+fn surround_inside(d: f32, edge: f32, feather: f32) -> f32 {
+    let f = max(feather, 1e-6);
+    return clamp((edge - d) / f + 0.5, 0.0, 1.0);
+}
+
+/// How much of the picture the cut takes `d` points off a note's edge, as a
+/// share of its amount: [`surround_ramp`] over the cut's reach, and nothing
+/// from the reach's antialiasing on, which ends half a feather past it.
+///
+/// Read off the distance rather than a blur of the note's silhouette, which is
+/// the point of it: a blur of a ribbon thinner than its σ never reaches full
+/// strength, so the surround all but vanished round exactly the hairline notes
+/// that need one, and spread into a wide smear round a fat one. Here a note's
+/// edge is equally held at every width. The amount itself is laid on by each
+/// producer, one amount for every note, so it changes no note's rank against
+/// another's.
+fn surround_cut_coverage(surround: SurroundCut, d: f32, feather: f32) -> f32 {
+    let reach = surround_reach(surround);
+    if reach <= 0.0 {
+        return 0.0;
+    }
+    return surround_fade_at(surround, d) * surround_inside(d, reach, feather);
+}
+
 /// A note's fill where [`surround_fade_at`] reads `fade`, above 0: `sooner` more
 /// powers of it off `color`, so the tint draws in toward the note while the cut
 /// keeps its reach. Neighbouring fills then stop merging into a sheet of their
