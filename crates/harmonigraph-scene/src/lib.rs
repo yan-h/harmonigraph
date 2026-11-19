@@ -531,7 +531,7 @@ pub struct GlowStep {
 }
 
 /// One lattice node, ready for instanced rendering.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NodeInstance {
     pub lattice_pos: LatticePos,
     pub world_pos: Vec3,
@@ -906,7 +906,7 @@ impl NodeInstance {
 
 /// One marker standing at a lattice position: a small cross, drawn under the
 /// nodes, and the whole of what an unplayed lattice draws.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlusInstance {
     /// Index of the home node this marker stands under in [`Scene::nodes`].
     /// Each node has at most one marker. Reordering nodes must update these
@@ -937,6 +937,7 @@ pub struct PlusInstance {
 }
 
 /// Everything the renderer needs for one frame.
+#[derive(Debug, PartialEq)]
 pub struct Scene {
     /// The normalized look used to derive this snapshot. Geometry and colors
     /// below are derived values; renderers read the look's dials here.

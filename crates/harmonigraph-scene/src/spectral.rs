@@ -234,6 +234,7 @@ pub type SpectralLevels = [u8; SPECTRUM_BINS];
 /// pitch ramp's, which is the exact confusion the two schemes exist to
 /// prevent. [`silent`](Self::silent) is the one state where none of it is
 /// read.
+#[derive(Debug, PartialEq)]
 pub struct SpectralPaint {
     /// The FREQUENCY scheme's ramp — `SpectrumConfig::spectrogram_gradient`
     /// through [`pitch_ramp_lut`], the same gradient
