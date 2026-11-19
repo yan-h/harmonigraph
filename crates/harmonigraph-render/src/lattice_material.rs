@@ -383,6 +383,10 @@ impl Source {
         });
         Self { view, buffer, bind_group, stars: None, velvet: false }
     }
+    #[cfg(test)]
+    pub(super) fn stars(&self) -> Option<&lattice_stars::Targets> {
+        self.stars.as_ref()
+    }
     pub(super) fn star_output(&self) -> Option<&wgpu::BindGroup> {
         self.stars.as_ref().map(|stars| &stars.output_group)
     }

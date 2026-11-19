@@ -124,11 +124,25 @@ pub(super) struct Frame {
     pub amount: f32,
 }
 
-#[derive(PartialEq, Eq)]
+/// The sizes a [`Targets`] is built at. Any change rebuilds every bind
+/// group, but each texture is carried wherever its own size still fits
+/// ([`Targets::carry`]), so a Stars resolution drag reallocates the image
+/// alone, as the spectrogram's starfield does.
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Allocation {
     output: [u32; 2],
     atlas: [u32; 2],
     image: [u32; 2],
+}
+
+/// What a rebuild keeps of the targets before it: each texture whose size
+/// still fits, and the uniform and the source binding, which no size decides.
+struct Carried {
+    output: Option<(wgpu::TextureView, wgpu::BindGroup)>,
+    atlas: Option<wgpu::TextureView>,
+    image: Option<wgpu::TextureView>,
+    uniform: wgpu::Buffer,
+    source: wgpu::BindGroup,
 }
 pub(super) struct Targets {
     output: wgpu::TextureView,
@@ -146,62 +160,95 @@ pub(super) struct Targets {
     material: wgpu::BindGroup,
 }
 impl Targets {
+    /// Takes apart targets being replaced for `next`. Everything not carried
+    /// is dropped when this returns, the old bind groups with it, so the
+    /// textures they bound are gone before any replacement is built. Every
+    /// target is drawn whole each frame, so a carried one holds nothing a
+    /// fresh one would not.
+    fn carry(self, next: Allocation) -> Carried {
+        let Self { output, output_group, allocation, atlas, image, uniform, source, .. } = self;
+        Carried {
+            output: (allocation.output == next.output).then_some((output, output_group)),
+            atlas: (allocation.atlas == next.atlas).then_some(atlas),
+            image: (allocation.image == next.image).then_some(image),
+            uniform,
+            source,
+        }
+    }
+
     fn new(
         device: &wgpu::Device,
         pipelines: &Pipelines,
         source: &wgpu::TextureView,
         allocation: Allocation,
+        carried: Option<Carried>,
     ) -> Self {
-        let output =
-            stars::image(device, "lattice_star_light", allocation.output, LATTICE_COLOR_FORMAT);
-        let output_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("lattice_star_light"),
-            layout: &pipelines.output_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&output),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
-                },
-            ],
+        let (output, atlas, image, kept) = match carried {
+            Some(Carried { output, atlas, image, uniform, source }) => {
+                (output, atlas, image, Some((uniform, source)))
+            }
+            None => (None, None, None, None),
+        };
+        let (output, output_group) = output.unwrap_or_else(|| {
+            let output =
+                stars::image(device, "lattice_star_light", allocation.output, LATTICE_COLOR_FORMAT);
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("lattice_star_light"),
+                layout: &pipelines.output_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&output),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
+                    },
+                ],
+            });
+            (output, group)
         });
-        let atlas = stars::image(device, "star_atlas", allocation.atlas, stars::STAR_FORMAT);
-        let image = stars::image(device, "star_image", allocation.image, stars::STAR_IMAGE_FORMAT);
+        let atlas = atlas.unwrap_or_else(|| {
+            stars::image(device, "star_atlas", allocation.atlas, stars::STAR_FORMAT)
+        });
+        let image = image.unwrap_or_else(|| {
+            stars::image(device, "star_image", allocation.image, stars::STAR_IMAGE_FORMAT)
+        });
         // A pass binds a stand-in for the target it renders into.
         let scratch = stars::image(device, "star_scratch", [1; 2], stars::STAR_IMAGE_FORMAT);
         let atlas_scratch = stars::image(device, "star_atlas_scratch", [1; 2], stars::STAR_FORMAT);
-        let uniform = crate::gpu_memory::buffer(
-            device,
-            &wgpu::BufferDescriptor {
-                label: Some("lattice_star_settings"),
-                size: std::mem::size_of::<Settings>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM
-                    | wgpu::BufferUsages::COPY_DST
-                    | if cfg!(test) {
-                        wgpu::BufferUsages::COPY_SRC
-                    } else {
-                        wgpu::BufferUsages::empty()
+        let (uniform, source) = kept.unwrap_or_else(|| {
+            let uniform = crate::gpu_memory::buffer(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("lattice_star_settings"),
+                    size: std::mem::size_of::<Settings>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM
+                        | wgpu::BufferUsages::COPY_DST
+                        | if cfg!(test) {
+                            wgpu::BufferUsages::COPY_SRC
+                        } else {
+                            wgpu::BufferUsages::empty()
+                        },
+                    mapped_at_creation: false,
+                },
+            );
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("lattice_star_source"),
+                layout: &pipelines.source_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(source),
                     },
-                mapped_at_creation: false,
-            },
-        );
-        let source = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("lattice_star_source"),
-            layout: &pipelines.source_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
-                },
-            ],
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
+                    },
+                ],
+            });
+            (uniform, group)
         });
         let group = |atlas: &wgpu::TextureView, tone: &wgpu::TextureView| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -231,6 +278,12 @@ impl Targets {
             source,
         }
     }
+    /// The pane's star light and atlas, and the star image's size: its size
+    /// rather than the view, which a test holding it would keep alive.
+    #[cfg(test)]
+    pub(super) fn targets(&self) -> (wgpu::TextureView, wgpu::TextureView, wgpu::Extent3d) {
+        (self.output.clone(), self.atlas.clone(), self.image.texture().size())
+    }
     #[cfg(test)]
     pub(super) fn uniforms(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Settings {
         crate::gpu_harness::read_uniform(device, queue, &self.uniform)
@@ -252,10 +305,8 @@ impl Targets {
             image: stars::star_image_size(size, stars),
         };
         if held.as_ref().is_none_or(|t| t.allocation != allocation) {
-            // Dropped before the new one is built, so a Stars setting change
-            // never holds both sets of targets at once.
-            *held = None;
-            *held = Some(Self::new(device, pipelines, source, allocation));
+            let carried = held.take().map(|targets| targets.carry(allocation));
+            *held = Some(Self::new(device, pipelines, source, allocation, carried));
         }
         let held = held.as_mut().unwrap();
         held.atlas_scissor = layout.scissor();
