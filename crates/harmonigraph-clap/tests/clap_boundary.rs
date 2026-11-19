@@ -849,8 +849,11 @@ fn a_restore_drops_an_edit_the_host_was_not_told() {
 /// The editor's open path, through `gui.set_parent`: a resize the editor
 /// asks for as it opens reaches the host at the size asked, and the host may
 /// call the plugin's `gui.get_size` and `gui.set_size` from inside that
-/// request, as Bitwig echoes a resize, without the shell holding a lock they
-/// wait on. The editor then has the size.
+/// request, as Bitwig echoes a resize, without the shell or the editor
+/// holding a lock those two calls wait on. The editor then has the size.
+/// Holding `editor_handle` across `spawn` passes here: only a host that
+/// re-enters `gui.create`, `gui.destroy` or `gui.set_parent` would wait on it,
+/// and Bitwig's echo does not.
 #[test]
 fn a_resize_asked_as_the_editor_opens_reaches_the_host_which_may_reenter() {
     let _serial = serial();
