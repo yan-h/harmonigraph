@@ -88,9 +88,8 @@ struct Locals {
 @group(0) @binding(0) var<uniform> locals: Locals;
 
 /// The union of every body's coverage, one texel per device pixel of the
-/// roll's rect, read only by the surround's passes. Binding 2 keeps it clear of
-/// the common module's glow slots in the same group.
-@group(1) @binding(2) var body_holdout: texture_2d<f32>;
+/// roll's rect, read only by the surround's passes.
+@group(1) @binding(0) var body_holdout: texture_2d<f32>;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,

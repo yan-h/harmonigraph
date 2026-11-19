@@ -1364,13 +1364,10 @@ pub(crate) mod tests {
             "nothing has been published since these were built"
         );
 
-        crate::reload::publish(
-            format!(
-                "{}\n// pipelines_built_before_a_reload_are_stale\n",
-                crate::with_common(TEXT_SRC)
-            ),
-            crate::COMMON_SRC.to_owned(),
-        );
+        crate::reload::publish(format!(
+            "{}\n// pipelines_built_before_a_reload_are_stale\n",
+            crate::with_common(TEXT_SRC)
+        ));
         assert!(
             resources.pipelines.is_stale(FORMAT),
             "a reload the text pipelines never hear about"

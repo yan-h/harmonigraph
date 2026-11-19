@@ -578,24 +578,8 @@ fn cuts_stay_on_their_notes_in_a_rect_off_the_surface_corner() {
 
 #[test]
 fn baked_roll_shader_validates() {
-    // After the surround's arithmetic it calls into, as `roll_source`
-    // joins it.
-    let source = crate::with_common(&crate::roll_module());
-    let module = naga::front::wgsl::parse_str(&source)
-        .map_err(|e| e.emit_to_string(&source))
-        .expect("roll.wgsl must parse");
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    )
-    .validate(&module)
-    .expect("roll.wgsl must validate");
-    for required in ROLL_ENTRY_POINTS {
-        assert!(
-            module.entry_points.iter().any(|ep| ep.name == *required),
-            "missing entry point `{required}`"
-        );
-    }
+    crate::validate_wgsl("roll.wgsl", &crate::roll_source(), 0, ROLL_ENTRY_POINTS)
+        .expect("baked roll.wgsl must parse and validate");
 }
 
 /// The vertex-layout <-> shader-input contract (attribute locations,
@@ -1606,10 +1590,6 @@ fn the_bloom_covers_the_pixels_the_halo_is_stretched_across() {
 /// hide would show here.
 #[test]
 fn a_pane_that_stops_drawing_keeps_its_chain() {
-    // Held across every prepare: under `hot-reload` a shader published by
-    // another test between two of them makes `is_stale` rebuild the
-    // resources, pane map included, which reads here as an eviction (#675).
-    let _guard = crate::reload::test_lock();
     let Some((device, queue)) = headless_device() else {
         return;
     };

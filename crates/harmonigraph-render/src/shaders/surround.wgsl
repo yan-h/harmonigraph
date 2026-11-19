@@ -9,9 +9,8 @@
 // is that hue laid on; over bright energy it is what keeps the note legible.
 // Where two notes' cuts meet, the stronger lands, with its color.
 //
-// Functions only, with no bindings, so it can be joined to any module: a
-// producer's own module puts it after common.wgsl and before its own source,
-// and the composite's after nothing.
+// Functions only, with no bindings, so it can be joined to any module: each
+// module that uses it puts it before its own source, and no other half.
 
 /// The cut as every producer that draws it reads it. One vec4, so it
 /// sits at the head of a uniform block with no padding of its own.

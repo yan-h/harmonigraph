@@ -116,8 +116,6 @@ pub(crate) struct Pipelines {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
-    #[cfg(feature = "hot-reload")]
-    generation: u64,
 }
 
 struct Pane {
@@ -156,10 +154,6 @@ impl Resources {
 
 impl Pipelines {
     fn is_stale(&self, format: wgpu::TextureFormat) -> bool {
-        #[cfg(feature = "hot-reload")]
-        if self.generation != crate::reload::generation() {
-            return true;
-        }
         self.format != format
     }
 
@@ -198,13 +192,7 @@ impl Pipelines {
             "fs_dot_surround",
             format,
         );
-        Pipelines {
-            pipeline,
-            layout,
-            format,
-            #[cfg(feature = "hot-reload")]
-            generation: crate::reload::generation(),
-        }
+        Pipelines { pipeline, layout, format }
     }
 }
 

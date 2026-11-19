@@ -426,8 +426,6 @@ pub(crate) struct RollPipelines {
     bloom_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
-    #[cfg(feature = "hot-reload")]
-    generation: u64,
 }
 
 struct RollPane {
@@ -592,10 +590,6 @@ impl RollResources {
 
 impl RollPipelines {
     fn is_stale(&self, target_format: wgpu::TextureFormat) -> bool {
-        #[cfg(feature = "hot-reload")]
-        if self.generation != crate::reload::generation() {
-            return true;
-        }
         self.target_format != target_format
     }
 
@@ -636,10 +630,9 @@ impl RollPipelines {
             label: Some("roll_filter_bind_group_layout"),
             entries: &[texture_entry(0), sampler_entry(1)],
         });
-        // Binding 2, matching `body_holdout` in roll.wgsl.
         let holdout_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("roll_holdout_bind_group_layout"),
-            entries: &[texture_entry(2)],
+            entries: &[texture_entry(0)],
         });
         let bloom_layout = crate::BloomChain::add_layout(device, "roll_bloom_bind_group_layout");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -698,8 +691,6 @@ impl RollPipelines {
             // so every hop is a resample.
             sampler,
             target_format,
-            #[cfg(feature = "hot-reload")]
-            generation: crate::reload::generation(),
         }
     }
 }
@@ -803,7 +794,7 @@ impl RollHoldout {
                 label: Some("roll_holdout_read_bind_group"),
                 layout: read_layout,
                 entries: &[wgpu::BindGroupEntry {
-                    binding: 2,
+                    binding: 0,
                     resource: wgpu::BindingResource::TextureView(&view),
                 }],
             }),

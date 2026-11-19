@@ -225,24 +225,10 @@ pub(crate) fn text_source() -> String {
     }
 }
 
-/// The roll's module joined to the common half currently in force, after the
-/// surround's arithmetic it shares with the Spiral's dots. Its own file
-/// remains baked; a common-shader reload still rebuilds
-/// them so every group uses one generation of the two kernels.
+/// roll.wgsl after the surround's arithmetic it calls into: the whole roll
+/// module. It names nothing in common.wgsl, so it takes none of it, and a
+/// common-shader reload leaves the roll's pipelines as they are.
 pub(crate) fn roll_source() -> String {
-    #[cfg(feature = "hot-reload")]
-    {
-        module_source(&reload::common_source(), &roll_module())
-    }
-    #[cfg(not(feature = "hot-reload"))]
-    {
-        with_common(&roll_module())
-    }
-}
-
-/// roll.wgsl after the surround's arithmetic it calls into, which is the
-/// roll's own half of its module: common.wgsl goes before both.
-pub(crate) fn roll_module() -> String {
     format!("{}\n{}", surround::SRC, roll::ROLL_SRC)
 }
 
@@ -261,7 +247,6 @@ mod reload {
     use std::sync::RwLock;
 
     static TEXT: RwLock<Option<String>> = RwLock::new(None);
-    static COMMON: RwLock<Option<String>> = RwLock::new(None);
     static GENERATION: AtomicU64 = AtomicU64::new(0);
 
     /// Held by every test that publishes or asks whether a build is current.
@@ -290,9 +275,8 @@ mod reload {
     /// other order hands out a raised count over the previous source, which is
     /// a rebuild that produces the build it was called to replace and then
     /// reports itself done.
-    pub(super) fn publish(text: String, common: String) {
+    pub(super) fn publish(text: String) {
         *TEXT.write().expect("no reader panics while holding this") = Some(text);
-        *COMMON.write().expect("no reader panics while holding this") = Some(common);
         GENERATION.fetch_add(1, Ordering::Release);
     }
 
@@ -303,15 +287,6 @@ mod reload {
             .expect("no writer panics while holding this")
             .clone()
             .unwrap_or_else(|| crate::with_common(crate::text::TEXT_SRC))
-    }
-
-    #[cfg(feature = "hot-reload")]
-    pub(super) fn common_source() -> String {
-        COMMON
-            .read()
-            .expect("no writer panics while holding this")
-            .clone()
-            .unwrap_or_else(|| crate::COMMON_SRC.to_owned())
     }
 }
 
@@ -350,7 +325,6 @@ const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 #[cfg(any(test, feature = "hot-reload"))]
 #[cfg_attr(all(test, not(feature = "hot-reload")), allow(dead_code))]
 struct ReloadedShaders {
-    common: String,
     lattice: String,
     text: String,
     /// Lines the common half takes in both modules above — the seam a naga
@@ -443,7 +417,6 @@ impl ShaderWatcher {
                 let text = std::fs::read_to_string(&self.text).ok()?;
                 self.mtime = Some(mtime);
                 Some(ReloadedShaders {
-                    common: common.clone(),
                     lattice: module_source(&common, &lattice),
                     text: module_source(&common, &text),
                     seam: common_lines(&common),
