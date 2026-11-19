@@ -23,16 +23,15 @@
 //! A drag in the region itself moves nothing, which keeps it free to mean
 //! something of its own.
 
-use std::sync::Arc;
-
 use egui::{Align, Align2, Pos2, Rect, Stroke};
-use harmonigraph_core::spectrum::SPECTRUM_BINS;
-use harmonigraph_render::{SpectrogramGrid, SpectrogramSlab, SpectrogramVertex};
+use harmonigraph_render::SpectrogramVertex;
 
 use super::axes::{Axes, PitchScale, TimeAxis};
 use super::roll::{self, RollDrawOptions, RollSource, Width};
 use super::Navigation;
-use crate::spectrogram::{pane_ppp, pitch_pixels, read_of, PaneView, LIVE_SLAB_CAP, RING_SLOTS};
+use crate::spectrogram::{
+    pane_ppp, pitch_pixels, read_of, PaneView, TapeRun, TapeStrip, LIVE_SLAB_CAP,
+};
 use crate::tape::spectrogram::{silent_slab, COLUMN_SECONDS, LEVELS};
 use crate::tape::{Speed, TapeRequest, TapeView};
 use crate::{theme, PictureState};
@@ -241,10 +240,17 @@ pub(super) fn kept_window(ctx: &egui::Context, surface: usize) -> Option<(f64, f
     ctx.data(|d| d.get_temp::<Window>(window_id(surface))).map(|w| (w.from, w.to))
 }
 
-/// The tape's own GPU grid, apart from the live heatmap's, so that switching
-/// modes re-uploads neither.
-fn pane_id(surface: usize) -> u64 {
-    u64::MAX - surface as u64
+/// The GPU grid `strip` draws on `surface`, apart from the live heatmap's
+/// and from the other strip's: switching modes re-uploads neither heatmap,
+/// and moving the overview's box re-uploads neither strip.
+fn grid_id(strip: TapeStrip, surface: usize) -> u64 {
+    // The overview's count down below every far region's, which count down
+    // from the top one per surface.
+    const BELOW_PANES: u64 = 1 << 16;
+    match strip {
+        TapeStrip::Region => u64::MAX - surface as u64,
+        TapeStrip::Overview => u64::MAX - BELOW_PANES - surface as u64,
+    }
 }
 
 /// Seconds one slab of `level` spans.
@@ -287,7 +293,7 @@ pub(super) fn draw(
     frame: RollFrame,
 ) -> Vec<(Pos2, Align2, String)> {
     let axis = SongAxis::new(axes, split, window);
-    heatmap(painter, axes, scale, state, &axis, surface, pane_id(surface));
+    heatmap(painter, axes, scale, state, &axis, surface, TapeStrip::Region);
     if state.appearance.spectrum.show_roll {
         // Through the live roll's own rule, which holds nothing for a song
         // axis: it stands still, and a live note played over the audition
@@ -442,7 +448,7 @@ fn heatmap(
     state: &mut PictureState,
     axis: &SongAxis,
     surface: usize,
-    grid_id: u64,
+    strip: TapeStrip,
 ) {
     let cfg = state.appearance.spectrum;
     let ppp = pane_ppp(painter.ctx());
@@ -455,13 +461,13 @@ fn heatmap(
     let first = (window.from / width).floor() as i64 - 1;
     let last = (window.to / width).ceil() as i64 + 1;
     let tape = &state.runtime.tape.spectrogram;
-    let run: Arc<[SpectrogramSlab]> =
-        (first..=last).map(|j| tape.slab(level, j).cloned().unwrap_or_else(silent_slab)).collect();
-    // The live heatmap's one size, which holds any run a region's pixels cut,
-    // so neither a pan nor a zoom reallocates the ring: sized from the run, a
-    // drag at an unlucky zoom re-sent the whole grid at every slab it crossed.
-    // Only the coarsest level's run can be longer, a song past about 2.3 hours.
-    let capacity = RING_SLOTS.max(run.len()) as u32;
+    let key = TapeRun { level, first, last, revision: tape.revision() };
+    // In the live heatmap's one size of ring, which holds any run a region's
+    // pixels cut, so neither a pan nor a zoom reallocates it: sized from the
+    // run, a drag at an unlucky zoom re-sent the whole grid at every slab it
+    // crossed.
+    let grid = state.surfaces.spectrogram.at(surface).tape[strip as usize]
+        .tape(key, |j| tape.slab(level, j).cloned().unwrap_or_else(silent_slab));
     // Column k is centred on its own song seconds, so slab j of any level
     // starts half a column before column `j * 2^level`.
     let origin = first as f64 * width - 0.5 * COLUMN_SECONDS;
@@ -481,13 +487,6 @@ fn heatmap(
         scale: *scale,
         cfg,
     };
-    let grid = SpectrogramGrid {
-        capacity,
-        bins: SPECTRUM_BINS as u32,
-        first_key: first,
-        run,
-        full_uploads: Default::default(),
-    };
     let shades = crate::spectrogram::shades(&mut state.surfaces.spectrogram, surface, &cfg);
     painter.add(harmonigraph_render::spectrogram_paint_callback(
         painter.clip_rect(),
@@ -496,7 +495,7 @@ fn heatmap(
         read_of(&view, pitch_pixels(axes.pitch_len(), ppp)),
         shades,
         state.surfaces.target_format,
-        grid_id,
+        grid_id(strip, surface),
         None,
     ));
 }
@@ -782,9 +781,8 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
 
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, crate::spectrogram::silence_color(cfg.spectrogram_gradient));
-    let max_midi = cfg.high_midi.max(cfg.low_midi + crate::PITCH_RANGE_MIN_SPAN);
-    let scale = PitchScale { min_midi: cfg.low_midi, max_midi, span: max_midi - cfg.low_midi };
-    heatmap(&painter, &axes, &scale, state, &axis, surface, overview_id(surface));
+    let scale = PitchScale::of(&cfg);
+    heatmap(&painter, &axes, &scale, state, &axis, surface, TapeStrip::Overview);
     let view = &state.runtime.tape;
     coverage(&painter, &axes, view, &axis);
     let moving = marks(&painter, &axes, view, &axis, id.with("marks"));
@@ -833,14 +831,6 @@ fn grip(axes: &Axes, axis: &SongAxis, shown: Window, x: f32) -> Option<Grip> {
     } else {
         None
     }
-}
-
-/// The overview's own GPU grid, apart from the far region's, so moving the
-/// box re-uploads neither.
-fn overview_id(surface: usize) -> u64 {
-    // Below every `pane_id`, which counts down from the top one per surface.
-    const BELOW_PANES: u64 = 1 << 16;
-    u64::MAX - BELOW_PANES - surface as u64
 }
 
 /// The controls' one line (#1719 slice 4): why the tape cannot sound, or what
