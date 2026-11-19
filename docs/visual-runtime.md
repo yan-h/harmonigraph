@@ -8,7 +8,8 @@ and replay feeds `VisualRuntime` directly.
 
 `VisualRuntime` owns the tracker, analyzed spectrum and bounded history, configuration observation, and explicit time progression.
 It borrows the existing `AppearanceDocument` when observing parameters and advancing.
-`LiveInput` retains the plugin's sole publication consumer, audio consumer, clock mapper, and reusable scratch for the plugin lifetime.
+`LiveInput` retains the plugin's sole publication consumer, audio consumer, analysis and reusable scratch for the plugin lifetime, owned by the input worker rather than the editor's lock (#1866);
+the clock mapper it dates them by is the editor's `DisplayClock`, which frames read.
 It drains into runtime storage without access to a dock or recording controls.
 Audio producers retain their existing independent, nonblocking contract;
 this change introduces no queue, worker, snapshot, or alternate ingress for #742.
@@ -51,7 +52,7 @@ and the recorder's status, as the worker's last poll left it, is mirrored into t
 Only [`background::step`](../crates/harmonigraph-plugin/src/background.rs) calls `EditorShared::poll_take_end`, every step,
 so a completed take can finish and render with no frame running,
 and the trigger settings it publishes reach the audio thread within a step of changing.
-Its stopped-transport debounce is timed in seconds on `LiveInput::now`'s clock (`EditorShared::STOP_SECONDS`),
+Its stopped-transport debounce is timed in seconds on `DisplayClock::now`'s clock (`EditorShared::STOP_SECONDS`),
 so it lasts as long at either poll rate.
 The completion poll does not apply the GUI's recording commands.
 This boundary is covered by `a_take_ends_itself_with_no_frame_running` in the background module.

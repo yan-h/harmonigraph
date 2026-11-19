@@ -764,15 +764,20 @@ mod tests {
 
         // One target from each owner that rebuilds on a pane's size, each
         // of which must be seen rebuilt for the counts below to reach it.
-        const KEYED: [&str; 5] = [
+        const KEYED: [&str; 6] = [
             "lattice_offscreen_color",
             "roll_holdout",
             "spectral_cloud_source",
             "lattice_shadow_atlas",
             "spectral_shadow_atlas",
+            "lattice_material_tile_a",
         ];
+        // B is picked so that every target above crosses a step from A: the
+        // Watercolor tile pinned below goes from 384 to 512 texels, which a
+        // few hundred pixels more height does not reach, and the lattice's
+        // shadow atlas grows too. The first loop below checks each did.
         const A: [u32; 2] = [1600, 1000];
-        const B: [u32; 2] = [2000, 1250];
+        const B: [u32; 2] = [2600, 1600];
         const RATE: f32 = 48_000.0;
 
         let Some(mut sheet) = ProbeSheet::new(A, 1.0) else { return };
@@ -781,6 +786,16 @@ mod tests {
         // Notes for the roll and a second of sound for the cloud, neither of
         // which builds a target without.
         hold(&mut state, &[55, 60, 64, 67, 71]);
+        // A lit Watercolor glow, whose tile is sized on the pane, at the
+        // texture size and render scale the sizes above were picked for: at
+        // a render scale of 0.5, a valid setting, the shadow atlas does not
+        // grow between them.
+        let view = &mut state.appearance.view;
+        (view.glow_reach, view.glow_strength) = (1.0, 1.0);
+        view.render_scale = 1.0;
+        view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
+        view.atmosphere.material_amount = 1.0;
+        view.atmosphere.material_settings.wash_size = 1.459_047_9;
         let mut now = 1.0;
         let cfg = state.appearance.spectrum;
         analyze(&mut state, &sawtooth(55.0, RATE), RATE, now, &cfg);

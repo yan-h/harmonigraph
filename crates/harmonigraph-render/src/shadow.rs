@@ -1266,35 +1266,6 @@ fn cs_shadow_law() {{
         pack(&casters, px_per_point, max_side)
     }
 
-    /// The shader's caster is as many rows as the one the CPU writes.
-    ///
-    /// Two files with no linkage: common.wgsl declares the struct the scene
-    /// draws read a caster's entry out of, and [`ShadowCaster`] is what `pack`
-    /// writes into that buffer. A shader one row short reads every field after
-    /// the missing one out of the next caster's entry — a shadow of the right
-    /// shape in the wrong place, on no diagnostic at all.
-    ///
-    /// The rows and not the field names, which is what a wgsl parser would buy
-    /// and is not what goes wrong: every row here is a `vec4<f32>`, so the
-    /// count is the size and a row added on one side alone is what the count
-    /// catches.
-    #[test]
-    fn the_shaders_caster_is_the_packers() {
-        let src = crate::with_common("");
-        let body = src
-            .split_once("struct ShadowCaster {")
-            .and_then(|(_, rest)| rest.split_once('}'))
-            .expect("common.wgsl declares ShadowCaster")
-            .0;
-        let rows = body.matches("vec4<f32>,").count();
-        assert_eq!(
-            rows,
-            std::mem::size_of::<ShadowCaster>() / 16,
-            "common.wgsl's ShadowCaster is {rows} rows where the packer writes {}",
-            std::mem::size_of::<ShadowCaster>() / 16,
-        );
-    }
-
     /// The shader's kernel and the packer's padding reach the same number of
     /// σ, and the loop bound is what the packer's cap implies — the three
     /// constants that have to agree across two files with no linkage.

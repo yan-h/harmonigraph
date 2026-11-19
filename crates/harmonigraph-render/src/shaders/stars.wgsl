@@ -197,8 +197,7 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     // cells included, without `wrap_cell`'s integer divisions.
     let hashed = cell & vec2<i32>(STAR_HASH_PERIOD - 1);
     let d = star_draw(s, hashed, salt);
-    let at = (vec2<f32>(cell) + d.centre + s.offset) * s.cell
-        * (star_size().y / STAR_PANE) + star_size() * 0.5;
+    let at = star_screen_pos(s, cell, d.centre);
     let paint = star_source(at, star_rank(d.own.x), index);
     if paint.a <= 0.0 { return vec4<u32>(0u); }
     var colour = paint.rgb;
@@ -234,15 +233,51 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
 fn fs_star_bake(in: TileVertex) -> @location(0) vec4<u32> {
     let texel = vec2<i32>(floor(in.position.xy));
     let index = texel.y * STAR_ATLAS_WIDTH + texel.x;
+    let at = star_atlas_cell(index);
+    if at.slice == STAR_SLICES { return vec4<u32>(0u); }
+    return star_bake(star_slice(at.slice), at.cell, star_salt(at.slice), index);
+}
+
+// The salt slice `k`'s stars are hashed at, which every reader of a slice's
+// cells hashes them at too, so a cell is one star to all of them.
+fn star_salt(k: u32) -> u32 {
+    return 1000u + 3u * k;
+}
+
+// Where the star `centre` cells into slice `s`'s `cell` sits on the pane, in
+// the pane's units (`star_size`).
+fn star_screen_pos(s: StarSlice, cell: vec2<i32>, centre: vec2<f32>) -> vec2<f32> {
+    return (vec2<f32>(cell) + centre + s.offset) * s.cell
+        * (star_size().y / STAR_PANE) + star_size() * 0.5;
+}
+
+// The slice and the cell of it that atlas texel `index` holds; `slice` is
+// STAR_SLICES past the last slice's cells, where the texel holds no star.
+struct StarCell {
+    slice: u32,
+    cell: vec2<i32>,
+};
+
+fn star_atlas_cell(index: i32) -> StarCell {
     for (var k = 0u; k < STAR_SLICES; k += 1u) {
         let s = star_slice(k);
         let at = index - s.base;
         if at >= 0 && at < s.grid.x * s.grid.y {
-            let local = vec2<i32>(at % s.grid.x, at / s.grid.x);
-            return star_bake(s, s.origin + local, 1000u + 3u * k, index);
+            return StarCell(k, s.origin + vec2<i32>(at % s.grid.x, at / s.grid.x));
         }
     }
-    return vec4<u32>(0u);
+    return StarCell(STAR_SLICES, vec2<i32>(0));
+}
+
+// The level a star of `rank` paints over light of `level`, both 0..=1: the
+// light spread by the star's brightness draw at `Brightness variation` and
+// lifted by it, the lift fading in with the light so a star over
+// near-silence cannot climb on its rank alone.
+fn star_level(level: f32, rank: f32) -> f32 {
+    let randomness = star_randomness();
+    let spread = (1.0 - randomness) + randomness * (0.35 + 0.65 * rank);
+    let lift = 0.5 * STAR_LIFT * rank * smoothstep(0.0, 0.15, level);
+    return clamp(level * spread + lift, 0.0, 1.0);
 }
 
 // One star's coverage at `t`, its distance over its own outer radius: full

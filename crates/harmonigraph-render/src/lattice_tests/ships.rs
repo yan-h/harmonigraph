@@ -1,7 +1,7 @@
 //! Which instances reach the GPU at all, and the early-outs that drop them.
 
 use super::fixtures::*;
-use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use crate::gpu_harness::{headless_device, readback, render_to_texture, render_to_textures};
 use crate::*;
 
 /// The fragment shader's early-outs — skipping the fragments outside
@@ -163,7 +163,11 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     };
     // The last column: whether the node cells are ANALYTIC, the only ones
     // `cell_reach` skips in, which each of its arms has a fixture for.
-    for (name, scene, analytic) in [
+    // One window's resources across the fixtures, each on a pane of its own,
+    // so the programs below are built once on the layouts they all share.
+    let mut resources = CallbackResources::default();
+    let mut programs: Option<Programs> = None;
+    for (pane_id, (name, scene, analytic)) in (11u64..).zip([
         ("lit", parity_scene(), false),
         ("shaped slices", shaped(wide_shadow()), false),
         ("shaped slices under a spread Gaussian", shaped(spread(parity_scene())), true),
@@ -174,103 +178,121 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         ("a lit field", lit_field(), false),
         ("a spread Gaussian", spread(parity_scene()), true),
         ("moving slices under a spread Gaussian", moving(spread(parity_scene())), true),
-    ] {
+    ]) {
         let cb = LatticeCallback::from_scene(
             &scene,
             LatticeLabels::default(),
             egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
             format,
-            11,
+            pane_id,
             None,
         );
-        let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
 
         let res: &LatticeResources = resources.get().expect("prepare created resources");
-        let layouts = SceneLayouts {
-            uniforms: &res.compiled.bind_group_layout,
-            glow: &res.compiled.filter_layout,
-            shadow: &res.compiled.shadow_layout,
-            casters: &res.compiled.caster_layout,
-        };
-        let build = |src: &str| {
-            let shader = lattice_module(&device, &with_common(src));
-            create_pipelines(&device, &shader, format, layouts, 1)
-        };
-        let (fast, _) = build(SHADER_SRC);
-        let (slow, _) = build(&reference_src);
-        // The light at group 1: one colour over the whole frame, bound to both
-        // pipelines, so the wash reads the same thing back whichever is drawing
-        // and what they differ by is the early-outs alone. A constant rather
-        // than the 1x1 stand-in because `node_paint` reads its Wash OUT of
-        // this, and a transparent nothing leaves that term at zero on either
-        // pipeline — which takes the whole of what the ink does with the light
-        // out of the comparison. Premultiplied, as the real target is, and well
-        // under opaque so the ground still shows through it.
-        let light = {
-            let texture = crate::gpu_memory::texture(
-                &device,
-                &wgpu::TextureDescriptor {
-                    label: Some("parity_light"),
-                    size: wgpu::Extent3d {
-                        width: SIZE[0],
-                        height: SIZE[1],
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                },
-            );
-            let texel = [96u8, 64, 32, 128];
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &texel.repeat((SIZE[0] * SIZE[1]) as usize),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(SIZE[0] * 4),
-                    rows_per_image: Some(SIZE[1]),
-                },
-                wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
-            );
-            let view = texture.create_view(&Default::default());
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("parity_light_bind_group"),
-                layout: &res.compiled.filter_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&res.compiled.sampler),
-                    },
-                ],
-            })
-        };
-        let light = &light;
-        let pane = res.panes.get(&11).expect("prepare created the pane");
+        let Programs { fast, slow, fast_cells, slow_cells, light } =
+            programs.get_or_insert_with(|| {
+                let layouts = SceneLayouts {
+                    uniforms: &res.compiled.bind_group_layout,
+                    glow: &res.compiled.filter_layout,
+                    shadow: &res.compiled.shadow_layout,
+                    casters: &res.compiled.caster_layout,
+                };
+                // The pipelines that ship with the bloom off: three targets,
+                // the visible pair and the local transmission.
+                let build = |src: &str| {
+                    let shader = lattice_module(&device, &with_common(src));
+                    let (scene, _) = create_pipelines(&device, &shader, layouts, false);
+                    let (cells, _) =
+                        create_cell_pipelines(&device, &shader, &res.compiled.bind_group_layout);
+                    (scene, cells)
+                };
+                let (fast, fast_cells) = build(SHADER_SRC);
+                let (slow, slow_cells) = build(&reference_src);
+                // The light at group 1: one colour over the whole frame, bound to both
+                // pipelines, so the wash reads the same thing back whichever is drawing
+                // and what they differ by is the early-outs alone. A constant rather
+                // than the 1x1 stand-in because `node_paint` reads its Wash OUT of
+                // this, and a transparent nothing leaves that term at zero on either
+                // pipeline — which takes the whole of what the ink does with the light
+                // out of the comparison. Premultiplied, as the real target is, and well
+                // under opaque so the ground still shows through it.
+                let light = {
+                    let texture = crate::gpu_memory::texture(
+                        &device,
+                        &wgpu::TextureDescriptor {
+                            label: Some("parity_light"),
+                            size: wgpu::Extent3d {
+                                width: SIZE[0],
+                                height: SIZE[1],
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                | wgpu::TextureUsages::COPY_DST,
+                            view_formats: &[],
+                        },
+                    );
+                    let texel = [96u8, 64, 32, 128];
+                    queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &texel.repeat((SIZE[0] * SIZE[1]) as usize),
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(SIZE[0] * 4),
+                            rows_per_image: Some(SIZE[1]),
+                        },
+                        wgpu::Extent3d {
+                            width: SIZE[0],
+                            height: SIZE[1],
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    let view = texture.create_view(&Default::default());
+                    device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("parity_light_bind_group"),
+                        layout: &res.compiled.filter_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&res.compiled.sampler),
+                            },
+                        ],
+                    })
+                };
+                Programs { fast, slow, fast_cells, slow_cells, light }
+            });
+        let light = &*light;
+        let pane = res.panes.get(&pane_id).expect("prepare created the pane");
         let cells = pane
             .offscreen
             .as_ref()
             .and_then(|o| o.shadow.as_ref())
             .map_or(&res.compiled.shadow_dummy_bind_group, |a| a.read());
 
-        let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
+        // The bloom-off scene pass's targets, in its formats and cleared as
+        // `encode_scene` clears them: the visible pair to nothing, the
+        // transmission to one.
+        let formats: Vec<_> = scene_targets(false).into_iter().map(|t| t.unwrap().format).collect();
+        let clears = [wgpu::Color::TRANSPARENT, wgpu::Color::TRANSPARENT, wgpu::Color::WHITE];
+        let targets: [_; 3] = std::array::from_fn(|i| (formats[i], clears[i]));
         let draw = |pipeline: &wgpu::RenderPipeline| {
-            let texture = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
+            let textures = render_to_textures(&device, &queue, SIZE, targets, |pass| {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
                 pass.set_bind_group(1, light, &[]);
@@ -286,38 +308,47 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
                 pass.draw(0..4, 0..pane.instance_count);
             });
-            readback(&device, &queue, &texture, SIZE)
+            // Every channel of every target a half float, read as its value.
+            textures.map(|texture| {
+                let format = texture.format();
+                let channel =
+                    format.block_copy_size(None).unwrap() / u32::from(format.components());
+                assert_eq!(channel, 2, "{format:?} is not a half-float target");
+                let bytes = readback(&device, &queue, &texture, SIZE);
+                let halves = bytes.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b));
+                halves.map(shadow::tests::half).collect::<Vec<f32>>()
+            })
         };
-        let with_early_out = draw(&fast);
-        let without = draw(&slow);
+        let with_early_out = draw(fast);
+        let without = draw(slow);
 
-        // Guard against a vacuous pass: the nodes must have drawn something
-        // over the clear color.
-        let bg = [18u8, 20, 23, 255];
+        // Guard against a vacuous pass: the nodes must have drawn something.
         assert!(
-            without.chunks(4).any(|px| px.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 8)),
+            without[0].iter().any(|&v| v > 0.03),
             "the {name} scene drew nothing; the comparison is vacuous",
         );
 
         // The two builds are different programs and Metal compiles both with
-        // fast math, so their last f32 ulp may round differently and a value on
-        // an 8-bit rounding boundary come out one step apart. It did, in one
-        // byte of one fixture, once the slot walk rotated its edges instead of
-        // taking their sines. An
-        // early-out that changes what is drawn moves a contour across many
-        // pixels, so a handful of one-step flips is all this lets through.
-        const ROUNDING_FLIPS: usize = 4;
+        // fast math, so their last f32 ulp may round differently and a value
+        // on a half-float rounding boundary come out one step apart: a few
+        // dozen values a fixture. An early-out that changes what is drawn
+        // moves a contour, and values by far more than a step (0.87 with
+        // `paint_reach` cut by a tenth), so one step is all this lets through.
+        // Compared as values, so a zero of either sign is one value.
+        let step = |v: f32| 2f32.powi(v.abs().max(2f32.powi(-14)).log2().floor() as i32 - 10);
         let differing: Vec<_> = with_early_out
             .iter()
             .zip(&without)
             .enumerate()
-            .filter(|(_, (&a, &b))| a != b)
-            .map(|(i, (&a, &b))| (i, a, b))
+            .flat_map(|(target, (fast, slow))| {
+                fast.iter().zip(slow).enumerate().map(move |(i, (&a, &b))| (target, i, a, b))
+            })
+            .filter(|&(_, _, a, b)| (a - b).abs() > step(a.abs().max(b.abs())))
             .collect();
         assert!(
-            differing.len() <= ROUNDING_FLIPS
-                && differing.iter().all(|&(_, a, b)| a.abs_diff(b) == 1),
-            "the {name} scene changed when the early-outs were enabled: {} bytes, first {:?}",
+            differing.is_empty(),
+            "the {name} scene changed when the early-outs were enabled: {} values, first \
+             (target, index, with, without) {:?}",
             differing.len(),
             &differing[..differing.len().min(8)],
         );
@@ -358,10 +389,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 "the {name} fixture has no node still moving",
             );
         }
-        let draw_cells = |src: &str| {
-            let shader = lattice_module(&device, &with_common(src));
-            let (pipeline, _) =
-                create_cell_pipelines(&device, &shader, &res.compiled.bind_group_layout);
+        let draw_cells = |pipeline: &wgpu::RenderPipeline| {
             let target = render_to_texture(
                 &device,
                 &queue,
@@ -369,7 +397,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 shadow::ATLAS_FORMAT,
                 wgpu::Color::TRANSPARENT,
                 |pass| {
-                    pass.set_pipeline(&pipeline);
+                    pass.set_pipeline(pipeline);
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                     pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
@@ -378,8 +406,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             );
             readback(&device, &queue, &target, atlas_size)
         };
-        let cell_fast = draw_cells(SHADER_SRC);
-        let cell_slow = draw_cells(&reference_src);
+        let cell_fast = draw_cells(fast_cells);
+        let cell_slow = draw_cells(slow_cells);
         assert!(
             cell_slow.as_chunks::<4>().0.iter().any(|p| {
                 let bits = u16::from_le_bytes([p[0], p[1]]);
@@ -402,6 +430,16 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             "the node cell changed when the early-outs were enabled: texel {differing:?}",
         );
     }
+}
+
+/// What the early-out comparison draws with, built once: the scene and cell
+/// pipelines with and without `EARLY_OUT`, and the constant light.
+struct Programs {
+    fast: wgpu::RenderPipeline,
+    slow: wgpu::RenderPipeline,
+    fast_cells: wgpu::RenderPipeline,
+    slow_cells: wgpu::RenderPipeline,
+    light: wgpu::BindGroup,
 }
 
 /// A node that can paint nothing is not shipped at all — and the marker standing

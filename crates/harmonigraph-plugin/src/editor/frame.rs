@@ -62,11 +62,11 @@ pub(super) fn frame(
 
     // The input worker ([`crate::background`]) drains the rings, runs the
     // analysis and polls the take's end; a frame reads what it left.
-    let now = shared.input.now();
+    let now = shared.clock.now();
     // Drained on the clock it arrived by, drawn at the refresh it is for.
-    let wall = shared.input.frame_wall(timing, now);
-    let now = shared.input.display_now(wall);
-    let sample_rate = shared.input.sample_rate();
+    let wall = shared.clock.frame_wall(timing, now);
+    let now = shared.clock.display_now(wall);
+    let sample_rate = shared.clock.sample_rate();
     while let Some(line) = state.params.settings.take_notice() {
         shared.ui.log(line);
     }

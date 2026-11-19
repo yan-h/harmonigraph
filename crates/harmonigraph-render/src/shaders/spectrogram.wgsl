@@ -674,11 +674,10 @@ fn remembered(current: vec4<f32>, previous: vec4<f32>) -> vec4<f32> {
 }
 
 fn star_memory(k: u32, cell: vec2<i32>) -> vec4<f32> {
-    let s = cloud.stars.star_slices[k];
-    let salt = 1000u + 3u * k;
+    let s = star_slice(k);
     let hashed = cell & vec2<i32>(STAR_HASH_PERIOD - 1);
-    let d = star_draw(s, hashed, salt);
-    let at = (vec2<f32>(cell) + d.centre + s.offset) * s.cell * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
+    let d = star_draw(s, hashed, star_salt(k));
+    let at = star_screen_pos(s, cell, d.centre);
     let level = star_level_at(at);
     var paint = star_paint(level, star_rank(d.own.x));
     if d.blend > 0.0 { paint = mix(paint, star_paint(level, star_rank(d.other.x)), d.blend); }
@@ -700,15 +699,9 @@ fn star_memory(k: u32, cell: vec2<i32>) -> vec4<f32> {
 fn fs_color_memory(in: TileVertex) -> @location(0) vec4<f32> {
     let texel = vec2<i32>(floor(in.position.xy));
     if cloud.cloud_style == 2u {
-        let index = texel.y * STAR_ATLAS_WIDTH + texel.x;
-        for (var k = 0u; k < STAR_SLICES; k += 1u) {
-            let s = cloud.stars.star_slices[k];
-            let at = index - s.base;
-            if at >= 0 && at < s.grid.x * s.grid.y {
-                return star_memory(k, s.origin + vec2<i32>(at % s.grid.x, at / s.grid.x));
-            }
-        }
-        return vec4<f32>(0.0);
+        let at = star_atlas_cell(texel.y * STAR_ATLAS_WIDTH + texel.x);
+        if at.slice == STAR_SLICES { return vec4<f32>(0.0); }
+        return star_memory(at.slice, at.cell);
     }
     // The lattice is fixed in material coordinates. Only integer textureLoad
     // copies enter feedback; drift never repeatedly bilinear-blurs held color.
@@ -924,10 +917,7 @@ fn star_level_at(pt: vec2<f32>) -> f32 {
 // lift fades in with the level, so a star over near-silence cannot climb the
 // palette on its rank alone. The mean rank, 1, paints the mean star.
 fn star_paint(level: f32, rank: f32) -> vec3<f32> {
-    let randomness = cloud.stars.star_randomness;
-    let spread = (1.0 - randomness) + randomness * (0.35 + 0.65 * rank);
-    let lift = 0.5 * STAR_LIFT * rank * smoothstep(0.0, 0.15, level);
-    return palette_color(clamp(level * spread + lift, 0.0, 1.0));
+    return palette_color(star_level(level, rank));
 }
 fn star_size() -> vec2<f32> { return cloud.stars.size; }
 fn star_randomness() -> f32 { return cloud.stars.star_randomness; }
