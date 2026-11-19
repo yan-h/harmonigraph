@@ -441,15 +441,25 @@ pub enum Pane {
     Spectral,
 }
 
-/// Draw one pane's body into `ui`, filling it, with no dock or tab bar.
+/// Draw a composed frame — each pane at its placement, with no dock or tab
+/// bar — as an export does. Callers must have run [`begin_frame`] for this
+/// `now` already. These are picture copies: the lattice omits editor
+/// navigation, picking, map annotations and Learn-mode chrome, as the Video
+/// preview does.
 ///
-/// Callers must have run [`begin_frame`] for this `now` already. These are
-/// picture copies: the lattice omits editor navigation, picking, map
-/// annotations and Learn-mode chrome, as the Video preview does.
+/// The lattice draws first, and the spectral pane describes the window it
+/// returns: the one it drew this frame, in the rect egui allocated it (#1833).
+/// Unlike the dock, whose panes draw in the order the user arranged them and so
+/// read the window of the frame before (see [`begin_frame`]), a composed frame
+/// has one answer for the frame it draws; reading the frame before's put a
+/// false off-lattice band down an export's first frame and lagged camera
+/// automation by a frame. With no lattice placement the reach is the window,
+/// as [`PictureState::shown`] falls back to it. Nothing here publishes to
+/// [`SurfaceState::drawn`](state::SurfaceState::drawn), which is the docked
+/// lattice's.
 ///
-/// `surface` is which live copy of the pane this is — offline, the placement's
-/// index in the resolved [`Layout`] — and it is what makes two placements of
-/// one pane two pictures instead of one picture drawn twice.
+/// A placement's `surface` is its index in `placements`, and it is what makes
+/// two placements of one pane two pictures instead of one picture drawn twice.
 /// Every pane here holds something between frames — a GPU instance buffer, a
 /// bloom chain, a folded slab grid, a text batch — keyed on its surface, and
 /// egui-wgpu runs every `prepare` before any `paint`, so two copies sharing a
@@ -462,46 +472,49 @@ pub enum Pane {
 /// names. [`Layout::resolve`] drops a placement too small to draw, so the index
 /// is into what it returned rather than into the file — which is the same list
 /// every frame of a render, the size being fixed for the whole of one.
-pub fn draw_pane(
+pub fn draw_panes(
     ui: &mut egui::Ui,
-    pane: Pane,
+    placements: &[(Pane, egui::Rect)],
     state: &mut PictureState,
     now: f64,
-    surface: usize,
 ) {
-    match pane {
-        Pane::Lattice => {
-            let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
-            if rect.width() < 1.0 || rect.height() < 1.0 {
-                return;
+    debug_assert!(layout::lattice_first(placements), "{placements:?}");
+    let mut shown = None;
+    for (surface, &(pane, rect)) in placements.iter().enumerate() {
+        let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        match pane {
+            Pane::Lattice => {
+                let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+                if rect.width() < 1.0 || rect.height() < 1.0 {
+                    continue;
+                }
+                ui.painter().rect_filled(rect, 0.0, state.background_ink());
+                // Exported pictures share the preview's scene path, without
+                // the working pane's navigation, picking, or Learn-mode chrome.
+                let window = panes::lattice::draw_lattice(
+                    ui,
+                    rect,
+                    state,
+                    now,
+                    surface,
+                    state.surfaces.background,
+                    None,
+                    None,
+                    1.0,
+                    panes::lattice::NO_SOLO,
+                );
+                shown = shown.or(Some(window));
             }
-            ui.painter().rect_filled(rect, 0.0, state.background_ink());
-            // Exported pictures share the preview's scene path, without the
-            // working pane's navigation, picking, or Learn-mode chrome.
-            let window = panes::lattice::draw_lattice(
-                ui,
-                rect,
-                state,
-                now,
-                surface,
-                state.surfaces.background,
-                None,
-                None,
-                1.0,
-                panes::lattice::NO_SOLO,
-            );
-            state.surfaces.drawn_this_frame = Some(window);
+            // Text sizes itself off the pane, here as everywhere.
+            Pane::Spectral => {
+                let shown = shown.unwrap_or_else(|| state.appearance.view.reach());
+                let navigation = panes::spectral::Navigation::None;
+                let solo = panes::lattice::NO_SOLO;
+                panes::spectral::spectral_pane(
+                    ui, state, now, surface, 1.0, navigation, shown, solo,
+                );
+            }
         }
-        // Text sizes itself off the pane, here as everywhere.
-        Pane::Spectral => panes::spectral::spectral_pane(
-            ui,
-            state,
-            now,
-            surface,
-            1.0,
-            panes::spectral::Navigation::None,
-            panes::lattice::NO_SOLO,
-        ),
     }
 }
 

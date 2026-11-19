@@ -12,6 +12,12 @@
 //! take carries them only inside the opaque `appearance` document in its header
 //! (#797), so they live in `harmonigraph-ui` beside that document.
 
+/// The stderr prefix that marks a line as a warning about an export that still
+/// succeeds: a render job keeps every such line, where it keeps only the last
+/// of the others. Beside [`RenderProgress::PREFIX`], the other half of what the
+/// renderer's stderr says to the job reading it.
+pub const WARNING_PREFIX: &str = "warning: ";
+
 /// How far a video render running in the background has got.
 ///
 /// Frames rather than a fraction, because frames are what the renderer counts;

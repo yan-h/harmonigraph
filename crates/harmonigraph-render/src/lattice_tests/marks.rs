@@ -760,9 +760,9 @@ fn lone_marker_scene(half_width: f32, taper_start: f32) -> Scene {
 /// band as a proportional rim on both — which is why the marker is drawn big
 /// and the tolerance is a tenth rather than a percent.
 ///
-/// What stays a look, and stays with `the_resting_markers_draw_a_picture`:
-/// whether a cross reads as a crossing rather than as a glyph, and whether the
-/// tapered end arrives at nothing rather than stopping at something.
+/// What stays a look, judged in the DAW rather than here: whether a cross
+/// reads as a crossing rather than as a glyph, and whether the tapered end
+/// arrives at nothing rather than stopping at something.
 #[test]
 fn the_shader_spends_a_markers_proportions_on_the_shape_they_name() {
     const SIZE: [u32; 2] = [256, 256];

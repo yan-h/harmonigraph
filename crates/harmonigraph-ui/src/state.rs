@@ -153,10 +153,10 @@ pub struct SurfaceState {
     /// drawn one; [`PictureState::shown`] is what to read, and it falls back to
     /// the view's reach.
     ///
-    /// Reported rather than computed from the view, because the view holds no
-    /// window to compute it from: it is derived per pane from that pane's own
-    /// aspect ([`harmonigraph_scene::ViewConfig::scrolled`]), so the only
-    /// place it exists is inside the draw that built it.
+    /// Reported rather than computed from the view, because the window is
+    /// derived per pane from that pane's own aspect
+    /// ([`harmonigraph_scene::ViewConfig::scrolled`]), and the dock knows its
+    /// lattice's rect only as it draws it.
     ///
     /// LAST frame's, and that is what makes it safe to read from another pane:
     /// the dock draws its panes in whatever order the user has arranged them,
@@ -165,13 +165,15 @@ pub struct SurfaceState {
     /// of lag on a window that only moves with the camera is invisible; an
     /// answer that changes with the dock arrangement is not.
     ///
-    /// The primary picture: the docked copy live, the layout's copy offline.
-    /// The Video tab's preview is a second lattice at
-    /// a second aspect, and letting it publish would make these answers jump
-    /// with a tab that is not the one being read — the same argument that
-    /// keeps the preview out of the GPU timing slot.
+    /// The docked copy's, and only ever its. A composed frame, an export or the
+    /// Video preview, draws its lattice first and hands its spectral pane the
+    /// window that draw returns instead ([`crate::draw_panes`]), publishing
+    /// nothing here. The preview's is a second lattice at a second aspect, and
+    /// letting it publish would make the docked answers jump with a tab that is
+    /// not the one being read — the same argument that keeps the preview out
+    /// of the GPU timing slot.
     pub drawn: Option<DrawnWindow>,
-    /// What the primary lattice has published so far THIS frame, rotated into
+    /// What the docked lattice has published so far THIS frame, rotated into
     /// [`drawn`](Self::drawn) by `begin_frame`. The perf overlay's node count
     /// reads it directly, because that read happens after every pane has
     /// drawn and a diagnostic holding its last good reading is the one that
@@ -485,7 +487,7 @@ impl Workspace {
 /// What keeps it clear of a RECORDED frame is three different arguments, not
 /// one, and the difference is worth having: `timings` and `perf` belong to
 /// `root_ui`, which the offline renderer never enters at all. The three side
-/// channels it DOES write, every offline frame, because it calls `draw_pane` —
+/// channels it DOES write, every offline frame, because it calls `draw_panes` —
 /// but nothing offline reads `lattice_stats` or `roll_notes`, so those are
 /// dead writes, and the atlas trackers depend only on the context's glyph
 /// assets. Both `lattice_stats` and `roll_notes` carry wall-clock or per-frame
@@ -1010,9 +1012,10 @@ impl PictureState {
     /// pane is not drawing is named and banded at once.
     ///
     /// The reach is the fallback rather than the answer, for the frame before
-    /// the first lattice draw and for a layout with no lattice pane in it at
-    /// all. There is no picture to describe there, and the reach is the only
-    /// window that does not depend on one.
+    /// the docked lattice first draws and for a frame after one where it was
+    /// folded, as it is for a composed layout with no lattice pane in it at
+    /// all ([`crate::draw_panes`]). There is no picture to describe
+    /// there, and the reach is the only window that does not depend on one.
     pub fn shown(&self) -> DrawnWindow {
         self.surfaces.drawn.unwrap_or_else(|| self.appearance.view.reach())
     }

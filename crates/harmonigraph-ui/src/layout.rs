@@ -24,6 +24,15 @@ pub fn export_pixels_per_point(size: [u32; 2]) -> f32 {
     size[0].max(1) as f32 / REFERENCE_POINTS_ACROSS
 }
 
+/// Whether no lattice placement follows another pane. A composed frame draws
+/// its lattice first so the panes after it describe the window it drew this
+/// frame ([`crate::draw_panes`] and the Video preview); [`Layout::split`]
+/// places it so.
+pub(crate) fn lattice_first(placements: &[(Pane, egui::Rect)]) -> bool {
+    let mut rest = placements.iter().skip_while(|(pane, _)| *pane == Pane::Lattice);
+    rest.all(|(pane, _)| *pane != Pane::Lattice)
+}
+
 /// One pane and the slice of the frame it fills.
 #[derive(Clone, Copy, Debug)]
 pub struct Placement {

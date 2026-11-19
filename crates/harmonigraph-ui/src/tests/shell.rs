@@ -101,7 +101,7 @@ fn draw_panes(ctx: &egui::Context, state: &mut SharedState, t: f64, panes: &[Pan
                 time: Some(t),
                 ..Default::default()
             },
-            |ui| crate::draw_pane(ui, pane, &mut state.picture, t, 0),
+            |ui| crate::draw_panes(ui, &[(pane, ui.max_rect())], &mut state.picture, t),
         );
     }
 }

@@ -65,7 +65,19 @@ TESTS = ["cargo", "test", "--no-fail-fast", "-p", "harmonigraph-render",
 # A change touching only these cannot move a pixel. An exclusion list rather
 # than a list of what draws, so that anything not named here — a toolchain pin,
 # a cargo config, an asset — runs the comparison instead of skipping it.
-NOT_DRAWN_DIRS = ("docs/", ".github/", ".claude/", ".agents/", ".githooks/", "tools/")
+#
+# The crates named here are the workspace members the golden tests do not link
+# (`cargo tree -p harmonigraph-render -p harmonigraph-offline -e normal,dev,build`
+# lists the ones they do), and the files are the top-level scripts that drive a
+# build or a session rather than decide a frame. Without them every plugin or
+# shell PR missed CI's cached frames and drew its base (#1853). A crate the
+# golden tests come to link must leave this list in the same change, or its
+# changes will skip the comparison and reuse a cached "no move".
+NOT_DRAWN_DIRS = ("docs/", ".github/", ".claude/", ".agents/", ".githooks/", "tools/",
+                  "crates/harmonigraph-plugin/", "crates/harmonigraph-clap/",
+                  "crates/harmonigraph-standalone/", "xtask/")
+NOT_DRAWN_FILES = ("ci.sh", "load-plugin.sh", "build-pr.sh", "session-lifecycle.sh",
+                   "read-plugin-state.py", "loc-report.py", "sample-hang.sh")
 NOT_DRAWN_SUFFIXES = (".md",)
 
 
@@ -83,7 +95,8 @@ def changed_files(base):
 
 
 def draws(path):
-    return not (path.startswith(NOT_DRAWN_DIRS) or path.endswith(NOT_DRAWN_SUFFIXES))
+    return not (path.startswith(NOT_DRAWN_DIRS) or path in NOT_DRAWN_FILES
+                or path.endswith(NOT_DRAWN_SUFFIXES))
 
 
 def frames_key(ref):
