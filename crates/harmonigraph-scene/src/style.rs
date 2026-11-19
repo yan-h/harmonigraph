@@ -808,7 +808,7 @@ impl ShadowSettings {
     /// Every group, in the order the settings pane lists them.
     ///
     /// The sanitizer's finite-value repair and the tests sweep this list;
-    /// [`clamped`](Self::clamped) assigns each group's width limit.
+    /// [`sanitized`](Self::sanitized) assigns each group's width limit.
     pub fn groups(&self) -> [ShadowStyle; 3] {
         [self.lattice_geometry, self.lattice_text, self.spectral_text]
     }
@@ -818,8 +818,25 @@ impl ShadowSettings {
         [&mut self.lattice_geometry, &mut self.lattice_text, &mut self.spectral_text]
     }
 
-    /// Every group held to its bars' ranges; see [`ShadowStyle::clamped`].
-    pub fn clamped(self) -> ShadowSettings {
+    /// What a load holds: a non-finite field repaired from its own group's
+    /// fresh value ([`Default`] above, #1677 area 5 Q2), then every group held
+    /// to its bars' ranges ([`ShadowStyle::clamped`]). The width is what every
+    /// caster's quad is grown by, so a number from outside the bar is a quad
+    /// nothing can fill, and the depth is a SHARE of the frame, so the unit
+    /// interval.
+    ///
+    /// Over the groups the settings enumerate rather than by name, so a group
+    /// added arrives sanitized, and destructured whole, so a field added to
+    /// `ShadowStyle` does not build until it is repaired here too (#1847 was
+    /// Spread, left to the clamp's 0).
+    pub fn sanitized(mut self) -> ShadowSettings {
+        for (style, fresh) in self.groups_mut().into_iter().zip(ShadowSettings::default().groups())
+        {
+            let ShadowStyle { width, spread, depth } = style;
+            *width = finite_or(*width, fresh.width);
+            *spread = finite_or(*spread, fresh.spread);
+            *depth = finite_or(*depth, fresh.depth);
+        }
         ShadowSettings {
             lattice_geometry: self.lattice_geometry.clamped(crate::GLOW_SHADOW_MAX),
             lattice_text: self.lattice_text.clamped(crate::GLOW_SHADOW_MAX),

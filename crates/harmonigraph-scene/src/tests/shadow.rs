@@ -11,10 +11,14 @@ use harmonigraph_core::{NoteTracker, Tuning};
 #[test]
 fn a_non_finite_shadow_field_repairs_to_its_groups_fresh_value() {
     let fresh = ViewConfig::default().shadow;
-    assert!(
-        fresh.groups().iter().any(|g| g.width != 0.0 && g.spread != 0.0 && g.depth != 0.0),
-        "no fresh group holds all three fields off 0, so a repair to 0 would pass",
-    );
+    let fields: [(&str, fn(&ShadowStyle) -> f32); 3] =
+        [("width", |g| g.width), ("spread", |g| g.spread), ("depth", |g| g.depth)];
+    for (name, field) in fields {
+        assert!(
+            fresh.groups().iter().any(|g| field(g) != 0.0),
+            "no fresh group holds its {name} off 0, so a repair to 0 would pass",
+        );
+    }
     for poison in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         let mut view = ViewConfig::default();
         for group in view.shadow.groups_mut() {

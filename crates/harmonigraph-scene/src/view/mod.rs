@@ -1436,20 +1436,7 @@ impl ViewConfig {
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
         self.glow_curve = self.glow_curve.sanitized();
         self.atmosphere = self.atmosphere.sanitized();
-        // Every Shadow group, over the groups the settings enumerate rather
-        // than by name, so a group added at step 7 arrives sanitized. The width
-        // is what every caster's quad is grown by — a number from outside the
-        // bar is a quad nothing can fill — and the depth is a SHARE of the
-        // frame, so the unit interval. Destructured whole, so a field added to
-        // `ShadowStyle` does not build until it is repaired from its group's
-        // fresh value here too (#1847 was Spread, left to the clamp's 0).
-        for (style, fresh) in self.shadow.groups_mut().into_iter().zip(fresh.shadow.groups()) {
-            let crate::ShadowStyle { width, spread, depth } = style;
-            *width = finite_or(*width, fresh.width);
-            *spread = finite_or(*spread, fresh.spread);
-            *depth = finite_or(*depth, fresh.depth);
-        }
-        self.shadow = self.shadow.clamped();
+        self.shadow = self.shadow.sanitized();
         self.hide_behind = finite_or(self.hide_behind, fresh.hide_behind)
             .clamp(*HIDE_BEHIND_RANGE.start(), *HIDE_BEHIND_RANGE.end());
         // The SHARES — of the light a lit slice stands in, of the light's own
