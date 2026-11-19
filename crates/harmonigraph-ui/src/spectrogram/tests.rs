@@ -15,26 +15,6 @@ fn col(time: f64, energy: &[(usize, f32)]) -> Col {
     (time, power)
 }
 
-/// Group columns into fixed time slabs of `bucket` seconds: linear power
-/// summed and divided once before quantizing. Folded twice, by the oracle's
-/// grid and by one pyramid level at the same width, and held equal, so each
-/// test below holds both: `(centres, slabs)`.
-fn aggregate_slabs(columns: &[Col], bucket: f64) -> (Vec<f64>, Vec<SpectrogramSlab>) {
-    let mut grid = oracle::SlabGrid::default();
-    for (time, power) in columns {
-        grid.fold(*time, &power[..], bucket);
-    }
-    grid.finish();
-    let (first_key, level) = pyramid::fold_one_level(bucket, 1 << 20, columns);
-    let keys = grid.centers.iter().map(|c| (c / bucket).floor() as i64);
-    assert_eq!(keys.clone().next(), Some(first_key), "the level starts at another slab");
-    assert_eq!(level.len(), grid.power.len(), "the level holds another number of slabs");
-    for (key, (a, b)) in keys.zip(grid.power.iter().zip(&level)) {
-        assert_eq!(a[..], b[..], "slab {key} differs between the oracle and the level");
-    }
-    (grid.centers, grid.power)
-}
-
 /// The pitch range the scroll sweeps hold fixed while they move time.
 const SWEEP_SCALE: PitchScale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
 
@@ -53,6 +33,15 @@ fn pyramid_of(columns: impl IntoIterator<Item = Col>) -> SlabPyramid {
     pyramid
 }
 
+/// Level `level` of a pyramid fed `columns` in order: its slabs' centres in
+/// absolute time and the slabs, oldest first.
+fn level_of(columns: &[Col], level: usize) -> (Vec<f64>, Vec<SpectrogramSlab>) {
+    let (first_key, slabs) = pyramid_of(columns.iter().cloned()).level(level);
+    let w = width(level);
+    let centres = (0..slabs.len()).map(|i| ((first_key + i as i64) as f64 + 0.5) * w).collect();
+    (centres, slabs)
+}
+
 #[test]
 fn a_short_loud_column_contributes_its_linear_power_mean() {
     // A brief loud note between quiet columns: each contributes once,
@@ -62,8 +51,9 @@ fn a_short_loud_column_contributes_its_linear_power_mean() {
         col(0.02, &[(5, 1.0)]), // the short note
         col(0.04, &[(5, 0.002)]),
     ];
-    let (centers, power) = aggregate_slabs(&cols, 1.0);
-    assert_eq!(centers.len(), 1, "one slab of width 1.0 s holds all three");
+    // Level 6's slabs are 1.024 s wide, which holds all three in its first.
+    let (centers, power) = level_of(&cols, 6);
+    assert_eq!(centers.len(), 1, "one slab of width 1.024 s holds all three");
     assert_eq!(power[0][5], q((0.001 + 1.0 + 0.002) / 3.0), "mean power, not max or mean dB");
 }
 
@@ -76,10 +66,10 @@ fn a_short_loud_column_contributes_its_linear_power_mean() {
 /// of one flat color, exactly as wide as the stall.
 #[test]
 fn a_gap_in_the_columns_keeps_a_row_for_every_silent_slab() {
-    // Two columns a second apart, in quarter-second slabs: four slabs of
-    // silence between them.
-    let cols = [col(0.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
-    let (centers, power) = aggregate_slabs(&cols, 0.25);
+    // Two columns 1.1 s apart, in level 4's 0.256 s slabs: the second lands
+    // four slabs on, with three of silence between them.
+    let cols = [col(0.0, &[(5, 1.0)]), col(1.1, &[(5, 0.5)])];
+    let (centers, power) = level_of(&cols, 4);
     assert_eq!(centers.len(), 5, "one row per slab, silent ones included");
     let at = |slab: usize| power[slab][5];
     assert_eq!(at(0), q(1.0), "the column before the gap");
@@ -87,7 +77,10 @@ fn a_gap_in_the_columns_keeps_a_row_for_every_silent_slab() {
     assert_eq!(at(4), q(0.5), "the column after it");
     // Evenly spaced centers are exactly what the texture mapping assumes.
     for pair in centers.windows(2) {
-        assert!((pair[1] - pair[0] - 0.25).abs() < 1e-9, "slabs must stay uniform: {centers:?}");
+        assert!(
+            (pair[1] - pair[0] - width(4)).abs() < 1e-9,
+            "slabs must stay uniform: {centers:?}"
+        );
     }
 }
 
@@ -95,13 +88,15 @@ fn a_gap_in_the_columns_keeps_a_row_for_every_silent_slab() {
 fn a_slab_is_anchored_to_absolute_time_not_ring_position() {
     // The same note must land in the same slab whether or not older columns
     // are present — otherwise scrolling would shift it and it would shimmer.
-    // A note at t=2.6 sits in slab floor(2.6)=2.
+    // A note at t=2.6 sits in level 6's slab floor(2.6 / 1.024) = 2, centred
+    // on 2.56.
+    let centre = 2.5 * width(6);
     let with_old = [col(0.1, &[(0, 0.1)]), col(2.6, &[(0, 0.5)])];
-    let (c_full, _) = aggregate_slabs(&with_old, 1.0);
+    let (c_full, _) = level_of(&with_old, 6);
     let just_note = [col(2.6, &[(0, 0.5)])];
-    let (c_scrolled, _) = aggregate_slabs(&just_note, 1.0);
-    assert!(c_full.contains(&2.5), "slab center is 2.5 with old columns");
-    assert!(c_scrolled.contains(&2.5), "and still 2.5 after they scroll off");
+    let (c_scrolled, _) = level_of(&just_note, 6);
+    assert_eq!(c_full.last(), Some(&centre), "the note's slab with old columns");
+    assert_eq!(c_scrolled, [centre], "and the same slab after they scroll off");
 }
 
 /// Storing a bucket as a byte of dB is a memory decision, and it is only
@@ -2063,106 +2058,6 @@ mod gpu {
             (2..=32).collect::<Vec<_>>(),
             "the spans reached run lengths {lengths:?}",
         );
-    }
-
-    /// One analysed column through the real transform, so the partials carry
-    /// the taper's own skirts and the floor is the transform's rather than one
-    /// this fixture picked. An empty `notes` leaves the noise alone.
-    fn analysed_column(notes: &[f32]) -> Vec<BucketDb> {
-        let sr = 48_000.0f32;
-        let mut an =
-            harmonigraph_analysis::SpectrumAnalyzer::new(harmonigraph_analysis::AnalyzerConfig {
-                sample_rate: sr,
-                ..Default::default()
-            });
-        let mut seed = 0x1234_5678u32;
-        let mut noise = move || {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            (seed >> 8) as f32 / (1 << 24) as f32 - 0.5
-        };
-        let buf: Vec<f32> = (0..1 << 16)
-            .map(|i| {
-                let t = i as f32 / sr;
-                // Sawtooths by partial, rolled off 1/k and band-limited by hand.
-                let v: f32 = notes
-                    .iter()
-                    .flat_map(|&m| {
-                        let f = harmonigraph_core::spectrum::midi_to_hz(m);
-                        (1..=24).map(move |k| (f * k as f32, k))
-                    })
-                    .filter(|&(fk, _)| fk < sr * 0.45)
-                    .map(|(fk, k)| (std::f32::consts::TAU * fk * t).sin() / k as f32)
-                    .sum();
-                v * 0.05 + noise() * if notes.is_empty() { 0.1 } else { 0.0005 }
-            })
-            .collect();
-        an.push_samples(&buf);
-        an.pitch_spectrum()
-            .expect("a full window analyses")
-            .iter()
-            .map(|&p| harmonigraph_core::spectrogram::quantize(p))
-            .collect()
-    }
-
-    /// Scratch: what the picture's overall brightness does as the pane's row
-    /// count changes, which is the resize and offline-resolution case (#491).
-    /// Not an assertion.
-    ///
-    /// A pixel's read is a filter whose SUPPORT is set by the row count, so
-    /// the same audio at the same zoom draws brighter or darker as the pane
-    /// grows unless the filter is LINEAR in the level — visible when the
-    /// editor and an export of the same take disagree. The
-    /// noise row is the control: a read's dependence over a pure floor is a
-    /// fraction of what it is over partials, so what moves the brightness is
-    /// spectral features NARROWER than a pixel rather than the floor.
-    ///
-    /// Through the shader, so the number stands for the picture that ships;
-    /// [`probe_read`] is what makes the pane mean readable off it.
-    ///
-    /// `cargo test -p harmonigraph-ui --release gpu::brightness_across_resolutions -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn brightness_across_resolutions() {
-        let Some(mut headless) = SpectrogramHeadless::new() else {
-            return;
-        };
-        let step = f64::from(harmonigraph_core::spectrogram::DB_STEP);
-        let scale_of = |span: f32| {
-            let min_midi = if span >= 119.0 { SPECTRUM_MIN_MIDI } else { 60.0 - span / 2.0 };
-            PitchScale { min_midi, max_midi: min_midi + span, span }
-        };
-        let chord = analysed_column(&[48.0, 55.0, 60.0, 64.0]);
-        let noise = analysed_column(&[]);
-
-        for (name, column) in [("partials", &chord), ("noise", &noise)] {
-            let bytes: Vec<u8> = (0..W).flat_map(|_| column.iter().copied()).collect();
-            println!("\n-- settled, same range at five row counts, dB from 256 rows ({name}) --");
-            for &span in &[119.6f32, 60.0, 24.0, 12.0] {
-                let view = view_of(scale_of(span), SpectrumConfig::default());
-                let mut line = String::new();
-                let mut base = 0.0;
-                for (k, &rows) in [256u32, 448, 704, 1408, 2816].iter().enumerate() {
-                    let read = probe_read(&view, rows as usize);
-                    let size = [W, rows];
-                    let frame = headless.frame(
-                        0,
-                        size,
-                        texel_quad(&read, W, size),
-                        grid_of(bytes.clone()),
-                        read,
-                        probe_shades(),
-                    );
-                    let mean =
-                        frame.as_chunks::<4>().0.iter().map(|p| f64::from(p[0])).sum::<f64>()
-                            / f64::from(W * rows);
-                    if k == 0 {
-                        base = mean;
-                    }
-                    line += &format!("  {rows}:{:+.2}", (mean - base) * step);
-                }
-                println!("{:>9}{line}", format!("{span:.0} semi"));
-            }
-        }
     }
 
     /// A pane resize re-sends the whole heatmap a handful of times, not

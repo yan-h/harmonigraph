@@ -14,7 +14,7 @@
 //! spectrum's own size. [`spectrum_split`] is where the two meet, and it is the
 //! one answer every layer of the pane takes its boundary from.
 
-use super::axes::{spectrum_share, widest_span, Axes};
+use super::axes::{spectrum_share, Axes, FULL_PITCH_SPAN};
 use super::Navigation;
 use crate::panes::{zoom_gesture, DOCKED_SURFACE};
 use crate::PictureState;
@@ -588,7 +588,7 @@ pub(super) fn drag_zoom(
             let anchor =
                 ui.ctx().pointer_hover_pos().map_or(0.5, |p| axes.pitch_at(p).clamp(0.0, 1.0));
             let held = low + anchor * span;
-            span = (span / factor).clamp(crate::PITCH_RANGE_MIN_SPAN, widest_span());
+            span = (span / factor).clamp(crate::PITCH_RANGE_MIN_SPAN, FULL_PITCH_SPAN);
             low = held - anchor * span;
             moved = true;
         }
@@ -689,7 +689,7 @@ pub(super) fn drag_zoom(
     // draws a band with no buckets behind it. The upper bound takes a `max`
     // because at the full span the two ends meet, and float rounding is enough
     // to cross them — which `clamp` answers with a panic.
-    let span = span.clamp(crate::PITCH_RANGE_MIN_SPAN, widest_span());
+    let span = span.clamp(crate::PITCH_RANGE_MIN_SPAN, FULL_PITCH_SPAN);
     let low = low.clamp(SPECTRUM_MIN_MIDI, (SPECTRUM_MAX_MIDI - span).max(SPECTRUM_MIN_MIDI));
     // The span is kept above; this holds the pair to the rule every writer of
     // it shares, so rounding cannot leave it a pair `sanitize` would move.

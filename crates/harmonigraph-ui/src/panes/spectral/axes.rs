@@ -468,13 +468,6 @@ pub(super) fn spectrum_share(cfg: &crate::SpectrumConfig) -> f32 {
     }
 }
 
-/// The whole axis the analyzer covers, as a span — the widest the pitch range
-/// can be zoomed out to.
-pub(super) fn widest_span() -> f32 {
-    use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
-    SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI
-}
-
 /// Where a pitch sits on the pane's axis: the pitch range, as a mapping.
 #[derive(Clone, Copy)]
 pub(crate) struct PitchScale {

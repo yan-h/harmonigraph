@@ -32,6 +32,24 @@ pub const BINS_PER_SEMITONE: usize = 32;
 pub const SPECTRUM_BINS: usize =
     ((SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as usize + 2;
 
+/// The MIDI pitch bucket `bucket` of the axis is centred on.
+///
+/// A bucket stands for its own CENTRE rather than its low edge — the half
+/// step is what keeps a partial's pitch and the bucket that carries it
+/// agreeing to better than a bucket, which at 3.125¢ is the whole resolution
+/// the axis has to place a partial with.
+pub fn bucket_pitch(bucket: usize) -> f32 {
+    SPECTRUM_MIN_MIDI + (bucket as f32 + 0.5) / BINS_PER_SEMITONE as f32
+}
+
+/// Where MIDI pitch `midi` falls on the axis, in buckets from its low EDGE:
+/// bucket `b` covers `b..b + 1`, so its centre ([`bucket_pitch`]) is at
+/// `b + 0.5`. A reader that interpolates between bucket centres subtracts
+/// that half itself.
+pub fn midi_to_bucket_x(midi: f32) -> f32 {
+    (midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32
+}
+
 /// Frequency of a (fractional) MIDI pitch at A440.
 pub fn midi_to_hz(midi: f32) -> f32 {
     440.0 * ((midi - 69.0) / 12.0).exp2()

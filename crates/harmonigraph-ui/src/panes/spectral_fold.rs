@@ -164,12 +164,13 @@
 //! an editor frame (the docked pane and the Render preview's copy) steps it
 //! once, and a render at 60 fps and a pane at 144 walk the same transition.
 
-use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
-// The axis' own ends, read by `Fold::slot_power` — which is the shader's
-// per-wedge read written out on the CPU, and so test-only along with them.
+use harmonigraph_core::spectrum::{bucket_pitch, BINS_PER_SEMITONE, SPECTRUM_BINS};
+// The axis' own ends and its walk, read by `Fold::slot_power` — which is the
+// shader's per-wedge read written out on the CPU, and so test-only along with
+// them.
 #[cfg(test)]
-use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
-use harmonigraph_scene::{bucket_pitch, Scene, SpectralPaint, SpectralReading, ViewConfig};
+use harmonigraph_core::spectrum::{midi_to_bucket_x, SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
+use harmonigraph_scene::{Scene, SpectralPaint, SpectralReading, ViewConfig};
 
 use super::spectral::axes::{loudness, power_db, spectrogram_level_db};
 use crate::spectrum::SpectrumBuckets;
@@ -329,7 +330,7 @@ impl Fold {
         // Bucket `b` stands for `SPECTRUM_MIN_MIDI + (b + 0.5) / 32` — the
         // grid's own convention, and the shader's `spectrum_color_at` subtracts the
         // same half so the fold and the ring place a partial at one pitch.
-        let x = (pitch - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32 - 0.5;
+        let x = midi_to_bucket_x(pitch) - 0.5;
         let i = (x.max(0.0) as usize).min(SPECTRUM_BINS - 2);
         let t = (x - i as f32).clamp(0.0, 1.0);
         Some(self.smoothed[i] + (self.smoothed[i + 1] - self.smoothed[i]) * t)
@@ -757,10 +758,6 @@ mod tests {
         fn db(&self, width: f32, pos: LatticePos) -> f32 {
             power_db(self.light(width, pos).total)
         }
-    }
-
-    fn power_db(power: f32) -> f32 {
-        10.0 * power.max(1e-12).log10()
     }
 
     /// The fresh width, and the one every claim about the constellation is
@@ -1521,7 +1518,7 @@ mod tests {
         // from an absolute pitch wobbles by ~1e-4 of a bucket, and the levels
         // reach the GPU as bytes (a step of ~4e-3) anyway. The bug this pins
         // read the centre HALF a bucket off — three orders of magnitude out.
-        let centre = harmonigraph_scene::bucket_pitch(bucket);
+        let centre = bucket_pitch(bucket);
         let at_centre = fold.slot_power(centre).unwrap();
         assert!(
             (at_centre - fold.smoothed[bucket]).abs() < 1e-3,

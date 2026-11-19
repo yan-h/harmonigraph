@@ -199,7 +199,7 @@ pub(crate) fn spectral_pane(
     // pane, none for the Video preview and an export (Yan, #1862).
     star_solo: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
 ) {
-    use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+    use harmonigraph_core::spectrum::midi_to_bucket_x;
 
     let regions = match navigation {
         Navigation::Folded(regions) => Some(regions),
@@ -453,7 +453,6 @@ pub(crate) fn spectral_pane(
             // buckets per column as the heatmap does, which on a 2x display is
             // the same disagreement a MAX would cause, arrived at from the
             // other side.
-            let bucket_x = |midi: f32| (midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32;
             let ppp = crate::spectrogram::pane_ppp(painter.ctx());
             let cols = crate::spectrogram::curve_cols(axes.pitch_len(), ppp);
             let visible: Vec<(f32, f32, f32)> = (0..cols)
@@ -461,8 +460,8 @@ pub(crate) fn spectral_pane(
                     let edge = |i: usize| scale.min_midi + scale.span * i as f32 / cols as f32;
                     let level = spectrogram::footprint_mean_db(
                         levels,
-                        bucket_x(edge(c)),
-                        bucket_x(edge(c + 1)),
+                        midi_to_bucket_x(edge(c)),
+                        midi_to_bucket_x(edge(c + 1)),
                     );
                     let t = (c as f32 + 0.5) / cols as f32;
                     (scale.min_midi + t * scale.span, t, level)

@@ -10,9 +10,7 @@
 //! still emit zero columns without transforming, so history and release
 //! continue advancing.
 
-use harmonigraph_core::spectrum::{
-    midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI,
-};
+use harmonigraph_core::spectrum::{bucket_pitch, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS};
 
 mod kernels;
 pub use kernels::fixed_frame;
@@ -81,7 +79,7 @@ static BUCKET_FREQUENCIES: std::sync::LazyLock<[BucketFrequencies; SPECTRUM_BINS
     std::sync::LazyLock::new(|| {
         let half_bucket = 0.5 / BINS_PER_SEMITONE as f32;
         std::array::from_fn(|b| {
-            let midi = SPECTRUM_MIN_MIDI + (b as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+            let midi = bucket_pitch(b);
             BucketFrequencies {
                 lower_hz: midi_to_hz(midi - half_bucket),
                 upper_hz: midi_to_hz(midi + half_bucket),
@@ -422,7 +420,7 @@ fn hann_weight(i: usize, n: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harmonigraph_core::spectrum::hz_to_midi;
+    use harmonigraph_core::spectrum::{hz_to_midi, midi_to_bucket_x};
 
     /// Feed a sum of sines and return the folded spectrum.
     fn analyze(freqs_amps: &[(f32, f32)], sample_rate: f32) -> [f32; SPECTRUM_BINS] {
@@ -456,7 +454,7 @@ mod tests {
     }
 
     fn bucket_of_midi(midi: f32) -> usize {
-        ((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).round() as usize
+        midi_to_bucket_x(midi).round() as usize
     }
 
     fn dist(a: usize, b: usize) -> usize {
@@ -571,7 +569,7 @@ mod tests {
         for fft_size in [6144, 12_288, 24_576] {
             for hz in [27.5f32, 41.2, 55.0, 110.0, 220.0] {
                 let peak = peak_bucket(&analyze_with(fft_size, &[(hz, 0.8)], 48_000.0));
-                let midi = SPECTRUM_MIN_MIDI + (peak as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+                let midi = bucket_pitch(peak);
                 let cents = 100.0 * (midi - hz_to_midi(hz));
                 // A bucket is 3.125 cents, so a peak in the right one is within
                 // half of that; one bucket either side is rounding, not place.
@@ -704,7 +702,7 @@ mod tests {
         // happen is a peak somewhere else, which is what wrapping would look
         // like: the axis above the very bottom stays quiet.
         let buckets = analyze(&[(12.5, 0.8)], 48_000.0);
-        let above = bucket_of_midi(SPECTRUM_MIN_MIDI + 12.0);
+        let above = bucket_of_midi(harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI + 12.0);
         let stray = buckets[above..].iter().fold(0.0f32, |a, &b| a.max(b));
         assert!(stray < 0.01, "sub-axis energy appeared an octave up: {stray}");
     }

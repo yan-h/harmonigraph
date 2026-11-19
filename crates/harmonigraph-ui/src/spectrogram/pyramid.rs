@@ -325,24 +325,5 @@ impl SlabPyramid {
     }
 }
 
-/// One level of `width` seconds keeping `keep` slabs, fed `columns` in order:
-/// its first key and its slabs, for the tests that hold a level to the
-/// oracle at widths off the ladder.
-#[cfg(test)]
-pub(crate) fn fold_one_level(
-    width: f64,
-    keep: usize,
-    columns: &[(f64, Box<SpectrumBuckets>)],
-) -> (i64, Vec<SpectrogramSlab>) {
-    let mut level = Level { width, keep, ..Level::new(0) };
-    let silence = SpectrogramSlab::from([0; SPECTRUM_BINS]);
-    for (time, power) in columns {
-        let zero = power.iter().all(|&p| p == 0.0);
-        level.fold(*time, power, zero, &silence);
-    }
-    level.finish();
-    (level.first_key, level.slabs.into_iter().collect())
-}
-
 #[cfg(test)]
 mod tests;

@@ -461,7 +461,7 @@ fn norm_power(sum: f64) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use harmonigraph_core::spectrum::{hz_to_midi, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+    use harmonigraph_core::spectrum::{bucket_pitch, hz_to_midi, BINS_PER_SEMITONE};
 
     use super::*;
     use crate::{AnalyzerConfig, SpectrumAnalyzer};
@@ -492,7 +492,7 @@ mod tests {
     }
 
     fn cents_off(bucket: usize, hz: f32) -> f32 {
-        let midi = SPECTRUM_MIN_MIDI + (bucket as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+        let midi = bucket_pitch(bucket);
         100.0 * (midi - hz_to_midi(hz))
     }
 
