@@ -5,8 +5,9 @@
 //! A halo is the slow part of the picture: stepped with the marks' own fast
 //! envelopes it flickers with them, and what a light should do instead is
 //! arrive a little behind the note and leave a long way behind it. So it has a
-//! pair of its own ([`ViewConfig::glow_attack`] and `_release`) and this is
-//! where they are spent.
+//! pair of its own
+//! ([`ViewConfig::glow_attack`](harmonigraph_scene::ViewConfig::glow_attack)
+//! and `_release`) and this is where they are spent.
 //!
 //! Not a pane, though it sits with them, and the same shape as its neighbour
 //! [`spectral_fold`](super::spectral_fold): a post-pass the Lattice pane runs
@@ -34,7 +35,7 @@
 //! a resize (#422) or a big chord growing the strip (#1759, Q3).
 
 use harmonigraph_core::LatticePos;
-use harmonigraph_scene::{GlowLight, GlowStep, Scene, ViewConfig, MAX_LIGHTS};
+use harmonigraph_scene::{GlowLight, GlowStep, Scene, MAX_LIGHTS};
 
 use crate::PictureState;
 
@@ -140,7 +141,7 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize,
         return;
     }
     let glow = state.surfaces.glow_fade.entry(surface).or_default();
-    let moving = glow.step(scene, &state.appearance.view, now);
+    let moving = glow.step(scene, now);
     state.surfaces.moving_this_frame.releasing(moving);
 }
 
@@ -183,7 +184,11 @@ impl GlowFade {
     /// colour's still to move ([`easing`]), times the glow gain, is over
     /// [`VISIBLE_STEP`]. What the frame loop stays awake for (`releasing` in
     /// `lib.rs`), asked on the step's own draw.
-    fn step(&mut self, scene: &mut Scene, view: &ViewConfig, now: f64) -> bool {
+    ///
+    /// Stepped on the Glow times of the scene's own view, the look it was
+    /// derived from.
+    fn step(&mut self, scene: &mut Scene, now: f64) -> bool {
+        let view = &scene.view;
         let (up, down) = coefficients(now, self.at, view.glow_attack, view.glow_release);
         let seed = if view.glow_attack <= 0.0 {
             1.0
@@ -200,7 +205,7 @@ impl GlowFade {
         // at any level. A level rising belongs to a note being played, and a light
         // settled at its reading is still, so a mark held with no key down
         // never keeps the loop awake.
-        let strength = scene.view.glow_strength;
+        let strength = view.glow_strength;
         let mut moving = false;
         // The lights this frame sees already, which are what a new one counts
         // against the most a surface lights at once: one carried for a node
@@ -304,8 +309,6 @@ mod tests {
             &mut scene,
             &state.runtime.tracker,
             &state.runtime.tuning,
-            &state.appearance.view,
-            &state.appearance.view.envelope(),
             &harmonigraph_scene::RingFade::default(),
             now,
         );
@@ -354,7 +357,7 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
         let mut scene = scene_at(&state, 0.0);
-        fade.step(&mut scene, &state.appearance.view, 0.0);
+        fade.step(&mut scene, 0.0);
         let held = node_at(&scene, LatticePos::ORIGIN).glow.level;
         assert!(held > 0.99, "a held note lights its node at once: {held}");
 
@@ -363,7 +366,7 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::off(0.0, SourceId::DIRECT, 0, 60));
         let level = |fade: &mut GlowFade, state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
-            fade.step(&mut scene, &state.appearance.view, now);
+            fade.step(&mut scene, now);
             let node = node_at(&scene, LatticePos::ORIGIN);
             assert_eq!(node.presence_with_opacity, 0.0, "the note itself must be gone by {now}s");
             node.glow.level
@@ -398,7 +401,7 @@ mod tests {
         let mut fade = GlowFade::default();
         let mut step = |state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
-            fade.step(&mut scene, &state.appearance.view, now);
+            fade.step(&mut scene, now);
             let node = node_at(&scene, LatticePos::ORIGIN);
             (node.glow, node.glow_light())
         };
@@ -473,7 +476,7 @@ mod tests {
             let mut fade = GlowFade::default();
             let mut step = |state: &PictureState, now: f64| {
                 let mut scene = scene_at(state, now);
-                fade.step(&mut scene, &state.appearance.view, now);
+                fade.step(&mut scene, now);
                 let node = node_at(&scene, LatticePos::ORIGIN);
                 (node.glow.light, node.glow_light())
             };
@@ -516,7 +519,7 @@ mod tests {
         let mut fade = GlowFade::default();
         let mut level_at = |state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
-            let moving = fade.step(&mut scene, &state.appearance.view, now);
+            let moving = fade.step(&mut scene, now);
             (node_at(&scene, LatticePos::ORIGIN).glow.level, moving)
         };
         let (held, settled_awake) = level_at(&state, 0.5);
@@ -543,7 +546,7 @@ mod tests {
         let mut fade = GlowFade::default();
         let mut step = |state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
-            fade.step(&mut scene, &state.appearance.view, now);
+            fade.step(&mut scene, now);
             let node = node_at(&scene, LatticePos::ORIGIN);
             (node.glow, node.glow_light())
         };
@@ -582,7 +585,7 @@ mod tests {
         let mut fade = GlowFade::default();
         let mut level = |state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
-            fade.step(&mut scene, &state.appearance.view, now);
+            fade.step(&mut scene, now);
             node_at(&scene, LatticePos::ORIGIN).glow.level
         };
         let mut now = 0.0;
@@ -620,7 +623,7 @@ mod tests {
         let mut fade = GlowFade::default();
         let mut step = |state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
-            fade.step(&mut scene, &state.appearance.view, now);
+            fade.step(&mut scene, now);
             let node = node_at(&scene, LatticePos::ORIGIN);
             (node.glow, node.glow_light())
         };
@@ -671,7 +674,7 @@ mod tests {
         let mut fade = GlowFade::default();
         let mut step = |state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
-            let moving = fade.step(&mut scene, &state.appearance.view, now);
+            let moving = fade.step(&mut scene, now);
             let node = node_at(&scene, LatticePos::ORIGIN);
             let lit = fade.nodes[&LatticePos::ORIGIN];
             (
@@ -737,20 +740,20 @@ mod tests {
         let lit = |scene: &Scene| scene.nodes.iter().filter(|n| n.glow.level > 0.0).count();
         let mut fade = GlowFade::default();
         let mut first = window(0);
-        fade.step(&mut first, &state.appearance.view, 0.0);
+        fade.step(&mut first, 0.0);
         assert_eq!(lit(&first), MAX_LIGHTS, "one more node than a surface lights");
         // Half a window on: newcomers first in scene order, then the lights
         // still carried, which keep theirs, and the newcomers take only the
         // places those leave.
         let mut half = window(-2048);
-        fade.step(&mut half, &state.appearance.view, 0.05);
+        fade.step(&mut half, 0.05);
         assert_eq!(lit(&half), MAX_LIGHTS, "newcomers ahead of carried lights overran the cap");
         assert!(
             half.nodes.iter().filter(|n| n.lattice_pos.threes >= 0).all(|n| n.glow.level > 0.0),
             "a carried light lost its place to a newcomer",
         );
         let mut moved = window(100_000);
-        fade.step(&mut moved, &state.appearance.view, 0.1);
+        fade.step(&mut moved, 0.1);
         assert_eq!(lit(&moved), MAX_LIGHTS, "lights that left the window held their places");
     }
 
@@ -763,12 +766,12 @@ mod tests {
         let mut fade = GlowFade::default();
         for now in [0.0, 0.5, 1.0] {
             let mut scene = scene_at(&state, now);
-            let moving = fade.step(&mut scene, &state.appearance.view, now);
+            let moving = fade.step(&mut scene, now);
             assert!(!moving, "a held light asked to be repainted at {now}");
         }
         state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let mut scene = scene_at(&state, 1.5);
-        let moving = fade.step(&mut scene, &state.appearance.view, 1.5);
+        let moving = fade.step(&mut scene, 1.5);
         assert!(moving, "a released light is falling");
     }
 
@@ -782,14 +785,14 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
         let mut scene = scene_at(&state, 0.0);
-        fade.step(&mut scene, &state.appearance.view, 0.0);
+        fade.step(&mut scene, 0.0);
         assert!(node_at(&scene, LatticePos::ORIGIN).glow.level > 0.0, "the note lit nothing");
         state.runtime.tracker.handle_event(NoteEvent::off(0.0, SourceId::DIRECT, 0, 60));
         let mut now = 0.0;
         loop {
             now += 1.0 / 144.0;
             let mut scene = scene_at(&state, now);
-            let moving = fade.step(&mut scene, &state.appearance.view, now);
+            let moving = fade.step(&mut scene, now);
             if node_at(&scene, LatticePos::ORIGIN).glow.level == 0.0 {
                 assert!(!moving, "the light ended at {now:.3}s and asked for another frame");
                 break;
@@ -834,13 +837,13 @@ mod tests {
         let mut state = lit(1.0, 0.5);
         let mut fade = GlowFade::default();
         let mut idle = scene_at(&state, 0.0);
-        fade.step(&mut idle, &state.appearance.view, 0.0);
+        fade.step(&mut idle, 0.0);
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         for (time, expected) in
             [(0.0, 0.0), (0.5, 1.0 - (-0.5f32).exp()), (1.0, 1.0 - (-1.0f32).exp())]
         {
             let mut scene = scene_at(&state, time);
-            fade.step(&mut scene, &state.appearance.view, time);
+            fade.step(&mut scene, time);
             let node = node_at(&scene, LatticePos::ORIGIN);
             assert!((node.glow.level - expected).abs() < 0.001, "attack at {time}: {node:?}");
             assert_eq!(node.glow.light, node.glow_light(), "the light was not seeded whole");
@@ -884,7 +887,7 @@ mod tests {
         let pos = node.lattice_pos;
 
         let mut fade = GlowFade::default();
-        fade.step(&mut scene, &state.appearance.view, 0.0);
+        fade.step(&mut scene, 0.0);
         let held = node_at(&scene, pos).glow.level;
         assert_eq!(held, 0.0, "a ring lit its node at {held}");
         assert!(fade.nodes.is_empty(), "a ring was given a light");

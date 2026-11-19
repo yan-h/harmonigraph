@@ -481,13 +481,12 @@ impl NodeMotion {
     /// This selects geometry only, reading the voices and the roll for their
     /// pitches; their onsets, releases and envelopes are read by `step` and,
     /// for an audio-only pose, by `gates`.
-    pub fn light_classes(
+    pub(crate) fn light_classes(
         tracker: &NoteTracker,
         view: &ViewConfig,
-        env: &Envelope,
         now: f64,
     ) -> Vec<PitchClass> {
-        let floor = now - horizon(env.fade_time, view.mark_delay, view.note_animation);
+        let floor = now - horizon(view.fade_time, view.mark_delay, view.note_animation);
         let mut classes: Vec<_> = tracker.voices().map(|voice| voice.pitch_class).collect();
         let presses = tracker.roll().voice_presses();
         for note in presses.filter(|note| note.end.is_none_or(|at| at >= floor)) {
@@ -702,21 +701,25 @@ impl NodeMotion {
     }
     /// Apply carried motion, then marker/name complement and the MIDI ring floor.
     /// `fade` contains measured audio presence only, independent of that floor.
-    /// The caller prunes `tracker` at `now` with this envelope before composition.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// Read against the scene's own view and its envelope
+    /// ([`ViewConfig::envelope`], the single assembly point), so the motion
+    /// cannot be stepped on another look than the one the scene was derived
+    /// from. The caller prunes `tracker` at `now` with that envelope before
+    /// composition.
     pub fn step(
         &mut self,
         scene: &mut Scene,
         tracker: &NoteTracker,
         tuning: &Tuning,
-        view: &ViewConfig,
-        env: &Envelope,
         fade: &RingFade,
         now: f64,
     ) {
         if !now.is_finite() {
             return;
         }
+        let view = &scene.view;
+        let env = &view.envelope();
         let horizon = horizon(env.fade_time, view.mark_delay, view.note_animation);
         // A hidden surface cannot benefit from replaying minutes of settled
         // history. Seed current state and replay only the visible horizon.
@@ -1064,11 +1067,11 @@ mod tests {
             0,
             "fixture must rely on bounded roll, not current voices"
         );
-        let classes = NodeMotion::light_classes(&tracker, &view, &env, 0.2);
+        let classes = NodeMotion::light_classes(&tracker, &view, 0.2);
         for note in [60, 62, 64] {
             assert!(classes.contains(&PitchClass::from_midi_note(note)));
         }
-        assert!(NodeMotion::light_classes(&tracker, &view, &env, 2.0).is_empty());
+        assert!(NodeMotion::light_classes(&tracker, &view, 2.0).is_empty());
     }
 
     use crate::{derive_scene, Camera, MIDDLE_C_SLOT};
@@ -1103,7 +1106,7 @@ mod tests {
             scene.spectral.gate = 0.0;
             fade.advance(&crate::RingGate::new(&scene.spectral), &env, now);
         }
-        motion.step(&mut scene, tracker, &Tuning::default(), view, &env, &fade, now);
+        motion.step(&mut scene, tracker, &Tuning::default(), &fade, now);
         scene
     }
     /// The view with intensity pinned unrouted, so every note is drawn in full,
@@ -1590,16 +1593,7 @@ mod tests {
         tracker.handle_event(on(0.0, 60));
         let mut scene = draw(&mut motion, &mut tracker, &view, 1.1, false);
         scene.nodes.retain(|node| node.lattice_pos != LatticePos::ORIGIN);
-        let env = ViewConfig { fade_time: 1.0, ..view.clone() }.envelope();
-        motion.step(
-            &mut scene,
-            &tracker,
-            &Tuning::default(),
-            &view,
-            &env,
-            &RingFade::default(),
-            1.2,
-        );
+        motion.step(&mut scene, &tracker, &Tuning::default(), &RingFade::default(), 1.2);
         assert!(!motion.nodes.contains_key(&LatticePos::ORIGIN));
         let returned = draw(&mut motion, &mut tracker, &view, 1.3, false);
         assert_eq!(origin(&returned).slice_progress, [1.0; 11]);
@@ -2314,7 +2308,7 @@ mod tests {
                 let mut drawn = Vec::new();
                 for motion in [&mut dense, &mut sparse] {
                     let mut scene = scene();
-                    motion.step(&mut scene, &tracker, &Tuning::default(), &view, &env, &fade, now);
+                    motion.step(&mut scene, &tracker, &Tuning::default(), &fade, now);
                     let lights: Vec<_> =
                         scene.nodes.iter().map(|n| motion.owns_light(n.lattice_pos)).collect();
                     drawn.push(format!("{:?} {:?} {lights:?}", scene.nodes, scene.pluses));

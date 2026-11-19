@@ -574,8 +574,6 @@ fn a_hovered_position_draws_no_marker() {
         &mut scene,
         &NoteTracker::new(),
         &Tuning::default(),
-        &view,
-        &view.envelope(),
         &RingFade::default(),
         0.0,
     );
@@ -787,7 +785,7 @@ fn a_soft_notes_name_and_cross_hold_still_at_key_up() {
         tracker.prune(now, &env);
         let mut scene =
             derive_scene(&tracker, &tuning, &view, &view.reach(), Camera::default(), None);
-        motion.step(&mut scene, &tracker, &tuning, &view, &env, &RingFade::default(), now);
+        motion.step(&mut scene, &tracker, &tuning, &RingFade::default(), now);
         let node = *origin_node(&scene);
         let name = node.name_level(&view);
         let cross =

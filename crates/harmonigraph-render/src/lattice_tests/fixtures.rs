@@ -20,8 +20,6 @@ pub(super) fn animated_snapshot(
         &mut scene,
         tracker,
         tuning,
-        view,
-        &view.envelope(),
         &harmonigraph_scene::RingFade::default(),
         now,
     );

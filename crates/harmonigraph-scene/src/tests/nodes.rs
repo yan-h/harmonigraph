@@ -687,15 +687,7 @@ fn one_fade_time_carries_every_layer_of_the_node() {
     tracker.prune(1.5, &view.envelope());
     let tuning = Tuning::default();
     let mut scene = scene_of(&tracker, &tuning, &view, 1.5);
-    NodeMotion::default().step(
-        &mut scene,
-        &tracker,
-        &tuning,
-        &view,
-        &view.envelope(),
-        &RingFade::default(),
-        1.5,
-    );
+    NodeMotion::default().step(&mut scene, &tracker, &tuning, &RingFade::default(), 1.5);
 
     let half = |what: &str, v: f32| {
         assert!((v - 0.5).abs() < 1e-5, "{what} should be half-faded, got {v}");
@@ -730,15 +722,7 @@ fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
         let mut ringing = Vec::new();
         let mut sample = |tracker: &NoteTracker, now| {
             let mut scene = scene_of(tracker, &tuning, &view, now);
-            motion.step(
-                &mut scene,
-                tracker,
-                &tuning,
-                &view,
-                &view.envelope(),
-                &RingFade::default(),
-                now,
-            );
+            motion.step(&mut scene, tracker, &tuning, &RingFade::default(), now);
             ringing.extend(
                 scene
                     .nodes
@@ -1040,15 +1024,7 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     // And the mark extends that same sector, whose colour the shader looks
     // up from the slot: a slot an octave out would be a mark a seventh of the
     // ramp away from the disc it sits on.
-    NodeMotion::default().step(
-        &mut scene,
-        &tracker,
-        &tuning,
-        &view,
-        &view.envelope(),
-        &RingFade::default(),
-        0.5,
-    );
+    NodeMotion::default().step(&mut scene, &tracker, &tuning, &RingFade::default(), 0.5);
     let origin = origin_node(&scene);
     let marked: Vec<usize> =
         (0..OCTAVE_SLOTS).filter(|&s| origin.melody_slots >> s & 1 == 1).collect();
@@ -1159,7 +1135,7 @@ fn animate_measured(scene: &mut Scene, tracker: &NoteTracker, view: &ViewConfig,
     if scene.spectral.ring_draws() {
         fade.advance(&RingGate::new(&scene.spectral), &env, now);
     }
-    NodeMotion::default().step(scene, tracker, &Tuning::just(), view, &env, &fade, now);
+    NodeMotion::default().step(scene, tracker, &Tuning::just(), &fade, now);
 }
 
 fn gated_scene(gate: f32, pitch: f32) -> Scene {

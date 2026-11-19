@@ -415,15 +415,7 @@ fn map_assignments(
         .into_iter()
         .flat_map(|map| (0..12).map(move |midi| map.node(midi)))
         .filter(|&pos| window.contains(pos))
-        .filter_map(|pos| {
-            scene
-                .nodes
-                .binary_search_by_key(&(pos.threes, pos.fives, pos.sevens), |node| {
-                    let p = node.lattice_pos;
-                    (p.threes, p.fives, p.sevens)
-                })
-                .ok()
-        })
+        .filter_map(|pos| scene.node_index(pos))
         .collect();
     indices.sort_unstable();
     indices.dedup();
@@ -447,12 +439,7 @@ fn draw_map_overlay(
         .hovered
         .filter(|pos| maps.is_some_and(|m| m.editing()) && window.contains(*pos))
     {
-        if let Ok(index) =
-            scene.nodes.binary_search_by_key(&(pos.threes, pos.fives, pos.sevens), |node| {
-                let p = node.lattice_pos;
-                (p.threes, p.fives, p.sevens)
-            })
-        {
+        if let Some(index) = scene.node_index(pos) {
             if let Some(p) = projector.project(scene.nodes[index].world_pos) {
                 let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
                 painter.circle_stroke(
