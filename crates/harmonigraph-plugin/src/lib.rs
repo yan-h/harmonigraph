@@ -1761,7 +1761,7 @@ mod tests {
         while shared.ui.picture.runtime.tracker.roll().notes().count() < 2
             && Instant::now() < deadline
         {
-            input.drain(shared, &mut Vec::new(), 22.0);
+            input.drain(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 22.0);
             std::thread::yield_now();
         }
         let notes: Vec<_> =
@@ -1786,7 +1786,11 @@ mod tests {
             let mut main = [&mut left[..], &mut right[..]];
             plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
         }
-        let columns = input.drain_columns(shared, plugin.presentation_seconds);
+        let columns = input.drain_columns(
+            &mut shared.clock,
+            &mut shared.ui.picture,
+            plugin.presentation_seconds,
+        );
         assert!(columns.len() > 40, "all three callbacks must reach the analyzer");
         let before = shared.ui.picture.runtime.spectrum.columns_taken();
         let times: Vec<_> = columns.iter().map(|(time, _)| *time).collect();
@@ -1800,7 +1804,12 @@ mod tests {
         let mut right = [0.0; 384];
         let mut main = [&mut left[..], &mut right[..]];
         plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
-        input.drain(shared, &mut Vec::new(), plugin.presentation_seconds);
+        input.drain(
+            &mut shared.clock,
+            &mut shared.ui.picture,
+            &mut Vec::new(),
+            plugin.presentation_seconds,
+        );
         assert_eq!(shared.ui.picture.runtime.spectrum.columns_taken(), before);
     }
 

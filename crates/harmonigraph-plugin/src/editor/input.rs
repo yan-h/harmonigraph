@@ -5,7 +5,6 @@ use std::time::Instant;
 use egui_baseview::baseview::FrameTiming;
 
 use super::clock::ClockMapper;
-use super::EditorShared;
 
 /// The clock frames draw by, the only part of the input a frame reads: it
 /// stays under the editor lock, while the input itself ([`LiveInput`]) is the
@@ -126,16 +125,17 @@ impl LiveInput {
     /// records are mapped; delayed batches never reset that anchor.
     fn drain_into_tracker(
         &mut self,
-        shared: &mut EditorShared,
+        clock: &mut DisplayClock,
+        picture: &mut harmonigraph_ui::PictureState,
         marks: &mut Vec<(f64, crate::tape::notes::Mark)>,
         now: f64,
     ) {
-        let clock = &mut shared.clock.mapper;
+        let clock = &mut clock.mapper;
         if let Some(observation) = self.consumer.clock() {
             clock.observe(observation, now);
         }
         let Some(offset) = clock.offset else { return };
-        let tracker = &mut shared.ui.picture.runtime.tracker;
+        let tracker = &mut picture.runtime.tracker;
         let recorder = &mut self.recorder;
         self.consumer.drain(|event| {
             let result = tracker.handle_canonical_mapped(event, offset);
@@ -154,17 +154,21 @@ impl LiveInput {
     /// spectrogram read this one analyzer, the curve is always drawn, and
     /// feeding it is also what drives smooth repaint while anything it heard
     /// is still on screen (`harmonigraph_ui::Animating::audible`).
-    fn take_audio(&mut self, shared: &EditorShared) -> Option<&Taken> {
+    fn take_audio(
+        &mut self,
+        clock: &DisplayClock,
+        picture: &harmonigraph_ui::PictureState,
+    ) -> Option<&Taken> {
         // One clock conversion per take, shared with note delivery and made
         // in the same hold, observed and then mapped as a frame's drain did.
-        let offset = shared.clock.mapper.offset?;
+        let offset = clock.mapper.offset?;
         let audio = &mut self.taken;
         // Emptied here rather than once given, so what a step that panicked
         // before giving left behind is never given again.
         audio.samples.clear();
         audio.blocks.clear();
         audio.deliveries.clear();
-        audio.config = shared.ui.picture.appearance.spectrum;
+        audio.config = picture.appearance.spectrum;
         audio.offset = offset;
         self.audio_consumer.drain(|block, samples| {
             let position = (block.epoch, block.first_frame);
@@ -238,25 +242,27 @@ impl LiveInput {
     /// the input worker in the same hold and a frame in `begin_frame`.
     pub(crate) fn take(
         &mut self,
-        shared: &mut EditorShared,
+        clock: &mut DisplayClock,
+        picture: &mut harmonigraph_ui::PictureState,
         marks: &mut Vec<(f64, crate::tape::notes::Mark)>,
         now: f64,
     ) -> Option<&Taken> {
-        self.drain_into_tracker(shared, marks, now);
-        self.take_audio(shared)
+        self.drain_into_tracker(clock, picture, marks, now);
+        self.take_audio(clock, picture)
     }
     /// A whole step with the lock held throughout: take, analyze, give. The
     /// input worker splits the same three around its lock; this is them in
     /// one, for its final drain and for tests.
     pub(crate) fn drain(
         &mut self,
-        shared: &mut EditorShared,
+        clock: &mut DisplayClock,
+        picture: &mut harmonigraph_ui::PictureState,
         marks: &mut Vec<(f64, crate::tape::notes::Mark)>,
         now: f64,
     ) {
-        if self.take(shared, marks, now).is_some() {
+        if self.take(clock, picture, marks, now).is_some() {
             self.analyze();
-            self.give(&mut shared.ui.picture.runtime);
+            self.give(&mut picture.runtime);
         }
     }
     /// [`Self::drain`] with a delivery tap: the columns its analysis made, as
@@ -264,10 +270,11 @@ impl LiveInput {
     #[cfg(test)]
     pub(crate) fn drain_columns(
         &mut self,
-        shared: &mut EditorShared,
+        clock: &mut DisplayClock,
+        picture: &mut harmonigraph_ui::PictureState,
         now: f64,
     ) -> Vec<(f64, Vec<f32>)> {
-        if self.take(shared, &mut Vec::new(), now).is_none() {
+        if self.take(clock, picture, &mut Vec::new(), now).is_none() {
             return Vec::new();
         }
         self.analyze();
@@ -275,7 +282,7 @@ impl LiveInput {
             .filter_map(harmonigraph_ui::Delivery::column)
             .map(|column| (column.time(), column.power().to_vec()))
             .collect();
-        self.give(&mut shared.ui.picture.runtime);
+        self.give(&mut picture.runtime);
         columns
     }
 }
@@ -352,7 +359,7 @@ mod tests {
     }
 
     fn drain_audio(input: &mut LiveInput, shared: &mut EditorShared, now: f64) {
-        input.drain(shared, &mut Vec::new(), now);
+        input.drain(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), now);
     }
 
     /// Callbacks a 144 Hz display link ran late by these amounts — the spread
@@ -439,10 +446,18 @@ mod tests {
                 count += 1;
                 if count % drain_every == 0 {
                     let now = 10.0 + end as f64 / 48_000.0 + delay;
-                    actual.extend(input.drain_columns(&mut shared, now));
+                    actual.extend(input.drain_columns(
+                        &mut shared.clock,
+                        &mut shared.ui.picture,
+                        now,
+                    ));
                 }
             }
-            actual.extend(input.drain_columns(&mut shared, 15.0 + delay));
+            actual.extend(input.drain_columns(
+                &mut shared.clock,
+                &mut shared.ui.picture,
+                15.0 + delay,
+            ));
             assert!(actual.len() > 50, "fixture must fill the window and reach many FFT hops");
             if let Some(expected) = &reference {
                 assert_eq!(&actual, expected, "callback={callback}, drain_every={drain_every}");
@@ -519,7 +534,11 @@ mod tests {
                     )
                     .unwrap();
                 notes.observe_clock(end);
-                columns.extend(input.drain_columns(&mut shared, end / speed));
+                columns.extend(input.drain_columns(
+                    &mut shared.clock,
+                    &mut shared.ui.picture,
+                    end / speed,
+                ));
                 now = shared.clock.display_now(end / speed);
                 shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
             }
@@ -598,7 +617,7 @@ mod tests {
             crate::audio_ingress::TapePlay::Idle,
             std::iter::repeat(0.0),
         );
-        let mut refilled = input.drain_columns(&mut shared, 4.0);
+        let mut refilled = input.drain_columns(&mut shared.clock, &mut shared.ui.picture, 4.0);
         assert_eq!(shared.ui.picture.runtime.spectrum.columns_taken(), before);
         for i in 1..=4 {
             tx.publish(
@@ -609,7 +628,7 @@ mod tests {
                 crate::audio_ingress::TapePlay::Idle,
                 std::iter::repeat(0.0),
             );
-            refilled.extend(input.drain_columns(&mut shared, 5.0));
+            refilled.extend(input.drain_columns(&mut shared.clock, &mut shared.ui.picture, 5.0));
         }
         assert!(!refilled.is_empty(), "new format must refill and emit columns");
         for (time, power) in &refilled {
@@ -645,7 +664,7 @@ mod tests {
         }
 
         producer.observe_clock(99.995);
-        input.drain_into_tracker(&mut shared, &mut Vec::new(), 7.0);
+        input.drain_into_tracker(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 7.0);
         let mut on_times: Vec<f64> =
             shared.ui.picture.runtime.tracker.voices().map(|v| v.on_time).collect();
         on_times.sort_by(f64::total_cmp);
@@ -661,7 +680,7 @@ mod tests {
         // That is not a new clock: it must not re-anchor the mapping, which
         // would read as a callback pause.
         let anchored = shared.clock.mapper.offset;
-        input.drain_into_tracker(&mut shared, &mut Vec::new(), 8.5);
+        input.drain_into_tracker(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 8.5);
         assert_eq!(shared.clock.mapper.offset, anchored, "an idle poll re-anchored the clock");
         producer.observe_clock(11.0);
         // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
@@ -677,7 +696,7 @@ mod tests {
         producer.note(accepted).unwrap();
         let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
         producer.note(NoteDelta { event, lifetime: 62, ..accepted }).unwrap();
-        input.drain_into_tracker(&mut shared, &mut Vec::new(), 21.0);
+        input.drain_into_tracker(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 21.0);
         assert_eq!(
             shared
                 .ui
@@ -708,7 +727,7 @@ mod tests {
         .unwrap();
         producer.observe_clock(12.0);
         producer.baseline(&baseline).unwrap();
-        input.drain_into_tracker(&mut shared, &mut Vec::new(), 22.2);
+        input.drain_into_tracker(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 22.2);
         let note = shared
             .ui
             .picture
@@ -762,7 +781,7 @@ mod tests {
         )
         .unwrap();
         producer.baseline(&restated).unwrap();
-        input.drain_into_tracker(&mut shared, &mut Vec::new(), 22.3);
+        input.drain_into_tracker(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), 22.3);
         let voice =
             shared.ui.picture.runtime.tracker.voices().find(|v| v.source == SourceId(3)).unwrap();
         let note = shared

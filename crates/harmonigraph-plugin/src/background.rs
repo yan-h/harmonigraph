@@ -286,7 +286,7 @@ fn step(
         let onset = newest_onset(&shared.ui.picture.runtime);
         // The drain's marks go straight to the tape, which `settle` empties
         // every step.
-        let taken = input.take(shared, &mut tape.inbox, now);
+        let taken = input.take(&mut shared.clock, &mut shared.ui.picture, &mut tape.inbox, now);
         if let Some(taken) = taken {
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
@@ -417,8 +417,9 @@ fn run(
     // Destruction follows host callback quiescence. Consume the final owned
     // display payloads before the editor's bank is reclaimed off thread.
     let mut shared = shared.lock();
+    let shared = &mut *shared;
     let now = shared.clock.now();
-    input.drain(&mut shared, &mut tape.inbox, now);
+    input.drain(&mut shared.clock, &mut shared.ui.picture, &mut tape.inbox, now);
 }
 
 #[cfg(test)]
