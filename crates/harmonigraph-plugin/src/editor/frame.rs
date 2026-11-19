@@ -1,4 +1,4 @@
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui_baseview::Queue;
@@ -8,7 +8,6 @@ use crate::{HarmonigraphParams, PluginParamBackend};
 
 use super::lock::EditorLock;
 use super::persist::EguiState;
-use super::pop_out::OwnWindow;
 
 /// The plugin's per-frame GUI work: take the frame's lock, close out the note
 /// frame — and then hand the state the input worker has fed to
@@ -28,9 +27,10 @@ pub(super) fn frame(
     egui_state: &EguiState,
     context: &dyn EditorHost,
 ) {
-    // The view does not own the native controller; closing its editor handle
-    // must be able to release the view and its callbacks.
-    let Some(pop_out) = state.pop_out.upgrade() else { return };
+    // No frame after the host's destroy has closed the editor.
+    if !egui_state.is_open() {
+        return;
+    }
 
     // Everything the shell does before the UI runs: the lock, a restore and
     // the camera. Timed separately because `ui cpu` starts at the dock build,
@@ -105,15 +105,15 @@ pub(super) fn frame(
         shell_ms: shell_start.elapsed().as_secs_f32() * 1000.0 + state.take_ms,
     };
     // A fold is priced against `egui_state.size`, which is the size the window
-    // actually has: `requested_size` is empty by now whatever happened above,
-    // since the window's size source clears it on refusal as well as on
-    // accept, and `size` is only updated when the host agrees, or in the own
-    // window to the size AppKit applied. So two folds in
+    // actually has: the window's size source negotiated any size asked for
+    // before this frame, and the size changes only when the host agrees, or
+    // in the own window to the size AppKit applied. So two folds in
     // consecutive frames add up rather than the second cancelling the first.
     let (window_width, window_height) = egui_state.size();
     // Offered only where the shell can give the editor its own window, and
     // read back after the UI has had the chance to flip it.
-    shared.ui.workspace.interaction.own_window = pop_out.offered().then(|| !egui_state.docked());
+    shared.ui.workspace.interaction.own_window =
+        egui_state.size.offered().then(|| !egui_state.docked());
     let take_start = Instant::now();
     let mut drawing = Duration::ZERO;
     let ask = shared.take_pass(sample_rate, |shared| {
@@ -146,16 +146,17 @@ pub(super) fn frame(
     // Also where a host restore that moved the setting reaches an open editor.
     if let Some(own) = shared.ui.workspace.interaction.own_window {
         egui_state.set_docked(!own);
-        pop_out.want(own);
+        egui_state.size.want(own);
     }
 
     // A pane folded sideways (or came back) leaves every other pane its width
-    // and asks the WINDOW for the difference. Queued rather than applied:
-    // `request_resize` is the host's round trip, and the window's size source
-    // — which runs at the top of the next tick, before the frame it will be
-    // laid out in — is where this window takes it (see `LatticeEditor::spawn`).
+    // and asks the WINDOW for the difference, within the editor's limits.
+    // Queued rather than applied: `request_resize` is the host's round trip,
+    // and the window's size source — which runs at the top of the next tick,
+    // before the frame it will be laid out in — is where this window takes it
+    // (see `next_size`).
     if let Some(size) = ask {
-        egui_state.requested_size.store(Some((size.x.round() as u32, size.y.round() as u32)));
+        egui_state.size.request_size((size.x.round() as u32, size.y.round() as u32));
         ui.ctx().request_repaint();
     }
     // A resize or an Own window switch marks the project modified, as an edit
@@ -181,7 +182,6 @@ const STALL_GAP: f64 = 0.1;
 pub(super) struct WindowState {
     pub(super) shared: Arc<EditorLock>,
     pub(super) params: Arc<HarmonigraphParams>,
-    pub(super) pop_out: Weak<OwnWindow>,
     /// The last pass's take work, in ms, for this pass's shell reading.
     take_ms: f32,
     /// What the frame log was last told the editor was doing.
@@ -190,15 +190,10 @@ pub(super) struct WindowState {
 }
 
 impl WindowState {
-    pub(super) fn new(
-        shared: Arc<EditorLock>,
-        params: Arc<HarmonigraphParams>,
-        pop_out: Weak<OwnWindow>,
-    ) -> Self {
+    pub(super) fn new(shared: Arc<EditorLock>, params: Arc<HarmonigraphParams>) -> Self {
         WindowState {
             shared,
             params,
-            pop_out,
             take_ms: 0.0,
             #[cfg(all(feature = "frame-log", target_os = "macos"))]
             logged: Logged::default(),

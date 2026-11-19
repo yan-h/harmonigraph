@@ -18,9 +18,12 @@ mod window;
 
 pub(crate) use lock::open_window_session;
 pub use lock::EditorLock;
+pub(crate) use persist::SavedWindow;
 pub use persist::{EguiState, UiState};
 pub use shared::EditorShared;
 pub use window::create;
+#[cfg(test)]
+pub(crate) use window::next_size;
 pub(crate) use window::{graphics_config, start_graphics};
 
 /// The surface format egui-baseview's wgpu backend will pick. It isn't
@@ -40,12 +43,14 @@ const MIN_SIZE: (u32, u32) = (
     harmonigraph_ui::shell::MIN_WINDOW_SIZE.x as u32,
     harmonigraph_ui::shell::MIN_WINDOW_SIZE.y as u32,
 );
-/// The largest the editor's own window may be, in logical points: Apple
-/// silicon's texture limit, 16,384 pixels a side, at a Retina display's scale
-/// of 2. Past it egui-baseview refuses the surface, and the picture would stop
-/// following the window, so the window stops where the picture already did,
-/// and no display reaches it. The host's window has no maximum of ours.
+/// The largest the editor may be, in logical points, in the host's window or
+/// its own: Apple silicon's texture limit, 16,384 pixels a side, at a Retina
+/// display's scale of 2. Past it egui-baseview refuses the surface, and the
+/// picture would stop following the window, so the window stops where the
+/// picture already did, and no display reaches it.
 const MAX_SIZE: (u32, u32) = (8192, 8192);
-/// Whether the editor can open in a window of its own on this platform
-/// (`pop_out`); elsewhere it stays in the host's.
-const OWN_WINDOW_OFFERED: bool = cfg!(target_os = "macos");
+/// The sizes the editor allows, in the host's window and in its own: the
+/// host's border drag stops at them (`gui.adjust_size`) and a host size
+/// outside them is refused (Yan, #1814).
+pub(crate) const LIMITS: plugin_own_window::Limits =
+    plugin_own_window::Limits { min: MIN_SIZE, max: MAX_SIZE };
