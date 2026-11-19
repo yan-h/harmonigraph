@@ -126,7 +126,7 @@ one evening with OBS on the plugin window tells you whether anything else is wor
 **Then 1, if it isn't.** The standalone already has the `capture` feature compiled in, already screenshots itself, has free threads, no host, and a window size you control.
 Turn `SelfShot` into `LATTICE_RECORD=out.mp4`:
 screenshot per frame, hand frames to a worker thread, pipe raw to `ffmpeg -f rawvideo`.
-Drive it from the DAW over an IAC MIDI bus (the standalone already enumerates MIDI ports), and port the look you dialed in with `./read-plugin-state.py --rust`.
+Drive it from the DAW over an IAC MIDI bus (the standalone already enumerates MIDI ports), and port the look you dialed in with `./read-plugin-state --rust`.
 The catch is that the standalone's audio is `MockSynth`, so the spectrum curve won't match the real mix —
 if the video leans on the spectrum, this route needs the standalone to accept real audio input first.
 

@@ -482,14 +482,19 @@ impl Table {
             }
             row.plain.store(row.spec.restore(saved.get(row.spec.id)), Ordering::Relaxed);
         }
-        let unknown: Vec<&str> = saved
-            .keys()
-            .map(String::as_str)
-            .filter(|id| self.rows.iter().all(|row| row.spec.id != *id))
-            .collect();
+        let unknown = self.unknown(saved);
         if !unknown.is_empty() {
             crate::shell_warn!("The saved state names parameters this build has not: {unknown:?}");
         }
+    }
+
+    /// The ids `saved` holds that no row has, which a restore skips.
+    pub fn unknown<'a>(&self, saved: &'a BTreeMap<String, ParamValue>) -> Vec<&'a str> {
+        saved
+            .keys()
+            .map(String::as_str)
+            .filter(|id| self.rows.iter().all(|row| row.spec.id != *id))
+            .collect()
     }
 }
 

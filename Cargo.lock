@@ -1591,6 +1591,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "harmonigraph-state-reader"
+version = "0.6.1"
+dependencies = [
+ "flate2",
+ "harmonigraph-clap",
+ "harmonigraph-plugin",
+ "harmonigraph-ui",
+ "ron",
+ "serde_json",
+]
+
+[[package]]
 name = "harmonigraph-take"
 version = "0.6.1"
 dependencies = [

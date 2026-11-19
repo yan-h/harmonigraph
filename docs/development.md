@@ -47,7 +47,7 @@ cargo test
 
 # Read the plugin's live settings from a saved Bitwig project.
 # Save the project first; the window may stay open.
-./read-plugin-state.py
+./read-plugin-state
 ```
 
 The standalone harness uses the same UI and render paths as the plugin.

@@ -79,7 +79,7 @@ OPTIONS:
                            the hardware encoder has its own quality.
                            [default: 10]
         --appearance <FILE>  Override the look recorded in the take with a
-                           versioned appearance RON (read-plugin-state.py --appearance).
+                           versioned appearance RON (./read-plugin-state --appearance).
         --ffmpeg <PATH>    ffmpeg to run. Normally found automatically, on
                            PATH or in the usual install locations.
     -h, --help             Show this.

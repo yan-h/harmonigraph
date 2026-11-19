@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Read the plugin's settings back out of a saved Bitwig project, through the
+# plugin's own load: the read-plugin-state binary of
+# crates/harmonigraph-state-reader, whose doc says what each option prints.
+# Cargo builds it in release and runs it, sharing the plugin's release build:
+# a few minutes in a fresh worktree, seconds after. Cargo's output goes to
+# stderr, so `--appearance > appearance.ron` holds the document alone.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd -P)"
+# Under the session-lifecycle tool where it is installed and not already
+# running this checkout, as ci.sh is, so cleanup never prunes a build in use.
+# It runs commands from the checkout, so the caller's directory comes along
+# for a relative project path.
+tool="${AGENT_LIFECYCLE_TOOL:-$HOME/.agents/skills/session-lifecycle/scripts/lifecycle.py}"
+if [[ -f "$tool" && "${AGENT_LIFECYCLE_ACTIVE:-}" != "$here" ]]; then
+  READ_PLUGIN_STATE_CWD="$PWD" exec python3 "$tool" --repo "$here" run -- "$here/read-plugin-state" "$@"
+fi
+cd "${READ_PLUGIN_STATE_CWD:-$PWD}"
+exec cargo run --release --quiet --manifest-path "$here/Cargo.toml" -p harmonigraph-state-reader -- "$@"

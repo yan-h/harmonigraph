@@ -453,23 +453,12 @@ impl<P: Plugin> Wrapper<P> {
         unsafe_clap_call! { host=>request_callback(&**host) };
     }
 
-    /// The one restore: the setup prepares (and may refuse the whole state),
-    /// then the parameters are set from the main thread, even while audio
-    /// runs, then the setup commits. Nothing reinitializes the plugin.
+    /// The one restore ([`setup::restore`](super::setup::restore)), from the
+    /// main thread, even while audio runs.
     fn restore(&self, state: &PluginState) -> bool {
-        let prepared = match self.setup.as_ref().map(|setup| setup.prepare(state)) {
-            Some(Err(reason)) => {
-                crate::shell_error!("Prepared setup restore refused: {reason}");
-                return false;
-            }
-            Some(Ok(prepared)) => Some(prepared),
-            None => None,
-        };
-        self.params.restore(&state.params);
-        if let Some(prepared) = prepared {
-            prepared.commit();
-        }
-        true
+        super::setup::restore(self.setup.as_deref(), &self.params, state)
+            .inspect_err(|reason| crate::shell_error!("Prepared setup restore refused: {reason}"))
+            .is_ok()
     }
 
     /// Move the number the host reads to the one the plugin asked for, and

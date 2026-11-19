@@ -2,7 +2,7 @@
 //! camera fields overridden — the offline renderer's `--appearance` input,
 //! synthesized instead of recovered from a DAW project.
 //!
-//! `read-plugin-state.py` is the usual way to get one of these, but it needs
+//! `./read-plugin-state` is the usual way to get one of these, but it needs
 //! Bitwig and a saved project. That is the right tool for capturing a look
 //! Yan actually dialed in; it is the wrong one for rendering a still of a look nobody has dialed in yet — a study frame,
 //! a before/after for a settings change, a regression picture.

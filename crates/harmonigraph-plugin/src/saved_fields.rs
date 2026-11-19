@@ -20,9 +20,9 @@ use crate::editor::SavedWindow;
 use crate::HarmonigraphParams;
 use harmonigraph_ui::lattice_maps::MapDocument;
 
-const LATTICE_MAPS: &str = "lattice-maps";
-const EDITOR_STATE: &str = "editor-state";
-const UI_STATE: &str = "ui-state";
+pub(crate) const LATTICE_MAPS: &str = "lattice-maps";
+pub(crate) const EDITOR_STATE: &str = "editor-state";
+pub(crate) const UI_STATE: &str = "ui-state";
 
 /// Write the three fields into `state`. The maps' lock and the editor's lock
 /// are taken one after the other, never nested.
@@ -47,13 +47,7 @@ pub(crate) fn prepare(params: &Arc<HarmonigraphParams>, state: &PluginState) -> 
     let maps = parse(state, LATTICE_MAPS, &mut notes);
     let window = parse(state, EDITOR_STATE, &mut notes);
     let look = parse(state, UI_STATE, &mut notes);
-    let table = &params.table;
-    let unknown: Vec<&str> = state
-        .params
-        .keys()
-        .map(String::as_str)
-        .filter(|id| (0..table.len()).all(|row| table.spec(row).id != *id))
-        .collect();
+    let unknown = params.table.unknown(&state.params);
     if !unknown.is_empty() {
         notes.push(format!(
             "This project saved parameters this build no longer has, which were not read: \
