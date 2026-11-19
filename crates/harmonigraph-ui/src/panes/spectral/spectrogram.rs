@@ -223,6 +223,7 @@ pub(super) fn strip_depths(
 /// drew ([`Moving`](crate::Moving)): what the editor's frame loop stays awake
 /// for. A frame that draws no run reports nothing, and so does a frame
 /// that does not draw the heatmap at all.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,
@@ -235,6 +236,8 @@ pub(crate) fn draw_spectrogram(
     // `SpectrogramSurfaces`) — two live spectrograms in a frame need their
     // own grid.
     surface: usize,
+    // The Stars solo this copy draws (see `spectral_pane`).
+    star_solo: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
 ) {
     // Small copies, so `state.runtime.spectrum` is then free to take mutably without
     // fighting the config reads.
@@ -309,6 +312,7 @@ pub(crate) fn draw_spectrogram(
             now,
             history_epoch: spectrum.history_epoch(),
             light_hold,
+            star_solo,
         }),
     ));
 }
@@ -385,7 +389,16 @@ mod gap_tests {
                 let output = ctx.run_ui(
                     egui::RawInput { screen_rect: Some(rect), ..Default::default() },
                     |ui| {
-                        draw_spectrogram(ui.painter(), &axes, &scale, &mut state, 0.0, now, 0);
+                        draw_spectrogram(
+                            ui.painter(),
+                            &axes,
+                            &scale,
+                            &mut state,
+                            0.0,
+                            now,
+                            0,
+                            crate::panes::lattice::NO_SOLO,
+                        );
                     },
                 );
                 assert_eq!(
@@ -464,7 +477,16 @@ mod gap_tests {
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
         let output =
             ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
-                draw_spectrogram(ui.painter(), &axes, &scale, &mut state, 0.0, 622.0, 0);
+                draw_spectrogram(
+                    ui.painter(),
+                    &axes,
+                    &scale,
+                    &mut state,
+                    0.0,
+                    622.0,
+                    0,
+                    crate::panes::lattice::NO_SOLO,
+                );
             });
         assert!(
             output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Callback(_))),

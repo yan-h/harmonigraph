@@ -178,3 +178,22 @@ fn exact_onset_and_audio_first_keep_surface_local_stable_poses() {
     let scene = frame(&mut hidden, 0.0, 0, true);
     assert_eq!(origin(&scene).slice_progress, [0.0; 11]);
 }
+
+/// A copy's scene carries the Stars solo it is handed, never the one its
+/// state holds, so which copies draw the solo is decided by their callers:
+/// the working pane hands the window's, and the Video preview and an export
+/// hand `NO_SOLO` (Yan, #1862). Those call sites are what keep the preview
+/// free of it; this test does not reach them.
+#[test]
+fn a_scene_carries_the_solo_its_copy_is_handed_not_the_states() {
+    let mut state = crate::tests::probe::fresh_picture();
+    let solo = [false, true, false, true, false];
+    state.surfaces.star_solo.lattice = solo;
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0));
+    let mut drawn = |handed| {
+        let ground = state.surfaces.background;
+        copy_scene(&mut state, rect, 0.0, 0, None, ground, 1.0, handed).1.star_solo
+    };
+    assert_eq!(drawn(solo), solo, "the working pane");
+    assert_eq!(drawn(NO_SOLO), NO_SOLO, "the preview or an export");
+}

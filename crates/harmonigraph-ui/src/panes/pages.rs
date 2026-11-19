@@ -34,7 +34,11 @@ pub(super) fn lattice_settings_pane(
     plus_pane(ui, &mut state.appearance);
     section(ui, "Note bloom", |ui| lighting::note_bloom(ui, &mut state.appearance.view.note_bloom));
     section(ui, "Background glow", |ui| lighting::glow(ui, &mut state.appearance.view));
-    lattice_atmosphere::settings(ui, &mut state.appearance.view);
+    lattice_atmosphere::settings(
+        ui,
+        &mut state.appearance.view,
+        &mut state.surfaces.star_solo.lattice,
+    );
     section(ui, "Shadows", |ui| lighting::lattice_shadows(ui, &mut state.appearance.view));
 }
 
@@ -48,7 +52,11 @@ pub(super) fn analyzer_settings_pane(
     interaction: &mut crate::Interaction,
     params: &dyn ParamBackend,
 ) {
-    spectrogram_section(ui, &mut state.appearance.spectrum);
+    spectrogram_section(
+        ui,
+        &mut state.appearance.spectrum,
+        &mut state.surfaces.star_solo.spectrogram,
+    );
     ribbons_section(ui, &mut state.appearance.spectrum, &mut state.appearance.view.note_bloom);
     view_section(ui, state, &mut interaction.dock);
     analysis_section(ui, &mut state.appearance.spectrum, params);

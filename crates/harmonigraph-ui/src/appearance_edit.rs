@@ -86,26 +86,6 @@ impl Slots {
     pub(crate) fn stored(&self, slot: usize) -> Option<&Look> {
         self.stored[slot].as_ref()
     }
-
-    /// Take on the Stars solos `live`'s stored looks hold, which a save skips,
-    /// so that equality is what a save stores.
-    pub(crate) fn copy_solo(&mut self, live: &Slots) {
-        for (own, live) in self.stored.iter_mut().zip(&live.stored) {
-            if let (Some(own), Some(live)) = (own, live) {
-                copy_solo((&mut own.view, &mut own.spectrum), (&live.view, &live.spectrum));
-            }
-        }
-    }
-}
-
-/// Copy the Stars solos, which a save skips (`StarSettings::star_solo`), from
-/// one look's view and spectrum into another's: the one list of where they are.
-pub(crate) fn copy_solo(
-    (view, spectrum): (&mut ViewConfig, &mut SpectrumConfig),
-    (from_view, from_spectrum): (&ViewConfig, &SpectrumConfig),
-) {
-    view.atmosphere.stars.star_solo = from_view.atmosphere.stars.star_solo;
-    spectrum.atmosphere.stars.star_solo = from_spectrum.atmosphere.stars.star_solo;
 }
 
 pub(crate) fn slot_name(slot: usize) -> String {
@@ -521,7 +501,13 @@ mod tests {
                     let before = Look::capture(&state.appearance);
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                     crate::panes::spectral::spectral_pane(
-                        &mut child, &mut state, 0.0, 1, 1.0, navigation,
+                        &mut child,
+                        &mut state,
+                        0.0,
+                        1,
+                        1.0,
+                        navigation,
+                        crate::panes::lattice::NO_SOLO,
                     );
                     zooming_frames += usize::from(before != Look::capture(&state.appearance));
                     editor.end_frame(before, &mut state.appearance, ui.ctx(), false);
@@ -612,6 +598,7 @@ mod tests {
                         1,
                         1.0,
                         crate::panes::spectral::Navigation::Docked,
+                        crate::panes::lattice::NO_SOLO,
                     );
                     moving_frames += usize::from(before != Look::capture(&state.appearance));
                     editor.end_frame(before, &mut state.appearance, ui.ctx(), false);

@@ -506,9 +506,9 @@ fn soloing_carries_and_updates_every_layers_color_history() {
     cb.grid.fill(0);
     for solo in [true, true, false] {
         cb.atmosphere.as_mut().unwrap().now += 0.1;
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_solo = [false; 5];
+        cb.atmosphere.as_mut().unwrap().star_solo = [false; 5];
         prepare_once(&device, &queue, &mut control, &cb);
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_solo[4] = solo;
+        cb.atmosphere.as_mut().unwrap().star_solo[4] = solo;
         prepare_once(&device, &queue, &mut changed, &cb);
         let current = pixels(&device, &queue, memory(&changed));
         assert_eq!(current, pixels(&device, &queue, memory(&control)), "solo={solo}");

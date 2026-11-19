@@ -38,7 +38,11 @@ pub(crate) fn span_readout(seconds: f32) -> String {
 /// Analyzer page, being what gets dialled per song. Its switch is in the heading, because off there is
 /// nothing here that draws; the history it shares with the ribbons is under
 /// View, the axis it is.
-pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
+pub(crate) fn spectrogram_section(
+    ui: &mut egui::Ui,
+    cfg: &mut crate::SpectrumConfig,
+    solo: &mut [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
+) {
     let atmosphere = &mut cfg.atmosphere;
     switched_section(
         ui,
@@ -122,6 +126,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                         super::super::material::stars(
                             ui,
                             &mut atmosphere.stars,
+                            solo,
                             &crate::panes::fresh_spectrum().atmosphere.stars,
                             harmonigraph_scene::StarPane::Spectrogram,
                         );

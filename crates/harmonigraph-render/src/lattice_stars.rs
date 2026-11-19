@@ -120,6 +120,8 @@ impl Pipelines {
 
 pub(super) struct Frame {
     pub settings: harmonigraph_scene::StarSettings,
+    /// The editor's Stars solo ([`stars::soloed`]).
+    pub solo: [bool; stars::STAR_SLICES],
     pub layout: stars::StarLayout,
     /// How far the stars have travelled and their lives run, at
     /// [`stars::star_px_per_second`] (`PaneBuffers::material_travel`).
@@ -248,7 +250,7 @@ impl Targets {
         size: [u32; 2],
         frame: Frame,
     ) {
-        let Frame { settings: stars, layout, motion, amount } = frame;
+        let Frame { settings: stars, solo, layout, motion, amount } = frame;
         let allocation = Allocation {
             output: size,
             atlas: stars::star_atlas_size(layout.size(), held.as_ref().map(|t| t.allocation.atlas)),
@@ -265,7 +267,10 @@ impl Targets {
                 motion,
                 size.map(|n| n as f32),
                 held.allocation.image,
-                stars::star_slices(stars, motion.stars, &layout, held.allocation.image),
+                stars::soloed(
+                    stars::star_slices(stars, motion.stars, &layout, held.allocation.image),
+                    solo,
+                ),
             ),
             depth: amount,
             _pad0: 0.0,

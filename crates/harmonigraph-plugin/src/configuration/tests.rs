@@ -908,6 +908,73 @@ fn a_ui_state_edit_marks_the_project_once_and_its_restore_does_not() {
     assert_eq!(device.service(), before + 1, "once");
 }
 
+/// A resize or an Own window switch, what `editor-state` saves, has the host
+/// mark the project modified, once per change; a host's resize while the
+/// editor opens marks nothing, nor does a restore (#1824). `frame` is what
+/// the end of each editor frame does, and the editor opens docked, where a
+/// host's `set_size` is the editor's size.
+/// A notice only sets a flag the host services, so the device is serviced
+/// after every frame: notices from two frames would otherwise read as one.
+#[test]
+fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not() {
+    let _scope = crate::test_scope::enter();
+    let device = Device::new();
+    let gui = unsafe {
+        &*(((*device.plugin).get_extension.unwrap())(device.plugin, CLAP_EXT_GUI.as_ptr())
+            .cast::<clap_plugin_gui>())
+    };
+    let (mut api, mut floating) = (ptr::null(), false);
+    unsafe {
+        assert!((gui.get_preferred_api.unwrap())(device.plugin, &mut api, &mut floating));
+        assert!((gui.create.unwrap())(device.plugin, api, false));
+    }
+    let state = device.wrapper().test_inspect_plugin(|plugin| plugin.params.editor_state.clone());
+    let settings = device.settings();
+    let frame = || state.report_edit(|| settings.changed());
+    let resize = |grow: u32| {
+        let (width, height) = state.size();
+        let size = (width + grow, height + grow);
+        assert!(unsafe { (gui.set_size.unwrap())(device.plugin, size.0, size.1) });
+        assert_eq!(state.size(), size, "the host sized the editor");
+    };
+    let before = device.service();
+    state.set_docked(true);
+    state.set_open(true);
+    resize(40);
+    frame();
+    assert_eq!(device.service(), before, "a resize while the editor opens");
+    resize(30);
+    frame();
+    assert_eq!(device.service(), before + 1, "a resize");
+    frame();
+    assert_eq!(device.service(), before + 1, "once");
+    state.set_docked(false);
+    frame();
+    assert_eq!(device.service(), before + 2, "an Own window switch");
+    frame();
+    assert_eq!(device.service(), before + 2, "once");
+
+    let saved = crate::editor::EguiState::from_size(900, 700);
+    saved.set_docked(true);
+    let mut project = device.wrapper().get_state_object();
+    project.fields.insert("editor-state".into(), serde_json::to_string(&*saved).unwrap());
+    device.load(project, false);
+    assert_eq!(state.size(), (900, 700), "the restore installed");
+    frame();
+    assert_eq!(device.service(), before + 2, "a restore");
+
+    // Closed, then reopened: a frame the own window draws as the view moves
+    // into it comes before the opening is recorded.
+    state.set_open(false);
+    resize(20);
+    frame();
+    assert_eq!(device.service(), before + 2, "a resize while the view moves in");
+    state.set_open(true);
+    resize(20);
+    frame();
+    assert_eq!(device.service(), before + 2, "a resize while the editor opens again");
+}
+
 /// The queue keeps arrival order across kinds: an edit queued before a restore
 /// is overwritten by it, and one queued after it lands on the restored record.
 #[test]

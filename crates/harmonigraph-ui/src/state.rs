@@ -233,6 +233,23 @@ pub struct SurfaceState {
     /// is what a project saves and a take renders from, and a length in POINTS
     /// is a fact about the window this session happens to be open in.
     pub(crate) spectrum_hold: panes::spectral::SpectrumHold,
+    /// Which Stars depths each picture solos, from the Stars `Solo` toggles: a
+    /// viewing aid for one editor window rather than part of the look (#1828).
+    /// No save, slot, undo or export holds it, so it stays through a slot
+    /// switch, an undo or a restore until it is switched off or the window
+    /// closes ([`SharedState::start_window_session`]). Only the working
+    /// lattice and spectrogram panes are handed it, so the Video preview draws
+    /// what the render will (Yan, #1862); crate-private as well, so the
+    /// offline renderer cannot set it.
+    pub(crate) star_solo: StarSolo,
+}
+
+/// Which Stars depths the lattice and the spectrogram each solo
+/// ([`SurfaceState::star_solo`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct StarSolo {
+    pub lattice: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
+    pub spectrogram: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
 }
 
 /// The editor's preferences: how this editor, on this screen, is set up to
@@ -790,9 +807,8 @@ impl SharedState {
         self.workspace.interaction.appearance_editor.start_window_session();
         // The new window lays the Analyzer out afresh.
         self.workspace.interaction.analyzer_regions.relayout();
-        // A viewing aid for one sitting, never saved (`StarSettings::star_solo`).
-        self.picture.appearance.view.atmosphere.stars.star_solo = Default::default();
-        self.picture.appearance.spectrum.atmosphere.stars.star_solo = Default::default();
+        // A viewing aid for one window (`SurfaceState::star_solo`).
+        self.picture.surfaces.star_solo = Default::default();
     }
 
     /// The editor is closing, or has stopped being seen: an appearance edit
@@ -877,10 +893,8 @@ impl UiPersist {
     ///
     /// - the host-owned camera ([`AppearanceDocument::copy_host_owned`]),
     ///   which reaches it as parameters and which automation moves;
-    /// - the Stars solos of the live look and the stored ones, which serde
-    ///   skips ([`appearance_edit::copy_solo`]);
-    /// - what the Analyzer's regions lay out by themselves
-    ///   ([`Regions::copy_layout`]).
+    /// - what the Analyzer's regions lay out by themselves, and the relayout
+    ///   flag serde skips ([`Regions::copy_layout`]).
     ///
     /// The layout `workspace::show` fits to the window is settled where it is
     /// written instead, since the layout is also edited.
@@ -890,10 +904,9 @@ impl UiPersist {
     /// whole by its derived `PartialEq`, so a field added inside one is in the
     /// key by itself. What it does not: a `#[serde(skip)]` field added to any
     /// of them is compared all the same, and marks the project at every change
-    /// until it is copied in here.
+    /// until it is copied in here, as the regions' relayout flag is.
     ///
     /// [`AppearanceDocument::copy_host_owned`]: crate::AppearanceDocument::copy_host_owned
-    /// [`appearance_edit::copy_solo`]: crate::appearance_edit::copy_solo
     /// [`Regions::copy_layout`]: crate::panes::spectral::collapse::Regions::copy_layout
     fn stores(&mut self, workspace: &Workspace, appearance: &crate::AppearanceDocument) -> bool {
         let UiPersist {
@@ -910,11 +923,6 @@ impl UiPersist {
             (&mut own.camera, &mut own.view),
             (&appearance.camera, &appearance.view),
         );
-        crate::appearance_edit::copy_solo(
-            (&mut own.view, &mut own.spectrum),
-            (&appearance.view, &appearance.spectrum),
-        );
-        look_slots.copy_solo(&interaction.appearance_editor.slots);
         analyzer_regions.copy_layout(&interaction.analyzer_regions);
         *own == *appearance
             && *layout == workspace.layout
@@ -953,6 +961,7 @@ impl SurfaceState {
             node_motion: std::collections::HashMap::new(),
             spare_nodes: Vec::new(),
             spectrum_hold: panes::spectral::SpectrumHold::default(),
+            star_solo: StarSolo::default(),
         }
     }
 }

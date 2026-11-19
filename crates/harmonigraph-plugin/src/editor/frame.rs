@@ -158,6 +158,9 @@ pub(super) fn frame(
         egui_state.requested_size.store(Some((size.x.round() as u32, size.y.round() as u32)));
         ui.ctx().request_repaint();
     }
+    // A resize or an Own window switch marks the project modified, as an edit
+    // to what `ui-state` saves does (#1824).
+    egui_state.report_edit(|| state.params.settings.changed());
 
     // AFTER the UI has run, so a rate picked this frame takes effect on the
     // next refresh rather than the one after it.
