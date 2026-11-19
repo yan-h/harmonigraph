@@ -795,10 +795,12 @@ fn source_instances(
                 }
             };
             let (cropped_t0, cropped_t1) = (t0.max(edge), t1.min(near_edge));
-            let (p0, p1) = (
-                if cropped_t0 > t0 { at(cropped_t0) } else { p0 },
-                if cropped_t1 < t1 { at(cropped_t1) } else { p1 },
-            );
+            let p0 = if cropped_t0 > t0 { at(cropped_t0) } else { p0 };
+            // The segment's flat colour, read at its middle as the far crop
+            // leaves it and before the near one: the near crop saves quads
+            // the pane never shows, and changes nothing that it does.
+            let pitch = (p0 + p1) * 0.5;
+            let p1 = if cropped_t1 < t1 { at(cropped_t1) } else { p1 };
             let (t0, t1) = (cropped_t0, cropped_t1);
             // Unclamped: `edge` already bounds how far past the region these
             // can reach, and clamping is what squashed the leaving ribbon
@@ -864,7 +866,6 @@ fn source_instances(
             }
             // A flat, opaque pitch color; the Opacity mapping fades it (`Look::fade`).
             // Read it only for segments that survive the pitch cull.
-            let pitch = (p0 + p1) * 0.5;
             let core = note_color(state, pitch, 1.0);
             let segment = RollInstance {
                 center: [center.x, center.y],
@@ -2427,15 +2428,41 @@ mod tests {
     /// Where the near edge bounds the notes (Tape mode), a bend running on
     /// past it is cropped there as at the far edge (#1849): its box stops an
     /// ink overhang past the region rather than at the bend's own end, and
-    /// what stays draws the bend's own pitch inside the region.
+    /// what stays draws as it did: on the bend's own pitch, in the colour of
+    /// the whole segment, and at the intensity it sounded with at the crop.
     #[test]
     fn a_bend_crossing_the_near_edge_is_cropped_there_on_its_pitch() {
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.note_cut = 0.0;
-        // C4 glides an octave up from 2 s to 18 s and is released at 20 s.
+        state.appearance.view.intensity = IntensitySettings {
+            velocity: Default::default(),
+            gain: Default::default(),
+            pressure: harmonigraph_scene::IntensitySource {
+                opacity: Some(1.0),
+                thickness: Some(2.0),
+            },
+            opacity_rest: 0.0,
+            thickness_base: 1.0,
+            thickness_max: 3.0,
+            ..Default::default()
+        };
+        // C4 glides an octave up from 2 s to 18 s and is released at 20 s,
+        // pressed at 0.25 from 6 s and at 0.9 from 14 s.
         let tracker = &mut state.runtime.tracker;
         tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
+        for (time, value) in [(6.0, 0.25), (14.0, 0.9)] {
+            tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
+                time,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Expression {
+                    expression: harmonigraph_core::Expression::Pressure,
+                    value,
+                },
+            });
+        }
         tracker.handle_event(NoteEvent {
             source: SourceId::DIRECT,
             time: 18.0,
@@ -2448,26 +2475,39 @@ mod tests {
         let axes = Axes::new(rect, &state.appearance.spectrum);
         let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
         // A stretch of song 0..10 s shown, with the glide running on 8 s past
-        // its near edge.
+        // its near edge, and the second press past it.
         let time = TimeAxis { split: 0.5, depth_span: 0.5, window: 10.0, origin: 10.0, now: 30.0 };
         let source = RollSource { roll: state.roll(), time, now_line: false, live_during: None };
         let width = Width::of(&state, &axes, &scale, 1.0);
-        let notes = source_instances(&axes, &scale, &width, &state, &source, PPP, 1.0).notes;
-        let bent = notes
+        let pieces: Vec<_> = source_instances(&axes, &scale, &width, &state, &source, PPP, 1.0)
+            .notes
+            .into_iter()
+            .filter(|note| note.shear != 0.0)
+            .collect();
+        let newest = pieces
             .iter()
-            .find(|note| note.shear != 0.0)
+            .find(|piece| piece.span[0] == f32::MIN)
             .expect("the glide crosses the near edge and is drawn");
-        let center = egui::pos2(bent.center[0], bent.center[1]);
-        // Its newer end along depth, toward the near edge, which runs against
-        // the depth axis.
-        let reach = (center - axes.at(0.5, time.split)).dot(axes.dir_depth()) - bent.half_extent[1];
+        // Every piece keeps the segment's box; its newer end along depth,
+        // toward the near edge, which runs against the depth axis.
+        let center = egui::pos2(newest.center[0], newest.center[1]);
+        let reach =
+            (center - axes.at(0.5, time.split)).dot(axes.dir_depth()) - newest.half_extent[1];
         let ink = Quad::new(surround(&state, 1.0), 1.0 / PPP).depth(0.5 * MIN_LENGTH_PT);
         assert!(reach >= -ink - 0.01, "the box runs {reach} pt past the region, ink {ink}");
         // On the glide's own pitch inside the region: 64.5 at 8 s.
         let target = axes.at(scale.t_of(64.5), time.depth_of_unclamped(8.0));
         let along = (target - center).dot(axes.dir_depth());
-        let drawn = center + axes.dir_depth() * along + axes.dir_pitch() * (bent.shear * along);
+        let drawn = center + axes.dir_depth() * along + axes.dir_pitch() * (newest.shear * along);
         assert!(drawn.distance(target) < 0.01, "the crop draws {drawn:?}, not {target:?}");
+        // In the whole segment's colour, read at its middle pitch, 66.
+        let colour = note_color(&state, 66.0, 1.0).to_array();
+        assert!(pieces.iter().all(|piece| piece.core == colour), "the crop moved the colour");
+        // At the crop, the first press's opacity and thickness: the second,
+        // past the crop, leaves nothing on what is kept.
+        assert!((newest.fade[0] - 0.25).abs() < 1e-5, "{newest:?}");
+        let half_width = newest.half_extent[0] * newest.taper[1];
+        assert!((half_width - width.half_pitch * 1.5).abs() < 1e-4, "{newest:?}");
     }
 
     /// A bend that FINISHED before the region begins leaves nothing at the
