@@ -65,8 +65,10 @@ impl Recording {
         }
     }
 
-    /// A host reset cuts the clock. A run open across it ends here and opens
-    /// again on the new clock.
+    /// A host reset cuts the take. A run open across it ends here, on the
+    /// presentation clock it opened on, and the next one opens at or after
+    /// that end even where the host restarts its steady counter, which the
+    /// Hub's next `begin` measures and re-pins (`Hub::anchor`).
     pub fn reset(&mut self, recorder: &mut Recorder) {
         self.end_run(recorder);
         *self = Self::default();

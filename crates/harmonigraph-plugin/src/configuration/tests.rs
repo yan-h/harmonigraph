@@ -1478,6 +1478,71 @@ fn a_tuning_edit_before_a_host_reset_opens_the_run_after_it() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// CLAP lets a host restart its steady counter at a reset. A take recorded
+/// across one reads exactly as it does when the counter runs on: its notes and
+/// configurations land where they would have, on both sides of the reset
+/// (#1881). Before the fix, notes on both sides refused to read and notes only
+/// before it landed three blocks late.
+#[test]
+fn a_host_reset_that_restarts_the_steady_counter_records_as_one_that_does_not() {
+    let block = 64.0 / 48000.0;
+    let record = |restart: bool, after: bool| {
+        let _scope = crate::test_scope::enter();
+        let (mut device, mut capture) = recorded_device();
+        device.activate();
+        capture.arm();
+        let dir = std::env::temp_dir().join(format!(
+            "harmonigraph-config-reset-counter-{restart}-{after}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("record.take");
+        let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+        let struck = vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)];
+        device.run_transport(0, struck, false, None, Some(transport(1.0, 0)));
+        assert!(device.settings().submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0))));
+        let released = vec![note(10, 60, 30, CLAP_EVENT_NOTE_OFF)];
+        device.run_transport(64, released, false, None, Some(transport(1.0 + block, 0)));
+        device.run_transport(128, vec![], false, None, Some(transport(1.0 + 2.0 * block, 0)));
+        unsafe { ((*device.plugin).reset.unwrap())(device.plugin) };
+        let mut raw = if restart { 0 } else { 192 };
+        for i in 3..10 {
+            let events = match i {
+                5 if after => vec![note(11, 64, 0, CLAP_EVENT_NOTE_ON)],
+                7 if after => vec![note(11, 64, 0, CLAP_EVENT_NOTE_OFF)],
+                _ => vec![],
+            };
+            let position = transport(1.0 + i as f64 * block, 0);
+            device.run_transport(raw, events, false, None, Some(position));
+            raw += 64;
+        }
+        capture.stop();
+        for _ in 0..12 {
+            let mut parked = transport(1.0 + 10.0 * block, 0);
+            parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+            device.run_transport(raw, vec![], false, None, Some(parked));
+            raw += 64;
+        }
+        writer.stop();
+        writer.drain(&mut capture);
+        assert!(!writer.failed());
+        let take = harmonigraph_take::Take::read(&path)
+            .unwrap_or_else(|e| panic!("restart {restart}, after {after}: {e:?}"));
+        let configurations: Vec<_> = take.configurations.iter().map(|c| (c.t, c.axes[1])).collect();
+        let notes = (drawn(&take, 60), drawn(&take, 64));
+        drop(writer);
+        drop(device);
+        std::fs::remove_dir_all(dir).unwrap();
+        (notes, configurations)
+    };
+    for after in [true, false] {
+        let ran_on = record(false, after);
+        assert_eq!(ran_on.0 .0.len(), 1, "the fixture holds the note before the reset");
+        assert_eq!(ran_on.0 .1.len(), usize::from(after), "and the one after it only when asked");
+        assert_eq!(record(true, after), ran_on, "notes after the reset: {after}");
+    }
+}
+
 /// Armed with the transport stopped, then sent back to the start before
 /// anything played — Bitwig's stop-returns-to-start, or a jump to bar 1 for an
 /// AtBar take. Under take v7 that move owed a split, and paying it from a pass

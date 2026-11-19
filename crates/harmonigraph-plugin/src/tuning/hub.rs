@@ -307,7 +307,12 @@ pub struct Hub {
     sequencer: Box<Sequencer>,
     rate: f64,
     callback: Option<Boundary>,
+    /// Where the presentation clock pins the steady clock: a steady sample
+    /// and the presentation second it maps to. See [`Hub::anchor`].
     anchor: Option<(i64, f64)>,
+    /// The steady sample just past the last valid callback, which a counter
+    /// that has gone back is measured against.
+    reached: Option<i64>,
     /// The last observation of the host's seconds timeline, for loop and
     /// seek detection.
     seconds: Option<Seconds>,
@@ -337,6 +342,7 @@ impl Hub {
             rate: 0.0,
             callback: None,
             anchor: None,
+            reached: None,
             seconds: None,
             opened: None,
             status: 0,
@@ -366,6 +372,7 @@ impl Hub {
     pub fn activate(&mut self, rate: f64, frames: u32) {
         self.rate = rate;
         self.anchor = None;
+        self.reached = None;
         self.seconds = None;
         // No delay at all: the Hub's own input is already at the Hub, and its
         // correction is queued at the input boundary before the same
@@ -376,9 +383,7 @@ impl Hub {
 
     pub fn begin(&mut self, callback: &Boundary, owner: &mut Owner, presentation: f64) {
         self.callback = Some(*callback);
-        if self.anchor.is_none() {
-            self.anchor = Some((callback.steady_time, presentation));
-        }
+        self.anchor(callback, presentation);
         // A run states where it opens on the clock every delta is timed on.
         owner.recording.presentation = self.mapping();
         // Reset all voices is the Hub's own: a cut, which this callback's own
@@ -407,6 +412,32 @@ impl Hub {
         // frontier, which is this callback's start: everything before it has
         // been sequenced, and nothing after it has arrived.
         self.sequencer.expire(callback.steady_time, self.rate);
+    }
+
+    /// The presentation clock is the steady clock pinned once, at the first
+    /// callback after activation, to the presentation time the plugin has
+    /// reached, and it runs on from there with the samples.
+    ///
+    /// CLAP lets a host restart the steady counter at a reset. A boundary
+    /// before where the last valid callback ended is that restart, and it is
+    /// pinned where the clock before it ended: the run the reset closed ends
+    /// there on the old clock (`Recording::reset`), the next one opens at or
+    /// after it, and every note and configuration lands where a counter that
+    /// ran on would have put it (#1881). A counter that runs on, the usual
+    /// reset, never moves the pin, so its times are untouched. An invalid
+    /// boundary decides neither, since its steady time may be CLAP's -1 for
+    /// "unknown".
+    fn anchor(&mut self, callback: &Boundary, presentation: f64) {
+        if self.anchor.is_none() {
+            self.anchor = Some((callback.steady_time, presentation));
+        }
+        if !callback.valid {
+            return;
+        }
+        if let Some(reached) = self.reached.filter(|&reached| callback.steady_time < reached) {
+            self.anchor = Some((callback.steady_time, self.presentation(reached)));
+        }
+        self.reached = Some(callback.steady_time + i64::from(callback.frames));
     }
 
     /// An epoch change ends every voice.
