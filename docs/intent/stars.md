@@ -29,3 +29,5 @@ Every resolution draws stars in their own pass into one image, so Uniform's larg
 
 - The Stars solo leaves the saved look for the editor window's own state (option A): a slot switch and an undo leave it as set, and it goes when switched off or when the editor closes. No save, slot or export holds it. #1828
 That a restore into an open editor keeps it too, and that a toggle is no longer an undo entry, follow from the move; they are the implementer's reading, not Yan's answer.
+- A solo flag on a depth `Star layers` leaves out counts for nothing and comes back, lit, with its depth, however the count changes: the panel no longer clears every flag when the count moves there. #1862 (recommendation taken)
+- Only the working lattice and spectrogram panes draw the solo; the Video tab's preview draws none, as an export does, so what the preview frames is what the render produces. #1862 (recommendation taken)

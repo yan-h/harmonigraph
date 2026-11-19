@@ -76,7 +76,8 @@ pub struct SpectrogramAtmosphere {
     /// `None` where the strip does not reach the now-line.
     pub light_hold: Option<[SpectrogramVertex; 6]>,
     /// Which Stars depths the editor solos ([`soloed`]): a viewing aid of the
-    /// editor's window and no part of the look (#1828), so none in an export.
+    /// editor's working pane and no part of the look (#1828), so none in the
+    /// Video preview or an export.
     pub star_solo: [bool; STAR_SLICES],
 }
 

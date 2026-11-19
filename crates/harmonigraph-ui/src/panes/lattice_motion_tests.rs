@@ -179,18 +179,19 @@ fn exact_onset_and_audio_first_keep_surface_local_stable_poses() {
     assert_eq!(origin(&scene).slice_progress, [0.0; 11]);
 }
 
-/// The lattice is drawn with the window's Stars solo, which no look holds
-/// (#1828), and a fresh state, as the offline renderer builds for an export,
-/// solos nothing.
+/// Only the copy handed the window's Stars solo draws it: the working pane
+/// is, and the Video preview and an export are handed none, though all three
+/// compose from one state holding a solo (Yan, #1862).
 #[test]
-fn the_scene_carries_the_windows_stars_solo_and_a_fresh_state_none() {
-    let drawn = |picture: &mut PictureState| {
-        let window = picture.appearance.view.reach();
-        compose_scene(picture, &window, 1.0, None, 0, 0.0).star_solo
-    };
-    let mut live = crate::tests::probe::fresh_picture();
+fn only_the_copy_handed_the_windows_stars_solo_draws_it() {
+    let mut state = crate::tests::probe::fresh_picture();
     let solo = [false, true, false, true, false];
-    live.surfaces.star_solo.lattice = solo;
-    assert_eq!(drawn(&mut live), solo, "the scene left out the solo");
-    assert_eq!(drawn(&mut crate::tests::probe::fresh_picture()), [false; 5], "a fresh state");
+    state.surfaces.star_solo.lattice = solo;
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0));
+    let mut drawn = |handed| {
+        let ground = state.surfaces.background;
+        copy_scene(&mut state, rect, 0.0, 0, None, ground, 1.0, handed).1.star_solo
+    };
+    assert_eq!(drawn(solo), solo, "the working pane");
+    assert_eq!(drawn(NO_SOLO), NO_SOLO, "the preview or an export");
 }

@@ -237,8 +237,10 @@ pub struct SurfaceState {
     /// viewing aid for one editor window rather than part of the look (#1828).
     /// No save, slot, undo or export holds it, so it stays through a slot
     /// switch, an undo or a restore until it is switched off or the window
-    /// closes ([`SharedState::start_window_session`]). Crate-private, so the
-    /// offline renderer, which builds its own state, draws none.
+    /// closes ([`SharedState::start_window_session`]). Only the working
+    /// lattice and spectrogram panes are handed it, so the Video preview draws
+    /// what the render will (Yan, #1862); crate-private as well, so the
+    /// offline renderer cannot set it.
     pub(crate) star_solo: StarSolo,
 }
 

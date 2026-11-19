@@ -501,7 +501,13 @@ mod tests {
                     let before = Look::capture(&state.appearance);
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                     crate::panes::spectral::spectral_pane(
-                        &mut child, &mut state, 0.0, 1, 1.0, navigation,
+                        &mut child,
+                        &mut state,
+                        0.0,
+                        1,
+                        1.0,
+                        navigation,
+                        crate::panes::lattice::NO_SOLO,
                     );
                     zooming_frames += usize::from(before != Look::capture(&state.appearance));
                     editor.end_frame(before, &mut state.appearance, ui.ctx(), false);
@@ -592,6 +598,7 @@ mod tests {
                         1,
                         1.0,
                         crate::panes::spectral::Navigation::Docked,
+                        crate::panes::lattice::NO_SOLO,
                     );
                     moving_frames += usize::from(before != Look::capture(&state.appearance));
                     editor.end_frame(before, &mut state.appearance, ui.ctx(), false);

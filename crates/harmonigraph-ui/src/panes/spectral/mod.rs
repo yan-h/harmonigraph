@@ -186,6 +186,9 @@ pub(crate) fn spectral_pane(
     // The configured semitone width already follows the pane's pitch axis.
     point_scale: f32,
     navigation: Navigation,
+    // The Stars solo the spectrogram draws: the window's for the working
+    // pane, none for the Video preview and an export (Yan, #1862).
+    star_solo: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS],
 ) {
     use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
@@ -404,7 +407,9 @@ pub(crate) fn spectral_pane(
                 &painter, &response, &axes, &scale, state, split, surface, window, frame,
             );
         } else if cfg.show_spectrogram {
-            spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
+            spectrogram::draw_spectrogram(
+                &painter, &axes, &scale, state, split, now, surface, star_solo,
+            );
         }
     }
 

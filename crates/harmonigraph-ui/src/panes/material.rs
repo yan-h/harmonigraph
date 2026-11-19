@@ -175,7 +175,7 @@ fn star_solo(
             let name = (n + 1).to_string();
             ui.toggle_value(&mut solo[k], &name)
                 .on_hover_text(format!(
-                    "Draw only the soloed layers, to see what layer {name} looks like on its own (1 is drawn at the back). Not part of the look: a slot switch or an undo keeps it, and it is not saved or exported, so every window opens with all layers drawn."
+                    "Draw only the soloed layers, to see what layer {name} looks like on its own (1 is drawn at the back). Not part of the look: a slot switch or an undo keeps it, and it is not saved, exported or shown in the Video preview, so every window opens with all layers drawn."
                 ));
         }
         crate::widgets::label(ui, "front");
