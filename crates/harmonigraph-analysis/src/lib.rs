@@ -121,9 +121,6 @@ pub struct SpectrumAnalyzer {
     /// rate, and replanned by [`configure`](Self::configure) whenever either
     /// changes, so there is no key to check per column.
     kernels: kernels::Kernels,
-    /// [`AnalyzerConfig::column_lag`] for the same two, settled with the
-    /// kernels.
-    lag: f64,
 }
 
 impl SpectrumAnalyzer {
@@ -140,7 +137,6 @@ impl SpectrumAnalyzer {
             fft_scratch: Vec::new(),
             buckets: Box::new([0.0; SPECTRUM_BINS]),
             kernels: kernels::Kernels::new(),
-            lag: 0.0,
         };
         analyzer.configure(config);
         analyzer
@@ -194,15 +190,13 @@ impl SpectrumAnalyzer {
             self.fft = Some(fft);
         }
         self.kernels.plan(self.sample_rate, self.fft_size);
-        self.lag =
-            AnalyzerConfig { sample_rate: self.sample_rate, fft_size: self.fft_size }.column_lag();
     }
 
     /// How far BEFORE the newest sample the spectrum it produces belongs on a
     /// time axis, in seconds: [`AnalyzerConfig::column_lag`] for the settings
     /// it is running.
     pub fn window_center_offset(&self) -> f64 {
-        self.lag
+        AnalyzerConfig { sample_rate: self.sample_rate, fft_size: self.fft_size }.column_lag()
     }
 
     /// Forget the retained audio, keeping the plan, the window and the

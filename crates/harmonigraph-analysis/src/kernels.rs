@@ -192,7 +192,40 @@ pub(crate) fn lag_samples(fft_size: usize) -> f64 {
 /// The listen's window — the frame's Hann window under the listen's Gaussian —
 /// summed once for everything that asks about it: its sum, where its weight is
 /// centred relative to the listen's centre, and its spread about that.
+///
+/// Memoized per frame for every frame a setting reads at: [`fixed_frame`]'s
+/// three, an octave apart up to three each way ([`MOMENT_FRAMES`]), which is
+/// what the UI's frame choice gives from 6 to 384 kHz. The sum is a
+/// transcendental loop over the whole frame, 20 to 130 µs, and its callers
+/// ask every draw frame (the live heatmap's fresh edge), every Tape column
+/// and every export frame (#1831). Keyed on the frame alone, because nothing
+/// else reaches it: the listen's centre and spread are constants of the
+/// frame's length. Each slot holds the loop's own result for its size, so a
+/// memoized value is the one the loop gives, bit for bit. Any other size, as
+/// a test asks for, runs the loop.
 fn fixed_moments(fft_size: usize) -> (f64, f64, f64) {
+    static MEMO: [std::sync::OnceLock<(f64, f64, f64)>; MOMENT_FRAMES.len()] =
+        [const { std::sync::OnceLock::new() }; MOMENT_FRAMES.len()];
+    match MOMENT_FRAMES.iter().position(|&frame| frame == fft_size) {
+        Some(slot) => *MEMO[slot].get_or_init(|| summed_moments(fft_size)),
+        None => summed_moments(fft_size),
+    }
+}
+
+/// The frames [`fixed_moments`] keeps: 3·2^k from 768 to 196,608, every
+/// fixed frame shifted by up to three octaves either way.
+const MOMENT_FRAMES: [usize; 9] = {
+    let mut frames = [0; 9];
+    let mut k = 0;
+    while k < frames.len() {
+        frames[k] = 3 << (8 + k);
+        k += 1;
+    }
+    frames
+};
+
+/// [`fixed_moments`] summed afresh.
+fn summed_moments(fft_size: usize) -> (f64, f64, f64) {
     let centre = listen_centre(fft_size) as f64;
     let sigma = FIXED_SPREAD * fft_size as f64;
     let (mut sum, mut first, mut second) = (0.0f64, 0.0f64, 0.0f64);
