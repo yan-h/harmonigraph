@@ -2,7 +2,7 @@
 
 Implements the passage workflow in [#889](https://github.com/yan-h/harmonigraph/issues/889).
 Use the existing Harmonigraph Tune instances before instruments and one Harmonigraph Hub.
-Retune and Show remain per-source controls.
+Retune, Show and Decode fifths remain per-source controls.
 Note retuning is shared by the Hub:
 Pass through preserves player pitch,
 Lattice Map assigns each incoming note from explicit geometry,
@@ -239,7 +239,9 @@ Deleting the selected map selects its next live neighbour in display order,
 or the previous when it was last;
 the last live map cannot be deleted.
 An unused,
-deleted or invalid slot adds no correction and the UI reports it as unavailable.
+deleted or invalid slot adds no correction and the UI reports it as unavailable;
+a source with Decode fifths on then sounds its declared chain,
+as it does in Pass through.
 At capacity Duplicate as new map is disabled,
 and its tooltip says all 128 stable map identities have been used.
 Editing a shape rewrites its slot in place and keeps its identity;
@@ -314,6 +316,9 @@ A keyboard that already applies its own temperament — quarter-comma meantone,
 an MTS scale — therefore lands on the key it is playing rather than on whatever its detune drifts past.
 A source further than half a semitone from its written key selects the key it actually sounds;
 the map holds twelve slots and has nothing else to offer a pitch that far out.
+A source with Decode fifths on takes its slot the same way:
+its channel's comma bank is ignored,
+so C♯ and D♭ on one key share that key's slot.
 
 The map then states an absolute pitch rather than an increment.
 The emitted correction is the difference from what arrived to the map's own pitch,
@@ -323,7 +328,9 @@ Adding to the arriving pitch instead would move every note off the map by exactl
 which is [#891](https://github.com/yan-h/harmonigraph/issues/891).
 
 Reading a standing channel bend as part of the arriving pitch is the same rule Adaptive applies,
-so the two engines never disagree about what was played.
+so the two engines never disagree about what was played,
+except for a source with Decode fifths on:
+Adaptive hears its declared pitch and the map reads its key alone.
 It has a cost worth stating:
 a bend held at the attack is absorbed into the frozen correction,
 and returning the wheel to centre afterwards moves that voice by the amount the bend was worth.

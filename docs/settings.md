@@ -308,8 +308,10 @@ The plugin saves them with the project's tuning,
 and saved links and recorded configurations are restored as saved,
 without running recognition again.
 The standalone app does not save them, and opens with both linked.
-**Note retuning** holds only the engine choice;
-each engine's controls follow in a section of their own.
+**Note retuning** holds the engine choice and the **Decoded fifth**,
+the fifth a source with **Decode fifths** on sounds its chain of fifths at wherever a Lattice Map is not tuning it;
+**Decode fifths** is in that source's **Source details**.
+Each engine's controls follow in a section of their own.
 Adaptive tuning's **Keyboard** and **Context** are blocks,
 open like the rest of the section.
 The **Lattice Map** section starts with the saved map's number, its name field and a menu of rarer actions,

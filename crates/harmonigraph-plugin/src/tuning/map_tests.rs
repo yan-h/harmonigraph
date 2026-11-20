@@ -555,3 +555,182 @@ fn map_follow_changes_leave_adaptive_context_alone() {
     hub.run(1024, vec![note(2, 0, 64, 0, true)], None);
     assert_eq!(inspect_hub(&hub, |hub| hub.test_context()), 2, "the held C is still context");
 }
+
+/// A Hub on `engine` (its host step) with `tuning` and the decoded fifth
+/// `fifth`, and two Tunes, at 48 kHz and 128-frame callbacks: the first with
+/// Decode fifths switched on once it holds its row, the second plain.
+struct Decoding {
+    hub: Device,
+    decoded: Device,
+    plain: Device,
+    raw: i64,
+}
+impl Decoding {
+    fn new(engine: f64, tuning: Tuning, fifth: i32) -> Self {
+        let mut hub = hub();
+        hub.activate_format(48_000.0, 128);
+        musical_tests::configure(&hub, tuning);
+        let policy = harmonigraph_core::configuration::PolicyConfig {
+            decoded_fifth: fifth,
+            ..Default::default()
+        };
+        assert!(settings(&hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() }));
+        let mut decoded = tune();
+        decoded.activate_format(48_000.0, 128);
+        let mut plain = tune();
+        plain.activate_format(48_000.0, 128);
+        for tune in [&decoded, &plain] {
+            tune.run_format(0, vec![], None, None, 128);
+        }
+        hub.run_format(0, vec![parameter("tuning-engine", engine, 0)], None, None, 128);
+        decoded.shared().set_decode_fifths(true);
+        Self { hub, decoded, plain, raw: 128 }
+    }
+    /// One callback of each Tune and then the Hub, and the next callback of
+    /// each Tune, which emits what this one played, a delay later.
+    fn play(&mut self, decoded: Vec<Input>, plain: Vec<Input>) -> [Vec<(u32, Event)>; 2] {
+        let raw = self.raw;
+        self.decoded.run_format(raw, decoded, None, None, 128);
+        self.plain.run_format(raw, plain, None, None, 128);
+        self.hub.run_format(raw, vec![], None, None, 128);
+        let out = [&self.decoded, &self.plain]
+            .map(|tune| tune.run_format(raw + 128, vec![], None, None, 128).values);
+        self.hub.run_format(raw + 128, vec![], None, None, 128);
+        self.raw += 256;
+        out
+    }
+    fn voice(
+        &self,
+        decoded: bool,
+        channel: u8,
+        key: u8,
+    ) -> harmonigraph_core::canonical::VoiceBaseline {
+        let tune = if decoded { &self.decoded } else { &self.plain };
+        let slot = tune.shared().slot.load(Ordering::Acquire) as u8;
+        inspect_hub(&self.hub, |hub| hub.test_voice(slot, channel, key)).unwrap()
+    }
+}
+
+/// The last tuning expression `output` carries for the note `id`, in
+/// semitones: none for a note nothing was sent for.
+fn tuning_for(output: &[(u32, Event)], id: i32) -> Option<f64> {
+    output.iter().rev().find_map(|(_, event)| match event {
+        Event::Expression { kind: 2, id: of, value, .. } if *of == id => Some(*value),
+        _ => None,
+    })
+}
+
+/// The microcents a decoded `(channel, key)` lies from 12-TET: its chain of
+/// fifths at `fifth`, from the lattice's C at `c_offset`.
+fn stage(channel: u8, key: u8, c_offset: i32, fifth: i32) -> i64 {
+    let fifths = harmonigraph_core::tuning::fifths_for_midi(channel, key);
+    i64::from(c_offset) + i64::from(fifths) * (i64::from(fifth) - 700_000_000)
+}
+
+/// Pass through tunes a decoded Tune's chain at the decoded fifth, from the
+/// lattice's C, and leaves the plain Tune's same keys alone; the player's own
+/// per-note tuning still sounds on top.
+#[test]
+fn pass_through_tunes_a_decoded_tunes_chain_at_the_decoded_fifth() {
+    let _scope = crate::test_scope::enter();
+    let mut tuning = Tuning::just();
+    tuning.c_offset = 10_000_000;
+    let fifth = 695_000_000;
+    let mut session = Decoding::new(0.0, tuning, fifth);
+    // C♯ on the bank above the central one, D♭ on the central one: one key.
+    let [decoded, plain] = session.play(
+        vec![note(1, 1, 61, 0, true), expression(1, 0.125, 0), note(2, 0, 61, 0, true)],
+        vec![note(3, 1, 61, 0, true), note(4, 0, 61, 0, true)],
+    );
+    for (id, channel) in [(1, 1), (2, 0)] {
+        let stage = stage(channel, 61, tuning.c_offset, fifth);
+        let voice = session.voice(true, channel, 61);
+        assert_eq!(voice.frozen_offset_microcents, stage, "decoded channel {channel}");
+        assert_ne!(voice.decision, 0, "the take records a decoded correction");
+        let player = if id == 1 { 0.125 } else { 0.0 };
+        let sent = tuning_for(&decoded, id).expect("a decoded note is retuned");
+        assert!((sent - (player + stage as f64 / 1e8)).abs() < 1e-9, "id {id}: {sent}");
+    }
+    for (id, channel) in [(3, 1), (4, 0)] {
+        let voice = session.voice(false, channel, 61);
+        assert_eq!((voice.frozen_offset_microcents, voice.decision), (0, 0));
+        assert!(tuning_for(&plain, id).is_none_or(|sent| sent == 0.0), "plain id {id}");
+    }
+    // The Hub's own input decodes by its own switch.
+    let hub = session.hub.shared();
+    hub.set_retune(true);
+    hub.set_decode_fifths(true);
+    session.hub.run_format(session.raw, vec![note(5, 1, 61, 0, true)], None, None, 128);
+    let direct = inspect_hub(&session.hub, |hub| hub.test_voice(DIRECT, 1, 61)).unwrap();
+    assert_eq!(direct.frozen_offset_microcents, stage(1, 61, tuning.c_offset, fifth));
+}
+
+/// Lattice Map reads a decoded Tune's key alone: C♯ and D♭ share key 61's
+/// slot, and a spelling whose chain lies most of a semitone from 12-TET still
+/// takes its own key's slot rather than its neighbour's.
+#[test]
+fn lattice_map_tunes_a_decoded_tune_from_its_keys_slot() {
+    let _scope = crate::test_scope::enter();
+    let mut tuning = Tuning::just();
+    tuning.c_offset = 5_000_000;
+    let fifth = 696_578_428;
+    let mut session = Decoding::new(2.0, tuning, fifth);
+    // C on the bank two above the central one is 24 fifths up: at this fifth,
+    // nearer B than C.
+    assert!(stage(2, 60, tuning.c_offset, fifth) < -50_000_000);
+    session.play(
+        vec![note(1, 1, 61, 0, true), note(2, 0, 61, 0, true), note(3, 2, 60, 0, true)],
+        vec![],
+    );
+    let map = LatticeMap::default();
+    for (channel, key) in [(1, 61), (0, 61), (2, 60)] {
+        let voice = session.voice(true, channel, key);
+        assert_eq!(voice.attack_node, Some(map.node(key.into())), "channel {channel} key {key}");
+        assert_eq!(voice.frozen_offset_microcents, map.correction(key.into(), tuning));
+    }
+}
+
+/// Adaptive hears a decoded Tune as a keyboard tuned in the decoded fifth, so
+/// over a held C its C♯ and D♭ are 25/24 and 16/15. A plain Tune's note at
+/// the decoded C♯'s very pitch is no key of the global 12-TET keyboard, so
+/// nothing holds it to a C♯ spelling.
+#[test]
+fn adaptive_spells_a_decoded_tunes_notes_from_the_decoded_fifth() {
+    let _scope = crate::test_scope::enter();
+    let mut tuning = Tuning::just();
+    tuning.c_offset = 3_000_000;
+    let fifth = 696_578_428;
+    let mut session = Decoding::new(1.0, tuning, fifth);
+    session.play(vec![note(1, 0, 60, 0, true)], vec![]);
+    let at = |node: LatticePos, c: i64| {
+        c * 100_000_000
+            + i64::from(tuning.c_offset)
+            + i64::from(node.threes) * i64::from(tuning.three)
+            + i64::from(node.fives) * i64::from(tuning.five)
+    };
+    let sharp = LatticePos::new(-1, 2, 0);
+    let flat = LatticePos::new(-1, -1, 0);
+    let [out, _] = session.play(vec![note(2, 1, 61, 0, true)], vec![]);
+    let voice = session.voice(true, 1, 61);
+    assert_eq!(voice.attack_node, Some(sharp));
+    let correction = at(sharp, 60) - 6_100_000_000;
+    assert_eq!(voice.frozen_offset_microcents, correction);
+    assert!((tuning_for(&out, 2).unwrap() - correction as f64 / 1e8).abs() < 1e-9);
+    // Memory and context hold the pitch sounding, the chain's place taken once.
+    let next = inspect_hub(&session.hub, |hub| hub.test_next_context());
+    assert_eq!(next.reference, correction - stage(1, 61, tuning.c_offset, fifth));
+    let held = next.context.iter().find(|pitch| pitch.node == Some(sharp)).unwrap();
+    assert_eq!(held.pitch, 6_100_000_000 + correction);
+    session.play(vec![note(3, 0, 61, 0, true)], vec![]);
+    let voice = session.voice(true, 0, 61);
+    assert_eq!(voice.attack_node, Some(flat));
+    assert_eq!(voice.frozen_offset_microcents, at(flat, 72) - 6_100_000_000);
+    // The plain Tune plays the C♯'s pitch through its own player tuning, once
+    // both are let go, so it is no unison with either.
+    let raw = stage(1, 61, tuning.c_offset, fifth) as f64 / 1e8;
+    session.play(
+        vec![note(2, 1, 61, 0, false), note(3, 0, 61, 0, false)],
+        vec![note(4, 0, 61, 0, true), expression(4, raw, 0)],
+    );
+    assert_ne!(session.voice(false, 0, 61).attack_node, Some(sharp));
+}

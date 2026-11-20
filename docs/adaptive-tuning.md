@@ -21,6 +21,22 @@ see [Lattice Map tuning](lattice-maps.md).
 The shared Note retuning selector chooses Pass through,
 Lattice Map or Adaptive for subsequent attacks.
 
+A Tune with **Decode fifths** on is a keyboard with a declared tuning:
+it reads each note as a 12-TET key plus a MIDI channel carrying a signed 12-fifth comma bank (Ch 1 holds D♭ to F♯, Ch 2 is 12 fifths up, Ch 16 is 12 fifths down),
+the chain-of-fifths layout of a Wicki-Hayden keyboard,
+and sounds that chain at the project's **Decoded fifth**,
+with its C at the lattice's C offset.
+Pass through sounds the chain as declared,
+so switching Note retuning between Pass through and Lattice Map switches the same playing between that temperament and the lattice's tuning without moving a slider.
+Lattice Map ignores the channel and gives the key its map's slot.
+Adaptive hears the declared pitch,
+from a keyboard tuned in the Decoded fifth,
+so the decoded C♯ and D♭ of one key can take different nodes while other sources keep the Keyboard block's tuning.
+Learn does not hear a decoded source,
+since its keys arrive in 12-TET.
+Retune off passes a decoded source through undecoded,
+like any other.
+
 
 The moving, register-aware policy developed from [Adaptive tuning: a moving harmonic neighbourhood](adaptive-tuning-design.md) shipped in [#782](https://github.com/yan-h/harmonigraph/pull/782).
 That design document remains the requirements and discussion record;

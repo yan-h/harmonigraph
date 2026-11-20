@@ -48,3 +48,38 @@ fn learn_hears_more_held_voices_than_the_adaptive_context_holds() {
     assert_eq!(fifth(), harmonigraph_core::tuning::microcents(700.0), "Learn learned");
     drop(tunes);
 }
+
+/// A Tune with Decode fifths on declares its tuning, so Learn does not hear
+/// its raw 12-TET keys: a chord held there leaves the just fifth standing,
+/// and the same chord on a plain Tune is learned.
+#[test]
+fn learn_does_not_hear_a_tune_that_decodes_fifths() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = hub();
+    hub.activate();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let settings = settings(&hub);
+    let fifth = || settings.view().resolved.tuning.three;
+    assert!(settings.submit(ConfigEdit { learning: Some(true), ..Default::default() }));
+    let mut decoded = tune();
+    decoded.shared().set_decode_fifths(true);
+    decoded.activate();
+    let mut plain = tune();
+    plain.activate();
+    let chord = |first: i32| {
+        [60, 64, 67].into_iter().zip(first..).map(|(key, id)| note(id, 0, key, 0, true)).collect()
+    };
+    decoded.run(0, chord(1), None);
+    plain.run(0, vec![], None);
+    hub.run(0, vec![], None);
+    hub.run(64, vec![], None);
+    let just = harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST);
+    let slot = decoded.shared().slot.load(Ordering::Acquire) as u8;
+    assert_eq!(inspect_hub(&hub, |hub| hub.test_held(slot)), 3, "the decoded Tune holds the chord");
+    assert_eq!((heard(&hub), fifth()), (0, just), "Learn heard the decoded Tune");
+    plain.run(64, chord(4), None);
+    hub.run(128, vec![], None);
+    hub.run(192, vec![], None);
+    assert_eq!(heard(&hub), 3);
+    assert_eq!(fifth(), harmonigraph_core::tuning::microcents(700.0), "Learn learned");
+}

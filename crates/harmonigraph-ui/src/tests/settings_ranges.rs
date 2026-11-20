@@ -222,6 +222,7 @@ const POLICY: &[PolicyEdge] = &[
     ("keyboard[0]", |p, high| p.keyboard[0] = if high { i32::MAX } else { i32::MIN }),
     ("keyboard[1]", |p, high| p.keyboard[1] = if high { i32::MAX } else { i32::MIN }),
     ("keyboard[2]", |p, high| p.keyboard[2] = if high { i32::MAX } else { i32::MIN }),
+    ("decoded_fifth", |p, high| p.decoded_fifth = if high { i32::MAX } else { i32::MIN }),
 ];
 
 /// What a host holds before anything is nudged: every parameter at its default.

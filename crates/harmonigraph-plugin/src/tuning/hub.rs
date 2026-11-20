@@ -15,7 +15,7 @@ use harmonigraph_clap::plugin::Boundary;
 use harmonigraph_core::canonical::{NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
-use harmonigraph_core::tuning::PitchClass;
+use harmonigraph_core::tuning::{fifth_generated, fifths_for_midi, fifths_offset, PitchClass};
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
 
@@ -275,6 +275,8 @@ impl Sequencer {
 struct Row {
     retune: u64,
     show: bool,
+    /// The source's channels are comma banks over a chain of fifths.
+    decode_fifths: bool,
     /// A Tune holds this row. Read from the row's own owner each callback.
     live: bool,
     state: State,
@@ -480,12 +482,22 @@ impl Hub {
         self.rows[usize::from(DIRECT)].live = true;
         self.rows[usize::from(DIRECT)].delay = self.tune.delay();
         for source in 0..=TUNERS {
-            let (retune, show) = if source == usize::from(DIRECT) {
-                (self.shared.retuning(), self.shared.show.load(Ordering::Acquire))
+            let (retune, show, decode_fifths) = if source == usize::from(DIRECT) {
+                let shared = &self.shared;
+                (
+                    shared.retuning(),
+                    shared.show.load(Ordering::Acquire),
+                    shared.decode_fifths.load(Ordering::Acquire),
+                )
             } else {
                 let row = session.row(source as u8);
-                (row.retune.load(Ordering::Acquire), row.show.load(Ordering::Acquire))
+                (
+                    row.retune.load(Ordering::Acquire),
+                    row.show.load(Ordering::Acquire),
+                    row.decode_fifths.load(Ordering::Acquire),
+                )
             };
+            self.rows[source].decode_fifths = decode_fifths;
             if self.rows[source].retune != retune {
                 self.sequencer.forget_source(source as u8);
                 self.rows[source].retune = retune;
@@ -841,15 +853,24 @@ impl Hub {
             });
         }
         let incoming = self.arriving(record, channel, key);
+        // A decoded source declares its tuning: a chain of fifths at the
+        // decoded fifth, its C at the lattice's. A map never reads it, since
+        // both its slot and its follow are chosen by the key.
+        let decoded = self.rows[source].decode_fifths;
+        let stage = decoded.then(|| {
+            let fifths = fifths_for_midi(channel, key);
+            fifths_offset(fifths, config.tuning.c_offset, config.policy.decoded_fifth)
+        });
         if self.sequencer.engine != TuningEngine::Adaptive {
             let mapped = (self.sequencer.engine == TuningEngine::LatticeMap)
                 .then_some(self.sequencer.map)
                 .flatten()
                 .map(|map| self.follow(position, map));
             let assigned = mapped.map(|map| map.assignment(incoming, config.tuning));
-            let correction = assigned.map_or(0, |(_, correction)| correction);
+            // With no map to assign from, a decoded onset sounds as declared.
+            let correction = assigned.map_or(stage.unwrap_or(0), |(_, correction)| correction);
             let node = assigned.map(|(node, _)| node);
-            let decision = if mapped.is_some() {
+            let decision = if mapped.is_some() || stage.is_some() {
                 self.sequencer.decision += 1;
                 self.decisions += 1;
                 self.sequencer.decision
@@ -876,10 +897,17 @@ impl Hub {
         }
         self.sequencer.take_loop();
         self.sequencer.fill(self.rate);
-        let onset = policy::OrderedOnset { pitch: incoming };
+        // Adaptive spells a decoded onset from its declared pitch, as a key of a
+        // keyboard tuned in the decoded fifth.
+        let mut musical: policy::MusicalConfig = config.into();
+        if decoded {
+            musical.policy.keyboard = fifth_generated(config.policy.decoded_fifth);
+        }
+        let stage = stage.unwrap_or(0);
+        let onset = policy::OrderedOnset { pitch: incoming + stage };
         let count = self.sequencer.working.len();
         let selected = policy::assign_new_note(
-            config.into(),
+            musical,
             &self.sequencer.working[..count],
             &self.sequencer.memory,
             onset,
@@ -893,13 +921,14 @@ impl Hub {
             }
             Err(_) => {
                 // The one thing the policy can refuse. That onset sounds at raw
-                // pitch, the status says so, and nothing is silenced for it.
+                // (or declared) pitch, the status says so, and nothing is
+                // silenced for it.
                 self.status |= session::POLICY;
                 (policy::Assignment::NoCandidate { correction_microcents: 0 }, 0)
             }
         };
         let (correction, node) = (assignment.correction_microcents(), assignment.node());
-        self.reply(record, correction);
+        self.reply(record, stage + correction);
         let mut struck = record.sample;
         if decision != 0 {
             struck = self.sequencer.memory.attack(
@@ -924,13 +953,15 @@ impl Hub {
         if !self.sequencer.hold(voice) {
             self.status |= session::POLICY;
         }
-        Some(Assigned { correction, node, decision, player, channel_pitch })
+        Some(Assigned { correction: stage + correction, node, decision, player, channel_pitch })
     }
 
     /// What actually arrived, key number and every tuning the source already
     /// applied to it. Both engines decide from this one pitch: whatever a
     /// keyboard's own temperament, an MTS scale or a bend held at the attack
     /// has done is part of the note here, not something to correct on top of.
+    /// A decoded source's declared tuning is not in it: Adaptive adds that
+    /// itself, and Lattice Map reads the key alone.
     fn arriving(&self, record: Record, channel: u8, key: u8) -> i64 {
         let channel_pitch = self.rows[usize::from(record.source)].state.channel_pitch(channel);
         i64::from(key) * 100_000_000
@@ -1124,10 +1155,12 @@ impl Hub {
     /// its adaptive correction taken back off (`State::learnable`).
     /// `LearningState` sorts and deduplicates. Learn hears every row, Retune
     /// off included: Retune decides what the Hub corrects, and an uncorrected
-    /// note is the player's pitch Learn reads.
+    /// note is the player's pitch Learn reads. A row with Decode fifths on is
+    /// the exception: its tuning is declared rather than played, and its raw
+    /// keys are 12-TET.
     pub fn held_classes(&self, scratch: &mut [PitchClass; HELD_VOICES]) -> usize {
         let mut count = 0;
-        for row in self.rows.iter() {
+        for row in self.rows.iter().filter(|row| !row.decode_fifths) {
             for pitch in row.state.learnable() {
                 scratch[count] = PitchClass::from_microcents(pitch);
                 count += 1;

@@ -40,6 +40,9 @@ pub struct PolicyConfig {
     /// from the lattice's own C offset. A key may only become a node this
     /// tuning would render at the pitch the key sent.
     pub keyboard: [i32; 3],
+    /// The fifth, in microcents, a source with Decode fifths on sounds its
+    /// chain at: what its keyboard declares rather than the lattice's own.
+    pub decoded_fifth: i32,
 }
 impl Default for PolicyConfig {
     fn default() -> Self {
@@ -58,10 +61,11 @@ impl PolicyConfig {
         self.tolerance = self.tolerance.min(20_000_000);
         self.silence_ms = self.silence_ms.min(120_000);
         self.keyboard = self.keyboard.map(|v| v.clamp(0, 1_200_000_000));
+        self.decoded_fifth = TuningAxis::Three.clamp(self.decoded_fifth);
         self
     }
     /// Words [`Self::words`] takes.
-    pub const WORDS: usize = 9;
+    pub const WORDS: usize = 10;
     /// The policy as the settings seqlock carries it, one word per field but
     /// the first, which packs the radius, the axes and the two reset flags
     /// (bits 26 and 27).
@@ -79,6 +83,7 @@ impl PolicyConfig {
             self.keyboard[0],
             self.keyboard[1],
             self.keyboard[2],
+            self.decoded_fifth,
         ]
     }
     pub fn from_words(w: [i32; Self::WORDS]) -> Self {
@@ -93,6 +98,7 @@ impl PolicyConfig {
             tolerance: w[4].max(0) as u32,
             silence_ms: w[5].max(0) as u32,
             keyboard: [w[6], w[7], w[8]],
+            decoded_fifth: w[9],
         }
         .sanitize()
     }

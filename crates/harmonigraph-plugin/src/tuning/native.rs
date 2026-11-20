@@ -22,6 +22,7 @@ struct Widgets {
     name: Retained<NSTextField>,
     retune: Retained<NSButton>,
     show: Retained<NSButton>,
+    decode_fifths: Retained<NSButton>,
     status: Retained<NSTextField>,
 }
 struct Ivars {
@@ -46,6 +47,11 @@ define_class!(
             self.ivars().shared.set_show(button.state() != 0);
             self.refresh_status();
         }
+        #[unsafe(method(decodeFifths:))]
+        fn decode_fifths(&self, button: &NSButton) {
+            self.ivars().shared.set_decode_fifths(button.state() != 0);
+            self.refresh_status();
+        }
         #[unsafe(method(refresh:))]
         fn refresh(&self, _: &NSTimer) { self.refresh_status(); }
     }
@@ -57,6 +63,7 @@ impl Actions {
         w.name.setStringValue(&NSString::from_str(&shared.display_name()));
         w.retune.setState(isize::from(shared.retuning() & 1 != 0));
         w.show.setState(isize::from(shared.show.load(Ordering::Acquire)));
+        w.decode_fifths.setState(isize::from(shared.decode_fifths.load(Ordering::Acquire)));
         let status = shared.status();
         let connection = if shared.active_multiplier.load(Ordering::Acquire) == 0 {
             "Waiting for host activation"
@@ -99,7 +106,7 @@ impl Editor for NativeEditor {
             field
         };
         let name = label("Harmonigraph Tune", 196.0, 26.0);
-        let button = |title: &str, x: f64, action| {
+        let button = |title: &str, x: f64, width: f64, action| {
             let button = unsafe {
                 NSButton::buttonWithTitle_target_action(
                     &NSString::from_str(title),
@@ -109,19 +116,20 @@ impl Editor for NativeEditor {
                 )
             };
             button.setButtonType(NSButtonType::Switch);
-            button.setFrame(rect(x, 155.0, 190.0, 30.0));
+            button.setFrame(rect(x, 155.0, width, 30.0));
             view.addSubview(&button);
             button
         };
-        let retune = button("Retune", 16.0, sel!(retune:));
-        let show = button("Show in Harmonigraph", 206.0, sel!(show:));
+        let retune = button("Retune", 16.0, 100.0, sel!(retune:));
+        let show = button("Show in Harmonigraph", 116.0, 180.0, sel!(show:));
+        let decode_fifths = button("Decode fifths", 296.0, 148.0, sel!(decodeFifths:));
         label("Retune off passes notes through without influencing adaptive tuning.", 119.0, 32.0);
         let status = label("Waiting for audio state", 54.0, 60.0);
         label("Manage instances and timing in Harmonigraph → Tuning.", 16.0, 32.0);
         actions
             .ivars()
             .widgets
-            .set(Widgets { view, name, retune, show, status })
+            .set(Widgets { view, name, retune, show, decode_fifths, status })
             .unwrap_or_else(|_| unreachable!());
         actions.refresh_status();
         let parent = unsafe { &*parent.cast::<NSView>() };

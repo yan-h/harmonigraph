@@ -150,6 +150,37 @@ fn derive_from_fifth_sends_the_shown_policy_with_the_shown_fifths_keyboard() {
     assert_eq!(sent, [Some(PolicyConfig { keyboard, ..shown })]);
 }
 
+/// The Decoded fifth is drawn in Note retuning under Pass through too, and an
+/// edit of it sends the whole policy shown: here a double-click, which puts
+/// it back on its fresh value.
+#[test]
+fn the_decoded_fifth_sends_the_shown_policy_under_pass_through() {
+    let ctx = themed();
+    let params = Edits::new(TuningEngine::Off, Follow::Off, 1);
+    let mut state = fresh_picture();
+    let shown =
+        PolicyConfig { pitch_flexibility: 37, decoded_fifth: 700_000_000, ..Default::default() };
+    state.runtime.adaptive_policy = shown;
+    let size = egui::vec2(420.0, 2000.0);
+    let mut frame = |events| {
+        events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {
+            tuning_pane(ui, &mut state, &params, 0.0);
+        })
+    };
+    frame(vec![]);
+    let at = text_at(&frame(vec![]), "Decoded fifth").expect("the bar must be visible");
+    frame(vec![egui::Event::PointerMoved(at)]);
+    for _ in 0..2 {
+        frame(vec![press(at, true)]);
+        frame(vec![press(at, false)]);
+    }
+    let sent = params.tuning.borrow().last().and_then(|edit| edit.policy).expect("an edit");
+    // The bar holds cents as an f32, a few microcents short of the default.
+    let fresh = PolicyConfig::default().decoded_fifth;
+    assert!((sent.decoded_fifth - fresh).abs() < 100, "{sent:?}");
+    assert_eq!(sent, PolicyConfig { decoded_fifth: sent.decoded_fifth, ..shown });
+}
+
 /// With Learn on, whether the pane's first frame draws the armed ring at
 /// `now`, and whether that frame holds the loop at full rate for it, with the
 /// pane `below` points down a 2000-point screen.

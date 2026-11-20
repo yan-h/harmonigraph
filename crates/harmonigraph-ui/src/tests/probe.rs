@@ -210,6 +210,7 @@ pub(crate) fn tuning_instances() -> Vec<crate::params::TuningInstance> {
             is_hub: id == 0,
             retune: id == 0,
             show: id == 1,
+            decode_fifths: false,
             voices: (0..=id)
                 .map(|n| crate::params::TuningVoice {
                     key: n as u16,

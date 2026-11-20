@@ -103,6 +103,7 @@ pub struct TuningInstance {
     pub is_hub: bool,
     pub retune: bool,
     pub show: bool,
+    pub decode_fifths: bool,
     pub voices: Vec<TuningVoice>,
     pub notes_in: u64,
     pub notes_out: u64,
@@ -123,6 +124,7 @@ pub struct TuningInstance {
 pub enum InstanceEdit {
     Retune(bool),
     Show(bool),
+    DecodeFifths(bool),
     Name(String),
     Delay(u32),
     Reset,

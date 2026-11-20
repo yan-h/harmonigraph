@@ -299,7 +299,7 @@ mod tests {
         assert!(reading.look.is_none() && reading.params.is_empty());
         assert_eq!(
             reading.fields[INSTANCE_FIELD],
-            r#"{"retune":true,"show":true,"name":"","delay":1}"#
+            r#"{"retune":true,"show":true,"decode_fifths":false,"name":"","delay":1}"#
         );
     }
 
