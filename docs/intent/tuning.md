@@ -66,3 +66,17 @@ Yan took the recommendations made after the audit was checked against the code (
 ## 2026-11-19 (#1881, PR #1884)
 
 - With the CLAP shell running the steady clock on across a host's restart of its counter, a backward step no longer reaches the plugin, so a Lattice Map note struck just before a restart is tuned by the map in force at its own sample. This supersedes the 2026-11-14 #1792 line's sentence about a note struck just before a steady-clock discontinuity, superseded by the session under Yan's rule on decisions whose need a change still meets, and told to Yan in the wave's questions issue. The one lost-history path for every engine stands. #1881
+
+## 2026-11-20 (lattice-board decoding, PR #1894)
+
+Lines marked "Yan" are his answers in chat; lines marked "session" are the implementing session's own choices, reported to him and his to change.
+
+- Harmonigraph decodes the lattice-board's chain-of-fifths MIDI, replacing the Note Grid patch in each project: a normal 12-TET key with the MIDI channel as a signed 12-fifth comma bank, Ch 1 holding D♭ to F♯. Yan (the window; the move itself)
+- Decoding is a setting of each Tune, not of the Hub: Yan improvises in meantone beside recorded 12-TET tracks, which must stay as recorded. Yan (the use), session (the mechanism)
+- The decoded chain sounds at its own saved Decoded fifth, apart from the lattice's Perfect fifth, so switching between meantone improvisation and composing in JI is the Note retuning selector alone and no tuning slider moves. Yan
+- The Decoded fifth is a setting in the project, edited in the editor, with no host automation and no glide of held notes, in the Perfect fifth's own range. Yan
+- Lattice Map keeps its twelve slots: a decoded key takes its key's slot and its comma bank is ignored, so C♯ and D♭ on one key share a slot and Map Thirds keeps choosing between them. A map that shifts a slot by a diesis per bank was built and dropped: it sounded nodes the map does not hold. Yan
+- Adaptive hears a decoded Tune as a keyboard tuned in the Decoded fifth, through the keyboard check it already has, while other sources keep the Keyboard block; kept because it was cheap, and Adaptive stays outside the use. Yan (keep it in mind if cheap), session (the mechanism)
+- Learn does not hear a decoded Tune: its tuning is declared, and its keys arrive in 12-TET. Session
+- The Decoded fifth opens at quarter-comma meantone, 696.578¢. Session
+- Adaptive fell out of use because it guessed the syntonic comma wrong and drifted, with no obvious choice in pentatonic-like chords; spelled input removes the enharmonic guess and not that one. Yan is open to another try, which is not this PR. Yan

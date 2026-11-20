@@ -869,10 +869,10 @@ impl Hub {
                 .flatten()
                 .map(|map| self.follow(position, map));
             let assigned = mapped.map(|map| map.assignment(incoming, config.tuning));
-            let declared = stage.filter(|_| self.sequencer.engine == TuningEngine::Off);
-            let correction = assigned.map_or(declared.unwrap_or(0), |(_, correction)| correction);
+            // With no map to assign from, a decoded onset sounds as declared.
+            let correction = assigned.map_or(stage.unwrap_or(0), |(_, correction)| correction);
             let node = assigned.map(|(node, _)| node);
-            let decision = if mapped.is_some() || declared.is_some() {
+            let decision = if mapped.is_some() || stage.is_some() {
                 self.sequencer.decision += 1;
                 self.decisions += 1;
                 self.sequencer.decision
