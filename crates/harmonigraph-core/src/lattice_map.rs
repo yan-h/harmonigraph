@@ -41,14 +41,6 @@ impl TuningEngine {
             Self::LatticeMap => "Lattice Map",
         }
     }
-
-    /// Whether Learn runs under this engine, with Decode fifths on or off as
-    /// `decoding` says. Lattice Map reads its own map instead, and with Decode
-    /// fifths on the lattice-board declares its tuning, which the lattice is
-    /// drawn in under Pass through: Learn is suspended in both.
-    pub fn learns(self, decoding: bool) -> bool {
-        self != Self::LatticeMap && !decoding
-    }
 }
 
 /// Whether Lattice Map moves the selected map by itself, and along which axes.

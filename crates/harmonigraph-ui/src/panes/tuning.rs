@@ -191,13 +191,19 @@ pub(super) fn tuning_pane(
     // Pass through with Decode fifths on draws the lattice in the board's
     // tuning (`ResolvedConfig::drawn`), which the bars show: the fifth is the
     // Decoded fifth, and the rest follows it, so only the fifth is edited. The
-    // saved intervals stand unseen until Lattice Map draws them again.
-    let board = engine.is_some_and(|engine| state.runtime.adaptive_policy.board_drawn(engine));
+    // saved intervals stand unseen until Lattice Map draws them again. Read
+    // as the frame's configuration was drawn, so no control here shows one
+    // tuning and edits another.
+    let board = state.runtime.board_drawn;
     section(ui, "Tuning", |ui| {
         axis_bar(ui, state, params, TuningAxis::COffset);
         if board {
             let mut policy = state.runtime.adaptive_policy;
-            decoded_fifth_bar(ui, &mut policy, "Perfect fifth", BOARD_FIFTH_HINT);
+            // An id of its own: the saved fifth's bar stands in the same place
+            // and keeps a typed draft by id, which must not cross settings.
+            ui.push_id("decoded fifth", |ui| {
+                decoded_fifth_bar(ui, &mut policy, "Perfect fifth", BOARD_FIFTH_HINT);
+            });
             if policy != state.runtime.adaptive_policy {
                 let edit = ConfigEdit { policy: Some(policy), ..Default::default() };
                 state.runtime.edit_tuning(params, edit);
@@ -328,7 +334,10 @@ pub(super) fn tuning_pane(
         (TuningEngine::LatticeMap, Some(view)) => map_controls(ui, state, params, view),
         _ => {}
     }
-    board_section(ui, state, params);
+    // Only a Hub decodes: a shell with no engine selector has no board to read.
+    if maps.is_some() {
+        board_section(ui, state, params);
+    }
     instance_section(ui, state, params);
     // Keep transient status after every control so it cannot move a held slider.
     if !configuration_notice && state.runtime.configuration_pending_shown {
@@ -1034,14 +1043,15 @@ const BOARD_FIFTH_HINT: &str = "The lattice-board's Decoded fifth, which the lat
     in while Pass through decodes the board: editing it here edits the Decoded fifth. Lattice Map \
     draws and tunes from the lattice's own fifth, which this leaves as it was.";
 
-const BOARD_DRAWN_NOTE: &str = "Drawn in the lattice-board's tuning.";
+const BOARD_DRAWN_NOTE: &str = "Lattice-board tuning";
 
 const DECODE_FIFTHS_HINT: &str = "For the lattice-board, a custom chain-of-fifths keyboard \
     (yan-h/lattice-board); leave it off for any other input. Every source with Retune on reads \
     each note's MIDI channel as a 12-fifth comma bank (Ch 1 = D♭..F♯, Ch 2 = +12 fifths, \
     Ch 16 = −12 fifths) and sounds the chain at the Decoded fifth, so a 12-TET or MPE track with \
-    Retune on is decoded too. A Lattice Map ignores the bank and tunes each key from its slot, \
-    so under Lattice Map it changes nothing you hear and can stay on while you switch. \
+    Retune on is decoded too. A playing Lattice Map ignores the bank and tunes each key from its \
+    slot, so it changes nothing you hear there and can stay on while you switch; an empty map \
+    slot sounds the decoded chain. \
     Under Pass through the lattice is drawn in the board's tuning, and Learn is suspended while \
     it is on. While it is on, \
     a lattice-board plugged into this Mac lights the key nearest each note the lattice draws, \

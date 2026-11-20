@@ -154,6 +154,16 @@ impl DockHarness {
         harness
     }
 
+    /// The same backed by a Hub running `engine`, for what only a Hub's
+    /// Tuning pane draws.
+    pub(super) fn with_engine(
+        mut self,
+        engine: harmonigraph_core::lattice_map::TuningEngine,
+    ) -> Self {
+        self.backend.maps = Some(engine_view(engine));
+        self
+    }
+
     pub(super) fn frame(
         &mut self,
         state: &mut SharedState,

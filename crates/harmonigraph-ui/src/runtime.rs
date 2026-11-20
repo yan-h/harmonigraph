@@ -68,6 +68,10 @@ pub struct VisualRuntime {
     /// The resolved tuning, refreshed each frame in [`root_ui`](crate::root_ui)
     /// from whichever owner holds the configuration.
     pub tuning: Tuning,
+    /// Whether `tuning` is drawn in the lattice-board's tuning rather than the
+    /// saved one ([`ConfigurationView::board`](crate::params::ConfigurationView::board)):
+    /// the Tuning pane's fifth then edits the Decoded fifth.
+    pub board_drawn: bool,
     /// While true, tuning params continuously re-learn from the held notes
     /// (v1's learn mode). Runtime-only; never persisted.
     pub learn_active: bool,
@@ -121,6 +125,7 @@ impl Default for VisualRuntime {
             console: Console::default(),
             tracker: NoteTracker::new(),
             tuning: Tuning::default(),
+            board_drawn: false,
             learn_active: false,
             tempered: harmonigraph_core::configuration::TuningModes::default().tempered,
             config_reducer: Default::default(),
@@ -174,6 +179,7 @@ impl VisualRuntime {
             self.learn_step();
         }
 
+        self.board_drawn = owned.is_some_and(|owned| owned.board);
         if let Some(owned) = owned {
             self.apply_resolved(owned.resolved);
             self.configuration_status = owned.status;
@@ -194,14 +200,14 @@ impl VisualRuntime {
         self.maps_unadopted.backdate();
     }
 
-    /// Whether Learn acts: armed, under an engine that learns with Decode
-    /// fifths as the policy holds it, where `engine` is the Hub's selected one
-    /// (`None` for a shell with no engine selector, which passes notes
-    /// through). The one rule Learn's two indicators, the lattice's badge and
-    /// the Tuning pane's ring, and the pane's "suspended" line all read.
+    /// Whether Learn acts: armed, under an engine where the policy lets it
+    /// learn ([`PolicyConfig::learns`](harmonigraph_core::configuration::PolicyConfig::learns)),
+    /// where `engine` is the Hub's selected one (`None` for a shell with no
+    /// engine selector, which learns, and offers no Decode fifths). The one
+    /// rule Learn's two indicators, the lattice's badge and the Tuning pane's
+    /// ring, and the pane's "suspended" line all read.
     pub fn learn_acts(&self, engine: Option<harmonigraph_core::lattice_map::TuningEngine>) -> bool {
-        let engine = engine.unwrap_or(harmonigraph_core::lattice_map::TuningEngine::Off);
-        self.learn_active && engine.learns(self.adaptive_policy.decode_fifths)
+        self.learn_active && engine.is_none_or(|engine| self.adaptive_policy.learns(engine))
     }
 
     /// Keep this frame's map view, and decide its pending label.

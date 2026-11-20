@@ -261,11 +261,13 @@ impl Settings {
                 let reducer = settings.reducer();
                 let mut resolved = reducer.resolved();
                 resolved.revision = applied.resolved.revision;
-                return (reducer.raw(), ConfigurationView { resolved, status, unadopted });
+                let view = ConfigurationView { resolved, board: false, status, unadopted };
+                return (reducer.raw(), view);
             }
             producer.shadow = None;
         }
-        (applied.raw, ConfigurationView { resolved: applied.resolved, status, unadopted })
+        let resolved = applied.resolved;
+        (applied.raw, ConfigurationView { resolved, board: false, status, unadopted })
     }
 
     pub fn view(&self) -> ConfigurationView {
@@ -577,7 +579,7 @@ impl Owner {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
         self.status &= !ConfigurationView::TOO_MANY_CLASSES;
-        if self.maps.playback.engine.learns(self.reducer.resolved().policy.decode_fifths) {
+        if self.reducer.resolved().policy.learns(self.maps.playback.engine) {
             match self.learning.infer(self.reducer.resolved().modes.learning, classes) {
                 Ok(Some(learned)) => {
                     self.reducer.apply(ConfigMutation::LearnResolved { learned, retuning });

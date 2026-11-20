@@ -315,8 +315,9 @@ Decode fifths reads the MIDI of the [lattice-board](https://github.com/yan-h/lat
 It is one setting for the project, saved with the musical settings:
 while it is on, every source with Retune on is decoded,
 so a 12-TET or MPE track with Retune on is read as the board's encoding too.
-A Lattice Map ignores the decoding,
-so under Lattice Map it changes nothing heard and can stay on while Note retuning switches.
+A playing Lattice Map ignores the decoding,
+so it changes nothing heard there and can stay on while Note retuning switches;
+an empty map slot sounds the decoded chain.
 While it is on, a lattice-board plugged into the Mac also lights its keys for every held note the lattice draws, from any track or the Tape:
 the key nearest the note's sounding pitch in the Decoded fifth, sent in the board's own encoding, so a note a Lattice Map moved lights the key it sounds on.
 The board's firmware reads these, and a note whose nearest spelling the board lacks lights the nearest key it has.

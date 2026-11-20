@@ -363,7 +363,7 @@ an uncorrected note is exactly the player's pitch Learn reads, so a tuner in fro
 What Learn writes depends on Retune and the engine:
 with Retune on anywhere under Adaptive, the lattice is the target, and Learn moves only the C offset and the [keyboard tuning](adaptive-tuning-plugin.md#keyboard-tuning).
 Under Pass through, Learn updates the lattice axes too;
-Lattice Map suspends Learn.
+Lattice Map suspends Learn, and so does Decode fifths under every engine.
 Switching it off removes that source's held context, released memory and owned moving reference on the Hub's next callback.
 Already sounding notes keep their correction through release, including subsequent player expression;
 turning Retune back on admits new attacks only.

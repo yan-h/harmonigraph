@@ -1624,13 +1624,14 @@ fn painted_in(out: &egui::FullOutput, leaf: egui::Rect, needle: &str) -> Option<
         .max_by(|a, b| a.top().total_cmp(&b.top()))
 }
 
-/// A fresh editor opens the lattice-board's section folded, since only that
+/// A fresh editor opens a Hub's lattice-board section folded, since only that
 /// controller reads it; a click on its heading opens it.
 #[test]
 fn a_fresh_editor_folds_the_lattice_board_section() {
     let mut state = fresh();
     state.workspace.layout.select(panes::Tab::Tuning);
-    let mut h = DockHarness::at(egui::vec2(1000.0, 4000.0));
+    let engine = harmonigraph_core::lattice_map::TuningEngine::LatticeMap;
+    let mut h = DockHarness::at(egui::vec2(1000.0, 4000.0)).with_engine(engine);
     h.settle(&mut state);
     let out = h.frame(&mut state, vec![]);
     let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];

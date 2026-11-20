@@ -91,9 +91,9 @@ fn a_take_carries_released_axes_in_its_configuration_records() {
 }
 
 /// A take improvised in Pass through with Decode fifths on records the
-/// lattice drawn in the lattice-board's tuning, and from the sample Lattice
-/// Map is chosen mid-block the saved just axes, which a save stores whatever
-/// was drawn.
+/// lattice drawn in the lattice-board's tuning, and from the very sample
+/// Lattice Map is chosen mid-block the saved just axes; a save while the
+/// board's tuning is drawn stores the saved fifth.
 #[test]
 fn a_take_records_the_board_s_tuning_only_while_pass_through_decodes() {
     let _scope = crate::test_scope::enter();
@@ -107,6 +107,7 @@ fn a_take_records_the_board_s_tuning_only_while_pass_through_decodes() {
         ..Default::default()
     }));
     device.run(0, vec![], None);
+    assert_eq!(saved(&device.save()).axes[1], just.three, "a save stored the drawn fifth");
     capture.arm();
     let lattice_map = Input::Param(clap_event_param_value {
         header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, 10),
@@ -123,14 +124,19 @@ fn a_take_records_the_board_s_tuning_only_while_pass_through_decodes() {
         .drain_entries()
         .iter()
         .filter_map(|entry| match entry {
-            harmonigraph_record::Entry::Configuration(config) => Some(config.resolved()),
+            harmonigraph_record::Entry::Configuration(config) => Some(*config),
             _ => None,
         })
-        .map(|config| (config.tuning.three, config.modes.tempered.syntonic))
         .collect();
     let board = PolicyConfig::default().decoded_fifth;
-    assert_eq!(fifths, [(board, true), (just.three, false)]);
-    assert_eq!(saved(&device.save()).axes[1], just.three, "a save stored the drawn fifth");
+    let drawn: Vec<_> = fifths
+        .iter()
+        .map(|c| c.resolved())
+        .map(|c| (c.tuning.three, c.modes.tempered.syntonic))
+        .collect();
+    assert_eq!(drawn, [(board, true), (just.three, false)]);
+    let switched = fifths[1].t - fifths[0].t;
+    assert!((switched - 10.0 / 48_000.0).abs() < 1e-9, "switched {switched} s into the block");
 }
 
 pub(in crate::configuration) fn transport(seconds: f64, time: u32) -> clap_event_transport {

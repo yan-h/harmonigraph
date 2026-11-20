@@ -246,6 +246,7 @@ fn backend_with(
     reducer.apply(ConfigMutation::Restore { raw, modes, policy });
     Backend {
         config: params::ConfigurationView {
+            board: false,
             resolved: reducer.resolved(),
             status: 0,
             unadopted: None,

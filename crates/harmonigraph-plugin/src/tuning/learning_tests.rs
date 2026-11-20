@@ -52,8 +52,8 @@ fn learn_hears_more_held_voices_than_the_adaptive_context_holds() {
 /// With Decode fifths on, Learn is suspended as under Lattice Map: the
 /// lattice is drawn in the lattice-board's tuning, and what is left to hear is
 /// the 12-TET tracks beside it. A chord held on a Tune with Retune off, which
-/// Learn still reads, leaves the just fifth standing from the very callback
-/// that turns decoding on, and is learned once decoding is off.
+/// the rows still hold for Learn, leaves the just fifth standing from the very
+/// callback that turns decoding on, and is learned once decoding is off.
 #[test]
 fn learn_is_suspended_while_decoding() {
     let _scope = crate::test_scope::enter();

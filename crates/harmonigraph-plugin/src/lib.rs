@@ -416,6 +416,7 @@ impl HarmonigraphParams {
     pub(crate) fn configuration_view(&self) -> harmonigraph_ui::params::ConfigurationView {
         let mut view = self.settings.view();
         let engine = TuningEngine::from_index(self.int(Row::TuningEngine));
+        view.board = view.resolved.policy.board_drawn(engine);
         view.resolved = view.resolved.drawn(engine);
         view
     }

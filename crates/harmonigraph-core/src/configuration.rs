@@ -60,6 +60,13 @@ impl PolicyConfig {
     pub fn board_drawn(&self, engine: TuningEngine) -> bool {
         engine == TuningEngine::Off && self.decode_fifths
     }
+    /// Whether Learn runs under `engine`. Lattice Map reads its own map
+    /// instead, and with Decode fifths on the lattice-board declares its
+    /// tuning, which the lattice is drawn in under Pass through: Learn is
+    /// suspended in both.
+    pub fn learns(&self, engine: TuningEngine) -> bool {
+        engine != TuningEngine::LatticeMap && !self.decode_fifths
+    }
     pub fn sanitize(mut self) -> Self {
         self.radius = self.radius.clamp(1, 5);
         self.axes = self.axes.clamp(1, 3);

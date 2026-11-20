@@ -1215,15 +1215,23 @@ fn the_editor_draws_the_board_s_tuning_under_pass_through() {
     let _scope = crate::test_scope::enter();
     let mut device = hub();
     device.activate();
-    let policy = PolicyConfig { decode_fifths: true, ..PolicyConfig::default() };
-    assert!(device.settings().submit(ConfigEdit { policy: Some(policy), ..Default::default() }));
+    let policy =
+        PolicyConfig { decode_fifths: true, decoded_fifth: 696_000_000, ..PolicyConfig::default() };
+    let saved_fifth = harmonigraph_core::tuning::microcents(701.0);
+    assert!(device.settings().submit(ConfigEdit {
+        axes: [None, Some(saved_fifth), None, None, None],
+        policy: Some(policy),
+        ..Default::default()
+    }));
     device.run(0, vec![], None);
     let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
-    let fifth = || params.configuration_view().resolved.tuning.three;
-    assert_eq!(fifth(), policy.decoded_fifth);
+    let drawn = || {
+        let view = params.configuration_view();
+        (view.resolved.tuning.three, view.board)
+    };
+    assert_eq!(drawn(), (696_000_000, true));
     params.set(crate::Row::TuningEngine, TuningEngine::LatticeMap.index() as f32);
-    assert_eq!(fifth(), params.settings.view().resolved.tuning.three);
-    assert_ne!(fifth(), policy.decoded_fifth, "the fixture's saved fifth is the board's");
+    assert_eq!(drawn(), (saved_fifth, false));
 }
 
 #[test]

@@ -193,14 +193,17 @@ fn the_decoding_controls_send_the_shown_policy_under_pass_through() {
 }
 
 /// What a double-click on the control labelled `label` sends under `engine`,
-/// with Decode fifths on at a 700¢ Decoded fifth, each on a fresh pane: two
-/// double-clicks in one window count as a triple-click.
+/// with Decode fifths on at a 700¢ Decoded fifth, the third linked, and the
+/// configuration drawn in the board's tuning under Pass through, each on a
+/// fresh pane: two double-clicks in one window count as a triple-click.
 fn double_clicked(engine: TuningEngine, label: &str) -> Vec<ConfigEdit> {
     let ctx = themed();
     let params = Edits::new(engine, Follow::Off, 1);
     let mut state = fresh_picture();
     state.runtime.adaptive_policy =
         PolicyConfig { decode_fifths: true, decoded_fifth: 700_000_000, ..Default::default() };
+    state.runtime.board_drawn = engine == TuningEngine::Off;
+    state.runtime.tempered.syntonic = true;
     let size = egui::vec2(420.0, 2000.0);
     let mut frame = |events| {
         events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {
@@ -231,7 +234,7 @@ fn the_perfect_fifth_edits_the_decoded_fifth_while_the_board_is_drawn() {
     let fresh = PolicyConfig::default().decoded_fifth;
     assert!((policy.decoded_fifth - fresh).abs() < 100, "{policy:?}");
     assert_eq!(edit.axes, [None; 5], "the lattice's fifth moved");
-    // The fresh picture links the third, so its label carries the badge.
+    // The third is linked, so its label carries the badge.
     for label in ["↔ · Major third", "Just"] {
         assert_eq!(double_clicked(TuningEngine::Off, label), [], "{label} edited");
     }
