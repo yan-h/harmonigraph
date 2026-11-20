@@ -308,9 +308,12 @@ The plugin saves them with the project's tuning,
 and saved links and recorded configurations are restored as saved,
 without running recognition again.
 The standalone app does not save them, and opens with both linked.
-**Note retuning** holds the engine choice and the **Decoded fifth**,
-the fifth a source with **Decode fifths** on sounds its chain of fifths at wherever a Lattice Map is not tuning it;
-**Decode fifths** is in that source's **Source details**.
+**Note retuning** holds the engine choice, **Decode fifths** and the **Decoded fifth**.
+Decode fifths reads the MIDI of the [lattice-board](https://github.com/yan-h/lattice-board), a custom chain-of-fifths keyboard, and is to be left off for any other input.
+It is one setting for the project, saved with the musical settings:
+while it is on, every source with Retune on is decoded,
+so a 12-TET or MPE track with Retune on is read as the board's encoding too.
+The Decoded fifth is the fifth a decoded source sounds its chain of fifths at wherever a Lattice Map is not tuning it.
 Each engine's controls follow in a section of their own.
 Adaptive tuning's **Keyboard** and **Context** are blocks,
 open like the rest of the section.

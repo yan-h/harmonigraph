@@ -72,7 +72,7 @@ Yan took the recommendations made after the audit was checked against the code (
 Lines marked "Yan" are his answers in chat; lines marked "session" are the implementing session's own choices, reported to him and his to change.
 
 - Harmonigraph decodes the lattice-board's chain-of-fifths MIDI, replacing the Note Grid patch in each project: a normal 12-TET key with the MIDI channel as a signed 12-fifth comma bank, Ch 1 holding D♭ to F♯. Yan (the window; the move itself)
-- Decoding is a setting of each Tune, not of the Hub: Yan improvises in meantone beside recorded 12-TET tracks, which must stay as recorded. Yan (the use), session (the mechanism)
+- Decoding is a setting of each Tune, not of the Hub: Yan improvises in meantone beside recorded 12-TET tracks, which must stay as recorded. Yan (the use), session (the mechanism) Superseded by the #1897 entry below.
 - The decoded chain sounds at its own saved Decoded fifth, apart from the lattice's Perfect fifth, so switching between meantone improvisation and composing in JI is the Note retuning selector alone and no tuning slider moves. Yan
 - The Decoded fifth is a setting in the project, edited in the editor, with no host automation and no glide of held notes, in the Perfect fifth's own range. Yan
 - Lattice Map keeps its twelve slots: a decoded key takes its key's slot and its comma bank is ignored, so C♯ and D♭ on one key share a slot and Map Thirds keeps choosing between them. A map that shifts a slot by a diesis per bank was built and dropped: it sounded nodes the map does not hold. Yan
@@ -80,3 +80,13 @@ Lines marked "Yan" are his answers in chat; lines marked "session" are the imple
 - Learn does not hear a decoded Tune: its tuning is declared, and its keys arrive in 12-TET. Session
 - The Decoded fifth opens at quarter-comma meantone, 696.578¢. Session
 - Adaptive fell out of use because it guessed the syntonic comma wrong and drifted, with no obvious choice in pentatonic-like chords; spelled input removes the enharmonic guess and not that one. Yan is open to another try, which is not this PR. Yan
+
+## 2026-11-20 (Decode fifths for the project, #1897)
+
+- Decode fifths is one setting for the project, saved with the policy beside the Decoded fifth, and every source with Retune on is decoded while it is on. This supersedes the per-Tune mechanism above: "decode fifth should be a global toggle, not per source. I don't usually want to control that setting for each track individually." Yan
+- Its controls and documentation name it as the decoding for the lattice-board, a custom controller, to be left off for any other input: "this should be noted as something specific to my instruments just in case users get confused". Yan
+- A 12-TET track with Retune on is decoded with the board, its Ch 1 notes read as D♭ to F♯; a note off by a Pythagorean comma is moved to the next channel's bank in the piano roll, and Retune off keeps a whole track out. No per-Tune opt-out. Yan
+- The board keeps its central bank on Ch 1 rather than leaving Ch 1 to plain 12-TET, so notes drawn in the piano roll mix with the board's recorded notes on one track. Yan
+- With Decode fifths on, Learn hears only sources with Retune off, the rule above that it does not hear a decoded source applied to the project's flag; Learn is not suspended while decoding is on, though with the board alone it then hears nothing while its armed ring still shows. Yan (PR #1898 review)
+- A note struck decoded is heard by Learn as its raw 12-TET key once decoding stops applying to it while it is held (Decode fifths or that source's Retune turned off): no per-note record of decoding at the attack. Yan (PR #1898 review)
+- No setting for which twelve fifths Ch 1 holds: Harmonigraph cannot tell the board's notes from drawn ones, so its window would have to match the board's firmware, kept in step by hand, and every recorded clip would be read again when it changed. "not sure that it's worth it if I have to keep the board in sync manually" Yan

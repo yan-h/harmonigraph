@@ -275,8 +275,6 @@ impl Sequencer {
 struct Row {
     retune: u64,
     show: bool,
-    /// The source's channels are comma banks over a chain of fifths.
-    decode_fifths: bool,
     /// A Tune holds this row. Read from the row's own owner each callback.
     live: bool,
     state: State,
@@ -482,22 +480,12 @@ impl Hub {
         self.rows[usize::from(DIRECT)].live = true;
         self.rows[usize::from(DIRECT)].delay = self.tune.delay();
         for source in 0..=TUNERS {
-            let (retune, show, decode_fifths) = if source == usize::from(DIRECT) {
-                let shared = &self.shared;
-                (
-                    shared.retuning(),
-                    shared.show.load(Ordering::Acquire),
-                    shared.decode_fifths.load(Ordering::Acquire),
-                )
+            let (retune, show) = if source == usize::from(DIRECT) {
+                (self.shared.retuning(), self.shared.show.load(Ordering::Acquire))
             } else {
                 let row = session.row(source as u8);
-                (
-                    row.retune.load(Ordering::Acquire),
-                    row.show.load(Ordering::Acquire),
-                    row.decode_fifths.load(Ordering::Acquire),
-                )
+                (row.retune.load(Ordering::Acquire), row.show.load(Ordering::Acquire))
             };
-            self.rows[source].decode_fifths = decode_fifths;
             if self.rows[source].retune != retune {
                 self.sequencer.forget_source(source as u8);
                 self.rows[source].retune = retune;
@@ -853,10 +841,11 @@ impl Hub {
             });
         }
         let incoming = self.arriving(record, channel, key);
-        // A decoded source declares its tuning: a chain of fifths at the
-        // decoded fifth, its C at the lattice's. A map never reads it, since
-        // both its slot and its follow are chosen by the key.
-        let decoded = self.rows[source].decode_fifths;
+        // With Decode fifths on, every source with Retune on declares its
+        // tuning: a chain of fifths at the decoded fifth, its C at the
+        // lattice's. A map never reads it, since both its slot and its follow
+        // are chosen by the key.
+        let decoded = config.policy.decode_fifths;
         let stage = decoded.then(|| {
             let fifths = fifths_for_midi(channel, key);
             fifths_offset(fifths, config.tuning.c_offset, config.policy.decoded_fifth)
@@ -1155,12 +1144,14 @@ impl Hub {
     /// its adaptive correction taken back off (`State::learnable`).
     /// `LearningState` sorts and deduplicates. Learn hears every row, Retune
     /// off included: Retune decides what the Hub corrects, and an uncorrected
-    /// note is the player's pitch Learn reads. A row with Decode fifths on is
-    /// the exception: its tuning is declared rather than played, and its raw
-    /// keys are 12-TET.
-    pub fn held_classes(&self, scratch: &mut [PitchClass; HELD_VOICES]) -> usize {
+    /// note is the player's pitch Learn reads. With Decode fifths on
+    /// (`decoded`), a row with Retune on is the exception: its tuning is
+    /// declared rather than played, and its raw keys are 12-TET. The caller
+    /// passes the configuration as Learn itself reads it, this callback's
+    /// edits applied, since the policy the Hub adopted at `begin` predates them.
+    pub fn held_classes(&self, decoded: bool, scratch: &mut [PitchClass; HELD_VOICES]) -> usize {
         let mut count = 0;
-        for row in self.rows.iter().filter(|row| !row.decode_fifths) {
+        for row in self.rows.iter().filter(|row| !(decoded && row.retune & 1 != 0)) {
             for pitch in row.state.learnable() {
                 scratch[count] = PitchClass::from_microcents(pitch);
                 count += 1;

@@ -621,9 +621,8 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], sta
 /// boxes included: off, Retune passes notes through uncorrected and still
 /// heard by Learn (a Tune's still through its delay), and Show changes
 /// nothing heard.
-const RETUNE_HINT: &str = "Tune new notes with the selected engine. Off, notes pass through uncorrected, without influencing adaptive tuning, and Learn still hears them; a Tune's untuned notes still pass through its tuning delay.";
+const RETUNE_HINT: &str = "Tune new notes with the selected engine. Off, notes pass through uncorrected and, with Decode fifths on, undecoded, without influencing adaptive tuning, and Learn still hears them; a Tune's untuned notes still pass through its tuning delay.";
 const SHOW_HINT: &str = "Show this instance's output notes on the lattice, in takes and in exports. Changes nothing you hear.";
-const DECODE_FIFTHS_HINT: &str = "Read each note's MIDI channel as a 12-fifth comma bank (Ch 1 = D♭..F♯, Ch 2 = +12 fifths, Ch 16 = −12 fifths) and tune the chain at the Decoded fifth. A Lattice Map ignores it and tunes each key from its slot. Learn does not hear a decoded source, and with Retune off its keys pass through undecoded.";
 
 fn instance_controls(
     ui: &mut egui::Ui,
@@ -763,13 +762,6 @@ fn instance_controls(
                     .changed()
                 {
                     params.edit_tuning_instance(row.id, InstanceEdit::Name(name));
-                }
-                let mut decode = row.decode_fifths;
-                if crate::widgets::checkbox(ui, &mut decode, "Decode fifths")
-                    .on_hover_text(DECODE_FIFTHS_HINT)
-                    .changed()
-                {
-                    params.edit_tuning_instance(row.id, InstanceEdit::DecodeFifths(decode));
                 }
                 crate::widgets::label(ui, &row.status);
                 crate::widgets::label(
@@ -917,8 +909,8 @@ fn adaptive_value(
     }
 }
 
-/// Note retuning: which engine retunes incoming notes, and the fifth a
-/// decoded source sounds at, which all but a playing map read, so it keeps
+/// Note retuning: which engine retunes incoming notes, and the lattice-board
+/// decoding with the fifth it sounds at, which all but a playing map read, so it keeps
 /// its height whichever is chosen. Each engine's own controls follow
 /// in a section of their own. Returns the engine chosen this frame, so a
 /// click draws its controls at once rather than a frame later.
@@ -948,7 +940,7 @@ fn retuning_controls(
                 (
                     TuningEngine::Off,
                     TuningEngine::Off.label(),
-                    "Leave incoming note pitches unchanged; a source with Decode fifths on sounds its chain at the Decoded fifth. Lattice display tuning still applies.",
+                    "Leave incoming note pitches unchanged; with Decode fifths on, a source with Retune on sounds its chain at the Decoded fifth. Lattice display tuning still applies.",
                 ),
                 (
                     TuningEngine::LatticeMap,
@@ -965,7 +957,7 @@ fn retuning_controls(
         if mode != engine {
             params.edit_lattice_map(MapEdit::Engine(mode));
         }
-        decoded_fifth_bar(ui, state, params);
+        decoding_controls(ui, state, params);
         if state.runtime.learn_active && !state.runtime.learn_acts(Some(mode)) {
             crate::widgets::label(
                 ui,
@@ -978,11 +970,14 @@ fn retuning_controls(
     .unwrap_or(engine)
 }
 
-/// The fifth a Tune with Decode fifths on sounds its chain at. A policy
-/// setting, sent as the whole policy shown, like the Adaptive section's.
-fn decoded_fifth_bar(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
+/// Decode fifths, the project's reading of the lattice-board's MIDI, and the
+/// fifth a decoded source sounds its chain at. Policy settings, sent as the
+/// whole policy shown, like the Adaptive section's.
+fn decoding_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     let mut p = state.runtime.adaptive_policy;
     let before = p;
+    crate::widgets::checkbox(ui, &mut p.decode_fifths, "Decode fifths (lattice-board)")
+        .on_hover_text(DECODE_FIFTHS_HINT);
     let fresh = PolicyConfig::default().decoded_fifth;
     let [low, high] = [i32::MIN, i32::MAX].map(|edge| TuningAxis::Three.clamp(edge) as u32);
     p.decoded_fifth = adaptive_value(
@@ -999,8 +994,15 @@ fn decoded_fifth_bar(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     }
 }
 
-const DECODED_FIFTH_HINT: &str = "The fifth a Tune with Decode fifths on sounds its chain at, \
-    independent of the lattice's Perfect fifth: switching Note retuning between Pass through \
+const DECODE_FIFTHS_HINT: &str = "For the lattice-board, a custom chain-of-fifths keyboard \
+    (yan-h/lattice-board); leave it off for any other input. Every source with Retune on reads \
+    each note's MIDI channel as a 12-fifth comma bank (Ch 1 = D♭..F♯, Ch 2 = +12 fifths, \
+    Ch 16 = −12 fifths) and sounds the chain at the Decoded fifth, so a 12-TET or MPE track with \
+    Retune on is decoded too. A Lattice Map ignores the bank and tunes each key from its slot. \
+    Learn hears only sources with Retune off, and those pass through undecoded.";
+
+const DECODED_FIFTH_HINT: &str = "The fifth the lattice-board's chain sounds at with Decode \
+    fifths on, independent of the lattice's Perfect fifth: switching Note retuning between Pass through \
     and Lattice Map switches the same playing between this temperament and the lattice's \
     tuning without moving a slider. A Lattice Map with no map to play sounds it too.";
 

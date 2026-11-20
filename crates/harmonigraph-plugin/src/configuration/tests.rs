@@ -269,7 +269,8 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
         device.wrapper().test_inspect_plugin(|plugin| {
             let mut scratch = [harmonigraph_core::tuning::PitchClass::from_microcents(0);
                 crate::tuning::HELD_VOICES];
-            plugin.aggregation.as_ref().unwrap().held_classes(&mut scratch)
+            let decoded = plugin.configuration.as_ref().unwrap().current().policy.decode_fifths;
+            plugin.aggregation.as_ref().unwrap().held_classes(decoded, &mut scratch)
         })
     };
     assert_eq!(heard(&device), 3);
@@ -768,6 +769,7 @@ fn the_published_record_round_trips_every_word() {
                 reset_stop: true,
                 reset_loop: false,
                 keyboard: [695_000_007, 380_000_008, 980_000_009],
+                decode_fifths: true,
                 decoded_fifth: 690_000_010,
             },
         },
@@ -889,6 +891,7 @@ fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
         silence_ms: 4500,
         reset_loop: true,
         reset_stop: true,
+        decode_fifths: true,
         decoded_fifth: 694_786_840,
         ..Default::default()
     };
