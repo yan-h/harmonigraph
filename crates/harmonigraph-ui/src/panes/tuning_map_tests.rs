@@ -192,14 +192,64 @@ fn the_decoding_controls_send_the_shown_policy_under_pass_through() {
     );
 }
 
+/// What a double-click on the control labelled `label` sends under `engine`,
+/// with Decode fifths on at a 700¢ Decoded fifth, each on a fresh pane: two
+/// double-clicks in one window count as a triple-click.
+fn double_clicked(engine: TuningEngine, label: &str) -> Vec<ConfigEdit> {
+    let ctx = themed();
+    let params = Edits::new(engine, Follow::Off, 1);
+    let mut state = fresh_picture();
+    state.runtime.adaptive_policy =
+        PolicyConfig { decode_fifths: true, decoded_fifth: 700_000_000, ..Default::default() };
+    let size = egui::vec2(420.0, 2000.0);
+    let mut frame = |events| {
+        events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {
+            tuning_pane(ui, &mut state, &params, 0.0);
+        })
+    };
+    frame(vec![]);
+    let at = text_at(&frame(vec![]), label).unwrap_or_else(|| panic!("{label} is drawn"));
+    frame(vec![egui::Event::PointerMoved(at)]);
+    for _ in 0..2 {
+        frame(vec![press(at, true)]);
+        frame(vec![press(at, false)]);
+    }
+    params.tuning.take()
+}
+
+/// While Pass through decodes the board, Tuning's Perfect fifth is the
+/// Decoded fifth: a double-click on it puts the Decoded fifth back on its
+/// fresh value and leaves the lattice's own fifth alone, while the third and
+/// the presets, which would edit saved intervals nobody sees, do nothing.
+/// Under Lattice Map the same double-click edits the lattice's fifth.
+#[test]
+fn the_perfect_fifth_edits_the_decoded_fifth_while_the_board_is_drawn() {
+    let [edit] = double_clicked(TuningEngine::Off, "Perfect fifth")[..] else {
+        panic!("one edit");
+    };
+    let policy = edit.policy.expect("a Decoded fifth edit");
+    let fresh = PolicyConfig::default().decoded_fifth;
+    assert!((policy.decoded_fifth - fresh).abs() < 100, "{policy:?}");
+    assert_eq!(edit.axes, [None; 5], "the lattice's fifth moved");
+    // The fresh picture links the third, so its label carries the badge.
+    for label in ["↔ · Major third", "Just"] {
+        assert_eq!(double_clicked(TuningEngine::Off, label), [], "{label} edited");
+    }
+    let [edit] = double_clicked(TuningEngine::LatticeMap, "Perfect fifth")[..] else {
+        panic!("one edit");
+    };
+    assert!(edit.axes[TuningAxis::Three.index()].is_some() && edit.policy.is_none());
+}
+
 /// With Learn on, whether the pane's first frame draws the armed ring at
 /// `now`, and whether that frame holds the loop at full rate for it, with the
-/// pane `below` points down a 2000-point screen.
-fn learn_ring_drawn(engine: TuningEngine, below: f32) -> (bool, bool) {
+/// pane `below` points down a 2000-point screen and Decode fifths as given.
+fn learn_ring_drawn(engine: TuningEngine, decoding: bool, below: f32) -> (bool, bool) {
     let ctx = themed();
     let params = Edits::new(engine, Follow::Off, 1);
     let mut state = fresh_picture();
     state.runtime.learn_active = true;
+    state.runtime.adaptive_policy.decode_fifths = decoding;
     let size = egui::vec2(420.0, 2000.0);
     let now = 0.0;
     let ring = theme::armed().gamma_multiply(learn_pulse(now));
@@ -220,17 +270,25 @@ fn learn_ring_drawn(engine: TuningEngine, below: f32) -> (bool, bool) {
 #[test]
 fn the_learn_ring_is_drawn_only_where_learn_acts() {
     assert_eq!(
-        learn_ring_drawn(TuningEngine::Off, 0.0),
+        learn_ring_drawn(TuningEngine::Off, false, 0.0),
         (true, true),
         "Pass through learns, so the ring pulses at full rate"
     );
     assert_eq!(
-        learn_ring_drawn(TuningEngine::LatticeMap, 0.0),
+        learn_ring_drawn(TuningEngine::LatticeMap, false, 0.0),
         (false, false),
         "Lattice Map suspends Learn, and its still ring holds nothing"
     );
+    assert_eq!(
+        learn_ring_drawn(TuningEngine::Off, true, 0.0),
+        (false, false),
+        "Decode fifths suspends Learn"
+    );
     // Scrolled out of the settings page, the pulse is seen nowhere.
-    assert!(!learn_ring_drawn(TuningEngine::Off, 3000.0).1, "a ring out of view held the loop");
+    assert!(
+        !learn_ring_drawn(TuningEngine::Off, false, 3000.0).1,
+        "a ring out of view held the loop"
+    );
 }
 
 /// Each row's buttons act on that row's map, selected or not, and are

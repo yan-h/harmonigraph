@@ -71,7 +71,7 @@ pub(super) fn frame(
         shared.ui.log(line);
     }
     // Snapshot current host movement before arming or queuing a render.
-    let configuration = state.params.settings.view();
+    let configuration = state.params.configuration_view();
     shared.ui.picture.appearance.sync_camera(&PluginParamBackend {
         params: &state.params,
         host: context,

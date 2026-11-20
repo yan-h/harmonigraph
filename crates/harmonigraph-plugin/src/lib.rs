@@ -410,6 +410,16 @@ impl HarmonigraphParams {
         self.table.int(row.index())
     }
 
+    /// The configuration as the editor shows it: drawn under the engine the
+    /// parameters select (`ResolvedConfig::drawn`), as the audio side records
+    /// it for a take. A save reads the configuration undrawn.
+    pub(crate) fn configuration_view(&self) -> harmonigraph_ui::params::ConfigurationView {
+        let mut view = self.settings.view();
+        let engine = TuningEngine::from_index(self.int(Row::TuningEngine));
+        view.resolved = view.resolved.drawn(engine);
+        view
+    }
+
     /// A camera row's value, modulated.
     pub fn camera(&self, key: ParamKey) -> f32 {
         self.table.float(Row::camera(key).index())
@@ -1047,8 +1057,7 @@ impl Plugin for Harmonigraph {
         for input in block.events() {
             owner.maps.observe(input, owner.current());
         }
-        let decoded = owner.current().policy.decode_fifths;
-        owner.group_end(hub.retuning(), |scratch| hub.held_classes(decoded, scratch));
+        owner.group_end(hub.retuning(), |scratch| hub.held_classes(scratch));
         for input in block.events() {
             hub.input(input);
         }

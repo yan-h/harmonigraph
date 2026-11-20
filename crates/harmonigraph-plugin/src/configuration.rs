@@ -555,7 +555,8 @@ impl Owner {
 
     /// Learn, then publish the callback's record. A Retune-enabled source
     /// reserves the lattice axes only while the engine actually retunes. Pass
-    /// through learns the axes from unchanged input.
+    /// through learns the axes from unchanged input. Decode fifths, as edited
+    /// this callback, suspends Learn as Lattice Map does.
     ///
     /// `classes` is the Hub's `held_classes`, asked only while Learn is armed.
     /// `TOO_MANY_CLASSES` reports this evaluation alone rather than latching,
@@ -572,7 +573,7 @@ impl Owner {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
         self.status &= !ConfigurationView::TOO_MANY_CLASSES;
-        if self.maps.playback.engine.learns() {
+        if self.maps.playback.engine.learns(self.reducer.resolved().policy.decode_fifths) {
             match self.learning.infer(self.reducer.resolved().modes.learning, classes) {
                 Ok(Some(learned)) => {
                     self.reducer.apply(ConfigMutation::LearnResolved { learned, retuning });

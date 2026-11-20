@@ -2,7 +2,7 @@
 //! drive a take through the exported CLAP factory and read what it recorded
 //! (moved here from `configuration/tests.rs`, #1868).
 use super::*;
-use crate::configuration::tests::{hub, note, plain, restored};
+use crate::configuration::tests::{hub, note, plain, restored, saved};
 use crate::configuration::*;
 use crate::test_device::{header, Device, Input};
 use clap_sys::events::*;
@@ -88,6 +88,49 @@ fn a_take_carries_released_axes_in_its_configuration_records() {
     assert_eq!(replayed.modes, expected.modes);
     let lane = entries.iter().filter(|e| matches!(e, harmonigraph_record::Entry::Param { .. }));
     assert_eq!(lane.count(), ParamKey::ALL.len(), "only the camera, once each");
+}
+
+/// A take improvised in Pass through with Decode fifths on records the
+/// lattice drawn in the lattice-board's tuning, and from the sample Lattice
+/// Map is chosen mid-block the saved just axes, which a save stores whatever
+/// was drawn.
+#[test]
+fn a_take_records_the_board_s_tuning_only_while_pass_through_decodes() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = crate::test_device::recorded(hub);
+    device.activate();
+    let settings = device.settings();
+    let just = Tuning::just();
+    assert!(settings.submit(ConfigEdit {
+        axes: [None, Some(just.three), Some(just.five), None, None],
+        policy: Some(PolicyConfig { decode_fifths: true, ..PolicyConfig::default() }),
+        ..Default::default()
+    }));
+    device.run(0, vec![], None);
+    capture.arm();
+    let lattice_map = Input::Param(clap_event_param_value {
+        header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, 10),
+        param_id: harmonigraph_clap::wrapper::hash_param_id("tuning-engine"),
+        cookie: std::ptr::null_mut(),
+        note_id: -1,
+        port_index: -1,
+        channel: -1,
+        key: -1,
+        value: f64::from(harmonigraph_core::lattice_map::TuningEngine::LatticeMap.index()),
+    });
+    device.run(64, vec![lattice_map], None);
+    let fifths: Vec<_> = capture
+        .drain_entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            harmonigraph_record::Entry::Configuration(config) => Some(config.resolved()),
+            _ => None,
+        })
+        .map(|config| (config.tuning.three, config.modes.tempered.syntonic))
+        .collect();
+    let board = PolicyConfig::default().decoded_fifth;
+    assert_eq!(fifths, [(board, true), (just.three, false)]);
+    assert_eq!(saved(&device.save()).axes[1], just.three, "a save stored the drawn fifth");
 }
 
 pub(in crate::configuration) fn transport(seconds: f64, time: u32) -> clap_event_transport {

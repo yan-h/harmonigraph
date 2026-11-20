@@ -32,16 +32,22 @@ the chain-of-fifths layout of a Wicki-Hayden keyboard,
 and sounds that chain at the project's **Decoded fifth**,
 with its C at the lattice's C offset.
 Pass through sounds the chain as declared,
-so switching Note retuning between Pass through and Lattice Map switches the same playing between that temperament and the lattice's tuning without moving a slider.
+and draws the lattice in the board's tuning:
+its fifth is the Decoded fifth with Meantone linked,
+and Tuning's Perfect fifth edits the Decoded fifth while the other intervals and the presets wait, greyed.
+The saved intervals are left as they were,
+so switching Note retuning between Pass through and Lattice Map switches the same playing,
+and the lattice that draws it,
+between that temperament and the lattice's own tuning,
+and a take records whichever was drawn.
 Lattice Map ignores the channel and gives the key its map's slot.
 Adaptive hears the declared pitch,
 from a keyboard tuned in the Decoded fifth,
 so the decoded C♯ and D♭ of one key can take different nodes;
 the Keyboard block's tuning applies only with Decode fifths off.
-Learn does not hear a decoded source,
-since its keys arrive in 12-TET,
-so with Decode fifths on it hears only sources with Retune off,
-which pass through undecoded like any other.
+Learn is suspended while Decode fifths is on, as under Lattice Map:
+the board declares its tuning,
+and what Learn would hear beside it is the 12-TET tracks that pass through undecoded.
 
 
 The moving, register-aware policy developed from [Adaptive tuning: a moving harmonic neighbourhood](adaptive-tuning-design.md) shipped in [#782](https://github.com/yan-h/harmonigraph/pull/782).

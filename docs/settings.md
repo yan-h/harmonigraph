@@ -318,6 +318,13 @@ the key nearest the note's sounding pitch in the Decoded fifth, sent in the boar
 The board's firmware reads these, and a note whose nearest spelling the board lacks lights the nearest key it has.
 There is nothing to route in Bitwig; the board may be plugged in or out at any time, and the Console says when it is found, missing or lost.
 The Decoded fifth is the fifth a decoded source sounds its chain of fifths at wherever a Lattice Map is not tuning it.
+Under Pass through with Decode fifths on the lattice is drawn in the board's tuning,
+the Decoded fifth with Meantone linked,
+in the editor and in a take:
+**Tuning**'s Perfect fifth then shows and edits the Decoded fifth,
+and the other intervals, their links and the Just and 12-TET presets are greyed,
+since they edit saved intervals only Lattice Map and Adaptive draw.
+Learn is suspended while Decode fifths is on.
 Each engine's controls follow in a section of their own.
 Adaptive tuning's **Keyboard** and **Context** are blocks,
 open like the rest of the section.
