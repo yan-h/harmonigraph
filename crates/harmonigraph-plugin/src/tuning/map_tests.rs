@@ -158,7 +158,7 @@ fn an_engine_or_follow_event_past_the_top_step_selects_the_top_step() {
     hub.run(0, vec![parameter("tuning-engine", 5.0, 0), parameter("map-follow", 4.0, 0)], None);
     let playback =
         hub_wrapper(&hub).test_inspect_plugin(|plugin| *plugin.params.map_playback.lock());
-    assert_eq!(playback.engine, TuningEngine::Fifths);
+    assert_eq!(playback.engine, TuningEngine::LatticeMap);
     assert_eq!(playback.follow, harmonigraph_core::lattice_map::Follow::ThirdsAndFifths);
 }
 
@@ -557,7 +557,7 @@ fn map_follow_changes_leave_adaptive_context_alone() {
 }
 
 #[test]
-fn fifths_engine_decodes_comma_banks_composes_expression_and_suspends_learn() {
+fn decode_fifths_stage_stacks_with_pass_through_lattice_map_and_adaptive() {
     let _scope = crate::test_scope::enter();
     let mut hub = hub().with_adaptive();
     hub.activate_format(48_000.0, 128);
@@ -568,18 +568,18 @@ fn fifths_engine_decodes_comma_banks_composes_expression_and_suspends_learn() {
     hub.shared().set_retune(true);
     let mut tune = tune();
     tune.activate_format(48_000.0, 128);
-    // Select Fifths (index 3) and arm Learn to verify Fifths suspends Learn.
+
+    // 1. Decode fifths -> Pass through: uses C offset + Perfect fifth and suspends Learn.
     hub_wrapper(&hub).test_inspect_plugin(|plugin| {
-        assert!(plugin
-            .params
-            .settings
-            .submit(ConfigEdit { learning: Some(true), ..Default::default() }));
+        assert!(plugin.params.settings.submit(ConfigEdit {
+            learning: Some(true),
+            decode_fifths: Some(true),
+            ..Default::default()
+        }));
     });
-    hub.run_format(0, vec![parameter("tuning-engine", 3.0, 0)], None, None, 128);
-    // Simultaneous enharmonics on the same MIDI key (61):
-    // - ch 0 (MIDI Ch 1): D♭4 -> fifths = -5
-    // - ch 1 (MIDI Ch 2): C♯4 -> fifths = +7 (plus +0.25 st player expression)
-    // - ch 15 (MIDI Ch 16): G♭4 (key 66) -> fifths = -6
+    hub.run_format(0, vec![parameter("tuning-engine", 0.0, 0)], None, None, 128);
+    // Simultaneous enharmonics on key 61 (ch 0 = D♭4 -> -5, ch 1 = C♯4 -> +7 + 0.25 st)
+    // plus ch 15 = G♭4 (key 66 -> -6).
     let input = vec![
         note(1, 0, 61, 0, true),
         note(2, 1, 61, 0, true),
@@ -602,21 +602,14 @@ fn fifths_engine_decodes_comma_banks_composes_expression_and_suspends_learn() {
     assert_eq!((db.attack_node, db.frozen_offset_microcents), (Some(db_node), db_corr));
     assert_eq!((cs.attack_node, cs.frozen_offset_microcents), (Some(cs_node), cs_corr));
     assert_eq!((gb.attack_node, gb.frozen_offset_microcents), (Some(gb_node), gb_corr));
-    // Additive: C♯4's +0.25 st player expression stays composed on top of the correction.
     assert_eq!(cs.onset_pitch_microcents, 61 * 100_000_000 + cs_corr + 25_000_000);
-    // Fifths does not populate Adaptive/Follow context.
     assert_eq!(inspect_hub(&hub, |hub| hub.test_context()), 0);
-    // Learn stayed suspended: C offset and fifth did not snap toward 12-TET.
     let resolved =
         hub_wrapper(&hub).test_inspect_plugin(|plugin| plugin.params.settings.view().resolved);
     assert_eq!(resolved.tuning.c_offset, meantone.c_offset);
     assert_eq!(resolved.tuning.three, meantone.three);
-    // Tune emitted the exact per-note tuning expressions on the wire (note 2
-    // receives both its onset expression and its forwarded player expression,
-    // both carrying the composed correction).
-    let last_tuning = |target_id: i32| {
-        output
-            .values
+    let last_tuning = |values: &[(u32, Event)], target_id: i32| {
+        values
             .iter()
             .filter_map(|(_, event)| match event {
                 Event::Expression { kind: 2, id, value, .. } if *id == target_id => Some(*value),
@@ -625,8 +618,70 @@ fn fifths_engine_decodes_comma_banks_composes_expression_and_suspends_learn() {
             .next_back()
             .expect("tuning expression emitted")
     };
-    assert!((last_tuning(1) - db_corr as f64 / 1e8).abs() < 1e-8);
-    assert!((last_tuning(2) - (0.25 + cs_corr as f64 / 1e8)).abs() < 1e-8);
-    assert!((last_tuning(3) - gb_corr as f64 / 1e8).abs() < 1e-8);
+    assert!((last_tuning(&output.values, 1) - db_corr as f64 / 1e8).abs() < 1e-8);
+    assert!((last_tuning(&output.values, 2) - (0.25 + cs_corr as f64 / 1e8)).abs() < 1e-8);
+    assert!((last_tuning(&output.values, 3) - gb_corr as f64 / 1e8).abs() < 1e-8);
+
+    // 2. Decode fifths -> Lattice Map (5-limit Just): C# and Db hit distinct
+    //    5-limit JI nodes (-1, 2, 0) and (-1, -1, 0) simultaneously.
+    let just = Tuning::just();
+    musical_tests::configure(&hub, just);
+    hub_wrapper(&hub).test_inspect_plugin(|plugin| {
+        assert!(plugin
+            .params
+            .settings
+            .submit(ConfigEdit { decode_fifths: Some(true), ..Default::default() }));
+    });
+    hub.run_format(384, vec![parameter("tuning-engine", 2.0, 0)], None, None, 128);
+    tune.run_format(512, vec![note(4, 0, 61, 0, true), note(5, 1, 61, 0, true)], None, None, 128);
+    hub.run_format(512, vec![], None, None, 128);
+    tune.run_format(640, vec![], None, None, 128);
+    hub.run_format(640, vec![], None, None, 128);
+
+    let ji_db = inspect_hub(&hub, |hub| hub.test_voice(0, 0, 61)).expect("JI D♭4");
+    let ji_cs = inspect_hub(&hub, |hub| hub.test_voice(0, 1, 61)).expect("JI C♯4");
+    assert_eq!(ji_db.attack_node, Some(LatticePos::new(-1, -1, 0)));
+    assert_eq!(ji_cs.attack_node, Some(LatticePos::new(-1, 2, 0)));
+    assert_eq!(
+        ji_db.frozen_offset_microcents,
+        LatticeMap::node_correction(LatticePos::new(-1, -1, 0), just)
+    );
+    assert_eq!(
+        ji_cs.frozen_offset_microcents,
+        LatticeMap::node_correction(LatticePos::new(-1, 2, 0), just)
+    );
+
+    // 3. Decode fifths -> Adaptive (meantone keyboard -> 5-limit Just):
+    //    Keyboard fifth = 696.58¢ separates C# and Db by 41¢, so Adaptive maps
+    //    C4 + Db4 to 16/15 (-1, -1, 0) and C4 + C#4 to 25/24 (-1, 2, 0).
+    hub_wrapper(&hub).test_inspect_plugin(|plugin| {
+        let mut policy = plugin.params.settings.view().resolved.policy;
+        policy.keyboard[0] = 696_578_428; // quarter-comma meantone keyboard
+        assert!(plugin.params.settings.submit(ConfigEdit {
+            decode_fifths: Some(true),
+            policy: Some(policy),
+            ..Default::default()
+        }));
+    });
+    hub.run_format(768, vec![parameter("tuning-engine", 1.0, 0)], None, None, 128);
+    tune.run_format(
+        896,
+        vec![note(6, 0, 60, 0, true), note(7, 0, 61, 0, true), note(8, 1, 61, 0, true)],
+        None,
+        None,
+        128,
+    );
+    hub.run_format(896, vec![], None, None, 128);
+    let adaptive_out = tune.run_format(1024, vec![], None, None, 128);
+    hub.run_format(1024, vec![], None, None, 128);
+
+    let ad_db = inspect_hub(&hub, |hub| hub.test_voice(0, 0, 61)).expect("Adaptive D♭4");
+    let ad_cs = inspect_hub(&hub, |hub| hub.test_voice(0, 1, 61)).expect("Adaptive C♯4");
+    assert_eq!(ad_db.attack_node, Some(LatticePos::new(-1, -1, 0)));
+    assert_eq!(ad_cs.attack_node, Some(LatticePos::new(-1, 2, 0)));
+    let expected_db = LatticeMap::node_correction(LatticePos::new(-1, -1, 0), just) as f64 / 1e8;
+    let expected_cs = LatticeMap::node_correction(LatticePos::new(-1, 2, 0), just) as f64 / 1e8;
+    assert!((last_tuning(&adaptive_out.values, 7) - expected_db).abs() < 1e-6);
+    assert!((last_tuning(&adaptive_out.values, 8) - expected_cs).abs() < 1e-6);
     assert_eq!(tune.shared().misses.load(Ordering::Relaxed), 0);
 }

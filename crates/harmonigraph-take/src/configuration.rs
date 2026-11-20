@@ -65,6 +65,7 @@ pub struct ConfigurationRecord {
     pub axes: [i32; 5],
     pub tempered: [bool; 2],
     pub learning: bool,
+    pub decode_fifths: bool,
     pub policy: PolicyRecord,
 }
 impl Default for ConfigurationRecord {
@@ -81,6 +82,7 @@ impl ConfigurationRecord {
             axes: config.tuning.axes(),
             tempered: [config.modes.tempered.syntonic, config.modes.tempered.septimal_kleisma],
             learning: config.modes.learning,
+            decode_fifths: config.modes.decode_fifths,
             policy: p.into(),
         }
     }
@@ -95,6 +97,7 @@ impl ConfigurationRecord {
                     septimal_kleisma: self.tempered[1],
                 },
                 learning: self.learning,
+                decode_fifths: self.decode_fifths,
             },
             policy: p.into(),
         }

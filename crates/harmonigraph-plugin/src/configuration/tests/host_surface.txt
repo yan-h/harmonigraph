@@ -98,15 +98,14 @@ parameters of com.yan-h.harmonigraph
   host 1.6: text Some("-70") applied {"i32":-7} read back 2.000000014901161
   host 18.0: text Some("90") applied {"i32":9} read back 18.0
   typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.000000476837158), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None
-"Note Retuning": id 1141170266 module "" range 0..3 default 0 flags stepped
+"Note Retuning": id 1141170266 module "" range 0..2 default 0 flags stepped
   host 0.0: text Some("Pass through") applied {"i32":0} read back 0.0
-  host 1.0000000298023224: text Some("Adaptive") applied {"i32":1} read back 1.0000000298023224
-  host 2.0000000596046448: text Some("Lattice Map") applied {"i32":2} read back 2.0000000596046448
-  host 3.0: text Some("Fifths") applied {"i32":3} read back 3.0
-  host 1.4: text Some("Adaptive") applied {"i32":1} read back 1.0000000298023224
-  host 1.6: text Some("Lattice Map") applied {"i32":2} read back 2.0000000596046448
-  host 3.0: text Some("Fifths") applied {"i32":3} read back 3.0
-  typed: "Pass through" -> None, "0" -> Some(0.0), "1" -> Some(1.0000000298023224), "3" -> Some(3.0), "10" -> Some(3.0), "-1" -> Some(0.0), "200" -> Some(3.0), "0.5" -> None, " 2 " -> Some(2.0000000596046448), "Off" -> None, "Main" -> None
+  host 1.0: text Some("Adaptive") applied {"i32":1} read back 1.0
+  host 2.0: text Some("Lattice Map") applied {"i32":2} read back 2.0
+  host 1.4: text Some("Adaptive") applied {"i32":1} read back 1.0
+  host 1.6: text Some("Lattice Map") applied {"i32":2} read back 2.0
+  host 2.0: text Some("Lattice Map") applied {"i32":2} read back 2.0
+  typed: "Pass through" -> None, "0" -> Some(0.0), "1" -> Some(1.0), "3" -> Some(2.0), "10" -> Some(2.0), "-1" -> Some(0.0), "200" -> Some(2.0), "0.5" -> None, " 2 " -> Some(2.0), "Off" -> None, "Main" -> None
 "Map Follow": id 613187906 module "" range 0..2 default 0 flags stepped,automatable
   host 0.0: text Some("Off") applied {"i32":0} read back 0.0
   host 1.0: text Some("Thirds") applied {"i32":1} read back 1.0

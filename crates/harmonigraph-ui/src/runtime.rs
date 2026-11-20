@@ -71,6 +71,9 @@ pub struct VisualRuntime {
     /// While true, tuning params continuously re-learn from the held notes
     /// (v1's learn mode). Runtime-only; never persisted.
     pub learn_active: bool,
+    /// While true, incoming MIDI is decoded as 12-TET key plus signed 12-fifth
+    /// comma bank on MIDI channels ahead of Note retuning.
+    pub decode_fifths: bool,
     /// The commas being tempered out: the links every naming path spells
     /// against and the tuning panes show. Resolved each frame from whichever
     /// owner holds the configuration (the plugin's audio owner, a take's
@@ -122,6 +125,7 @@ impl Default for VisualRuntime {
             tracker: NoteTracker::new(),
             tuning: Tuning::default(),
             learn_active: false,
+            decode_fifths: false,
             tempered: harmonigraph_core::configuration::TuningModes::default().tempered,
             config_reducer: Default::default(),
             replayed_configuration: None,
@@ -199,7 +203,7 @@ impl VisualRuntime {
     /// which learns). The one rule Learn's two indicators, the lattice's badge
     /// and the Tuning pane's ring, and the pane's "suspended" line all read.
     pub fn learn_acts(&self, engine: Option<harmonigraph_core::lattice_map::TuningEngine>) -> bool {
-        self.learn_active && engine.is_none_or(|engine| engine.learns())
+        self.learn_active && !self.decode_fifths && engine.is_none_or(|engine| engine.learns())
     }
 
     /// Keep this frame's map view, and decide its pending label.
@@ -215,6 +219,7 @@ impl VisualRuntime {
         self.adaptive_policy = config.policy;
         self.tempered = config.modes.tempered;
         self.learn_active = config.modes.learning;
+        self.decode_fifths = config.modes.decode_fifths;
     }
 
     /// Install a configuration in this runtime's own reducer without rejudging
@@ -250,7 +255,7 @@ impl VisualRuntime {
     /// held pitch classes changes, re-infer the tuning into the runtime's own
     /// reducer. Change-detected so a held chord is learned once. No egui types.
     pub(crate) fn learn_step(&mut self) {
-        if !self.learn_active {
+        if !self.learn_active || self.decode_fifths {
             self.last_learned_classes = None;
             return;
         }

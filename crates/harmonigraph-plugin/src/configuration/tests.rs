@@ -380,6 +380,7 @@ fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
         let restored_modes = TuningModes {
             tempered: Tempered { syntonic: meantone, septimal_kleisma: marvel },
             learning,
+            decode_fifths: false,
         };
         assert_eq!(readback.modes, restored_modes);
         assert_eq!(readback.tuning.three, 700_000_000, "the readback's tuning is the restored one");
@@ -756,6 +757,7 @@ fn the_published_record_round_trips_every_word() {
             modes: TuningModes {
                 tempered: Tempered { syntonic: false, septimal_kleisma: true },
                 learning: true,
+                decode_fifths: true,
             },
             policy: PolicyConfig {
                 radius: 2,
@@ -1163,7 +1165,7 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
     let mut device = hub().with_retune();
     device.activate();
     for (round, (engine, map, shown, decoded, slot)) in [
-        (4, 200, "Fifths", TuningEngine::Fifths, 127),
+        (3, 200, "Lattice Map", TuningEngine::LatticeMap, 127),
         (-1, -5, "Pass through", TuningEngine::Off, 0),
     ]
     .into_iter()

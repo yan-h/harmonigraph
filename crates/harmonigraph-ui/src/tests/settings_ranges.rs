@@ -241,6 +241,7 @@ fn backend_with(
     let modes = TuningModes {
         tempered: harmonigraph_core::Tempered { syntonic: meantone, septimal_kleisma: marvel },
         learning: false,
+        decode_fifths: false,
     };
     reducer.apply(ConfigMutation::Restore { raw, modes, policy });
     Backend {

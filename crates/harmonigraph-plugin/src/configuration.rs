@@ -35,6 +35,7 @@ pub(crate) struct MusicalSettings {
     meantone: bool,
     marvel: bool,
     learning: bool,
+    decode_fifths: bool,
     adaptive: harmonigraph_take::configuration::PolicyRecord,
 }
 impl Default for MusicalSettings {
@@ -50,6 +51,7 @@ impl MusicalSettings {
             meantone: resolved.modes.tempered.syntonic,
             marvel: resolved.modes.tempered.septimal_kleisma,
             learning: resolved.modes.learning,
+            decode_fifths: resolved.modes.decode_fifths,
             adaptive: resolved.policy.into(),
         }
     }
@@ -59,6 +61,7 @@ impl MusicalSettings {
             modes: TuningModes {
                 tempered: Tempered { syntonic: self.meantone, septimal_kleisma: self.marvel },
                 learning: self.learning,
+                decode_fifths: self.decode_fifths,
             },
             policy: PolicyConfig::from(self.adaptive),
         }
@@ -104,7 +107,8 @@ impl Published {
         let modes = record.resolved.modes;
         let bits = u64::from(modes.tempered.syntonic)
             | u64::from(modes.tempered.septimal_kleisma) << 1
-            | u64::from(modes.learning) << 2;
+            | u64::from(modes.learning) << 2
+            | u64::from(modes.decode_fifths) << 3;
         // Typed to the words left after the header and the two tunings, so a
         // policy that grew is a type error here rather than a word `zip`
         // drops.
@@ -152,6 +156,7 @@ impl Published {
                             septimal_kleisma: words[2] & 2 != 0,
                         },
                         learning: words[2] & 4 != 0,
+                        decode_fifths: words[2] & 8 != 0,
                     },
                     policy: PolicyConfig::from_words(std::array::from_fn(|i| signed(14 + i))),
                 },
@@ -566,8 +571,9 @@ impl Owner {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
         self.status &= !ConfigurationView::TOO_MANY_CLASSES;
-        if self.maps.playback.engine.learns() {
-            match self.learning.infer(self.reducer.resolved().modes.learning, classes) {
+        let resolved = self.reducer.resolved();
+        if self.maps.playback.engine.learns() && !resolved.modes.decode_fifths {
+            match self.learning.infer(resolved.modes.learning, classes) {
                 Ok(Some(learned)) => {
                     self.reducer.apply(ConfigMutation::LearnResolved { learned, retuning });
                     self.edited = true;

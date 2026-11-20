@@ -3,16 +3,25 @@
 
 use crate::{Comma, LearnedTuning, Tempered, Tuning};
 
-/// Explicit interval links and Learn state. Recognition runs only on tuning edits.
+/// Explicit interval links, Learn state, and input decoding. Recognition runs
+/// only on tuning edits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TuningModes {
     pub tempered: Tempered,
     pub learning: bool,
+    /// Decode incoming `(channel, key)` MIDI as 12-TET key plus signed
+    /// 12-fifth comma bank on MIDI channels (`Ch 1 = D♭..F♯`, `Ch 2 = +12`,
+    /// `Ch 16 = −12`) as an input stage ahead of Note retuning.
+    pub decode_fifths: bool,
 }
 
 impl Default for TuningModes {
     fn default() -> Self {
-        Self { tempered: Tempered { syntonic: true, septimal_kleisma: true }, learning: false }
+        Self {
+            tempered: Tempered { syntonic: true, septimal_kleisma: true },
+            learning: false,
+            decode_fifths: false,
+        }
     }
 }
 
@@ -179,6 +188,7 @@ pub struct ConfigEdit {
     pub axes: [Option<i32>; 5],
     pub tempered: [Option<bool>; Comma::COUNT],
     pub learning: Option<bool>,
+    pub decode_fifths: Option<bool>,
     /// The whole adaptive policy, as the editor shows it.
     pub policy: Option<PolicyConfig>,
 }
@@ -329,6 +339,9 @@ impl ConfigReducer {
                 }
                 if let Some(on) = edit.learning {
                     self.modes.learning = on;
+                }
+                if let Some(on) = edit.decode_fifths {
+                    self.modes.decode_fifths = on;
                 }
             }
             ConfigMutation::LearnResolved { learned, retuning } => {
@@ -520,7 +533,8 @@ mod tests {
         assert_eq!(reducer.resolved().modes.tempered, Tempered::default());
         switch(&mut reducer, Comma::Syntonic, true);
         assert!(reducer.resolved().modes.tempered.syntonic);
-        let modes = TuningModes { tempered: Tempered::default(), learning: false };
+        let modes =
+            TuningModes { tempered: Tempered::default(), learning: false, decode_fifths: false };
         reducer.apply(ConfigMutation::Restore {
             raw: Tuning::default(),
             modes,

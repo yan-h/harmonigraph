@@ -19,10 +19,11 @@ the remaining sections record the implementation boundaries, rejected alternativ
 For explicit passage tuning with saved maps,
 see [Lattice Map tuning](lattice-maps.md).
 The shared Note retuning selector chooses Pass through,
-Fifths,
 Lattice Map or Adaptive for subsequent attacks.
-Fifths decodes 12-TET MIDI notes carrying signed 12-fifth comma banks on MIDI channels (Ch 1 = `D♭..F♯`, Ch 2 = +12 fifths, Ch 16 = −12 fifths) using the Hub's C pitch offset and Perfect fifth settings,
-and suspends Learn.
+Enabling Decode fifths adds a comma-bank input stage ahead of Note retuning (12-TET MIDI keys with signed 12-fifth banks on MIDI channels: Ch 1 = `D♭..F♯`, Ch 2 = +12 fifths, Ch 16 = −12 fifths) and suspends Learn:
+Pass through tunes directly from C pitch offset and Perfect fifth,
+Lattice Map shifts each slot by whole dieses (3 thirds) per comma bank so enharmonic keys stay distinct,
+and Adaptive decodes with Adaptive → Keyboard → Fifth before scoring.
 
 
 The moving, register-aware policy developed from [Adaptive tuning: a moving harmonic neighbourhood](adaptive-tuning-design.md) shipped in [#782](https://github.com/yan-h/harmonigraph/pull/782).

@@ -153,11 +153,12 @@ fn derive_from_fifth_sends_the_shown_policy_with_the_shown_fifths_keyboard() {
 /// With Learn on, whether the pane's first frame draws the armed ring at
 /// `now`, and whether that frame holds the loop at full rate for it, with the
 /// pane `below` points down a 2000-point screen.
-fn learn_ring_drawn(engine: TuningEngine, below: f32) -> (bool, bool) {
+fn learn_ring_drawn(engine: TuningEngine, decode_fifths: bool, below: f32) -> (bool, bool) {
     let ctx = themed();
     let params = Edits::new(engine, Follow::Off, 1);
     let mut state = fresh_picture();
     state.runtime.learn_active = true;
+    state.runtime.decode_fifths = decode_fifths;
     let size = egui::vec2(420.0, 2000.0);
     let now = 0.0;
     let ring = theme::armed().gamma_multiply(learn_pulse(now));
@@ -178,22 +179,25 @@ fn learn_ring_drawn(engine: TuningEngine, below: f32) -> (bool, bool) {
 #[test]
 fn the_learn_ring_is_drawn_only_where_learn_acts() {
     assert_eq!(
-        learn_ring_drawn(TuningEngine::Off, 0.0),
+        learn_ring_drawn(TuningEngine::Off, false, 0.0),
         (true, true),
         "Pass through learns, so the ring pulses at full rate"
     );
     assert_eq!(
-        learn_ring_drawn(TuningEngine::LatticeMap, 0.0),
+        learn_ring_drawn(TuningEngine::LatticeMap, false, 0.0),
         (false, false),
         "Lattice Map suspends Learn, and its still ring holds nothing"
     );
     assert_eq!(
-        learn_ring_drawn(TuningEngine::Fifths, 0.0),
+        learn_ring_drawn(TuningEngine::Off, true, 0.0),
         (false, false),
-        "Fifths suspends Learn, and its still ring holds nothing"
+        "Decode fifths suspends Learn, and its still ring holds nothing"
     );
     // Scrolled out of the settings page, the pulse is seen nowhere.
-    assert!(!learn_ring_drawn(TuningEngine::Off, 3000.0).1, "a ring out of view held the loop");
+    assert!(
+        !learn_ring_drawn(TuningEngine::Off, false, 3000.0).1,
+        "a ring out of view held the loop"
+    );
 }
 
 /// Each row's buttons act on that row's map, selected or not, and are

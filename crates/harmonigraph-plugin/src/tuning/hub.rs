@@ -15,7 +15,8 @@ use harmonigraph_clap::plugin::Boundary;
 use harmonigraph_core::canonical::{NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{
-    fifths_assignment, Follow, LatticeMap, TuningEngine, FOLLOW_GROUP,
+    fifths_assignment, fifths_for_midi, fifths_offset, Follow, LatticeMap, TuningEngine,
+    FOLLOW_FIFTHS, FOLLOW_GROUP,
 };
 use harmonigraph_core::tuning::PitchClass;
 use harmonigraph_core::{policy, LatticePos, SourceId};
@@ -843,8 +844,23 @@ impl Hub {
             });
         }
         let incoming = self.arriving(record, channel, key);
+        let decode_fifths = config.modes.decode_fifths;
         match self.sequencer.engine {
             TuningEngine::Off => {
+                if decode_fifths {
+                    let (node, correction) = fifths_assignment(channel, key, config.tuning);
+                    self.sequencer.decision += 1;
+                    self.decisions += 1;
+                    let decision = self.sequencer.decision;
+                    self.reply(record, correction);
+                    return Some(Assigned {
+                        correction,
+                        node: Some(node),
+                        decision,
+                        player,
+                        channel_pitch,
+                    });
+                }
                 self.reply(record, 0);
                 return Some(Assigned {
                     correction: 0,
@@ -854,23 +870,16 @@ impl Hub {
                     channel_pitch,
                 });
             }
-            TuningEngine::Fifths => {
-                let (node, correction) = fifths_assignment(channel, key, config.tuning);
-                self.sequencer.decision += 1;
-                self.decisions += 1;
-                let decision = self.sequencer.decision;
-                self.reply(record, correction);
-                return Some(Assigned {
-                    correction,
-                    node: Some(node),
-                    decision,
-                    player,
-                    channel_pitch,
-                });
-            }
             TuningEngine::LatticeMap => {
-                let mapped = self.sequencer.map.map(|map| self.follow(position, map));
-                let assigned = mapped.map(|map| map.assignment(incoming, config.tuning));
+                let mapped =
+                    self.sequencer.map.map(|map| self.follow(position, map, decode_fifths));
+                let assigned = mapped.map(|map| {
+                    if decode_fifths {
+                        map.assignment_for_fifths(fifths_for_midi(channel, key), config.tuning)
+                    } else {
+                        map.assignment(incoming, config.tuning)
+                    }
+                });
                 let correction = assigned.map_or(0, |(_, correction)| correction);
                 let node = assigned.map(|(node, _)| node);
                 let decision = if mapped.is_some() {
@@ -902,10 +911,24 @@ impl Hub {
         }
         self.sequencer.take_loop();
         self.sequencer.fill(self.rate);
-        let onset = policy::OrderedOnset { pitch: incoming };
+        let stage1 = if decode_fifths {
+            fifths_offset(
+                fifths_for_midi(channel, key),
+                config.tuning.c_offset,
+                config.policy.keyboard[0],
+            )
+        } else {
+            0
+        };
+        let mut policy_config: policy::MusicalConfig = config.into();
+        if decode_fifths {
+            policy_config.policy.keyboard =
+                harmonigraph_core::tuning::fifth_generated(config.policy.keyboard[0]);
+        }
+        let onset = policy::OrderedOnset { pitch: incoming + stage1 };
         let count = self.sequencer.working.len();
         let selected = policy::assign_new_note(
-            config.into(),
+            policy_config,
             &self.sequencer.working[..count],
             &self.sequencer.memory,
             onset,
@@ -919,18 +942,19 @@ impl Hub {
             }
             Err(_) => {
                 // The one thing the policy can refuse. That onset sounds at raw
-                // pitch, the status says so, and nothing is silenced for it.
+                // (or stage-1 decoded) pitch, the status says so, and nothing is silenced for it.
                 self.status |= session::POLICY;
                 (policy::Assignment::NoCandidate { correction_microcents: 0 }, 0)
             }
         };
-        let (correction, node) = (assignment.correction_microcents(), assignment.node());
-        self.reply(record, correction);
+        let (adaptive_correction, node) = (assignment.correction_microcents(), assignment.node());
+        let total_correction = stage1 + adaptive_correction;
+        self.reply(record, total_correction);
         let mut struck = record.sample;
         if decision != 0 {
             struck = self.sequencer.memory.attack(
                 onset.pitch,
-                correction,
+                adaptive_correction,
                 self.sequencer.config.policy.tolerance,
                 node,
                 record.sample,
@@ -942,7 +966,7 @@ impl Hub {
         let voice = Voice {
             source: record.source,
             lifetime: record.serial,
-            onset_pitch: onset.pitch + correction,
+            onset_pitch: onset.pitch + adaptive_correction,
             node,
             decision,
             onset: struck,
@@ -950,7 +974,7 @@ impl Hub {
         if !self.sequencer.hold(voice) {
             self.status |= session::POLICY;
         }
-        Some(Assigned { correction, node, decision, player, channel_pitch })
+        Some(Assigned { correction: total_correction, node, decision, player, channel_pitch })
     }
 
     /// What actually arrived, key number and every tuning the source already
@@ -969,7 +993,7 @@ impl Hub {
     /// for the whole group. Releases at that sample have all applied by then,
     /// because a sample's onsets sort after its releases, so a chord change
     /// on one sample is weighed against what is actually still held.
-    fn follow(&mut self, position: usize, map: LatticeMap) -> LatticeMap {
+    fn follow(&mut self, position: usize, map: LatticeMap, decode_fifths: bool) -> LatticeMap {
         let sample = self.batch[position].sample;
         if self.sequencer.followed_at != Some(sample) {
             self.sequencer.followed_at = Some(sample);
@@ -977,16 +1001,22 @@ impl Hub {
             self.sequencer.followed = if self.sequencer.follow == Follow::Off {
                 LatticePos::ORIGIN
             } else {
-                self.decide_follow(position, map)
+                self.decide_follow(position, map, decode_fifths)
             };
         }
         LatticeMap { position: map.position + self.sequencer.followed, ..map }
     }
 
     /// The follow offset for the attack group starting at `position`.
-    fn decide_follow(&mut self, position: usize, map: LatticeMap) -> LatticePos {
+    fn decide_follow(
+        &mut self,
+        position: usize,
+        map: LatticeMap,
+        decode_fifths: bool,
+    ) -> LatticePos {
         let sample = self.batch[position].sample;
         let mut keys = [0i64; FOLLOW_GROUP];
+        let mut fifths = [0i32; FOLLOW_FIFTHS];
         let mut struck = 0;
         let mut index = position;
         while index < self.batch.len() && self.batch[index].sample == sample {
@@ -1001,11 +1031,19 @@ impl Hub {
             if record.retune & 1 == 0 || record.retune != retune {
                 continue;
             }
-            // One per pitch class, so octave doublings never crowd a class out.
-            let key = LatticeMap::rounded_key(self.arriving(record, channel, key));
-            if !keys[..struck].iter().any(|k| (k - key).rem_euclid(12) == 0) {
-                keys[struck] = key;
-                struck += 1;
+            if decode_fifths {
+                let f = fifths_for_midi(channel, key);
+                if struck < FOLLOW_FIFTHS && !fifths[..struck].contains(&f) {
+                    fifths[struck] = f;
+                    struck += 1;
+                }
+            } else {
+                // One per pitch class, so octave doublings never crowd a class out.
+                let key = LatticeMap::rounded_key(self.arriving(record, channel, key));
+                if !keys[..struck].iter().any(|k| (k - key).rem_euclid(12) == 0) {
+                    keys[struck] = key;
+                    struck += 1;
+                }
             }
         }
         // Adaptive's own context: the held voices, or with nothing held the
@@ -1013,7 +1051,23 @@ impl Hub {
         let sequencer = &mut self.sequencer;
         sequencer.fill(self.rate);
         let held = sequencer.context.iter().any(Option::is_some);
-        map.follow(sequencer.follow, sequencer.followed, &sequencer.working, held, &keys[..struck])
+        if decode_fifths {
+            map.follow_fifths(
+                sequencer.follow,
+                sequencer.followed,
+                &sequencer.working,
+                held,
+                &fifths[..struck],
+            )
+        } else {
+            map.follow(
+                sequencer.follow,
+                sequencer.followed,
+                &sequencer.working,
+                held,
+                &keys[..struck],
+            )
+        }
     }
 
     fn reply(&mut self, record: Record, correction: i64) {

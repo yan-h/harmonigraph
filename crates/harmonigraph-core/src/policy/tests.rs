@@ -14,6 +14,7 @@ fn just() -> MusicalConfig {
         TuningModes {
             tempered: Tempered { syntonic: false, septimal_kleisma: false },
             learning: false,
+            decode_fifths: false,
         },
     )
     .resolved()
