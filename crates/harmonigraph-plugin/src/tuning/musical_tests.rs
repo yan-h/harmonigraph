@@ -19,7 +19,6 @@ pub(super) fn configure(hub: &Device, tuning: Tuning) {
             ],
             tempered: [Some(false); 2],
             learning: Some(false),
-            decode_fifths: None,
             policy: None,
         },
     );

@@ -245,7 +245,7 @@ pub(super) fn tuning_pane(
             let mut learn_active = state.runtime.learn_active;
             let learn = crate::widgets::toggle_switch(ui, &mut learn_active, "Learn")
                 .on_hover_text(
-                    "While active, set the tuning from the held notes whenever they change. With Adaptive retuning a source that has Retune on, only the C offset and the keyboard are learned: the lattice axes are what it is retuned to. Lattice Map and Decode fifths suspend Learn.",
+                    "While active, set the tuning from the held notes whenever they change. With Adaptive retuning a source that has Retune on, only the C offset and the keyboard are learned: the lattice axes are what it is retuned to. Lattice Map suspends Learn.",
                 );
             if learn.changed() {
                 state.runtime.edit_tuning(
@@ -333,57 +333,31 @@ pub(super) fn tuning_pane(
 /// How the player's controller renders each prime. Learn fills it from the
 /// fifth it hears; it is an adaptive policy setting, edited in the policy the
 /// Adaptive section sends. "Derive from fifth" derives from the fifth shown.
-fn keyboard_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, decode_fifths: bool) {
+fn keyboard_controls(ui: &mut egui::Ui, p: &mut PolicyConfig) {
     super::block(ui, "Keyboard", |ui| {
         let fresh = PolicyConfig::default().keyboard;
-        if decode_fifths {
-            p.keyboard[0] = adaptive_value(
+        for ((value, fresh), label) in
+            p.keyboard.iter_mut().zip(fresh).zip(["Fifth", "Third", "Seventh"])
+        {
+            *value = adaptive_value(
                 ui,
-                (p.keyboard[0] as u32, fresh[0] as u32),
+                (*value as u32, fresh as u32),
                 0..=1_200_000_000,
                 1_000_000.0,
-                "Fifth",
+                label,
                 "¢",
-                "Fifth size Decode fifths uses to turn comma-bank MIDI into acoustic pitches before Adaptive scores them; Third and Seventh are derived from this fifth.",
+                "",
             ) as i32;
-            let derived = tuning::fifth_generated(p.keyboard[0]);
-            for (value, label) in [(derived[1], "Third"), (derived[2], "Seventh")] {
-                let mut shown = value as f32 / 1_000_000.0;
-                ui.add_enabled(
-                    false,
-                    |ui: &mut egui::Ui| {
-                        ValueBar::new(&mut shown, 0.0..=1200.0, label)
-                            .decimals(2)
-                            .unit(1.0, "¢")
-                            .badge("↔")
-                            .show(ui)
-                    },
-                );
-            }
-        } else {
-            for ((value, fresh), label) in
-                p.keyboard.iter_mut().zip(fresh).zip(["Fifth", "Third", "Seventh"])
-            {
-                *value = adaptive_value(
-                    ui,
-                    (*value as u32, fresh as u32),
-                    0..=1_200_000_000,
-                    1_000_000.0,
-                    label,
-                    "¢",
-                    "",
-                ) as i32;
-            }
-            let [third, seventh] = tuning::fifth_generated_steps(p.keyboard[0]).map(fifths);
-            if ui
-                .button("Derive from fifth")
-                .on_hover_text(format!(
-                    "Set the input keyboard's third and seventh from its fifth: {third} and {seventh}."
-                ))
-                .clicked()
-            {
-                p.keyboard = tuning::fifth_generated(p.keyboard[0]);
-            }
+        }
+        let [third, seventh] = tuning::fifth_generated_steps(p.keyboard[0]).map(fifths);
+        if ui
+            .button("Derive from fifth")
+            .on_hover_text(format!(
+                "Set the input keyboard's third and seventh from its fifth: {third} and {seventh}."
+            ))
+            .clicked()
+        {
+            p.keyboard = tuning::fifth_generated(p.keyboard[0]);
         }
     })
     .response
@@ -433,7 +407,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 },
             );
         });
-        keyboard_controls(ui, &mut p, state.runtime.decode_fifths);
+        keyboard_controls(ui, &mut p);
         super::block(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, true))
             .response
             .on_hover_text(
@@ -649,6 +623,7 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], sta
 /// nothing heard.
 const RETUNE_HINT: &str = "Tune new notes with the selected engine. Off, notes pass through uncorrected, without influencing adaptive tuning, and Learn still hears them; a Tune's untuned notes still pass through its tuning delay.";
 const SHOW_HINT: &str = "Show this instance's output notes on the lattice, in takes and in exports. Changes nothing you hear.";
+const DECODE_FIFTHS_HINT: &str = "Read each note's MIDI channel as a 12-fifth comma bank (Ch 1 = D♭..F♯, Ch 2 = +12 fifths, Ch 16 = −12 fifths) and tune the chain at the Decoded fifth. Lattice Map ignores it and tunes each key from its map. Learn does not hear a decoded source.";
 
 fn instance_controls(
     ui: &mut egui::Ui,
@@ -788,6 +763,13 @@ fn instance_controls(
                     .changed()
                 {
                     params.edit_tuning_instance(row.id, InstanceEdit::Name(name));
+                }
+                let mut decode = row.decode_fifths;
+                if crate::widgets::checkbox(ui, &mut decode, "Decode fifths")
+                    .on_hover_text(DECODE_FIFTHS_HINT)
+                    .changed()
+                {
+                    params.edit_tuning_instance(row.id, InstanceEdit::DecodeFifths(decode));
                 }
                 crate::widgets::label(ui, &row.status);
                 crate::widgets::label(
@@ -935,8 +917,9 @@ fn adaptive_value(
     }
 }
 
-/// Note retuning: which engine retunes incoming notes, and nothing else, so
-/// it keeps its height whichever is chosen. Each engine's own controls follow
+/// Note retuning: which engine retunes incoming notes, and the fifth a
+/// decoded source sounds at, which every engine but Lattice Map reads, so it
+/// keeps its height whichever is chosen. Each engine's own controls follow
 /// in a section of their own. Returns the engine chosen this frame, so a
 /// click draws its controls at once rather than a frame later.
 fn retuning_controls(
@@ -954,17 +937,6 @@ fn retuning_controls(
     };
     let engine = view.playback.engine;
     section(ui, "Note retuning", |ui| {
-        let mut decode_fifths = state.runtime.decode_fifths;
-        let decode = crate::widgets::toggle_switch(ui, &mut decode_fifths, "Decode fifths")
-            .on_hover_text(
-                "Decode incoming 12-TET MIDI notes carrying signed 12-fifth comma banks on MIDI channels (Ch 1 = D♭..F♯, Ch 2 = +12 fifths, Ch 16 = −12 fifths) before retuning. Pass through tunes directly from C pitch offset and Perfect fifth; Lattice Map shifts slots by whole dieses (3 thirds) per comma bank so enharmonic keys stay distinct; Adaptive decodes using Adaptive → Keyboard → Fifth.",
-            );
-        if decode.changed() {
-            state.runtime.edit_tuning(
-                params,
-                ConfigEdit { decode_fifths: Some(decode_fifths), ..Default::default() },
-            );
-        }
         let mut mode = engine;
         // The host's own words, in the editor's order rather than the host
         // parameter's numbering (#1620).
@@ -976,7 +948,7 @@ fn retuning_controls(
                 (
                     TuningEngine::Off,
                     TuningEngine::Off.label(),
-                    "Leave incoming note pitches unchanged (or apply Decode fifths directly using C pitch offset and Perfect fifth). Lattice display tuning still applies.",
+                    "Leave incoming note pitches unchanged. Lattice display tuning still applies.",
                 ),
                 (
                     TuningEngine::LatticeMap,
@@ -993,19 +965,44 @@ fn retuning_controls(
         if mode != engine {
             params.edit_lattice_map(MapEdit::Engine(mode));
         }
+        decoded_fifth_bar(ui, state, params);
         if state.runtime.learn_active && !state.runtime.learn_acts(Some(mode)) {
-            let reason = if state.runtime.decode_fifths {
-                "Learn is suspended while Decode fifths is on."
-            } else {
-                "Learn is suspended in Lattice Map."
-            };
-            crate::widgets::label(ui, egui::RichText::new(reason).color(theme::armed()));
+            crate::widgets::label(
+                ui,
+                egui::RichText::new("Learn is suspended in Lattice Map.").color(theme::armed()),
+            );
         }
         mode
     })
     // A folded section changes nothing, so the engine stands as it was.
     .unwrap_or(engine)
 }
+
+/// The fifth a Tune with Decode fifths on sounds its chain at. A policy
+/// setting, sent as the whole policy shown, like the Adaptive section's.
+fn decoded_fifth_bar(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
+    let mut p = state.runtime.adaptive_policy;
+    let before = p;
+    let fresh = PolicyConfig::default().decoded_fifth;
+    let [low, high] = [i32::MIN, i32::MAX].map(|edge| TuningAxis::Three.clamp(edge) as u32);
+    p.decoded_fifth = adaptive_value(
+        ui,
+        (p.decoded_fifth as u32, fresh as u32),
+        low..=high,
+        1_000_000.0,
+        "Decoded fifth",
+        "¢",
+        DECODED_FIFTH_HINT,
+    ) as i32;
+    if p != before {
+        state.runtime.edit_tuning(params, ConfigEdit { policy: Some(p), ..Default::default() });
+    }
+}
+
+const DECODED_FIFTH_HINT: &str = "The fifth a Tune with Decode fifths on sounds its chain at, \
+    independent of the lattice's Perfect fifth: switching Note retuning between Pass through \
+    and Lattice Map switches the same playing between this temperament and the lattice's \
+    tuning without moving a slider.";
 
 /// Lattice Map's own controls, in the order a passage is made with them: the
 /// saved map that plays, its shape edited on the lattice, where the shape

@@ -3,25 +3,16 @@
 
 use crate::{Comma, LearnedTuning, Tempered, Tuning};
 
-/// Explicit interval links, Learn state, and input decoding. Recognition runs
-/// only on tuning edits.
+/// Explicit interval links and Learn state. Recognition runs only on tuning edits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TuningModes {
     pub tempered: Tempered,
     pub learning: bool,
-    /// Decode incoming `(channel, key)` MIDI as 12-TET key plus signed
-    /// 12-fifth comma bank on MIDI channels (`Ch 1 = D♭..F♯`, `Ch 2 = +12`,
-    /// `Ch 16 = −12`) as an input stage ahead of Note retuning.
-    pub decode_fifths: bool,
 }
 
 impl Default for TuningModes {
     fn default() -> Self {
-        Self {
-            tempered: Tempered { syntonic: true, septimal_kleisma: true },
-            learning: false,
-            decode_fifths: false,
-        }
+        Self { tempered: Tempered { syntonic: true, septimal_kleisma: true }, learning: false }
     }
 }
 
@@ -49,6 +40,9 @@ pub struct PolicyConfig {
     /// from the lattice's own C offset. A key may only become a node this
     /// tuning would render at the pitch the key sent.
     pub keyboard: [i32; 3],
+    /// The fifth, in microcents, a source with Decode fifths on sounds its
+    /// chain at: what its keyboard declares rather than the lattice's own.
+    pub decoded_fifth: i32,
 }
 impl Default for PolicyConfig {
     fn default() -> Self {
@@ -67,10 +61,11 @@ impl PolicyConfig {
         self.tolerance = self.tolerance.min(20_000_000);
         self.silence_ms = self.silence_ms.min(120_000);
         self.keyboard = self.keyboard.map(|v| v.clamp(0, 1_200_000_000));
+        self.decoded_fifth = TuningAxis::Three.clamp(self.decoded_fifth);
         self
     }
     /// Words [`Self::words`] takes.
-    pub const WORDS: usize = 9;
+    pub const WORDS: usize = 10;
     /// The policy as the settings seqlock carries it, one word per field but
     /// the first, which packs the radius, the axes and the two reset flags
     /// (bits 26 and 27).
@@ -88,6 +83,7 @@ impl PolicyConfig {
             self.keyboard[0],
             self.keyboard[1],
             self.keyboard[2],
+            self.decoded_fifth,
         ]
     }
     pub fn from_words(w: [i32; Self::WORDS]) -> Self {
@@ -102,6 +98,7 @@ impl PolicyConfig {
             tolerance: w[4].max(0) as u32,
             silence_ms: w[5].max(0) as u32,
             keyboard: [w[6], w[7], w[8]],
+            decoded_fifth: w[9],
         }
         .sanitize()
     }
@@ -188,7 +185,6 @@ pub struct ConfigEdit {
     pub axes: [Option<i32>; 5],
     pub tempered: [Option<bool>; Comma::COUNT],
     pub learning: Option<bool>,
-    pub decode_fifths: Option<bool>,
     /// The whole adaptive policy, as the editor shows it.
     pub policy: Option<PolicyConfig>,
 }
@@ -339,9 +335,6 @@ impl ConfigReducer {
                 }
                 if let Some(on) = edit.learning {
                     self.modes.learning = on;
-                }
-                if let Some(on) = edit.decode_fifths {
-                    self.modes.decode_fifths = on;
                 }
             }
             ConfigMutation::LearnResolved { learned, retuning } => {
@@ -533,8 +526,7 @@ mod tests {
         assert_eq!(reducer.resolved().modes.tempered, Tempered::default());
         switch(&mut reducer, Comma::Syntonic, true);
         assert!(reducer.resolved().modes.tempered.syntonic);
-        let modes =
-            TuningModes { tempered: Tempered::default(), learning: false, decode_fifths: false };
+        let modes = TuningModes { tempered: Tempered::default(), learning: false };
         reducer.apply(ConfigMutation::Restore {
             raw: Tuning::default(),
             modes,

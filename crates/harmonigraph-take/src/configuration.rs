@@ -17,6 +17,7 @@ pub struct PolicyRecord {
     pub reset_stop: bool,
     pub reset_loop: bool,
     pub keyboard: [i32; 3],
+    pub decoded_fifth: i32,
 }
 impl Default for PolicyRecord {
     fn default() -> Self {
@@ -36,6 +37,7 @@ impl From<PolicyConfig> for PolicyRecord {
             reset_stop: p.reset_stop,
             reset_loop: p.reset_loop,
             keyboard: p.keyboard,
+            decoded_fifth: p.decoded_fifth,
         }
     }
 }
@@ -52,6 +54,7 @@ impl From<PolicyRecord> for PolicyConfig {
             reset_stop: p.reset_stop,
             reset_loop: p.reset_loop,
             keyboard: p.keyboard,
+            decoded_fifth: p.decoded_fifth,
         }
         .sanitize()
     }
@@ -65,7 +68,6 @@ pub struct ConfigurationRecord {
     pub axes: [i32; 5],
     pub tempered: [bool; 2],
     pub learning: bool,
-    pub decode_fifths: bool,
     pub policy: PolicyRecord,
 }
 impl Default for ConfigurationRecord {
@@ -82,7 +84,6 @@ impl ConfigurationRecord {
             axes: config.tuning.axes(),
             tempered: [config.modes.tempered.syntonic, config.modes.tempered.septimal_kleisma],
             learning: config.modes.learning,
-            decode_fifths: config.modes.decode_fifths,
             policy: p.into(),
         }
     }
@@ -97,7 +98,6 @@ impl ConfigurationRecord {
                     septimal_kleisma: self.tempered[1],
                 },
                 learning: self.learning,
-                decode_fifths: self.decode_fifths,
             },
             policy: p.into(),
         }

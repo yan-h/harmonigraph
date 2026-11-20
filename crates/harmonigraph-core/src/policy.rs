@@ -35,6 +35,8 @@ pub const CONFIG: PolicyConfig = PolicyConfig {
     reset_stop: false,
     reset_loop: false,
     keyboard: [700_000_000, 400_000_000, 1_000_000_000],
+    // Quarter-comma meantone.
+    decoded_fifth: 696_578_428,
 };
 
 /// The share of its weight a contribution keeps `ticks` before the newest

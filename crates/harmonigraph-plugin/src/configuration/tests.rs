@@ -380,7 +380,6 @@ fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
         let restored_modes = TuningModes {
             tempered: Tempered { syntonic: meantone, septimal_kleisma: marvel },
             learning,
-            decode_fifths: false,
         };
         assert_eq!(readback.modes, restored_modes);
         assert_eq!(readback.tuning.three, 700_000_000, "the readback's tuning is the restored one");
@@ -757,7 +756,6 @@ fn the_published_record_round_trips_every_word() {
             modes: TuningModes {
                 tempered: Tempered { syntonic: false, septimal_kleisma: true },
                 learning: true,
-                decode_fifths: true,
             },
             policy: PolicyConfig {
                 radius: 2,
@@ -770,6 +768,7 @@ fn the_published_record_round_trips_every_word() {
                 reset_stop: true,
                 reset_loop: false,
                 keyboard: [695_000_007, 380_000_008, 980_000_009],
+                decoded_fifth: 690_000_010,
             },
         },
         status: 16 | 2,
@@ -890,6 +889,7 @@ fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
         silence_ms: 4500,
         reset_loop: true,
         reset_stop: true,
+        decoded_fifth: 694_786_840,
         ..Default::default()
     };
     let mut state = restored(&device, 700.0);
@@ -915,6 +915,13 @@ fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
     let clamped: MusicalSettings =
         serde_json::from_str(r#"{"adaptive":{"pitch_flexibility":65535}}"#).unwrap();
     assert_eq!(PolicyConfig::from(clamped.adaptive).pitch_flexibility, 100);
+    let fifth: MusicalSettings =
+        serde_json::from_str(r#"{"adaptive":{"decoded_fifth":800000000}}"#).unwrap();
+    assert_eq!(
+        PolicyConfig::from(fifth.adaptive).decoded_fifth,
+        TuningAxis::Three.clamp(i32::MAX),
+        "a decoded fifth past the Perfect fifth's range opens at its edge"
+    );
 }
 
 /// The presentation clock, which dates the live audio ring and the take's

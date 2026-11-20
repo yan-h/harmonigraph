@@ -174,6 +174,7 @@ fn instance_settings_restore_independently_and_default_missing_fields() {
     };
     shared.set_retune(false);
     shared.set_show(true);
+    shared.set_decode_fifths(true);
     shared.set_name("Reference".to_owned());
     shared.request_delay(4);
     adapter.save(&mut state);
@@ -181,11 +182,13 @@ fn instance_settings_restore_independently_and_default_missing_fields() {
     setup::Adapter(restored.clone()).prepare(&state).unwrap().commit();
     assert_eq!(restored.retuning() & 1, 0);
     assert!(restored.show.load(Ordering::Acquire));
+    assert!(restored.decode_fifths.load(Ordering::Acquire));
     assert_eq!(*restored.name.lock().unwrap(), "Reference");
     state.fields.insert("tuning-instance".to_owned(), r#"{"show":false}"#.to_owned());
     adapter.prepare(&state).unwrap().commit();
     assert_eq!(shared.retuning() & 1, 1, "a missing field falls back to its default");
     assert!(!shared.show.load(Ordering::Acquire));
+    assert!(!shared.decode_fifths.load(Ordering::Acquire), "a project from before Decode fifths");
     assert!(shared.name.lock().unwrap().is_empty());
     assert_eq!(
         shared.requested_multiplier.load(Ordering::Acquire),

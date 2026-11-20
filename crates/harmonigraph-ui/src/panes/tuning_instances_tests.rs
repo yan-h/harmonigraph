@@ -30,6 +30,7 @@ impl ParamBackend for Instances {
         match edit {
             InstanceEdit::Retune(value) => row.retune = value,
             InstanceEdit::Show(value) => row.show = value,
+            InstanceEdit::DecodeFifths(value) => row.decode_fifths = value,
             InstanceEdit::Delay(value) => row.delay = value,
             _ => panic!("unexpected edit"),
         }
@@ -72,6 +73,41 @@ fn apply_to_all_tuners_applies_the_first_tuners_current_delay() {
     click("Apply to all tuners");
     let delays: Vec<_> = params.0.borrow().iter().map(|row| row.delay).collect();
     assert_eq!(delays, [0, 4, 4], "the hub keeps no delay; the tuners take the first's");
+}
+
+/// Decode fifths is the selected source's own, in Source details.
+#[test]
+fn decode_fifths_edits_the_selected_source() {
+    let params = Instances::new();
+    let state = fresh_picture();
+    let ctx = themed();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let size = egui::vec2(300.0, 2400.0);
+    let frame = |events| {
+        events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {
+            instance_section(ui, &state, &params)
+        })
+    };
+    let click = |label: &str| {
+        let at = frame(vec![])
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + egui::vec2(4.0, 4.0))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{label} is not drawn"));
+        frame(vec![egui::Event::PointerMoved(at)]);
+        frame(vec![press(at, true)]);
+        frame(vec![press(at, false)]);
+    };
+    click("Bass");
+    click("Source details");
+    click("Decode fifths");
+    let decoding: Vec<_> = params.0.borrow().iter().map(|row| row.decode_fifths).collect();
+    assert_eq!(decoding, [false, true, false]);
 }
 
 /// The delay is a value bar: a double-click puts it back on one buffer, a
@@ -282,13 +318,25 @@ fn live_instance_controls_fit_a_narrow_settings_column() {
                         .expect("the wide table's flag heading is painted")
                 };
                 let labels = [heading_x("Retune"), heading_x("Show")];
+                // The table's own boxes: Source details below it has Decode
+                // fifths, a box of the selected source alone.
+                let details = shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Source details" => {
+                            Some(text.pos.y)
+                        }
+                        _ => None,
+                    })
+                    .expect("the details heading is painted");
                 let boxes: Vec<_> = shapes
                     .iter()
                     .filter_map(|shape| match &shape.shape {
                         egui::Shape::Rect(rect)
                             if (rect.rect.width() - crate::widgets::CHECKBOX_BOX).abs() < 0.1
                                 && (rect.rect.height() - crate::widgets::CHECKBOX_BOX).abs()
-                                    < 0.1 =>
+                                    < 0.1
+                                && rect.rect.top() < details =>
                         {
                             Some(rect.rect)
                         }

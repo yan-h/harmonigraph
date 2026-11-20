@@ -66,15 +66,6 @@ pub fn fifths_offset(fifths: i32, c_offset: i32, fifth: i32) -> i64 {
     i64::from(c_offset) + i64::from(fifths) * (i64::from(fifth) - 700_000_000)
 }
 
-/// Node and additive microcent correction for a comma-bank fifths note,
-/// realized from `tuning`'s C offset and perfect fifth alone. Additive rather
-/// than replacing incoming player tuning so later pitch lanes and channel
-/// bends compose on top.
-pub fn fifths_assignment(channel: u8, key: u8, tuning: Tuning) -> (LatticePos, i64) {
-    let fifths = fifths_for_midi(channel, key);
-    (LatticePos::new(fifths, 0, 0), fifths_offset(fifths, tuning.c_offset, tuning.three))
-}
-
 /// Whether Lattice Map moves the selected map by itself, and along which axes.
 ///
 /// A prototype of adaptive tuning from the map's side: the map keeps its
@@ -124,10 +115,6 @@ impl Follow {
 /// all twelve, fixed so the decision runs on the audio thread without
 /// allocating.
 pub const FOLLOW_GROUP: usize = 12;
-
-/// Distinct decoded fifths coordinates one attack group weighs under
-/// `decode_fifths` (allowing simultaneous enharmonics such as C♯ and D♭).
-pub const FOLLOW_FIFTHS: usize = 32;
 
 /// What each step costs a follow decision, in the bits [`excess`] counts.
 /// A wolf fifth is about 5.5 bits and a Pythagorean third 4, so a fifths step
@@ -223,40 +210,14 @@ impl LatticeMap {
         self.nodes[index] + self.position
     }
 
-    /// The node a decoded chain-of-fifths coordinate lands on: the map's own
-    /// slot for `fifths`'s 12-TET class, shifted along the thirds axis by
-    /// whole dieses `(0, ±3, 0)` (each 12 meantone fifths) so enharmonic
-    /// comma banks (`C♯` vs `D♭`, `F♯` vs `G♭`, etc.) land on their own
-    /// 5-limit nodes simultaneously while the map chooses the syntonic comma.
-    pub fn node_for_fifths(&self, fifths: i32) -> LatticePos {
-        let base = self.node((7 * i64::from(fifths)).rem_euclid(12));
-        let slot_fifths = base.threes + 4 * base.fives + 10 * base.sevens;
-        debug_assert_eq!((fifths - slot_fifths).rem_euclid(12), 0);
-        let diesis = (fifths - slot_fifths) / 12;
-        base + LatticePos::new(0, 3 * diesis, 0)
-    }
-
-    /// Full unwrapped correction for `node`. Subtract the fixed MIDI generator
-    /// interval, never the nearest octave; this preserves even more than an
-    /// octave of drift.
-    pub fn node_correction(node: LatticePos, tuning: Tuning) -> i64 {
-        i64::from(tuning.c_offset)
-            + i64::from(node.threes) * (i64::from(tuning.three) - 700_000_000)
-            + i64::from(node.fives) * (i64::from(tuning.five) - 400_000_000)
-            + i64::from(node.sevens) * (i64::from(tuning.seven) - 1_000_000_000)
-    }
-
     /// Full unwrapped correction. Subtract the fixed MIDI generator interval,
     /// never the nearest octave; this preserves even more than an octave of drift.
     pub fn correction(&self, midi: i64, tuning: Tuning) -> i64 {
-        Self::node_correction(self.node(midi), tuning)
-    }
-
-    /// Node and additive microcent correction for a decoded chain-of-fifths
-    /// coordinate against this map.
-    pub fn assignment_for_fifths(&self, fifths: i32, tuning: Tuning) -> (LatticePos, i64) {
-        let node = self.node_for_fifths(fifths);
-        (node, Self::node_correction(node, tuning))
+        let p = self.node(midi);
+        i64::from(tuning.c_offset)
+            + i64::from(p.threes) * (i64::from(tuning.three) - 700_000_000)
+            + i64::from(p.fives) * (i64::from(tuning.five) - 400_000_000)
+            + i64::from(p.sevens) * (i64::from(tuning.seven) - 1_000_000_000)
     }
 
     /// The 12-TET key an incoming onset selects, from its pitch in microcents.
@@ -314,71 +275,15 @@ impl LatticeMap {
         held: bool,
         keys: &[i64],
     ) -> LatticePos {
-        let mut classes = [false; 12];
-        for key in keys {
-            classes[key.rem_euclid(12) as usize] = true;
-        }
-        self.follow_with::<12>(
-            follow,
-            current,
-            context,
-            held,
-            |map, node| map.node(Self::midi_class(node) as i64) == node,
-            |map, nodes| {
-                let mut count = 0;
-                for (class, _) in classes.iter().enumerate().filter(|(_, struck)| **struck) {
-                    nodes[count] = map.node(class as i64);
-                    count += 1;
-                }
-                count
-            },
-        )
-    }
-
-    /// Follow decision for an attack group of decoded chain-of-fifths
-    /// coordinates: each struck fifth lands on [`Self::node_for_fifths`], and
-    /// held notes stay pinned under the same diesis-tiled lookup.
-    pub fn follow_fifths(
-        &self,
-        follow: Follow,
-        current: LatticePos,
-        context: &[ContextPitch],
-        held: bool,
-        fifths: &[i32],
-    ) -> LatticePos {
-        self.follow_with::<FOLLOW_FIFTHS>(
-            follow,
-            current,
-            context,
-            held,
-            |map, node| {
-                map.node_for_fifths(node.threes + 4 * node.fives + 10 * node.sevens) == node
-            },
-            |map, nodes| {
-                let mut count = 0;
-                for &f in fifths.iter().take(FOLLOW_FIFTHS) {
-                    nodes[count] = map.node_for_fifths(f);
-                    count += 1;
-                }
-                count
-            },
-        )
-    }
-
-    fn follow_with<const N: usize>(
-        &self,
-        follow: Follow,
-        current: LatticePos,
-        context: &[ContextPitch],
-        held: bool,
-        on: impl Fn(&LatticeMap, LatticePos) -> bool,
-        struck: impl Fn(&LatticeMap, &mut [LatticePos; N]) -> usize,
-    ) -> LatticePos {
         let fifths: &[i32] = match follow {
             Follow::Off => return LatticePos::ORIGIN,
             Follow::Thirds => &[0],
             Follow::ThirdsAndFifths => &[0, -1, 1],
         };
+        let mut classes = [false; 12];
+        for key in keys {
+            classes[key.rem_euclid(12) as usize] = true;
+        }
         // Each context node once, at its strongest weight, gathered before the
         // candidates so their loop reads each node once.
         let mut anchors =
@@ -394,6 +299,8 @@ impl LatticeMap {
                 anchored += 1;
             }
         }
+        let on =
+            |map: &LatticeMap, node: LatticePos| map.node(Self::midi_class(node) as i64) == node;
         let here = LatticeMap { position: self.position + current, ..*self };
         let pinned = if held { &anchors[..anchored] } else { &[] };
         let mut best = (f64::INFINITY, f64::NEG_INFINITY, current);
@@ -404,8 +311,12 @@ impl LatticeMap {
                 if !map.valid() || pinned.iter().any(|a| on(&here, a.0) && !on(&map, a.0)) {
                     continue;
                 }
-                let mut nodes = [LatticePos::ORIGIN; N];
-                let count = struck(&map, &mut nodes);
+                let mut nodes = [LatticePos::ORIGIN; 12];
+                let mut count = 0;
+                for (class, _) in classes.iter().enumerate().filter(|(_, struck)| **struck) {
+                    nodes[count] = map.node(class as i64);
+                    count += 1;
+                }
                 let mut cost = FIFTH_STEP * f64::from(df.abs()) + THIRD_STEP * f64::from(dt.abs());
                 for (i, &node) in nodes[..count].iter().enumerate() {
                     cost +=
@@ -690,57 +601,5 @@ mod tests {
         // Extreme signed banks: ch 7 = +7 (+84 fifths), ch 8 = -8 (-96 fifths).
         assert_eq!(fifths_for_midi(7, 60), 84);
         assert_eq!(fifths_for_midi(8, 60), -96);
-
-        let mut tuning = Tuning::just();
-        tuning.c_offset = 12_500_000;
-        let three_delta = i64::from(tuning.three) - 700_000_000;
-        // C#4 (ch 1, key 61 -> fifths = +7) vs Db4 (ch 0, key 61 -> fifths = -5)
-        assert_eq!(
-            fifths_assignment(1, 61, tuning),
-            (LatticePos::new(7, 0, 0), 12_500_000 + 7 * three_delta)
-        );
-        assert_eq!(
-            fifths_assignment(0, 61, tuning),
-            (LatticePos::new(-5, 0, 0), 12_500_000 - 5 * three_delta)
-        );
-    }
-
-    #[test]
-    fn lattice_map_tiles_enharmonic_fifths_by_diesis_and_follows_syntonic_commas() {
-        let map = LatticeMap::default();
-        // Default map holds C#-2 (-1, 2, 0). C# (+7) hits it directly while Db (-5)
-        // shifts down one diesis (0, -3, 0) to 5-limit Db+ (-1, -1, 0).
-        assert_eq!(map.node_for_fifths(7), LatticePos::new(-1, 2, 0));
-        assert_eq!(map.node_for_fifths(-5), LatticePos::new(-1, -1, 0));
-        // F# (+6) vs Gb (-6): (2, 1, 0) vs (2, -2, 0).
-        assert_eq!(map.node_for_fifths(6), LatticePos::new(2, 1, 0));
-        assert_eq!(map.node_for_fifths(-6), LatticePos::new(2, -2, 0));
-        // Under meantone, assignment_for_fifths agrees identically with pure fifths.
-        let mut meantone = Tuning::just();
-        meantone.three = 696_578_428;
-        meantone.temper(crate::Comma::Syntonic);
-        for (ch, key) in [(0, 61), (1, 61), (15, 66), (0, 66)] {
-            let f = fifths_for_midi(ch, key);
-            assert_eq!(
-                map.assignment_for_fifths(f, meantone).1,
-                fifths_assignment(ch, key, meantone).1
-            );
-        }
-        // Db-F-Ab is already pure 5-limit at origin, so Follow stays put.
-        assert_eq!(
-            map.follow_fifths(
-                Follow::ThirdsAndFifths,
-                LatticePos::ORIGIN,
-                &[],
-                false,
-                &[-5, -1, -4]
-            ),
-            LatticePos::ORIGIN
-        );
-        // D-F-A still steps down a fifth to mend the wolf D-A syntonic comma.
-        assert_eq!(
-            map.follow_fifths(Follow::ThirdsAndFifths, LatticePos::ORIGIN, &[], false, &[2, -1, 3]),
-            LatticePos::new(-1, 0, 0)
-        );
     }
 }

@@ -2,7 +2,7 @@
 
 Implements the passage workflow in [#889](https://github.com/yan-h/harmonigraph/issues/889).
 Use the existing Harmonigraph Tune instances before instruments and one Harmonigraph Hub.
-Retune and Show remain per-source controls.
+Retune, Show and Decode fifths remain per-source controls.
 Note retuning is shared by the Hub:
 Pass through preserves player pitch,
 Lattice Map assigns each incoming note from explicit geometry,
@@ -314,6 +314,9 @@ A keyboard that already applies its own temperament — quarter-comma meantone,
 an MTS scale — therefore lands on the key it is playing rather than on whatever its detune drifts past.
 A source further than half a semitone from its written key selects the key it actually sounds;
 the map holds twelve slots and has nothing else to offer a pitch that far out.
+A source with Decode fifths on takes its slot the same way:
+its channel's comma bank is ignored,
+so C♯ and D♭ on one key share that key's slot.
 
 The map then states an absolute pitch rather than an increment.
 The emitted correction is the difference from what arrived to the map's own pitch,

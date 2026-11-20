@@ -55,6 +55,7 @@ pub fn snapshots() -> Vec<TuningInstance> {
                 is_hub: shared.is_hub(),
                 retune: shared.retuning() & 1 != 0,
                 show: shared.show.load(Ordering::Acquire),
+                decode_fifths: shared.decode_fifths.load(Ordering::Acquire),
                 voices: shared
                     .voices
                     .iter()
@@ -106,6 +107,7 @@ pub fn edit(id: u64, edit: InstanceEdit) {
         match edit {
             InstanceEdit::Retune(value) => shared.set_retune(value),
             InstanceEdit::Show(value) => shared.set_show(value),
+            InstanceEdit::DecodeFifths(value) => shared.set_decode_fifths(value),
             InstanceEdit::Name(value) => shared.set_name(value),
             InstanceEdit::Delay(value) => shared.request_delay(value),
             InstanceEdit::Reset => unreachable!("handled above"),
