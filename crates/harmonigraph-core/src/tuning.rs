@@ -90,21 +90,28 @@ pub fn fifths_for_midi(channel: u8, key: u8) -> i32 {
     f0 + 12 * bank
 }
 
-/// The `(channel, key)` of the key nearest `pitch` (MIDI note units) on a
-/// chain-of-fifths keyboard tuned in `fifth` with its C at `c_offset`
-/// (microcents), in the encoding [`fifths_for_midi`] reads: the inverse of the
-/// decoding, for lighting the key a sounding note would be played on.
+/// The `(channel, key)` of the key nearest `pitch` (MIDI note units) among
+/// the chain positions `span` of a chain-of-fifths keyboard tuned in `fifth`
+/// with its C at `c_offset` (microcents), in the encoding [`fifths_for_midi`]
+/// reads: the inverse of the decoding, for lighting the key a sounding note
+/// would be played on.
 ///
-/// Searches the three central banks, Ch 16 to Ch 2 (`-17..=18` fifths), and a
-/// tie, which only a fifth at or near 700¢ makes, goes to the key nearest the
-/// central twelve on Ch 1, so a 12-TET fifth reads D♭ to F♯ as decoding does.
+/// A tie between two keys that sound the same pitch class, which an equal
+/// temperament whose fifths close within `span` makes (12 or 19), or between
+/// two keys a pitch sits exactly between, goes to the key nearest the central
+/// twelve on Ch 1, so a 12-TET fifth reads D♭ to F♯ as decoding does.
 /// `None` for a pitch that is not finite or whose key falls outside MIDI.
-pub fn nearest_fifths_key(pitch: f32, c_offset: i32, fifth: i32) -> Option<(u8, u8)> {
+pub fn nearest_fifths_key(
+    pitch: f32,
+    c_offset: i32,
+    fifth: i32,
+    span: std::ops::RangeInclusive<i32>,
+) -> Option<(u8, u8)> {
     if !pitch.is_finite() {
         return None;
     }
     let cents = f64::from(pitch) * 100.0;
-    let (_, _, fifths, key) = (-17..=18)
+    let (_, _, fifths, key) = span
         .map(|fifths: i32| {
             let offset = fifths_offset(fifths, c_offset, fifth) as f64 / 1e6;
             let class = (7 * fifths).rem_euclid(12);
@@ -982,6 +989,8 @@ mod tests {
 
     /// Quarter-comma meantone, the Decoded fifth's default, in microcents.
     const QUARTER_COMMA: i32 = 696_578_428;
+    /// The three banks around Ch 1, a span wider than any search needs here.
+    const BANKS: std::ops::RangeInclusive<i32> = -17..=18;
 
     #[test]
     fn nearest_fifths_key_finds_every_decoded_key_it_searches() {
@@ -992,8 +1001,8 @@ mod tests {
                 let key = (12 * (octave + 1) + class) as u8;
                 let pitch =
                     f32::from(key) + fifths_offset(fifths, c_offset, QUARTER_COMMA) as f32 / 1e8;
-                let (channel, found) =
-                    nearest_fifths_key(pitch, c_offset, QUARTER_COMMA).expect("in MIDI range");
+                let (channel, found) = nearest_fifths_key(pitch, c_offset, QUARTER_COMMA, BANKS)
+                    .expect("in MIDI range");
                 assert_eq!(found, key, "fifths {fifths} octave {octave}");
                 assert_eq!(fifths_for_midi(channel, found), fifths, "octave {octave}");
             }
@@ -1004,16 +1013,26 @@ mod tests {
     fn nearest_fifths_key_lights_the_meantone_key_of_a_just_pitch() {
         let ji = |ratio: f64| 60.0 + (1200.0 * ratio.log2() / 100.0) as f32;
         // 16/15 is a D♭ (Ch 1), not a C♯; 7/4 an A♯ (+10, Ch 2), not a B♭.
-        assert_eq!(nearest_fifths_key(ji(16.0 / 15.0), 0, QUARTER_COMMA), Some((0, 61)));
-        assert_eq!(nearest_fifths_key(ji(7.0 / 4.0), 0, QUARTER_COMMA), Some((1, 70)));
+        assert_eq!(nearest_fifths_key(ji(16.0 / 15.0), 0, QUARTER_COMMA, BANKS), Some((0, 61)));
+        assert_eq!(nearest_fifths_key(ji(7.0 / 4.0), 0, QUARTER_COMMA, BANKS), Some((1, 70)));
         // A 12-TET D♯ is nearer the meantone E♭.
-        assert_eq!(nearest_fifths_key(63.0, 0, QUARTER_COMMA), Some((0, 63)));
+        assert_eq!(nearest_fifths_key(63.0, 0, QUARTER_COMMA, BANKS), Some((0, 63)));
+    }
+
+    #[test]
+    fn nearest_fifths_key_keeps_to_its_span() {
+        // 35/32 above C5 is nearest the −17th fifth (Ch 16, key 73), 0.01¢
+        // ahead of C𝄪 (+14, Ch 2, key 74), which a span ending at +14 lights.
+        let pitch = 72.0 + (1200.0 * (35.0f64 / 32.0).log2() / 100.0) as f32;
+        assert_eq!(nearest_fifths_key(pitch, 0, QUARTER_COMMA, BANKS), Some((15, 73)));
+        assert_eq!(nearest_fifths_key(pitch, 0, QUARTER_COMMA, -10..=14), Some((1, 74)));
     }
 
     #[test]
     fn nearest_fifths_key_breaks_a_12_tet_tie_toward_ch_1() {
         for key in 48..72 {
-            let (channel, found) = nearest_fifths_key(f32::from(key), 0, 700_000_000).unwrap();
+            let (channel, found) =
+                nearest_fifths_key(f32::from(key), 0, 700_000_000, BANKS).unwrap();
             assert_eq!((channel, found), (0, key), "key {key}");
         }
     }

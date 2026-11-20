@@ -3,18 +3,34 @@
 //! While Decode fifths is on, every held note the lattice draws, from any
 //! source and from the tape, lights the board key nearest its sounding pitch
 //! in the board's own tuning (the Decoded fifth, the lattice's C offset):
-//! [`nearest_fifths_key`], in the `(channel, key)` encoding the board reads
-//! in its Fifths mode. So a note a Lattice Map moved lights the key it
-//! sounds on, not the one played. There is no setting of its own; Decode
-//! fifths is already the board's.
+//! [`nearest_fifths_key`] over the fifths the board holds, in the
+//! `(channel, key)` encoding its firmware reads. So a note a Lattice Map moved
+//! lights the key it sounds on, not the one played. There is no setting of its
+//! own; Decode fifths is already the board's.
 //!
-//! The input worker runs it once a poll, after its step: it reads the tracker
-//! under the editor lock it takes anyway and the configuration from its
-//! lock-free published copy, and sends with no lock held. Nothing runs on the
-//! audio thread or the host's main thread. The board is found by its USB
-//! product name, and looked for again at most once a second while there is
-//! something to light; a failed send drops the port, which is then looked for
-//! again the same way.
+//! The input worker runs it once a poll, after its step. With decoding on, or
+//! the board still owing a reset, it takes the editor lock once more to copy
+//! the shown held pitches and write the Console lines owed; it reads the
+//! configuration from its lock-free published copy, and finds keys and sends
+//! with no lock held. Nothing runs on the audio thread, and the host's main
+//! thread only makes the two CoreMIDI clients, once, at plugin creation.
+//!
+//! **The clients are made on the main thread** because CoreMIDI tells a
+//! process about devices that come and go only through the run loop of the
+//! thread its first client was made on, and the input worker runs none.
+//! Measured on macOS (2026-11-20, a virtual port standing in for the board):
+//! with the first client made on a thread with no run loop, a port that
+//! appeared later was never listed, by that client or by a fresh one; with it
+//! made on a thread running its run loop, a client on another thread listed
+//! the port within a second of its appearing and dropped it within a second of
+//! its going. A client is never disposed (coremidi leaves that to the
+//! process's end), so the two are kept for the plugin's life rather than made
+//! per look.
+//!
+//! The board is found by its USB product name, looked for again at most once
+//! a second while there is something to light, and while it is lit checked
+//! once a second to still be there, since CoreMIDI need not fail a send to an
+//! unplugged device. A board that went is relit whole when it returns.
 //!
 //! The board drops a remote key at its first Note Off and holds 32, so what
 //! is sent is the set of keys rather than the notes: two notes on one key
@@ -23,9 +39,10 @@
 //! firmware reads as clearing every remote key.
 //!
 //! Only macOS has a port to send to, so elsewhere the board is never made and
-//! all but its tests are dead code.
-#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+//! all but its tests are dead code; tests never make the CoreMIDI side.
+#![cfg_attr(any(not(target_os = "macos"), test), allow(dead_code))]
 
+use std::ops::RangeInclusive;
 use std::time::{Duration, Instant};
 
 use harmonigraph_core::configuration::ResolvedConfig;
@@ -35,8 +52,15 @@ use harmonigraph_core::NoteTracker;
 /// A `(channel, key)` the board reads, channel `0..=15`.
 pub(crate) type Key = (u8, u8);
 
-/// How often a missing board is looked for while there is something to light.
-const RETRY: Duration = Duration::from_secs(1);
+/// The fifths the 5x25 board holds, E𝄫 to C𝄪, from its firmware's layout
+/// (`layout_5x25.rs` in yan-h/lattice-board, keys 33 to 92). A note lights
+/// the nearest key among these rather than a spelling the board does not
+/// have; a board of another shape needs this changed.
+const BOARD_FIFTHS: RangeInclusive<i32> = -10..=14;
+
+/// How often a missing board is looked for, and a lit one checked, while
+/// there is something to light.
+const LOOK: Duration = Duration::from_secs(1);
 
 /// All Notes Off on channel 1; the firmware clears every remote key on it,
 /// whatever the channel.
@@ -45,11 +69,7 @@ const ALL_NOTES_OFF: [u8; 3] = [0xb0, 123, 0];
 /// The sounding pitches of the held notes the lattice draws, copied under
 /// the editor lock so the keys are found after it is let go.
 pub(crate) fn sounding(tracker: &NoteTracker) -> Vec<f32> {
-    tracker
-        .held_voices()
-        .filter(|voice| !tracker.hides(voice.source))
-        .map(|voice| voice.pitch)
-        .collect()
+    tracker.held_shown().map(|voice| voice.pitch).collect()
 }
 
 /// The keys the board should show for `pitches`, sorted: `None` while Decode
@@ -59,8 +79,10 @@ pub(crate) fn wanted(pitches: &[f32], config: &ResolvedConfig) -> Option<Vec<Key
         return None;
     }
     let (c_offset, fifth) = (config.tuning.c_offset, config.policy.decoded_fifth);
-    let mut keys: Vec<Key> =
-        pitches.iter().filter_map(|&pitch| nearest_fifths_key(pitch, c_offset, fifth)).collect();
+    let mut keys: Vec<Key> = pitches
+        .iter()
+        .filter_map(|&pitch| nearest_fifths_key(pitch, c_offset, fifth, BOARD_FIFTHS))
+        .collect();
     keys.sort_unstable();
     keys.dedup();
     Some(keys)
@@ -70,6 +92,8 @@ pub(crate) fn wanted(pitches: &[f32], config: &ResolvedConfig) -> Option<Vec<Key
 pub(crate) trait Wire {
     /// Opens the board's port, or says why it could not.
     fn open(&mut self) -> Result<(), String>;
+    /// Whether the port opened is still listed.
+    fn present(&self) -> bool;
     fn send(&mut self, message: [u8; 3]) -> Result<(), String>;
     fn close(&mut self);
 }
@@ -80,9 +104,9 @@ pub(crate) struct Board<W: Wire> {
     open: bool,
     /// The keys the board was sent a Note On for and no Note Off since, sorted.
     lit: Vec<Key>,
-    /// The earliest a missing board is looked for again.
-    retry: Option<Instant>,
-    /// The board's absence was logged since it was last open.
+    /// The earliest the board is looked for again, or checked to be there.
+    next_look: Option<Instant>,
+    /// The board's absence was logged since it was last open or went dark.
     missing_logged: bool,
     /// Console lines owed, written at the worker's next hold of the lock.
     pub(crate) logs: Vec<String>,
@@ -94,16 +118,15 @@ impl<W: Wire> Board<W> {
             wire,
             open: false,
             lit: Vec::new(),
-            retry: None,
+            next_look: None,
             missing_logged: false,
             logs: Vec::new(),
         }
     }
 
-    /// Nothing lit, no port open and no Console line owed: a poll with
-    /// decoding off has nothing to do.
+    /// Dark with nothing owed: a poll with decoding off has nothing to do.
     fn idle(&self) -> bool {
-        !self.open && self.logs.is_empty()
+        !self.open && self.logs.is_empty() && self.next_look.is_none() && !self.missing_logged
     }
 
     /// Shows `wanted` on the board, or leaves it dark for `None`.
@@ -112,12 +135,21 @@ impl<W: Wire> Board<W> {
             self.go_dark();
             return;
         };
-        if !self.open {
-            if wanted.is_empty() || self.retry.is_some_and(|at| now < at) {
+        let due = self.next_look.is_none_or(|at| now >= at);
+        if self.open {
+            if due && !(wanted.is_empty() && self.lit.is_empty()) {
+                self.next_look = Some(now + LOOK);
+                if !self.wire.present() {
+                    self.lose("unplugged", now);
+                    return;
+                }
+            }
+        } else {
+            if wanted.is_empty() || !due {
                 return;
             }
+            self.next_look = Some(now + LOOK);
             if let Err(why) = self.wire.open() {
-                self.retry = Some(now + RETRY);
                 if !std::mem::replace(&mut self.missing_logged, true) {
                     self.logs.push(format!(
                         "lattice-board not lit: {why}. Looked for again once a second while notes sound.",
@@ -126,7 +158,6 @@ impl<W: Wire> Board<W> {
                 return;
             }
             self.open = true;
-            self.retry = None;
             self.missing_logged = false;
             self.logs.push("lattice-board found: lighting its keys".to_string());
             if let Err(why) = self.wire.send(ALL_NOTES_OFF) {
@@ -149,12 +180,12 @@ impl<W: Wire> Board<W> {
         self.lit = wanted;
     }
 
-    /// A send failed: the port is dropped and looked for again.
+    /// The board went: the port is dropped and looked for again.
     fn lose(&mut self, why: &str, now: Instant) {
         self.wire.close();
         self.open = false;
         self.lit.clear();
-        self.retry = Some(now + RETRY);
+        self.next_look = Some(now + LOOK);
         self.logs.push(format!("lattice-board lost ({why}): looking for it again"));
     }
 
@@ -166,7 +197,7 @@ impl<W: Wire> Board<W> {
         }
         self.open = false;
         self.lit.clear();
-        self.retry = None;
+        self.next_look = None;
         self.missing_logged = false;
     }
 }
@@ -179,41 +210,67 @@ impl<W: Wire> Drop for Board<W> {
 }
 
 /// The board's port over CoreMIDI, found by the product name its firmware
-/// gives its USB device.
+/// gives its USB device: one client that only looks, and one that connects.
 #[cfg(target_os = "macos")]
-#[derive(Default)]
 pub(crate) struct Midi {
-    connection: Option<midir::MidiOutputConnection>,
+    looker: midir::MidiOutput,
+    /// The connecting client while no connection holds it.
+    spare: Option<midir::MidiOutput>,
+    /// The connection, and the unique id of the port it went to.
+    connection: Option<(midir::MidiOutputConnection, String)>,
 }
 
 #[cfg(target_os = "macos")]
 impl Midi {
     const PRODUCT: &'static str = "LatticeBoard";
+
+    /// On the host's main thread, for the reason the module says.
+    fn new() -> Option<Self> {
+        let looker = midir::MidiOutput::new("Harmonigraph").ok()?;
+        let spare = midir::MidiOutput::new("Harmonigraph lights").ok()?;
+        Some(Self { looker, spare: Some(spare), connection: None })
+    }
+
+    fn find(&self) -> Option<midir::MidiOutputPort> {
+        let looker = &self.looker;
+        looker
+            .ports()
+            .into_iter()
+            .find(|port| looker.port_name(port).is_ok_and(|name| name.contains(Self::PRODUCT)))
+    }
 }
 
 #[cfg(target_os = "macos")]
 impl Wire for Midi {
     fn open(&mut self) -> Result<(), String> {
-        let output = midir::MidiOutput::new("Harmonigraph").map_err(|error| error.to_string())?;
-        let port = output
-            .ports()
-            .into_iter()
-            .find(|port| output.port_name(port).is_ok_and(|name| name.contains(Self::PRODUCT)))
-            .ok_or_else(|| format!("no MIDI port named {}", Self::PRODUCT))?;
-        let connection =
-            output.connect(&port, "Harmonigraph lights").map_err(|error| error.to_string())?;
-        self.connection = Some(connection);
-        Ok(())
+        let port = self.find().ok_or_else(|| format!("no MIDI port named {}", Self::PRODUCT))?;
+        let output = self.spare.take().ok_or("its client is connected elsewhere")?;
+        match output.connect(&port, "Harmonigraph lights") {
+            Ok(connection) => {
+                self.connection = Some((connection, port.id()));
+                Ok(())
+            }
+            Err(error) => {
+                let why = error.to_string();
+                self.spare = Some(error.into_inner());
+                Err(why)
+            }
+        }
+    }
+
+    fn present(&self) -> bool {
+        let Some((_, id)) = &self.connection else { return false };
+        self.looker.ports().iter().any(|port| port.id() == *id)
     }
 
     fn send(&mut self, message: [u8; 3]) -> Result<(), String> {
-        let connection = self.connection.as_mut().ok_or("the port is closed")?;
+        let (connection, _) = self.connection.as_mut().ok_or("the port is closed")?;
         connection.send(&message).map_err(|error| error.to_string())
     }
 
     fn close(&mut self) {
-        if let Some(connection) = self.connection.take() {
-            connection.close();
+        if let Some((connection, _)) = self.connection.take() {
+            self.spare = Some(connection.close());
         }
     }
 }
@@ -227,11 +284,13 @@ pub(crate) struct Lights {
 }
 
 impl Lights {
-    /// `None` off macOS, the one platform the plugin runs on, and in tests,
-    /// which must not reach a board plugged into the machine running them.
+    /// Called on the host's main thread, at plugin creation, which makes the
+    /// CoreMIDI clients there. `None` off macOS, the one platform the plugin
+    /// runs on; when CoreMIDI makes no client; and in tests, which must not
+    /// reach a board plugged into the machine running them.
     pub(crate) fn live(settings: std::sync::Arc<crate::configuration::Settings>) -> Option<Self> {
         #[cfg(all(target_os = "macos", not(test)))]
-        return Some(Self { settings, board: Board::new(Midi::default()) });
+        return Midi::new().map(|midi| Self { settings, board: Board::new(midi) });
         #[cfg(not(all(target_os = "macos", not(test))))]
         {
             let _ = settings;
@@ -240,7 +299,7 @@ impl Lights {
     }
 
     /// One poll: the pitches under the lock, the keys and messages without
-    /// it. With decoding off and the board dark it does not take the lock.
+    /// it. With decoding off and the board idle it does not take the lock.
     pub(crate) fn poll(&mut self, shared: &crate::editor::EditorLock) {
         let config = self.settings.applied();
         #[cfg(target_os = "macos")]
@@ -269,7 +328,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    /// Records what was sent; `present` decides whether the port opens.
+    /// Records what was sent; `present` is whether the board is plugged in.
     #[derive(Clone, Default)]
     struct Recorder {
         sent: Rc<RefCell<Vec<[u8; 3]>>>,
@@ -284,11 +343,14 @@ mod tests {
                 Err("absent".to_string())
             }
         }
+        fn present(&self) -> bool {
+            *self.present.borrow()
+        }
+        /// A send to an unplugged board succeeds, as CoreMIDI's may.
         fn send(&mut self, message: [u8; 3]) -> Result<(), String> {
-            if !*self.present.borrow() {
-                return Err("unplugged".to_string());
+            if *self.present.borrow() {
+                self.sent.borrow_mut().push(message);
             }
-            self.sent.borrow_mut().push(message);
             Ok(())
         }
         fn close(&mut self) {}
@@ -306,14 +368,19 @@ mod tests {
         use harmonigraph_core::notes::{NoteEvent, NoteEventKind, SourceId};
         let mut config = harmonigraph_core::configuration::ConfigReducer::default().resolved();
         config.tuning.c_offset = 0;
+        config.policy.decoded_fifth = 696_578_428;
+        config.policy.decode_fifths = false;
         let mut tracker = NoteTracker::new();
         let source = SourceId(1);
-        // A B♭ key retuned to 7/4 above C sounds an A♯ (+10 fifths, Ch 2), and
-        // lights it rather than the B♭ its raw key would; a second note is released.
-        tracker.handle_event(NoteEvent::on(0.0, source, 0, 70, 1.0));
+        // B♭ keys on two channels, each retuned to 7/4 above C, sound one A♯
+        // (+10 fifths, Ch 2) and light it once, rather than the B♭ their raw
+        // keys would; a third note is released.
         let semitones = (12.0 * 1.75f64.log2()) as f32 - 10.0;
-        let kind = NoteEventKind::Tuning { semitones };
-        tracker.handle_event(NoteEvent { time: 0.0, source, channel: 0, note: 70, kind });
+        for channel in [0, 1] {
+            tracker.handle_event(NoteEvent::on(0.0, source, channel, 70, 1.0));
+            let kind = NoteEventKind::Tuning { semitones };
+            tracker.handle_event(NoteEvent { time: 0.0, source, channel, note: 70, kind });
+        }
         tracker.handle_event(NoteEvent::on(0.0, source, 0, 64, 1.0));
         tracker.handle_event(NoteEvent::off(0.1, source, 0, 64));
         // A G held by a source whose Show is off: held, but not drawn.
@@ -327,9 +394,9 @@ mod tests {
         };
         let hidden = SourceBaseline::new(SourceId::DIRECT, 0.0, 0, false, &[row]).unwrap();
         tracker.replace_source(&hidden).unwrap();
-        assert_eq!(tracker.held_voices().count(), 2, "the hidden G is held");
+        assert_eq!(tracker.held_voices().count(), 3, "the hidden G is held");
         let pitches = sounding(&tracker);
-        assert_eq!(wanted(&pitches, &config), None, "Decode fifths is off by default");
+        assert_eq!(wanted(&pitches, &config), None, "dark with Decode fifths off");
         config.policy.decode_fifths = true;
         assert_eq!(wanted(&pitches, &config), Some(vec![(1, 70)]));
     }
@@ -355,14 +422,30 @@ mod tests {
         board.update(Some(vec![(0, 60)]), start);
         assert_eq!(board.logs.len(), 1, "the absence is said once");
         *wire.present.borrow_mut() = true;
-        board.update(Some(vec![(0, 60)]), start + RETRY / 2);
+        board.update(Some(vec![(0, 60)]), start + LOOK / 2);
         assert!(wire.sent.borrow().is_empty(), "not looked for within the second");
-        board.update(Some(vec![(0, 60)]), start + RETRY);
+        board.update(Some(vec![(0, 60)]), start + LOOK);
         assert_eq!(*wire.sent.borrow(), [ALL_NOTES_OFF, [0x90, 60, 100]]);
     }
 
     #[test]
-    fn turning_decoding_off_darkens_the_board() {
+    fn an_unplugged_board_is_noticed_within_a_second_and_relit_whole_on_return() {
+        let (mut board, wire) = board(true);
+        let start = Instant::now();
+        board.update(Some(vec![(0, 60)]), start);
+        *wire.present.borrow_mut() = false;
+        board.update(Some(vec![(0, 60)]), start + LOOK);
+        *wire.present.borrow_mut() = true;
+        // The held chord has not changed, so only the check could relight it.
+        board.update(Some(vec![(0, 60)]), start + LOOK * 2);
+        assert_eq!(
+            *wire.sent.borrow(),
+            [ALL_NOTES_OFF, [0x90, 60, 100], ALL_NOTES_OFF, [0x90, 60, 100]],
+        );
+    }
+
+    #[test]
+    fn turning_decoding_off_darkens_the_board_and_owes_nothing() {
         let (mut board, wire) = board(true);
         let now = Instant::now();
         board.update(Some(vec![(0, 60)]), now);
@@ -370,5 +453,15 @@ mod tests {
         assert_eq!(wire.sent.borrow().last(), Some(&ALL_NOTES_OFF));
         board.update(Some(vec![(0, 62)]), now);
         assert_eq!(wire.sent.borrow()[3..], [ALL_NOTES_OFF, [0x90, 62, 100]], "relit whole");
+        // A missing board: turning decoding off clears what it owes, so the
+        // next look says again that it is missing.
+        let (mut board, _) = self::board(false);
+        board.update(Some(vec![(0, 60)]), now);
+        board.logs.clear();
+        assert!(!board.idle(), "a look is owed");
+        board.update(None, now);
+        assert!(board.idle());
+        board.update(Some(vec![(0, 60)]), now);
+        assert_eq!(board.logs.len(), 1, "the absence is said again");
     }
 }

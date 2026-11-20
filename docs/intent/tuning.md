@@ -98,4 +98,4 @@ Lines marked "Yan" are his answers in chat; lines marked "session" are the imple
 - Every note the lattice draws lights the board, from any source and from the Tape's cues. Yan
 - No setting of its own: the board lights while Decode fifths is on. Yan
 - Keys pressed and keys sounded share the board's one highlight for now; a separate tint, a firmware change, waits until it has been used. Yan
-- The search covers the three central banks (Ch 16 to Ch 2) rather than the board's layout, so nothing is kept in step with the firmware; a key the board does not hold stays dark. Session
+- A note lights the nearest key the board has, searching the 25 fifths its 5x25 layout holds (E𝄫 to C𝄪), which `board.rs` mirrors from the firmware: Yan agreed to "the board key that would sound nearest". A first build searched three channel banks to keep nothing in step with the firmware, and review (#1899) found notes left dark with a board key 3¢ away, and at third-comma whole regions of central keys. Yan's words (the board key), session (the span)

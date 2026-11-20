@@ -811,8 +811,14 @@ impl NoteTracker {
         self.roll.held()
     }
 
+    /// Every held voice the picture draws: [`held_voices`](Self::held_voices)
+    /// less the hidden sources'.
+    pub fn held_shown(&self) -> impl Iterator<Item = Voice> + '_ {
+        self.roll.held().filter(|v| !self.hides(v.source))
+    }
+
     pub fn held_count(&self) -> usize {
-        self.roll.held().filter(|v| !self.hides(v.source)).count()
+        self.held_shown().count()
     }
 
     /// Every published source's notes off. The tape's stay: its player
