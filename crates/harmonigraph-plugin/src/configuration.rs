@@ -272,6 +272,12 @@ impl Settings {
         self.current().1
     }
 
+    /// The configuration the audio owner last applied, read without the
+    /// producer's lock: an edit shows here a host block after the editor.
+    pub fn applied(&self) -> ResolvedConfig {
+        self.published.load().resolved
+    }
+
     pub fn restored(&self) -> u64 {
         self.restored.load(Ordering::Acquire)
     }

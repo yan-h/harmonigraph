@@ -147,6 +147,7 @@ impl InputWorker {
         editor_state: Arc<EguiState>,
         tape: crate::tape::Worker,
         input: LiveInput,
+        lights: Option<crate::board::Lights>,
     ) -> InputWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -159,11 +160,19 @@ impl InputWorker {
             .name("harmonigraph-input-worker".to_string())
             .spawn(move || {
                 raise_to_gui_priority();
-                let (mut tape, mut input) = (tape, input);
+                let (mut tape, mut input, mut lights) = (tape, input, lights);
                 #[cfg(not(test))]
-                run(&worker, &editor_state, &mut tape, &mut input, &flag);
+                run(&worker, &editor_state, &mut tape, &mut input, &mut lights, &flag);
                 #[cfg(test)]
-                run(&worker, &editor_state, &mut tape, &mut input, &flag, &worker_rounds);
+                run(
+                    &worker,
+                    &editor_state,
+                    &mut tape,
+                    &mut input,
+                    &mut lights,
+                    &flag,
+                    &worker_rounds,
+                );
                 ended(input)
             });
         let thread = match thread {
@@ -418,6 +427,7 @@ fn run(
     editor_state: &EguiState,
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
+    lights: &mut Option<crate::board::Lights>,
     stop: &AtomicBool,
     #[cfg(test)] rounds: &AtomicU64,
 ) {
@@ -436,6 +446,19 @@ fn run(
                      editor's input is frozen until the plugin is reloaded",
                 ));
                 return;
+            }
+        }
+        // After the step, so the board shows the notes it just drained.
+        // Guarded as a step is, but a panic here ends only the lights.
+        if let Some(lit) = lights {
+            let polled =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lit.poll(shared)));
+            if polled.is_err() {
+                *lights = None;
+                shared.lock().ui.picture.runtime.console.log(
+                    "the lattice-board's lights panicked and stay off until the plugin is reloaded"
+                        .to_string(),
+                );
             }
         }
         #[cfg(test)]
@@ -967,7 +990,8 @@ mod tests {
             crate::audio_ingress::channel(1).1,
         );
         let input = std::mem::replace(&mut h.input, unfed);
-        let analyzer = InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), tape(), input);
+        let analyzer =
+            InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), tape(), input, None);
         // Polled to a deadline, so a loaded machine cannot fail this for being
         // slow — it is asserting that steps happen at all, not how fast.
         let started = Instant::now();

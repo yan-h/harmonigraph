@@ -999,7 +999,9 @@ const DECODE_FIFTHS_HINT: &str = "For the lattice-board, a custom chain-of-fifth
     each note's MIDI channel as a 12-fifth comma bank (Ch 1 = D♭..F♯, Ch 2 = +12 fifths, \
     Ch 16 = −12 fifths) and sounds the chain at the Decoded fifth, so a 12-TET or MPE track with \
     Retune on is decoded too. A Lattice Map ignores the bank and tunes each key from its slot. \
-    Learn hears only sources with Retune off, and those pass through undecoded.";
+    Learn hears only sources with Retune off, and those pass through undecoded. While it is on, \
+    a lattice-board plugged into this Mac lights the key nearest each note the lattice draws, \
+    in the Decoded fifth: the key a note sounds on, from any track or the Tape.";
 
 const DECODED_FIFTH_HINT: &str = "The fifth the lattice-board's chain sounds at with Decode \
     fifths on, independent of the lattice's Perfect fifth: switching Note retuning between Pass through \
