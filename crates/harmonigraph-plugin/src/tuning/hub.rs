@@ -14,7 +14,9 @@ use harmonigraph_clap::events::{Input, InputValue, Output, Transport};
 use harmonigraph_clap::plugin::Boundary;
 use harmonigraph_core::canonical::{NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
-use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
+use harmonigraph_core::lattice_map::{
+    fifths_assignment, Follow, LatticeMap, TuningEngine, FOLLOW_GROUP,
+};
 use harmonigraph_core::tuning::PitchClass;
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
@@ -841,38 +843,62 @@ impl Hub {
             });
         }
         let incoming = self.arriving(record, channel, key);
-        if self.sequencer.engine != TuningEngine::Adaptive {
-            let mapped = (self.sequencer.engine == TuningEngine::LatticeMap)
-                .then_some(self.sequencer.map)
-                .flatten()
-                .map(|map| self.follow(position, map));
-            let assigned = mapped.map(|map| map.assignment(incoming, config.tuning));
-            let correction = assigned.map_or(0, |(_, correction)| correction);
-            let node = assigned.map(|(node, _)| node);
-            let decision = if mapped.is_some() {
+        match self.sequencer.engine {
+            TuningEngine::Off => {
+                self.reply(record, 0);
+                return Some(Assigned {
+                    correction: 0,
+                    node: None,
+                    decision: 0,
+                    player,
+                    channel_pitch,
+                });
+            }
+            TuningEngine::Fifths => {
+                let (node, correction) = fifths_assignment(channel, key, config.tuning);
                 self.sequencer.decision += 1;
                 self.decisions += 1;
-                self.sequencer.decision
-            } else {
-                0
-            };
-            self.reply(record, correction);
-            // A mapped voice is context too: following weighs what is held, and
-            // what was released, through the same memory Adaptive keeps.
-            if let Some(node) = node {
-                let voice = Voice {
-                    source: record.source,
-                    lifetime: record.serial,
-                    onset_pitch: incoming + correction,
+                let decision = self.sequencer.decision;
+                self.reply(record, correction);
+                return Some(Assigned {
+                    correction,
                     node: Some(node),
                     decision,
-                    onset: record.sample,
-                };
-                if !self.sequencer.hold(voice) {
-                    self.status |= session::POLICY;
-                }
+                    player,
+                    channel_pitch,
+                });
             }
-            return Some(Assigned { correction, node, decision, player, channel_pitch });
+            TuningEngine::LatticeMap => {
+                let mapped = self.sequencer.map.map(|map| self.follow(position, map));
+                let assigned = mapped.map(|map| map.assignment(incoming, config.tuning));
+                let correction = assigned.map_or(0, |(_, correction)| correction);
+                let node = assigned.map(|(node, _)| node);
+                let decision = if mapped.is_some() {
+                    self.sequencer.decision += 1;
+                    self.decisions += 1;
+                    self.sequencer.decision
+                } else {
+                    0
+                };
+                self.reply(record, correction);
+                // A mapped voice is context too: following weighs what is held, and
+                // what was released, through the same memory Adaptive keeps.
+                if let Some(node) = node {
+                    let voice = Voice {
+                        source: record.source,
+                        lifetime: record.serial,
+                        onset_pitch: incoming + correction,
+                        node: Some(node),
+                        decision,
+                        onset: record.sample,
+                    };
+                    if !self.sequencer.hold(voice) {
+                        self.status |= session::POLICY;
+                    }
+                }
+                return Some(Assigned { correction, node, decision, player, channel_pitch });
+            }
+            TuningEngine::Adaptive => {}
         }
         self.sequencer.take_loop();
         self.sequencer.fill(self.rate);

@@ -245,7 +245,7 @@ pub(super) fn tuning_pane(
             let mut learn_active = state.runtime.learn_active;
             let learn = crate::widgets::toggle_switch(ui, &mut learn_active, "Learn")
                 .on_hover_text(
-                    "While active, set the tuning from the held notes whenever they change. With Adaptive retuning a source that has Retune on, only the C offset and the keyboard are learned: the lattice axes are what it is retuned to. Lattice Map suspends Learn.",
+                    "While active, set the tuning from the held notes whenever they change. With Adaptive retuning a source that has Retune on, only the C offset and the keyboard are learned: the lattice axes are what it is retuned to. Lattice Map and Fifths suspend Learn.",
                 );
             if learn.changed() {
                 state.runtime.edit_tuning(
@@ -942,6 +942,11 @@ fn retuning_controls(
                     "Leave incoming note pitches unchanged. Lattice display tuning still applies.",
                 ),
                 (
+                    TuningEngine::Fifths,
+                    TuningEngine::Fifths.label(),
+                    "Decode 12-TET MIDI notes with 12-fifth comma banks on MIDI channels (Ch 1 = D♭..F♯, Ch 2 = +12 fifths, Ch 16 = −12 fifths), tuned from C pitch offset and Perfect fifth.",
+                ),
+                (
                     TuningEngine::LatticeMap,
                     TuningEngine::LatticeMap.label(),
                     "Tune new notes using the selected saved lattice map.",
@@ -959,7 +964,8 @@ fn retuning_controls(
         if state.runtime.learn_active && !state.runtime.learn_acts(Some(mode)) {
             crate::widgets::label(
                 ui,
-                egui::RichText::new("Learn is suspended in Lattice Map.").color(theme::armed()),
+                egui::RichText::new(format!("Learn is suspended in {}.", mode.label()))
+                    .color(theme::armed()),
             );
         }
         mode

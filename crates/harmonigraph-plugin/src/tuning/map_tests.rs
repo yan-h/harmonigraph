@@ -158,7 +158,7 @@ fn an_engine_or_follow_event_past_the_top_step_selects_the_top_step() {
     hub.run(0, vec![parameter("tuning-engine", 5.0, 0), parameter("map-follow", 4.0, 0)], None);
     let playback =
         hub_wrapper(&hub).test_inspect_plugin(|plugin| *plugin.params.map_playback.lock());
-    assert_eq!(playback.engine, TuningEngine::LatticeMap);
+    assert_eq!(playback.engine, TuningEngine::Fifths);
     assert_eq!(playback.follow, harmonigraph_core::lattice_map::Follow::ThirdsAndFifths);
 }
 
@@ -554,4 +554,79 @@ fn map_follow_changes_leave_adaptive_context_alone() {
     hub.run(512, vec![parameter("map-follow", 2.0, 0)], None);
     hub.run(1024, vec![note(2, 0, 64, 0, true)], None);
     assert_eq!(inspect_hub(&hub, |hub| hub.test_context()), 2, "the held C is still context");
+}
+
+#[test]
+fn fifths_engine_decodes_comma_banks_composes_expression_and_suspends_learn() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = hub().with_adaptive();
+    hub.activate_format(48_000.0, 128);
+    let mut meantone = Tuning::just();
+    meantone.c_offset = 10_000_000; // +10¢
+    meantone.three = 696_578_428; // quarter-comma meantone fifth
+    musical_tests::configure(&hub, meantone);
+    hub.shared().set_retune(true);
+    let mut tune = tune();
+    tune.activate_format(48_000.0, 128);
+    // Select Fifths (index 3) and arm Learn to verify Fifths suspends Learn.
+    hub_wrapper(&hub).test_inspect_plugin(|plugin| {
+        assert!(plugin
+            .params
+            .settings
+            .submit(ConfigEdit { learning: Some(true), ..Default::default() }));
+    });
+    hub.run_format(0, vec![parameter("tuning-engine", 3.0, 0)], None, None, 128);
+    // Simultaneous enharmonics on the same MIDI key (61):
+    // - ch 0 (MIDI Ch 1): D♭4 -> fifths = -5
+    // - ch 1 (MIDI Ch 2): C♯4 -> fifths = +7 (plus +0.25 st player expression)
+    // - ch 15 (MIDI Ch 16): G♭4 (key 66) -> fifths = -6
+    let input = vec![
+        note(1, 0, 61, 0, true),
+        note(2, 1, 61, 0, true),
+        expression(2, 0.25, 0),
+        note(3, 15, 66, 0, true),
+    ];
+    tune.run_format(128, input, None, None, 128);
+    hub.run_format(128, vec![], None, None, 128);
+    let output = tune.run_format(256, vec![], None, None, 128);
+    hub.run_format(256, vec![], None, None, 128);
+
+    let step = i64::from(meantone.three) - 700_000_000;
+    let (db_node, db_corr) = (LatticePos::new(-5, 0, 0), i64::from(meantone.c_offset) - 5 * step);
+    let (cs_node, cs_corr) = (LatticePos::new(7, 0, 0), i64::from(meantone.c_offset) + 7 * step);
+    let (gb_node, gb_corr) = (LatticePos::new(-6, 0, 0), i64::from(meantone.c_offset) - 6 * step);
+
+    let db = inspect_hub(&hub, |hub| hub.test_voice(0, 0, 61)).expect("D♭4 held");
+    let cs = inspect_hub(&hub, |hub| hub.test_voice(0, 1, 61)).expect("C♯4 held");
+    let gb = inspect_hub(&hub, |hub| hub.test_voice(0, 15, 66)).expect("G♭4 held");
+    assert_eq!((db.attack_node, db.frozen_offset_microcents), (Some(db_node), db_corr));
+    assert_eq!((cs.attack_node, cs.frozen_offset_microcents), (Some(cs_node), cs_corr));
+    assert_eq!((gb.attack_node, gb.frozen_offset_microcents), (Some(gb_node), gb_corr));
+    // Additive: C♯4's +0.25 st player expression stays composed on top of the correction.
+    assert_eq!(cs.onset_pitch_microcents, 61 * 100_000_000 + cs_corr + 25_000_000);
+    // Fifths does not populate Adaptive/Follow context.
+    assert_eq!(inspect_hub(&hub, |hub| hub.test_context()), 0);
+    // Learn stayed suspended: C offset and fifth did not snap toward 12-TET.
+    let resolved =
+        hub_wrapper(&hub).test_inspect_plugin(|plugin| plugin.params.settings.view().resolved);
+    assert_eq!(resolved.tuning.c_offset, meantone.c_offset);
+    assert_eq!(resolved.tuning.three, meantone.three);
+    // Tune emitted the exact per-note tuning expressions on the wire (note 2
+    // receives both its onset expression and its forwarded player expression,
+    // both carrying the composed correction).
+    let last_tuning = |target_id: i32| {
+        output
+            .values
+            .iter()
+            .filter_map(|(_, event)| match event {
+                Event::Expression { kind: 2, id, value, .. } if *id == target_id => Some(*value),
+                _ => None,
+            })
+            .next_back()
+            .expect("tuning expression emitted")
+    };
+    assert!((last_tuning(1) - db_corr as f64 / 1e8).abs() < 1e-8);
+    assert!((last_tuning(2) - (0.25 + cs_corr as f64 / 1e8)).abs() < 1e-8);
+    assert!((last_tuning(3) - gb_corr as f64 / 1e8).abs() < 1e-8);
+    assert_eq!(tune.shared().misses.load(Ordering::Relaxed), 0);
 }

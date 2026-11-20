@@ -112,7 +112,7 @@ fn every_map_control_needs_no_fold_opened() {
     };
     frame(vec![]);
     let out = frame(vec![]);
-    assert!(text_at(&out, "Fifths").is_some(), "the offsets must be drawn without a fold");
+    assert!(text_at(&out, "Thirds").is_some(), "the offsets must be drawn without a fold");
     for (label, expected) in [
         ("Map 1", "Select(1)"),
         ("Edit shape on lattice", "EditShape(true)"),
@@ -186,6 +186,11 @@ fn the_learn_ring_is_drawn_only_where_learn_acts() {
         learn_ring_drawn(TuningEngine::LatticeMap, 0.0),
         (false, false),
         "Lattice Map suspends Learn, and its still ring holds nothing"
+    );
+    assert_eq!(
+        learn_ring_drawn(TuningEngine::Fifths, 0.0),
+        (false, false),
+        "Fifths suspends Learn, and its still ring holds nothing"
     );
     // Scrolled out of the settings page, the pulse is seen nowhere.
     assert!(!learn_ring_drawn(TuningEngine::Off, 3000.0).1, "a ring out of view held the loop");

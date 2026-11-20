@@ -1500,7 +1500,12 @@ mod tests {
         let words = |labels: &[&str]| labels.iter().map(|&label| label.to_owned()).collect();
         assert_eq!(
             contract(Row::TuningEngine),
-            ("Note Retuning".into(), 0, 0..=2, words(&["Pass through", "Adaptive", "Lattice Map"]))
+            (
+                "Note Retuning".into(),
+                0,
+                0..=3,
+                words(&["Pass through", "Adaptive", "Lattice Map", "Fifths"]),
+            )
         );
         assert_eq!(
             contract(Row::MapFollow),

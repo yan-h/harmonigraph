@@ -52,6 +52,12 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 - Live note-history loss is handled only by the take's gap record and its export warning: the live banner, per-source certainty and the withdrawn release fade go, since the Hub repays the snapshots within about a callback once the display lane drains. #1798 F1, #1797
 - The Tuning pane sends the whole policy it shows rather than only the fields changed; a pane edit within one block of a keyboard Learn result may revert it until Learn runs again. #1798 F2, #1797
 
+## 2026-11-19 (Fifths engine)
+
+- Add a `Fifths` retuning engine that decodes 12-TET MIDI keys with signed 12-fifth comma banks on MIDI channels (`Ch 1 = D♭..F♯`, `fifths ∈ −5..=+6`; `Ch 2 = +12 fifths`; `Ch 16 = −12 fifths`) using the Hub's existing `C pitch offset` and `Perfect fifth` settings.
+- Keep `Perfect fifth` as a UI/per-project setting affecting new attacks only (no host automation, no held-note gliding), preserving #1756, and keep `Perfect fifth`'s existing `661.96..=741.96¢` range.
+- Suspend Learn under `Fifths` as under `Lattice Map`.
+
 ## 2026-11-18 (CLAP-shell rework, #1814)
 
 - Restored host parameters follow one rule per row in harmonigraph-clap's parameter table: missing, wrong-typed or an unknown variant takes the default, and out of range is clamped. This supersedes the 2026-11-10 `filter_state` line: its reason, a patch carried across every wrapper upgrade, ended when harmonigraph took the wrapper as its own crate (#1827). #1814 step 5

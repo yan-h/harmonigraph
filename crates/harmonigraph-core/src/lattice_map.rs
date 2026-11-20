@@ -11,12 +11,13 @@ pub enum TuningEngine {
     Off,
     Adaptive,
     LatticeMap,
+    Fifths,
 }
 
 impl TuningEngine {
     /// Every engine, in host order: `HOST[i].index() == i`. The editor lists
     /// them in an order of its own (#1620).
-    pub const HOST: [Self; 3] = [Self::Off, Self::Adaptive, Self::LatticeMap];
+    pub const HOST: [Self; 4] = [Self::Off, Self::Adaptive, Self::LatticeMap, Self::Fifths];
     pub const HOST_MAX: i32 = Self::HOST.len() as i32 - 1;
 
     /// The host parameter integer. Saved projects and automation hold these,
@@ -26,6 +27,7 @@ impl TuningEngine {
             Self::Off => 0,
             Self::Adaptive => 1,
             Self::LatticeMap => 2,
+            Self::Fifths => 3,
         }
     }
     /// The engine at a host integer, clamped into range as the host's label
@@ -39,14 +41,38 @@ impl TuningEngine {
             Self::Off => "Pass through",
             Self::Adaptive => "Adaptive",
             Self::LatticeMap => "Lattice Map",
+            Self::Fifths => "Fifths",
         }
     }
 
-    /// Whether Learn runs under this engine. Lattice Map reads its own map
-    /// instead, so Learn is suspended there.
+    /// Whether Learn runs under this engine. Lattice Map and Fifths define
+    /// their own target pitches from incoming keys, so Learn is suspended
+    /// there.
     pub fn learns(self) -> bool {
-        self != Self::LatticeMap
+        matches!(self, Self::Off | Self::Adaptive)
     }
+}
+
+/// Chain-of-fifths coordinate encoded by a `(channel, key)` pair:
+/// `key` is the 12-TET MIDI note, and `channel` (`0..=15`) carries the signed
+/// 12-fifth comma bank modulo 16 with channel 0 (MIDI Ch 1) holding the
+/// central twelve fifths `D♭..F♯` (`-5..=+6`), Ch 2 `+12`, and Ch 16 `-12`.
+pub fn fifths_for_midi(channel: u8, key: u8) -> i32 {
+    let ch = i32::from(channel & 15);
+    let bank = if ch < 8 { ch } else { ch - 16 };
+    let f0 = (7 * i32::from(key) + 5).rem_euclid(12) - 5;
+    f0 + 12 * bank
+}
+
+/// Node and additive microcent correction for a comma-bank fifths note,
+/// realized from `tuning`'s C offset and perfect fifth alone. Additive rather
+/// than replacing incoming player tuning so later pitch lanes and channel
+/// bends compose on top.
+pub fn fifths_assignment(channel: u8, key: u8, tuning: Tuning) -> (LatticePos, i64) {
+    let fifths = fifths_for_midi(channel, key);
+    let correction =
+        i64::from(tuning.c_offset) + i64::from(fifths) * (i64::from(tuning.three) - 700_000_000);
+    (LatticePos::new(fifths, 0, 0), correction)
 }
 
 /// Whether Lattice Map moves the selected map by itself, and along which axes.
@@ -346,10 +372,10 @@ mod tests {
     #[test]
     fn host_lists_match_index_and_out_of_range_clamps() {
         use Follow::{Thirds, ThirdsAndFifths};
-        use TuningEngine::{Adaptive, LatticeMap, Off};
+        use TuningEngine::{Adaptive, Fifths, LatticeMap, Off};
         for (index, engine) in TuningEngine::HOST.into_iter().enumerate() {
             match engine {
-                Off | Adaptive | LatticeMap => assert_eq!(engine.index(), index as i32),
+                Off | Adaptive | LatticeMap | Fifths => assert_eq!(engine.index(), index as i32),
             }
         }
         for (index, follow) in Follow::HOST.into_iter().enumerate() {
@@ -357,7 +383,7 @@ mod tests {
                 Follow::Off | Thirds | ThirdsAndFifths => assert_eq!(follow.index(), index as i32),
             }
         }
-        assert_eq!(TuningEngine::from_index(3), LatticeMap);
+        assert_eq!(TuningEngine::from_index(4), Fifths);
         assert_eq!(TuningEngine::from_index(-1), Off);
         assert_eq!(Follow::from_index(7), ThirdsAndFifths);
         assert_eq!(Follow::from_index(-2), Follow::Off);
@@ -556,5 +582,48 @@ mod tests {
         // the lattice, which is what an i64 rem rather than rem_euclid would do.
         assert_eq!(LatticeMap::rounded_key(-1), 0);
         assert_eq!(LatticeMap::rounded_key(-60_000_000), -1);
+    }
+
+    #[test]
+    fn fifths_decodes_central_db_to_f_sharp_and_signed_comma_banks() {
+        // Central twelve fifths on channel 0 (MIDI Ch 1): D♭ (-5) through F♯ (+6).
+        let expected_ch0 = [
+            (60, 0),  // C
+            (67, 1),  // G
+            (62, 2),  // D
+            (69, 3),  // A
+            (64, 4),  // E
+            (71, 5),  // B
+            (66, 6),  // F#
+            (65, -1), // F
+            (70, -2), // Bb
+            (63, -3), // Eb
+            (68, -4), // Ab
+            (61, -5), // Db
+        ];
+        for (key, fifths) in expected_ch0 {
+            assert_eq!(fifths_for_midi(0, key), fifths, "ch 0 key {key}");
+            // Channel 1 (MIDI Ch 2) = +12 fifths; channel 15 (MIDI Ch 16) = -12 fifths.
+            assert_eq!(fifths_for_midi(1, key), fifths + 12, "ch 1 key {key}");
+            assert_eq!(fifths_for_midi(15, key), fifths - 12, "ch 15 key {key}");
+        }
+        // Extreme signed banks: ch 7 = +7 (+84 fifths), ch 8 = -8 (-96 fifths).
+        assert_eq!(fifths_for_midi(7, 60), 84);
+        assert_eq!(fifths_for_midi(8, 60), -96);
+
+        let mut tuning = Tuning::just();
+        tuning.c_offset = 12_500_000;
+        let three_delta = i64::from(tuning.three) - 700_000_000;
+        // C#4 (ch 1, key 61 -> fifths = +7) vs Db4 (ch 0, key 61 -> fifths = -5)
+        assert_eq!(
+            fifths_assignment(1, 61, tuning),
+            (LatticePos::new(7, 0, 0), 12_500_000 + 7 * three_delta)
+        );
+        assert_eq!(
+            fifths_assignment(0, 61, tuning),
+            (LatticePos::new(-5, 0, 0), 12_500_000 - 5 * three_delta)
+        );
+        assert!(!TuningEngine::Fifths.learns());
+        assert_eq!(TuningEngine::from_index(TuningEngine::Fifths.index()), TuningEngine::Fifths);
     }
 }

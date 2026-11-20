@@ -1163,7 +1163,7 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
     let mut device = hub().with_retune();
     device.activate();
     for (round, (engine, map, shown, decoded, slot)) in [
-        (3, 200, "Lattice Map", TuningEngine::LatticeMap, 127),
+        (4, 200, "Fifths", TuningEngine::Fifths, 127),
         (-1, -5, "Pass through", TuningEngine::Off, 0),
     ]
     .into_iter()
