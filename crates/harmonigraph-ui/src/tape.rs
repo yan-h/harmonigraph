@@ -168,8 +168,9 @@ pub struct TapeView {
     /// where the recorded notes were assigned. Set by each block of an
     /// audition's audio, so a new cue marks the last spot's, or the live map,
     /// until its first block arrives, a few tens of milliseconds; cleared
-    /// when the audition ends. The tuning axes, which nothing automates
-    /// (#1756), stay the host's.
+    /// when the audition ends. The tuning stays the live one: the host's axes,
+    /// drawn in the lattice-board's tuning while the live engine is Pass
+    /// through with Decode fifths on.
     pub map: Option<RecordedMap>,
     /// What was played along the song, in song seconds: each stretch's notes
     /// from the recording whose audio won there, so the roll shows what an

@@ -41,12 +41,6 @@ impl TuningEngine {
             Self::LatticeMap => "Lattice Map",
         }
     }
-
-    /// Whether Learn runs under this engine. Lattice Map reads its own map
-    /// instead, so Learn is suspended there.
-    pub fn learns(self) -> bool {
-        self != Self::LatticeMap
-    }
 }
 
 /// Whether Lattice Map moves the selected map by itself, and along which axes.

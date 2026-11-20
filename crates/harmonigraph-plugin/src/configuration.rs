@@ -261,11 +261,13 @@ impl Settings {
                 let reducer = settings.reducer();
                 let mut resolved = reducer.resolved();
                 resolved.revision = applied.resolved.revision;
-                return (reducer.raw(), ConfigurationView { resolved, status, unadopted });
+                let view = ConfigurationView { resolved, board: false, status, unadopted };
+                return (reducer.raw(), view);
             }
             producer.shadow = None;
         }
-        (applied.raw, ConfigurationView { resolved: applied.resolved, status, unadopted })
+        let resolved = applied.resolved;
+        (applied.raw, ConfigurationView { resolved, board: false, status, unadopted })
     }
 
     pub fn view(&self) -> ConfigurationView {
@@ -543,11 +545,15 @@ impl Owner {
         recorder.record(self.take_time(), origin);
         if recorder.recording() {
             // What the Hub assigned from, at the block's start and at each
-            // change inside it. The recorder writes each only when it changed.
+            // change inside it, as the lattice draws it under the engine in
+            // force there (`ResolvedConfig::drawn`). The recorder writes each
+            // only when it changed.
             let clock = self.recording.presentation;
-            recorder.configuration(clock.at(start), self.in_force(start).config);
+            let drawn =
+                |state: crate::lattice_maps::AttackState| state.config.drawn(state.playback.engine);
+            recorder.configuration(clock.at(start), drawn(self.in_force(start)));
             for (sample, state) in self.maps.changes(start, end) {
-                recorder.configuration(clock.at(sample), state.config);
+                recorder.configuration(clock.at(sample), drawn(state));
             }
         }
         self.recording.registered(end);
@@ -555,7 +561,8 @@ impl Owner {
 
     /// Learn, then publish the callback's record. A Retune-enabled source
     /// reserves the lattice axes only while the engine actually retunes. Pass
-    /// through learns the axes from unchanged input.
+    /// through learns the axes from unchanged input. Decode fifths, as edited
+    /// this callback, suspends Learn as Lattice Map does.
     ///
     /// `classes` is the Hub's `held_classes`, asked only while Learn is armed.
     /// `TOO_MANY_CLASSES` reports this evaluation alone rather than latching,
@@ -572,7 +579,7 @@ impl Owner {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
         self.status &= !ConfigurationView::TOO_MANY_CLASSES;
-        if self.maps.playback.engine.learns() {
+        if self.reducer.resolved().policy.learns(self.maps.playback.engine) {
             match self.learning.infer(self.reducer.resolved().modes.learning, classes) {
                 Ok(Some(learned)) => {
                     self.reducer.apply(ConfigMutation::LearnResolved { learned, retuning });

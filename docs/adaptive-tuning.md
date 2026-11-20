@@ -21,7 +21,7 @@ see [Lattice Map tuning](lattice-maps.md).
 The shared Note retuning selector chooses Pass through,
 Lattice Map or Adaptive for subsequent attacks.
 
-**Decode fifths**, in Note retuning, is for the [lattice-board](https://github.com/yan-h/lattice-board),
+**Decode fifths**, in Tuning's Lattice-board section, is for the [lattice-board](https://github.com/yan-h/lattice-board),
 a custom chain-of-fifths keyboard;
 leave it off for any other input.
 It is one setting for the project:
@@ -32,16 +32,22 @@ the chain-of-fifths layout of a Wicki-Hayden keyboard,
 and sounds that chain at the project's **Decoded fifth**,
 with its C at the lattice's C offset.
 Pass through sounds the chain as declared,
-so switching Note retuning between Pass through and Lattice Map switches the same playing between that temperament and the lattice's tuning without moving a slider.
+and draws the lattice in the board's tuning:
+its fifth is the Decoded fifth with Meantone linked,
+and Tuning's Perfect fifth edits the Decoded fifth while the other intervals and the presets wait, greyed.
+The saved intervals are left as they were,
+so switching Note retuning between Pass through and Lattice Map switches the same playing,
+and the lattice that draws it,
+between that temperament and the lattice's own tuning,
+and a take records whichever was drawn.
 Lattice Map ignores the channel and gives the key its map's slot.
 Adaptive hears the declared pitch,
 from a keyboard tuned in the Decoded fifth,
 so the decoded C♯ and D♭ of one key can take different nodes;
 the Keyboard block's tuning applies only with Decode fifths off.
-Learn does not hear a decoded source,
-since its keys arrive in 12-TET,
-so with Decode fifths on it hears only sources with Retune off,
-which pass through undecoded like any other.
+Learn is suspended while Decode fifths is on, as under Lattice Map:
+the board declares its tuning,
+and what Learn would hear beside it is the 12-TET tracks that pass through undecoded.
 
 
 The moving, register-aware policy developed from [Adaptive tuning: a moving harmonic neighbourhood](adaptive-tuning-design.md) shipped in [#782](https://github.com/yan-h/harmonigraph/pull/782).
@@ -357,7 +363,7 @@ an uncorrected note is exactly the player's pitch Learn reads, so a tuner in fro
 What Learn writes depends on Retune and the engine:
 with Retune on anywhere under Adaptive, the lattice is the target, and Learn moves only the C offset and the [keyboard tuning](adaptive-tuning-plugin.md#keyboard-tuning).
 Under Pass through, Learn updates the lattice axes too;
-Lattice Map suspends Learn.
+Lattice Map suspends Learn, and so does Decode fifths under every engine.
 Switching it off removes that source's held context, released memory and owned moving reference on the Hub's next callback.
 Already sounding notes keep their correction through release, including subsequent player expression;
 turning Retune back on admits new attacks only.

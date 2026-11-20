@@ -1144,14 +1144,12 @@ impl Hub {
     /// its adaptive correction taken back off (`State::learnable`).
     /// `LearningState` sorts and deduplicates. Learn hears every row, Retune
     /// off included: Retune decides what the Hub corrects, and an uncorrected
-    /// note is the player's pitch Learn reads. With Decode fifths on
-    /// (`decoded`), a row with Retune on is the exception: its tuning is
-    /// declared rather than played, and its raw keys are 12-TET. The caller
-    /// passes the configuration as Learn itself reads it, this callback's
-    /// edits applied, since the policy the Hub adopted at `begin` predates them.
-    pub fn held_classes(&self, decoded: bool, scratch: &mut [PitchClass; HELD_VOICES]) -> usize {
+    /// note is the player's pitch Learn reads. Learn does not run while
+    /// Decode fifths is on (`TuningEngine::learns`), so no row's keys are read
+    /// here as the lattice-board's.
+    pub fn held_classes(&self, scratch: &mut [PitchClass; HELD_VOICES]) -> usize {
         let mut count = 0;
-        for row in self.rows.iter().filter(|row| !(decoded && row.retune & 1 != 0)) {
+        for row in &self.rows {
             for pitch in row.state.learnable() {
                 scratch[count] = PitchClass::from_microcents(pitch);
                 count += 1;

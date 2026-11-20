@@ -344,7 +344,7 @@ pub struct EditorPrefs {
 impl Default for EditorPrefs {
     fn default() -> Self {
         Self {
-            folded_sections: Default::default(),
+            folded_sections: panes::folded_by_default(),
             frame_rate: FrameRate::default(),
             // The design size, which a fresh install opens at and a blob
             // without the key loads as; an `f32`'s own default of 0.0 is a

@@ -283,7 +283,8 @@ Tuning separates lattice pitch/temperaments,
 note matching,
 output **Note retuning**,
 and connected **Tuning sources**.
-**Pass through** leaves incoming note pitches unchanged while the lattice's display tuning still applies.
+**Pass through** leaves incoming note pitches unchanged while the lattice's display tuning still applies,
+except that with Decode fifths on it draws the lattice-board's tuning (below).
 **Tuning** puts the **Meantone** switch beside **Major third** and **Marvel** beside **Harmonic seventh**.
 A linked interval shows its calculated value with a ↔ indicator;
 in narrow panes its switch wraps below the interval.
@@ -308,16 +309,27 @@ The plugin saves them with the project's tuning,
 and saved links and recorded configurations are restored as saved,
 without running recognition again.
 The standalone app does not save them, and opens with both linked.
-**Note retuning** holds the engine choice, **Decode fifths** and the **Decoded fifth**.
+**Note retuning** holds the engine choice.
+**Decode fifths** and the **Decoded fifth** have a section of their own, **Lattice-board**, after the engines' controls, which a fresh editor opens folded.
 Decode fifths reads the MIDI of the [lattice-board](https://github.com/yan-h/lattice-board), a custom chain-of-fifths keyboard, and is to be left off for any other input.
 It is one setting for the project, saved with the musical settings:
 while it is on, every source with Retune on is decoded,
 so a 12-TET or MPE track with Retune on is read as the board's encoding too.
+A playing Lattice Map ignores the decoding,
+so it changes nothing heard there and can stay on while Note retuning switches;
+an empty map slot sounds the decoded chain.
 While it is on, a lattice-board plugged into the Mac also lights its keys for every held note the lattice draws, from any track or the Tape:
 the key nearest the note's sounding pitch in the Decoded fifth, sent in the board's own encoding, so a note a Lattice Map moved lights the key it sounds on.
 The board's firmware reads these, and a note whose nearest spelling the board lacks lights the nearest key it has.
 There is nothing to route in Bitwig; the board may be plugged in or out at any time, and the Console says when it is found, missing or lost.
 The Decoded fifth is the fifth a decoded source sounds its chain of fifths at wherever a Lattice Map is not tuning it.
+Under Pass through with Decode fifths on the lattice is drawn in the board's tuning,
+the Decoded fifth with Meantone linked,
+in the editor and in a take:
+**Tuning**'s Perfect fifth then shows and edits the Decoded fifth,
+and the other intervals, their links and the Just and 12-TET presets are greyed,
+since they edit saved intervals only Lattice Map and Adaptive draw.
+Learn is suspended while Decode fifths is on.
 Each engine's controls follow in a section of their own.
 Adaptive tuning's **Keyboard** and **Context** are blocks,
 open like the rest of the section.

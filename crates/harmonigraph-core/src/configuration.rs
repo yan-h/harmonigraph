@@ -1,6 +1,7 @@
 //! Effective musical configuration. One serialized owner applies semantic edits;
 //! display and policy consumers copy the same resolved value. No serde or I/O.
 
+use crate::lattice_map::TuningEngine;
 use crate::{Comma, LearnedTuning, Tempered, Tuning};
 
 /// Explicit interval links and Learn state. Recognition runs only on tuning edits.
@@ -53,6 +54,19 @@ impl Default for PolicyConfig {
     }
 }
 impl PolicyConfig {
+    /// Whether the lattice is drawn in the lattice-board's tuning under
+    /// `engine`: Pass through with Decode fifths on, where the board's chain
+    /// sounds at the Decoded fifth and nothing retunes it.
+    pub fn board_drawn(&self, engine: TuningEngine) -> bool {
+        engine == TuningEngine::Off && self.decode_fifths
+    }
+    /// Whether Learn runs under `engine`. Lattice Map reads its own map
+    /// instead, and with Decode fifths on the lattice-board declares its
+    /// tuning, which the lattice is drawn in under Pass through: Learn is
+    /// suspended in both.
+    pub fn learns(&self, engine: TuningEngine) -> bool {
+        engine != TuningEngine::LatticeMap && !self.decode_fifths
+    }
     pub fn sanitize(mut self) -> Self {
         self.radius = self.radius.clamp(1, 5);
         self.axes = self.axes.clamp(1, 3);
@@ -115,6 +129,26 @@ pub struct ResolvedConfig {
     pub tuning: Tuning,
     pub modes: TuningModes,
     pub policy: PolicyConfig,
+}
+
+impl ResolvedConfig {
+    /// This configuration as the lattice is drawn and a take records it under
+    /// `engine`. Where [`PolicyConfig::board_drawn`], the fifth is the Decoded fifth
+    /// with Meantone linked, since the board names a third as four fifths;
+    /// the seventh keeps its value unless Marvel derives it. The saved axes
+    /// are untouched, so Lattice Map still tunes from them.
+    pub fn drawn(mut self, engine: TuningEngine) -> Self {
+        if self.policy.board_drawn(engine) {
+            self.tuning.three = self.policy.decoded_fifth;
+            self.modes.tempered.syntonic = true;
+            for comma in Comma::ALL {
+                if self.modes.tempered.has(comma) {
+                    self.tuning.temper(comma);
+                }
+            }
+        }
+        self
+    }
 }
 
 /// How far each prime's interval may sit from just intonation, in cents.
@@ -541,6 +575,45 @@ mod tests {
         let revision = reducer.resolved().revision;
         enter(&mut reducer, 4, 2.0);
         assert_eq!(reducer.resolved().revision, revision, "display tolerance is not musical");
+    }
+
+    /// Pass through with Decode fifths on draws the lattice in the board's
+    /// tuning, from a just lattice with both links released: third-comma, so
+    /// its linked third (379.1¢) is no 5:4 left standing. Marvel, released,
+    /// keeps the seventh; linked, it derives the seventh from the board's.
+    #[test]
+    fn pass_through_with_decoding_draws_the_lattice_in_the_board_s_tuning() {
+        let mut reducer = ConfigReducer::default();
+        for comma in Comma::ALL {
+            switch(&mut reducer, comma, false);
+        }
+        for (index, cents) in [(1, THREE_JUST), (2, FIVE_JUST)] {
+            enter(&mut reducer, index, cents);
+        }
+        let policy = PolicyConfig {
+            decode_fifths: true,
+            decoded_fifth: 694_786_840,
+            ..PolicyConfig::default()
+        };
+        reducer
+            .apply(ConfigMutation::Edit(ConfigEdit { policy: Some(policy), ..Default::default() }));
+        let just = reducer.resolved();
+        let board = just.drawn(TuningEngine::Off);
+        assert_eq!(board.tuning.three, 694_786_840);
+        assert!(board.modes.tempered.syntonic && !board.modes.tempered.septimal_kleisma);
+        assert_eq!(i64::from(board.tuning.five), 4 * 694_786_840 - 2_400_000_000);
+        assert_eq!(board.tuning.seven, just.tuning.seven);
+        for engine in [TuningEngine::LatticeMap, TuningEngine::Adaptive] {
+            assert_eq!(just.drawn(engine), just, "{engine:?} draws the saved axes");
+        }
+        let off = ResolvedConfig { policy: PolicyConfig::default(), ..just };
+        assert_eq!(off.drawn(TuningEngine::Off), off, "decoding off draws the saved axes");
+        switch(&mut reducer, Comma::SeptimalKleisma, true);
+        let marvel = reducer.resolved().drawn(TuningEngine::Off);
+        assert_eq!(
+            i64::from(marvel.tuning.seven),
+            2 * 694_786_840 + 2 * i64::from(board.tuning.five) - 1_200_000_000
+        );
     }
 
     #[test]

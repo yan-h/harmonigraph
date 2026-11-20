@@ -44,7 +44,8 @@ pub trait ParamBackend {
     }
     fn edit_tuning_instance(&self, _id: u64, _edit: InstanceEdit) {}
 
-    /// Coherent audio-owned CLAP configuration, when the shell provides one.
+    /// Coherent audio-owned CLAP configuration as the editor draws it, when
+    /// the shell provides one.
     fn configuration(&self) -> Option<ConfigurationView> {
         None
     }
@@ -132,7 +133,13 @@ pub enum InstanceEdit {
 /// a queued restore will leave it.
 #[derive(Clone, Copy, Debug)]
 pub struct ConfigurationView {
+    /// The configuration as the editor draws it: the saved one, or with
+    /// `board` the lattice-board's tuning drawn over it.
     pub resolved: harmonigraph_core::configuration::ResolvedConfig,
+    /// Whether `resolved` is drawn in the lattice-board's tuning
+    /// (`ResolvedConfig::drawn`), decided once with it so every control in a
+    /// frame agrees about which value it shows.
+    pub board: bool,
     /// The bits below.
     pub status: u32,
     /// The id of the latest edit the audio owner has not applied yet, or

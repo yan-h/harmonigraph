@@ -246,6 +246,7 @@ fn backend_with(
     reducer.apply(ConfigMutation::Restore { raw, modes, policy });
     Backend {
         config: params::ConfigurationView {
+            board: false,
             resolved: reducer.resolved(),
             status: 0,
             unadopted: None,
@@ -333,6 +334,8 @@ fn draw(mut state: SharedState, scenario: Scenario, backend: &Backend) -> Vec<Vi
     assert_eq!(state.picture.runtime.tempered.syntonic, scenario.meantone);
     assert_eq!(state.picture.runtime.tempered.septimal_kleisma, scenario.marvel);
     set_optional_sections(&mut state, scenario.enabled);
+    // Every section open, though a fresh editor folds the lattice-board's.
+    state.workspace.interaction.prefs.folded_sections.clear();
     let a = &mut state.picture.appearance;
     a.camera.projection = scenario.projection;
     if scenario.pane == panes::Tab::Mappings {

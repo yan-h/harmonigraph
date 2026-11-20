@@ -1624,6 +1624,24 @@ fn painted_in(out: &egui::FullOutput, leaf: egui::Rect, needle: &str) -> Option<
         .max_by(|a, b| a.top().total_cmp(&b.top()))
 }
 
+/// A fresh editor opens a Hub's lattice-board section folded, since only that
+/// controller reads it; a click on its heading opens it.
+#[test]
+fn a_fresh_editor_folds_the_lattice_board_section() {
+    let mut state = fresh();
+    state.workspace.layout.select(panes::Tab::Tuning);
+    let engine = harmonigraph_core::lattice_map::TuningEngine::LatticeMap;
+    let mut h = DockHarness::at(egui::vec2(1000.0, 4000.0)).with_engine(engine);
+    h.settle(&mut state);
+    let out = h.frame(&mut state, vec![]);
+    let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
+    let heading = painted_in(&out, leaf, "LATTICE-BOARD").expect("the heading is drawn");
+    assert!(painted_in(&out, leaf, "Decode fifths").is_none(), "the section opened unfolded");
+    click_at(&mut h, &mut state, heading.center());
+    let out = h.frame(&mut state, vec![]);
+    assert!(painted_in(&out, leaf, "Decode fifths").is_some(), "the click did not open it");
+}
+
 /// A real click at `at` through the dock.
 fn click_at(h: &mut DockHarness, state: &mut SharedState, at: egui::Pos2) {
     h.frame(state, vec![egui::Event::PointerMoved(at)]);
@@ -1717,7 +1735,7 @@ fn a_heading_switch_turns_its_feature_off_without_folding_the_section() {
     assert_ne!(heading_color(&out, leaf, "MIDI RIBBONS"), lit, "an off heading reads as on");
     assert!(painted_in(&out, leaf, "Ribbon width").is_none(), "a ribbon row outlived the ribbons");
     assert!(
-        state.workspace.interaction.prefs.folded_sections.is_empty(),
+        state.workspace.interaction.prefs.folded_sections == panes::folded_by_default(),
         "the switch folded a section: {:?}",
         state.workspace.interaction.prefs.folded_sections,
     );
@@ -1725,7 +1743,7 @@ fn a_heading_switch_turns_its_feature_off_without_folding_the_section() {
     click_at(&mut h, &mut state, heading.center());
     h.frame(&mut state, vec![]);
     assert!(
-        state.workspace.interaction.prefs.folded_sections.is_empty(),
+        state.workspace.interaction.prefs.folded_sections == panes::folded_by_default(),
         "a click on an off heading folded it: {:?}",
         state.workspace.interaction.prefs.folded_sections,
     );

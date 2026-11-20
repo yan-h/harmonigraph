@@ -524,6 +524,17 @@ pub(super) fn switched_section<R>(
     folding_section(ui, title, "", Some((on, hint)), body)
 }
 
+/// A section's key in [`SectionFolds`]: its page and its title.
+fn fold_key(page: &str, title: &str) -> String {
+    format!("{page}/{title}")
+}
+
+/// The sections a fresh editor opens folded: the lattice-board's, which only
+/// that controller reads (#1897).
+pub(crate) fn folded_by_default() -> std::collections::BTreeSet<String> {
+    [fold_key(tab_title(&Tab::Tuning), tuning::BOARD_SECTION)].into()
+}
+
 fn folding_section<R>(
     ui: &mut egui::Ui,
     title: &str,
@@ -533,7 +544,7 @@ fn folding_section<R>(
 ) -> Option<R> {
     section_separator(ui);
     let (key, folded) = SectionFolds::with(ui, |folds| {
-        let key = format!("{}/{title}", folds.page);
+        let key = fold_key(folds.page, title);
         let folded = folds.folded.contains(&key);
         (key, folded)
     })
