@@ -419,12 +419,9 @@ impl AudioMaps {
         self.resolve();
         self.push(event.sample, config);
     }
-    /// The state the latest observation leaves, under `config` as the lattice
-    /// is drawn under this engine (`ResolvedConfig::drawn`): what an attack the
-    /// history no longer reaches is assigned from, and what a take records.
-    /// Drawing changes no axis an engine tunes from.
+    /// The state the latest observation leaves, under `config`: what an attack
+    /// the history no longer reaches is assigned from.
     pub fn live(&self, config: ResolvedConfig) -> AttackState {
-        let config = config.drawn(self.playback.engine);
         AttackState { config, playback: self.playback, engine_revision: self.engine_revision }
     }
     fn push(&mut self, sample: i64, config: ResolvedConfig) {

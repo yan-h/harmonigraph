@@ -543,11 +543,15 @@ impl Owner {
         recorder.record(self.take_time(), origin);
         if recorder.recording() {
             // What the Hub assigned from, at the block's start and at each
-            // change inside it. The recorder writes each only when it changed.
+            // change inside it, as the lattice draws it under the engine in
+            // force there (`ResolvedConfig::drawn`). The recorder writes each
+            // only when it changed.
             let clock = self.recording.presentation;
-            recorder.configuration(clock.at(start), self.in_force(start).config);
+            let drawn =
+                |state: crate::lattice_maps::AttackState| state.config.drawn(state.playback.engine);
+            recorder.configuration(clock.at(start), drawn(self.in_force(start)));
             for (sample, state) in self.maps.changes(start, end) {
-                recorder.configuration(clock.at(sample), state.config);
+                recorder.configuration(clock.at(sample), drawn(state));
             }
         }
         self.recording.registered(end);
