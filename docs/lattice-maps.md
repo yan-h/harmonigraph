@@ -331,7 +331,7 @@ which is [#891](https://github.com/yan-h/harmonigraph/issues/891).
 Reading a standing channel bend as part of the arriving pitch is the same rule Adaptive applies,
 so the two engines never disagree about what was played,
 except with Decode fifths on:
-Adaptive hears its declared pitch and the map reads its key alone.
+Adaptive hears its declared pitch, and the map reads the arriving pitch without the comma bank.
 It has a cost worth stating:
 a bend held at the attack is absorbed into the frozen correction,
 and returning the wheel to centre afterwards moves that voice by the amount the bend was worth.

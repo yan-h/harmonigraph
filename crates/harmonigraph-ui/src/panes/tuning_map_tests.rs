@@ -185,8 +185,11 @@ fn the_decoding_controls_send_the_shown_policy_under_pass_through() {
     frame(vec![press(at, true)]);
     frame(vec![press(at, false)]);
     let sent = params.tuning.borrow().last().and_then(|edit| edit.policy).expect("an edit");
-    assert!(sent.decode_fifths, "{sent:?}");
-    assert_eq!(sent.pitch_flexibility, 37, "the toggle sends the policy shown");
+    assert_eq!(
+        sent,
+        PolicyConfig { decode_fifths: true, ..shown },
+        "the toggle sends the policy shown"
+    );
 }
 
 /// With Learn on, whether the pane's first frame draws the armed ring at

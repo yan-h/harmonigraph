@@ -1045,7 +1045,8 @@ impl Plugin for Harmonigraph {
         for input in block.events() {
             owner.maps.observe(input, owner.current());
         }
-        owner.group_end(hub.retuning(), |scratch| hub.held_classes(scratch));
+        let decoded = owner.current().policy.decode_fifths;
+        owner.group_end(hub.retuning(), |scratch| hub.held_classes(decoded, scratch));
         for input in block.events() {
             hub.input(input);
         }

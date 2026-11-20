@@ -269,7 +269,8 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
         device.wrapper().test_inspect_plugin(|plugin| {
             let mut scratch = [harmonigraph_core::tuning::PitchClass::from_microcents(0);
                 crate::tuning::HELD_VOICES];
-            plugin.aggregation.as_ref().unwrap().held_classes(&mut scratch)
+            let decoded = plugin.configuration.as_ref().unwrap().current().policy.decode_fifths;
+            plugin.aggregation.as_ref().unwrap().held_classes(decoded, &mut scratch)
         })
     };
     assert_eq!(heard(&device), 3);
