@@ -283,7 +283,8 @@ Tuning separates lattice pitch/temperaments,
 note matching,
 output **Note retuning**,
 and connected **Tuning sources**.
-**Pass through** leaves incoming note pitches unchanged while the lattice's display tuning still applies.
+**Pass through** leaves incoming note pitches unchanged while the lattice's display tuning still applies,
+except that with Decode fifths on it draws the lattice-board's tuning (below).
 **Tuning** puts the **Meantone** switch beside **Major third** and **Marvel** beside **Harmonic seventh**.
 A linked interval shows its calculated value with a ↔ indicator;
 in narrow panes its switch wraps below the interval.

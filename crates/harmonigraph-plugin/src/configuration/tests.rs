@@ -1206,6 +1206,26 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
     }
 }
 
+/// The editor draws the configuration under the engine the parameters
+/// select, as a take records it: the Decoded fifth under Pass through with
+/// Decode fifths on, the saved fifth under Lattice Map.
+#[test]
+fn the_editor_draws_the_board_s_tuning_under_pass_through() {
+    use harmonigraph_core::lattice_map::TuningEngine;
+    let _scope = crate::test_scope::enter();
+    let mut device = hub();
+    device.activate();
+    let policy = PolicyConfig { decode_fifths: true, ..PolicyConfig::default() };
+    assert!(device.settings().submit(ConfigEdit { policy: Some(policy), ..Default::default() }));
+    device.run(0, vec![], None);
+    let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
+    let fifth = || params.configuration_view().resolved.tuning.three;
+    assert_eq!(fifth(), policy.decoded_fifth);
+    params.set(crate::Row::TuningEngine, TuningEngine::LatticeMap.index() as f32);
+    assert_eq!(fifth(), params.settings.view().resolved.tuning.three);
+    assert_ne!(fifth(), policy.decoded_fifth, "the fixture's saved fifth is the board's");
+}
+
 #[test]
 fn camera_orbit_gestures_reach_the_host_once_per_axis() {
     use harmonigraph_ui::params::ParamBackend;
