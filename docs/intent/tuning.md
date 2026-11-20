@@ -90,3 +90,12 @@ Lines marked "Yan" are his answers in chat; lines marked "session" are the imple
 - With Decode fifths on, Learn hears only sources with Retune off, the rule above that it does not hear a decoded source applied to the project's flag; Learn is not suspended while decoding is on, though with the board alone it then hears nothing while its armed ring still shows. Yan (PR #1898 review)
 - A note struck decoded is heard by Learn as its raw 12-TET key once decoding stops applying to it while it is held (Decode fifths or that source's Retune turned off): no per-note record of decoding at the attack. Yan (PR #1898 review)
 - No setting for which twelve fifths Ch 1 holds: Harmonigraph cannot tell the board's notes from drawn ones, so its window would have to match the board's firmware, kept in step by hand, and every recorded clip would be read again when it changed. "not sure that it's worth it if I have to keep the board in sync manually" Yan
+
+## 2026-11-20 (lighting the lattice-board)
+
+- Harmonigraph sends the board its lit keys itself, over CoreMIDI, rather than through a Bitwig hardware-out device or a controller script: Bitwig turns a Tune's per-note tuning into MPE channels, which scrambles the comma banks, and its controller API gives a playing note only a pitch and a velocity. Yan
+- A note lights the key nearest its sounding pitch in the board's own tuning (the Decoded fifth, the lattice's C offset), not the key played or drawn: a note a Lattice Map moved lights the key it sounds on, and a 12-TET track its nearest key. Yan
+- Every note the lattice draws lights the board, from any source and from the Tape's cues. Yan
+- No setting of its own: the board lights while Decode fifths is on. Yan
+- Keys pressed and keys sounded share the board's one highlight for now; a separate tint, a firmware change, waits until it has been used. Yan
+- The search covers the three central banks (Ch 16 to Ch 2) rather than the board's layout, so nothing is kept in step with the firmware; a key the board does not hold stays dark. Session

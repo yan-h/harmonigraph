@@ -15,6 +15,7 @@ use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
 
 mod audio_ingress;
 mod background;
+mod board;
 mod configuration;
 mod editor;
 mod lattice_maps;
@@ -760,6 +761,7 @@ impl Default for Harmonigraph {
             params.editor_state.clone(),
             tape_worker,
             editor::input::LiveInput::new(consumer, audio_consumer),
+            board::Lights::live(params.settings.clone()),
         );
         params.ui_state.attach(&editor_shared);
         Harmonigraph {

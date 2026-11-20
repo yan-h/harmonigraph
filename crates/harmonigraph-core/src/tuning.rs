@@ -90,6 +90,37 @@ pub fn fifths_for_midi(channel: u8, key: u8) -> i32 {
     f0 + 12 * bank
 }
 
+/// The `(channel, key)` of the key nearest `pitch` (MIDI note units) on a
+/// chain-of-fifths keyboard tuned in `fifth` with its C at `c_offset`
+/// (microcents), in the encoding [`fifths_for_midi`] reads: the inverse of the
+/// decoding, for lighting the key a sounding note would be played on.
+///
+/// Searches the three central banks, Ch 16 to Ch 2 (`-17..=18` fifths), and a
+/// tie, which only a fifth at or near 700¢ makes, goes to the key nearest the
+/// central twelve on Ch 1, so a 12-TET fifth reads D♭ to F♯ as decoding does.
+/// `None` for a pitch that is not finite or whose key falls outside MIDI.
+pub fn nearest_fifths_key(pitch: f32, c_offset: i32, fifth: i32) -> Option<(u8, u8)> {
+    if !pitch.is_finite() {
+        return None;
+    }
+    let cents = f64::from(pitch) * 100.0;
+    let (_, _, fifths, key) = (-17..=18)
+        .map(|fifths: i32| {
+            let offset = fifths_offset(fifths, c_offset, fifth) as f64 / 1e6;
+            let class = (7 * fifths).rem_euclid(12);
+            let octaves = ((cents - offset) / 100.0 - f64::from(class)) / 12.0;
+            let key = class + 12 * octaves.round() as i32;
+            // Hundredths of a cent: closer than that is a tie.
+            let error = ((f64::from(key) * 100.0 + offset - cents).abs() * 100.0).round() as i64;
+            let off_centre = (-5 - fifths).max(fifths - 6).max(0);
+            (error, off_centre, fifths, key)
+        })
+        .min()?;
+    let key = u8::try_from(key).ok().filter(|&key| key <= 127)?;
+    let bank = (fifths + 5).div_euclid(12);
+    Some((bank.rem_euclid(16) as u8, key))
+}
+
 /// What a chain-of-fifths keyboard tuned in `fifth` (microcents) sounds
 /// `fifths` steps along its chain, as an offset in microcents from that key's
 /// 12-TET pitch, with its C at `c_offset`.
@@ -947,6 +978,44 @@ mod tests {
         ];
         let three = learn_tuning(&classes).three.unwrap();
         assert!((three - 701.0).abs() < 0.01, "three = {three}");
+    }
+
+    /// Quarter-comma meantone, the Decoded fifth's default, in microcents.
+    const QUARTER_COMMA: i32 = 696_578_428;
+
+    #[test]
+    fn nearest_fifths_key_finds_every_decoded_key_it_searches() {
+        let c_offset = 3_000_000;
+        for fifths in -17..=18i32 {
+            for octave in [3, 4, 5] {
+                let class = (7 * fifths).rem_euclid(12);
+                let key = (12 * (octave + 1) + class) as u8;
+                let pitch =
+                    f32::from(key) + fifths_offset(fifths, c_offset, QUARTER_COMMA) as f32 / 1e8;
+                let (channel, found) =
+                    nearest_fifths_key(pitch, c_offset, QUARTER_COMMA).expect("in MIDI range");
+                assert_eq!(found, key, "fifths {fifths} octave {octave}");
+                assert_eq!(fifths_for_midi(channel, found), fifths, "octave {octave}");
+            }
+        }
+    }
+
+    #[test]
+    fn nearest_fifths_key_lights_the_meantone_key_of_a_just_pitch() {
+        let ji = |ratio: f64| 60.0 + (1200.0 * ratio.log2() / 100.0) as f32;
+        // 16/15 is a D♭ (Ch 1), not a C♯; 7/4 an A♯ (+10, Ch 2), not a B♭.
+        assert_eq!(nearest_fifths_key(ji(16.0 / 15.0), 0, QUARTER_COMMA), Some((0, 61)));
+        assert_eq!(nearest_fifths_key(ji(7.0 / 4.0), 0, QUARTER_COMMA), Some((1, 70)));
+        // A 12-TET D♯ is nearer the meantone E♭.
+        assert_eq!(nearest_fifths_key(63.0, 0, QUARTER_COMMA), Some((0, 63)));
+    }
+
+    #[test]
+    fn nearest_fifths_key_breaks_a_12_tet_tie_toward_ch_1() {
+        for key in 48..72 {
+            let (channel, found) = nearest_fifths_key(f32::from(key), 0, 700_000_000).unwrap();
+            assert_eq!((channel, found), (0, key), "key {key}");
+        }
     }
 
     #[test]

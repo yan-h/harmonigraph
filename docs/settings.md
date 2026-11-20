@@ -313,6 +313,9 @@ Decode fifths reads the MIDI of the [lattice-board](https://github.com/yan-h/lat
 It is one setting for the project, saved with the musical settings:
 while it is on, every source with Retune on is decoded,
 so a 12-TET or MPE track with Retune on is read as the board's encoding too.
+While it is on, a lattice-board plugged into the Mac also lights its keys for every held note the lattice draws, from any track or the Tape:
+the key nearest the note's sounding pitch in the Decoded fifth, sent in the board's own encoding, so a note a Lattice Map moved lights the key it sounds on.
+The board's Fifths mode reads these; there is nothing to route in Bitwig, and the Console says when the board is found or missing.
 The Decoded fifth is the fifth a decoded source sounds its chain of fifths at wherever a Lattice Map is not tuning it.
 Each engine's controls follow in a section of their own.
 Adaptive tuning's **Keyboard** and **Context** are blocks,
