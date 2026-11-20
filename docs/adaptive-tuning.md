@@ -21,7 +21,7 @@ see [Lattice Map tuning](lattice-maps.md).
 The shared Note retuning selector chooses Pass through,
 Lattice Map or Adaptive for subsequent attacks.
 
-**Decode fifths**, in Note retuning, is for the [lattice-board](https://github.com/yan-h/lattice-board),
+**Decode fifths**, in Tuning's Lattice-board section, is for the [lattice-board](https://github.com/yan-h/lattice-board),
 a custom chain-of-fifths keyboard;
 leave it off for any other input.
 It is one setting for the project:

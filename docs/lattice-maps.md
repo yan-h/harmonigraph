@@ -3,7 +3,7 @@
 Implements the passage workflow in [#889](https://github.com/yan-h/harmonigraph/issues/889).
 Use the existing Harmonigraph Tune instances before instruments and one Harmonigraph Hub.
 Retune and Show remain per-source controls;
-Decode fifths, for the lattice-board, is one setting for the project in Note retuning.
+Decode fifths, for the lattice-board, is one setting for the project in its own Lattice-board section.
 Note retuning is shared by the Hub:
 Pass through preserves player pitch,
 Lattice Map assigns each incoming note from explicit geometry,

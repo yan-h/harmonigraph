@@ -150,7 +150,7 @@ fn derive_from_fifth_sends_the_shown_policy_with_the_shown_fifths_keyboard() {
     assert_eq!(sent, [Some(PolicyConfig { keyboard, ..shown })]);
 }
 
-/// Decode fifths and the Decoded fifth are drawn in Note retuning under Pass
+/// Decode fifths and the Decoded fifth are drawn in the lattice-board's section under Pass
 /// through too, and an edit of either sends the whole policy shown: here a
 /// double-click on the bar, which puts it back on its fresh value, and a click
 /// on the toggle.
@@ -180,7 +180,7 @@ fn the_decoding_controls_send_the_shown_policy_under_pass_through() {
     let fresh = PolicyConfig::default().decoded_fifth;
     assert!((sent.decoded_fifth - fresh).abs() < 100, "{sent:?}");
     assert_eq!(sent, PolicyConfig { decoded_fifth: sent.decoded_fifth, ..shown });
-    let at = text_at(&frame(vec![]), "Decode fifths (lattice-board)").expect("the toggle is drawn");
+    let at = text_at(&frame(vec![]), "Decode fifths").expect("the toggle is drawn");
     frame(vec![egui::Event::PointerMoved(at)]);
     frame(vec![press(at, true)]);
     frame(vec![press(at, false)]);

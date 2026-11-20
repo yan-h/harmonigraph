@@ -309,11 +309,14 @@ The plugin saves them with the project's tuning,
 and saved links and recorded configurations are restored as saved,
 without running recognition again.
 The standalone app does not save them, and opens with both linked.
-**Note retuning** holds the engine choice, **Decode fifths** and the **Decoded fifth**.
+**Note retuning** holds the engine choice.
+**Decode fifths** and the **Decoded fifth** have a section of their own, **Lattice-board**, after the engines' controls, which a fresh editor opens folded.
 Decode fifths reads the MIDI of the [lattice-board](https://github.com/yan-h/lattice-board), a custom chain-of-fifths keyboard, and is to be left off for any other input.
 It is one setting for the project, saved with the musical settings:
 while it is on, every source with Retune on is decoded,
 so a 12-TET or MPE track with Retune on is read as the board's encoding too.
+A Lattice Map ignores the decoding,
+so under Lattice Map it changes nothing heard and can stay on while Note retuning switches.
 While it is on, a lattice-board plugged into the Mac also lights its keys for every held note the lattice draws, from any track or the Tape:
 the key nearest the note's sounding pitch in the Decoded fifth, sent in the board's own encoding, so a note a Lattice Map moved lights the key it sounds on.
 The board's firmware reads these, and a note whose nearest spelling the board lacks lights the nearest key it has.
