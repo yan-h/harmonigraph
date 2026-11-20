@@ -309,7 +309,7 @@ and saved links and recorded configurations are restored as saved,
 without running recognition again.
 The standalone app does not save them, and opens with both linked.
 **Note retuning** holds the engine choice and the **Decoded fifth**,
-the fifth a source with **Decode fifths** on sounds its chain of fifths at under every engine but Lattice Map;
+the fifth a source with **Decode fifths** on sounds its chain of fifths at wherever a Lattice Map is not tuning it;
 **Decode fifths** is in that source's **Source details**.
 Each engine's controls follow in a section of their own.
 Adaptive tuning's **Keyboard** and **Context** are blocks,

@@ -14,10 +14,8 @@ use harmonigraph_clap::events::{Input, InputValue, Output, Transport};
 use harmonigraph_clap::plugin::Boundary;
 use harmonigraph_core::canonical::{NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
-use harmonigraph_core::lattice_map::{
-    fifths_for_midi, fifths_offset, Follow, LatticeMap, TuningEngine, FOLLOW_GROUP,
-};
-use harmonigraph_core::tuning::{fifth_generated, PitchClass};
+use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
+use harmonigraph_core::tuning::{fifth_generated, fifths_for_midi, fifths_offset, PitchClass};
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
 
@@ -856,8 +854,8 @@ impl Hub {
         }
         let incoming = self.arriving(record, channel, key);
         // A decoded source declares its tuning: a chain of fifths at the
-        // decoded fifth, its C at the lattice's. Lattice Map never reads it,
-        // since both its slot and its follow are chosen by the key.
+        // decoded fifth, its C at the lattice's. A map never reads it, since
+        // both its slot and its follow are chosen by the key.
         let decoded = self.rows[source].decode_fifths;
         let stage = decoded.then(|| {
             let fifths = fifths_for_midi(channel, key);
@@ -962,6 +960,8 @@ impl Hub {
     /// applied to it. Both engines decide from this one pitch: whatever a
     /// keyboard's own temperament, an MTS scale or a bend held at the attack
     /// has done is part of the note here, not something to correct on top of.
+    /// A decoded source's declared tuning is not in it: Adaptive adds that
+    /// itself, and Lattice Map reads the key alone.
     fn arriving(&self, record: Record, channel: u8, key: u8) -> i64 {
         let channel_pitch = self.rows[usize::from(record.source)].state.channel_pitch(channel);
         i64::from(key) * 100_000_000

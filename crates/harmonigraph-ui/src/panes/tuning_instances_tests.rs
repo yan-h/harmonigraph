@@ -82,6 +82,7 @@ fn decode_fifths_edits_the_selected_source() {
     let state = fresh_picture();
     let ctx = themed();
     ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    crate::panes::open_subsections(&ctx);
     let size = egui::vec2(300.0, 2400.0);
     let frame = |events| {
         events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {
@@ -104,7 +105,6 @@ fn decode_fifths_edits_the_selected_source() {
         frame(vec![press(at, false)]);
     };
     click("Bass");
-    click("Source details");
     click("Decode fifths");
     let decoding: Vec<_> = params.0.borrow().iter().map(|row| row.decode_fifths).collect();
     assert_eq!(decoding, [false, true, false]);

@@ -49,23 +49,6 @@ impl TuningEngine {
     }
 }
 
-/// Chain-of-fifths coordinate encoded by a `(channel, key)` pair:
-/// `key` is the 12-TET MIDI note, and `channel` (`0..=15`) carries the signed
-/// 12-fifth comma bank modulo 16 with channel 0 (MIDI Ch 1) holding the
-/// central twelve fifths `D♭..F♯` (`-5..=+6`), Ch 2 `+12`, and Ch 16 `-12`.
-pub fn fifths_for_midi(channel: u8, key: u8) -> i32 {
-    let ch = i32::from(channel & 15);
-    let bank = if ch < 8 { ch } else { ch - 16 };
-    let f0 = (7 * i32::from(key) + 5).rem_euclid(12) - 5;
-    f0 + 12 * bank
-}
-
-/// Microcent offset from 12-TET for `fifths` steps of `fifth` (microcents),
-/// anchored at `c_offset`.
-pub fn fifths_offset(fifths: i32, c_offset: i32, fifth: i32) -> i64 {
-    i64::from(c_offset) + i64::from(fifths) * (i64::from(fifth) - 700_000_000)
-}
-
 /// Whether Lattice Map moves the selected map by itself, and along which axes.
 ///
 /// A prototype of adaptive tuning from the map's side: the map keeps its
@@ -573,33 +556,5 @@ mod tests {
         // the lattice, which is what an i64 rem rather than rem_euclid would do.
         assert_eq!(LatticeMap::rounded_key(-1), 0);
         assert_eq!(LatticeMap::rounded_key(-60_000_000), -1);
-    }
-
-    #[test]
-    fn fifths_decodes_central_db_to_f_sharp_and_signed_comma_banks() {
-        // Central twelve fifths on channel 0 (MIDI Ch 1): D♭ (-5) through F♯ (+6).
-        let expected_ch0 = [
-            (60, 0),  // C
-            (67, 1),  // G
-            (62, 2),  // D
-            (69, 3),  // A
-            (64, 4),  // E
-            (71, 5),  // B
-            (66, 6),  // F#
-            (65, -1), // F
-            (70, -2), // Bb
-            (63, -3), // Eb
-            (68, -4), // Ab
-            (61, -5), // Db
-        ];
-        for (key, fifths) in expected_ch0 {
-            assert_eq!(fifths_for_midi(0, key), fifths, "ch 0 key {key}");
-            // Channel 1 (MIDI Ch 2) = +12 fifths; channel 15 (MIDI Ch 16) = -12 fifths.
-            assert_eq!(fifths_for_midi(1, key), fifths + 12, "ch 1 key {key}");
-            assert_eq!(fifths_for_midi(15, key), fifths - 12, "ch 15 key {key}");
-        }
-        // Extreme signed banks: ch 7 = +7 (+84 fifths), ch 8 = -8 (-96 fifths).
-        assert_eq!(fifths_for_midi(7, 60), 84);
-        assert_eq!(fifths_for_midi(8, 60), -96);
     }
 }

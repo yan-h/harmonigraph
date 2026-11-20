@@ -239,7 +239,9 @@ Deleting the selected map selects its next live neighbour in display order,
 or the previous when it was last;
 the last live map cannot be deleted.
 An unused,
-deleted or invalid slot adds no correction and the UI reports it as unavailable.
+deleted or invalid slot adds no correction and the UI reports it as unavailable;
+a source with Decode fifths on then sounds its declared chain,
+as it does in Pass through.
 At capacity Duplicate as new map is disabled,
 and its tooltip says all 128 stable map identities have been used.
 Editing a shape rewrites its slot in place and keeps its identity;
@@ -326,7 +328,9 @@ Adding to the arriving pitch instead would move every note off the map by exactl
 which is [#891](https://github.com/yan-h/harmonigraph/issues/891).
 
 Reading a standing channel bend as part of the arriving pitch is the same rule Adaptive applies,
-so the two engines never disagree about what was played.
+so the two engines never disagree about what was played,
+except for a source with Decode fifths on:
+Adaptive hears its declared pitch and the map reads its key alone.
 It has a cost worth stating:
 a bend held at the attack is absorbed into the frozen correction,
 and returning the wheel to centre afterwards moves that voice by the amount the bend was worth.

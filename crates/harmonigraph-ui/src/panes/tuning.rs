@@ -623,7 +623,7 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], sta
 /// nothing heard.
 const RETUNE_HINT: &str = "Tune new notes with the selected engine. Off, notes pass through uncorrected, without influencing adaptive tuning, and Learn still hears them; a Tune's untuned notes still pass through its tuning delay.";
 const SHOW_HINT: &str = "Show this instance's output notes on the lattice, in takes and in exports. Changes nothing you hear.";
-const DECODE_FIFTHS_HINT: &str = "Read each note's MIDI channel as a 12-fifth comma bank (Ch 1 = D♭..F♯, Ch 2 = +12 fifths, Ch 16 = −12 fifths) and tune the chain at the Decoded fifth. Lattice Map ignores it and tunes each key from its map. Learn does not hear a decoded source.";
+const DECODE_FIFTHS_HINT: &str = "Read each note's MIDI channel as a 12-fifth comma bank (Ch 1 = D♭..F♯, Ch 2 = +12 fifths, Ch 16 = −12 fifths) and tune the chain at the Decoded fifth. A Lattice Map ignores it and tunes each key from its slot. Learn does not hear a decoded source, and with Retune off its keys pass through undecoded.";
 
 fn instance_controls(
     ui: &mut egui::Ui,
@@ -918,8 +918,8 @@ fn adaptive_value(
 }
 
 /// Note retuning: which engine retunes incoming notes, and the fifth a
-/// decoded source sounds at, which every engine but Lattice Map reads, so it
-/// keeps its height whichever is chosen. Each engine's own controls follow
+/// decoded source sounds at, which all but a playing map read, so it keeps
+/// its height whichever is chosen. Each engine's own controls follow
 /// in a section of their own. Returns the engine chosen this frame, so a
 /// click draws its controls at once rather than a frame later.
 fn retuning_controls(
@@ -948,7 +948,7 @@ fn retuning_controls(
                 (
                     TuningEngine::Off,
                     TuningEngine::Off.label(),
-                    "Leave incoming note pitches unchanged. Lattice display tuning still applies.",
+                    "Leave incoming note pitches unchanged; a source with Decode fifths on sounds its chain at the Decoded fifth. Lattice display tuning still applies.",
                 ),
                 (
                     TuningEngine::LatticeMap,
@@ -1002,7 +1002,7 @@ fn decoded_fifth_bar(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
 const DECODED_FIFTH_HINT: &str = "The fifth a Tune with Decode fifths on sounds its chain at, \
     independent of the lattice's Perfect fifth: switching Note retuning between Pass through \
     and Lattice Map switches the same playing between this temperament and the lattice's \
-    tuning without moving a slider.";
+    tuning without moving a slider. A Lattice Map with no map to play sounds it too.";
 
 /// Lattice Map's own controls, in the order a passage is made with them: the
 /// saved map that plays, its shape edited on the lattice, where the shape

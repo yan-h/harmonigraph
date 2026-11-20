@@ -623,7 +623,7 @@ fn tuning_for(output: &[(u32, Event)], id: i32) -> Option<f64> {
 /// The microcents a decoded `(channel, key)` lies from 12-TET: its chain of
 /// fifths at `fifth`, from the lattice's C at `c_offset`.
 fn stage(channel: u8, key: u8, c_offset: i32, fifth: i32) -> i64 {
-    let fifths = harmonigraph_core::lattice_map::fifths_for_midi(channel, key);
+    let fifths = harmonigraph_core::tuning::fifths_for_midi(channel, key);
     i64::from(c_offset) + i64::from(fifths) * (i64::from(fifth) - 700_000_000)
 }
 
