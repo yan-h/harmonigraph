@@ -129,7 +129,6 @@ impl Ends {
 pub struct Row {
     pub retune: AtomicU64,
     pub show: AtomicBool,
-    pub decode_fifths: AtomicBool,
     /// Registration id of the Tune holding this row, or zero.
     owner: AtomicU64,
     /// This Tune's activation-fixed delay in samples. The Tune is the only
@@ -147,15 +146,12 @@ impl Row {
         if self.owner.load(Ordering::Acquire) == shared.instance_id.load(Ordering::Acquire) {
             self.retune.store(shared.retuning(), Ordering::Release);
             self.show.store(shared.show.load(Ordering::Acquire), Ordering::Release);
-            self.decode_fifths
-                .store(shared.decode_fifths.load(Ordering::Acquire), Ordering::Release);
         }
     }
     fn new() -> Self {
         Self {
             retune: AtomicU64::new(1),
             show: AtomicBool::new(true),
-            decode_fifths: AtomicBool::new(false),
             owner: AtomicU64::new(0),
             delay: AtomicI64::new(0),
             ends: Mutex::new(Ends::new()),
@@ -299,8 +295,6 @@ impl Session {
                 shared.slot.store(slot as u32, Ordering::Release);
                 row.retune.store(shared.retuning(), Ordering::Release);
                 row.show.store(shared.show.load(Ordering::Acquire), Ordering::Release);
-                row.decode_fifths
-                    .store(shared.decode_fifths.load(Ordering::Acquire), Ordering::Release);
                 self.bump();
                 return Some((slot as u8, ends));
             }
@@ -328,7 +322,6 @@ impl Session {
             row.delay.store(0, Ordering::Release);
             row.retune.store(1, Ordering::Release);
             row.show.store(true, Ordering::Release);
-            row.decode_fifths.store(false, Ordering::Release);
             *row.ends.lock().unwrap_or_else(|e| e.into_inner()) = Ends::new();
         }
         self.hub.store(0, Ordering::Release);

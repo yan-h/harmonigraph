@@ -768,6 +768,7 @@ fn the_published_record_round_trips_every_word() {
                 reset_stop: true,
                 reset_loop: false,
                 keyboard: [695_000_007, 380_000_008, 980_000_009],
+                decode_fifths: true,
                 decoded_fifth: 690_000_010,
             },
         },
@@ -889,6 +890,7 @@ fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
         silence_ms: 4500,
         reset_loop: true,
         reset_stop: true,
+        decode_fifths: true,
         decoded_fifth: 694_786_840,
         ..Default::default()
     };

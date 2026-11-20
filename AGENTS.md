@@ -122,7 +122,7 @@ how often it occurs here, and what it costs when it does.
 **Use.** Yan alone, composing in Bitwig Studio on macOS 14 or later, on Apple silicon with a 144 Hz display,
 and exporting the pieces as videos.
 The pieces often carry tuning automation that moves the Lattice Map over time (Yan, 2026-11-14).
-Yan improvises on a lattice-board, a Wicki-Hayden keyboard a Tune decodes, in meantone beside recorded 12-TET tracks,
+Yan improvises on a lattice-board, a Wicki-Hayden keyboard whose MIDI the project-wide Decode fifths reads, in meantone beside recorded 12-TET tracks,
 and switches Note retuning to Lattice Map to compose in JI (Yan, 2026-11-20).
 Yan no longer uses the Adaptive engine but keeps it in the product, so a case only Adaptive reaches lies outside the use (Yan, 2026-11-15).
 The projects run at 44.1 or 48 kHz (Yan, 2026-11-14).

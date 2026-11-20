@@ -49,22 +49,27 @@ fn learn_hears_more_held_voices_than_the_adaptive_context_holds() {
     drop(tunes);
 }
 
-/// A Tune with Decode fifths on declares its tuning, so Learn does not hear
-/// its raw 12-TET keys: a chord held there leaves the just fifth standing,
-/// and the same chord on a plain Tune is learned.
+/// With Decode fifths on, a Tune with Retune on declares its tuning, so Learn
+/// does not hear its raw 12-TET keys: a chord held there leaves the just fifth
+/// standing, and the same chord on a Tune with Retune off is learned.
 #[test]
-fn learn_does_not_hear_a_tune_that_decodes_fifths() {
+fn learn_does_not_hear_a_decoded_tune() {
     let _scope = crate::test_scope::enter();
     let mut hub = hub();
     hub.activate();
     musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
     let settings = settings(&hub);
     let fifth = || settings.view().resolved.tuning.three;
-    assert!(settings.submit(ConfigEdit { learning: Some(true), ..Default::default() }));
+    let policy = harmonigraph_core::configuration::PolicyConfig {
+        decode_fifths: true,
+        ..Default::default()
+    };
+    let edit = ConfigEdit { learning: Some(true), policy: Some(policy), ..Default::default() };
+    assert!(settings.submit(edit));
     let mut decoded = tune();
-    decoded.shared().set_decode_fifths(true);
     decoded.activate();
     let mut plain = tune();
+    plain.shared().set_retune(false);
     plain.activate();
     let chord = |first: i32| {
         [60, 64, 67].into_iter().zip(first..).map(|(key, id)| note(id, 0, key, 0, true)).collect()
@@ -82,4 +87,9 @@ fn learn_does_not_hear_a_tune_that_decodes_fifths() {
     hub.run(192, vec![], None);
     assert_eq!(heard(&hub), 3);
     assert_eq!(fifth(), harmonigraph_core::tuning::microcents(700.0), "Learn learned");
+    // With Decode fifths off, Learn hears the Tune with Retune on again.
+    assert!(settings.submit(ConfigEdit { policy: Some(Default::default()), ..Default::default() }));
+    hub.run(256, vec![], None);
+    hub.run(320, vec![], None);
+    assert_eq!(heard(&hub), 6, "Learn did not hear the undecoded Tune");
 }

@@ -59,9 +59,6 @@ pub struct Shared {
     /// even an off/on between callbacks forgets this source's old context.
     retune: AtomicU64,
     pub show: AtomicBool,
-    /// Read each note's MIDI channel as a 12-fifth comma bank and tune the
-    /// chain at the policy's decoded fifth (a lattice-board keyboard).
-    pub decode_fifths: AtomicBool,
     pub name: Mutex<String>,
     track_name: Mutex<String>,
     pub held: AtomicU64,
@@ -107,7 +104,6 @@ impl Shared {
             slot: AtomicU32::new(u32::MAX),
             retune: AtomicU64::new(u64::from(!hub)),
             show: AtomicBool::new(true),
-            decode_fifths: AtomicBool::new(false),
             name: Mutex::new(String::new()),
             track_name: Mutex::new(String::new()),
             held: AtomicU64::new(0),
@@ -151,11 +147,6 @@ impl Shared {
     }
     pub fn set_show(&self, value: bool) {
         self.show.store(value, Ordering::Release);
-        self.publish_controls();
-        self.changed();
-    }
-    pub fn set_decode_fifths(&self, value: bool) {
-        self.decode_fifths.store(value, Ordering::Release);
         self.publish_controls();
         self.changed();
     }
@@ -234,7 +225,6 @@ pub struct Adapter(pub Arc<Shared>);
 struct InstanceSettings {
     retune: bool,
     show: bool,
-    decode_fifths: bool,
     name: String,
     /// A Tune's Tuning delay, in buffers. The Hub's own input has none, and
     /// saves none.
@@ -243,7 +233,7 @@ struct InstanceSettings {
 }
 impl Default for InstanceSettings {
     fn default() -> Self {
-        Self { retune: true, show: true, decode_fifths: false, name: String::new(), delay: None }
+        Self { retune: true, show: true, name: String::new(), delay: None }
     }
 }
 struct Restore(Arc<Shared>, InstanceSettings);
@@ -254,7 +244,6 @@ impl Prepared for Restore {
         let Self(shared, settings) = *self;
         shared.store_retune(settings.retune);
         shared.show.store(settings.show, Ordering::Release);
-        shared.decode_fifths.store(settings.decode_fifths, Ordering::Release);
         shared.store_name(settings.name);
         if !shared.hub {
             let delay = clamp_delay(settings.delay.unwrap_or(1));
@@ -291,7 +280,6 @@ impl Setup for Adapter {
         let settings = InstanceSettings {
             retune: self.0.retuning() & 1 != 0,
             show: self.0.show.load(Ordering::Acquire),
-            decode_fifths: self.0.decode_fifths.load(Ordering::Acquire),
             name: self.0.name.lock().unwrap().clone(),
             delay: (!self.0.is_hub()).then(|| self.0.requested_multiplier.load(Ordering::Acquire)),
         };

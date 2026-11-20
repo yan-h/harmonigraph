@@ -556,9 +556,9 @@ fn map_follow_changes_leave_adaptive_context_alone() {
     assert_eq!(inspect_hub(&hub, |hub| hub.test_context()), 2, "the held C is still context");
 }
 
-/// A Hub on `engine` (its host step) with `tuning` and the decoded fifth
-/// `fifth`, and two Tunes, at 48 kHz and 128-frame callbacks: the first with
-/// Decode fifths switched on once it holds its row, the second plain.
+/// A Hub on `engine` (its host step) with `tuning`, Decode fifths on at the
+/// decoded fifth `fifth`, and two Tunes, at 48 kHz and 128-frame callbacks:
+/// the first with Retune on, so decoded, the second with Retune off.
 struct Decoding {
     hub: Device,
     decoded: Device,
@@ -571,6 +571,7 @@ impl Decoding {
         hub.activate_format(48_000.0, 128);
         musical_tests::configure(&hub, tuning);
         let policy = harmonigraph_core::configuration::PolicyConfig {
+            decode_fifths: true,
             decoded_fifth: fifth,
             ..Default::default()
         };
@@ -578,12 +579,12 @@ impl Decoding {
         let mut decoded = tune();
         decoded.activate_format(48_000.0, 128);
         let mut plain = tune();
+        plain.shared().set_retune(false);
         plain.activate_format(48_000.0, 128);
         for tune in [&decoded, &plain] {
             tune.run_format(0, vec![], None, None, 128);
         }
         hub.run_format(0, vec![parameter("tuning-engine", engine, 0)], None, None, 128);
-        decoded.shared().set_decode_fifths(true);
         Self { hub, decoded, plain, raw: 128 }
     }
     /// One callback of each Tune and then the Hub, and the next callback of
@@ -628,7 +629,7 @@ fn stage(channel: u8, key: u8, c_offset: i32, fifth: i32) -> i64 {
 }
 
 /// Pass through tunes a decoded Tune's chain at the decoded fifth, from the
-/// lattice's C, and leaves the plain Tune's same keys alone; the player's own
+/// lattice's C, and leaves a Tune with Retune off alone; the player's own
 /// per-note tuning still sounds on top.
 #[test]
 fn pass_through_tunes_a_decoded_tunes_chain_at_the_decoded_fifth() {
@@ -656,10 +657,9 @@ fn pass_through_tunes_a_decoded_tunes_chain_at_the_decoded_fifth() {
         assert_eq!((voice.frozen_offset_microcents, voice.decision), (0, 0));
         assert!(tuning_for(&plain, id).is_none_or(|sent| sent == 0.0), "plain id {id}");
     }
-    // The Hub's own input decodes by its own switch.
+    // The Hub's own input decodes too, once its Retune is on.
     let hub = session.hub.shared();
     hub.set_retune(true);
-    hub.set_decode_fifths(true);
     session.hub.run_format(session.raw, vec![note(5, 1, 61, 0, true)], None, None, 128);
     let direct = inspect_hub(&session.hub, |hub| hub.test_voice(DIRECT, 1, 61)).unwrap();
     assert_eq!(direct.frozen_offset_microcents, stage(1, 61, tuning.c_offset, fifth));
@@ -691,9 +691,7 @@ fn lattice_map_tunes_a_decoded_tune_from_its_keys_slot() {
 }
 
 /// Adaptive hears a decoded Tune as a keyboard tuned in the decoded fifth, so
-/// over a held C its C♯ and D♭ are 25/24 and 16/15. A plain Tune's note at
-/// the decoded C♯'s very pitch is no key of the global 12-TET keyboard, so
-/// nothing holds it to a C♯ spelling.
+/// over a held C its C♯ and D♭ are 25/24 and 16/15.
 #[test]
 fn adaptive_spells_a_decoded_tunes_notes_from_the_decoded_fifth() {
     let _scope = crate::test_scope::enter();
@@ -725,12 +723,4 @@ fn adaptive_spells_a_decoded_tunes_notes_from_the_decoded_fifth() {
     let voice = session.voice(true, 0, 61);
     assert_eq!(voice.attack_node, Some(flat));
     assert_eq!(voice.frozen_offset_microcents, at(flat, 72) - 6_100_000_000);
-    // The plain Tune plays the C♯'s pitch through its own player tuning, once
-    // both are let go, so it is no unison with either.
-    let raw = stage(1, 61, tuning.c_offset, fifth) as f64 / 1e8;
-    session.play(
-        vec![note(2, 1, 61, 0, false), note(3, 0, 61, 0, false)],
-        vec![note(4, 0, 61, 0, true), expression(4, raw, 0)],
-    );
-    assert_ne!(session.voice(false, 0, 61).attack_node, Some(sharp));
 }
