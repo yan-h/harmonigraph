@@ -15,10 +15,9 @@
 //! written ON each ribbon, at one of its ends. The heatmap band under a
 //! ribbon is the same note, so naming the ribbon names the band.
 //!
-//! WHICH end is the layout's first and a setting's second: a name goes on the
-//! end that READS first, so the gap a reader measures — letter to ribbon end —
-//! is the same gap in all four orientations, and the setting asks for the
-//! other end. See [`Anchor::of`], which holds the trade.
+//! WHICH end is the setting's ([`NameAnchor`]): the onset or the leading edge,
+//! the same end in every orientation, with the name lying back over its own
+//! ribbon from whichever end it is written on.
 //!
 //! EVERY note, not one per pitch. The alternative — name a pitch the first
 //! time it is played and rule a line forward to carry it — reads well on paper
@@ -39,14 +38,12 @@
 //! it where "E +14\u{a2}" does not.
 //!
 //! Geometry comes from [`Axes`] like everything else in the pane, so names turn
-//! and flip with it. One thing here does name a screen side, and only one:
-//! which END of a ribbon a name is written on ([`Anchor::of`]), because a name
-//! is a word and a word is read from its own left however the picture under it
-//! is turned. Everything downstream of that choice — the box, the growth, the
-//! clamp — reads the direction it hands back and names no side of its own.
+//! and flip with it: the box, the growth and the clamp read the direction the
+//! anchor hands back and name no screen side of their own.
 
 use std::collections::{HashMap, HashSet};
 
+use crate::NameAnchor;
 use harmonigraph_core::{LatticePos, NoteName, PitchClass, RollNote, Tempered, Tuning};
 use harmonigraph_scene::{DrawnWindow, ViewConfig};
 
@@ -310,10 +307,10 @@ pub(super) fn plan(
         thinning.suppressed.clear();
         return Vec::new();
     };
-    let anchor = Anchor::of(cfg);
+    let anchor = cfg.note_name_anchor;
 
     // Direction along the ribbon from its chosen anchor.
-    let grow = if anchor == Anchor::Onset { -axes.dir_depth() } else { axes.dir_depth() };
+    let grow = if anchor == NameAnchor::Onset { -axes.dir_depth() } else { axes.dir_depth() };
     let layout = ThinningLayout {
         size: axes.rect.size(),
         pitch: [scale.min_midi, scale.max_midi],
@@ -488,123 +485,6 @@ struct Edge {
     pitch: f32,
 }
 
-/// Which end of a ribbon its name is written on.
-///
-/// They are the two ENDS, so every name on the pane sits somewhere different
-/// under one than under the other — a released note's name at the head of its
-/// ribbon or at its tail, a ribbon's length apart. What differs is not only
-/// where a name starts but whether it MOVES: a leading edge tracks `now` while
-/// the key is down and an onset never moves at all.
-///
-/// They do agree at one instant, and it is the instant a note is struck: a
-/// ribbon of no length has its two ends in one place, at the now-line. So which
-/// end a name is on decides what happens to it AFTER that, and every name is at
-/// the same place at the moment it appears either way.
-///
-/// Which of the two a pane uses is [`of`](Self::of)'s, and it is not the
-/// setting's alone: the orientation picks the end that READS first and the
-/// setting asks for the other one.
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum Anchor {
-    /// The end that touches the now-line: the low-depth end live, which is the
-    /// side [`SpectralOrientation`](crate::SpectralOrientation) is named for.
-    ///
-    /// While the key is down the note keeps reaching the present, so this edge
-    /// IS the now-line: the name sits still there, at the head of a ribbon
-    /// growing out behind it, for as long as the note is held, and starts
-    /// travelling at the release. A name you can read in one place while you
-    /// play, at the price of a movement the music did not make and of a drone
-    /// whose name never scrolls at all.
-    Leading,
-    /// The onset — the moment the key went down, wherever the layout puts it.
-    ///
-    /// Fixed in take time, so the name scrolls with the picture from the first
-    /// frame of the note and nothing about it changes at the release: not where
-    /// it sits, not whether the thinning kept it. The price is a note longer
-    /// than the window, whose onset leaves the far edge with ribbon still to
-    /// come: the name goes off the edge with it, its own length of ink later,
-    /// and the rest of that ribbon scrolls unnamed. Holding it back on the edge
-    /// instead is the trade [`place`](plan) declines — the gap between a letter
-    /// and the end it names is what a name IS here, and a name that outstays its
-    /// own end has given that up to stay on screen.
-    Onset,
-}
-
-impl Anchor {
-    /// The end a reader's eye reaches FIRST — the pane's left where time runs
-    /// across it, its top where time runs down it — unless
-    /// [`note_names_travel`](crate::SpectrumConfig::note_names_travel) asks for
-    /// the other one.
-    ///
-    /// This is the one place in this file that names a screen side, and it is
-    /// forced to: a name is a WORD, and a word is read from its own left
-    /// whatever the picture under it is doing. So a name belongs on the end of
-    /// its ribbon that comes first, with the note running away under the rest
-    /// of it — mirror the picture and the geometry mirrors, but the reading
-    /// does not, and a name on the other end reads out of its note instead of
-    /// into it. What a reader measures is the gap between the letter and the
-    /// end it starts from, and that gap is the same one in every orientation
-    /// only if this is.
-    ///
-    /// WHICH end reads first is the orientation's: live, depth is AGE, so a
-    /// ribbon's shallow end is its newest — the leading edge — and it is drawn
-    /// at the pane's left or top where time runs the screen's own way, at the
-    /// right or the bottom where it runs back against it
-    /// ([`SpectralOrientation::is_time_reversed`]). So the reading-first end is
-    /// the leading edge in the two orientations that agree with the screen and
-    /// the onset in the two that do not.
-    ///
-    /// So what the setting DOES depends on the orientation, and saying that
-    /// plainly is better than the alternative: with the spectrum on the left a
-    /// name is on the leading edge by default and waits at the now-line while
-    /// you hold a key, and with it on the right the same default is the onset
-    /// and the name travels from the first frame. The two pictures are both
-    /// still reachable in every orientation — the setting is what reaches the
-    /// other one — and it is the GEOMETRY that is held fixed across the four
-    /// rather than the held-note behaviour, because the geometry is what a
-    /// reader sees on every note rather than only on the one under their
-    /// finger.
-    ///
-    /// [`SpectralOrientation::is_time_reversed`]:
-    ///     crate::SpectralOrientation::is_time_reversed
-    pub(crate) fn of(cfg: &crate::SpectrumConfig) -> Anchor {
-        Anchor::at(cfg.orientation, cfg.note_names_travel)
-    }
-
-    /// [`of`](Self::of) from the two fields it reads.
-    pub(crate) fn at(orientation: crate::SpectralOrientation, travel: bool) -> Anchor {
-        let reads_first = Anchor::reads_first(orientation);
-        if travel {
-            reads_first.other()
-        } else {
-            reads_first
-        }
-    }
-
-    /// The [`note_names_travel`](crate::SpectrumConfig::note_names_travel)
-    /// that puts names on this end in `orientation`: the settings' choice of
-    /// end, stored as which end it is against the orientation's.
-    pub(crate) fn travels(self, orientation: crate::SpectralOrientation) -> bool {
-        self != Anchor::reads_first(orientation)
-    }
-
-    fn reads_first(orientation: crate::SpectralOrientation) -> Anchor {
-        if orientation.is_time_reversed() {
-            Anchor::Onset
-        } else {
-            Anchor::Leading
-        }
-    }
-
-    /// The ribbon's other end.
-    fn other(self) -> Anchor {
-        match self {
-            Anchor::Leading => Anchor::Onset,
-            Anchor::Onset => Anchor::Leading,
-        }
-    }
-}
-
 /// Where on a ribbon its name goes, and the pitch the ribbon has there.
 ///
 /// Asked of the two ends' TIMES rather than of their depths, which is the same
@@ -623,7 +503,7 @@ impl Anchor {
 ///
 /// Neither end is bounded here, and the pair is the true one however far off
 /// the picture it lies. [`plan`] lets a name leave with the end it names.
-fn anchor_edge(note: &RollNote, time: &TimeAxis, anchor: Anchor) -> Edge {
+fn anchor_edge(note: &RollNote, time: &TimeAxis, anchor: NameAnchor) -> Edge {
     match anchor {
         // The onset end, so the pitch the note SETTLED on rather than the key
         // it was pressed at — a retuned note reaches its real pitch a moment
@@ -631,10 +511,10 @@ fn anchor_edge(note: &RollNote, time: &TimeAxis, anchor: Anchor) -> Edge {
         // one pitch on a bent note that stops moving, which is what lets a name
         // anchored here hold both its place and its spelling while the note
         // glides under it.
-        Anchor::Onset => Edge { time: note.start, pitch: note.settled_pitch() },
+        NameAnchor::Onset => Edge { time: note.start, pitch: note.settled_pitch() },
         // Live, time runs from the now-line outward, so the ribbon's leading
         // edge is where it most recently sounded.
-        Anchor::Leading => Edge { time: note.stop(time.now), pitch: note.end_pitch() },
+        NameAnchor::Leading => Edge { time: note.stop(time.now), pitch: note.end_pitch() },
     }
 }
 
@@ -1002,13 +882,22 @@ mod tests {
         turned(range, span, SpectralOrientation::Left)
     }
 
-    /// The same pane with the names anchored on their onsets — the "Name the
-    /// far end" setting, which in this Left-facing fixture is the onset and in
-    /// a reversed orientation would be the leading edge.
+    /// The same pane with the names anchored on their onsets, so they travel
+    /// from the key-down.
     fn travelling(range: f32, span: f32) -> PictureState {
         let mut state = state(range, span);
-        state.appearance.spectrum.note_names_travel = true;
+        state.appearance.spectrum.note_name_anchor = NameAnchor::Onset;
         state
+    }
+
+    /// The onset when `travel`, else the leading edge: the two anchors as the
+    /// sweeps below loop over them.
+    fn anchor_for(travel: bool) -> NameAnchor {
+        if travel {
+            NameAnchor::Onset
+        } else {
+            NameAnchor::Leading
+        }
     }
 
     fn turned(range: f32, span: f32, orientation: SpectralOrientation) -> PictureState {
@@ -1065,9 +954,9 @@ mod tests {
         recorded.note_on(key(57), 1.0, 57.0, 45.0);
         recorded.note_off(key(57), 48.0);
         for travel in [false, true] {
-            // Left-facing: the leading anchor, or the onset when travelling.
+            // The leading anchor, or the onset when travelling.
             let mut state = state(24.0, 10.0);
-            state.appearance.spectrum.note_names_travel = travel;
+            state.appearance.spectrum.note_name_anchor = anchor_for(travel);
             state.appearance.spectrum.roll_fraction = 0.5;
             let cfg = &state.appearance.spectrum;
             let axes = Axes::new(PANE, cfg);
@@ -1248,7 +1137,7 @@ mod tests {
         for orientation in SpectralOrientation::ALL {
             for travel in [false, true] {
                 let mut state = turned(24.0, 10.0, orientation);
-                state.appearance.spectrum.note_names_travel = travel;
+                state.appearance.spectrum.note_name_anchor = anchor_for(travel);
                 for event in [on(1.0, 67), on(1.0, 64), on(2.0, 60), off(2.5, 60)] {
                     state.runtime.tracker.handle_event(event);
                 }
@@ -1411,7 +1300,7 @@ mod tests {
         let run: Vec<f64> = (0..12).map(|k| 7.2 + 0.09 * f64::from(k)).collect();
         for travel in [false, true] {
             let mut state = state(24.0, 10.0); // 48..72
-            state.appearance.spectrum.note_names_travel = travel;
+            state.appearance.spectrum.note_name_anchor = anchor_for(travel);
             swelling(&mut state);
             for event in [
                 on(2.0, 60),
@@ -1582,7 +1471,7 @@ mod tests {
     /// A TRAVELLING name is moving from the first frame of its note, and the
     /// release is not an event in its life at all.
     ///
-    /// The other anchor ([`Anchor::Onset`]), and the whole of what it is for.
+    /// The other anchor ([`NameAnchor::Onset`]), and the whole of what it is for.
     /// Where the leading edge holds a held note's name at the now-line and
     /// starts it moving at the key-up — a movement nothing in the music made —
     /// this pins the name to the moment the key went DOWN, which is a fact
@@ -1659,14 +1548,10 @@ mod tests {
     /// name a screen side, and swept over [`SpectralOrientation::ALL`] so a
     /// fifth orientation cannot skip it.
     ///
-    /// WHICH end each pass expects is [`Anchor::of`]'s rule restated: reading
-    /// order picks one and the setting asks for the other, so the two swap in a
-    /// reversed orientation. Restating it is the point — a mapping hardcoded
-    /// here would agree with the code in half the sweep and be checked by
-    /// neither assertion, both of which only bracket the name between the
-    /// ribbon's ends. The gap asserted last is what makes it bite: written on
-    /// the wrong end, a name stands a ribbon's length from the one it is
-    /// measured against rather than [`LABEL_INSET`].
+    /// Both assertions on the box only bracket the name between the ribbon's
+    /// ends; the gap asserted last is what makes it bite: written on the wrong
+    /// end, a name stands a ribbon's length from the one it is measured against
+    /// rather than [`LABEL_INSET`].
     #[test]
     fn a_name_lies_over_its_own_ribbon_at_either_anchor() {
         // A plain `C`, whose box does not overrun its anchor: a name carrying
@@ -1675,7 +1560,7 @@ mod tests {
         for orientation in SpectralOrientation::ALL {
             for travel in [false, true] {
                 let mut state = turned(24.0, 10.0, orientation);
-                state.appearance.spectrum.note_names_travel = travel;
+                state.appearance.spectrum.note_name_anchor = anchor_for(travel);
                 state.runtime.tracker.handle_event(on(2.0, 60));
                 state.runtime.tracker.handle_event(off(6.0, 60));
 
@@ -1691,11 +1576,7 @@ mod tests {
                 let axes = Axes::new(square, &state.appearance.spectrum);
                 let t = scale_of(&state).t_of(60.0);
                 let (head, onset) = (axes.at(t, 0.4), axes.at(t, 0.8));
-                // The leading edge reads first where time runs the screen's own
-                // way, the onset where it runs back against it; the setting
-                // asks for the other end of whichever that is.
-                let on_head = orientation.is_time_reversed() == travel;
-                let (anchor, other) = if on_head { (head, onset) } else { (onset, head) };
+                let (anchor, other) = if travel { (onset, head) } else { (head, onset) };
                 let toward = (other - anchor).normalized();
                 let reach = (placed[0].rect.center() - anchor).dot(toward);
                 assert!(
@@ -1793,6 +1674,7 @@ mod tests {
         // meets the pane. `split` is 0.02 here rather than 0, so a clamp still
         // measuring against the divider would leave the name 6 points out.
         let mut state = turned(24.0, 10.0, SpectralOrientation::Right);
+        state.appearance.spectrum.note_name_anchor = NameAnchor::Onset;
         state.appearance.spectrum.roll_fraction = 0.98;
         state.runtime.tracker.handle_event(on(5.0, 60));
         let axes = Axes::new(PANE, &state.appearance.spectrum);
@@ -1815,19 +1697,17 @@ mod tests {
         );
     }
 
-    /// With the spectrum on the RIGHT, a name keeps its gap from the note's
-    /// LEFT end — the onset there — from the note's very first frame, and
-    /// travels with it from that frame on.
+    /// With the spectrum on the RIGHT, a name at the onset keeps its gap from
+    /// the note's LEFT end — the onset there — from the note's very first
+    /// frame, and travels with it from that frame on.
     ///
-    /// This is the mirror of what the Left orientation does with the leading
-    /// edge, and it is the point of choosing the anchor by reading order: the
-    /// distance a reader measures, letter to ribbon end, is one distance in
-    /// both. It costs the crossing — at the strike the onset IS the now-line,
-    /// so the name is written wholly over the analyzer and slides off it as the
-    /// note scrolls away.
+    /// It costs the crossing — at the strike the onset IS the now-line, so the
+    /// name is written wholly over the analyzer and slides off it as the note
+    /// scrolls away.
     #[test]
     fn with_the_spectrum_on_the_right_a_name_holds_the_notes_left_end() {
         let mut state = turned(24.0, 10.0, SpectralOrientation::Right);
+        state.appearance.spectrum.note_name_anchor = NameAnchor::Onset;
         state.appearance.spectrum.roll_fraction = 0.55; // the fresh value
         state.runtime.tracker.handle_event(on(5.0, 60));
 
@@ -1864,67 +1744,6 @@ mod tests {
                 placed[0].lead.x,
             );
             previous = placed[0].lead.x;
-        }
-    }
-
-    /// The settings' Name at row names an end, and stores it as which end
-    /// against the orientation's: in every orientation the end chosen is the
-    /// end the names go on, and the other choice is the other end.
-    #[test]
-    fn the_end_chosen_in_settings_is_the_end_names_go_on() {
-        for orientation in crate::SpectralOrientation::ALL {
-            for end in [Anchor::Leading, Anchor::Onset] {
-                let travel = end.travels(orientation);
-                assert!(Anchor::at(orientation, travel) == end, "{orientation:?}");
-                assert!(Anchor::at(orientation, !travel) == end.other(), "{orientation:?}");
-            }
-        }
-    }
-
-    /// Whichever end of a ribbon READS first is the end named, in every
-    /// orientation — and the name stands the same [`LABEL_INSET`] off it, with
-    /// the note running away under the rest of the name.
-    ///
-    /// The sweep is the point: this is the one thing in the module that names a
-    /// screen side, so it is asked of all four rather than of the two a person
-    /// happens to use, and a fifth orientation cannot skip it.
-    #[test]
-    fn a_name_is_written_on_the_end_that_reads_first() {
-        for orientation in SpectralOrientation::ALL {
-            let mut state = turned(24.0, 10.0, orientation);
-            state.runtime.tracker.handle_event(on(2.0, 60));
-            state.runtime.tracker.handle_event(off(6.0, 60));
-
-            // Square, so the same pane serves the vertical orientations.
-            let square = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
-            let placed = labels_in(&state, 10.0, square);
-            assert_eq!(placed.len(), 1, "{orientation:?}");
-
-            // The ribbon's two ends — the release 4s back, the onset 8s back —
-            // and the way a reader's eye runs over the pane: rightward where
-            // time is across it, downward where time runs down it.
-            let axes = Axes::new(square, &state.appearance.spectrum);
-            let t = scale_of(&state).t_of(60.0);
-            let (head, onset) = (axes.at(t, 0.4), axes.at(t, 0.8));
-            let reading = if orientation.is_time_vertical() {
-                egui::vec2(0.0, 1.0)
-            } else {
-                egui::vec2(1.0, 0.0)
-            };
-            let (first, second) =
-                if (head - onset).dot(reading) < 0.0 { (head, onset) } else { (onset, head) };
-
-            let lead = placed[0].lead;
-            let gap = (lead - first).dot(reading);
-            assert!(
-                (gap - LABEL_INSET).abs() < 0.01,
-                "{orientation:?}: the letter stands {gap} off the end that reads first, \
-                 not {LABEL_INSET}",
-            );
-            assert!(
-                (lead - second).dot(reading) < 0.0,
-                "{orientation:?}: the name is written on the end that reads SECOND",
-            );
         }
     }
 
@@ -2085,10 +1904,8 @@ mod tests {
     /// before, whatever its ribbon is doing, and not after — in every
     /// orientation.
     ///
-    /// Swept over [`SpectralOrientation::ALL`] because the orientation is what
-    /// picks the anchor (see [`Anchor::of`]): the two that agree with the screen
-    /// name a ribbon's leading edge, the two that reverse it name the onset. At
-    /// a leading edge the name lies back over its ribbon and the two leave
+    /// Swept over [`SpectralOrientation::ALL`] and both anchors. At a leading
+    /// edge the name lies back over its ribbon and the two leave
     /// together. At an onset they part both ways: a note longer than its name
     /// keeps scrolling after the name has gone, and a note SHORTER than its name
     /// is gone first, the name lying past its end.
@@ -2110,9 +1927,13 @@ mod tests {
     fn a_name_leaves_the_far_edge_only_once_its_own_box_has() {
         let square = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
         let step = 0.02;
-        for orientation in SpectralOrientation::ALL {
+        for (orientation, anchor) in SpectralOrientation::ALL
+            .into_iter()
+            .flat_map(|o| [(o, NameAnchor::Leading), (o, NameAnchor::Onset)])
+        {
             for length in [0.3f64, 4.0, 12.0] {
                 let mut state = turned(24.0, 10.0, orientation);
+                state.appearance.spectrum.note_name_anchor = anchor;
                 state.runtime.tracker.handle_event(on(1.0, 60));
                 state.runtime.tracker.handle_event(off(1.0 + length, 60));
 
@@ -2145,18 +1966,18 @@ mod tests {
                     (step / TimeAxis::new(&state, split, 0.0).seconds_per_point(&axes)) as f32;
                 assert!(
                     showing <= travel + 1e-3,
-                    "{orientation:?}, a {length} s note: the name went with {showing} points of \
-                     its box still on the pane (name {named}, ribbon {drawn})",
+                    "{orientation:?} at {anchor:?}, a {length} s note: the name went with \
+                     {showing} points of its box still on the pane (name {named}, ribbon {drawn})",
                 );
                 assert!(
                     showing > -(LABEL_INSET + LABEL_PAD) - travel,
-                    "{orientation:?}, a {length} s note: the name stayed {} points past the \
-                     edge after its box had left (name {named}, ribbon {drawn})",
+                    "{orientation:?} at {anchor:?}, a {length} s note: the name stayed {} points \
+                     past the edge after its box had left (name {named}, ribbon {drawn})",
                     -showing,
                 );
                 // The note's stop leaves the far edge a window after it.
                 let gone = 1.0 + length + 10.0;
-                if orientation.is_time_reversed() && length < 1.0 {
+                if anchor == NameAnchor::Onset && length < 1.0 {
                     assert!(
                         named > gone + step,
                         "{orientation:?}: the fixture is vacuous, the short note's name did not \
@@ -2400,15 +2221,13 @@ mod tests {
     /// one step, the picture's own, from the first frame to the last.
     ///
     /// The ONSET anchor in all four orientations, since it is the one whose end
-    /// leaves while its ribbon is still on the pane: reading order picks it in
-    /// the two reversed orientations and the setting asks for it in the other
-    /// two (see [`Anchor::of`]). Held throughout, so nothing but its own
+    /// leaves while its ribbon is still on the pane. Held throughout, so nothing but its own
     /// departure can end the name.
     #[test]
     fn a_travelling_name_scrolls_at_the_pictures_own_rate_until_it_is_gone() {
         for orientation in SpectralOrientation::ALL {
             let mut state = turned(24.0, 10.0, orientation);
-            state.appearance.spectrum.note_names_travel = !orientation.is_time_reversed();
+            state.appearance.spectrum.note_name_anchor = NameAnchor::Onset;
             state.runtime.tracker.handle_event(on(1.0, 60)); // held for the whole sweep
 
             // Square, so the same pane serves the vertical orientations.
@@ -2458,7 +2277,7 @@ mod tests {
     fn travelling_names_never_blink_out_and_back_either() {
         let travelling = |now: f64| {
             let mut state = phrase(now);
-            state.appearance.spectrum.note_names_travel = true;
+            state.appearance.spectrum.note_name_anchor = NameAnchor::Onset;
             state
         };
         assert_eq!(blinks(travelling, 2.23), 0);
@@ -3205,7 +3024,7 @@ mod tests {
             let anchor = axes.at(0.5, 0.5);
             // Both growths, which is both anchors: a name at the ribbon's head
             // runs one way through time and one at its onset the other. See
-            // [`Anchor`].
+            // [`NameAnchor`].
             for grow in [axes.dir_depth(), -axes.dir_depth()] {
                 for name in [plain, marked] {
                     for zoom in [1.0f32, 2.23, 5.0] {

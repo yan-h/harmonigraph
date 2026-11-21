@@ -53,8 +53,8 @@ pub use layout::{Layout, Placement};
 // which only the tests wanted, and `sane_scale` and `SpectrogramSurface`,
 // which nothing outside their own module wanted at all.
 pub use config::{
-    SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE,
-    TILT_STEPS,
+    NameAnchor, SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumWindow,
+    SCALE_BAR_RANGE, TILT_STEPS,
 };
 pub(crate) use config::{
     LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN, ROLL_LEAD_MAX,

@@ -6,7 +6,7 @@ use crate::config::BALLISTICS_MAX;
 use crate::panes::{block, edge_bar, hinted_section, section, switched_section};
 use crate::params::{AnalysisInput, ParamBackend};
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
-use crate::PictureState;
+use crate::{NameAnchor, PictureState};
 
 /// The Texture block's Style options, which the settings sweeps also iterate,
 /// so a texture added here is drawn by them without a list of their own.
@@ -247,32 +247,23 @@ pub(crate) fn ribbons_section(
                 "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
             );
             ui.add_enabled_ui(cfg.note_names, |ui| {
-                // Stored as which end against the orientation's
-                // (`Anchor::of`), so flipping the orientation moves the names
-                // and this row with them.
-                use crate::panes::spectral::names::Anchor;
-                let shown = Anchor::at(cfg.orientation, cfg.note_names_travel);
-                let mut anchor = shown;
                 choice_row(
                     ui,
                     "Name at",
-                    &mut anchor,
+                    &mut cfg.note_name_anchor,
                     &[
                         (
-                            Anchor::Leading,
+                            NameAnchor::Leading,
                             "Now-line",
                             "Place each name at its note's newest end, so a held note's name waits at the now-line and travels from the release.",
                         ),
                         (
-                            Anchor::Onset,
+                            NameAnchor::Onset,
                             "Onset",
                             "Place each name at its note's start, so it travels with the onset from the first frame.",
                         ),
                     ],
                 );
-                if anchor != shown {
-                    cfg.note_names_travel = anchor.travels(cfg.orientation);
-                }
                 ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Label scale")
                     .default_value(crate::panes::fresh_spectrum().note_name_scale)
                     .unit(1.0, "×")

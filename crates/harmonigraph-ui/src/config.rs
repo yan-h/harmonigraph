@@ -85,6 +85,45 @@ pub enum SpectralOrientation {
     Bottom,
 }
 
+/// Which end of a ribbon its note's name is written on: the settings' Name at.
+///
+/// They are the two ENDS, so every name on the pane sits somewhere different
+/// under one than under the other — a released note's name at the head of its
+/// ribbon or at its tail, a ribbon's length apart. What differs is not only
+/// where a name starts but whether it MOVES: a leading edge tracks `now` while
+/// the key is down and an onset never moves at all.
+///
+/// They do agree at one instant, and it is the instant a note is struck: a
+/// ribbon of no length has its two ends in one place, at the now-line. So which
+/// end a name is on decides what happens to it AFTER that, and every name is at
+/// the same place at the moment it appears either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NameAnchor {
+    /// The end that touches the now-line: the low-depth end live, which is the
+    /// side [`SpectralOrientation`] is named for.
+    ///
+    /// While the key is down the note keeps reaching the present, so this edge
+    /// IS the now-line: the name sits still there, at the head of a ribbon
+    /// growing out behind it, for as long as the note is held, and starts
+    /// travelling at the release. A name you can read in one place while you
+    /// play, at the price of a movement the music did not make and of a drone
+    /// whose name never scrolls at all.
+    #[default]
+    Leading,
+    /// The onset — the moment the key went down, wherever the layout puts it.
+    ///
+    /// Fixed in take time, so the name scrolls with the picture from the first
+    /// frame of the note and nothing about it changes at the release: not where
+    /// it sits, not whether the thinning kept it. The price is a note longer
+    /// than the window, whose onset leaves the far edge with ribbon still to
+    /// come: the name goes off the edge with it, its own length of ink later,
+    /// and the rest of that ribbon scrolls unnamed. Holding it back on the edge
+    /// instead is the trade the names' placement declines — the gap between a
+    /// letter and the end it names is what a name IS here, and a name that
+    /// outstays its own end has given that up to stay on screen.
+    Onset,
+}
+
 impl SpectralOrientation {
     /// Every orientation, for the settings row and the axis tests.
     ///
@@ -486,46 +525,18 @@ pub struct SpectrumConfig {
     pub roll_lead_release: f32,
     /// Write each note's name over its own ribbon — see
     /// [`panes::spectral::names`](crate::panes::spectral::names), and
-    /// [`note_names_travel`](Self::note_names_travel) for which END of the
+    /// [`note_name_anchor`](Self::note_name_anchor) for which END of the
     /// ribbon it is written on.
     pub note_names: bool,
-    /// Write a name on the FAR end of its ribbon — the end a reader's eye
-    /// reaches second — rather than on the end that reads first.
+    /// Which end of its ribbon a name is written on, in every orientation.
     ///
-    /// Off, a name goes where a label goes: at the ribbon's leading corner in
-    /// reading order, with the note running away under the rest of it, so the
-    /// gap between the letter and the end it names is the same gap in all four
-    /// orientations. WHICH musical end that is follows from the layout rather
-    /// than from this — see [`Anchor::of`](crate::panes::spectral::names) — and
-    /// so the held-note behaviour does too:
-    ///
-    ///   - Spectrum left or on top, time running the screen's own way: the
-    ///     reading-first end is the note's LEADING edge. A held note's name
-    ///     stands still and legible at the now-line for as long as you hold it,
-    ///     and starts moving at the release — a movement nothing in the music
-    ///     made, and a drone held longer than the Span never scrolls at all.
-    ///   - Spectrum right or along the bottom, time running back against it:
-    ///     the reading-first end is the ONSET. The name is pinned to a take
-    ///     time, travelling with the picture from the first frame of the note
-    ///     and unchanged by the release — at the price that a note held longer
-    ///     than the Span carries its name off the far edge with its onset and
-    ///     scrolls the rest of its ribbon unnamed, and that a note younger than
-    ///     its own name has the name lying over the spectrum until its ribbon
-    ///     is long enough to hold it.
-    ///
-    /// Turning this on asks for the other end, and so for the other of those
-    /// two in whichever orientation the pane is in.
-    ///
-    /// The GAP is the same at either setting: a name holds its small distance
-    /// from the end it is written on, and goes off the picture when that end
-    /// does, rather than waiting on the edge while its own note scrolls out
-    /// from under it. The one thing that holds a name off that distance is the
-    /// pane's own outer edge, which a name younger than its own ribbon can
-    /// reach past — and only where [`roll_fraction`](Self::roll_fraction)
-    /// leaves the analyzer too narrow to lie over.
-    ///
-    /// The default is off, which is the look the naming was dialled in at.
-    pub note_names_travel: bool,
+    /// The end itself rather than one relative to the layout: a name at the
+    /// onset stays at the onset when the spectrum moves to the other side
+    /// (Yan, PR #1902). It once meant "the end that reads first, or the other
+    /// one", so turning the analyzer moved every name to its ribbon's other
+    /// end; the key was renamed with the change, and a project saved before it
+    /// opens at the default with a Console line.
+    pub note_name_anchor: NameAnchor,
     /// Overall size of those names, as a multiple of their built-in size.
     ///
     /// Rides on top of the pitch zoom, which already grows a name as the range
@@ -994,9 +1005,7 @@ impl Default for SpectrumConfig {
             // goes looking for the note that made it.
             roll_lead_release: 0.25,
             note_names: true,
-            // The end that reads first, which in the fresh orientation is the
-            // onset: a name travels from the key-down (`Anchor::of`).
-            note_names_travel: false,
+            note_name_anchor: NameAnchor::Leading,
             note_name_scale: 1.415_327_1,
             show_spectrogram: true,
             // Aurora retuned in the DAW on 2026-09-26: a shorter magenta-to-

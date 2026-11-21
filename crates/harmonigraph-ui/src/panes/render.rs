@@ -721,13 +721,12 @@ fn record_controls(
 }
 
 /// The Appearance row's Recorded option.
-const RECORDED_HINT: &str = "Each take's own appearance, saved when it was recorded, with the Output size, Tail, Encoder and Archive copy set here. \
-     A take recorded without one exports in the current appearance.";
+const RECORDED_HINT: &str = "Each take's own appearance, saved when it was recorded, with the Output size, Tail, Encoder and Archive copy set here.";
 
 /// What both Queue buttons answer a hover with: what a queued job carries,
 /// and what the queue survives.
 const QUEUE_HINT: &str = "Every job captures the selected look and the current Video settings. \
-     Under Recorded, only Output size, Tail, Encoder and Archive copy are the current ones: the take keeps the frame and Video history it was recorded with, and one recorded without a look exports in the current appearance. \
+     Under Recorded, only Output size, Tail, Encoder and Archive copy are the current ones: the take keeps the frame and Video history it was recorded with. \
      Recorded camera movement wins during replay. \
      The queue survives closing this editor, but removing the plugin or closing the project cancels unfinished jobs, and there is no resume after a crash.";
 
@@ -865,29 +864,26 @@ pub(crate) fn capture_export(
     interaction: &crate::Interaction,
     path: &std::path::Path,
 ) -> Result<crate::ExportAction, String> {
-    // A recorded look keeps its own frame and Video history, so queueing it
-    // does not recompose the take to the pane's aspect and split; only the
-    // pane's Output size, Tail, Encoder and Archive copy apply. A take that carries none has
-    // no frame to keep and exports in the current appearance.
-    let recorded = if interaction.take.export_look == crate::ExportLook::Recorded {
-        let header = harmonigraph_take::Header::read(path).map_err(|error| error.to_string())?;
-        header.appearance.as_deref().map(crate::AppearanceDocument::parse).transpose()?
-    } else {
-        None
-    };
-    let captured = match recorded {
-        Some(mut recorded) => {
+    let captured = match interaction.take.export_look {
+        // A recorded look keeps its own frame and Video history, so queueing it
+        // does not recompose the take to the pane's aspect and split; only the
+        // pane's Output size, Tail, Encoder and Archive copy apply. Every take
+        // writer records a look, so a take without one is refused rather than
+        // drawn in some other look.
+        crate::ExportLook::Recorded => {
+            let header =
+                harmonigraph_take::Header::read(path).map_err(|error| error.to_string())?;
+            let look = header.appearance.as_deref().ok_or("the take recorded no appearance")?;
+            let mut recorded = crate::AppearanceDocument::parse(look)?;
             recorded.render.take_output_from(&appearance.render);
             recorded
         }
-        None => {
+        crate::ExportLook::Current => appearance.clone(),
+        crate::ExportLook::Slot(slot) => {
             let mut captured = appearance.clone();
-            let slots = &interaction.appearance_editor.slots;
-            let slot = match interaction.take.export_look {
-                crate::ExportLook::Slot(slot) => slots.stored(slot),
-                crate::ExportLook::Recorded | crate::ExportLook::Current => None,
-            };
-            if let Some(look) = slot {
+            // The active slot is the live look, and a slot never visited
+            // starts as a copy of it, so either is the current appearance.
+            if let Some(look) = interaction.appearance_editor.slots.stored(slot) {
                 look.apply(&mut captured);
             }
             captured
@@ -1756,35 +1752,20 @@ mod export_tests {
         assert_eq!(size, [1080, 1920]);
     }
 
-    /// A take whose header holds no appearance has no frame to keep: queueing
-    /// it under Recorded is an ordinary queued export, drawn by the pane's
-    /// whole Video configuration and the current look, not the default look.
+    /// A take whose header holds no appearance, which no take writer
+    /// produces, is refused under Recorded rather than drawn in another look.
     #[test]
-    fn a_take_with_no_recorded_look_exports_in_the_current_appearance() {
-        use crate::{LatticeSide, SpectrogramRender};
+    fn a_take_with_no_recorded_look_is_refused_under_recorded() {
         let path = std::env::temp_dir()
             .join(format!("harmonigraph-unrecorded-queue-{}.take", std::process::id()));
         let header = harmonigraph_take::Header { appearance: None, ..Default::default() };
         drop(harmonigraph_take::Writer::create(&path, &header).unwrap());
-
-        let mut pane = crate::AppearanceDocument::default();
-        pane.render.frame.aspect_w = 9;
-        pane.render.frame.aspect_h = 16;
-        pane.render.frame.lattice = LatticeSide::Top;
-        pane.render.spectrogram = SpectrogramRender::Scrolling;
-        pane.spectrum.attack = 0.2;
         let mut interaction = crate::Interaction::default();
         interaction.take.export_look = crate::ExportLook::Recorded;
-        let queued = capture_export(&pane, &interaction, &path).unwrap();
+        let queued = capture_export(&crate::AppearanceDocument::default(), &interaction, &path);
         std::fs::remove_file(&path).unwrap();
-
-        let crate::ExportAction::Queue { appearance, .. } = queued else { panic!("queue action") };
-        let captured = crate::AppearanceDocument::parse(&appearance).unwrap();
-        assert_eq!(captured.spectrum.attack, 0.2, "the current look");
-        let render = &captured.render;
-        assert_eq!((render.frame.aspect_w, render.frame.aspect_h), (9, 16));
-        assert_eq!(render.frame.lattice, LatticeSide::Top);
-        assert_eq!(render.spectrogram, SpectrogramRender::Scrolling);
+        let error = queued.err().expect("a take with no recorded look was queued");
+        assert!(error.contains("recorded no appearance"), "refused for another reason: {error}");
     }
 
     #[test]

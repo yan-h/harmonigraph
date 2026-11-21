@@ -75,7 +75,9 @@ pub(crate) fn checkbox_indeterminate(
 ///   one you can hear (Reset context on stop), one thing to show or include
 ///   (Show map dots, Archive copy), a child option indented under its parent
 ///   (Frame breakdown), and anything in a grid or with a mixed state
-///   (Retune and Show), which a switch cannot draw.
+///   (Retune and Show), which a switch cannot draw. A parent that only
+///   enables or reveals a few rows under it (Show note names, Performance
+///   overlay) stays a checkbox: a switch needs a whole section or a mode.
 /// - A [`toggle_button`] is one of a row of peers side by side (the Curve's
 ///   channels, the Stars solo).
 /// - Where both states have names of their own, neither: a two-option

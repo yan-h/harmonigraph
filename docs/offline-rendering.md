@@ -47,7 +47,7 @@ In **Exports**, **Queue last take** and **Queue paths** capture the appearance t
 with the current Video output settings and dimensions.
 Under **Recorded** only Output size, Tail, Encoder and Archive copy are the current ones:
 each take keeps the frame (aspect, lattice side and split) and Video history it was recorded with.
-A take recorded without a look exports in the current appearance.
+A take recorded without a look is refused, with the reason in the export list.
 Camera movement is recorded through host parameters;
 see [What is and isn't captured](#what-is-and-isnt-captured).
 

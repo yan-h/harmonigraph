@@ -71,3 +71,7 @@ Yan approved a search's three relaxations; each supersedes part of the entry abo
 Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
 
 - The six ignored PNG probes in the offline renderer's frame tests and the closed #503 heatmap timing benchmark are deleted, left to git history. #1861 Q4
+
+## 2026-11-20 (one Appearance row, PR #1902)
+
+- "Use each take's recorded appearance" (above) is the Appearance row's Recorded option, beside Current and the slots; what it keeps from the take is unchanged. Yan ("Go with your recommendations")

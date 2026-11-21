@@ -26,6 +26,7 @@ A section whose feature can be switched off (Spectrogram, MIDI ribbons) carries 
 off, the section is its heading alone, dimmed and with no fold arrow.
 A switch turns on a feature or a mode (a section of settings, or how notes are tuned or read, or what a click does: Meantone, Learn, Decode fifths, Edit shape on lattice);
 a checkbox is every other on/off: an option inside a feature, one thing to show or include, a child option under its parent, or a column that can be mixed (Retune and Show).
+A checkbox that only enables or reveals a few rows under it (Show note names, Performance overlay) stays a checkbox: a switch needs a whole section or a mode.
 Where both states have names, a two-option choice names them (Name at: Now-line or Onset).
 Right-clicking the Lattice or Analyzer picture offers a link to its settings tab.
 Each tab keeps a single owner for its controls.
@@ -352,7 +353,7 @@ Finishing a take starts rendering;
 The **Appearance** row picks that look: **Recorded** (each take's own), **Current**, or a saved slot.
 Under **Recorded** only Output size, Tail, Encoder and Archive copy are the current ones:
 the take keeps the frame and Video history it was recorded with.
-A take recorded without a look exports in the current appearance.
+A take recorded without a look is refused, with the reason in the export list.
 **Output size (px)** shows the actual width and height for the chosen aspect ratio.
 **Archive copy** also saves a small AV1 copy beside each video, to keep once the video is uploaded;
 see [Archive copy](offline-rendering.md#archive-copy).
