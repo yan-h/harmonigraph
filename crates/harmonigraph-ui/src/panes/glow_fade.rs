@@ -178,11 +178,12 @@ impl GlowFade {
     /// A new light starts dark when attack is nonzero, including the first
     /// frame, and its level attacks from there; what it is made of starts as
     /// the node's reading whole, since a light at no level shows none of it.
+    /// A node lights only where some layer that draws holds part of its light.
     ///
     /// Answers whether some light still moves a pixel on its own after the
     /// step: the larger of its level's distance above its target and its
     /// colour's still to move ([`easing`]), times the glow gain, is over
-    /// [`VISIBLE_STEP`], on a layer that draws it. What the frame loop stays awake for (`releasing` in
+    /// [`VISIBLE_STEP`]. What the frame loop stays awake for (`releasing` in
     /// `lib.rs`), asked on the step's own draw.
     ///
     /// Stepped on the Glow times of the scene's own view, the look it was
@@ -206,13 +207,16 @@ impl GlowFade {
         // settled at its reading is still, so a mark held with no key down
         // never keeps the loop awake.
         let strength = view.glow_strength;
-        // And only a light some layer draws: the renderer lays a slot's weight
-        // on the octave band and a mark's on the mark strip, each only where
-        // that layer has width (`ink_at` in `lattice.wgsl`), and a halo with no
-        // ink under it is no pixels at all. Its fall is a still picture, so it
-        // holds nothing (#1836). The weights themselves are left whole: the
-        // level is read off every layer, and gating them here would move the
-        // halo of a node that does draw one.
+        // A light no layer draws is no light at all (#1836). The renderer lays
+        // a slot's weight on the octave band and a mark's on the mark strip,
+        // each only where that layer has width (`ink_at` in `lattice.wgsl`),
+        // and a halo with no ink under it is no pixels. So a node whose light
+        // sits wholly on layers that draw nothing heads for none: it starts no
+        // light, and so no glow passes, and does not charge one up for a layer
+        // still to come, such as a mark inside its Delay with the band at 0.
+        // One that shines on some drawn layer keeps its weights whole, the
+        // others' included: its level is read off every layer, and gating them
+        // would move the halo of a node that does draw one.
         let (band, marks) = (scene.outer_outer > scene.outer_inner, view.marks_draw());
         let shines = |light: &GlowLight| {
             (band && light.l.iter().any(|&l| l > 0.0))
@@ -247,7 +251,7 @@ impl GlowFade {
             // `presence_with_opacity`, the presence that holds through a
             // release — and the level is read off the same weights, so the two
             // halves of one light cannot come to disagree about what lit it.
-            let goal = node.glow_light();
+            let goal = Some(node.glow_light()).filter(shines).unwrap_or_default();
             let target = goal.level();
             node.glow = match self.nodes.get_mut(&node.lattice_pos) {
                 Some(lit) => {
@@ -261,13 +265,16 @@ impl GlowFade {
                     // instance for the rest of the session. Only where there
                     // is nothing left to follow — a target that is small but
                     // real is a node still drawing something.
-                    if lit.level < GONE && target <= 0.0 {
+                    // A light carried onto layers that no longer draw, as a
+                    // dial turns its last one off, ends here too: it is no
+                    // light, as one that never shone is none.
+                    if (lit.level < GONE && target <= 0.0) || !shines(&lit.light) {
                         lit.level = 0.0;
                     }
                     // Asked after the end is said, so the step that ends a
                     // light asks for no frame after it.
                     let seen = (lit.level - target).max(easing(lit.level, &lit.light, &goal));
-                    moving |= seen * strength > VISIBLE_STEP && shines(&lit.light);
+                    moving |= seen * strength > VISIBLE_STEP;
                     GlowStep { level: lit.level, light: lit.light }
                 }
                 // A node with no light yet and none arriving is left alone, and
@@ -787,14 +794,15 @@ mod tests {
         assert!(moving, "a released light is falling");
     }
 
-    /// A falling light holds the frame loop only through a layer the renderer
-    /// draws it on: the octave band for a slot's light, the mark strip for a
-    /// mark's. With both dialled to nothing the halo is no pixels at all
-    /// (`ink_at` in `lattice.wgsl`), and its release is a still picture
-    /// (#1836).
+    /// A light no layer draws is no light at all (#1836): the octave band
+    /// draws a slot's light and the mark strip a mark's, and with both dialled
+    /// to nothing the halo would be no pixels (`ink_at` in `lattice.wgsl`). So
+    /// a held note lights nothing, and the renderer runs no glow pass for it;
+    /// and a light carried while a layer drew it ends once none does, asking
+    /// for no frame after.
     #[test]
-    fn a_light_on_layers_that_draw_nothing_asks_for_no_repaint() {
-        let falling = |band_width: f32, mark_thickness: f32| {
+    fn a_light_no_layer_draws_is_no_light() {
+        let held = |band_width: f32, mark_thickness: f32| {
             let mut state = lit(0.0, 2.0);
             state.appearance.view.band_width = band_width;
             state.appearance.view.mark_thickness = mark_thickness;
@@ -802,16 +810,74 @@ mod tests {
             let mut fade = GlowFade::default();
             let mut scene = scene_at(&state, 0.0);
             fade.step_drawn(&mut scene, 0.0);
-            state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
-            let mut scene = scene_at(&state, 1.5);
-            let moving = fade.step_drawn(&mut scene, 1.5);
-            let level = node_at(&scene, LatticePos::ORIGIN).glow.level;
-            assert!(level > 0.3, "the fixture's light must still be falling: {level}");
-            moving
+            (state, fade, node_at(&scene, LatticePos::ORIGIN).glow.level)
         };
-        assert!(falling(0.2, 0.0), "a light the band draws is falling");
-        assert!(falling(0.0, 0.1), "a light the mark draws is falling");
-        assert!(!falling(0.0, 0.0), "a light no layer draws held the loop");
+        assert!(held(0.2, 0.0).2 > 0.99, "a light the band draws");
+        assert!(held(0.0, 0.1).2 > 0.99, "a light the mark draws");
+        let (_, fade, level) = held(0.0, 0.0);
+        assert_eq!(level, 0.0, "a light no layer draws");
+        assert!(fade.nodes.is_empty(), "a light no layer draws is carried");
+
+        // Lit on the band, then released and the band dialled off mid-fall.
+        let (mut state, mut fade, _) = held(0.2, 0.0);
+        state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+        state.appearance.view.band_width = 0.0;
+        let mut scene = scene_at(&state, 1.5);
+        let moving = fade.step_drawn(&mut scene, 1.5);
+        assert_eq!(node_at(&scene, LatticePos::ORIGIN).glow.level, 0.0, "a light left lit");
+        assert!(!moving, "a light no layer draws held the loop");
+    }
+
+    /// Under a Mark delay with the band at 0, a lone note's halo arrives with
+    /// its mark, on the Glow attack, rather than charging up through the delay
+    /// on the band's light, which draws nothing, and appearing already lit
+    /// (#1836).
+    #[test]
+    fn a_halo_waiting_on_a_marks_delay_fades_in_with_it() {
+        const DELAY: f32 = 0.5;
+        let mut state = lit(0.5, 1.0);
+        state.appearance.view.band_width = 0.0;
+        state.appearance.view.mark_thickness = 0.1;
+        state.appearance.view.mark_delay = DELAY;
+        // A Fade to wait behind: at 0 a mark steps in at once, Delay or none.
+        state.appearance.view.fade_time = 0.05;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        // One motion across the frames, so the mark waits out its Delay rather
+        // than being seeded settled on a fresh surface.
+        let mut motion = harmonigraph_scene::NodeMotion::default();
+        let mut fade = GlowFade::default();
+        let mut frame = |now: f64| {
+            let mut scene = harmonigraph_scene::derive_scene(
+                &state.runtime.tracker,
+                &state.runtime.tuning,
+                &state.appearance.view,
+                &state.appearance.view.reach(),
+                state.appearance.camera,
+                None,
+            );
+            motion.step(
+                &mut scene,
+                &state.runtime.tracker,
+                &state.runtime.tuning,
+                &harmonigraph_scene::RingFade::default(),
+                now,
+            );
+            fade.step_drawn(&mut scene, now);
+            node_at(&scene, LatticePos::ORIGIN)
+        };
+        let mut now = 0.0;
+        let node = loop {
+            let node = frame(now);
+            if node.melody_level > 0.0 {
+                break node;
+            }
+            assert!(now < 2.0 * f64::from(DELAY), "the mark never appeared");
+            now += 1.0 / 144.0;
+        };
+        assert!(now >= f64::from(DELAY) - 0.01, "the mark did not wait: {now}");
+        assert!(node.glow.level < 0.05, "the halo arrived lit: {}", node.glow.level);
+        let later = frame(now + 1.0).glow.level;
+        assert!(later > 0.5, "the halo never came in: {later}");
     }
 
     /// The step that ends a light, snapping it to exactly 0, asks for no
