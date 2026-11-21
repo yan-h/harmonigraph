@@ -29,8 +29,8 @@ use harmonigraph_core::canonical::{
     CanonicalEvent, GapReason, NoteDelta, PublicationGap, SourceBaseline, VoiceBaseline,
 };
 use harmonigraph_core::{
-    Envelope, Expression, Expressions, NoteEvent, NoteEventKind, NoteTracker, RollNote, SourceId,
-    Time, Voice, VoiceKey, VoiceState,
+    Envelope, Expression, Expressions, NoteEvent, NoteEventKind, NoteTracker, PressId, RollNote,
+    SourceId, Time, Voice, VoiceKey, VoiceState,
 };
 
 const SEEDS: u64 = 96;
@@ -166,8 +166,9 @@ struct Run<'a> {
     /// Notes Clear took off the roll while they sounded or faded, by key and
     /// onset.
     cleared: BTreeSet<(VoiceKey, u64)>,
-    /// Rule-1 pulses still fading, as `tail` lists them.
-    pulses: Vec<(VoiceKey, Time, Time, Option<u64>)>,
+    /// Rule-1 pulses still fading, by press: a reset can close another press
+    /// at the same key, onset and end, which `tail` cannot tell from one.
+    pulses: Vec<PressId>,
     hits: &'a mut BTreeMap<&'static str, usize>,
 }
 
@@ -202,8 +203,8 @@ impl Run<'_> {
             14..=16 => self.advance(&before),
             _ => self.baseline(&before),
         }
-        let released = tail(&snap(&self.tracker).released);
-        self.pulses.retain(|pulse| released.contains(pulse));
+        let released = snap(&self.tracker).released;
+        self.pulses.retain(|pulse| released.iter().any(|v| v.id() == *pulse));
         self.one_record();
     }
 
@@ -244,16 +245,27 @@ impl Run<'_> {
         let held = after.held(key).expect("an on holds its key");
         assert_eq!((held.on_time, held.state), (at, VoiceState::Held));
         // Rule 2: a pulse on the key at this onset is this press, sent as on,
-        // off, on at one sample, when it is the key's newest release. It is
-        // absorbed; nothing else lets go.
+        // off, on at one sample, when it is the key's newest release among
+        // this instant's: the search stops at a press that opened and ended
+        // before it. It is absorbed; nothing else lets go.
         let mut tail_expected = tail(&before.released);
-        let newest = before.released.iter().rev().find(|v| v.key() == key);
-        let newest = newest.map(|v| tail(std::slice::from_ref(v))[0]);
-        if let Some(index) = self.pulses.iter().position(|p| p.1 == at && Some(*p) == newest) {
+        let mut newest = None;
+        for voice in before.released.iter().rev() {
+            if voice.key() == key {
+                newest = Some(voice);
+                break;
+            }
+            let VoiceState::Released { at: off } = voice.state else { unreachable!() };
+            if voice.on_time < at && off < at {
+                break;
+            }
+        }
+        let absorbed = newest.filter(|v| v.on_time == at && self.pulses.contains(&v.id()));
+        if let Some(pulse) = absorbed {
             self.hit("rule 2: an on at a pulse's onset absorbs it");
-            let pulse = self.pulses.remove(index);
-            // That entry alone: a reset at the same onset can leave its twin.
-            let index = tail_expected.iter().position(|t| *t == pulse).expect("a fading pulse");
+            self.pulses.retain(|id| *id != pulse.id());
+            let row = tail(std::slice::from_ref(pulse))[0];
+            let index = tail_expected.iter().position(|t| *t == row).expect("a fading pulse");
             tail_expected.remove(index);
         }
         assert_eq!(tail(&after.released), tail_expected, "an on lets nothing else go");
@@ -311,7 +323,7 @@ impl Run<'_> {
         } else {
             if pulse {
                 self.hit("rule 1: an off at its onset pulses");
-                self.pulses.push((key, prev.on_time, at, prev.lifetime));
+                self.pulses.push(prev.id());
             }
             tail_expected.push((key, prev.on_time, at, prev.lifetime));
             tail_expected.sort_by(|a, b| a.partial_cmp(b).unwrap());

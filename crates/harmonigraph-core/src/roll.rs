@@ -463,12 +463,21 @@ impl NoteRoll {
                 self.retire(previous);
             }
         }
-        // The key's newest release, sought from the back: a roll nothing
-        // prunes keeps every release here, and a walk of them all on every
-        // on would make building one quadratic in its notes.
-        if let Some(index) = self.fading.iter().rposition(|note| note.key() == key) {
-            if self.fading[index].pulse && self.fading[index].start == at {
-                self.fading.remove(index);
+        // The key's newest release, sought from the back among this
+        // instant's: a pulse this on absorbs opened at `at`, so it was let go
+        // with this instant's events, and a press that opened and ended
+        // before them ends the search. A roll nothing prunes keeps every
+        // release here, and a walk of them all on every on would make
+        // building one quadratic in its notes.
+        for (index, note) in self.fading.iter().enumerate().rev() {
+            if note.key() == key {
+                if note.pulse && note.start == at {
+                    self.fading.remove(index);
+                }
+                break;
+            }
+            if note.start < at && note.departed().is_some_and(|off| off < at) {
+                break;
             }
         }
         let id = self.mint();
