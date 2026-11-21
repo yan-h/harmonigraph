@@ -162,8 +162,8 @@ impl EguiState {
 /// on, so a frame holding the lock there is one that is itself waiting on
 /// this save (a host answering something the frame asked by saving state),
 /// and the lock is not reentrant, so no wait helps. What can hold it in
-/// parallel is the input worker, for a take or a give (microseconds, a few
-/// milliseconds for a full ring; see [`crate::background`]). Bounded rather
+/// parallel is the input worker, for a step or the lattice-board lights' poll
+/// (microseconds, a few milliseconds for a full ring; see [`crate::background`]). Bounded rather
 /// than a plain `lock`
 /// so the re-entrant case costs the save its freshness and not the host a
 /// hang — the kind issue #296 is about.

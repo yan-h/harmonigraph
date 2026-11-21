@@ -1145,7 +1145,7 @@ impl Hub {
     /// `LearningState` sorts and deduplicates. Learn hears every row, Retune
     /// off included: Retune decides what the Hub corrects, and an uncorrected
     /// note is the player's pitch Learn reads. Learn does not run while
-    /// Decode fifths is on (`TuningEngine::learns`), so no row's keys are read
+    /// Decode fifths is on (`PolicyConfig::learns`), so no row's keys are read
     /// here as the lattice-board's.
     pub fn held_classes(&self, scratch: &mut [PitchClass; HELD_VOICES]) -> usize {
         let mut count = 0;

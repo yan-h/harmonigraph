@@ -7,7 +7,7 @@ the plugin framework nice-plug, which harmonigraph used to vendor, together with
   nice-plug-core's modules sit at the crate root, where nice-plug's `pub use nice_plug_core::*` used to put them.
 - **`src/params.rs`** is harmonigraph's own (#1814 step 5): one fixed table of host parameters, which replaced nice-plug-core's parameter types and nice-plug-derive's `Params` and `Enum` derives.
 - **`tests/`** drive an exported fixture plugin through `clap-sys`: the process callback, flush and editor writes (`clap_boundary.rs`), and the auxiliary bounds (`clap_auxiliary.rs`).
-  They run in `ci.sh`'s workspace test gate, which names both fixture features (`assert_process_allocs`, `clap-boundary-tests`).
+  They run in `ci.sh`'s workspace test gate, which names `clap-boundary-tests`, the fixture feature that turns on `assert_process_allocs` too.
 - **`src/testing.rs`**, behind `clap-boundary-tests`, is the one CLAP host those fixtures and harmonigraph-plugin's entry-point suites run on (#1868): it answers only the extensions a suite turns on, and drives a plugin through the C ABI.
 
 The library is `harmonigraph_clap`, the package's own name, and its logging and assertion macros are `shell_*!` (#1814 step 7); step 4 had kept nice-plug's names so the plugin's source moved untouched.
@@ -39,7 +39,7 @@ Each change's reason is a comment at the code it explains; this is the map.
     An event the plugin does not read (SysEx, MIDI 2, outside the core space, a per-note parameter event) is skipped.
   - `Output::push(value, time)` calls `try_push` and returns the host's answer; keeping the list sorted is the plugin's contract, checked by a `debug_assert`.
   - A flush applies its values to the table at once, and an editor edit writes the table at once; each row remembers the gesture and value the host has not been told, which the shell reports at offset 0 at the next callback or flush, stopping at the first refusal.
-  - The main thread is reached by one deferred host callback request, and serves three flags: the setup's service, a latency change, and the transport line.
+  - The main thread is reached by one deferred host callback request, and serves four flags: the setup's service, a latency change, the transport line, and the line for a restart of the host's steady counter.
   - A prepared `Setup` owns every saved field: it validates before the parameters restore, and commits after; the plugin adopts what it commits at its next callback.
     Its `service` reports what it changed as `Serviced`: a modified project is marked dirty, and changed parameter values or text are rescanned, each only when reported.
   - Main-thread lifecycle calls (`init`, `activate`, `deactivate`, `inactive`, `destroy`) keep registry locking and endpoint reclamation outside audio callbacks.

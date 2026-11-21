@@ -8,8 +8,9 @@
 //! none (#1814); one that arrives is logged once, from the main thread.
 //!
 //! The main thread is reached by one host callback request, deferred past any
-//! process callback in flight, and serves three flags: the setup's service,
-//! a latency the running activation was asked to change, and that log line.
+//! process callback in flight, and serves four flags: the setup's service,
+//! a latency the running activation was asked to change, that log line, and
+//! the line for a restart of the host's steady counter (#1881).
 
 use crate::audio_setup::{Audio, AuxStorage, BufferConfig, ProcessMode, Slices, audio};
 use crate::editor::{Editor, EditorHost};

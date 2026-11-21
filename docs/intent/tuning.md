@@ -77,7 +77,7 @@ Lines marked "Yan" are his answers in chat; lines marked "session" are the imple
 - The Decoded fifth is a setting in the project, edited in the editor, with no host automation and no glide of held notes, in the Perfect fifth's own range. Yan
 - Lattice Map keeps its twelve slots: a decoded key takes its key's slot and its comma bank is ignored, so C♯ and D♭ on one key share a slot and Map Thirds keeps choosing between them. A map that shifts a slot by a diesis per bank was built and dropped: it sounded nodes the map does not hold. Yan
 - Adaptive hears a decoded Tune as a keyboard tuned in the Decoded fifth, through the keyboard check it already has, while other sources keep the Keyboard block; kept because it was cheap, and Adaptive stays outside the use. Yan (keep it in mind if cheap), session (the mechanism)
-- Learn does not hear a decoded Tune: its tuning is declared, and its keys arrive in 12-TET. Session
+- Learn does not hear a decoded Tune: its tuning is declared, and its keys arrive in 12-TET. Session Superseded by the 2026-11-20 entry suspending Learn while Decode fifths is on.
 - The Decoded fifth opens at quarter-comma meantone, 696.578¢. Session
 - Adaptive fell out of use because it guessed the syntonic comma wrong and drifted, with no obvious choice in pentatonic-like chords; spelled input removes the enharmonic guess and not that one. Yan is open to another try, which is not this PR. Yan
 
@@ -88,7 +88,7 @@ Lines marked "Yan" are his answers in chat; lines marked "session" are the imple
 - A 12-TET track with Retune on is decoded with the board, its Ch 1 notes read as D♭ to F♯; a note off by a Pythagorean comma is moved to the next channel's bank in the piano roll, and Retune off keeps a whole track out. No per-Tune opt-out. Yan
 - The board keeps its central bank on Ch 1 rather than leaving Ch 1 to plain 12-TET, so notes drawn in the piano roll mix with the board's recorded notes on one track. Yan
 - With Decode fifths on, Learn hears only sources with Retune off, the rule above that it does not hear a decoded source applied to the project's flag; Learn is not suspended while decoding is on, though with the board alone it then hears nothing while its armed ring still shows. Yan (PR #1898 review) Superseded by the entry on switching below.
-- A note struck decoded is heard by Learn as its raw 12-TET key once decoding stops applying to it while it is held (Decode fifths or that source's Retune turned off): no per-note record of decoding at the attack. Yan (PR #1898 review)
+- A note struck decoded is heard by Learn as its raw 12-TET key once decoding stops applying to it while it is held (Decode fifths or that source's Retune turned off): no per-note record of decoding at the attack. Yan (PR #1898 review) Since the 2026-11-20 entry suspends Learn while Decode fifths is on, only turning Decode fifths off reaches this.
 - No setting for which twelve fifths Ch 1 holds: Harmonigraph cannot tell the board's notes from drawn ones, so its window would have to match the board's firmware, kept in step by hand, and every recorded clip would be read again when it changed. "not sure that it's worth it if I have to keep the board in sync manually" Yan
 
 ## 2026-11-20 (lighting the lattice-board)

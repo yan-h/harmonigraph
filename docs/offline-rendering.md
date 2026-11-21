@@ -60,7 +60,7 @@ For an explicit replacement file:
 cargo run -p harmonigraph-ui --example appearance -- min_sevens=-1 max_sevens=1 > appearance.ron
 ```
 
-Close the plugin window and save the Bitwig project before extracting its appearance.
+Save the Bitwig project before extracting its appearance; the window may stay open.
 The extraction command requires exactly one editor appearance;
 multiple editor instances are reported instead of concatenated into an invalid file.
 `--appearance` takes a standalone appearance document, not an enclosing editor save.
