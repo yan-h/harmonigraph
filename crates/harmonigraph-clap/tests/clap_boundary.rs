@@ -578,7 +578,8 @@ fn a_counter_that_skips_ahead_inside_a_run_is_noticed_once() {
 
     d.run(3000, vec![], None);
     d.run(4000, vec![], None);
-    assert_eq!(observed().steady[observed().steady.len() - 2..], [3000, 4000], "as given");
+    let steady = observed().steady.clone();
+    assert_eq!(steady[steady.len() - 2..], [3000, 4000], "as given");
     d.main();
     assert_eq!(SKIPS.load(Ordering::Relaxed), 1, "inside a run");
     assert_eq!(NOTICES.load(Ordering::Relaxed), 1, "once");
