@@ -52,7 +52,7 @@ cargo test
 
 The standalone harness uses the same UI and render paths as the plugin.
 Its labels read egui's font texture as the plugin's do,
-published from eframe's `ui()` rather than by Patch 13,
+published from eframe's `ui()` rather than by egui-baseview's Patch 13 (in egui-plugin-window's `PATCHES.md`),
 so on the frame egui replaces that texture (the atlas growing, or its rebuild at 80% full) the harness's labels read the retired one.
 It can accept hardware or virtual MIDI,
 and feeds its analyzer with a mock synth rather than external audio.
@@ -240,8 +240,9 @@ harmonigraph-scene       Per-frame scene derivation, camera, styles, envelopes
 
 harmonigraph-render      wgpu lattice renderer used as an egui paint callback.
 
-harmonigraph-perf        Performance instrumentation and build-tag stamping;
-                         the UI crate draws its overlay.
+harmonigraph-perf        Performance instrumentation; the UI crate draws its
+                         overlay, and each leaf binary stamps its own build tag
+                         (build/build_tag.rs).
 
 harmonigraph-ui          Shared pane shell and controls for Lattice, Tuning,
                          Analyzer, Mappings, Spectral, Spiral, System, Console
@@ -264,6 +265,9 @@ harmonigraph-standalone  eframe development harness with MIDI input and a mock
 
 harmonigraph-clap        The CLAP shell: nice-plug and nice-plug-core, owned,
                          with a parameter table of its own.
+
+harmonigraph-state-reader  read-plugin-state: a saved Bitwig project's settings
+                         read back through the plugin's own load.
 
 harmonigraph-plugin      Plugin on the shell, lock-free audio-to-UI ingress,
                          custom editor and CLAP export.

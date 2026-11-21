@@ -1,7 +1,8 @@
 # Carried patches against upstream dependencies
 
-Three dependencies carry local patches, wired in via `[patch.crates-io]` in the workspace `Cargo.toml`:
+Three dependencies carry local patches:
 wgpu-hal vendored here, and the editor window's two pinned from a shared repository.
+wgpu-hal and egui-baseview are wired in via `[patch.crates-io]` in the workspace `Cargo.toml`, and baseview comes by path from egui-baseview.
 Keep this file current when bumping them.
 
 baseview and egui-baseview were pruned to what Harmonigraph compiles on macOS, plus a no-window baseview platform that lets a Linux session build and test (#1810), and have since moved to egui-plugin-window, below.

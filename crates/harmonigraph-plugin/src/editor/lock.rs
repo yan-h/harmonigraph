@@ -88,8 +88,8 @@ impl EditorLock {
     ///
     /// `None` if the lock is not free within [`UNSEEN_WAIT`]. The notice that
     /// calls this comes on the main thread, outside any frame, so the only
-    /// holder it can meet is the input worker, for a take or a give (at most a
-    /// few milliseconds); the host's saves, the window's build and its close
+    /// holder it can meet is the input worker, for a step or the lattice-board
+    /// lights' poll (at most a few milliseconds); the host's saves, the window's build and its close
     /// hold the lock on the main thread but hide or move no view while they
     /// do. Should one ever, the gestures stay open, as before this existed,
     /// until the reveal's pass ends them or the close does.

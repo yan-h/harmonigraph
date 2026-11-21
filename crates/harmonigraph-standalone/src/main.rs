@@ -637,7 +637,7 @@ impl eframe::App for App {
 }
 
 /// Hand the label callbacks egui's font texture, as the plugin (egui-baseview's
-/// Patch 13) and the offline renderer (`frames::Renderer`) do.
+/// Patch 13, in egui-plugin-window's `PATCHES.md`) and the offline renderer (`frames::Renderer`) do.
 ///
 /// eframe runs `ui` before it applies the frame's texture deltas, so this is
 /// the texture as the previous frame left it. A delta that patches it in
