@@ -1011,7 +1011,7 @@ fn board_section(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn Param
         crate::widgets::label(ui, BOARD_SECTION_NOTE);
         let mut p = state.runtime.adaptive_policy;
         let before = p;
-        crate::widgets::checkbox(ui, &mut p.decode_fifths, "Decode fifths")
+        crate::widgets::toggle_switch(ui, &mut p.decode_fifths, "Decode fifths")
             .on_hover_text(DECODE_FIFTHS_HINT);
         decoded_fifth_bar(ui, &mut p, "Decoded fifth", DECODED_FIFTH_HINT);
         if p != before {
@@ -1098,7 +1098,7 @@ fn map_controls(
         // Shape editing sits under the list, outside every fold: it is the
         // control a passage is composed with, and it edits the map named above.
         let mut editing = view.edit_shape;
-        if crate::widgets::checkbox(ui, &mut editing, "Edit shape on lattice")
+        if crate::widgets::toggle_switch(ui, &mut editing, "Edit shape on lattice")
             .on_hover_text(
                 "Click a lattice node to move its note there. Edits save to the selected \
                  map, so its Map automation plays the new shape from the next attack.",

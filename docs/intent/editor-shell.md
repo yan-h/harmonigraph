@@ -78,3 +78,10 @@ Yan took the recommendations made after the audit was checked against the code (
 
 - A restore marks the project modified neither by itself nor through the resize it makes at the next frame. This is now Yan's answer ("no", recommendation taken), replacing the coordinating session's reading recorded under 2026-11-18 (#1824) for the restore half. #1875
 - Closing the editor right after a section fold, before the window has resized, saves the fold's requested width, so the editor reopens as it was left. Yan's answer ("keep", recommendation taken). #1875
+
+## 2026-11-20 (switch or checkbox, PR #1902)
+
+Yan asked for an audit of checkboxes against switches and a rule, and took the recommendations ("Go with your recommendations").
+
+- A switch turns on a feature (a section of settings of its own) or a mode (how notes are tuned or read, or what a click does); a checkbox is every other on/off, a lit button one of a row of peers, and a two-option choice an on/off whose both states have names. The rule is on `widgets::toggle_switch` and in `docs/settings.md`. PR #1902
+- Own window and Hide tab bars stay checkboxes: editor preferences, not modes. PR #1902

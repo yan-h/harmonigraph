@@ -53,8 +53,8 @@ pub use layout::{Layout, Placement};
 // which only the tests wanted, and `sane_scale` and `SpectrogramSurface`,
 // which nothing outside their own module wanted at all.
 pub use config::{
-    SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE,
-    TILT_STEPS,
+    NameAnchor, SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumWindow,
+    SCALE_BAR_RANGE, TILT_STEPS,
 };
 pub(crate) use config::{
     LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN, ROLL_LEAD_MAX,
@@ -66,8 +66,8 @@ pub(crate) use config::{
 // new one is one declaration and one name here, in this crate alone.
 pub use spectrum::{AnalyzedColumn, AudioSpectrum, Delivery, SpectrumAnalysis};
 pub use state::{
-    CameraPreset, Console, EditorPrefs, ExportAction, FrameRate, Interaction, PictureState,
-    SharedState, SurfaceState, TakeState,
+    CameraPreset, Console, EditorPrefs, ExportAction, ExportLook, FrameRate, Interaction,
+    PictureState, SharedState, SurfaceState, TakeState,
 };
 pub use video::{
     LatticeSide, RenderConfig, RenderFrame, RenderTrigger, SpectrogramRender, VideoEncoder,

@@ -16,7 +16,7 @@ Mode is saved but is not automatable in this prototype.
 
 Choose Lattice Map in Tuning's Note retuning,
 pick a saved map from the list at the top of the Lattice Map section,
-and tick Edit shape on lattice.
+and switch on Edit shape on lattice.
 Each row is a map's number, its Map automation value, and its name;
 a click on either selects it.
 The selected row's name is a field:

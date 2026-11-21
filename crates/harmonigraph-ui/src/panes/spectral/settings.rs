@@ -6,7 +6,7 @@ use crate::config::BALLISTICS_MAX;
 use crate::panes::{block, edge_bar, hinted_section, section, switched_section};
 use crate::params::{AnalysisInput, ParamBackend};
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
-use crate::PictureState;
+use crate::{NameAnchor, PictureState};
 
 /// The Texture block's Style options, which the settings sweeps also iterate,
 /// so a texture added here is drawn by them without a list of their own.
@@ -247,22 +247,23 @@ pub(crate) fn ribbons_section(
                 "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
             );
             ui.add_enabled_ui(cfg.note_names, |ui| {
-                // The box moves a name to its ribbon's other END, which is the
-                // onset only where time runs the screen's way (`Anchor::of`).
-                let (label, hover) = if cfg.orientation.is_time_reversed() {
-                    (
-                        "Labels wait at the now-line",
-                        "Place labels at the newest end of each note, so a held note's name waits at the now-line. \
-                         Turn off to have labels travel with each note's onset.",
-                    )
-                } else {
-                    (
-                        "Labels follow note onset",
-                        "Place labels at the start of each note so they travel with its onset. \
-                         Turn off to keep labels at the newest edge.",
-                    )
-                };
-                crate::widgets::checkbox(ui, &mut cfg.note_names_travel, label).on_hover_text(hover);
+                choice_row(
+                    ui,
+                    "Name at",
+                    &mut cfg.note_name_anchor,
+                    &[
+                        (
+                            NameAnchor::Leading,
+                            "Now-line",
+                            "Place each name at its note's newest end, so a held note's name waits at the now-line and travels from the release.",
+                        ),
+                        (
+                            NameAnchor::Onset,
+                            "Onset",
+                            "Place each name at its note's start, so it travels with the onset from the first frame.",
+                        ),
+                    ],
+                );
                 ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Label scale")
                     .default_value(crate::panes::fresh_spectrum().note_name_scale)
                     .unit(1.0, "×")

@@ -40,10 +40,12 @@ pub(crate) use label::{
 pub use layer::LayerStrip;
 pub(crate) use menu::menu_style;
 pub use range::RangeBar;
+#[cfg(test)]
+pub(crate) use rows::CHECKBOX_BOX;
 pub use rows::{button_row, checkbox, choice_row, record_button, row_field, toggle_switch};
 pub(crate) use rows::{
-    checkbox_box, checkbox_indeterminate, choice_buttons, option_button, preset_row,
-    selected_combo, toggle_button, toggle_switch_width, CHECKBOX_BOX,
+    checkbox_indeterminate, choice_buttons, option_button, preset_row, selected_combo,
+    switch_track, toggle_button, toggle_switch_width, SWITCH_GAP, SWITCH_SIZE,
 };
 pub use stack::StackBar;
 pub(crate) use tabs::tab_strip;
