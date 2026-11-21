@@ -815,6 +815,10 @@ impl crate::Queue for Queue {
                 command_buffer.presentDrawable(&texture.drawable);
             }
 
+            if let Some(observe) = PRESENT_OBSERVER.get() {
+                observe(&command_buffer, &texture.drawable);
+            }
+
             command_buffer.commit();
 
             if texture.present_with_transaction {
@@ -852,6 +856,10 @@ unsafe impl Sync for Buffer {}
 impl crate::DynBuffer for Buffer {}
 
 impl Buffer {
+    pub fn raw_handle(&self) -> &ProtocolObject<dyn MTLBuffer> {
+        &self.raw
+    }
+
     fn as_raw(&self) -> NonNull<ProtocolObject<dyn MTLBuffer>> {
         unsafe { NonNull::new_unchecked(Retained::as_ptr(&self.raw) as *mut _) }
     }
@@ -1407,4 +1415,17 @@ pub enum OsType {
     Ios,
     Tvos,
     VisionOs,
+}
+
+/// Called with each present's command buffer and drawable, before the commit.
+pub type PresentObserver =
+    fn(&ProtocolObject<dyn MTLCommandBuffer>, &ProtocolObject<dyn MTLDrawable>);
+
+static PRESENT_OBSERVER: OnceLock<PresentObserver> = OnceLock::new();
+
+/// Install a process-wide observer of presents, for timing them: the
+/// command buffer's `GPUStartTime`/`GPUEndTime` and the drawable's
+/// `presentedTime`. Returns false if one is already installed.
+pub fn set_present_observer(observer: PresentObserver) -> bool {
+    PRESENT_OBSERVER.set(observer).is_ok()
 }
