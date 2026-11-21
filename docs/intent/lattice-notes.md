@@ -27,3 +27,7 @@ Yan took the recommendations made after the audit was checked against the code (
 
 - A zero-length note (the roll's Rule 1) pulses on the lattice too, as the rule says and the Spiral and the note band already do. Fixed with #1838. #1861 Q5
 - Off-pane halo owner selection moves into `harmonigraph-scene` beside the rules it restates, taking an ownership predicate since the glow fade lives in the UI crate, and the lattice motion step reads the scene's own view. Built with #1838 in PR #1882. #1861 R5
+
+## 2026-11-20 (questions from the #1861 build wave, #1893)
+
+- Every lattice note waits out its attack before it leaves, as the Spiral and the note band already do, so a 1 ms note pulses as a 0 ms one does. The melody and bass marks follow the same held set: a note shorter than the Fade keeps its end until its attack lands, and is marked when the Fade outlasts the Mark delay (answer A, Yan, 2026-11-20). Built in PR #1912. #1893 item 7
