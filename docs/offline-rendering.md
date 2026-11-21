@@ -72,7 +72,9 @@ Take formats before v9 are refused with a version error and must be recorded aga
 there is no converter.
 An unreadable or unsupported selected appearance document refuses the export with an error on stderr.
 A valid replacement overrides the recorded document completely.
-The offline renderer draws a take with no recorded appearance in the defaults, and missing settings groups use their normal defaults.
+A take with no recorded appearance is refused unless `--appearance` gives one, as the Video pane's export refuses it under **Recorded**;
+every take writer records one.
+Missing settings groups use their normal defaults.
 The retired `record_audio`, `auto_render`, `audio_path` and `audio_offset` saved settings are ignored and are not saved again.
 They were inactive;
 capture and automatic rendering remain unconditional for a finished take.

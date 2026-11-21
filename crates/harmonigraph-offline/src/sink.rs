@@ -1158,7 +1158,11 @@ mod tests {
         // 0.75, so the click is heard 0.25 s into the video.
         write_wav(&dir.join("click.wav"), 48_000, 1.0, Some(0.5));
         let run = RunRecord { at: 0.0, song: 0.5 };
-        let header = Header { audio_file: Some("click.wav".into()), ..Default::default() };
+        let header = Header {
+            audio_file: Some("click.wav".into()),
+            appearance: Some(harmonigraph_ui::AppearanceDocument::default().serialize()),
+            ..Default::default()
+        };
         // Sounding a quarter second into the run.
         let note = DeltaRecord {
             event: NoteRecord {
