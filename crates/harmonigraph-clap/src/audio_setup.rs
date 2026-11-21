@@ -185,6 +185,13 @@ pub(crate) unsafe fn audio<'a>(
             unsafe { channels(process.audio_inputs, process.audio_inputs_count, first_aux + port) }
                 .unwrap_or(&[]);
         for (channel, slot) in slots.iter_mut().take(declared as usize).enumerate() {
+            // No host is known to hand an input the buffer of an output it
+            // has no in-place pair with; one that did would alias the main
+            // output the plugin writes (see `Audio::aux`).
+            debug_assert!(
+                host.get(channel).is_none_or(|input| !output[..main_channels].contains(input)),
+                "an auxiliary input shares a main output's buffer"
+            );
             *slot = match host.get(channel) {
                 Some(&input) => unsafe { std::slice::from_raw_parts(input, frames) },
                 None => silence,

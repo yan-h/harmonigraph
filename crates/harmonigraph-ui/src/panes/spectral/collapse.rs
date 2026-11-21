@@ -103,9 +103,8 @@ impl Regions {
     /// leaves the overview disagreeing with the picture it sits under
     /// (#1842).
     ///
-    /// The divider is read as the frame begins, before `draw_picture`
-    /// restores the saved hold, takes the pane's size into it, or lets a drag
-    /// move it: the strip has to be decided first, since its height comes out
+    /// The divider is read as the frame begins, before `draw_picture` takes
+    /// the pane's size into the hold or lets a drag move it: the strip has to be decided first, since its height comes out
     /// of the picture's. So a frame that drags the divider shut, or open,
     /// keeps the strip it began with, and the next frame follows.
     fn far_drawn(&self, state: &PictureState) -> bool {
