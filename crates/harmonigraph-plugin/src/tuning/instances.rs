@@ -39,14 +39,8 @@ pub fn snapshots() -> Vec<TuningInstance> {
             let bits = shared.status();
             let status = if frames == 0 {
                 "Waiting for host activation".to_owned()
-            } else if misses != 0 {
-                format!(
-                    "{}\n{}",
-                    super::session::status_text(bits),
-                    setup::deadline_text(bits, misses)
-                )
             } else {
-                super::session::status_text(bits)
+                setup::detail_text(bits, misses)
             };
             Some(TuningInstance {
                 id: *id,
