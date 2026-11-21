@@ -61,10 +61,16 @@ pub struct VoiceKey {
     pub note: u8,
 }
 
-/// One press: its key and the bits of its onset. What a press is known by
-/// across frames, as a [`Voice`] and as a [`RollNote`](crate::RollNote) alike;
-/// a retrigger at another instant is another press.
-pub type PressId = (VoiceKey, u64);
+/// One press: a serial its [`NoteRoll`] assigns as the press
+/// opens, at a note-on or a baseline's fresh entry. What a press is known by
+/// across frames, as a [`Voice`] and as a [`RollNote`](crate::RollNote) alike.
+///
+/// Two presses of one roll never share one, whatever their keys and onsets: a
+/// fade a baseline withdrew and the fresh press it opened at the same onset are
+/// two (#1883). Only within a roll, and only for its life: a roll rebuilt from
+/// the same notes numbers them again, and two rolls number theirs alike.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PressId(pub(crate) u64);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum NoteEventKind {
@@ -504,8 +510,7 @@ impl Envelope {
     /// Where the release of a press that sounded from `on` and let go at
     /// `off` starts: at its off, or once its attack has landed if that is
     /// later. The one statement that a release waits out the attack, which
-    /// every voice's does ([`Voice::release_level`]) and the lattice's for a
-    /// rule-1 pulse.
+    /// every voice's does ([`Voice::release_level`]) and every lattice note's.
     pub fn release_start(&self, on: Time, off: Time) -> Time {
         off.max(on + f64::from(self.attack_time))
     }
@@ -531,6 +536,8 @@ pub struct Voice {
     /// Canonical accepted lifetime, absent for ordinary direct observations.
     pub lifetime: Option<u64>,
     pub state: VoiceState,
+    /// The press this voice is ([`PressId`]).
+    pub(crate) id: PressId,
 }
 
 impl Voice {
@@ -538,9 +545,9 @@ impl Voice {
         VoiceKey { source: self.source, channel: self.channel, note: self.note }
     }
 
-    /// The press this voice is: its key and onset ([`PressId`]).
+    /// The press this voice is ([`PressId`]).
     pub fn id(&self) -> PressId {
-        (self.key(), self.on_time.to_bits())
+        self.id
     }
 
     /// What is left of this voice's RELEASE, `[0, 1]`: 1 for the whole of a
@@ -907,6 +914,7 @@ mod tests {
             on_time: 0.0,
             lifetime: None,
             state: VoiceState::Held,
+            id: PressId(0),
         }
     }
 

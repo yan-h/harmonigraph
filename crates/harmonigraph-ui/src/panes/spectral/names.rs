@@ -147,12 +147,26 @@ const LABEL_PAD: f32 = 1.95;
 /// picks and the next one it will take.
 const REPEAT_GAP: f32 = 7.8;
 
+/// A named note: its key and the bits of its onset.
+///
+/// Not the roll's [`PressId`](harmonigraph_core::PressId), which numbers a
+/// press within one roll for that roll's life. One surface names the notes of
+/// two rolls in Tape mode, the recording's and the live one over an audition,
+/// which number theirs alike; and the recording's is rebuilt whole each time
+/// a chunk commits, which numbers its notes afresh. Key and onset stay put
+/// through both.
+type NameId = (harmonigraph_core::VoiceKey, u64);
+
+fn name_id(note: &harmonigraph_core::RollNote) -> NameId {
+    (note.key(), note.start.to_bits())
+}
+
 /// Previous winners on one drawn surface. Musical identity excludes pitch,
 /// spelling and position: expression and scrolling must not create new labels.
 #[derive(Default)]
 pub(crate) struct Thinning {
-    visible: HashSet<harmonigraph_core::PressId>,
-    suppressed: HashSet<harmonigraph_core::PressId>,
+    visible: HashSet<NameId>,
+    suppressed: HashSet<NameId>,
     now: Option<f64>,
     layout: Option<ThinningLayout>,
 }
@@ -414,7 +428,7 @@ pub(super) fn plan(
         if !rect.intersects(axes.rect) {
             continue;
         }
-        let id = note.id();
+        let id = name_id(note);
         // Its standing, read once here rather than in every comparison of the
         // sort below: with thousands of candidates over a long Span, hashing
         // `visible` per comparison was most of this pass.

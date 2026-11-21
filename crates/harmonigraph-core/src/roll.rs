@@ -24,7 +24,8 @@
 //! 1. an off at or before its onset pulses as a voice and is no timeline note
 //!    ([`note_off`](NoteRoll::note_off));
 //! 2. a retrigger without an off ends the old press with no fade, and drops it
-//!    when the retrigger is at or before its onset
+//!    when the retrigger is at or before its onset; an on at a rule-1 pulse's
+//!    own onset absorbs the pulse, one press sent as on, off, on
 //!    ([`note_on`](NoteRoll::note_on));
 //! 4. a note hidden at its release is never drawn leaving nor remembered, while
 //!    the timeline follows the current Show switch;
@@ -51,6 +52,8 @@ use crate::tuning::PitchClass;
 /// it traced in between.
 #[derive(Clone, Debug)]
 pub struct RollNote {
+    /// The press ([`PressId`]), numbered by its roll as it opened.
+    id: PressId,
     pub source: SourceId,
     pub channel: u8,
     pub note: u8,
@@ -109,9 +112,11 @@ pub struct RollNote {
 }
 
 impl RollNote {
-    /// A press starting at `start`, its pitch and expressions first stated at
-    /// `at`.
+    /// The press `id` starting at `start`, its pitch and expressions first
+    /// stated at `at`.
+    #[allow(clippy::too_many_arguments)]
     fn new(
+        id: PressId,
         key: VoiceKey,
         velocity: f32,
         start: Time,
@@ -120,6 +125,7 @@ impl RollNote {
         expressions: Expressions,
     ) -> Self {
         RollNote {
+            id,
             source: key.source,
             channel: key.channel,
             note: key.note,
@@ -145,17 +151,9 @@ impl RollNote {
         VoiceKey { source: self.source, channel: self.channel, note: self.note }
     }
 
-    /// The press's identity: its key and its onset, as its voice's is
-    /// ([`Voice::id`]).
+    /// The press's identity, as its voice's is ([`Voice::id`]).
     pub fn id(&self) -> PressId {
-        (self.key(), self.start.to_bits())
-    }
-
-    /// Released at or before its onset (rule 1, [`NoteRoll::note_off`]): a
-    /// voice that pulses, its release waiting out the attack. A reset that
-    /// closes a note at its onset is not one: that note sounded.
-    pub fn is_pulse(&self) -> bool {
-        self.pulse
+        self.id
     }
 
     /// No timeline note: a rule-1 pulse, or a press Clear roll took.
@@ -185,6 +183,7 @@ impl RollNote {
             on_time: self.start,
             lifetime: self.lifetime,
             state: self.departed().map_or(VoiceState::Held, |at| VoiceState::Released { at }),
+            id: self.id,
         }
     }
 
@@ -428,6 +427,8 @@ pub struct NoteRoll {
     /// whole recording, built once and drawn a window at a time, where the
     /// cap would forget the song's start.
     uncapped: bool,
+    /// The [`PressId`] the last press to open took.
+    last_id: u64,
 }
 
 impl NoteRoll {
@@ -448,6 +449,13 @@ impl NoteRoll {
     /// trail mark — the retrigger's own release covers the pitch. If that
     /// instant is at or before the previous press's own onset, it is dropped
     /// instead, the note having never sounded.
+    ///
+    /// The same goes for a rule-1 pulse on the key that opened at this very
+    /// instant, though its off has already taken it from the held set: hosts
+    /// send one press as an on, an off and a second on all stamped at one
+    /// sample, and the pulse between them is that press, so the second on
+    /// absorbs it. Every pane then draws the one press once, where the Spiral
+    /// and the note band drew its arrival and fade twice over.
     pub fn note_on(&mut self, key: VoiceKey, velocity: f32, pitch: f32, at: Time) {
         if let Some(mut previous) = self.depart(key) {
             if at > previous.start {
@@ -455,7 +463,32 @@ impl NoteRoll {
                 self.retire(previous);
             }
         }
-        self.live.insert(key, RollNote::new(key, velocity, at, at, pitch, Expressions::NEUTRAL));
+        // The key's newest release, sought from the back among this
+        // instant's: a pulse this on absorbs opened at `at`, so it was let go
+        // with this instant's events, and a press that opened and ended
+        // before them ends the search. A roll nothing prunes keeps every
+        // release here, and a walk of them all on every on would make
+        // building one quadratic in its notes.
+        for (index, note) in self.fading.iter().enumerate().rev() {
+            if note.key() == key {
+                if note.pulse && note.start == at {
+                    self.fading.remove(index);
+                }
+                break;
+            }
+            if note.start < at && note.departed().is_some_and(|off| off < at) {
+                break;
+            }
+        }
+        let id = self.mint();
+        let note = RollNote::new(id, key, velocity, at, at, pitch, Expressions::NEUTRAL);
+        self.live.insert(key, note);
+    }
+
+    /// A fresh [`PressId`] for a press opening now.
+    fn mint(&mut self) -> PressId {
+        self.last_id += 1;
+        PressId(self.last_id)
     }
 
     /// Release one key.
@@ -464,7 +497,8 @@ impl NoteRoll {
     /// and the timeline drops it rather than remembering a note of no
     /// duration. Hosts do emit these: one press can arrive as an on, an off
     /// and a second on all stamped at the same sample, and the pair in the
-    /// middle leaves an entry that begins and ends together. As a voice it
+    /// middle leaves an entry that begins and ends together, until the second
+    /// on absorbs it ([`note_on`](Self::note_on)). Alone, as a voice it
     /// still PULSES — a full arrival and departure on the lattice, the Spiral
     /// and the note band, since the release waits out the attack
     /// ([`Voice::release_level`]) — and lands in the trail: it fades marked
@@ -617,8 +651,9 @@ impl NoteRoll {
                 continue;
             }
             let start = row.actual_onset + offset;
+            let id = self.mint();
             let mut note =
-                RollNote::new(key, row.velocity, start, at, row.pitch(), row.expressions);
+                RollNote::new(id, key, row.velocity, start, at, row.pitch(), row.expressions);
             note.lifetime = Some(row.lifetime);
             note.history_complete = false;
             self.live.insert(key, note);
@@ -776,10 +811,7 @@ impl NoteRoll {
     /// and once released it leaves `past` with its voice.
     ///
     /// `since` seeks the release-ordered `past` rather than walking it, so the
-    /// cost is the recent presses' rather than the session's. Two presses here
-    /// can share an identity: a rule-1 pulse and the press a host sends at the
-    /// same sample after it, or a fade a baseline withdrew (rule 6) and the
-    /// fresh press it opened. The later one in this order is the one sounding.
+    /// cost is the recent presses' rather than the session's.
     pub fn voice_presses(&self, since: Time) -> impl Iterator<Item = &RollNote> {
         let from = self.past.partition_point(|n| n.departed().is_some_and(|at| at < since));
         let past = self.past.range(from..).filter(|note| !note.left_hidden);
@@ -942,6 +974,9 @@ mod tests {
     /// where it ended. So a single press put a letter on the pane that
     /// scrolled away from the letter held at the now-line, as though the key
     /// had been played twice.
+    ///
+    /// Nor a voice of its own: the Spiral and the note band would draw the
+    /// press's arrival and fade twice over.
     #[test]
     fn one_press_delivered_as_on_off_on_is_one_note() {
         let mut tracker = NoteTracker::new();
@@ -949,6 +984,7 @@ mod tests {
         tracker.handle_event(off(9.9314, 60));
         tracker.handle_event(on(9.9314, 60));
         assert_eq!(tracker.roll().len(), 1, "the off/on pair is not a note of its own");
+        assert_eq!(tracker.voices().count(), 1, "the off/on pair is not a voice of its own");
         assert!(tracker.roll().notes().next().unwrap().is_live(), "the press is still sounding");
 
         tracker.handle_event(off(11.6881, 60));

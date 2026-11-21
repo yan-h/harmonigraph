@@ -318,9 +318,10 @@ fn a_released_end_can_mark_a_lower_slice_than_the_live_one() {
 #[test]
 fn an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it() {
     let mut motion = NodeMotion::default();
-    const DELAY: f64 = 0.2;
+    const DELAY: f64 = 0.5;
     let mut tracker = NoteTracker::new();
-    // C4 and C5 hold the node; C6 takes the melody for less than the wait.
+    // C4 and C5 hold the node; C6 takes the melody for less than the wait,
+    // its off waiting out its attack (#1893, item 7) to 0.5 + SPAN.
     tracker.handle_event(on(0.0, 60));
     tracker.handle_event(on(0.0, 72));
     tracker.handle_event(on(0.5, 84));
@@ -329,9 +330,18 @@ fn an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it() {
     // The motion pass retains the rejected handoff through its event history.
     const SPAN: f64 = 0.4;
     let view = ViewConfig { fade_time: SPAN as f32, ..view };
-    // C5 retook the melody at 0.55; one wait and one ease later its mark is
-    // whole, with C6's rejected handoff in the replayed history.
-    let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, 0.55 + DELAY + SPAN);
+    // C5 retook the melody as C6's attack landed; one wait and one ease later
+    // its mark is whole, with C6's rejected handoff in the replayed history.
+    let retaken = 0.5 + SPAN;
+    // Drawn as C6 arrives and as it leaves, so its edges reach the surface
+    // in time rather than at the edge of the replay horizon.
+    for now in [0.5, retaken] {
+        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, now);
+        let c6 = 1 << (MIDDLE_C_SLOT + 2);
+        assert_eq!(origin_node(&scene).melody_slots & c6, 0, "C6 was marked at {now}");
+    }
+    let scene =
+        motion_scene(&mut motion, &tracker, &Tuning::default(), &view, retaken + DELAY + SPAN);
     let origin = origin_node(&scene);
     // Sampled at the ramp's own endpoint, which the delay puts a sum of three
     // f64s away from a round number — so the claim is "up", not a bit pattern.
@@ -381,15 +391,15 @@ fn a_lone_notes_mark_fades_out_with_it() {
     }
 }
 
-/// A short note reverses its carried level at key-up, with its marks and
-/// octave sector leaving together.
+/// A note shorter than its arrival arrives in full before it leaves, as the
+/// lattice holds every note until its attack has landed (#1893, item 7), and
+/// its marks keep level with its octave sector the whole way.
 #[test]
 fn a_note_shorter_than_its_arrival_still_marks_level_with_its_sector() {
     let mut motion = NodeMotion::default();
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60));
-    // Lifted a third of the way up the ramp, so a frozen reading and a running
-    // one are far apart rather than a rounding away.
+    // Lifted a third of the way up the ramp.
     tracker.handle_event(off(ATTACK / 3.0, 60));
     let view = delayed_view(0.0);
     let mut mark = |now: f64| {
@@ -398,39 +408,43 @@ fn a_note_shorter_than_its_arrival_still_marks_level_with_its_sector() {
         (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
     };
 
-    let mut previous = mark(ATTACK / 3.0).0;
-    assert!(previous > 0.0);
-    for step in 2..=6 {
+    let mut peak = 0.0f32;
+    for step in 1..=6 {
         let now = ATTACK * f64::from(step) / 3.0;
         let (melody, bass, octave) = mark(now);
         assert_eq!(melody, octave, "at {now}s the mark and the sector it extends disagree");
-        assert_eq!(melody, bass, "and a lone note's two marks leave together");
-        assert!(melody <= previous, "the mark reverses at key-up");
-        previous = melody;
+        assert_eq!(melody, bass, "and a lone note's two marks agree");
+        peak = peak.max(melody);
     }
+    assert_eq!(peak, 1.0, "the marks did not arrive in full");
+    assert_eq!(mark(ATTACK * 3.0).0, 0.0, "the marks never left");
 }
 
 /// The Delay stays a THRESHOLD now that a mark outlives its key. An end
-/// dropped before the wait is up was never marked, and must not be on the way out:
-/// the threshold is answered at the key-up, so the ramp that runs on from
-/// there has nothing to carry.
+/// dropped before the wait is up was never marked, and must not be on the way
+/// out: the threshold is answered at the lattice's off, so the ramp that runs
+/// on from there has nothing to carry. With the Fade between half the Delay
+/// and the Delay, a note held for an instant leaves the lattice inside the
+/// wait, once its attack has landed, and its release runs on past the wait.
 #[test]
 fn an_end_dropped_inside_the_delay_is_never_marked_on_its_way_out() {
-    let mut motion = NodeMotion::default();
     const DELAY: f64 = 0.5;
+    const FADE: f64 = 0.3;
+    let mut motion = NodeMotion::default();
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60));
-    // Held for less than the wait, and then released on the longest envelope
-    // the bar offers — long enough that an ease still running would sail past
-    // the threshold.
-    tracker.handle_event(off(0.2, 60));
-    let view = ViewConfig { fade_time: FADE_TIME_MAX, ..delayed_view(DELAY as f32) };
-    for now in [0.2, 0.5, 0.8, 1.0, 1.15] {
+    tracker.handle_event(off(0.05, 60));
+    let view = ViewConfig { fade_time: FADE as f32, ..delayed_view(DELAY as f32) };
+    let mut released_past_the_wait = false;
+    for step in 0..=40 {
+        let now = f64::from(step) * 0.02;
         let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, now);
         let n = origin_node(&scene);
         assert_eq!(n.melody_level, 0.0, "a mark appeared at {now}s on a note that never had one");
         assert_eq!(n.bass_level, 0.0, "and a bass mark at {now}s");
+        released_past_the_wait |= now > DELAY && n.presence_with_opacity > 0.0;
     }
+    assert!(released_past_the_wait, "the fixture's release must outlast the wait");
 }
 
 #[test]
@@ -538,7 +552,12 @@ fn an_end_given_up_inside_the_delay_is_never_marked_at_all() {
     // A note that has lost the end again before its wait is up draws no mark
     // at any point: it never cleared the threshold while it was down, and a
     // released voice that never cleared it has no mark to fade out.
+    //
+    // The lattice holds every note until its attack has landed (#1893, item
+    // 7), so G4 hands the end back at 0.25, one attack after its note-on,
+    // and that is inside the wait too.
     const DELAY: f64 = 0.25;
+    const HANDOFF: f64 = 0.05 + ATTACK;
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60)); // C4, held right through
     tracker.handle_event(on(0.05, 67)); // G4 takes the melody...
@@ -552,17 +571,17 @@ fn an_end_given_up_inside_the_delay_is_never_marked_at_all() {
     };
 
     for step in 0..=10 {
-        let now = 0.15 + DELAY * f64::from(step) / 10.0;
-        assert!(mark(now) < 1e-6, "a mark drew at {now}, inside C4's own wait");
+        let now = 0.05 + (HANDOFF + DELAY - 0.05) * f64::from(step) / 10.0;
+        assert!(mark(now) < 1e-6, "a mark drew at {now}, inside a wait");
     }
     // C4 re-took the melody at the handoff, so its mark is due one wait and
     // one attack after THAT — not after its own note-on, which is older than
     // both put together.
-    assert_eq!(mark(0.15 + DELAY + ATTACK), 1.0, "and then C4's mark arrives");
+    assert_eq!(mark(HANDOFF + DELAY + ATTACK), 1.0, "and then C4's mark arrives");
     // The bass end never changed hands through any of it, so it is measured
     // from C4's note-on — one wait and one ease after that, and unmoved since.
     let scene =
-        motion_scene(&mut motion, &tracker, &Tuning::default(), &view, 0.15 + DELAY + ATTACK);
+        motion_scene(&mut motion, &tracker, &Tuning::default(), &view, HANDOFF + DELAY + ATTACK);
     assert_eq!(origin_node(&scene).bass_level, 1.0, "the end that never moved is unaffected");
 }
 
@@ -659,6 +678,23 @@ fn a_non_finite_delay_draws_as_no_delay_at_all() {
     assert_eq!(level(&poisoned, 0.0), level(&sane, 0.0), "the two doors must answer alike");
     // And it is the undelayed ramp rather than a mark layer that never comes.
     assert_eq!(level(&poisoned, ATTACK), 1.0, "the marks draw as they always did");
+}
+
+/// The Delay holds a mark back at a Fade of 0 as at any other: the mark steps
+/// in once the wait is out, rather than at the note-on with nothing to ease.
+#[test]
+fn a_mark_waits_out_its_delay_at_a_fade_of_zero() {
+    const DELAY: f64 = 0.5;
+    let tracker = held(60);
+    let view = ViewConfig { fade_time: 0.0, ..delayed_view(DELAY as f32) };
+    let mut motion = NodeMotion::default();
+    let mut level = |now: f64| {
+        origin_node(&motion_scene(&mut motion, &tracker, &Tuning::default(), &view, now))
+            .melody_level
+    };
+    assert_eq!(level(0.0), 0.0, "the mark arrived with its note");
+    assert_eq!(level(DELAY * 0.5), 0.0, "the mark arrived inside its Delay");
+    assert_eq!(level(DELAY), 1.0, "the mark did not step in as the Delay ran out");
 }
 
 /// `notes` held with both ends marked and the octave wheel set to `count`

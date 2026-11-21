@@ -3234,12 +3234,12 @@ fn glow_layer(light: vec2<f32>, uv: vec2<f32>) -> vec4<f32> {
     // what it is putting on the node and how much of the node that is.
     let ink = glow_ink(light.y, atan2(uv.y, uv.x), mix_out);
     // A node lighting NOTHING gives off nothing, and the level above does not
-    // say so: it is the node's drawn colour after Opacity (`glow.level`), and
-    // a view with every layer dialled off leaves a held note a full level with
-    // no ink under it — as does a node the audio ring is showing on with
-    // nothing sounding anywhere in it, whose every wedge is the ground.
-    // Lighting either would be a black halo, or a grey one: a colour invented
-    // for a node that has none.
+    // always say so: it is the node's drawn colour after Opacity (`glow.level`).
+    // The CPU ships no light that no layer draws (`GlowFade::step_drawn` in
+    // harmonigraph-ui), but a light can still miss every texel of this
+    // direction's strip, as a slot the ring has no room for does. Lighting
+    // that would be a black halo, or a grey one: a colour invented for a node
+    // that has none.
     if ink.w <= 0.0 {
         return vec4<f32>(0.0);
     }
