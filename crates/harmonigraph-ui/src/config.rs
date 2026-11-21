@@ -534,8 +534,8 @@ pub struct SpectrumConfig {
     /// onset stays at the onset when the spectrum moves to the other side
     /// (Yan, PR #1902). It once meant "the end that reads first, or the other
     /// one", so turning the analyzer moved every name to its ribbon's other
-    /// end; the key was renamed with the change, and a project saved before it
-    /// opens at the default with a Console line.
+    /// end. The key was renamed with the change, so a project or take saved
+    /// before it holds a key this skips, and opens at the default.
     pub note_name_anchor: NameAnchor,
     /// Overall size of those names, as a multiple of their built-in size.
     ///
