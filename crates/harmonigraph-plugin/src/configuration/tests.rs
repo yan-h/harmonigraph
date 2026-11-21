@@ -595,11 +595,11 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     let settings = device.settings();
     let (host, lock) = (device.editor_host(), device.editor_lock());
     let opened = std::cell::Cell::new(None);
-    let frame = || {
+    let frame = |own: Option<bool>| {
         if let Some(opened) = opened.get() {
             crate::editor::next_size(&state, opened, host.as_ref(), &lock);
         }
-        state.report_edit(|| settings.changed());
+        state.end_frame(own, None, || settings.changed());
     };
     let resize = |grow: u32| {
         let (width, height) = state.size();
@@ -612,24 +612,23 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     opened.set(Some(state.open()));
     state.settle();
     resize(40);
-    frame();
+    frame(None);
     assert_eq!(device.service(), before, "a resize while the editor opens");
     resize(30);
-    frame();
+    frame(None);
     assert_eq!(device.service(), before + 1, "a resize");
-    frame();
+    frame(None);
     assert_eq!(device.service(), before + 1, "once");
-    state.set_docked(false);
-    frame();
+    frame(Some(true));
     assert_eq!(device.service(), before + 2, "an Own window switch");
-    frame();
+    frame(None);
     assert_eq!(device.service(), before + 2, "once");
 
     let saved = crate::editor::SavedWindow { size: (900, 700), docked: true };
     let mut project = device.wrapper().get_state_object();
     project.fields.insert("editor-state".into(), serde_json::to_string(&saved).unwrap());
     device.load(project);
-    frame();
+    frame(None);
     assert_eq!(state.size(), (900, 700), "the restore installed");
     assert_eq!(device.service(), before + 2, "a restore");
 
@@ -638,11 +637,11 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
     state.close();
     opened.set(Some(state.open()));
     resize(20);
-    frame();
+    frame(None);
     assert_eq!(device.service(), before + 2, "a resize while the view moves in");
     state.settle();
     resize(20);
-    frame();
+    frame(None);
     assert_eq!(device.service(), before + 2, "a resize while the editor opens again");
 }
 
@@ -704,7 +703,7 @@ fn a_restore_while_the_editor_is_open_resizes_its_window_at_the_next_frame() {
     let opened = state.open();
     let frame = || {
         let laid_out = crate::editor::next_size(&state, opened, host.as_ref(), &lock);
-        state.report_edit(|| settings.changed());
+        state.end_frame(None, None, || settings.changed());
         laid_out
     };
     frame();
