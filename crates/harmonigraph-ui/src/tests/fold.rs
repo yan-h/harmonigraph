@@ -648,6 +648,26 @@ fn a_loaded_project_draws_the_spectrum_at_its_saved_length() {
     assert!((length - 100.0).abs() < 1.0, "the spectrum opened {length} points long, not 100");
 }
 
+/// A project loaded with the far region hidden still draws the spectrum at its
+/// saved length once the far region is turned back on.
+#[test]
+fn a_project_loaded_with_its_history_hidden_keeps_the_saved_length() {
+    let mut saved = relayout_state();
+    saved.workspace.interaction.analyzer_regions =
+        ron::from_str("(geometry:Some((depths:(100.0,400.0),dial:0.75,vertical:false)))")
+            .expect("an Analyzer's regions parse");
+    saved.picture.appearance.spectrum.show_spectrogram = false;
+    saved.picture.appearance.spectrum.show_roll = false;
+    let mut state = relayout_state();
+    assert!(state.install_document(&saved.save_persist()));
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    state.picture.appearance.spectrum.show_spectrogram = true;
+    h.settle(&mut state);
+    let (length, _) = spectrum_length(&h, &state);
+    assert!((length - 100.0).abs() < 1.0, "the spectrum opened {length} points long, not 100");
+}
+
 /// A loaded project whose Analyzer was laid out under another dial opens at
 /// the dial's share of the pane it opens in, not at the length the last
 /// window held (#1893).

@@ -193,7 +193,10 @@ pub(super) fn restore_spectrum(state: &mut PictureState, depths: Option<[f32; 2]
     let depth = depths[0] + depths[1];
     state.surfaces.spectrum_hold.held = (depth > 0.0).then_some(Held {
         dial: cfg.roll_fraction,
-        depth: depths[0] / super::axes::spectrum_share(&cfg).max(f32::EPSILON),
+        // The dial's share, not `spectrum_share`'s, which reads the whole
+        // axis while the far region is hidden: geometry is only saved with it
+        // drawn, and the hold waits for it to return.
+        depth: depths[0] / (1.0 - cfg.roll_fraction).max(f32::EPSILON),
         vertical: cfg.orientation.is_time_vertical(),
         held: depths[0] / depth.max(1.0),
     });
