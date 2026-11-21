@@ -90,27 +90,24 @@ pub struct Audio<'a> {
     /// the input does not have. The plugin writes its output over it.
     pub main: &'a mut [&'a mut [f32]],
     /// Each auxiliary input's channels, in the order [`Ports`] declares them:
-    /// the host's audio, copied so that the plugin may write it, or silence
-    /// for a port or a channel the host left out (#638).
-    pub aux: &'a mut [&'a mut [&'a mut [f32]]],
+    /// the host's audio, read where the host left it, or silence for a port
+    /// or a channel the host left out (#638).
+    ///
+    /// Read-only, and borrowed rather than copied (#1864): CLAP lets a host
+    /// share a buffer between an input and an output only for a port's
+    /// declared in-place pair, and an auxiliary input declares none
+    /// (`ext_audio_ports_get`), so nothing the plugin writes can alias these.
+    pub aux: &'a [&'a [&'a [f32]]],
 }
 
-/// What a callback's auxiliary inputs are copied into, sized at activation
-/// so a callback allocates nothing.
-pub(crate) struct AuxStorage {
-    /// Per port, per channel, the activation's maximum frames.
-    ports: Vec<Vec<Box<[f32]>>>,
-}
+/// The silence a callback reads for an auxiliary port or channel the host
+/// left out: one plane of the activation's maximum frames, sized there so a
+/// callback allocates nothing.
+pub(crate) struct Silence(Box<[f32]>);
 
-impl AuxStorage {
-    pub(crate) fn new(ports: &Ports, max_frames: u32) -> Self {
-        let channel = || vec![0.0; max_frames as usize].into_boxed_slice();
-        let ports = ports
-            .aux_inputs
-            .iter()
-            .map(|&(channels, _)| (0..channels).map(|_| channel()).collect())
-            .collect();
-        Self { ports }
+impl Silence {
+    pub(crate) fn new(max_frames: u32) -> Self {
+        Self(vec![0.0; max_frames as usize].into_boxed_slice())
     }
 }
 
@@ -137,22 +134,24 @@ unsafe fn channels<'a>(
 #[derive(Default)]
 pub(crate) struct Slices<'a> {
     main: [&'a mut [f32]; MAX_CHANNELS],
-    aux_channels: [[&'a mut [f32]; MAX_CHANNELS]; MAX_AUX_INPUTS],
-    aux: [&'a mut [&'a mut [f32]]; MAX_AUX_INPUTS],
+    aux_channels: [[&'a [f32]; MAX_CHANNELS]; MAX_AUX_INPUTS],
+    aux: [&'a [&'a [f32]]; MAX_AUX_INPUTS],
 }
 
-/// `process`'s audio for `ports`, built in `slices` with the auxiliary
-/// inputs copied into `storage`: `None` when the layout's main output is
+/// `process`'s audio for `ports`, built in `slices`, with `silence` for an
+/// auxiliary port or channel the host left out: `None` when the layout's main
+/// output is
 /// missing, or has fewer channels than the layout declares, so there is
 /// nothing to write the audio to.
 ///
 /// # Safety
 /// `process` and every buffer it points to must be valid for `'a`, each
-/// channel `frames_count` long, and `storage` sized for at least that many.
+/// channel `frames_count` long, `silence` at least that long, and no auxiliary
+/// input's buffer one the host also handed in as an output.
 pub(crate) unsafe fn audio<'a>(
     ports: &Ports,
     process: &clap_process,
-    storage: &'a mut AuxStorage,
+    silence: &'a Silence,
     slices: &'a mut Slices<'a>,
 ) -> Option<Audio<'a>> {
     let frames = process.frames_count as usize;
@@ -176,27 +175,24 @@ pub(crate) unsafe fn audio<'a>(
     }
 
     let first_aux = usize::from(ports.main_input > 0);
-    for (port, (stored, slots)) in storage.ports.iter_mut().zip(aux_channels.iter_mut()).enumerate()
+    let silence = &silence.0[..frames];
+    for (port, (&(declared, _), slots)) in
+        ports.aux_inputs.iter().zip(aux_channels.iter_mut()).enumerate()
     {
         // Stop at the host's declared count, before reading the one-past
         // descriptor (#638): an omitted port is silence.
         let host =
             unsafe { channels(process.audio_inputs, process.audio_inputs_count, first_aux + port) }
                 .unwrap_or(&[]);
-        for (channel, (stored, slot)) in stored.iter_mut().zip(slots.iter_mut()).enumerate() {
-            let stored = &mut stored[..frames];
-            match host.get(channel) {
-                Some(&input) => {
-                    stored.copy_from_slice(unsafe { std::slice::from_raw_parts(input, frames) })
-                }
-                None => stored.fill(0.0),
-            }
-            *slot = stored;
+        for (channel, slot) in slots.iter_mut().take(declared as usize).enumerate() {
+            *slot = match host.get(channel) {
+                Some(&input) => unsafe { std::slice::from_raw_parts(input, frames) },
+                None => silence,
+            };
         }
     }
-    for ((port, slots), slot) in ports.aux_inputs.iter().zip(aux_channels.iter_mut()).zip(&mut *aux)
-    {
-        *slot = &mut slots[..port.0 as usize];
+    for ((port, slots), slot) in ports.aux_inputs.iter().zip(&*aux_channels).zip(&mut *aux) {
+        *slot = &slots[..port.0 as usize];
     }
-    Some(Audio { main: &mut main[..main_channels], aux: &mut aux[..ports.aux_inputs.len()] })
+    Some(Audio { main: &mut main[..main_channels], aux: &aux[..ports.aux_inputs.len()] })
 }

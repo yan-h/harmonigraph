@@ -13,7 +13,7 @@
 //! the lines for a restart of the host's steady counter (#1881) and for one
 //! that skips ahead inside a processing run (#1885).
 
-use crate::audio_setup::{Audio, AuxStorage, BufferConfig, ProcessMode, Slices, audio};
+use crate::audio_setup::{Audio, BufferConfig, ProcessMode, Silence, Slices, audio};
 use crate::editor::{Editor, EditorHost};
 use crate::events::{self, InputValue, List, Output};
 use crate::params::{Report, Table};
@@ -243,8 +243,9 @@ pub struct Wrapper<P: Plugin> {
     /// request an active plugin makes waits there, and the host keeps reading
     /// the latency this activation runs, until the next one adopts it (#615).
     latency: LatencyState,
-    /// What the auxiliary inputs are copied into, sized at activation.
-    aux_storage: AtomicRefCell<AuxStorage>,
+    /// What a callback reads for an auxiliary port or channel the host left
+    /// out, sized at activation.
+    aux_silence: AtomicRefCell<Silence>,
 
     // We'll query all of the host's extensions upfront
     host_callback: ClapPtr<clap_host>,
@@ -329,7 +330,7 @@ impl<P: Plugin> Wrapper<P> {
             processed: AtomicBool::new(false),
             latency: LatencyState::default(),
             // Sized at activation, so a callback allocates nothing.
-            aux_storage: AtomicRefCell::new(AuxStorage::new(&P::PORTS, 0)),
+            aux_silence: AtomicRefCell::new(Silence::new(0)),
 
             host_callback,
 
@@ -604,7 +605,7 @@ impl<P: Plugin> Wrapper<P> {
         // Release the plugin lock before host callbacks.
         drop(plugin);
 
-        *wrapper.aux_storage.borrow_mut() = AuxStorage::new(&P::PORTS, max_frames_count);
+        *wrapper.aux_silence.borrow_mut() = Silence::new(max_frames_count);
         *wrapper.steady.borrow_mut() = SteadyClock::default();
         wrapper.current_buffer_config.store(Some(buffer_config));
         // The one place the reported latency moves and the one place the host
@@ -736,9 +737,9 @@ impl<P: Plugin> Wrapper<P> {
             // A lost callback's audio is left as the host gave it.
             plugin.process(&mut unsafe { self.block(boundary, list, process, None) });
         } else if valid {
-            let mut storage = self.aux_storage.borrow_mut();
+            let silence = self.aux_silence.borrow();
             let mut slices = Slices::default();
-            let audio = unsafe { audio(&P::PORTS, process, &mut storage, &mut slices) };
+            let audio = unsafe { audio(&P::PORTS, process, &silence, &mut slices) };
             plugin.process(&mut unsafe { self.block(boundary, list, process, audio) });
             self.poll_latency(&plugin);
         }
