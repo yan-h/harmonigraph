@@ -78,7 +78,7 @@ the serde field names are in the binary, so `roll_lead` answers "does this rende
 ## Every build says which build it is
 
 The performance overlay's bottom line reads `build  <branch> @<sha>` —
-the branch as git names it, `claude/<name>` or `codex/<slug>` (only a legacy `worktree-` prefix is stripped).
+the branch as git names it, less the `worktree-` prefix of a Claude worktree's branch: `<name>`, or `codex/<slug>`.
 The result is exactly the argument `./load-plugin.sh <branch>` takes.
 It is stamped at compile time by `build/build_tag.rs`, which each leaf binary's own `build.rs` includes (plugin, offline, standalone).
 The overlay carrying it ships OFF, so reading the tag takes one tick first:

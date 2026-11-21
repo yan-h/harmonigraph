@@ -409,6 +409,9 @@ impl SettingsCase {
     /// a real session gives it.
     pub(super) fn state(self) -> SharedState {
         let mut state = fresh();
+        // Every section open, though a fresh editor folds the lattice-board's:
+        // `open_settings_pane` opens subsections, not sections.
+        state.workspace.interaction.prefs.folded_sections.clear();
         // Learn on under Lattice Map, which says it is suspended there.
         state.picture.runtime.learn_active = self.variant
             == Variant::Engine(harmonigraph_core::lattice_map::TuningEngine::LatticeMap);
