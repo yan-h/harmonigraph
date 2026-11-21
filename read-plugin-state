@@ -15,5 +15,14 @@ tool="${AGENT_LIFECYCLE_TOOL:-$HOME/.agents/skills/session-lifecycle/scripts/lif
 if [[ -f "$tool" && "${AGENT_LIFECYCLE_ACTIVE:-}" != "$here" ]]; then
   READ_PLUGIN_STATE_CWD="$PWD" exec python3 "$tool" --repo "$here" run -- "$here/read-plugin-state" "$@"
 fi
-cd "${READ_PLUGIN_STATE_CWD:-$PWD}"
-exec cargo run --release --quiet --manifest-path "$here/Cargo.toml" -p harmonigraph-state-reader -- "$@"
+caller="${READ_PLUGIN_STATE_CWD:-$PWD}"
+# Cargo reads .cargo/config.toml (sccache, the macOS floor) and the pinned
+# toolchain from its working directory, not from the manifest, so it builds
+# from the checkout: a first build from a project's folder compiled without
+# the shared cache. The reader then runs from the caller's directory.
+cd "$here"
+cargo build --release --quiet -p harmonigraph-state-reader
+target="${CARGO_TARGET_DIR:-target}"
+[[ "$target" == /* ]] || target="$here/$target"
+cd "$caller"
+exec "$target/release/read-plugin-state" "$@"
