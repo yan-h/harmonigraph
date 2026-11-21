@@ -52,3 +52,13 @@ Yan took the recommendations made after the audit was checked against the code (
 ## 2026-11-18 (#1814, in chat, after step 7)
 
 - The host's window keeps the own window's limits too, maximum included, since the editor adopted `EditorSize` (#1814, recorded in `editor-shell.md`).
+
+## 2026-11-21 (pixel-rate pacing, #1911)
+
+- Each picture drawn says when it next changes on screen rather than whether it moves:
+  every frame while a value fades, and the frame its scroll next crosses a device pixel for the live roll, the heatmap and a Tape playhead.
+  The editor draws at the soonest, and a pace at or past the idle poll is left to the poll.
+  Yan said yes in #1893 item 3.
+  This replaces the R1 line's yes or no (2026-11-10) with a time, still answered by each picture's own draw, and replaces the Tape playhead's 144 px/s threshold (#1837).
+- Learn's armed pulse animates at about 30 Hz, as the Record button's breath does, rather than at the display rate. Yan, in chat, #1911.
+- The Record breath and the export stripes keep their 30 Hz cadence (#1861 Q1): every frame of a breath differs, so pacing by pixel would put it back at the display rate.

@@ -299,7 +299,10 @@ pub(super) fn tuning_pane(
                     ),
                     egui::StrokeKind::Outside,
                 );
-                state.surfaces.moving_this_frame.hold(crate::Reason::LearnPulse);
+                state
+                    .surfaces
+                    .moving_this_frame
+                    .hold_for(crate::Reason::LearnPulse, crate::CHROME_CUE);
             }
         });
     });

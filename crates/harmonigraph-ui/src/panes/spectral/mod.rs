@@ -521,11 +521,11 @@ pub(crate) fn spectral_pane(
     // `roll::lead`, and the divider below for what still draws over it).
     // The width it draws a body at is also where the names leave the pitch
     // zoom, so both take this one (computed above, for Tape mode's roll too).
-    // Whether something the live roll drew is still inside its Span: what it
-    // says about its motion waits for its names, below.
-    let mut in_span = false;
+    // How what the live roll drew still moves: what it says waits for its
+    // names, below.
+    let mut roll_motion = roll::RollMotion::default();
     if show_history && split < 1.0 && cfg.show_roll && song.is_none() {
-        in_span = roll::draw_live_roll(
+        roll_motion = roll::draw_live_roll(
             &painter,
             &axes,
             &scale,
@@ -669,15 +669,19 @@ pub(crate) fn spectral_pane(
         );
         state.surfaces.note_names.insert(surface, thinning);
         names::draw(&painter, &note_names, text.names.label, &mut labels);
-        in_span |= note_names.iter().any(|label| label.in_span);
+        // A name only scrolls with its note.
+        roll_motion.scrolling |= note_names.iter().any(|label| label.in_span);
     } else {
         state.surfaces.note_names.remove(&surface);
     }
     // The roll moves while a note it draws, as a ribbon, a Lead or a name, is
     // still inside its own Span: one off the zoom, or too thin to draw, or an
     // overhang past the far edge, leaves a still picture to the idle poll
-    // (#1835).
-    state.surfaces.moving_this_frame.hold_if(crate::Reason::RollInSpan, in_span);
+    // (#1835). A ribbon or a name moves on screen only when the Span's scroll
+    // crosses a device pixel (#1911).
+    let pixel = axes::TimeAxis::new(state, split, now).seconds_per_point(&axes)
+        / f64::from(crate::spectrogram::pane_ppp(painter.ctx()));
+    roll_motion.hold(&mut state.surfaces.moving_this_frame, pixel);
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.
     labels.flush(

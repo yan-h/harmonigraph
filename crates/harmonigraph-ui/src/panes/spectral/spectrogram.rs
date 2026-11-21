@@ -285,12 +285,22 @@ pub(crate) fn draw_spectrogram(
     // ([`tail`](harmonigraph_scene::SpectralAtmosphere::tail)). Only an
     // audible one moves anything, since silence draws in the bed's colour,
     // unless a tilt lifts silence off it, when every column's edges show.
-    let reach = time.window() + layout.bucket + cfg.atmosphere.tail();
+    //
+    // A scroll changes the picture only as it crosses a device pixel, so it
+    // asks for that frame (#1911). Once the column has scrolled off the far
+    // edge, the colour memory eases that edge in place, every frame.
+    let tail = cfg.atmosphere.tail();
+    let scrolled = time.window() + layout.bucket + tail.blur;
     let moving = if silence_shows(&cfg) { Some(newest) } else { spectrum.last_audible().column };
-    state
-        .surfaces
-        .moving_this_frame
-        .hold_if(crate::Reason::Audible, moving.is_some_and(|t| t + reach >= now));
+    if let Some(age) = moving.map(|heard| now - heard) {
+        let held = &mut state.surfaces.moving_this_frame;
+        if scrolled < age && age <= scrolled + tail.memory {
+            held.hold(crate::Reason::Audible);
+        } else if age <= scrolled {
+            let pixel = time.seconds_per_point(axes) / f64::from(view.ppp);
+            held.hold_for(crate::Reason::Audible, pixel);
+        }
+    }
     // The painter's own clip is what bounds the heatmap: the quads reach past
     // the pane wherever the oldest slab starts before the region, and the callback draws against the whole
     // surface and leaves the scissor egui set from this rect alone.

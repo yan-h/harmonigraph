@@ -336,32 +336,34 @@ pub fn root_ui(
     camera_movement::finish_edits(&mut state.picture.appearance, before_camera, params, ui.ctx());
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
 
-    // Render continuously only while something is animating (sounding or
-    // decaying voices); otherwise poll, which bounds how stale a change that
-    // animates nothing gets: an automated parameter, the console, a take's
-    // status. egui repaints on input events by itself, so interaction never
-    // waits on this, and a note repaints itself, since it makes a voice.
+    // Each picture drawn says when it next changes on screen (#1911): at once
+    // while a value still fades (sounding or decaying voices, a release, a
+    // glow, the smoothed spectrum), or when a scroll next crosses a device
+    // pixel (the roll and the heatmap after the sound, a Tape playhead). The
+    // earliest wins, and with nothing sooner than one poll the idle poll
+    // draws, which bounds how stale a change that animates nothing gets: an automated
+    // parameter, the console, a take's status. egui repaints on input events
+    // by itself, so interaction never waits on this, and a note repaints
+    // itself, since it makes a voice.
     //
-    // The piano roll keeps animating well past the last release fade — it
-    // scrolls for as long as its window still reaches a played note — so
-    // it gets its own say here. Without this the roll would advance in
-    // 50 ms jerks once the voices died.
-    //
-    // Audible audio counts too: the spectrum and spectrogram advance every
-    // frame off the analyzer, so with audio playing but no MIDI they'd
-    // otherwise crawl at the 50 ms idle poll. Audio that merely arrives does
-    // not: a host streams silence with its transport stopped (#1670 Q2).
-    let animating = Animating::of(state).any();
-    if animating {
+    // Audio that merely arrives does not count: a host streams silence with
+    // its transport stopped (#1670 Q2).
+    let animating = Animating::of(state);
+    match animating.next_change() {
         // As fast as the shell offers. The frame rate setting is the shell's
         // to apply, by offering fewer frames: a repaint delay cannot bound it,
         // because egui takes the smallest delay asked for in a pass and any
-        // input or hover asks for zero, and a delay of exactly one frame drops
-        // every frame that arrives a hair early, halving the rate.
-        ui.ctx().request_repaint();
-    } else {
-        repaint_after(ui.ctx(), IDLE_REPAINT_INTERVAL);
+        // input or hover asks for zero.
+        Some(seconds) if seconds <= 0.0 => ui.ctx().request_repaint(),
+        // The shell draws on the first refresh at or after the delay, so a
+        // scroll steps one to two device pixels, never more.
+        Some(seconds) => repaint_after(ui.ctx(), std::time::Duration::from_secs_f64(seconds)),
+        None => repaint_after(ui.ctx(), IDLE_REPAINT_INTERVAL),
     }
+    // What the overlay judges against the chosen rate: a picture asking for
+    // every frame the link offers, a fast scroll included.
+    let target_fps = state.picture.instruments.timings.target_fps;
+    let animating = animating.every_frame(target_fps);
 
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
     // the HUD. Interactive path only — the offline renderer never reaches
@@ -533,12 +535,16 @@ const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 pub(crate) const CHROME_REPAINT_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(33);
 
+/// [`CHROME_REPAINT_INTERVAL`] in seconds, for a picture's cue that
+/// [`Animating::hold_for`] paces as the chrome's are: Learn's armed pulse.
+pub(crate) const CHROME_CUE: f64 = CHROME_REPAINT_INTERVAL.as_secs_f64();
+
 /// Declares [`Reason`] from one list, each reason beside the name the frame
 /// log gives it, so a reason added or renamed is written once.
 macro_rules! reasons {
     ($($(#[$doc:meta])* $reason:ident => $name:literal,)*) => {
-        /// Each reason the editor draws at full rate rather than polling, apart
-        /// so the frame log can say which one held it there (#1670 Q2).
+        /// Each reason the editor draws sooner than its idle poll, apart so the
+        /// frame log can say which one held it there (#1670 Q2).
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum Reason {
             $($(#[$doc])* $reason,)*
@@ -565,14 +571,18 @@ reasons! {
     /// Learn's armed pulse, drawn where it can be seen: the lattice's badge
     /// and border, or the Tuning pane's ring round its switch. Learn armed
     /// where neither draws — Lattice Map, which suspends it, or both out of
-    /// sight — leaves a still picture to the idle poll (#1834).
+    /// sight — leaves a still picture to the idle poll (#1834). A cue like
+    /// the Record button's breath, so it asks for frames at the chrome's
+    /// [`CHROME_REPAINT_INTERVAL`] rather than every refresh (Yan, #1911).
     LearnPulse => "learn",
     /// A note the live roll draws, as a ribbon, a name or a Lead, still inside
     /// its own Span: its body has not yet scrolled past the far edge, or its
-    /// Lead is still fading through its release. One off the pitch zoom draws
-    /// nothing and so holds nothing, and an overhang still sliding off the far
-    /// edge finishes at the idle poll (Yan, #1861 on #1835). Tape mode's roll
-    /// holds nothing: its song axis does not scroll.
+    /// Lead is still fading through its release. A Lead fading holds every
+    /// frame; a ribbon or a name only scrolls, so it asks for the frame where
+    /// the roll next crosses a device pixel (#1911). One off the pitch zoom
+    /// draws nothing and so holds nothing, and an overhang still sliding off
+    /// the far edge finishes at the idle poll (Yan, #1861 on #1835). Tape
+    /// mode's roll holds nothing: its song axis does not scroll.
     RollInSpan => "roll",
     /// A lattice node still moving after its voice was pruned
     /// ([`NodeMotion::moving`](harmonigraph_scene::NodeMotion::moving): a
@@ -592,7 +602,9 @@ reasons! {
     ///   ([`AudioSpectrum::moving`]), off when it last held anything.
     /// - Each heatmap surface, off the run and slab it drew, its Span and its
     ///   atmosphere's tail
-    ///   ([`draw_spectrogram`](panes::spectral::spectrogram::draw_spectrogram)).
+    ///   ([`draw_spectrogram`](panes::spectral::spectrogram::draw_spectrogram)):
+    ///   paced by its scroll's device pixel, except for the colour memory's
+    ///   ease past the far edge, which fades in time (#1911).
     /// - The lattice ring's levels, carried on its own attack and release
     ///   ([`RingLevels`](panes::spectral_fold::RingLevels)), and whether each
     ///   wedge is drawn, on the note Fade
@@ -606,67 +618,109 @@ reasons! {
     Audible => "audible",
     /// A Tape mode playhead the editor draws moving visibly across the
     /// stretch of song shown: an audition's, or the host's position while the
-    /// transport rolls, still advancing, on the axis as it moves, at a device
-    /// pixel a 144 Hz refresh or faster (`marks` in the Analyzer's Tape mode).
-    /// Not the transport rolling or an audition playing as such (#1837).
+    /// transport rolls, still advancing on the axis as it moves, paced at the
+    /// time it takes to cross a device pixel (`marks` in the Analyzer's Tape
+    /// mode, #1911). Not the transport rolling or an audition playing as such
+    /// (#1837).
     Playhead => "playhead",
 }
 
-/// The reasons holding the editor at full rate this frame.
+/// When each reason next changes the picture, as the pictures drawn this frame
+/// report it.
 ///
-/// Each picture drawn says whether it is still moving, as its draw found it,
-/// from the state or stamp its own motion runs on, so a delay a picture gains
-/// reaches the repaint guard with no edit here (#1677 R1). The shell's copy
+/// Each picture drawn says when it next changes on screen, from the state or
+/// stamp its own motion runs on, so a delay a picture gains reaches the repaint
+/// guard with no edit here (#1677 R1): at once while a value still fades
+/// ([`hold`](Self::hold)), or when a scroll next crosses a device pixel
+/// ([`hold_for`](Self::hold_for)), since a pass between two pixels draws the
+/// picture it already shows (#1911). The shell's copy
 /// ([`moving_this_frame`](SurfaceState::moving_this_frame)) is cleared by
 /// [`begin_frame`] beside [`drawn_this_frame`](SurfaceState::drawn_this_frame),
 /// and for its reason: a picture not drawn this frame — its pane folded or
 /// hidden, its layer off, the Video tab closed — moves nothing, so it holds
 /// nothing, whatever its last draw said. One revealed again reports on its
 /// first draw. Read by [`Animating::of`] once every pane has drawn, in the
-/// same pass and so at the same `now`, which is why a yes or no is the whole
-/// answer: nothing asks a picture about a time it has not drawn.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Animating(u8);
+/// same pass and so at the same `now`: each answer is about the picture its
+/// own draw just made.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Animating([f64; Reason::ALL.len()]);
+
+impl Default for Animating {
+    /// Nothing held.
+    fn default() -> Self {
+        Animating([f64::INFINITY; Reason::ALL.len()])
+    }
+}
 
 impl Animating {
-    /// What holds the frame loop at full rate: what the pictures drawn this
-    /// frame reported, and the tracker's voices.
+    /// What the pictures drawn this frame reported, and the tracker's voices.
     pub fn of(state: &SharedState) -> Self {
         let mut held = state.picture.surfaces.moving_this_frame;
         held.hold_if(Reason::Voices, state.picture.runtime.tracker.voices().next().is_some());
         held
     }
 
-    /// Hold the loop for `reason` this frame.
+    /// Hold the loop for `reason` at every frame the shell offers.
     pub(crate) fn hold(&mut self, reason: Reason) {
-        self.0 |= 1 << reason as u8;
+        self.hold_for(reason, 0.0);
     }
 
-    /// Hold the loop for `reason` this frame if `moving`.
+    /// Hold the loop for `reason` at every frame if `moving`.
     pub(crate) fn hold_if(&mut self, reason: Reason, moving: bool) {
         if moving {
             self.hold(reason);
         }
     }
 
+    /// Ask for a frame `seconds` from now for `reason`, unless it already
+    /// asked for one sooner. One at or past the idle poll holds nothing: the
+    /// poll draws it as soon, so a scroll that slow, or a mark standing still
+    /// to within rounding, is a still picture.
+    pub(crate) fn hold_for(&mut self, reason: Reason, seconds: f64) {
+        if seconds < IDLE_REPAINT_INTERVAL.as_secs_f64() {
+            let slot = &mut self.0[reason as usize];
+            *slot = slot.min(seconds.max(0.0));
+        }
+    }
+
+    /// Whether `reason` asked for any frame, at once or paced.
     pub fn holds(self, reason: Reason) -> bool {
-        self.0 & (1 << reason as u8) != 0
+        self.after(reason).is_some()
+    }
+
+    /// Seconds until the frame `reason` asked for, if it asked for one.
+    pub fn after(self, reason: Reason) -> Option<f64> {
+        Some(self.0[reason as usize]).filter(|seconds| seconds.is_finite())
     }
 
     pub fn any(self) -> bool {
-        self.0 != 0
+        self.0.iter().any(|seconds| seconds.is_finite())
+    }
+
+    /// Seconds until the earliest frame any reason asked for.
+    pub fn next_change(self) -> Option<f64> {
+        Some(self.0.iter().copied().fold(f64::INFINITY, f64::min)).filter(|s| s.is_finite())
+    }
+
+    /// Whether the editor wants every frame the link offers at `target_fps`
+    /// (60 where nothing paces it, as the standalone): a value fading, or a
+    /// scroll that crosses a device pixel within one frame.
+    pub fn every_frame(self, target_fps: Option<f32>) -> bool {
+        let frame = 1.0 / f64::from(target_fps.unwrap_or(60.0));
+        self.next_change().is_some_and(|seconds| seconds < frame)
     }
 }
 
 /// The names of the reasons that hold, space-separated: what the frame log's
-/// `animating` row carries.
+/// `animating` row carries. A reason paced by its scroll carries `/px`.
 impl std::fmt::Display for Animating {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut names = Reason::ALL.iter().filter(|&&r| self.holds(r)).map(|r| r.name());
-        if let Some(first) = names.next() {
-            f.write_str(first)?;
+        let held = Reason::ALL.iter().filter(|&&r| self.holds(r));
+        for (i, &reason) in held.enumerate() {
+            let paced = if self.0[reason as usize] > 0.0 { "/px" } else { "" };
+            write!(f, "{}{}{paced}", if i == 0 { "" } else { " " }, reason.name())?;
         }
-        names.try_for_each(|name| write!(f, " {name}"))
+        Ok(())
     }
 }
 

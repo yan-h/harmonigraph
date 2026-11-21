@@ -3645,15 +3645,15 @@ enum Drawn {
 /// `frames` frames of `part` alone, 1/60 s apart on `ctx`'s clock, each first
 /// moving the playheads on at the rates they run when `advance` (the
 /// audition's at its cue's speed, the position while the transport rolls).
-/// Whether the last frame held the loop for a playhead; nothing else in the
-/// fixture moves.
+/// The seconds until the frame the last one asked for a playhead, if it asked;
+/// nothing else in the fixture moves.
 fn playhead_frames(
     ctx: &egui::Context,
     state: &mut PictureState,
     part: Drawn,
     frames: usize,
     advance: bool,
-) -> bool {
+) -> Option<f64> {
     let dt = 1.0 / 60.0;
     for _ in 0..frames {
         let tape = &mut state.runtime.tape;
@@ -3685,7 +3685,7 @@ fn playhead_frames(
             }
         });
     }
-    state.surfaces.moving_this_frame.holds(crate::Reason::Playhead)
+    state.surfaces.moving_this_frame.after(crate::Reason::Playhead)
 }
 
 /// [`on_tape`] auditioning from 1 s at `speed`, on fine pixels, as the
@@ -3707,38 +3707,48 @@ fn auditioning(speed: f64, zoomed: bool) -> (egui::Context, PictureState) {
     (ctx, state)
 }
 
-/// A Tape mode playhead in the pane holds the editor at full rate only while
-/// it visibly crosses the stretch shown (#1837): advancing, on the stretch,
-/// and fast enough on screen at the speed its audition was cued at.
+/// A Tape mode playhead in the pane asks for a frame each time it will have
+/// crossed a device pixel (#1911), and only while it moves on the stretch
+/// shown (#1837): advancing, on the stretch, at the speed its audition was
+/// cued at.
 #[test]
-fn a_tape_playhead_holds_full_rate_only_while_it_visibly_crosses_the_stretch_shown() {
+fn a_tape_playhead_asks_for_a_frame_each_device_pixel_it_crosses() {
     let (ctx, mut state) = auditioning(1.0, true);
-    assert!(playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true), "the audition idled");
+    let zoomed =
+        playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true).expect("the audition idled");
+    // Zoomed to 2 s, a playhead at full speed is well past a pixel a refresh.
+    assert!(zoomed < 1.0 / 144.0, "a fast playhead waited {zoomed} s");
     // Its value standing still, as a stalled input worker leaves it.
     let stalled = playhead_frames(&ctx, &mut state, Drawn::Pane, 30, false);
-    assert!(!stalled, "a playhead that stopped advancing held the loop");
+    assert_eq!(stalled, None, "a playhead that stopped advancing held the loop");
 
     let (ctx, mut state) = auditioning(1.0, true);
     state.runtime.tape.heard = Some(30.0);
     let off = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
-    assert!(!off, "an audition off the stretch shown held the loop");
+    assert_eq!(off, None, "an audition off the stretch shown held the loop");
 
     // Cued at a quarter speed, with Double chosen since: it plays on at a
-    // quarter until it is cued again.
+    // quarter until it is cued again, so a pixel takes four times as long.
     let (ctx, mut state) = auditioning(0.25, true);
     state.runtime.tape.speed = crate::tape::Speed::Double;
-    let slow = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
-    assert!(!slow, "the speed chosen, not the audition's, held the loop");
+    let slow = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true).expect("a slow cue idled");
+    assert!(
+        (slow / zoomed - 4.0).abs() < 0.1,
+        "a quarter-speed cue paced at {slow} s, not 4 x {zoomed}"
+    );
 
+    // Across the whole song it crosses a pixel less often than the idle poll
+    // draws, which then draws it.
     let (ctx, mut state) = auditioning(1.0, false);
     let crawl = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
-    assert!(!crawl, "a playhead crawling over the whole song held the loop");
+    assert_eq!(crawl, None, "a playhead crawling over the whole song held the loop");
 
     let (ctx, mut state) = auditioning(1.0, true);
     state.runtime.tape.heard = None;
     state.runtime.tape.rolling = true;
     state.runtime.tape.position = Some(1.0);
-    assert!(playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true), "the transport idled");
+    let rolling = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
+    assert!(rolling.is_some(), "the transport idled");
 }
 
 /// The overview's playhead, drawn alone, by the same rule as the pane's: on a
@@ -3746,7 +3756,7 @@ fn a_tape_playhead_holds_full_rate_only_while_it_visibly_crosses_the_stretch_sho
 /// whose end the position sets grows with it, so the mark stands still on
 /// screen while the song runs under it (#1837).
 #[test]
-fn the_overview_playhead_holds_full_rate_only_while_it_moves_on_screen() {
+fn the_overview_playhead_holds_the_loop_only_while_it_moves_on_screen() {
     let short = |end: f64, position: f64| {
         let ctx = themed();
         ctx.set_pixels_per_point(8.0);
@@ -3756,8 +3766,8 @@ fn the_overview_playhead_holds_full_rate_only_while_it_moves_on_screen() {
         state.runtime.tape.position = Some(position);
         playhead_frames(&ctx, &mut state, Drawn::Overview, 5, true)
     };
-    assert!(short(9.0, 5.0), "the position crossing a short strip idled");
-    assert!(!short(9.0, 9.0), "a position standing at the end it sets held the loop");
+    assert!(short(9.0, 5.0).is_some(), "the position crossing a short strip idled");
+    assert_eq!(short(9.0, 9.0), None, "a position standing at the end it sets held the loop");
 }
 
 /// The pane's sideways scroll pans the song only as far as the strip's end,
