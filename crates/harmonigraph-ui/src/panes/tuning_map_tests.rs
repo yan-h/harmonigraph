@@ -245,9 +245,9 @@ fn the_perfect_fifth_edits_the_decoded_fifth_while_the_board_is_drawn() {
 }
 
 /// With Learn on, whether the pane's first frame draws the armed ring at
-/// `now`, and whether that frame holds the loop at full rate for it, with the
+/// `now`, and when that frame asks for the next for it, if it does, with the
 /// pane `below` points down a 2000-point screen and Decode fifths as given.
-fn learn_ring_drawn(engine: TuningEngine, decoding: bool, below: f32) -> (bool, bool) {
+fn learn_ring_drawn(engine: TuningEngine, decoding: bool, below: f32) -> (bool, Option<f64>) {
     let ctx = themed();
     let params = Edits::new(engine, Follow::Off, 1);
     let mut state = fresh_picture();
@@ -265,7 +265,7 @@ fn learn_ring_drawn(engine: TuningEngine, decoding: bool, below: f32) -> (bool, 
         matches!(&shape.shape, egui::Shape::Rect(rect)
             if rect.stroke.color == ring && rect.stroke.width == theme::LINE_WIDTH)
     });
-    (drawn, state.surfaces.moving_this_frame.holds(crate::Reason::LearnPulse))
+    (drawn, state.surfaces.moving_this_frame.after(crate::Reason::LearnPulse))
 }
 
 /// On the pane's first frame, so the engine it reads is this frame's rather
@@ -274,22 +274,22 @@ fn learn_ring_drawn(engine: TuningEngine, decoding: bool, below: f32) -> (bool, 
 fn the_learn_ring_is_drawn_only_where_learn_acts() {
     assert_eq!(
         learn_ring_drawn(TuningEngine::Off, false, 0.0),
-        (true, true),
-        "Pass through learns, so the ring pulses at full rate"
+        (true, Some(crate::CHROME_CUE)),
+        "Pass through learns, so the ring pulses at about 30 Hz"
     );
     assert_eq!(
         learn_ring_drawn(TuningEngine::LatticeMap, false, 0.0),
-        (false, false),
+        (false, None),
         "Lattice Map suspends Learn, and its still ring holds nothing"
     );
     assert_eq!(
         learn_ring_drawn(TuningEngine::Off, true, 0.0),
-        (false, false),
+        (false, None),
         "Decode fifths suspends Learn"
     );
     // Scrolled out of the settings page, the pulse is seen nowhere.
     assert!(
-        !learn_ring_drawn(TuningEngine::Off, false, 3000.0).1,
+        learn_ring_drawn(TuningEngine::Off, false, 3000.0).1.is_none(),
         "a ring out of view held the loop"
     );
 }

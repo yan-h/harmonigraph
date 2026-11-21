@@ -22,14 +22,17 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     // A roll that is not drawn holds nothing, though its note is in its window.
     draw_panes(&ctx, &mut state, 1.5, &[]);
     assert!(
-        !Animating::of(&state).holds(Reason::RollInSpan),
+        !Animating::of(&state).asks_for(Reason::RollInSpan),
         "an undrawn roll held the loop awake"
     );
     draw_panes(&ctx, &mut state, 1.6, &[Pane::Spectral]);
-    assert!(Animating::of(&state).holds(Reason::RollInSpan), "the extension past the window idled");
+    assert!(
+        Animating::of(&state).asks_for(Reason::RollInSpan),
+        "the extension past the window idled"
+    );
     draw_panes(&ctx, &mut state, 2.2, &[Pane::Spectral]);
     assert!(
-        !Animating::of(&state).holds(Reason::RollInSpan),
+        !Animating::of(&state).asks_for(Reason::RollInSpan),
         "the roll held the loop past its extension"
     );
 }
@@ -41,42 +44,103 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
 /// note is the control.
 #[test]
 fn the_roll_holds_the_loop_only_for_a_drawn_note_inside_its_span() {
-    use harmonigraph_core::{NoteEvent, SourceId};
-
-    // Whether the roll holds the loop at `now`, and how many instances it drew.
-    let roll = |notes: &[(u8, f64, f64)], now: f64| {
-        let mut state = fresh();
-        let spectrum = &mut state.picture.appearance.spectrum;
-        spectrum.show_roll = true;
-        spectrum.note_names = false;
-        spectrum.roll_fraction = 0.5;
-        spectrum.roll_seconds = 10.0;
-        spectrum.roll_lead_release = 0.25;
-        spectrum.low_midi = 60.0;
-        spectrum.high_midi = 84.0;
-        let tracker = &mut state.picture.runtime.tracker;
-        for &(key, on, off) in notes {
-            tracker.handle_event(NoteEvent::on(on, SourceId::DIRECT, 0, key, 1.0));
-            tracker.handle_event(NoteEvent::off(off, SourceId::DIRECT, 0, key));
-        }
-        let ctx = super::probe::themed();
-        crate::panes::spectral::roll::take_roll_draw_probe();
-        draw_panes(&ctx, &mut state, now, &[Pane::Spectral]);
-        let drawn = crate::panes::spectral::roll::take_roll_draw_probe()
-            .map_or(0, |probe| probe.note_count);
-        (Animating::of(&state).holds(Reason::RollInSpan), drawn)
+    let held = |notes, now| {
+        let (after, drawn) = roll_frame(notes, now, 10.0, 4.0);
+        (after.is_some(), drawn)
     };
     // Long after each note's own fade, so the roll is the only thing that
     // could still be moving.
-    let (held, drawn) = roll(&[(72, 0.0, 0.1)], 5.0);
-    assert!(drawn > 0 && held, "a note scrolling on the zoom idled");
-    let (held, drawn) = roll(&[(36, 0.0, 0.1)], 5.0);
-    assert!(drawn == 0 && !held, "a note off the zoom held a still roll awake");
+    let (held_, drawn) = held(&[(72, 0.0, 0.1)], 5.0);
+    assert!(drawn > 0 && held_, "a note scrolling on the zoom idled");
+    let (held_, drawn) = held(&[(36, 0.0, 0.1)], 5.0);
+    assert!(drawn == 0 && !held_, "a note off the zoom held a still roll awake");
     // The older note's body left the Span at 10.1 s; its outline still slides
     // off the far edge. The newer note is inside the Span, off the zoom.
-    let (held, drawn) = roll(&[(72, 0.0, 0.1), (36, 5.0, 5.1)], 10.15);
+    let (held_, drawn) = held(&[(72, 0.0, 0.1), (36, 5.0, 5.1)], 10.15);
     assert!(drawn > 0, "the fixture's older note must still overhang the far edge");
-    assert!(!held, "an undrawn newer note held the older note's overhang at full rate");
+    assert!(!held_, "an undrawn newer note held the older note's overhang at full rate");
+}
+
+/// A ribbon that only scrolls asks for the frame where the Span's scroll next
+/// crosses a device pixel, which is as much sooner as the Span is shorter or
+/// the pixels finer (#1911); a Lead still fading through its release asks for every frame.
+#[test]
+fn a_scrolling_roll_asks_for_its_next_pixel_and_a_fading_lead_for_every_frame() {
+    let note = [(72, 0.0, 0.1)];
+    let (paced, drawn) = roll_frame(&note, 5.0, 10.0, 4.0);
+    let paced = paced.expect("a note scrolling on the zoom idled");
+    assert!(drawn > 0 && paced > 0.0, "a scroll held every frame: {paced} s");
+    let (half, _) = roll_frame(&note, 5.0, 5.0, 4.0);
+    let half = half.expect("a note scrolling on a shorter Span idled");
+    assert!((half / paced - 0.5).abs() < 1e-6, "half the Span paced at {half} s, not half {paced}");
+    // Twice the pixels a point: a pixel is crossed twice as often.
+    let (finer, _) = roll_frame(&note, 5.0, 10.0, 8.0);
+    let finer = finer.expect("a note scrolling on finer pixels idled");
+    assert!(
+        (finer / paced - 0.5).abs() < 1e-6,
+        "finer pixels paced at {finer} s, not half {paced}"
+    );
+    // Inside the Lead's 0.25 s release.
+    let (fading, _) = roll_frame(&note, 0.2, 10.0, 4.0);
+    assert_eq!(fading, Some(0.0), "a fading Lead was paced as a scroll");
+}
+
+/// One frame of the Spectral pane at `now`, with `notes` (key, on, off) played
+/// into a roll of `span` seconds at `ppp` device pixels a point: fine ones,
+/// as the Retina display's, make its scroll cross a device pixel sooner than
+/// the idle poll would draw it:
+/// when the roll asked for its next frame, and how many instances it drew.
+fn roll_frame(notes: &[(u8, f64, f64)], now: f64, span: f32, ppp: f32) -> (Option<f64>, usize) {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    let mut state = fresh();
+    let spectrum = &mut state.picture.appearance.spectrum;
+    spectrum.show_roll = true;
+    spectrum.note_names = false;
+    spectrum.roll_fraction = 0.5;
+    spectrum.roll_seconds = span;
+    spectrum.roll_lead_release = 0.25;
+    spectrum.low_midi = 60.0;
+    spectrum.high_midi = 84.0;
+    let tracker = &mut state.picture.runtime.tracker;
+    for &(key, on, off) in notes {
+        tracker.handle_event(NoteEvent::on(on, SourceId::DIRECT, 0, key, 1.0));
+        tracker.handle_event(NoteEvent::off(off, SourceId::DIRECT, 0, key));
+    }
+    let ctx = super::probe::themed_at(ppp);
+    // egui lays out the first pass after a change of scale in its default
+    // screen, 10,000 device pixels square, rather than the one given.
+    draw_panes(&ctx, &mut state, now, &[Pane::Spectral]);
+    crate::panes::spectral::roll::take_roll_draw_probe();
+    draw_panes(&ctx, &mut state, now, &[Pane::Spectral]);
+    let drawn =
+        crate::panes::spectral::roll::take_roll_draw_probe().map_or(0, |probe| probe.note_count);
+    (Animating::of(&state).after(Reason::RollInSpan), drawn)
+}
+
+/// A paced reason asks for its own frame and the sooner of two asks wins; one
+/// at or past the idle poll is a still picture, which the poll draws as soon.
+/// The perf overlay judges the rate against the link's only while some reason
+/// wants every frame it offers (#1911).
+#[test]
+fn the_soonest_ask_wins_and_one_past_the_poll_holds_nothing() {
+    let mut held = Animating::default();
+    assert_eq!(held.next_change(), None);
+    held.hold_for(Reason::Playhead, 0.02);
+    held.hold_for(Reason::Playhead, 0.03);
+    held.hold_for(Reason::RollInSpan, 0.01);
+    assert_eq!(held.after(Reason::Playhead), Some(0.02), "a later ask replaced a sooner one");
+    assert_eq!(held.next_change(), Some(0.01));
+    assert!(!held.every_frame(Some(144.0)), "a 10 ms pace was judged against 144 Hz");
+    assert!(held.every_frame(Some(60.0)), "a pace under one 60 Hz frame was not judged");
+    held.hold(Reason::Releasing);
+    assert_eq!(held.next_change(), Some(0.0));
+
+    let mut still = Animating::default();
+    still.hold_for(Reason::Audible, crate::IDLE_REPAINT_INTERVAL.as_secs_f64());
+    assert!(!still.asks(), "a pace at the idle poll held the loop");
+    assert_eq!(still.to_string(), "");
+    assert_eq!(held.to_string(), "roll~ releasing playhead~");
 }
 
 /// Run one frame of `panes` at `t`, each filling a pass of its own, as a shell
@@ -160,12 +224,12 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
             }
         } else if t >= 3.0 {
             assert!(
-                !Animating::of(&state).holds(Reason::RollInSpan),
+                !Animating::of(&state).asks_for(Reason::RollInSpan),
                 "the roll must not be what keeps this awake"
             );
             let visible = level * gain > 0.5 / 255.0;
             assert_eq!(
-                Animating::of(&state).holds(Reason::Releasing),
+                Animating::of(&state).asks_for(Reason::Releasing),
                 visible,
                 "at {t} s the light is {level} at gain {gain}"
             );
@@ -208,19 +272,19 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
         draw(&mut abandoned, t);
     }
     assert!(
-        Animating::of(&abandoned).holds(Reason::Releasing),
+        Animating::of(&abandoned).asks_for(Reason::Releasing),
         "the tail was over before the surface hid"
     );
     draw_panes(&ctx, &mut abandoned, 4.05, &[]);
     assert!(
-        !Animating::of(&abandoned).holds(Reason::Releasing),
+        !Animating::of(&abandoned).asks_for(Reason::Releasing),
         "an undrawn surface held the loop awake"
     );
 
     state.picture.appearance.view.glow_strength = 0.0;
     draw(&mut state, 60.0);
     assert!(
-        !Animating::of(&state).holds(Reason::Releasing),
+        !Animating::of(&state).asks_for(Reason::Releasing),
         "a glow that does not draw held the loop awake"
     );
 }
@@ -260,17 +324,17 @@ fn a_released_note_keeps_repainting_through_its_staggered_departure() {
     // starting half a fade later: 1.15 s past the off.
     draw_panes(&ctx, &mut state, 1.0 + 1.1, &[Pane::Lattice]);
     assert!(state.picture.runtime.tracker.voices().next().is_none(), "the voice outlasted 1 s");
-    assert!(Animating::of(&state).holds(Reason::Releasing), "the departure was cut short");
+    assert!(Animating::of(&state).asks_for(Reason::Releasing), "the departure was cut short");
     draw_panes(&ctx, &mut state, 1.0 + 1.2, &[Pane::Lattice]);
     assert!(
-        !Animating::of(&state).holds(Reason::Releasing),
+        !Animating::of(&state).asks_for(Reason::Releasing),
         "the loop stayed awake past the departure"
     );
 }
 
 /// Feeds `seconds` of audio from `t` in 10 ms blocks, a full-scale A4 while
 /// `tone` and digital silence otherwise, as a host streams both, and answers
-/// whether the editor animated after each block.
+/// when the audio next asked for a frame after each block, if it asked.
 ///
 /// Each block draws `panes`, since every picture answers from what it drew.
 fn stream(
@@ -281,7 +345,7 @@ fn stream(
     seconds: f64,
     tone: bool,
     panes: &[Pane],
-) -> Vec<(f64, bool)> {
+) -> Vec<(f64, Option<f64>)> {
     const RATE: f32 = 48_000.0;
     let cfg = state.picture.appearance.spectrum;
     let mut animated = Vec::new();
@@ -300,7 +364,7 @@ fn stream(
         *t += 0.01;
         feed.feed(&mut state.picture.runtime.spectrum, &block, 1, RATE, *t, &cfg);
         draw_panes(ctx, state, *t, panes);
-        animated.push((*t, Animating::of(state).holds(Reason::Audible)));
+        animated.push((*t, Animating::of(state).after(Reason::Audible)));
     }
     animated
 }
@@ -315,11 +379,15 @@ fn stream(
 ///
 /// The reach is written out as the guard summed it before the heatmap
 /// answered for itself (#1673), against the slab the draw chose, so the
-/// heatmap's own answer is held to it at every block.
+/// heatmap's own answer is held to it at every block. Inside it the heatmap
+/// asks for every frame while the display it reads still moves, and after
+/// that for the frame its scroll or its cloud's drift next crosses a device
+/// pixel (#1911), fine pixels, as the Retina display's, making that sooner
+/// than the idle poll.
 #[test]
 fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     let mut state = fresh();
-    let ctx = super::probe::themed();
+    let ctx = super::probe::themed_at(8.0);
     let span = 20.0;
     state.picture.appearance.spectrum.roll_seconds = span as f32;
     assert!(state.picture.appearance.spectrum.show_spectrogram, "the heatmap is drawn");
@@ -334,12 +402,14 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     let panes = [Pane::Spectral];
 
     let before = stream(&ctx, &mut state, &mut feed, &mut t, 2.0, false, &panes);
-    assert!(before.iter().all(|&(_, on)| !on), "silence with nothing heard animated");
+    assert!(before.iter().all(|&(_, on)| on.is_none()), "silence with nothing heard animated");
     let playing = stream(&ctx, &mut state, &mut feed, &mut t, 1.0, true, &panes);
-    assert!(playing[20..].iter().all(|&(_, on)| on), "audible audio idled");
+    assert!(playing[20..].iter().all(|&(_, on)| on == Some(0.0)), "audible audio idled");
     let level = state.picture.surfaces.spectrogram.at(0).held_level.expect("the heatmap drew");
     let slab = crate::spectrogram::width(level);
-    assert!(slab >= 0.1, "a slab of {slab} s is too narrow to tell from the blocks");
+    // A slab is about a device pixel, so fine pixels make it narrow; three
+    // 10 ms blocks still tell it apart.
+    assert!(slab >= 0.03, "a slab of {slab} s is too narrow to tell from the blocks");
     let reach = span + slab + 1.5 + memory;
     let stopped = t;
     let after = stream(&ctx, &mut state, &mut feed, &mut t, reach + 3.0, false, &panes);
@@ -348,23 +418,36 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     let heard = state.picture.runtime.spectrum.last_audible();
     let (heard, curve) = (heard.column.unwrap(), heard.curve.unwrap());
     assert!(heard < curve && curve < stopped + 6.0, "column {heard}, curve {curve}, {stopped}");
+    let mut paced = None;
     for (now, on) in after {
-        assert_eq!(on, now - heard <= reach, "at {now}: last heard at {heard}");
+        if state.picture.runtime.spectrum.moving(now) {
+            assert_eq!(on, Some(0.0), "at {now}: the display it reads still moved");
+        } else if now - heard <= reach {
+            let pixel = on.expect("a scroll inside the reach idled");
+            assert!(pixel > 0.0 && pixel < 0.05, "at {now}: a scroll paced at {pixel} s");
+            assert_eq!(*paced.get_or_insert(pixel), pixel, "at {now}: the scroll's pace moved");
+        } else {
+            assert_eq!(on, None, "at {now}: last heard at {heard}, past the reach");
+        }
     }
-    assert!(!Animating::of(&state).any(), "something else held a still picture awake");
+    assert!(paced.is_some(), "the fixture never reached the paced scroll");
+    assert!(!Animating::of(&state).asks(), "something else held a still picture awake");
 
     let cfg = &mut state.picture.appearance.spectrum;
     (cfg.tilt, cfg.volume_floor_db, cfg.high_midi) = (-6.0, -100.0, 135.0);
     draw_panes(&ctx, &mut state, t, &panes);
     assert!(
-        Animating::of(&state).holds(Reason::Audible),
+        Animating::of(&state).asks_for(Reason::Audible),
         "silence drawn off the bed's colour idled"
     );
 
     // A heatmap switched off holds nothing, whatever it last said.
     state.picture.appearance.spectrum.show_spectrogram = false;
     draw_panes(&ctx, &mut state, t, &panes);
-    assert!(!Animating::of(&state).holds(Reason::Audible), "a hidden heatmap held the loop awake");
+    assert!(
+        !Animating::of(&state).asks_for(Reason::Audible),
+        "a hidden heatmap held the loop awake"
+    );
 }
 
 /// A heatmap whose pane stops being drawn — folded, hidden, the Video tab
@@ -373,7 +456,7 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
 #[test]
 fn a_heatmap_that_stops_being_drawn_holds_nothing_until_it_is_drawn_again() {
     let mut state = fresh();
-    let ctx = super::probe::themed();
+    let ctx = super::probe::themed_at(8.0);
     state.picture.appearance.spectrum.roll_seconds = 60.0;
     let panes = [Pane::Spectral];
     let mut t = 0.0;
@@ -381,16 +464,60 @@ fn a_heatmap_that_stops_being_drawn_holds_nothing_until_it_is_drawn_again() {
     stream(&ctx, &mut state, &mut feed, &mut t, 1.0, true, &panes);
     let stopped = t;
     let drawn = stream(&ctx, &mut state, &mut feed, &mut t, 0.5, false, &panes);
-    assert!(drawn.iter().all(|&(_, on)| on), "the heatmap never held the sound");
+    assert!(drawn.iter().all(|&(_, on)| on.is_some()), "the heatmap never held the sound");
 
     let hidden = stream(&ctx, &mut state, &mut feed, &mut t, 15.0, false, &[]);
-    assert!(hidden.iter().all(|&(_, on)| !on), "a hidden heatmap held the loop awake");
+    assert!(hidden.iter().all(|&(_, on)| on.is_none()), "a hidden heatmap held the loop awake");
 
     // Long past the curve, well inside the Span: only the heatmap moves.
     let curve = state.picture.runtime.spectrum.moving_until().expect("a tone was heard");
     assert!(curve < t && t < stopped + 30.0, "the curve holds until {curve}, now {t}");
     let revealed = stream(&ctx, &mut state, &mut feed, &mut t, 0.1, false, &panes);
-    assert!(revealed.iter().all(|&(_, on)| on), "a heatmap drawn again mid-tail idled");
+    assert!(revealed.iter().all(|&(_, on)| on.is_some()), "a heatmap drawn again mid-tail idled");
+}
+
+/// The heatmap's pace after a sound: the history's scroll or the cloud's
+/// drift, whichever crosses a device pixel sooner, so a faster drift asks
+/// sooner and a still one leaves the scroll's pace (#1911). Fresh audio with
+/// the curve folded, and Stars twinkling on their own clock, ask for every
+/// frame.
+#[test]
+fn the_heatmap_paces_its_scroll_and_drift_and_not_fresh_audio_or_stars() {
+    // The pace the heatmap asks for 7 s after a tone, once the display it
+    // reads has settled and well inside the Span, with the curve folded,
+    // the cloud drawn at `speed`, in `style`; and whether the tone itself
+    // asked for every frame.
+    let tail = |speed: f32, style: harmonigraph_scene::CloudStyle| {
+        let mut state = fresh();
+        let ctx = super::probe::themed_at(8.0);
+        let spectrum = &mut state.picture.appearance.spectrum;
+        // Slow enough a scroll, about 39 ms a device pixel, that a drift at
+        // 10x (about 13 ms) and 20x crosses its pixels sooner.
+        spectrum.roll_seconds = 100.0;
+        // The history takes the whole pane, so the curve draws nothing.
+        spectrum.roll_fraction = 1.0;
+        let atmosphere = &mut spectrum.atmosphere;
+        (atmosphere.cloud_speed, atmosphere.cloud_style) = (speed, style);
+        assert!(atmosphere.effects().cloud, "the cloud is drawn");
+        let (mut t, mut feed, panes) =
+            (0.0, crate::spectrum::TestFeed::default(), [Pane::Spectral]);
+        let playing = stream(&ctx, &mut state, &mut feed, &mut t, 1.0, true, &panes);
+        let fresh = playing[20..].iter().all(|&(_, on)| on == Some(0.0));
+        let after = stream(&ctx, &mut state, &mut feed, &mut t, 7.0, false, &panes);
+        assert!(!state.picture.runtime.spectrum.moving(t), "the display still moves");
+        (fresh, after.last().unwrap().1)
+    };
+    use harmonigraph_scene::CloudStyle::{Stars, Watercolor};
+    let (fresh, still) = tail(0.0, Watercolor);
+    assert!(fresh, "fresh audio with the curve folded was paced");
+    let scroll = still.expect("a still wash's scroll idled");
+    let (_, slow) = tail(10.0, Watercolor);
+    let (_, fast) = tail(20.0, Watercolor);
+    let (slow, fast) = (slow.expect("a drifting wash idled"), fast.expect("a drifting wash idled"));
+    assert!(slow < scroll, "a wash drifting faster than the scroll waited for it: {slow} s");
+    assert!((slow / fast - 2.0).abs() < 1e-6, "twice the drift paced at {fast} s, not half {slow}");
+    let (_, stars) = tail(0.0, Stars);
+    assert_eq!(stars, Some(0.0), "twinkling Stars were paced");
 }
 
 /// With the heatmap hidden nothing on screen holds a sound for a Span: the
@@ -428,11 +555,11 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
             Some((at, drawn)) => {
                 assert_eq!(&nodes, drawn, "the lattice or its ring moved after {at}")
             }
-            None if !Animating::of(&state).any() => still = Some((t, nodes)),
+            None if !Animating::of(&state).asks() => still = Some((t, nodes)),
             None => {}
         }
         if still.is_some() {
-            assert!(!Animating::of(&state).any(), "woke at {t} with nothing heard");
+            assert!(!Animating::of(&state).asks(), "woke at {t} with nothing heard");
         }
     }
     assert!(ring_outlasted_the_display, "the ring never held the loop past the curve");
@@ -459,7 +586,8 @@ fn a_cleared_heatmap_holds_no_sound_for_a_span() {
     state.picture.runtime.spectrum.clear_history();
     let after = stream(&ctx, &mut state, &mut feed, &mut t, 10.0, false, &panes);
     let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
-    let last = after.iter().rev().find(|&&(_, on)| on).expect("the curve settled at once").0;
+    let last =
+        after.iter().rev().find(|&&(_, on)| on.is_some()).expect("the curve settled at once").0;
     assert!(last - heard < 1.0, "a Clear held the full rate {} s past the sound", last - heard);
 }
 
@@ -749,4 +877,52 @@ fn an_opaque_line_ends_round_and_a_translucent_one_square() {
         "a translucent line got caps"
     );
     assert!(caps(theme::text(), true).1.is_empty(), "a line in a disabled section got caps");
+}
+
+/// A released note left scrolling through the roll, with nothing else in
+/// motion, has the editor ask for the frame where the roll next crosses a
+/// device pixel rather than for every frame the shell offers, or the idle
+/// poll (#1911).
+#[test]
+fn a_roll_left_scrolling_asks_the_shell_for_its_next_pixel() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    let delay = |output: &egui::FullOutput| {
+        output.viewport_output.values().map(|viewport| viewport.repaint_delay).min().unwrap()
+    };
+    let mut state = fresh();
+    // A short Span on fine pixels, so the scroll crosses a device pixel
+    // sooner than the idle poll would draw it; a short Lead release and note
+    // Fade, so the note settles well inside the Span; and no Background glow,
+    // whose colour eases on for longer than the Span.
+    state.picture.appearance.spectrum.roll_seconds = 2.0;
+    state.picture.appearance.spectrum.roll_lead_release = 0.25;
+    state.picture.appearance.view.fade_time = 0.1;
+    state.picture.appearance.view.glow_strength = 0.0;
+    let mut harness = DockHarness::new();
+    harness.ctx.set_pixels_per_point(4.0);
+    let at = harness.next_time();
+    let tracker = &mut state.picture.runtime.tracker;
+    tracker.handle_event(NoteEvent::on(at, SourceId::DIRECT, 0, 72, 1.0));
+    tracker.handle_event(NoteEvent::off(at + 0.05, SourceId::DIRECT, 0, 72));
+    let mut last = harness.frame(&mut state, vec![]);
+    let mut frames = 0;
+    // Until the note's voice, its Lead and the lattice's departure settle.
+    while Animating::of(&state).next_change() == Some(0.0) {
+        assert!(frames < 60 * 30, "something held every frame for 30 s: {}", Animating::of(&state));
+        last = harness.frame(&mut state, vec![]);
+        frames += 1;
+    }
+    // And the dock's own opening passes, which ask egui to redraw at once.
+    for _ in 0..4 {
+        last = harness.frame(&mut state, vec![]);
+    }
+    let held = Animating::of(&state);
+    let roll = held.after(Reason::RollInSpan).expect("the roll stopped scrolling first");
+    assert_eq!(held.next_change(), Some(roll), "something else asked sooner: {held}");
+    let asked = delay(&last).as_secs_f64();
+    assert!(
+        (asked - roll).abs() < 1e-6,
+        "the shell was asked for {asked} s, not the roll's {roll}"
+    );
 }

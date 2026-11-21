@@ -377,7 +377,7 @@ pub(crate) fn draw_lattice(
     }
     if let Some(mut badge) = badge {
         draw_learn_overlay(ui, rect, state, now, surface, &mut badge);
-        state.surfaces.moving_this_frame.hold(crate::Reason::LearnPulse);
+        state.surfaces.moving_this_frame.hold_for(crate::Reason::LearnPulse, crate::CHROME_CUE);
     }
     state.surfaces.spare_nodes = scene.nodes;
     window
@@ -856,8 +856,8 @@ mod tests {
     use harmonigraph_core::{NoteEvent, SourceId};
     use harmonigraph_scene::NoteNames;
 
-    /// Learn armed holds the loop at full rate through the lattice only while
-    /// the pane draws its pulsing badge: under an engine that learns, and not
+    /// Learn armed asks for frames at the chrome's 30 Hz through the lattice
+    /// only while the pane draws its pulsing badge: under an engine that learns, and not
     /// under Lattice Map, which suspends Learn and leaves the pane still
     /// (#1834). Nothing else here moves, so the frame's report is Learn's.
     #[test]
@@ -887,10 +887,11 @@ mod tests {
                 matches!(&shape.shape, egui::Shape::Rect(r)
                     if r.stroke.color == theme::armed().gamma_multiply(learn_pulse(0.0)))
             });
-            (badge, state.surfaces.moving_this_frame.holds(crate::Reason::LearnPulse))
+            (badge, state.surfaces.moving_this_frame.after(crate::Reason::LearnPulse))
         };
-        assert_eq!(pulsing(TuningEngine::Off), (true, true), "the badge pulses at full rate");
-        assert_eq!(pulsing(TuningEngine::LatticeMap), (false, false), "a still pane held the loop");
+        let chrome = Some(crate::CHROME_CUE);
+        assert_eq!(pulsing(TuningEngine::Off), (true, chrome), "the badge pulses at about 30 Hz");
+        assert_eq!(pulsing(TuningEngine::LatticeMap), (false, None), "a still pane held the loop");
     }
 
     /// An audition marks the nodes of the map its spot was recorded under,

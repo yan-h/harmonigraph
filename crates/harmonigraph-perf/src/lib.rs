@@ -236,17 +236,19 @@ pub struct Workload {
     pub held_voices: usize,
     pub visible_nodes: usize,
     pub render_scale: f32,
-    /// Whether the last frame was repainting continuously (something moving)
-    /// rather than idling. The FPS number means different things in each: an
-    /// idle editor draws only what asks for a frame, at the 50 ms poll or a
-    /// chrome cue's 33 ms (the armed Record button, an export's stripes,
-    /// #1872), so a low idle rate is not a problem.
+    /// Whether the last frame asked for every frame the link offers (something
+    /// changing each frame, or scrolling a device pixel a frame or faster)
+    /// rather than idling or pacing. The FPS number means different things in
+    /// each: an idle or paced editor draws only what asks for a frame, at the
+    /// 50 ms poll, a chrome cue's 33 ms (the armed Record button, an export's
+    /// stripes, #1872) or a slow scroll's next device pixel (#1911), so a low
+    /// rate there is not a problem.
     ///
-    /// Audio keeps this true only while it can still be moving something on
-    /// screen: a DAW streams silence with its transport stopped, and once the
-    /// last audible column has scrolled out of the spectrogram's Span the
-    /// editor reads "idle" though samples still arrive (#1670 Q2). See
-    /// `harmonigraph_ui::Reason` for each reason.
+    /// Audio keeps this true only while it changes the picture each frame: a
+    /// DAW streams silence with its transport stopped, and once the curve has
+    /// settled the heatmap's scroll is paced, so the editor reads "idle"
+    /// though samples still arrive (#1670 Q2). See `harmonigraph_ui::Reason`
+    /// for each reason.
     pub animating: bool,
 }
 

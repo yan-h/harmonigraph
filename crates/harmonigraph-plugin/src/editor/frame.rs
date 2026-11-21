@@ -199,7 +199,7 @@ impl WindowState {
 #[cfg(all(feature = "frame-log", target_os = "macos"))]
 #[derive(Default)]
 struct Logged {
-    animating: Option<harmonigraph_ui::Animating>,
+    animating: Option<String>,
     exports: Option<usize>,
 }
 
@@ -210,10 +210,12 @@ impl Logged {
             let span = ui.picture.appearance.spectrum.roll_seconds;
             egui_baseview::frame_log::event(&format!("open span={span}"));
         }
-        let animating = harmonigraph_ui::Animating::of(ui);
-        if self.animating != Some(animating) {
-            self.animating = Some(animating);
+        // By the names, which say what holds the loop and whether it is paced:
+        // a paced delay itself drifts frame to frame with a playhead's speed.
+        let animating = harmonigraph_ui::Animating::of(ui).to_string();
+        if self.animating.as_ref() != Some(&animating) {
             egui_baseview::frame_log::event(&format!("animating {animating}"));
+            self.animating = Some(animating);
         }
         // A cancelled job's renderer runs until it is reaped, so it counts.
         // No encoder: the pane's says nothing about what an automatic export

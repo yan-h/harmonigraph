@@ -38,12 +38,15 @@ submitted after the target anyway) or late GPU.
 
 `--events` reports instead on the moments the editor's own `event` rows mark
 (#1670), across every window and every time the editor was opened:
-- still: each stretch where nothing kept the editor animating, so nothing on
-  screen could move, and how often it drew, against the rate each of its
-  phases offers frames at, and how many link frames a second drew nothing and
-  what they cost the main thread. A transport left stopped reaches one once the last
-  sound has scrolled out of the Span, since silence does not count as audible
-  audio;
+- still: each stretch where nothing asked the editor for a frame sooner than
+  its idle poll, so nothing on screen moved faster than the poll draws it, and
+  how often it drew, against the rate each of its phases offers frames at, and
+  how many link frames a second drew nothing and what they cost the main
+  thread. A transport left stopped reaches one once the curve has settled and
+  the history scrolls slower than a device pixel a poll (#1911), or once the
+  last sound has scrolled out of the Span, since silence does not count as
+  audible audio. A reason asking for a later frame than the next is logged
+  with `~`, as `roll~`;
 - first note: the frames in the second and a half after the first note of
   each opening, with any stall and the costliest frames;
 - exports: missed refreshes in each export's first 30 s against the 30 s
@@ -340,7 +343,9 @@ def openings(ticks, gpu_end, presented, events):
 
 def timeline(evs, end, kind):
     """(start, end, words) for each stretch between this kind's events."""
-    marks = [(t, text.split()[1:]) for _, t, text in evs if text.split()[0] == kind]
+    # A paced reason carries `~` (#1911): the reason's name is the word before it.
+    marks = [(t, [w.rstrip('~') for w in text.split()[1:]])
+             for _, t, text in evs if text.split()[0] == kind]
     return [(t, marks[i + 1][0] if i + 1 < len(marks) else end, words)
             for i, (t, words) in enumerate(marks)]
 

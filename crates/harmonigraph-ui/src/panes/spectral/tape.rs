@@ -41,20 +41,13 @@ const MIN_SECONDS: f64 = 2.0;
 /// The space a label needs along the time axis, in points, before the ruler
 /// labels every bar or every few.
 const LABEL_SPACING: f32 = 44.0;
-/// How fast a playhead crosses the screen, in device pixels a second, before
-/// it holds the editor at full rate: one pixel a refresh of the 144 Hz display
-/// the editor runs on. Slower, the idle poll draws it moving under about seven
-/// pixels a step, and a playhead crawling across a fitted song (about 2 pt/s
-/// for three minutes) under one; that is left to the poll rather than paying
-/// a full redraw a refresh (#1673) for it (#1837).
-const PLAYHEAD_FULL_RATE_PX: f64 = 144.0;
 /// How long a playhead may stand at one value and still count as advancing.
 /// The host's position and the audition's both reach the editor once per
 /// audio block (about 11 ms at 512 frames and 48 kHz, more for larger
 /// blocks), so at 144 Hz several frames in a row can see the same value
 /// while the playhead runs on; a still frame there is no stall. A value held
 /// longer than this — a stalled input worker (AGENTS.md's stakes record) —
-/// stops holding full rate rather than drawing a still mark at it.
+/// stops holding the loop rather than drawing a still mark at it.
 const PLAYHEAD_STALL_SECONDS: f64 = 0.25;
 /// The thickness, in points, of the band along the low-pitch edge that marks
 /// what is recorded: the one place a gap reads apart from recorded silence.
@@ -293,14 +286,17 @@ pub(super) fn draw(
         // Through the live roll's own rule, which holds nothing for a song
         // axis: it stands still, and a live note played over the audition
         // moves only while it sounds, which its voice holds.
-        let in_span = notes(painter, axes, scale, state, &axis, surface, frame);
-        state.surfaces.moving_this_frame.hold_if(crate::Reason::RollInSpan, in_span);
+        // A song axis does not scroll, so whatever moves moves every frame.
+        let motion = notes(painter, axes, scale, state, &axis, surface, frame);
+        motion.hold(&mut state.surfaces.moving_this_frame, 0.0);
     }
     let view = &mut state.runtime.tape;
     coverage(painter, axes, view, &axis);
     let labels = ruler(painter, axes, view, &axis);
-    let moving = marks(painter, axes, view, &axis, egui::Id::new(("tape-marks", surface)));
-    state.surfaces.moving_this_frame.hold_if(crate::Reason::Playhead, moving);
+    let pixel = marks(painter, axes, view, &axis, egui::Id::new(("tape-marks", surface)));
+    if let Some(pixel) = pixel {
+        state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, pixel);
+    }
     let view = &mut state.runtime.tape;
     let pointer = response.hover_pos().filter(|&p| axes.depth_at(p) >= split);
     if let Some(pointer) = pointer {
@@ -368,27 +364,26 @@ struct Seen {
 /// The reported position (dim) and the audition's playhead (accent) over
 /// `axis`, the one painter both the pane and the overview draw them with.
 ///
-/// Answers whether a mark it drew still moves visibly, for the frame loop
-/// ([`Reason::Playhead`](crate::Reason::Playhead)), by one rule for both: on
-/// the stretch shown, still advancing (its value changed within
-/// [`PLAYHEAD_STALL_SECONDS`], kept under `seen`), and crossing the screen at
-/// [`PLAYHEAD_FULL_RATE_PX`] or faster on the axis as it moves
-/// ([`screen_speed`]). Not the transport rolling or an audition playing as
-/// such, which would hold the editor at the display rate with the playhead
-/// off the stretch shown, stalled, or under a pixel a refresh (#1837).
+/// Answers when a mark it drew next moves a device pixel, in seconds, for the
+/// frame loop ([`Reason::Playhead`](crate::Reason::Playhead)), by one rule for
+/// both: on the stretch shown, still advancing (its value changed within
+/// [`PLAYHEAD_STALL_SECONDS`], kept under `seen`), and moving on the axis as it
+/// moves ([`screen_speed`]); the sooner of the two marks (#1911). Not the
+/// transport rolling or an audition playing as such, which would hold the
+/// editor with the playhead off the stretch shown or stalled (#1837).
 fn marks(
     painter: &egui::Painter,
     axes: &Axes,
     view: &TapeView,
     axis: &SongAxis,
     seen: egui::Id,
-) -> bool {
+) -> Option<f64> {
     let ctx = painter.ctx();
     let clock = ctx.input(|i| i.time);
     let ppp = ctx.pixels_per_point();
     let mut last = ctx.data(|d| d.get_temp::<Seen>(seen)).unwrap_or_default();
     let (position_rate, heard_rate) = rates(view);
-    let mut moving = false;
+    let mut pixel = None::<f64>;
     let mut mark = |at: Option<f64>, rate: Option<f64>, last: &mut Option<(f64, f64)>, stroke| {
         let Some(at) = at else {
             *last = None;
@@ -405,17 +400,17 @@ fn marks(
             return;
         }
         painter.line_segment(axes.across_pitch(axis.depth_of(at)), stroke);
-        moving |= clock - changed <= PLAYHEAD_STALL_SECONDS
-            && rate.is_some_and(|rate| {
-                screen_speed(view, axis, at, rate, ppp) >= PLAYHEAD_FULL_RATE_PX
-            });
+        let speed = rate.map_or(0.0, |rate| screen_speed(view, axis, at, rate, ppp));
+        if clock - changed <= PLAYHEAD_STALL_SECONDS && speed > 0.0 {
+            pixel = Some(pixel.map_or(1.0 / speed, |sooner| sooner.min(1.0 / speed)));
+        }
     };
     let dim = Stroke::new(theme::LINE_WIDTH, theme::text_dim());
     mark(view.position, position_rate, &mut last.position, dim);
     let accent = Stroke::new(theme::LINE_WIDTH, theme::accent());
     mark(view.heard, Some(heard_rate), &mut last.heard, accent);
     ctx.data_mut(|d| d.insert_temp(seen, last));
-    moving
+    pixel
 }
 
 /// How fast a mark at song seconds `at`, running at `rate`, crosses the
@@ -506,7 +501,7 @@ fn notes(
     axis: &SongAxis,
     surface: usize,
     frame: RollFrame,
-) -> bool {
+) -> roll::RollMotion {
     let sources = roll_sources(state, axis.split, axis.window, frame.now);
     let options = RollDrawOptions {
         split: axis.split,
@@ -780,8 +775,9 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
     heatmap(&painter, &axes, &scale, state, &axis, surface, TapeStrip::Overview);
     let view = &state.runtime.tape;
     coverage(&painter, &axes, view, &axis);
-    let moving = marks(&painter, &axes, view, &axis, id.with("marks"));
-    state.surfaces.moving_this_frame.hold_if(crate::Reason::Playhead, moving);
+    if let Some(pixel) = marks(&painter, &axes, view, &axis, id.with("marks")) {
+        state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, pixel);
+    }
     let view = &state.runtime.tape;
     // The rest of the song dimmed, and the stretch shown outlined.
     let (a, b) = span_x(&axes, &axis, shown);

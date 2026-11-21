@@ -79,8 +79,9 @@ pub use surround::{
 /// palette change is a uniform.
 mod spectrogram;
 pub use spectrogram::{
-    spectrogram_paint_callback, SpectrogramAtmosphere, SpectrogramGrid, SpectrogramHeadless,
-    SpectrogramRead, SpectrogramShades, SpectrogramSlab, SpectrogramVertex,
+    cloud_drift_heights_per_second, spectrogram_paint_callback, SpectrogramAtmosphere,
+    SpectrogramGrid, SpectrogramHeadless, SpectrogramRead, SpectrogramShades, SpectrogramSlab,
+    SpectrogramVertex,
 };
 
 #[cfg(test)]

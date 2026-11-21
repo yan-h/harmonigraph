@@ -391,19 +391,19 @@ pub(super) fn draw_live_roll(
     width: &Width,
     state: &PictureState,
     options: RollDrawOptions,
-) -> bool {
+) -> RollMotion {
     let live = RollSource::live(state, options.split, options.now);
     draw_rolls(painter, axes, scale, width, state, &options, &[live])
 }
 
 /// Draw `sources` as one roll, in order, through one paint callback.
 ///
-/// Answers whether something it drew is still inside its own Span
+/// Answers how what it drew still moves
 /// ([`Reason::RollInSpan`](crate::Reason::RollInSpan)): a ribbon whose note
-/// has not yet scrolled past the far edge, or a Lead, which stands only while
-/// its note sounds or its release fades it. Each asks of its own note, so an
-/// older note's overhang sliding off the far edge is not held at full rate by
-/// a newer note the roll does not draw (#1835).
+/// has not yet scrolled past the far edge scrolls, and a Lead, which stands
+/// only while its note sounds or its release fades it, fades. Each asks of its
+/// own note, so an older note's overhang sliding off the far edge is not held
+/// by a newer note the roll does not draw (#1835).
 #[must_use = "whether the roll still moves is the frame loop's to hear"]
 pub(super) fn draw_rolls(
     painter: &egui::Painter,
@@ -413,14 +413,14 @@ pub(super) fn draw_rolls(
     state: &PictureState,
     options: &RollDrawOptions,
     sources: &[RollSource],
-) -> bool {
+) -> RollMotion {
     let ppp = painter.ctx().pixels_per_point().max(1e-3);
-    let (mut notes, mut tongues, mut in_span) = (Vec::new(), Vec::new(), false);
+    let (mut notes, mut tongues, mut motion) = (Vec::new(), Vec::new(), RollMotion::default());
     for source in sources {
         let ink = source_instances(axes, scale, width, state, source, ppp, options.point_scale);
         notes.extend(ink.notes);
         tongues.extend(ink.tongues);
-        in_span |= ink.in_span;
+        motion = motion.or(ink.motion);
     }
     let leads = sources.iter().any(|source| source.now_line);
     // The roll's own share of the pane, and the whole of what its ink may
@@ -483,7 +483,7 @@ pub(super) fn draw_rolls(
             .store((notes.len() + tongues.len()) as u32, std::sync::atomic::Ordering::Relaxed);
     }
     if notes.is_empty() && tongues.is_empty() {
-        return false;
+        return RollMotion::default();
     }
     let axes_size = axes.rect.size();
     let dir = |v: egui::Vec2| [v.x, v.y];
@@ -505,7 +505,38 @@ pub(super) fn draw_rolls(
         pane,
         options.point_scale,
     ));
-    in_span
+    motion
+}
+
+/// How what a roll drew still moves, for
+/// [`Reason::RollInSpan`](crate::Reason::RollInSpan).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct RollMotion {
+    /// A Lead still standing: its release fades it in place, a change every
+    /// frame.
+    pub(super) fading: bool,
+    /// A ribbon or a name still inside its Span: it only scrolls, so it
+    /// changes on screen once a device pixel's worth of time has passed.
+    pub(super) scrolling: bool,
+}
+
+impl RollMotion {
+    pub(super) fn or(self, other: RollMotion) -> RollMotion {
+        RollMotion {
+            fading: self.fading || other.fading,
+            scrolling: self.scrolling || other.scrolling,
+        }
+    }
+
+    /// Hold the loop for it: every frame while a Lead fades, and otherwise at
+    /// the scroll's `pixel`, the seconds it takes to cross a device pixel.
+    pub(super) fn hold(self, moving: &mut crate::Animating, pixel: f64) {
+        if self.fading {
+            moving.hold(crate::Reason::RollInSpan);
+        } else if self.scrolling {
+            moving.hold_for(crate::Reason::RollInSpan, pixel);
+        }
+    }
 }
 
 /// Every visible note segment as one GPU instance, in paint order.
@@ -558,12 +589,11 @@ fn roll_instances_with_floor(
 }
 
 /// What one [`RollSource`] draws: the history's segments and the leads'
-/// tongues, and whether any of it is still inside its own Span (see
-/// [`draw_rolls`]).
+/// tongues, and how any of it still moves (see [`draw_rolls`]).
 struct RollInk {
     notes: Vec<RollInstance>,
     tongues: Vec<RollInstance>,
-    in_span: bool,
+    motion: RollMotion,
 }
 
 /// The roll's geometry for any [`RollSource`]: what [`draw_rolls`] draws.
@@ -702,7 +732,7 @@ fn source_instances(
     let mut instances = Vec::with_capacity(notes.len());
     let mut painted = Vec::with_capacity(notes.len());
     let mut tongues = Vec::new();
-    let mut in_span = false;
+    let mut motion = RollMotion::default();
     let ribbons = density::layout(&notes, now, minimum, gap, edge);
     for ribbon in ribbons {
         let note = ribbon.last();
@@ -757,7 +787,7 @@ fn source_instances(
         // keep one order across the line.
         if let Some(tongue) = tongue {
             tongues.push((ribbon.paint_starts[ribbon.paint_starts.len() - 1].0, tongue));
-            in_span = true;
+            motion.fading = true;
         }
         for ((t0, p0), (t1, p1)) in ribbon.segments(now) {
             // A segment wholly before the region is DROPPED, and the test has
@@ -888,7 +918,8 @@ fn source_instances(
         }
         // Drawn, and its newest note's body not yet past the far edge: what
         // is left of it is an overhang, which finishes at the idle poll.
-        in_span |= source.now_line && instances.len() > first_instance && note.stop(now) >= oldest;
+        motion.scrolling |=
+            source.now_line && instances.len() > first_instance && note.stop(now) >= oldest;
         // A later attack in this ribbon must paint above a voice that began
         // between its members. Split only its draw spans: the shared box and
         // ornament continue through each cut without adding a cap or seam.
@@ -924,7 +955,7 @@ fn source_instances(
     RollInk {
         notes: painted.into_iter().map(|(_, instance)| instance).collect(),
         tongues: tongues.into_iter().map(|(_, tongue)| tongue).collect(),
-        in_span,
+        motion,
     }
 }
 
