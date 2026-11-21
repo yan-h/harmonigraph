@@ -637,3 +637,17 @@ fn every_run_the_recorder_opens_takes_a_new_serial() {
     let restarted = block(&mut b, 2.0 * BLOCK_SECONDS, true);
     assert!(restarted.is_some() && restarted != rearmed, "the run after a reset is a new one");
 }
+
+/// Samples whose counting entry has no room in the record ring are not
+/// written: left uncounted in the audio ring, they would open the next take's
+/// soundtrack once the failure is cleared.
+#[test]
+fn audio_with_no_room_for_its_entry_stays_out_of_the_ring() {
+    let mut b = Bench::with_rings(1, 1024);
+    b.arm();
+    b.rec.audio(&mut [0.5, -0.5].into_iter(), 2);
+    assert_eq!(b.ends.audio.slots(), 2, "the first block and its entry");
+    b.rec.audio(&mut [0.25, -0.25].into_iter(), 2);
+    assert!(b.ctrl.fence.failed.load(Ordering::Acquire), "the full record ring fails the take");
+    assert_eq!(b.ends.audio.slots(), 2, "the second block's samples went in uncounted");
+}

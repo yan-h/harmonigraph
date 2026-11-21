@@ -509,6 +509,14 @@ impl Recorder {
         if self.fence.failed.load(Ordering::Acquire) {
             return;
         }
+        // The entry that counts these samples follows them: with no room for
+        // it, samples committed now would sit uncounted in the ring and open
+        // the next take's soundtrack.
+        if self.producer.is_full() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            self.fence.fail();
+            return;
+        }
         let room =
             interleaved_reservation(self.audio.slots(), samples / TAKE_CHANNELS, TAKE_CHANNELS);
         if room < samples {
