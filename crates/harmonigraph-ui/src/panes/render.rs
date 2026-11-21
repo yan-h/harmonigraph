@@ -720,10 +720,14 @@ fn record_controls(
     });
 }
 
+/// The Appearance row's Recorded option.
+const RECORDED_HINT: &str = "Each take's own appearance, saved when it was recorded, with the Output size, Tail, Encoder and Archive copy set here. \
+     A take recorded without one exports in the current appearance.";
+
 /// What both Queue buttons answer a hover with: what a queued job carries,
 /// and what the queue survives.
 const QUEUE_HINT: &str = "Every job captures the selected look and the current Video settings. \
-     With each take's recorded appearance, only Output size, Tail, Encoder and Archive copy are the current ones: the take keeps the frame and Video history it was recorded with, and one recorded without a look exports as an ordinary queued export. \
+     Under Recorded, only Output size, Tail, Encoder and Archive copy are the current ones: the take keeps the frame and Video history it was recorded with, and one recorded without a look exports in the current appearance. \
      Recorded camera movement wins during replay. \
      The queue survives closing this editor, but removing the plugin or closing the project cancels unfinished jobs, and there is no resume after a crash.";
 
@@ -735,7 +739,7 @@ fn export_queue(
     interaction: &mut crate::Interaction,
 ) {
     use crate::appearance_edit::{slot_name, SLOT_COUNT};
-    use crate::ExportAction;
+    use crate::{ExportAction, ExportLook};
     use harmonigraph_take::render::ExportStatus;
     if ui
         .button("Open video folder")
@@ -749,29 +753,20 @@ fn export_queue(
     subsection(ui, "Exports", |ui| {
         ui.add(egui::TextEdit::multiline(&mut interaction.take.export_paths).desired_width(ui.available_width()).desired_rows(2).hint_text("/path/to/music.take"))
             .on_hover_text("One take path per line. Each video is saved beside its take; an existing video gets a numbered variant.");
-        crate::widgets::checkbox(
-            ui,
-            &mut interaction.take.export_recorded,
-            "Use each take's recorded appearance",
-        );
-        if !interaction.take.export_recorded {
-            let slots: Vec<String> = (0..SLOT_COUNT).map(slot_name).collect();
-            let options: Vec<(Option<usize>, &str, &str)> =
-                std::iter::once((None, "Current appearance", ""))
-                    .chain(
-                        slots
-                            .iter()
-                            .enumerate()
-                            .map(|(slot, name)| (Some(slot), name.as_str(), "")),
-                    )
-                    .collect();
-            crate::widgets::choice_row(
-                ui,
-                "Appearance",
-                &mut interaction.take.export_look,
-                &options,
-            );
-        }
+        let slots: Vec<String> = (0..SLOT_COUNT).map(slot_name).collect();
+        let options: Vec<(ExportLook, &str, &str)> = [
+            (ExportLook::Recorded, "Recorded", RECORDED_HINT),
+            (ExportLook::Current, "Current", "The editor's appearance when you queue."),
+        ]
+        .into_iter()
+        .chain(
+            slots
+                .iter()
+                .enumerate()
+                .map(|(slot, name)| (ExportLook::Slot(slot), name.as_str(), "")),
+        )
+        .collect();
+        crate::widgets::choice_row(ui, "Appearance", &mut interaction.take.export_look, &options);
         let mut paths = Vec::new();
         button_row(ui, |ui| {
             if ui
@@ -873,8 +868,8 @@ pub(crate) fn capture_export(
     // A recorded look keeps its own frame and Video history, so queueing it
     // does not recompose the take to the pane's aspect and split; only the
     // pane's Output size, Tail, Encoder and Archive copy apply. A take that carries none has
-    // no frame to keep and exports as an ordinary queued export.
-    let recorded = if interaction.take.export_recorded {
+    // no frame to keep and exports in the current appearance.
+    let recorded = if interaction.take.export_look == crate::ExportLook::Recorded {
         let header = harmonigraph_take::Header::read(path).map_err(|error| error.to_string())?;
         header.appearance.as_deref().map(crate::AppearanceDocument::parse).transpose()?
     } else {
@@ -888,7 +883,11 @@ pub(crate) fn capture_export(
         None => {
             let mut captured = appearance.clone();
             let slots = &interaction.appearance_editor.slots;
-            if let Some(look) = interaction.take.export_look.and_then(|slot| slots.stored(slot)) {
+            let slot = match interaction.take.export_look {
+                crate::ExportLook::Slot(slot) => slots.stored(slot),
+                crate::ExportLook::Recorded | crate::ExportLook::Current => None,
+            };
+            if let Some(look) = slot {
                 look.apply(&mut captured);
             }
             captured
@@ -1737,7 +1736,7 @@ mod export_tests {
         pane.render.encoder = VideoEncoder::Hardware;
         pane.render.archive = true;
         let mut interaction = crate::Interaction::default();
-        interaction.take.export_recorded = true;
+        interaction.take.export_look = crate::ExportLook::Recorded;
         let queued = capture_export(&pane, &interaction, &path).unwrap();
         std::fs::remove_file(&path).unwrap();
 
@@ -1758,11 +1757,10 @@ mod export_tests {
     }
 
     /// A take whose header holds no appearance has no frame to keep: queueing
-    /// it under its recorded look is an ordinary queued export, drawn by the
-    /// pane's whole Video configuration and the selected export look, not the
-    /// default look.
+    /// it under Recorded is an ordinary queued export, drawn by the pane's
+    /// whole Video configuration and the current look, not the default look.
     #[test]
-    fn a_take_with_no_recorded_look_exports_as_an_ordinary_queued_export() {
+    fn a_take_with_no_recorded_look_exports_in_the_current_appearance() {
         use crate::{LatticeSide, SpectrogramRender};
         let path = std::env::temp_dir()
             .join(format!("harmonigraph-unrecorded-queue-{}.take", std::process::id()));
@@ -1776,17 +1774,13 @@ mod export_tests {
         pane.render.spectrogram = SpectrogramRender::Scrolling;
         pane.spectrum.attack = 0.2;
         let mut interaction = crate::Interaction::default();
-        interaction.appearance_editor.save_to(1, &pane);
-        // The live look has moved on from the saved one the export selects.
-        pane.spectrum.attack = 0.8;
-        interaction.take.export_recorded = true;
-        interaction.take.export_look = Some(1);
+        interaction.take.export_look = crate::ExportLook::Recorded;
         let queued = capture_export(&pane, &interaction, &path).unwrap();
         std::fs::remove_file(&path).unwrap();
 
         let crate::ExportAction::Queue { appearance, .. } = queued else { panic!("queue action") };
         let captured = crate::AppearanceDocument::parse(&appearance).unwrap();
-        assert_eq!(captured.spectrum.attack, 0.2, "the selected export look");
+        assert_eq!(captured.spectrum.attack, 0.2, "the current look");
         let render = &captured.render;
         assert_eq!((render.frame.aspect_w, render.frame.aspect_h), (9, 16));
         assert_eq!(render.frame.lattice, LatticeSide::Top);

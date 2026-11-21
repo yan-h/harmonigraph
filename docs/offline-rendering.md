@@ -43,11 +43,11 @@ Takes use format v9 and carry a version-1 appearance document captured when reco
 It contains camera, view, spectrum and the whole video configuration;
 dock layout, selected editor page, the Spiral's framing and other workspace settings stay in the editor save.
 Automatic export uses that recorded appearance, including the captured Aspect and Output size.
-In **Exports**, **Queue last take** and **Queue paths** capture the selected current, saved or recorded appearance,
+In **Exports**, **Queue last take** and **Queue paths** capture the appearance the **Appearance** row selects (**Recorded**, **Current** or a saved slot),
 with the current Video output settings and dimensions.
-Under **Use each take's recorded appearance** only Output size, Tail, Encoder and Archive copy are the current ones:
+Under **Recorded** only Output size, Tail, Encoder and Archive copy are the current ones:
 each take keeps the frame (aspect, lattice side and split) and Video history it was recorded with.
-A take recorded without a look exports as an ordinary queued export.
+A take recorded without a look exports in the current appearance.
 Camera movement is recorded through host parameters;
 see [What is and isn't captured](#what-is-and-isnt-captured).
 

@@ -66,8 +66,8 @@ pub(crate) use config::{
 // new one is one declaration and one name here, in this crate alone.
 pub use spectrum::{AnalyzedColumn, AudioSpectrum, Delivery, SpectrumAnalysis};
 pub use state::{
-    CameraPreset, Console, EditorPrefs, ExportAction, FrameRate, Interaction, PictureState,
-    SharedState, SurfaceState, TakeState,
+    CameraPreset, Console, EditorPrefs, ExportAction, ExportLook, FrameRate, Interaction,
+    PictureState, SharedState, SurfaceState, TakeState,
 };
 pub use video::{
     LatticeSide, RenderConfig, RenderFrame, RenderTrigger, SpectrogramRender, VideoEncoder,

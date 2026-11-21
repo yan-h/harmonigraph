@@ -74,10 +74,22 @@ pub struct TakeState {
     pub exports: Vec<harmonigraph_take::render::ExportJob>,
     pub export_actions: Vec<ExportAction>,
     pub export_paths: String,
-    /// Empty selects the current appearance; otherwise a slot.
-    pub export_look: Option<usize>,
-    pub export_recorded: bool,
+    /// The look a queued export is drawn in.
+    pub export_look: ExportLook,
     pub export_error: String,
+}
+
+/// The look a queued export is drawn in, chosen in the Video pane's Exports.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExportLook {
+    /// Each take's own, from its header, with the pane's output settings. A
+    /// take that recorded none exports in the current appearance.
+    Recorded,
+    /// The editor's appearance at the press.
+    #[default]
+    Current,
+    /// A saved appearance slot.
+    Slot(usize),
 }
 
 /// Settings are captured at the button press, before the shell's next frame.
