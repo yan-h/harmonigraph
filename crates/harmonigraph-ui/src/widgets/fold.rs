@@ -15,27 +15,16 @@ pub(crate) enum Rail {
     Row,
 }
 
-/// Where a caller's [`paint_rail`] still differs from the other's. The two
-/// rails were copies that drifted apart, and which look they share is Yan's to
-/// choose (#1851), so each caller keeps the one it had.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RailLook {
-    /// The side of the fold button's square cell, at the rail's start.
-    pub button: f32,
-    /// Points between the button's cell and the title, as drawn (not scaled
-    /// here).
-    pub gap: f32,
-    /// Whether the rail names itself, "Expand" and its title, to a hover and
-    /// to AccessKit, and leaves out a title too long for it rather than
-    /// letting the rail's end clip it.
-    pub named: bool,
-}
+/// Design points between a rail's fold button and its title.
+const RAIL_GAP: f32 = 6.0;
 
 /// The rail a folded pane leaves, a workspace section's or an analyzer
-/// region's, as one control: the whole rail answers a click by unfolding the
-/// pane, with the fold button at its start pointing `direction` and the
-/// pane's `title` beside it, as the caller's [`RailLook`] says. Returns
-/// whether it was clicked.
+/// region's, as one control in one look (Yan, #1893): the whole rail answers
+/// a click by unfolding the pane, with the fold button in a square cell
+/// `button` across at its start, pointing `direction`, and the pane's `title`
+/// [`RAIL_GAP`] after it. The rail names itself, "Expand" and its title, to a
+/// hover and to AccessKit, and leaves out a title too long for it rather than
+/// letting the rail's end clip it. Returns whether it was clicked.
 pub(crate) fn paint_rail(
     ui: &egui::Ui,
     rect: Rect,
@@ -43,16 +32,13 @@ pub(crate) fn paint_rail(
     rail: Rail,
     direction: Vec2,
     title: &str,
-    look: RailLook,
+    button: f32,
 ) -> bool {
-    let RailLook { button, gap, named } = look;
+    let gap = RAIL_GAP * theme::ui_scale(ui.ctx());
     let response = ui.interact(rect, id, egui::Sense::click());
     let expand = format!("Expand {title}");
-    if named {
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, expand.clone())
-        });
-    }
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, expand.clone()));
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::header());
     // The button's cell stands at the rail's start, centred across it.
@@ -66,7 +52,7 @@ pub(crate) fn paint_rail(
         egui::TextStyle::Heading.resolve(ui.style()),
         theme::text(),
     );
-    if !named || galley.size().x + button + 2.0 * gap <= length {
+    if galley.size().x + button + 2.0 * gap <= length {
         let (anchor, angle) = match rail {
             Rail::Column => (
                 egui::pos2(
@@ -82,11 +68,7 @@ pub(crate) fn paint_rail(
         };
         painter.add(egui::epaint::TextShape::new(anchor, galley, theme::text()).with_angle(angle));
     }
-    if named {
-        response.on_hover_text(expand).clicked()
-    } else {
-        response.clicked()
-    }
+    response.on_hover_text(expand).clicked()
 }
 
 /// A pane's fold button — a workspace section's or an analyzer region's — as
