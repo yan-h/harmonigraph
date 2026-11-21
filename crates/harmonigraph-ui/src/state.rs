@@ -788,14 +788,14 @@ impl SharedState {
         self.workspace.layout.sanitize();
         self.workspace.interaction.analyzer_regions = persist.analyzer_regions;
         self.workspace.interaction.analyzer_regions.sanitize();
-        // The regions' geometry is new, so the next open frame takes the
-        // spectrum hold from it.
-        self.picture.surfaces.spectrum_hold.relayout();
         // A restore into an open window replaces the layout a fold or a
         // divider drag in flight was made for.
         self.workspace.layout_runtime = workspace::Runtime::default();
         self.workspace.window_size_change = egui::Vec2::ZERO;
         self.picture.install_appearance(persist.appearance);
+        // The regions' geometry and the dial are new: the spectrum hold is
+        // taken from them.
+        self.workspace.interaction.analyzer_regions.relayout(&mut self.picture);
         let mut look_slots = persist.look_slots;
         look_slots.sanitize();
         self.workspace.interaction.appearance_editor =
@@ -832,7 +832,7 @@ impl SharedState {
         self.workspace.window_size_change = egui::Vec2::ZERO;
         self.workspace.interaction.appearance_editor.start_window_session();
         // The new window lays the Analyzer out afresh.
-        self.picture.surfaces.spectrum_hold.relayout();
+        self.workspace.interaction.analyzer_regions.relayout(&mut self.picture);
         // A viewing aid for one window (`SurfaceState::star_solo`).
         self.picture.surfaces.star_solo = Default::default();
     }

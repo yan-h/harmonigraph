@@ -168,28 +168,27 @@ pub(super) fn drag_split(
 /// [`crate::panes`]), which is the one surface a window can resize: the Video
 /// preview and the offline renderer draw from a size their own layout fixes,
 /// and a hold means nothing there.
+///
+/// A load and a new window, which lay the Analyzer out afresh, take it from
+/// the Analyzer regions' saved geometry ([`Regions::relayout`]); an unfold
+/// needs nothing, since a fold no longer changes the pane's size and the hold
+/// keeps the spectrum's points. Here rather than on the regions, which a
+/// project saves, because it is about the window this session is drawing in.
+///
+/// [`Regions::relayout`]: super::collapse::Regions::relayout
 #[derive(Default)]
 pub(crate) struct SpectrumHold {
     held: Option<Held>,
-    /// Re-take the hold from the Analyzer regions' saved geometry on the next
-    /// fully open frame ([`Regions`](super::collapse::Regions)): set by a load
-    /// and by a new window, which lay the Analyzer out afresh. An unfold needs
-    /// none, since a fold no longer changes the pane's size and the hold keeps
-    /// the spectrum's points. Here rather than on the regions, which a project
-    /// saves, because it is about the window this session is drawing in.
-    pub(super) relayout: bool,
-}
-
-impl SpectrumHold {
-    /// Re-take the hold from the saved geometry on the next fully open frame.
-    pub(crate) fn relayout(&mut self) {
-        self.relayout = true;
-    }
 }
 
 /// Reopening editor regions restores their measured split without writing the
-/// appearance dial that recorded takes and the Video preview share.
-pub(super) fn restore_spectrum(state: &mut PictureState, depths: [f32; 2]) {
+/// appearance dial that recorded takes and the Video preview share; with no
+/// `depths` for the dial in force, the hold goes and the dial answers.
+pub(super) fn restore_spectrum(state: &mut PictureState, depths: Option<[f32; 2]>) {
+    let Some(depths) = depths else {
+        state.surfaces.spectrum_hold.held = None;
+        return;
+    };
     let cfg = state.appearance.spectrum;
     let depth = depths[0] + depths[1];
     state.surfaces.spectrum_hold.held = (depth > 0.0).then_some(Held {

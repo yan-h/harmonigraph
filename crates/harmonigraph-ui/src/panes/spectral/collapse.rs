@@ -30,6 +30,16 @@ impl Geometry {
 }
 
 impl Regions {
+    /// Take the docked pane's spectrum hold afresh, at a load and in a new
+    /// window: from the saved geometry where it was laid out under the dial
+    /// in force, and otherwise from the dial itself rather than whatever the
+    /// last window held (#1893).
+    pub(crate) fn relayout(&self, state: &mut PictureState) {
+        let cfg = &state.appearance.spectrum;
+        let geometry = self.geometry.filter(|geometry| geometry.matches(cfg));
+        gestures::restore_spectrum(state, geometry.map(|geometry| geometry.depths));
+    }
+
     /// Take on what the pane writes by itself as it lays the Analyzer out:
     /// the depths it draws, every frame, from the pane's size, the Tape tab and
     /// the spectrum hold. The pane writes
@@ -135,11 +145,6 @@ impl Regions {
             [if folded[0] { rail } else { 0.0 }, if folded[1] && history { rail } else { 0.0 }];
         let available = (depth - rail_depths.iter().sum::<f32>()).max(0.0);
         if !folded[0] && !folded[1] {
-            if std::mem::take(&mut state.surfaces.spectrum_hold.relayout) {
-                if let Some(geometry) = geometry {
-                    gestures::restore_spectrum(state, geometry.depths);
-                }
-            }
             super::hold_spectrum(state, rect.size());
             let (shown, solo) = (state.shown(), state.surfaces.star_solo.spectrogram);
             let navigation = Navigation::Docked;

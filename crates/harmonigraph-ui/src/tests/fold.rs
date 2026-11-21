@@ -630,8 +630,8 @@ fn relayout_state() -> SharedState {
 
 /// A loaded project draws the spectrum at the length its Analyzer was saved
 /// at, in points, rather than at the dial's share of the pane it opens in: the
-/// load re-takes the spectrum hold from the regions' saved geometry on the
-/// first fully open frame (`SpectrumHold::relayout`).
+/// load re-takes the spectrum hold from the regions' saved geometry
+/// (`Regions::relayout`).
 #[test]
 fn a_loaded_project_draws_the_spectrum_at_its_saved_length() {
     let mut saved = relayout_state();
@@ -646,6 +646,32 @@ fn a_loaded_project_draws_the_spectrum_at_its_saved_length() {
     let dialled = width * 0.25;
     assert!((dialled - 100.0).abs() > 10.0, "the dial alone draws {dialled} points, too close");
     assert!((length - 100.0).abs() < 1.0, "the spectrum opened {length} points long, not 100");
+}
+
+/// A loaded project whose Analyzer was laid out under another dial opens at
+/// the dial's share of the pane it opens in, not at the length the last
+/// window held (#1893).
+#[test]
+fn a_loaded_project_laid_out_under_another_dial_opens_at_the_dial() {
+    let mut state = relayout_state();
+    let wide = DEFAULT_WINDOW + egui::vec2(400.0, 0.0);
+    let mut h = DockHarness::at(wide);
+    h.settle(&mut state);
+    let (held, _) = spectrum_length(&h, &state);
+    let mut saved = relayout_state();
+    saved.workspace.interaction.analyzer_regions =
+        ron::from_str("(geometry:Some((depths:(100.0,400.0),dial:0.5,vertical:false)))")
+            .expect("an Analyzer's regions parse");
+    assert!(state.install_document(&saved.save_persist()));
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let (length, width) = spectrum_length(&h, &state);
+    let dialled = width * 0.25;
+    assert!(held - dialled > 10.0, "the last window held {held} points, too close to {dialled}");
+    assert!(
+        (length - dialled).abs() < 1.0,
+        "the spectrum opened {length} points long, not {dialled}"
+    );
 }
 
 /// A new window opens the Analyzer at the spectrum length the last one drew,
