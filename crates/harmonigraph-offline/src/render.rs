@@ -90,13 +90,17 @@ impl Stages {
 
 /// Select and normalize once before output setup. Explicit re-render settings
 /// replace the recorded document in full. A malformed selected document refuses
-/// the export; only takes with no recorded appearance use the fresh settings.
+/// the export, and so does a take with no recorded appearance and no
+/// replacement, as the Video pane's export does: every take writer records one,
+/// and the fresh defaults are a look nobody chose.
 pub fn appearance_for(
     take: &harmonigraph_take::Take,
     replacement: Option<&str>,
 ) -> Result<AppearanceDocument, String> {
     let Some(blob) = replacement.or(take.header.appearance.as_deref()) else {
-        return Ok(AppearanceDocument::default());
+        return Err("cannot render: the take recorded no appearance; \
+                    give one with --appearance"
+            .into());
     };
     AppearanceDocument::parse(blob).map_err(|err| {
         let source =
@@ -429,7 +433,7 @@ mod tests {
             }
         }
         Take {
-            header: Header::default(),
+            header: recorded_header(),
             events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
             params: Vec::new(),
             configurations: Vec::new(),
@@ -437,6 +441,11 @@ mod tests {
             incomplete: None,
             ..Default::default()
         }
+    }
+
+    /// The header a take writer leaves: the fresh look, recorded.
+    fn recorded_header() -> Header {
+        Header { appearance: Some(AppearanceDocument::default().serialize()), ..Default::default() }
     }
 
     fn transient_audio() -> Audio {
@@ -471,6 +480,7 @@ mod tests {
     fn transient_take(origin: f64) -> Take {
         let onset = origin + 0.8;
         Take {
+            header: recorded_header(),
             events: vec![
                 harmonigraph_take::CanonicalRecord::Note(NoteRecord {
                     source: 0,
@@ -791,10 +801,15 @@ mod tests {
             // An explicit valid replacement can still rescue an obsolete take.
             assert!(appearance_for(&take, Some(&replacement.serialize())).is_ok());
         }
+        // No producer writes a take without a look, so the defaults are no
+        // answer for one: it refuses, as the Video pane does, unless a
+        // replacement names the look to draw.
         take.header.appearance = None;
+        let error = appearance_for(&take, None).err().expect("refuse a take with no look");
+        assert!(error.contains("recorded no appearance"), "{error}");
         assert_eq!(
-            appearance_for(&take, None).unwrap().serialize(),
-            AppearanceDocument::default().serialize()
+            appearance_for(&take, Some(&replacement.serialize())).unwrap().serialize(),
+            replacement.serialize()
         );
     }
 

@@ -39,7 +39,13 @@ fn take_with_a_gap(path: &std::path::Path) {
         .into(),
     ));
     let run = Record::Run(harmonigraph_take::RunRecord::default());
-    let lines = [Record::Header(Header::default()), run, note(0.2, 60), gap, note(1.2, 64)];
+    // A look, as every take writer records one: without it the export refuses
+    // before the command line is judged.
+    let header = Header {
+        appearance: Some(harmonigraph_ui::AppearanceDocument::default().serialize()),
+        ..Default::default()
+    };
+    let lines = [Record::Header(header), run, note(0.2, 60), gap, note(1.2, 64)];
     let encoded =
         lines.iter().map(|r| ron::to_string(r).unwrap()).collect::<Vec<_>>().join("\n") + "\n";
     std::fs::write(path, encoded).unwrap();
