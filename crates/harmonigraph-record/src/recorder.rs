@@ -942,9 +942,8 @@ impl Control {
 /// rather than a struct literal inline:
 ///
 /// - `appearance` is the appearance document that decides how the replay LOOKS. Unset,
-///   the take still records and the render still succeeds — and the video is
-///   of the default palette and camera instead of the ones the take
-///   was recorded under.
+///   the take still records, but both export doors refuse it unless the user
+///   names a replacement look: the take has lost the one it was recorded under.
 /// - `sample_rate` is the take's whole time base. Unset it falls back to
 ///   [`harmonigraph_take::Header::default`], which is 48 kHz rather than a
 ///   zero that would show up at once: every event lands at the wrong offset

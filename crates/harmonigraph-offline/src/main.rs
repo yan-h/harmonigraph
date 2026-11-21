@@ -315,10 +315,11 @@ fn size_matches_frame(size: [u32; 2], frame: &harmonigraph_ui::RenderFrame) -> b
 
 /// What is wrong with the take itself, in the order a person should hear it.
 ///
-/// A `Vec` of warnings and no `Result`: a take that PARSED is rendered, whatever
-/// its contents say about how the recording went. Refusing belongs to
-/// [`Take::read`](harmonigraph_take::Take::read) — a bad version, a corrupt line,
-/// no header — because those are takes nothing can be drawn from.
+/// A `Vec` of warnings and no `Result`: nothing about how the recording went
+/// refuses a take. Refusing belongs to [`Take::read`](harmonigraph_take::Take::read)
+/// — a bad version, a corrupt line, no header — and to
+/// [`render::appearance_for`] — no look to draw it in — because those are takes
+/// nothing can be drawn from.
 ///
 /// Missing note history used to refuse here, which was the recording path
 /// disagreeing with itself: the gap is written precisely so the roll can draw
@@ -903,7 +904,11 @@ mod tests {
             .into(),
         ));
         let run = Record::Run(harmonigraph_take::RunRecord::default());
-        let lines = [Record::Header(Header::default()), run, note(0.2, 60), gap, note(1.2, 64)];
+        let header = Header {
+            appearance: Some(harmonigraph_ui::AppearanceDocument::default().serialize()),
+            ..Default::default()
+        };
+        let lines = [Record::Header(header), run, note(0.2, 60), gap, note(1.2, 64)];
         let encoded = lines
             .iter()
             .map(|record| ron::to_string(record).unwrap())

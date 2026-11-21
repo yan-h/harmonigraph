@@ -659,7 +659,7 @@ Old policy-descriptor fields were removed without aliases or migration shims;
 missing v2 fields use sanitized baseline defaults.
 Replay uses recorded output pitches and never reruns adaptive selection.
 
-**A take that parsed is rendered;
+**A take that parsed and records a look is rendered;
 a take that did not parse is refused.** Missing note history is a warning, not a refusal:
 the renderer prints it on stderr before anything the command line can complain about, and the Video pane's export row carries it onto the render it succeeded on.
 Surviving data is drawn as it was recorded: a note held through a gap draws as one line, and a release the gap lost ends at the snapshot after it;

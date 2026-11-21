@@ -480,7 +480,6 @@ mod tests {
     fn transient_take(origin: f64) -> Take {
         let onset = origin + 0.8;
         Take {
-            header: recorded_header(),
             events: vec![
                 harmonigraph_take::CanonicalRecord::Note(NoteRecord {
                     source: 0,
@@ -765,7 +764,7 @@ mod tests {
     }
 
     #[test]
-    fn export_selects_one_complete_appearance_and_refuses_parse_errors() {
+    fn export_selects_one_complete_appearance_or_refuses() {
         let mut recorded = AppearanceDocument::default();
         recorded.camera.yaw = 1.23;
         recorded.view.max_sevens = 3;
