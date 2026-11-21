@@ -51,6 +51,8 @@ use crate::tuning::PitchClass;
 /// it traced in between.
 #[derive(Clone, Debug)]
 pub struct RollNote {
+    /// The press ([`PressId`]), numbered by its roll as it opened.
+    id: PressId,
     pub source: SourceId,
     pub channel: u8,
     pub note: u8,
@@ -109,9 +111,11 @@ pub struct RollNote {
 }
 
 impl RollNote {
-    /// A press starting at `start`, its pitch and expressions first stated at
-    /// `at`.
+    /// The press `id` starting at `start`, its pitch and expressions first
+    /// stated at `at`.
+    #[allow(clippy::too_many_arguments)]
     fn new(
+        id: PressId,
         key: VoiceKey,
         velocity: f32,
         start: Time,
@@ -120,6 +124,7 @@ impl RollNote {
         expressions: Expressions,
     ) -> Self {
         RollNote {
+            id,
             source: key.source,
             channel: key.channel,
             note: key.note,
@@ -145,10 +150,9 @@ impl RollNote {
         VoiceKey { source: self.source, channel: self.channel, note: self.note }
     }
 
-    /// The press's identity: its key and its onset, as its voice's is
-    /// ([`Voice::id`]).
+    /// The press's identity, as its voice's is ([`Voice::id`]).
     pub fn id(&self) -> PressId {
-        (self.key(), self.start.to_bits())
+        self.id
     }
 
     /// Released at or before its onset (rule 1, [`NoteRoll::note_off`]): a
@@ -185,6 +189,7 @@ impl RollNote {
             on_time: self.start,
             lifetime: self.lifetime,
             state: self.departed().map_or(VoiceState::Held, |at| VoiceState::Released { at }),
+            id: self.id,
         }
     }
 
@@ -428,6 +433,8 @@ pub struct NoteRoll {
     /// whole recording, built once and drawn a window at a time, where the
     /// cap would forget the song's start.
     uncapped: bool,
+    /// The [`PressId`] the last press to open took.
+    last_id: u64,
 }
 
 impl NoteRoll {
@@ -455,7 +462,15 @@ impl NoteRoll {
                 self.retire(previous);
             }
         }
-        self.live.insert(key, RollNote::new(key, velocity, at, at, pitch, Expressions::NEUTRAL));
+        let id = self.mint();
+        let note = RollNote::new(id, key, velocity, at, at, pitch, Expressions::NEUTRAL);
+        self.live.insert(key, note);
+    }
+
+    /// A fresh [`PressId`] for a press opening now.
+    fn mint(&mut self) -> PressId {
+        self.last_id += 1;
+        PressId(self.last_id)
     }
 
     /// Release one key.
@@ -617,8 +632,9 @@ impl NoteRoll {
                 continue;
             }
             let start = row.actual_onset + offset;
+            let id = self.mint();
             let mut note =
-                RollNote::new(key, row.velocity, start, at, row.pitch(), row.expressions);
+                RollNote::new(id, key, row.velocity, start, at, row.pitch(), row.expressions);
             note.lifetime = Some(row.lifetime);
             note.history_complete = false;
             self.live.insert(key, note);
@@ -776,10 +792,7 @@ impl NoteRoll {
     /// and once released it leaves `past` with its voice.
     ///
     /// `since` seeks the release-ordered `past` rather than walking it, so the
-    /// cost is the recent presses' rather than the session's. Two presses here
-    /// can share an identity: a rule-1 pulse and the press a host sends at the
-    /// same sample after it, or a fade a baseline withdrew (rule 6) and the
-    /// fresh press it opened. The later one in this order is the one sounding.
+    /// cost is the recent presses' rather than the session's.
     pub fn voice_presses(&self, since: Time) -> impl Iterator<Item = &RollNote> {
         let from = self.past.partition_point(|n| n.departed().is_some_and(|at| at < since));
         let past = self.past.range(from..).filter(|note| !note.left_hidden);

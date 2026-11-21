@@ -23,6 +23,8 @@ struct FactualTip {
 }
 #[derive(Clone, Copy)]
 struct Held {
+    /// The press's onset.
+    start: f64,
     pitch: f32,
     /// `pitch`'s class, converted once rather than per visible node.
     class: PitchClass,
@@ -31,8 +33,8 @@ struct Held {
     reading: IntensityReading,
 }
 impl Held {
-    fn new(pitch: f32, reading: IntensityReading) -> Self {
-        Self { pitch, class: PitchClass::from_cents(pitch * 100.0), reading }
+    fn new(start: f64, pitch: f32, reading: IntensityReading) -> Self {
+        Self { start, pitch, class: PitchClass::from_cents(pitch * 100.0), reading }
     }
 }
 #[derive(Clone, Copy)]
@@ -549,11 +551,11 @@ impl NodeMotion {
             // The one node x held-note match per step: occupancy, marks and
             // readings all come out of it, rather than a second pass over
             // the same pairs for the readings.
-            for (id, held) in &self.held {
+            for held in self.held.values() {
                 if !tuning.matches(held.class, node_class) {
                     continue;
                 }
-                preexisting |= self.at.is_some_and(|at| f64::from_bits(id.1) < at);
+                preexisting |= self.at.is_some_and(|at| held.start < at);
                 let slot = slot_of(lo, hi, node.cents, held.pitch);
                 // Activation measures occupancy; intensity rides beside it.
                 targets[slot] = 1.0;
@@ -753,20 +755,10 @@ impl NodeMotion {
         // hidden as it left, which would replay a fade nobody saw. Sought from
         // the oldest release a pulse's off can still keep in reach.
         let since = retained - f64::from(crate::FADE_TIME_MAX);
-        let mut notes: Vec<_> = tracker.roll().voice_presses(since).collect();
-        // A pulse sharing its identity with a later press, which hosts send as
-        // on, off, on at one sample, yields to it (`NoteRoll::voice_presses`).
-        // Replayed as one identity, its off would end the press, and their two
-        // tips would read as news on every frame. The rest keep their order,
-        // in which the later of two sharing an identity is the one sounding.
-        let mut unique = HashSet::default();
-        let keep: Vec<_> =
-            notes.iter().rev().map(|note| unique.insert(note.id()) || !note.is_pulse()).collect();
-        let mut keep = keep.into_iter().rev();
-        notes.retain(|_| keep.next() == Some(true));
+        let notes = tracker.roll().voice_presses(since);
         let mut seen = HashMap::default();
         let mut late = false;
-        let mut replay = Vec::with_capacity(notes.len());
+        let mut replay = Vec::new();
         for note in notes {
             let id = note.id();
             let old = self.seen.get(&id);
@@ -850,10 +842,10 @@ impl NodeMotion {
                     .last()
                     .unwrap_or(note.start_pitch());
                 let reading = intensity.read(note.velocity, note.expressions_at(begin));
-                self.held.insert(id, Held::new(pitch, reading));
+                self.held.insert(id, Held::new(note.start, pitch, reading));
             }
             let held = |at, pitch| {
-                Held::new(pitch, intensity.read(note.velocity, note.expressions_at(at)))
+                Held::new(note.start, pitch, intensity.read(note.velocity, note.expressions_at(at)))
             };
             let mut add = |at, value| {
                 let edge = Edge { at, id, value };
@@ -961,7 +953,7 @@ impl NodeMotion {
         self.held.clear();
         for voice in tracker.voices().filter(|v| matches!(v.state, VoiceState::Held)) {
             let reading = intensity.read(voice.velocity, voice.expressions);
-            self.held.insert(voice.id(), Held::new(voice.pitch, reading));
+            self.held.insert(voice.id(), Held::new(voice.on_time, voice.pitch, reading));
         }
         self.held.extend(pulsing);
         self.gates(scene, tuning, view, env, fade, tracker, now, false, std::mem::take(&mut first));
@@ -1792,12 +1784,46 @@ mod tests {
         assert_eq!(origin(&fresh).presence_with_opacity, 0.0, "a cleared release came back");
     }
     /// Hosts send one press as an on, an off and a second on at one sample:
-    /// the pulse between them shares the second press's key and onset, and
-    /// draws exactly as that press alone does.
+    /// the pulse between them, a press of its own on the second's node, draws
+    /// exactly as that press alone does (#1883).
     #[test]
     fn a_pulse_under_a_press_at_the_same_sample_changes_nothing() {
         let alone = presences(&[on(1.0, 60)]);
         assert_eq!(presences(&[on(1.0, 60), off(1.0, 60), on(1.0, 60)]), alone);
+    }
+    /// A fade a baseline withdrew (rule 6) and the fresh press it opened at
+    /// that fade's own onset are two presses (#1883): once the replay has read
+    /// both, it reads nothing new in them, where the two ends of one identity
+    /// read as news on every frame and rebuilt the surface.
+    #[test]
+    fn a_withdrawn_fade_and_the_press_reopened_at_its_onset_are_two_presses() {
+        use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
+        let view = view();
+        let listing = |at, cut| {
+            let row = VoiceBaseline {
+                note: 60,
+                lifetime: 1,
+                actual_onset: 0.0,
+                pitch_microcents: 6_000_000_000,
+                velocity: 0.2,
+                ..VoiceBaseline::default()
+            };
+            SourceBaseline::new(SourceId::DIRECT, at, cut, true, &[row]).unwrap()
+        };
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        tracker.replace_source(&listing(0.0, 1)).unwrap();
+        draw(&mut motion, &mut tracker, &view, 0.1, false);
+        tracker.handle_event(off(0.5, 60));
+        draw(&mut motion, &mut tracker, &view, 0.6, false);
+        tracker.replace_source(&listing(0.65, 2)).unwrap();
+        let onsets = tracker.roll().voice_presses(0.0).filter(|n| n.start == 0.0).count();
+        assert_eq!(onsets, 2, "the fixture must hold the withdrawn fade and the fresh press");
+        draw(&mut motion, &mut tracker, &view, 0.7, false);
+        for k in 1..=4 {
+            draw(&mut motion, &mut tracker, &view, 0.7 + f64::from(k) * 0.05, false);
+            assert_eq!(motion.replayed_edges, 0, "the replay was rebuilt on frame {k}");
+        }
     }
     /// A node whose note has faded all the way keeps no entry, so a frame's
     /// motion costs the notes in play rather than every node they ever lit.
