@@ -661,6 +661,23 @@ fn a_non_finite_delay_draws_as_no_delay_at_all() {
     assert_eq!(level(&poisoned, ATTACK), 1.0, "the marks draw as they always did");
 }
 
+/// The Delay holds a mark back at a Fade of 0 as at any other: the mark steps
+/// in once the wait is out, rather than at the note-on with nothing to ease.
+#[test]
+fn a_mark_waits_out_its_delay_at_a_fade_of_zero() {
+    const DELAY: f64 = 0.5;
+    let tracker = held(60);
+    let view = ViewConfig { fade_time: 0.0, ..delayed_view(DELAY as f32) };
+    let mut motion = NodeMotion::default();
+    let mut level = |now: f64| {
+        origin_node(&motion_scene(&mut motion, &tracker, &Tuning::default(), &view, now))
+            .melody_level
+    };
+    assert_eq!(level(0.0), 0.0, "the mark arrived with its note");
+    assert_eq!(level(DELAY * 0.5), 0.0, "the mark arrived inside its Delay");
+    assert_eq!(level(DELAY), 1.0, "the mark did not step in as the Delay ran out");
+}
+
 /// `notes` held with both ends marked and the octave wheel set to `count`
 /// octaves centered on `center`.
 fn marked(notes: &[u8], count: u32, center: f32) -> Scene {

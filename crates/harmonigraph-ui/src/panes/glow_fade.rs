@@ -340,14 +340,15 @@ mod tests {
     }
 
     /// A state with the light on and both of its times named, and the note
-    /// Fade at nothing so what a layer does is a step and what the LIGHT does
-    /// is the only thing being filtered.
+    /// Fade and the Mark delay at nothing so what a layer does is a step and
+    /// what the LIGHT does is the only thing being filtered.
     fn lit(attack: f32, release: f32) -> PictureState {
         let mut state = fresh();
         state.appearance.view.glow_reach = 0.8;
         state.appearance.view.glow_attack = attack;
         state.appearance.view.glow_release = release;
         state.appearance.view.fade_time = 0.0;
+        state.appearance.view.mark_delay = 0.0;
         state
     }
 
@@ -839,8 +840,6 @@ mod tests {
         state.appearance.view.band_width = 0.0;
         state.appearance.view.mark_thickness = 0.1;
         state.appearance.view.mark_delay = DELAY;
-        // A Fade to wait behind: at 0 a mark steps in at once, Delay or none.
-        state.appearance.view.fade_time = 0.05;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         // One motion across the frames, so the mark waits out its Delay rather
         // than being seeded settled on a fresh surface.

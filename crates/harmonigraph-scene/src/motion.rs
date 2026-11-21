@@ -178,8 +178,14 @@ impl MarkMotion {
     fn advance(&mut self, dt: f64, env: &Envelope) {
         for i in 0..11 {
             let target = f32::from(self.target == Some(i));
-            let moving = (dt - f64::from(self.waits[i])).max(0.0);
-            self.levels[i] = approach(self.levels[i], target, moving, env);
+            let wait = f64::from(self.waits[i]);
+            // Still inside its Delay: a level holds rather than taking a
+            // step of no time, which a Fade of 0 answers by landing at once.
+            if wait > dt {
+                self.waits[i] -= dt as f32;
+                continue;
+            }
+            self.levels[i] = approach(self.levels[i], target, (dt - wait).max(0.0), env);
             self.waits[i] = (self.waits[i] - dt as f32).max(0.0);
         }
     }
