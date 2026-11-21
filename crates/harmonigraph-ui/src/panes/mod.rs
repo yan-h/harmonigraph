@@ -507,7 +507,7 @@ pub(super) fn hinted_section<R>(
 
 /// A [`section`] for a feature that can be switched off, with its switch
 /// between the chevron and the name, where the eye already is and where every
-/// other checkbox's box stands against its label. Off, the section is its
+/// other switch's track stands against its label. Off, the section is its
 /// heading alone, in the dim label colour and with no chevron: every row under
 /// it would set a thing that is not drawn, so there is nothing to unfold, and
 /// the dimming is what tells an off section from a folded one at a glance.
@@ -550,11 +550,11 @@ fn folding_section<R>(
     })
     .unzip();
     let open = !folded.unwrap_or(false);
-    // The box's own gap to the name is a checkbox label's, `icon_spacing`, not
-    // the gap across a row: that is also about what the open chevron's ink
-    // leaves before the box, so the three read as evenly spaced.
+    // The track's own gap to the name is a switch label's, not the gap across
+    // a row, so the heading reads as the switch's label.
     let lead = if switch.is_some() {
-        crate::widgets::CHECKBOX_BOX * crate::theme::ui_scale(ui.ctx()) + ui.spacing().icon_spacing
+        (crate::widgets::SWITCH_SIZE.x + crate::widgets::SWITCH_GAP)
+            * crate::theme::ui_scale(ui.ctx())
     } else {
         0.0
     };
@@ -635,29 +635,23 @@ fn section_header(
     fold_header(ui, job, title, live.then_some(open), pad, lead)
 }
 
-/// A [`switched_section`]'s switch, a bare checkbox in the room its heading
-/// `row` leaves between the chevron and the name. Drawn after the heading, so
-/// it is on top of the row's fold target and takes its own clicks. Named for
-/// the section, the name the heading beside it draws.
+/// A [`switched_section`]'s switch, a bare switch track in the room its
+/// heading `row` leaves between the chevron and the name. Drawn after the
+/// heading, so it is on top of the row's fold target and takes its own clicks.
+/// Named for the section, the name the heading beside it draws.
 fn heading_switch(
     ui: &mut egui::Ui,
     row: egui::Rect,
     on: &mut bool,
     title: &str,
 ) -> egui::Response {
-    let side = crate::widgets::CHECKBOX_BOX * crate::theme::ui_scale(ui.ctx());
-    let rect = egui::Rect::from_center_size(
-        egui::pos2(row.left() + ui.spacing().indent + side / 2.0, row.center().y),
-        egui::vec2(side, side),
+    let size = crate::widgets::SWITCH_SIZE * crate::theme::ui_scale(ui.ctx());
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(row.left() + ui.spacing().indent, row.center().y - size.y / 2.0),
+        size,
     );
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-    let response = crate::widgets::checkbox_box(&mut child, on);
-    let enabled = child.is_enabled();
-    let checked = *on;
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, checked, title)
-    });
-    response
+    crate::widgets::switch_track(&mut child, on, title)
 }
 
 /// A fold's header row: a chevron that points at the name while folded and

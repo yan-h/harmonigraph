@@ -24,6 +24,9 @@ Tabs that do not fit the column move, from the right, into a trailing overflow m
 Every section heading folds its section, and folds are remembered.
 A section whose feature can be switched off (Spectrogram, MIDI ribbons) carries the switch in front of its name;
 off, the section is its heading alone, dimmed and with no fold arrow.
+A switch turns on a feature or a mode (a section of settings, or how notes are tuned or read, or what a click does: Meantone, Learn, Decode fifths, Edit shape on lattice);
+a checkbox is every other on/off: an option inside a feature, one thing to show or include, a child option under its parent, or a column that can be mixed (Retune and Show).
+Where both states have names, a two-option choice names them (Name at: Now-line or Onset).
 Right-clicking the Lattice or Analyzer picture offers a link to its settings tab.
 Each tab keeps a single owner for its controls.
 Explanation lives in tooltips rather than in lines between the controls:

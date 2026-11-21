@@ -1,5 +1,5 @@
-//! The controls that are not bars: the checkbox, the two switches a mode is
-//! engaged from, and the three helpers a settings pane lays a row of buttons
+//! The controls that are not bars: the checkbox, the two switches a feature or
+//! a mode is engaged from, and the three helpers a settings pane lays a row of buttons
 //! out with.
 
 use egui::{CornerRadius, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
@@ -7,7 +7,10 @@ use egui::{CornerRadius, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 use crate::theme;
 
 /// Track size of a [`toggle_switch`].
-const SWITCH_SIZE: Vec2 = Vec2::new(24.0, 14.0);
+pub(crate) const SWITCH_SIZE: Vec2 = Vec2::new(24.0, 14.0);
+
+/// Gap from a switch's track to its name.
+pub(crate) const SWITCH_GAP: f32 = 6.0;
 
 /// Side of a [`checkbox`]'s box, and of the check mark inside it.
 pub(crate) const CHECKBOX_BOX: f32 = 15.0;
@@ -51,46 +54,32 @@ pub(crate) fn checkbox_indeterminate(
     .inner
 }
 
-/// A [`checkbox`] with no text of its own, for a switch whose name is drawn
-/// beside it by something else: a section heading.
-#[allow(clippy::disallowed_methods)] // the wrapper the rule sends callers to
-pub(crate) fn checkbox_box(ui: &mut Ui, checked: &mut bool) -> Response {
-    let scale = theme::ui_scale(ui.ctx());
-    ui.scope(|ui| {
-        let spacing = ui.spacing_mut();
-        spacing.interact_size.y = 0.0;
-        spacing.icon_width = CHECKBOX_BOX * scale;
-        spacing.icon_width_inner = CHECKBOX_CHECK * scale;
-        ui.add(egui::Checkbox::without_text(checked))
-    })
-    .inner
-}
-
-/// A labeled sliding-knob switch for boolean *modes* (Meantone, Learn).
-/// Buttons with a `selected` fill read exactly like the momentary preset
+/// A labeled sliding-knob switch: the control that turns a feature or a mode
+/// on. Buttons with a `selected` fill read exactly like the momentary preset
 /// buttons they sit next to (Just, 12-TET); the track-and-knob shape is
 /// unmistakably persistent state. It wears the shared
 /// [`CONTROL_RADIUS`](theme::CONTROL_RADIUS) like every other framed control:
 /// what tells it from a button is the knob sliding in its track, not the
 /// roundness, and a pill was the one round shape in a pane of rectangles.
 ///
-/// Toggle vs checkbox, the house rule: a switch means "this mode is
-/// ENGAGED" — an ongoing behavior with side effects (Learn keeps
-/// rewriting tuning params; Meantone locks the third), especially next
-/// to action buttons it could be confused with. A checkbox means
-/// "include this element" — a display preference among peers in a
-/// settings stack (Fill, Note labels, ...). When adding a
-/// boolean control, default to a checkbox unless it's a mode that keeps
-/// acting after the click.
-pub(crate) fn toggle_switch_width(ui: &Ui, label: &str) -> f32 {
-    let text = ui.painter().layout_no_wrap(
-        label.to_owned(),
-        TextStyle::Button.resolve(ui.style()),
-        theme::text(),
-    );
-    (SWITCH_SIZE.x + 6.0) * theme::ui_scale(ui.ctx()) + text.size().x
-}
-
+/// Switch or checkbox, the house rule, after Apple's macOS guidance that a
+/// switch is the heavier control and suits one that "controls more
+/// functionality", such as "a group of settings":
+///
+/// - A **switch** turns on a feature or a mode. A feature has a section of
+///   settings of its own (Spectrogram, MIDI ribbons, through
+///   [`switch_track`] in the heading); a mode changes how notes are tuned or
+///   read, or what a click does (Meantone, Learn, Decode fifths, Edit shape
+///   on lattice).
+/// - A [`checkbox`] is every other on/off: an option inside a feature, even
+///   one you can hear (Reset context on stop), one thing to show or include
+///   (Show map dots, Archive copy), a child option indented under its parent
+///   (Frame breakdown), and anything in a grid or with a mixed state
+///   (Retune and Show), which a switch cannot draw.
+/// - A [`toggle_button`] is one of a row of peers side by side (the Curve's
+///   channels, the Stars solo).
+/// - Where both states have names of their own, neither: a two-option
+///   [`choice_row`] names them both.
 pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
@@ -99,7 +88,6 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     );
     let scale = theme::ui_scale(ui.ctx());
     let switch = SWITCH_SIZE * scale;
-    let gap = 6.0 * scale;
     // As tall as the track, not a row: every box in a column sits where its ink
     // is (see `widgets::label`), so a switch reads the row gap from a bar the
     // way a bar does. The label is trimmed to its capitals to fit, and the
@@ -110,49 +98,84 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let desired = Vec2::new(toggle_switch_width(ui, label), switch.y.max(caps));
     let (rect, row) = ui.allocate_exact_size(desired, Sense::hover());
     let target = rect.expand2(Vec2::new(0.0, ui.spacing().item_spacing.y / 2.0));
-    let mut response = ui.interact(target, row.id.with("switch"), Sense::click());
+    let response = flip(ui, ui.interact(target, row.id.with("switch"), Sense::click()), on, label);
+    if ui.is_rect_visible(rect) {
+        let track = egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.center().y - switch.y / 2.0),
+            switch,
+        );
+        paint_switch(ui, &response, track, *on);
+        let gap = SWITCH_GAP * scale;
+        let at = super::text_at(rect, &galley, track.right() + gap);
+        ui.painter().galley(at, galley, theme::text());
+    }
+    response
+}
+
+/// Width of a [`toggle_switch`] with `label`: the track, its gap and the text.
+pub(crate) fn toggle_switch_width(ui: &Ui, label: &str) -> f32 {
+    let text = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        TextStyle::Button.resolve(ui.style()),
+        theme::text(),
+    );
+    (SWITCH_SIZE.x + SWITCH_GAP) * theme::ui_scale(ui.ctx()) + text.size().x
+}
+
+/// A [`toggle_switch`]'s track alone, with no text of its own, filling `ui`'s
+/// rect: for a switch whose name is drawn beside it by something else, a
+/// section heading. `name` is what it reports to accessibility.
+pub(crate) fn switch_track(ui: &mut Ui, on: &mut bool, name: &str) -> Response {
+    let rect = ui.max_rect();
+    let response = ui.allocate_rect(rect, Sense::click());
+    let response = flip(ui, response, on, name);
+    if ui.is_rect_visible(rect) {
+        paint_switch(ui, &response, rect, *on);
+    }
+    response
+}
+
+/// A switch's click: flips `on`, and names the switch for accessibility.
+fn flip(ui: &Ui, mut response: Response, on: &mut bool, name: &str) -> Response {
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, label)
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, name)
     });
-
-    if ui.is_rect_visible(rect) {
-        // Same animation the stock egui toggle demo uses: the knob glides,
-        // the track cross-fades.
-        let t = ui.ctx().animate_bool_responsive(response.id, *on);
-        let track = egui::Rect::from_min_size(
-            egui::pos2(rect.left(), rect.center().y - switch.y / 2.0),
-            switch,
-        );
-        let radius = f32::from(theme::control_radius(scale));
-        // The knob stands this far in from the track on every side, and its
-        // corners are the track's less the inset, so the two round about one
-        // centre. A full square block, not a bar's thin grip, so the switch
-        // does not read as a slider to drag.
-        let inset = 2.5 * scale;
-        let knob = track.height() - 2.0 * inset;
-        let mix = |a: egui::Color32, b: egui::Color32| -> egui::Color32 {
-            egui::lerp(egui::Rgba::from(a)..=egui::Rgba::from(b), t).into()
-        };
-        let painter = ui.painter();
-        let track_fill = if response.hovered() || response.dragged() {
-            mix(theme::surface_faint(), theme::accent_edge())
-        } else {
-            mix(theme::well(), theme::accent_active())
-        };
-        painter.rect_filled(track, radius, track_fill);
-        let knob_x = egui::lerp((track.left() + inset)..=(track.right() - inset - knob), t);
-        painter.rect_filled(
-            egui::Rect::from_min_size(egui::pos2(knob_x, track.top() + inset), Vec2::splat(knob)),
-            (radius - inset).max(0.0),
-            theme::text(),
-        );
-        painter.galley(super::text_at(rect, &galley, track.right() + gap), galley, theme::text());
-    }
     response
+}
+
+/// A switch's track and knob in `track`.
+fn paint_switch(ui: &Ui, response: &Response, track: egui::Rect, on: bool) {
+    let scale = theme::ui_scale(ui.ctx());
+    // Same animation the stock egui toggle demo uses: the knob glides,
+    // the track cross-fades.
+    let t = ui.ctx().animate_bool_responsive(response.id, on);
+    let radius = f32::from(theme::control_radius(scale));
+    // The knob stands this far in from the track on every side, and its
+    // corners are the track's less the inset, so the two round about one
+    // centre. A full square block, not a bar's thin grip, so the switch
+    // does not read as a slider to drag.
+    let inset = 2.5 * scale;
+    let knob = track.height() - 2.0 * inset;
+    let mix = |a: egui::Color32, b: egui::Color32| -> egui::Color32 {
+        egui::lerp(egui::Rgba::from(a)..=egui::Rgba::from(b), t).into()
+    };
+    let painter = ui.painter();
+    let track_fill = if response.hovered() || response.dragged() {
+        mix(theme::surface_faint(), theme::accent_edge())
+    } else {
+        mix(theme::well(), theme::accent_active())
+    };
+    painter.rect_filled(track, radius, track_fill);
+    let knob_x = egui::lerp((track.left() + inset)..=(track.right() - inset - knob), t);
+    painter.rect_filled(
+        egui::Rect::from_min_size(egui::pos2(knob_x, track.top() + inset), Vec2::splat(knob)),
+        (radius - inset).max(0.0),
+        theme::text(),
+    );
 }
 
 /// A record control that doubles as its own live indicator. Press to arm; the
