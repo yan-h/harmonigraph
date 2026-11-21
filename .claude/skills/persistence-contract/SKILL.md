@@ -7,10 +7,21 @@ description: How a saved blob survives a change — the container-level serde(de
 
 The policy, and its one limit that a break must not be SILENT, live in `CLAUDE.md`.
 This skill is the mechanism:
-the two things that keep a break loud, and where each stops.
+what keeps a break loud, and where each guard stops.
 
-## Every persisted struct carries a container-level `#[serde(default)]`
+## A project saves its fields one by one
 
+A project's state is a set of named fields beside the parameter values, and the two kinds fail differently.
+The three editor fields that `crates/harmonigraph-plugin/src/saved_fields.rs` owns (`lattice-maps`, `editor-state`, `ui-state`):
+one that does not parse is skipped with a Console line and the rest of the restore goes ahead,
+and one the save lacks keeps what the instance holds.
+`SavedWindow` (the `editor-state` field) has no container-level default, so a window missing a key is that field skipped.
+The Hub's `musical-settings` (`crates/harmonigraph-plugin/src/configuration.rs`) is prepared before anything restores:
+one that does not parse refuses the whole restore with a line in the log, and one the save lacks restores the defaults.
+
+## Every struct inside the look carries a container-level `#[serde(default)]`
+
+Inside `ui-state`, the editor's look and layout, the rule is finer.
 A struct NESTED inside a persisted struct needs the attribute in its own right.
 A struct added without it is invisible at its declaration —
 nothing about the type says it is missing —

@@ -128,7 +128,7 @@ One is the whole list, and the rule that keeps it short is:
 **an agent encodes a job or a constraint, never a description of the code.** `merge-auditor` describes a method, and a method does not go stale when a type is renamed.
 
 A `spectral` agent carrying the spectrogram's retention and aggregation invariants was written and then deleted before it ever ran:
-every fact in it was already documented, better, on `SpectrumHistory` and `SpectrogramAgg`.
+every fact in it was already documented, better, on the spectrogram's own types.
 A doc comment sits in the same diff as the code it describes, so a refactor that invalidates it puts it in front of the author;
 a prompt in `.claude/agents/` has no such gravity, so copying docs into one buys a second copy with worse invalidation and equal authority.
 So a fact with a natural home in a doc comment goes there.

@@ -38,7 +38,7 @@ fi
 # is what the workspace's own feature unification covers, `isolated` is every
 # gate that exists precisely BECAUSE that unification hides something — the
 # plugin resolved on its own dependency edge, the gated startup-probe example,
-# harmonigraph-render's own tests, and the `exclude`d vendored crates.
+# and harmonigraph-render's own tests.
 #
 # Since #922 that seam is exclusive rather than merely descriptive: the
 # `workspace` test run passes `--exclude harmonigraph-render`, so render's 282
