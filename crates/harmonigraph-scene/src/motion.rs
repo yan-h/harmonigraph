@@ -362,9 +362,16 @@ impl Motion {
             // a departure holds it for the LAST slice's delay, one wait for
             // every slot lit at the off (`level_wait`), and both ends span the
             // same.
-            let level_dt = (dt - f64::from(self.level_wait[i])).max(0.0);
+            //
+            // Still inside that wait, the presence holds rather than taking a
+            // step of no time, which a Fade of 0 answers by landing at once.
+            let wait = f64::from(self.level_wait[i]);
             self.level_wait[i] = (self.level_wait[i] - dt as f32).max(0.0);
-            self.levels[i] = approach(self.levels[i], self.targets[i], level_dt, env);
+            let waiting = wait > dt;
+            if !waiting {
+                let level_dt = (dt - wait).max(0.0);
+                self.levels[i] = approach(self.levels[i], self.targets[i], level_dt, env);
+            }
             self.colors[i] = approach(self.colors[i], self.targets[i], dt, env);
         }
         for edge in &mut self.edges {
@@ -1319,6 +1326,28 @@ mod tests {
             origin(later).presence_with_opacity >= 0.3 - 1e-6,
             "the presence left with the colour"
         );
+    }
+    /// At a Fade of 0 the fade-out delay still holds the presence: the wheel
+    /// stands through the wait and then steps out, rather than vanishing at
+    /// the off while its slices wait.
+    #[test]
+    fn the_fade_out_delay_holds_the_presence_at_a_fade_of_zero() {
+        const HOLD: f64 = 0.3;
+        let mut view = ViewConfig { mark_delay: 0.0, ..view() };
+        view.note_animation.fade_out_delay = HOLD as f32;
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        let presence = |motion: &mut NodeMotion, tracker: &mut NoteTracker, now| {
+            let scene = draw_duration(motion, tracker, &view, now, false, 0.0);
+            origin(&scene).presence_with_opacity
+        };
+        tracker.handle_event(on(0.0, 60));
+        assert_eq!(presence(&mut motion, &mut tracker, 0.5), 1.0, "the held note is drawn");
+        tracker.handle_event(off(1.0, 60));
+        let waiting = presence(&mut motion, &mut tracker, 1.0 + HOLD * 0.5);
+        assert_eq!(waiting, 1.0, "the presence left inside the wait");
+        let after = presence(&mut motion, &mut tracker, 1.0 + HOLD * 1.5);
+        assert_eq!(after, 0.0, "the presence never left");
     }
     /// The fade-out delay holds the whole departure -- the sweep and the
     /// presence -- and not the colour, so the released wheel stands uncoloured
