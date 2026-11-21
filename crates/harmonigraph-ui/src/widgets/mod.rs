@@ -31,7 +31,7 @@ mod tabs;
 mod value;
 
 pub use bend::BendPlot;
-pub(crate) use fold::{paint_chevron, paint_fold, paint_rail, Rail, RailLook};
+pub(crate) use fold::{paint_chevron, paint_fold, paint_rail, Rail};
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub use label::label;
 pub(crate) use label::{

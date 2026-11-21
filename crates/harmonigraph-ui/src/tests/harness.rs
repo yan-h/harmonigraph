@@ -388,6 +388,10 @@ pub(super) enum Variant {
     /// Velocity and gain routed to Opacity, so the Mappings page draws a
     /// weight bar beside a Delete button for each.
     Routed,
+    /// Pass through decoding the lattice-board, so the Tuning page draws the
+    /// Decoded fifth in the Perfect fifth's place, the interval rows greyed,
+    /// and the note that says why.
+    Board,
 }
 
 /// One settings page drawn one way: what the layout sweeps iterate.
@@ -426,6 +430,9 @@ impl SettingsCase {
         let appearance = &mut state.picture.appearance;
         match self.variant {
             Variant::Fresh | Variant::Engine(_) => {}
+            // What a frame's configuration view sets (`observe_configuration`),
+            // which these fixtures do not run.
+            Variant::Board => state.picture.runtime.board_drawn = true,
             Variant::Projection(projection) => appearance.camera.projection = projection,
             Variant::Texture(style) => appearance.spectrum.atmosphere.cloud_style = style,
             Variant::Material(material) => appearance.view.atmosphere.material_style = material,
@@ -450,6 +457,7 @@ impl SettingsCase {
         let maps = match self.variant {
             Variant::Engine(TuningEngine::LatticeMap) => Some(lattice_map_view()),
             Variant::Engine(engine) => Some(engine_view(engine)),
+            Variant::Board => Some(engine_view(TuningEngine::Off)),
             _ => None,
         };
         // A plugin's backend, so the controls only a live host offers are
@@ -466,8 +474,9 @@ impl SettingsCase {
 
 /// The cases the layout sweeps draw: each page fresh, then every texture on
 /// the Analyzer page, every material and projection on the Lattice page,
-/// every retuning engine on the Tuning page, the Mappings page with two
-/// mappings routed ([`Variant::Routed`]), and [`Variant::Lit`] on the
+/// every retuning engine and the lattice-board's tuning ([`Variant::Board`])
+/// on the Tuning page, the Mappings page with two mappings routed
+/// ([`Variant::Routed`]), and [`Variant::Lit`] on the
 /// Lattice, Analyzer and System pages — all against a plugin's backend
 /// ([`SettingsCase::backend`]), with every fold open.
 ///
@@ -501,10 +510,12 @@ pub(super) fn settings_cases() -> Vec<SettingsCase> {
                 .collect(),
             Tab::Mappings => vec![Variant::Fresh, Variant::Routed],
             Tab::System => vec![Variant::Fresh, Variant::Lit],
-            // No engine selector at all, then each engine behind one.
-            Tab::Tuning => {
-                std::iter::once(Variant::Fresh).chain(engines.map(Variant::Engine)).collect()
-            }
+            // No engine selector at all, then each engine behind one, then
+            // the lattice-board's tuning drawn under Pass through.
+            Tab::Tuning => std::iter::once(Variant::Fresh)
+                .chain(engines.map(Variant::Engine))
+                .chain([Variant::Board])
+                .collect(),
             _ => vec![Variant::Fresh],
         };
         cases.extend(variants.into_iter().map(|variant| SettingsCase { pane, variant }));

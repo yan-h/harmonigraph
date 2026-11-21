@@ -138,6 +138,33 @@ impl EguiState {
         SavedWindow { size: self.size(), docked: self.docked() }
     }
 
+    /// What every editor frame does with the window once its UI has run: take
+    /// the Own window choice the UI holds, `own` (also where a host restore
+    /// that moved the setting reaches an open editor), queue the size a fold
+    /// asked for, `ask`, and report an edit ([`Self::report_edit`]).
+    ///
+    /// `ask` is queued rather than applied: `request_size` is the host's round
+    /// trip, and the window's size source, which runs at the top of the next
+    /// tick before the frame it will be laid out in, is where this window
+    /// takes it (see `next_size`).
+    pub(crate) fn end_frame(
+        &self,
+        own: Option<bool>,
+        ask: Option<(u32, u32)>,
+        notice: impl FnOnce(),
+    ) {
+        if let Some(own) = own {
+            self.set_docked(!own);
+            self.window.want(own);
+        }
+        if let Some(size) = ask {
+            self.window.request_size(size);
+        }
+        // A resize or an Own window switch marks the project modified, as an
+        // edit to what `ui-state` saves does (#1824).
+        self.report_edit(notice);
+    }
+
     /// Call `notice` if the size or the Own window choice moved since the
     /// host was last told what a save holds of them, and take them as told:
     /// at the end of every editor frame, so that a resize or an Own window
@@ -147,7 +174,7 @@ impl EguiState {
     /// the own window set while the editor opens, such as a host's `set_size`
     /// before or after it attaches the editor and the own window's move out,
     /// and the resize a restore makes, mark nothing.
-    pub(crate) fn report_edit(&self, notice: impl FnOnce()) {
+    fn report_edit(&self, notice: impl FnOnce()) {
         let now = self.saved();
         if self.told.swap(Some(now)).is_some_and(|told| told != now) {
             notice();

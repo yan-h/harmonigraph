@@ -32,7 +32,8 @@ impl Plugin for AuxiliaryFixture {
         let frames = block.boundary.frames as usize;
         // Report a malformed slice outside the FFI callback.
         assert!(
-            main.iter().chain(aux[0].iter()).all(|channel| channel.len() == frames),
+            main.iter().all(|channel| channel.len() == frames)
+                && aux[0].iter().all(|channel| channel.len() == frames),
             "a channel's length differs from the callback's"
         );
         for (main, input) in main.iter_mut().zip(aux[0].iter()) {

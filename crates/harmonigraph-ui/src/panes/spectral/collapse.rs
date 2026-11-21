@@ -4,12 +4,7 @@
 use egui::{Rect, Sense, Vec2};
 
 use super::{axes::Axes, gestures, Navigation, RegionView};
-use crate::{
-    panes::DOCKED_SURFACE,
-    theme,
-    widgets::{Rail, RailLook},
-    PictureState,
-};
+use crate::{panes::DOCKED_SURFACE, theme, widgets::Rail, PictureState};
 
 #[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -35,6 +30,16 @@ impl Geometry {
 }
 
 impl Regions {
+    /// Take the docked pane's spectrum hold afresh, at a load and in a new
+    /// window: from the saved geometry where it was laid out under the dial
+    /// in force, and otherwise from the dial itself rather than whatever the
+    /// last window held (#1893).
+    pub(crate) fn relayout(&self, state: &mut PictureState) {
+        let cfg = &state.appearance.spectrum;
+        let geometry = self.geometry.filter(|geometry| geometry.matches(cfg));
+        gestures::restore_spectrum(state, geometry.map(|geometry| geometry.depths));
+    }
+
     /// Take on what the pane writes by itself as it lays the Analyzer out:
     /// the depths it draws, every frame, from the pane's size, the Tape tab and
     /// the spectrum hold. The pane writes
@@ -98,9 +103,8 @@ impl Regions {
     /// leaves the overview disagreeing with the picture it sits under
     /// (#1842).
     ///
-    /// The divider is read as the frame begins, before `draw_picture`
-    /// restores the saved hold, takes the pane's size into it, or lets a drag
-    /// move it: the strip has to be decided first, since its height comes out
+    /// The divider is read as the frame begins, before `draw_picture` takes
+    /// the pane's size into the hold or lets a drag move it: the strip has to be decided first, since its height comes out
     /// of the picture's. So a frame that drags the divider shut, or open,
     /// keeps the strip it began with, and the next frame follows.
     fn far_drawn(&self, state: &PictureState) -> bool {
@@ -140,11 +144,6 @@ impl Regions {
             [if folded[0] { rail } else { 0.0 }, if folded[1] && history { rail } else { 0.0 }];
         let available = (depth - rail_depths.iter().sum::<f32>()).max(0.0);
         if !folded[0] && !folded[1] {
-            if std::mem::take(&mut state.surfaces.spectrum_hold.relayout) {
-                if let Some(geometry) = geometry {
-                    gestures::restore_spectrum(state, geometry.depths);
-                }
-            }
             super::hold_spectrum(state, rect.size());
             let (shown, solo) = (state.shown(), state.surfaces.star_solo.spectrogram);
             let navigation = Navigation::Docked;
@@ -265,11 +264,9 @@ fn control(
         // Time down the pane stacks the regions, so a folded one is a row
         // across it; time across stands them side by side, each a column.
         let run = if vertical { Rail::Row } else { Rail::Column };
-        // A region's own look: a tab bar's button even on a rail squeezed
-        // thinner, the title 6 points from it at every scale, named.
+        // A tab bar's button, even on a rail squeezed thinner.
         let button = theme::tab_bar_height(theme::ui_scale(ui.ctx()));
-        let look = RailLook { button, gap: 6.0, named: true };
-        return crate::widgets::paint_rail(ui, rect, id, run, direction, name, look);
+        return crate::widgets::paint_rail(ui, rect, id, run, direction, name, button);
     }
     let response = ui.interact(rect, id, Sense::click());
     let collapse = format!("Collapse {name}");

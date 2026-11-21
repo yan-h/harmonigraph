@@ -1834,3 +1834,17 @@ fn a_tune_note_restated_by_a_snapshot_stays_one_note_with_its_history() {
     drop(writer);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A Tune whose only trouble is missed corrections says so alone, with no
+/// "No faults" line above it, and the Sources table and the Tune's own editor
+/// say it in the same words (#1841).
+#[test]
+fn a_tune_with_only_missed_corrections_says_so_without_no_faults() {
+    let missed = setup::detail_text(0, 1);
+    assert_eq!(missed, "1 note sounded uncorrected - raise the delay and play again");
+    assert_eq!(setup::detail_text(0, 0), "No faults");
+    let both = setup::detail_text(session::RING_FULL, 2);
+    assert_eq!(both.lines().count(), 2, "a fault, then the misses: {both}");
+    assert!(both.starts_with("Tuning status: the copy queue is full"), "{both}");
+    assert!(!both.contains("raise the delay"), "no remedy for a full queue: {both}");
+}

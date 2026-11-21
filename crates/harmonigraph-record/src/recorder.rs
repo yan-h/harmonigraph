@@ -33,7 +33,10 @@ const TAKE_RING_CAPACITY: usize = 1 << 16;
 
 const FINISHING: &str = "finishing…";
 const FINISHING_PREVIOUS: &str = "finishing the previous take…";
-const CONFIGURATION_FAILURE: &str =
+/// What the status line says of a failed take whose cause carries no message:
+/// one the audio thread found (a full ring, a refused publication into an
+/// armed take, lost input).
+pub(crate) const CONFIGURATION_FAILURE: &str =
     "recording incomplete: configuration/audio ownership failed; no render started";
 
 /// Capacity of the audio ring, in interleaved samples. Generous on
@@ -506,6 +509,14 @@ impl Recorder {
         if self.fence.failed.load(Ordering::Acquire) {
             return;
         }
+        // The entry that counts these samples follows them: with no room for
+        // it, samples committed now would sit uncounted in the ring and open
+        // the next take's soundtrack.
+        if self.producer.is_full() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            self.fence.fail();
+            return;
+        }
         let room =
             interleaved_reservation(self.audio.slots(), samples / TAKE_CHANNELS, TAKE_CHANNELS);
         if room < samples {
@@ -787,12 +798,7 @@ impl Control {
     }
 
     pub fn status(&self) -> String {
-        let status = self.status.lock().clone();
-        if status == CONFIGURATION_FAILURE {
-            self.fence.failure_message.lock().clone().unwrap_or(status)
-        } else {
-            status
-        }
+        self.status.lock().clone()
     }
 
     /// The take most recently finished this session, if any.
@@ -837,11 +843,6 @@ impl Control {
         if self.is_recording() {
             return;
         }
-        if self.fence.failed.load(Ordering::Acquire) {
-            *self.status.lock() =
-                "recording incomplete — reload the plugin before starting another take".into();
-            return;
-        }
         {
             // Completion uses this same lock before releasing the fence, so
             // a rejected Start cannot publish "finishing" after success.
@@ -851,6 +852,10 @@ impl Control {
                 return;
             }
         }
+        // A failure was the last take's own: it sealed (no longer finishing)
+        // and every callback armed for it has retired, so nothing can fail it
+        // further, and this take starts clean (#1893).
+        self.fence.clear_failure();
         let dir = take_dir();
         #[cfg(feature = "test-support")]
         let dir = self.fence.test_directory.lock().clone().unwrap_or(dir);
@@ -918,7 +923,7 @@ impl Control {
         }
         let dropped = self.dropped.load(Ordering::Relaxed);
         *self.status.lock() = if self.fence.failed.load(Ordering::Acquire) {
-            CONFIGURATION_FAILURE.into()
+            self.fence.failure_status()
         } else if dropped > 0 {
             format!("RECORDS DROPPED ({dropped}) — the take is incomplete")
         } else if rolling {

@@ -722,7 +722,7 @@ fn take_right_channel(channels: usize) -> usize {
 /// One stereo frame for the take WAV, from the same selected buffer the live
 /// analyzer reads. The caller has already established that the buffer has at
 /// least one channel and that `frame` is in range.
-fn take_stereo_frame(planes: &[&mut [f32]], frame: usize) -> [f32; TAKE_CHANNELS] {
+fn take_stereo_frame(planes: &[&[f32]], frame: usize) -> [f32; TAKE_CHANNELS] {
     [planes[0][frame], planes[take_right_channel(planes.len())][frame]]
 }
 
@@ -861,8 +861,12 @@ impl Harmonigraph {
             },
             audio.main,
         );
-        let sidechain = audio.aux.first().map(|planes| &**planes);
-        let planes = selected_analysis_input(&*audio.main, sidechain, selected);
+        let mut main: [&[f32]; harmonigraph_clap::audio_setup::MAX_CHANNELS] = Default::default();
+        for (view, plane) in main.iter_mut().zip(audio.main.iter()) {
+            *view = plane;
+        }
+        let main = &main[..audio.main.len()];
+        let planes = selected_analysis_input(main, audio.aux.first().copied(), selected);
         let channels = planes.len();
         self.audio_producer.publish(
             block_samples,
@@ -1594,15 +1598,14 @@ mod tests {
         let mut main_right = [5.0, 6.0, 7.0, 8.0];
         let expected_main_left = main_left;
         let expected_main_right = main_right;
-        let mut sidechain_left = [11.0, 12.0, 13.0, 14.0];
-        let mut sidechain_right = [21.0, 22.0, 23.0, 24.0];
+        let sidechain_left = [11.0, 12.0, 13.0, 14.0];
+        let sidechain_right = [21.0, 22.0, 23.0, 24.0];
         let expected_sidechain = [11.0, 21.0, 12.0, 22.0, 13.0, 23.0, 14.0, 24.0];
 
         {
             let mut main = [&mut main_left[..], &mut main_right[..]];
-            let mut sidechain = [&mut sidechain_left[..], &mut sidechain_right[..]];
-            let mut aux = [&mut sidechain[..]];
-            plugin.play(&Transport::default(), Audio { main: &mut main, aux: &mut aux });
+            let sidechain = [&sidechain_left[..], &sidechain_right[..]];
+            plugin.play(&Transport::default(), Audio { main: &mut main, aux: &[&sidechain] });
         }
 
         assert_eq!(main_left, expected_main_left, "process changed the main left pass-through");
@@ -1779,7 +1782,7 @@ mod tests {
             transport.playing = playing;
             transport.pos_seconds = position.map(|samples: f64| samples / 48_000.0);
             let mut main = [&mut left[..], &mut right[..]];
-            plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
+            plugin.play(&transport, Audio { main: &mut main, aux: &[] });
         }
         let columns = input.drain_columns(
             &mut shared.clock,
@@ -1798,7 +1801,7 @@ mod tests {
         let mut left = [0.0; 384];
         let mut right = [0.0; 384];
         let mut main = [&mut left[..], &mut right[..]];
-        plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
+        plugin.play(&transport, Audio { main: &mut main, aux: &[] });
         input.drain(
             &mut shared.clock,
             &mut shared.ui.picture,
@@ -1829,7 +1832,7 @@ mod tests {
     ) {
         let transport = Transport { pos_seconds: Some(position), playing, ..Default::default() };
         let mut main = [left, right];
-        plugin.play(&transport, Audio { main: &mut main, aux: &mut [] });
+        plugin.play(&transport, Audio { main: &mut main, aux: &[] });
     }
 
     /// Click in Tape mode, and wait until the input worker has passed the

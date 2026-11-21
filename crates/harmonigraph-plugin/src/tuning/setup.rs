@@ -34,17 +34,27 @@ pub fn delay_text(requested: u32, active: u32, frames: u32, rate: f64) -> String
     )
 }
 
+/// A Tune's faults and missed corrections, as the Hub's Sources table and the
+/// Tune's own editor both say them: the faults named, then the misses, and
+/// "No faults" only when there are neither (#1841).
+pub fn detail_text(status: u32, misses: u64) -> String {
+    match (status != 0, misses != 0) {
+        (_, false) => session::status_text(status),
+        (false, true) => deadline_text(status, misses),
+        (true, true) => {
+            format!("{}\n{}", session::status_text(status), deadline_text(status, misses))
+        }
+    }
+}
+
 /// The missed-correction status. Raising the multiplier is the remedy for
-/// exactly one shape of miss, so the two states that a larger delay would not
-/// help — no Hub in the process, and no free row — are named rather than
-/// counted as evidence that D is too small.
-pub fn deadline_text(status: u32, misses: u64) -> String {
-    if status & (session::NO_HUB | session::NO_ROW) != 0 {
+/// exactly one shape of miss, so the states that a larger delay would not
+/// help — no Hub in the process, no free row, and a full copy queue — are
+/// named rather than counted as evidence that D is too small.
+fn deadline_text(status: u32, misses: u64) -> String {
+    if status & (session::NO_HUB | session::NO_ROW | session::RING_FULL) != 0 {
         return "Notes are passing through uncorrected; a larger delay is not the remedy"
             .to_owned();
-    }
-    if misses == 0 {
-        return "No missed correction deadlines".to_owned();
     }
     if misses == 1 {
         return "1 note sounded uncorrected - raise the delay and play again".to_owned();

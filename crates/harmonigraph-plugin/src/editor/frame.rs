@@ -143,25 +143,15 @@ pub(super) fn frame(
     #[cfg(all(feature = "frame-log", target_os = "macos"))]
     state.logged.note(&shared.ui);
 
-    // Also where a host restore that moved the setting reaches an open editor.
-    if let Some(own) = shared.ui.workspace.interaction.own_window {
-        egui_state.set_docked(!own);
-        egui_state.window.want(own);
-    }
-
     // A pane folded sideways (or came back) leaves every other pane its width
     // and asks the WINDOW for the difference, within the editor's limits.
-    // Queued rather than applied: `request_resize` is the host's round trip,
-    // and the window's size source — which runs at the top of the next tick,
-    // before the frame it will be laid out in — is where this window takes it
-    // (see `next_size`).
-    if let Some(size) = ask {
-        egui_state.window.request_size((size.x.round() as u32, size.y.round() as u32));
+    let ask = ask.map(|size| (size.x.round() as u32, size.y.round() as u32));
+    if ask.is_some() {
         ui.ctx().request_repaint();
     }
-    // A resize or an Own window switch marks the project modified, as an edit
-    // to what `ui-state` saves does (#1824).
-    egui_state.report_edit(|| state.params.settings.changed());
+    egui_state.end_frame(shared.ui.workspace.interaction.own_window, ask, || {
+        state.params.settings.changed()
+    });
 
     // AFTER the UI has run, so a rate picked this frame takes effect on the
     // next refresh rather than the one after it.

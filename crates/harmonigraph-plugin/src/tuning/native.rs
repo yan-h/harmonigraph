@@ -68,10 +68,8 @@ impl Actions {
             "Connected to Harmonigraph"
         };
         let misses = shared.misses.load(Ordering::Relaxed);
-        let detail = if status != 0 {
-            session::status_text(status)
-        } else if misses != 0 {
-            format!("{misses} missed corrections — check tuning delay in Harmonigraph")
+        let detail = if status != 0 || misses != 0 {
+            setup::detail_text(status, misses)
         } else {
             format!("{} notes held", shared.held.load(Ordering::Relaxed))
         };
