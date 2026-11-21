@@ -603,8 +603,9 @@ reasons! {
     /// - Each heatmap surface, off the run and slab it drew, its Span and its
     ///   atmosphere's tail
     ///   ([`draw_spectrogram`](panes::spectral::spectrogram::draw_spectrogram)):
-    ///   paced by its scroll's device pixel, except for the colour memory's
-    ///   ease past the far edge, which fades in time (#1911).
+    ///   every frame while the display it reads moves or Stars twinkle, and
+    ///   otherwise paced by the device pixel its scroll or its cloud's drift
+    ///   next crosses (#1911).
     /// - The lattice ring's levels, carried on its own attack and release
     ///   ([`RingLevels`](panes::spectral_fold::RingLevels)), and whether each
     ///   wedge is drawn, on the note Fade
@@ -632,8 +633,9 @@ reasons! {
 /// stamp its own motion runs on, so a delay a picture gains reaches the repaint
 /// guard with no edit here (#1677 R1): at once while a value still fades
 /// ([`hold`](Self::hold)), or when a scroll next crosses a device pixel
-/// ([`hold_for`](Self::hold_for)), since a pass between two pixels draws the
-/// picture it already shows (#1911). The shell's copy
+/// ([`hold_for`](Self::hold_for)), since a pass between two pixels draws a
+/// picture that differs from the last by under a pixel (#1911). Learn's pulse
+/// asks for the chrome's 30 Hz. The shell's copy
 /// ([`moving_this_frame`](SurfaceState::moving_this_frame)) is cleared by
 /// [`begin_frame`] beside [`drawn_this_frame`](SurfaceState::drawn_this_frame),
 /// and for its reason: a picture not drawn this frame — its pane folded or
@@ -684,7 +686,7 @@ impl Animating {
     }
 
     /// Whether `reason` asked for any frame, at once or paced.
-    pub fn holds(self, reason: Reason) -> bool {
+    pub fn asks_for(self, reason: Reason) -> bool {
         self.after(reason).is_some()
     }
 
@@ -693,7 +695,8 @@ impl Animating {
         Some(self.0[reason as usize]).filter(|seconds| seconds.is_finite())
     }
 
-    pub fn any(self) -> bool {
+    /// Whether any reason asked for a frame sooner than the idle poll.
+    pub fn asks(self) -> bool {
         self.0.iter().any(|seconds| seconds.is_finite())
     }
 
@@ -711,13 +714,14 @@ impl Animating {
     }
 }
 
-/// The names of the reasons that hold, space-separated: what the frame log's
-/// `animating` row carries. A reason paced by its scroll carries `/px`.
+/// The names of the reasons that ask for a frame, space-separated: what the
+/// frame log's `animating` row carries. One asking for a later frame than the
+/// next carries `~`, as `roll~`.
 impl std::fmt::Display for Animating {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let held = Reason::ALL.iter().filter(|&&r| self.holds(r));
+        let held = Reason::ALL.iter().filter(|&&r| self.asks_for(r));
         for (i, &reason) in held.enumerate() {
-            let paced = if self.0[reason as usize] > 0.0 { "/px" } else { "" };
+            let paced = if self.0[reason as usize] > 0.0 { "~" } else { "" };
             write!(f, "{}{}{paced}", if i == 0 { "" } else { " " }, reason.name())?;
         }
         Ok(())

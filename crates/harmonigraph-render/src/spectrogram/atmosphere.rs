@@ -1019,6 +1019,21 @@ impl MemoryStep {
     }
 }
 
+/// How fast the cloud's texture drifts across the heatmap, in pane heights a
+/// second: [`drift_rate`](harmonigraph_scene::MaterialSettings::drift_rate)
+/// over the ten cloud units a pane is tall
+/// ([`CLOUD_UNITS`](crate::material_cells::CLOUD_UNITS)). It moves only light,
+/// so it shows wherever a lit column is drawn, on its own clock rather than the
+/// history's scroll, which is why the editor's pacing asks for its pixel too.
+pub fn cloud_drift_heights_per_second(settings: harmonigraph_scene::SpectralAtmosphere) -> f64 {
+    let settings = settings.sanitized();
+    let [x, y] = harmonigraph_scene::MaterialSettings::drift_rate(
+        settings.cloud_speed,
+        settings.cloud_direction,
+    );
+    x.hypot(y) / f64::from(crate::material_cells::CLOUD_UNITS)
+}
+
 impl MemoryFrame {
     /// How this frame follows `previous`, with `taus` the pickup and release
     /// response times.

@@ -37,7 +37,7 @@ const SPECTROGRAM_SRC: &str = concat!(
 );
 
 mod atmosphere;
-pub use atmosphere::SpectrogramAtmosphere;
+pub use atmosphere::{cloud_drift_heights_per_second, SpectrogramAtmosphere};
 
 /// The detailed heatmap, reduced cloud material, and final composite entry
 /// points, including both target color spaces. Validate their names before

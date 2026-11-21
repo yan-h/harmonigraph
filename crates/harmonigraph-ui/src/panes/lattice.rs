@@ -856,8 +856,8 @@ mod tests {
     use harmonigraph_core::{NoteEvent, SourceId};
     use harmonigraph_scene::NoteNames;
 
-    /// Learn armed holds the loop at full rate through the lattice only while
-    /// the pane draws its pulsing badge: under an engine that learns, and not
+    /// Learn armed asks for frames at the chrome's 30 Hz through the lattice
+    /// only while the pane draws its pulsing badge: under an engine that learns, and not
     /// under Lattice Map, which suspends Learn and leaves the pane still
     /// (#1834). Nothing else here moves, so the frame's report is Learn's.
     #[test]

@@ -245,7 +245,7 @@ fn the_perfect_fifth_edits_the_decoded_fifth_while_the_board_is_drawn() {
 }
 
 /// With Learn on, whether the pane's first frame draws the armed ring at
-/// `now`, and whether that frame holds the loop at full rate for it, with the
+/// `now`, and when that frame asks for the next for it, if it does, with the
 /// pane `below` points down a 2000-point screen and Decode fifths as given.
 fn learn_ring_drawn(engine: TuningEngine, decoding: bool, below: f32) -> (bool, Option<f64>) {
     let ctx = themed();

@@ -286,9 +286,9 @@ pub(super) fn draw(
         // Through the live roll's own rule, which holds nothing for a song
         // axis: it stands still, and a live note played over the audition
         // moves only while it sounds, which its voice holds.
+        // A song axis does not scroll, so whatever moves moves every frame.
         let motion = notes(painter, axes, scale, state, &axis, surface, frame);
-        let moving = motion != roll::RollMotion::default();
-        state.surfaces.moving_this_frame.hold_if(crate::Reason::RollInSpan, moving);
+        motion.hold(&mut state.surfaces.moving_this_frame, 0.0);
     }
     let view = &mut state.runtime.tape;
     coverage(painter, axes, view, &axis);

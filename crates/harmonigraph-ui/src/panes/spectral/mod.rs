@@ -679,8 +679,8 @@ pub(crate) fn spectral_pane(
     // overhang past the far edge, leaves a still picture to the idle poll
     // (#1835). A ribbon or a name moves on screen only when the Span's scroll
     // crosses a device pixel (#1911).
-    let pixel = axes::TimeAxis::new(state, split, now).seconds_per_point(&axes)
-        / f64::from(crate::spectrogram::pane_ppp(painter.ctx()));
+    let pixel = axes::TimeAxis::new(state, split, now)
+        .seconds_per_pixel(&axes, crate::spectrogram::pane_ppp(painter.ctx()));
     roll_motion.hold(&mut state.surfaces.moving_this_frame, pixel);
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.

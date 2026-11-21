@@ -22,7 +22,7 @@ use crate::spectrogram::{
     frame_data, hold_time, read_of, run_for, slab_drawn, PaneView, Plan, TexLayout,
 };
 use crate::PictureState;
-use harmonigraph_scene::Gradient;
+use harmonigraph_scene::{CloudStyle, Gradient};
 
 /// The MEAN OF dB over the buckets a pixel covers — the operator the heatmap's
 /// fragment shader performs on stored dB bytes, applied here to powers.
@@ -285,21 +285,28 @@ pub(crate) fn draw_spectrogram(
     // ([`tail`](harmonigraph_scene::SpectralAtmosphere::tail)). Only an
     // audible one moves anything, since silence draws in the bed's colour,
     // unless a tilt lifts silence off it, when every column's edges show.
-    //
-    // A scroll changes the picture only as it crosses a device pixel, so it
-    // asks for that frame (#1911). Once the column has scrolled off the far
-    // edge, the colour memory eases that edge in place, every frame.
-    let tail = cfg.atmosphere.tail();
-    let scrolled = time.window() + layout.bucket + tail.blur;
+    let reach = time.window() + layout.bucket + cfg.atmosphere.tail();
     let moving = if silence_shows(&cfg) { Some(newest) } else { spectrum.last_audible().column };
-    if let Some(age) = moving.map(|heard| now - heard) {
-        let held = &mut state.surfaces.moving_this_frame;
-        if scrolled < age && age <= scrolled + tail.memory {
-            held.hold(crate::Reason::Audible);
-        } else if age <= scrolled {
-            let pixel = time.seconds_per_point(axes) / f64::from(view.ppp);
-            held.hold_for(crate::Reason::Audible, pixel);
-        }
+    if moving.is_some_and(|heard| heard + reach >= now) {
+        // Every frame while the display it reads still moves, since fresh
+        // columns change the now-line's edge, and while Stars twinkle on
+        // their own clock. Past that the history scrolls and the cloud's
+        // light drifts over it, each changing the picture only as it crosses
+        // a device pixel, so it asks for the sooner of those frames (#1911);
+        // the colour memory's ease is stepped at that pace.
+        let effects = cfg.atmosphere.effects();
+        let twinkles = effects.cloud && cfg.atmosphere.cloud_style == CloudStyle::Stars;
+        let pace = if twinkles || spectrum.moving(now) {
+            0.0
+        } else {
+            let scroll = time.seconds_per_pixel(axes, view.ppp);
+            let height = f64::from(painter.clip_rect().height() * view.ppp);
+            let drift = effects.cloud.then(|| {
+                harmonigraph_render::cloud_drift_heights_per_second(cfg.atmosphere) * height
+            });
+            drift.filter(|&px| px > 0.0).map_or(scroll, |px| scroll.min(1.0 / px))
+        };
+        state.surfaces.moving_this_frame.hold_for(crate::Reason::Audible, pace);
     }
     // The painter's own clip is what bounds the heatmap: the quads reach past
     // the pane wherever the oldest slab starts before the region, and the callback draws against the whole

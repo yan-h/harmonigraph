@@ -827,12 +827,11 @@ impl SpectralAtmosphere {
         self.effects().cloud && (self.color_pickup > 0.0 || self.color_release > 0.0)
     }
 
-    /// How long this atmosphere goes on moving pixels for a column past the
+    /// Seconds this atmosphere goes on moving pixels for a column past the
     /// moment the column itself has scrolled off the far edge: the time blur's
-    /// reach ([`BLUR_REACH_SIGMAS`] of Time softness), which scrolls with it,
-    /// then the colour memory easing what that edge last showed to what it
-    /// shows now, on the slower of Color pickup and Color release, which fades
-    /// in place.
+    /// reach ([`BLUR_REACH_SIGMAS`] of Time softness), then the colour memory
+    /// easing what that edge last showed to what it shows now, on the slower
+    /// of Color pickup and Color release.
     ///
     /// What the editor's frame loop holds a heard column for, beside the Span
     /// and the slab. Every field is named, so a field added to the atmosphere
@@ -840,7 +839,7 @@ impl SpectralAtmosphere {
     /// textures that drift on their own clock only move light, and every one
     /// keeps silence on the palette's floor, so they settle with the columns
     /// they light.
-    pub fn tail(self) -> AtmosphereTail {
+    pub fn tail(self) -> f64 {
         let settings = self.sanitized();
         let remembers = settings.remembers_color();
         let SpectralAtmosphere {
@@ -865,7 +864,7 @@ impl SpectralAtmosphere {
         } else {
             0.0
         };
-        AtmosphereTail { blur, memory }
+        blur + memory
     }
 
     /// Which effects these settings draw. Read off SANITIZED values — a NaN
@@ -1026,13 +1025,4 @@ impl Breathing {
             0.5 + (phase * 0.73 + place).sin() / 3.0 + (phase * 1.13 + place * 1.7).sin() / 6.0;
         1.0 - self.amount * (1.0 - wave as f32)
     }
-}
-
-/// What [`SpectralAtmosphere::tail`] adds past the far edge, in seconds, in
-/// the order it runs: the blur, which scrolls with the history, then the
-/// colour memory, which eases in place.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AtmosphereTail {
-    pub blur: f64,
-    pub memory: f64,
 }

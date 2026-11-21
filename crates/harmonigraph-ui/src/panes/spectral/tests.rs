@@ -3365,7 +3365,7 @@ fn tape_modes_roll_holds_nothing_once_its_notes_are_drawn() {
     tape_frames(&mut state, Navigation::Docked, vec![vec![]]);
     let drawn = super::roll::take_roll_draw_probe().map(|probe| probe.note_count);
     assert_eq!(drawn, Some(2), "the fixture draws the recorded note and the one played over it");
-    assert!(!state.surfaces.moving_this_frame.holds(crate::Reason::RollInSpan));
+    assert!(!state.surfaces.moving_this_frame.asks_for(crate::Reason::RollInSpan));
 }
 
 /// Tape mode names the notes it rolls (#1728): the recording's in the window,

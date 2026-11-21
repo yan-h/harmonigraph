@@ -22,14 +22,17 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     // A roll that is not drawn holds nothing, though its note is in its window.
     draw_panes(&ctx, &mut state, 1.5, &[]);
     assert!(
-        !Animating::of(&state).holds(Reason::RollInSpan),
+        !Animating::of(&state).asks_for(Reason::RollInSpan),
         "an undrawn roll held the loop awake"
     );
     draw_panes(&ctx, &mut state, 1.6, &[Pane::Spectral]);
-    assert!(Animating::of(&state).holds(Reason::RollInSpan), "the extension past the window idled");
+    assert!(
+        Animating::of(&state).asks_for(Reason::RollInSpan),
+        "the extension past the window idled"
+    );
     draw_panes(&ctx, &mut state, 2.2, &[Pane::Spectral]);
     assert!(
-        !Animating::of(&state).holds(Reason::RollInSpan),
+        !Animating::of(&state).asks_for(Reason::RollInSpan),
         "the roll held the loop past its extension"
     );
 }
@@ -135,9 +138,9 @@ fn the_soonest_ask_wins_and_one_past_the_poll_holds_nothing() {
 
     let mut still = Animating::default();
     still.hold_for(Reason::Audible, crate::IDLE_REPAINT_INTERVAL.as_secs_f64());
-    assert!(!still.any(), "a pace at the idle poll held the loop");
+    assert!(!still.asks(), "a pace at the idle poll held the loop");
     assert_eq!(still.to_string(), "");
-    assert_eq!(held.to_string(), "roll/px releasing playhead/px");
+    assert_eq!(held.to_string(), "roll~ releasing playhead~");
 }
 
 /// Run one frame of `panes` at `t`, each filling a pass of its own, as a shell
@@ -221,12 +224,12 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
             }
         } else if t >= 3.0 {
             assert!(
-                !Animating::of(&state).holds(Reason::RollInSpan),
+                !Animating::of(&state).asks_for(Reason::RollInSpan),
                 "the roll must not be what keeps this awake"
             );
             let visible = level * gain > 0.5 / 255.0;
             assert_eq!(
-                Animating::of(&state).holds(Reason::Releasing),
+                Animating::of(&state).asks_for(Reason::Releasing),
                 visible,
                 "at {t} s the light is {level} at gain {gain}"
             );
@@ -269,19 +272,19 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
         draw(&mut abandoned, t);
     }
     assert!(
-        Animating::of(&abandoned).holds(Reason::Releasing),
+        Animating::of(&abandoned).asks_for(Reason::Releasing),
         "the tail was over before the surface hid"
     );
     draw_panes(&ctx, &mut abandoned, 4.05, &[]);
     assert!(
-        !Animating::of(&abandoned).holds(Reason::Releasing),
+        !Animating::of(&abandoned).asks_for(Reason::Releasing),
         "an undrawn surface held the loop awake"
     );
 
     state.picture.appearance.view.glow_strength = 0.0;
     draw(&mut state, 60.0);
     assert!(
-        !Animating::of(&state).holds(Reason::Releasing),
+        !Animating::of(&state).asks_for(Reason::Releasing),
         "a glow that does not draw held the loop awake"
     );
 }
@@ -321,10 +324,10 @@ fn a_released_note_keeps_repainting_through_its_staggered_departure() {
     // starting half a fade later: 1.15 s past the off.
     draw_panes(&ctx, &mut state, 1.0 + 1.1, &[Pane::Lattice]);
     assert!(state.picture.runtime.tracker.voices().next().is_none(), "the voice outlasted 1 s");
-    assert!(Animating::of(&state).holds(Reason::Releasing), "the departure was cut short");
+    assert!(Animating::of(&state).asks_for(Reason::Releasing), "the departure was cut short");
     draw_panes(&ctx, &mut state, 1.0 + 1.2, &[Pane::Lattice]);
     assert!(
-        !Animating::of(&state).holds(Reason::Releasing),
+        !Animating::of(&state).asks_for(Reason::Releasing),
         "the loop stayed awake past the departure"
     );
 }
@@ -377,11 +380,10 @@ fn stream(
 /// The reach is written out as the guard summed it before the heatmap
 /// answered for itself (#1673), against the slab the draw chose, so the
 /// heatmap's own answer is held to it at every block. Inside it the heatmap
-/// asks for the frame its scroll next crosses a device pixel (#1911), fine
-/// pixels, as the Retina display's, making that sooner than the idle poll,
-/// and for every frame while the colour memory eases the far edge in place
-/// once the sound has scrolled off it. The curve holds every frame for a
-/// while after the sound, as it always has.
+/// asks for every frame while the display it reads still moves, and after
+/// that for the frame its scroll or its cloud's drift next crosses a device
+/// pixel (#1911), fine pixels, as the Retina display's, making that sooner
+/// than the idle poll.
 #[test]
 fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     let mut state = fresh();
@@ -408,8 +410,7 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     // A slab is about a device pixel, so fine pixels make it narrow; three
     // 10 ms blocks still tell it apart.
     assert!(slab >= 0.03, "a slab of {slab} s is too narrow to tell from the blocks");
-    let scrolled = span + slab + 1.5;
-    let reach = scrolled + memory;
+    let reach = span + slab + 1.5 + memory;
     let stopped = t;
     let after = stream(&ctx, &mut state, &mut feed, &mut t, reach + 3.0, false, &panes);
 
@@ -419,13 +420,10 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     assert!(heard < curve && curve < stopped + 6.0, "column {heard}, curve {curve}, {stopped}");
     let mut paced = None;
     for (now, on) in after {
-        let age = now - heard;
-        let spectrum = &state.picture.runtime.spectrum;
-        let easing = scrolled < age && age <= reach;
-        if easing || spectrum.moving(now) {
-            assert_eq!(on, Some(0.0), "at {now}: last heard at {heard}, easing or the curve");
-        } else if age <= scrolled {
-            let pixel = on.expect("a scroll inside the Span idled");
+        if state.picture.runtime.spectrum.moving(now) {
+            assert_eq!(on, Some(0.0), "at {now}: the display it reads still moved");
+        } else if now - heard <= reach {
+            let pixel = on.expect("a scroll inside the reach idled");
             assert!(pixel > 0.0 && pixel < 0.05, "at {now}: a scroll paced at {pixel} s");
             assert_eq!(*paced.get_or_insert(pixel), pixel, "at {now}: the scroll's pace moved");
         } else {
@@ -433,20 +431,23 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
         }
     }
     assert!(paced.is_some(), "the fixture never reached the paced scroll");
-    assert!(!Animating::of(&state).any(), "something else held a still picture awake");
+    assert!(!Animating::of(&state).asks(), "something else held a still picture awake");
 
     let cfg = &mut state.picture.appearance.spectrum;
     (cfg.tilt, cfg.volume_floor_db, cfg.high_midi) = (-6.0, -100.0, 135.0);
     draw_panes(&ctx, &mut state, t, &panes);
     assert!(
-        Animating::of(&state).holds(Reason::Audible),
+        Animating::of(&state).asks_for(Reason::Audible),
         "silence drawn off the bed's colour idled"
     );
 
     // A heatmap switched off holds nothing, whatever it last said.
     state.picture.appearance.spectrum.show_spectrogram = false;
     draw_panes(&ctx, &mut state, t, &panes);
-    assert!(!Animating::of(&state).holds(Reason::Audible), "a hidden heatmap held the loop awake");
+    assert!(
+        !Animating::of(&state).asks_for(Reason::Audible),
+        "a hidden heatmap held the loop awake"
+    );
 }
 
 /// A heatmap whose pane stops being drawn — folded, hidden, the Video tab
@@ -473,6 +474,50 @@ fn a_heatmap_that_stops_being_drawn_holds_nothing_until_it_is_drawn_again() {
     assert!(curve < t && t < stopped + 30.0, "the curve holds until {curve}, now {t}");
     let revealed = stream(&ctx, &mut state, &mut feed, &mut t, 0.1, false, &panes);
     assert!(revealed.iter().all(|&(_, on)| on.is_some()), "a heatmap drawn again mid-tail idled");
+}
+
+/// The heatmap's pace after a sound: the history's scroll or the cloud's
+/// drift, whichever crosses a device pixel sooner, so a faster drift asks
+/// sooner and a still one leaves the scroll's pace (#1911). Fresh audio with
+/// the curve folded, and Stars twinkling on their own clock, ask for every
+/// frame.
+#[test]
+fn the_heatmap_paces_its_scroll_and_drift_and_not_fresh_audio_or_stars() {
+    // The pace the heatmap asks for 7 s after a tone, once the display it
+    // reads has settled and well inside the Span, with the curve folded,
+    // the cloud drawn at `speed`, in `style`; and whether the tone itself
+    // asked for every frame.
+    let tail = |speed: f32, style: harmonigraph_scene::CloudStyle| {
+        let mut state = fresh();
+        let ctx = super::probe::themed_at(8.0);
+        let spectrum = &mut state.picture.appearance.spectrum;
+        // Slow enough a scroll, about 39 ms a device pixel, that a drift at
+        // 10x (about 13 ms) and 20x crosses its pixels sooner.
+        spectrum.roll_seconds = 100.0;
+        // The history takes the whole pane, so the curve draws nothing.
+        spectrum.roll_fraction = 1.0;
+        let atmosphere = &mut spectrum.atmosphere;
+        (atmosphere.cloud_speed, atmosphere.cloud_style) = (speed, style);
+        assert!(atmosphere.effects().cloud, "the cloud is drawn");
+        let (mut t, mut feed, panes) =
+            (0.0, crate::spectrum::TestFeed::default(), [Pane::Spectral]);
+        let playing = stream(&ctx, &mut state, &mut feed, &mut t, 1.0, true, &panes);
+        let fresh = playing[20..].iter().all(|&(_, on)| on == Some(0.0));
+        let after = stream(&ctx, &mut state, &mut feed, &mut t, 7.0, false, &panes);
+        assert!(!state.picture.runtime.spectrum.moving(t), "the display still moves");
+        (fresh, after.last().unwrap().1)
+    };
+    use harmonigraph_scene::CloudStyle::{Stars, Watercolor};
+    let (fresh, still) = tail(0.0, Watercolor);
+    assert!(fresh, "fresh audio with the curve folded was paced");
+    let scroll = still.expect("a still wash's scroll idled");
+    let (_, slow) = tail(10.0, Watercolor);
+    let (_, fast) = tail(20.0, Watercolor);
+    let (slow, fast) = (slow.expect("a drifting wash idled"), fast.expect("a drifting wash idled"));
+    assert!(slow < scroll, "a wash drifting faster than the scroll waited for it: {slow} s");
+    assert!((slow / fast - 2.0).abs() < 1e-6, "twice the drift paced at {fast} s, not half {slow}");
+    let (_, stars) = tail(0.0, Stars);
+    assert_eq!(stars, Some(0.0), "twinkling Stars were paced");
 }
 
 /// With the heatmap hidden nothing on screen holds a sound for a Span: the
@@ -510,11 +555,11 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
             Some((at, drawn)) => {
                 assert_eq!(&nodes, drawn, "the lattice or its ring moved after {at}")
             }
-            None if !Animating::of(&state).any() => still = Some((t, nodes)),
+            None if !Animating::of(&state).asks() => still = Some((t, nodes)),
             None => {}
         }
         if still.is_some() {
-            assert!(!Animating::of(&state).any(), "woke at {t} with nothing heard");
+            assert!(!Animating::of(&state).asks(), "woke at {t} with nothing heard");
         }
     }
     assert!(ring_outlasted_the_display, "the ring never held the loop past the curve");
@@ -847,9 +892,12 @@ fn a_roll_left_scrolling_asks_the_shell_for_its_next_pixel() {
     };
     let mut state = fresh();
     // A short Span on fine pixels, so the scroll crosses a device pixel
-    // sooner than the idle poll would draw it, and no Background glow, whose
-    // colour eases on for longer than the Span.
+    // sooner than the idle poll would draw it; a short Lead release and note
+    // Fade, so the note settles well inside the Span; and no Background glow,
+    // whose colour eases on for longer than the Span.
     state.picture.appearance.spectrum.roll_seconds = 2.0;
+    state.picture.appearance.spectrum.roll_lead_release = 0.25;
+    state.picture.appearance.view.fade_time = 0.1;
     state.picture.appearance.view.glow_strength = 0.0;
     let mut harness = DockHarness::new();
     harness.ctx.set_pixels_per_point(4.0);

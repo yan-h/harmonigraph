@@ -944,4 +944,11 @@ impl TimeAxis {
     pub(super) fn seconds_per_point(&self, axes: &Axes) -> f64 {
         self.window / f64::from(self.region_depth_len(axes).max(1.0))
     }
+
+    /// Seconds the scroll takes to cross one device pixel at `ppp` device
+    /// pixels a point: the frame a picture that only scrolls on this axis
+    /// next changes on screen (#1911).
+    pub(super) fn seconds_per_pixel(&self, axes: &Axes, ppp: f32) -> f64 {
+        self.seconds_per_point(axes) / f64::from(ppp)
+    }
 }

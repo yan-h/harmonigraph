@@ -217,7 +217,8 @@ That row names no encoder:
 an export runs the pane's Encoder, or the take's recorded one for an automatic export,
 except that a Hardware frame over 4096 px a side goes through x264, which the export's row shows as a warning.
 `--events` reads those instead of asking for the times by hand, across every window and opening in the log:
-each stretch where nothing kept it animating, so nothing on screen could move, with how often it drew then against the rate its phases offer (the log does not say which deadline paced a still editor: the 50 ms poll, or a chrome cue's 33 ms while Record waits armed or an export runs);
+each stretch where nothing asked for a frame sooner than the idle poll, so nothing on screen moved faster than the poll draws it, with how often it drew then against the rate its phases offer (the log does not say which deadline paced a still editor: the 50 ms poll, or a chrome cue's 33 ms while Record waits armed or an export runs);
+a reason paced slower than every frame is logged with `~`, as `roll~` (#1911);
 the frames after each opening's first note;
 and missed refreshes in each export's first 30 s against the 30 s before it.
 So all three need only one session that includes them:

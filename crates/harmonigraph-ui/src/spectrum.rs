@@ -39,8 +39,8 @@ pub struct AudioSpectrum {
     /// (silent/unrouted input, switched-off synth) rather than freezing.
     pub(crate) last_samples: Option<f64>,
     /// When the spectrum last held anything above silence, for
-    /// [`Animating`](crate::Animating), which keeps drawing at full rate only
-    /// while what that shows can still be in view or still settling. Samples
+    /// [`Animating`](crate::Animating), which asks for frames only while what
+    /// that shows can still be in view or still settling. Samples
     /// arriving say nothing about it, because a host streams silence with its
     /// transport stopped.
     pub(crate) last_audible: Heard,
