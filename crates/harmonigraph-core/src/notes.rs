@@ -510,8 +510,7 @@ impl Envelope {
     /// Where the release of a press that sounded from `on` and let go at
     /// `off` starts: at its off, or once its attack has landed if that is
     /// later. The one statement that a release waits out the attack, which
-    /// every voice's does ([`Voice::release_level`]) and the lattice's for a
-    /// rule-1 pulse.
+    /// every voice's does ([`Voice::release_level`]) and every lattice note's.
     pub fn release_start(&self, on: Time, off: Time) -> Time {
         off.max(on + f64::from(self.attack_time))
     }

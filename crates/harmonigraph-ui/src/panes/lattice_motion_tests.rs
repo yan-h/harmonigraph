@@ -70,10 +70,12 @@ fn markers_and_midi_ring_floor_follow_the_reversed_note_and_existing_history() {
         state.appearance.view.note_names = names;
         state.appearance.view.note_animation.stagger_spread = 0.0;
         // No measured audio: every nonzero ring below must be the MIDI floor.
+        // Released before its attack lands, so the lattice holds it to 1.15
+        // (#1893, item 7): arriving, then leaving, then gone with its voice.
         event(&mut state, 0.15, true);
         frame(&mut state, 0.18, 0, false);
         event(&mut state, 0.20, false);
-        for (now, presence) in [(0.22, 0.03), (0.30, 0.0), (2.20, 0.0)] {
+        for (now, presence) in [(0.22, 0.07), (1.50, 0.65), (2.20, 0.0)] {
             let scene = frame(&mut state, now, 0, false);
             let node = origin(&scene);
             assert!((node.presence_with_opacity - presence).abs() < 1e-5);
@@ -81,7 +83,7 @@ fn markers_and_midi_ring_floor_follow_the_reversed_note_and_existing_history() {
             assert_eq!(state.runtime.tracker.voices().count() > 0, now < 2.0);
             let expected_name = match names {
                 NoteNames::All => 1.0,
-                NoteNames::Past if !(0.25..=2.0).contains(&now) => 1.0,
+                NoteNames::Past if now > 1.15 => 1.0,
                 _ => presence,
             };
             assert!((node.name_level(&state.appearance.view) - expected_name).abs() < 1e-5);
@@ -91,7 +93,7 @@ fn markers_and_midi_ring_floor_follow_the_reversed_note_and_existing_history() {
             assert!((marker - (1.0 - expected_name)).abs() < 1e-5);
             assert!(scene.nodes.iter().any(|n| !n.on_home));
             assert!(scene.pluses.iter().all(|p| scene.nodes[p.node].on_home));
-            // Hover wins even in the Past gap between carried zero and history.
+            // Hover wins whatever the names would show.
             let window = state.appearance.view.reach();
             let hovered = compose_scene(&mut state, &window, 1.0, Some(LatticePos::ORIGIN), 0, now);
             assert_eq!(origin(&hovered).name_level(&state.appearance.view), 1.0);
@@ -141,13 +143,15 @@ fn measured_audio_keeps_repress_poses_until_the_tracked_lifetime_expires() {
     frame(&mut audio, 0.05, 0, true);
     event(&mut audio, 0.1, false);
     frame(&mut audio, 0.2, 0, true);
-    let settled = frame(&mut audio, 2.0, 0, true);
+    // Its off waits out the attack to 1.0 (#1893, item 7), and its departure
+    // holds the 0.9 spread and then fades for one Fade.
+    let settled = frame(&mut audio, 3.0, 0, true);
     assert_eq!(audio.runtime.tracker.voices().count(), 0);
     assert_eq!(origin(&settled).presence_with_opacity, 0.0);
     assert!(origin(&settled).audio_ring > 0.0);
     assert_eq!(origin(&settled).slice_progress, [1.0; 11]);
-    event(&mut audio, 2.1, true);
-    assert_eq!(origin(&frame(&mut audio, 2.1, 0, true)).slice_progress, [1.0; 11]);
+    event(&mut audio, 3.1, true);
+    assert_eq!(origin(&frame(&mut audio, 3.1, 0, true)).slice_progress, [1.0; 11]);
 }
 
 #[test]

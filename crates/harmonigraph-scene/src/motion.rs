@@ -504,12 +504,12 @@ impl NodeMotion {
         let env = view.envelope();
         let floor = now - horizon(view.fade_time, view.mark_delay, view.note_animation);
         let mut classes: Vec<_> = tracker.voices().map(|voice| voice.pitch_class).collect();
-        // A pulse is on the lattice until its off, which `step` puts where its
+        // A press is on the lattice until its off, which `step` puts where its
         // release starts, once the attack has landed: sought and kept by that.
         let attack = f64::from(env.attack_time.max(0.0));
         let presses = tracker.roll().voice_presses(floor - attack);
         for note in presses {
-            let off = |end| if note.is_pulse() { env.release_start(note.start, end) } else { end };
+            let off = |end| env.release_start(note.start, end);
             if note.end.is_some_and(|at| off(at) < floor) {
                 continue;
             }
@@ -766,7 +766,8 @@ impl NodeMotion {
         // What the voices drew, and not the Roll's timeline: the timeline
         // leaves out a pulse, and follows the Show switch for a press that was
         // hidden as it left, which would replay a fade nobody saw. Sought from
-        // the oldest release a pulse's off can still keep in reach.
+        // the oldest release an off waiting out its attack can still keep in
+        // reach.
         let since = retained - f64::from(crate::FADE_TIME_MAX);
         let notes = tracker.roll().voice_presses(since);
         let mut seen = HashMap::default();
@@ -775,26 +776,17 @@ impl NodeMotion {
         for note in notes {
             let id = note.id();
             let old = self.seen.get(&id);
-            // Rule 1's pulse: a voice that still pulses in full, its release
-            // waiting out the attack (`Envelope::release_start`), and the
-            // lattice's off for it waits the same. Only for it: any press with
-            // a length the lattice draws as far as its attack got.
-            let off =
-                note.end.map(
-                    |at| {
-                        if note.is_pulse() {
-                            env.release_start(note.start, at)
-                        } else {
-                            at
-                        }
-                    },
-                );
+            // The lattice's off waits out the attack, as every voice's release
+            // does (`Envelope::release_start`): a note shorter than its attack,
+            // a rule-1 pulse among them, arrives in full and then leaves,
+            // rather than leaving from as far as its attack got.
+            let off = note.end.map(|at| env.release_start(note.start, at));
             if off.is_some_and(|at| at < retained) {
                 continue;
             }
             // The factual end, not the lattice's off: the cursor tells a late
-            // delivery from a note already seen, which a pulse's off says
-            // nothing about.
+            // delivery from a note already seen, which an off waiting out the
+            // attack says nothing about.
             let end = note.end.map(f64::to_bits);
             // Completed old lifetimes cannot acquire more bends. Retain their
             // cursor even outside today's horizon, up to the longest the bar can
@@ -832,9 +824,9 @@ impl NodeMotion {
         // the seed or onset, for a note that never bent — and its slot would
         // release from that rather than from where the note left off.
         let mut endings = HashMap::default();
-        // The pulses whose off is still to come, which the reconciliation
-        // below keeps held: their voices are already released.
-        let mut pulsing = Vec::new();
+        // The released presses whose lattice off is still to come, which the
+        // reconciliation below keeps held: their voices are released already.
+        let mut waiting = Vec::new();
         // One bounded roll scan per surface, never one scan per node. Only
         // edges since the checkpoint are replayed; retained old notes cannot
         // restart a finished animation when history is trimmed.
@@ -878,8 +870,8 @@ impl NodeMotion {
                 endings.insert(id, intensity.read(note.velocity, note.expressions_at(at)));
                 // At the pitch its replay left it on, which is its voice's:
                 // a tuned onset is a bend at the onset itself.
-                if note.is_pulse() && note.start <= now && at > now {
-                    pulsing.push((id, held(at, note.end_pitch())));
+                if note.start <= now && at > now {
+                    waiting.push((id, held(at, note.end_pitch())));
                 }
             }
             // observed_until is loss of observation, not a factual key-up.
@@ -968,7 +960,7 @@ impl NodeMotion {
             let reading = intensity.read(voice.velocity, voice.expressions);
             self.held.insert(voice.id(), Held::new(voice.on_time, voice.pitch, reading));
         }
-        self.held.extend(pulsing);
+        self.held.extend(waiting);
         self.gates(scene, tuning, view, env, fade, tracker, now, false, std::mem::take(&mut first));
         self.advance(0.0, env);
         self.at = Some(now);
@@ -1162,6 +1154,14 @@ mod tests {
     fn off(t: f64, note: u8) -> NoteEvent {
         NoteEvent::off(t, SourceId::DIRECT, 0, note)
     }
+    /// A baseline at `t` listing nothing of the direct input's, which ends its
+    /// held notes with no off (rule 5). Since every off waits out the attack
+    /// (#1893, item 7), this is what still cuts an arrival short.
+    fn omit(tracker: &mut NoteTracker, t: f64) {
+        let frame =
+            harmonigraph_core::canonical::SourceBaseline::new(SourceId::DIRECT, t, 1, true, &[]);
+        tracker.replace_source(&frame.unwrap()).unwrap();
+    }
 
     #[test]
     fn smooth_slice_motion_uses_the_note_fade_curve_in_both_directions() {
@@ -1206,13 +1206,14 @@ mod tests {
         for repress in [1.6, 4.0] {
             let mut tracker = NoteTracker::new();
             let mut motion = NodeMotion::default();
-            // A short note: its lit slice arrives at once and takes the
-            // release late in the sweep, so it is still well out when the
+            // A note cut short: its lit slice arrives at once and takes the
+            // departure late in the sweep, so it is still well out when the
             // presence, held at 0.3 for the last delay, has faded.
             tracker.handle_event(on(0.0, 60));
             let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
             let (_, lit) = lit_by(&first, 60);
-            tracker.handle_event(off(0.3, 60));
+            omit(&mut tracker, 0.3);
+            draw(&mut motion, &mut tracker, &view, 0.3, false);
             let fading = draw(&mut motion, &mut tracker, &view, 1.45, false);
             assert!(origin(&fading).presence_with_opacity > 0.0, "the ink ran out early");
             assert!(origin(&fading).slice_progress[lit] > 0.5, "the lit slice left in time");
@@ -1299,33 +1300,6 @@ mod tests {
         }
         assert_eq!(lowest(&|n| n.presence_with_opacity), 1.0, "the presence left with the colour");
         assert_eq!(origin(&frames.last().unwrap().1).slice_progress, [1.0; 11]);
-    }
-    /// A note released before its arrival finished plays the same short rise
-    /// and fall on every unlit slice, each in its turn: a pulse travelling
-    /// round the ring, rather than the slices it reached turning back at once
-    /// and the rest never starting. The lit slice, which arrived first and
-    /// takes the release late in the sweep, keeps arriving until then, while
-    /// its colour leaves at the release.
-    #[test]
-    fn a_short_note_sends_its_pulse_round_the_ring() {
-        let (order, span, frames) = played(&[on(0.0, 60), off(0.3, 60)], 2.0);
-        let (slot, lit) = lit_by(&frames[0].1, 60);
-        assert!(
-            (0..span).any(|i| i != lit && order[i] > 0.3),
-            "every unlit slice had started by the release: {order:?}"
-        );
-        for i in (0..span).filter(|&i| i != lit) {
-            let peak = frames.iter().map(|(_, s)| origin(s).slice_progress[i]).fold(0.0, f32::max);
-            assert!((peak - 0.3).abs() < 0.03, "slice {i} peaked at {peak}, not 0.3");
-        }
-        // Two tenths after the release, where the presence still holds.
-        let (_, later) = frames.iter().find(|(now, _)| *now >= 0.5).unwrap();
-        let colour = origin(later).octaves[slot];
-        assert!((colour - 0.1).abs() < 0.03, "the lit slot's colour waited at {colour}");
-        assert!(
-            origin(later).presence_with_opacity >= 0.3 - 1e-6,
-            "the presence left with the colour"
-        );
     }
     /// At a Fade of 0 the fade-out delay still holds the presence: the wheel
     /// stands through the wait and then steps out, rather than vanishing at
@@ -1450,9 +1424,10 @@ mod tests {
     ///
     /// Over a spread of every setting a departure carries — Fade, its curve,
     /// the stagger's hold, the Fade-out delay — and of a note held to full and
-    /// one released part way in. Against the summary the guard used to keep
-    /// instead (the off plus [`departure`](NoteAnimationConfig::departure)):
-    /// the same where the node arrived in full, and never later anywhere.
+    /// one released part way in, whose off waits out its attack. Against the
+    /// summary the guard used to keep instead (that off plus
+    /// [`departure`](NoteAnimationConfig::departure)): the same where the
+    /// node arrived in full, and never later anywhere.
     #[test]
     fn moving_holds_while_a_later_frame_still_differs() {
         // What the motion writes on a node, without what a voice draws.
@@ -1507,7 +1482,8 @@ mod tests {
                 assert_eq!(*moving, changes, "{what}: said moving {moving} at {now}");
             }
             let still = after + frames[after..].iter().position(|&(.., moving)| !moving).unwrap();
-            let summary = off_at + view.note_animation.departure(fade);
+            let lattice_off = off_at.max(on_at + f64::from(fade));
+            let summary = lattice_off + view.note_animation.departure(fade);
             let last = frames[still - 1].0;
             assert!(last <= summary + 1e-4, "{what}: moving at {last}, past {summary}");
             if held_for > 1.0 {
@@ -1536,35 +1512,37 @@ mod tests {
         assert_eq!(origin(&back).octaves, [0.0; 11], "the colour waited");
     }
     #[test]
-    fn late_delivered_short_notes_recover_the_factual_timeline_once() {
+    fn late_delivered_notes_recover_the_factual_timeline_once() {
         let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
+        // Released just past its attack (1.0, `draw`'s Fade), so its off is
+        // the lattice's own and lands behind the frame it is delivered on.
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
-        draw(&mut motion, &mut tracker, &view, 0.21, false);
+        draw(&mut motion, &mut tracker, &view, 1.21, false);
         tracker.handle_event(on(0.15, 60));
-        tracker.handle_event(off(0.20, 60));
-        let late = draw(&mut motion, &mut tracker, &view, 0.22, false);
-        assert!((origin(&late).presence_with_opacity - 0.03).abs() < 1e-5);
+        tracker.handle_event(off(1.20, 60));
+        let late = draw(&mut motion, &mut tracker, &view, 1.22, false);
+        assert!((origin(&late).presence_with_opacity - 0.98).abs() < 1e-5);
         let mut timely_tracker = NoteTracker::new();
         let mut timely = NodeMotion::default();
         timely_tracker.handle_event(on(0.15, 60));
         draw(&mut timely, &mut timely_tracker, &view, 0.15, false);
-        timely_tracker.handle_event(off(0.20, 60));
-        let reference = draw(&mut timely, &mut timely_tracker, &view, 0.22, false);
+        timely_tracker.handle_event(off(1.20, 60));
+        let reference = draw(&mut timely, &mut timely_tracker, &view, 1.22, false);
         assert_eq!(origin(&late).slice_progress, origin(&reference).slice_progress);
-        let repeated = draw(&mut motion, &mut tracker, &view, 0.22, false);
+        let repeated = draw(&mut motion, &mut tracker, &view, 1.22, false);
         assert_eq!(origin(&late).slice_progress, origin(&repeated).slice_progress);
         assert_eq!(motion.replayed_edges, 0, "late edges replayed twice");
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         tracker.handle_event(on(0.15, 60));
-        draw(&mut motion, &mut tracker, &view, 0.21, false);
-        tracker.handle_event(off(0.20, 60));
-        let late_off = draw(&mut motion, &mut tracker, &view, 0.22, false);
+        draw(&mut motion, &mut tracker, &view, 1.21, false);
+        tracker.handle_event(off(1.20, 60));
+        let late_off = draw(&mut motion, &mut tracker, &view, 1.22, false);
         assert_eq!(origin(&late_off).slice_progress, origin(&reference).slice_progress);
-        assert!((origin(&late_off).presence_with_opacity - 0.03).abs() < 1e-5);
-        draw_duration(&mut motion, &mut tracker, &view, 0.5, false, 0.05);
-        let longer = draw_duration(&mut motion, &mut tracker, &view, 0.6, false, 1.0);
+        assert!((origin(&late_off).presence_with_opacity - 0.98).abs() < 1e-5);
+        draw_duration(&mut motion, &mut tracker, &view, 1.5, false, 0.05);
+        let longer = draw_duration(&mut motion, &mut tracker, &view, 1.6, false, 1.0);
         assert_eq!(
             origin(&longer).presence_with_opacity,
             0.0,
@@ -1714,13 +1692,18 @@ mod tests {
         assert_eq!(peak, 1.0, "the pulse peaked at {peak}");
         assert_eq!(at(3.5), 0.0, "the pulse never left");
     }
-    /// A transport reset that closes a note at its own onset is no rule-1
-    /// pulse: that note sounded, for a length nobody knows, and the lattice
-    /// draws it as far as its attack got, which is nothing.
+    /// Every lattice note waits out its attack before it leaves (#1893, item
+    /// 7), as the Spiral and the note band do: a 1 ms note peaks as a 0 ms
+    /// note does, rather than at what its attack reached in a millisecond.
     #[test]
-    fn a_reset_at_a_notes_onset_is_no_pulse() {
-        let frames = presences(&[on(1.0, 60), NoteEvent::source_reset(1.0, SourceId::DIRECT)]);
-        assert!(frames.iter().all(|f| f.0 == 0.0), "the reset note pulsed");
+    fn a_one_millisecond_note_peaks_as_a_zero_length_one_does() {
+        let peak = |length: f64| {
+            let frames = presences(&[on(1.0, 60), off(1.0 + length, 60)]);
+            frames.iter().map(|f| f.0).fold(0.0, f32::max)
+        };
+        let (zero, one) = (peak(0.0), peak(0.001));
+        assert!(zero > 0.9, "the 0 ms fixture must peak near full: {zero}");
+        assert_eq!(one, zero, "a 1 ms note peaked at {one}, a 0 ms one at {zero}");
     }
     /// A pulse whose onset is tuned lights the node its tuning names, as its
     /// voice does on the Spiral and the note band, and not its key's.
@@ -1873,7 +1856,7 @@ mod tests {
         assert!(motion.nodes.is_empty(), "{} entries outlived their fade", motion.nodes.len());
     }
     #[test]
-    fn short_stabs_carry_pose_and_opacity_at_event_time_across_frame_cadences() {
+    fn a_release_and_repress_carry_pose_at_event_time_across_frame_cadences() {
         let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
         let mut view = view.clone();
         view.note_animation.stagger_spread = NoteAnimationConfig::default().stagger_spread;
@@ -1884,26 +1867,24 @@ mod tests {
             tracker.handle_event(on(0.0, 60));
             draw(&mut motion, &mut tracker, &view, 0.0, false);
             if detailed {
-                draw(&mut motion, &mut tracker, &view, 0.1, false);
+                draw(&mut motion, &mut tracker, &view, 1.1, false);
             }
-            tracker.handle_event(off(0.2, 60));
+            // Past the attack (1.0, `draw`'s Fade), so the off is its own.
+            tracker.handle_event(off(1.2, 60));
             if detailed {
-                draw(&mut motion, &mut tracker, &view, 0.2, false);
+                draw(&mut motion, &mut tracker, &view, 1.2, false);
             }
-            tracker.handle_event(on(0.25, 60));
-            let scene = draw(&mut motion, &mut tracker, &view, 0.3, false);
+            tracker.handle_event(on(1.25, 60));
+            let scene = draw(&mut motion, &mut tracker, &view, 1.3, false);
             let node = origin(&scene);
-            // The presence holds at the off's 0.2 while the off travels the
-            // sweep, then the re-press raises it from there at event time.
-            assert!(
-                (node.presence_with_opacity - 0.25).abs() < 1e-5,
-                "{}",
-                node.presence_with_opacity
-            );
+            // The presence holds at full while the off travels the sweep, and
+            // the re-press takes it back before it has moved.
+            assert_eq!(node.presence_with_opacity, 1.0);
             snapshots.push((node.presence_with_opacity, node.slice_progress));
-            let repeated = draw(&mut motion, &mut tracker, &view, 0.3, false);
+            let repeated = draw(&mut motion, &mut tracker, &view, 1.3, false);
             assert_eq!(node.slice_progress, origin(&repeated).slice_progress);
         }
+        assert!(snapshots[0].1.iter().any(|&p| p < 1.0), "the fixture moved no slice");
         for i in 0..11 {
             assert!((snapshots[0].1[i] - snapshots[1].1[i]).abs() < 1e-5, "{i}");
         }
@@ -2128,11 +2109,13 @@ mod tests {
             origin(&draw(&mut motion, &mut tracker, &view, 1.5, false)).slice_progress,
             [1.0; 11]
         );
+        // Released at 2.0, its off waits out the attack to 2.5, and the
+        // departure from there is over by 4.1.
         tracker.handle_event(off(2.0, 72));
-        draw(&mut motion, &mut tracker, &view, 3.1, false);
-        tracker.handle_event(on(3.2, 60));
+        draw(&mut motion, &mut tracker, &view, 4.1, false);
+        tracker.handle_event(on(4.2, 60));
         assert!(
-            origin(&draw(&mut motion, &mut tracker, &view, 3.3, false)).slice_progress[0] < 0.2
+            origin(&draw(&mut motion, &mut tracker, &view, 4.3, false)).slice_progress[0] < 0.2
         );
     }
     #[test]
@@ -2145,12 +2128,14 @@ mod tests {
         let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
         let order = view.note_animation.delays(&first.octave_layout, 1.0);
         let arrival = draw(&mut motion, &mut tracker, &view, 0.15, false);
-        tracker.handle_event(off(0.15, 60));
+        // Cut short by a baseline, since an off waits out the arrival.
+        omit(&mut tracker, 0.15);
+        draw(&mut motion, &mut tracker, &view, 0.15, false);
         let departure = draw(&mut motion, &mut tracker, &view, 0.2, false);
         // Each slice where its own edges have brought it: one the rise has
-        // not reached is still out, one the off has reached is on its way
-        // back, and one between the two is still arriving. The lit slice
-        // takes the rise at once and the off in its turn.
+        // not reached is still out, one the departure has reached is on its
+        // way back, and one between the two is still arriving. The lit slice
+        // takes the rise at once and the departure in its turn.
         let (_, lit) = lit_by(&arrival, 60);
         let (a, b) = (origin(&arrival).slice_progress, origin(&departure).slice_progress);
         let mut reached = [false; 3];
@@ -2180,20 +2165,23 @@ mod tests {
     #[test]
     fn audio_presence_stays_settled_and_mark_delay_cancels_on_short_notes() {
         let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.4, ..view() };
+        // A Fade shorter than the Delay: a note's off waits out its attack,
+        // so only a note whose attack is over before the wait is can be one
+        // the Delay never marks.
+        let draw = |motion: &mut NodeMotion, tracker: &mut NoteTracker, now| {
+            draw_duration(motion, tracker, &view, now, true, 0.1)
+        };
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         for now in [0.0, 0.5, 1.5] {
-            assert_eq!(
-                origin(&draw(&mut motion, &mut tracker, &view, now, true)).slice_progress,
-                [1.0; 11]
-            );
+            assert_eq!(origin(&draw(&mut motion, &mut tracker, now)).slice_progress, [1.0; 11]);
         }
         tracker.handle_event(on(1.6, 60));
-        let scene = draw(&mut motion, &mut tracker, &view, 1.7, true);
+        let scene = draw(&mut motion, &mut tracker, 1.7);
         assert_eq!(origin(&scene).slice_progress, [1.0; 11]);
         assert_eq!(origin(&scene).melody_level, 0.0);
         tracker.handle_event(off(1.8, 60));
-        assert_eq!(origin(&draw(&mut motion, &mut tracker, &view, 2.1, true)).melody_level, 0.0);
+        assert_eq!(origin(&draw(&mut motion, &mut tracker, 2.1)).melody_level, 0.0);
     }
     #[test]
     fn stagger_spread_spans_starts_and_carries_through_interruptions() {
@@ -2212,12 +2200,15 @@ mod tests {
             draw(&mut motion, &mut tracker, &view, 0.0, false);
             draw(&mut motion, &mut tracker, &view, 0.04, false);
             let before = motion.at(LatticePos::ORIGIN).progress;
-            tracker.handle_event(off(0.04, 60));
+            // Cut short by a baseline, since an off waits out the arrival.
+            omit(&mut tracker, 0.04);
+            draw(&mut motion, &mut tracker, &view, 0.04, false);
             let scene = draw(&mut motion, &mut tracker, &view, 0.05, false);
-            // The off reaches the seam at once and the rest in their turn: a
-            // slice the arrival had not reached yet has not moved. The lit
-            // slice arrived at once and takes the off in its turn, so it may
-            // still be arriving, unless there is no spread to wait out.
+            // The departure reaches the seam at once and the rest in their
+            // turn: a slice the arrival had not reached yet has not moved. The
+            // lit slice arrived at once and takes the departure in its turn,
+            // so it may still be arriving, unless there is no spread to wait
+            // out.
             let (_, lit) = lit_by(&scene, 60);
             let m = motion.at(LatticePos::ORIGIN);
             for i in (0..11).filter(|&i| i != lit || spread == 0.0) {
@@ -2574,17 +2565,21 @@ mod tests {
         let scene = draw_duration(&mut motion, &mut tracker, &view, 0.2, false, 0.05);
         assert_eq!(origin(&scene).presence_with_opacity, 1.0);
         assert_eq!(origin(&scene).melody_level, 0.0, "late first observation skipped mark delay");
-        tracker = NoteTracker::new();
-        motion = NodeMotion::default();
-        tracker.handle_event(on(0.0, 60));
-        draw(&mut motion, &mut tracker, &view, 0.0, false);
-        tracker.handle_event(tune(0.2));
-        tracker.handle_event(off(0.2, 60));
-        let scene = draw(&mut motion, &mut tracker, &view, 0.35, false);
-        assert!(
-            scene.nodes.iter().all(|n| n.presence_with_opacity < 0.11),
-            "release-time bend resurrected a lifetime"
-        );
+        // Released past its attack (1.0, `draw`'s Fade), so the off is its
+        // own, with a bend at the same instant: the node it names never lights.
+        let released = |bent: bool| {
+            let mut tracker = NoteTracker::new();
+            let mut motion = NodeMotion::default();
+            tracker.handle_event(on(0.0, 60));
+            draw(&mut motion, &mut tracker, &view, 0.0, false);
+            if bent {
+                tracker.handle_event(tune(1.2));
+            }
+            tracker.handle_event(off(1.2, 60));
+            let scene = draw(&mut motion, &mut tracker, &view, 1.35, false);
+            scene.nodes.iter().map(|n| n.presence_with_opacity).collect::<Vec<_>>()
+        };
+        assert_eq!(released(true), released(false), "release-time bend resurrected a lifetime");
     }
     #[test]
     fn octave_mark_handoff_keeps_delay_and_releases_the_old_slot() {

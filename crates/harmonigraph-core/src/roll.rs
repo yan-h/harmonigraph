@@ -156,13 +156,6 @@ impl RollNote {
         self.id
     }
 
-    /// Released at or before its onset (rule 1, [`NoteRoll::note_off`]): a
-    /// voice that pulses, its release waiting out the attack. A reset that
-    /// closes a note at its onset is not one: that note sounded.
-    pub fn is_pulse(&self) -> bool {
-        self.pulse
-    }
-
     /// No timeline note: a rule-1 pulse, or a press Clear roll took.
     fn off_timeline(&self) -> bool {
         self.pulse || self.cleared != Cleared::No
