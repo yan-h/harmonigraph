@@ -1846,4 +1846,5 @@ fn a_tune_with_only_missed_corrections_says_so_without_no_faults() {
     let both = setup::detail_text(session::RING_FULL, 2);
     assert_eq!(both.lines().count(), 2, "a fault, then the misses: {both}");
     assert!(both.starts_with("Tuning status: the copy queue is full"), "{both}");
+    assert!(!both.contains("raise the delay"), "no remedy for a full queue: {both}");
 }

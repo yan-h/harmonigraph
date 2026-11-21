@@ -270,8 +270,11 @@ impl Pump {
                 Some((Err(error), _)) => fence.fail_with_message(error.to_string()),
                 _ => {}
             }
+            // Under the status lock Start reads `finishing` in, so a Start
+            // refused as finishing cannot overwrite the failure after it.
+            let mut status = status.lock();
             if fence.failed.load(Ordering::Acquire) {
-                *status.lock() = fence.failure_status();
+                *status = fence.failure_status();
             }
             fence.finishing.store(false, Ordering::Release);
         }

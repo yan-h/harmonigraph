@@ -577,11 +577,12 @@ fn a_counter_that_skips_ahead_inside_a_run_is_noticed_once() {
     assert_eq!(NOTICES.load(Ordering::Relaxed), 0, "after an invalid callback or a new run");
 
     d.run(3000, vec![], None);
-    d.run(4000, vec![], None);
-    let steady = observed().steady.clone();
-    assert_eq!(steady[steady.len() - 2..], [3000, 4000], "as given");
     d.main();
     assert_eq!(SKIPS.load(Ordering::Relaxed), 1, "inside a run");
+    d.run(4000, vec![], None);
+    d.main();
+    let steady = observed().steady.clone();
+    assert_eq!(steady[steady.len() - 2..], [3000, 4000], "as given");
     assert_eq!(NOTICES.load(Ordering::Relaxed), 1, "once");
 }
 

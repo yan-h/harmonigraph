@@ -48,11 +48,11 @@ pub fn detail_text(status: u32, misses: u64) -> String {
 }
 
 /// The missed-correction status. Raising the multiplier is the remedy for
-/// exactly one shape of miss, so the two states that a larger delay would not
-/// help — no Hub in the process, and no free row — are named rather than
-/// counted as evidence that D is too small.
+/// exactly one shape of miss, so the states that a larger delay would not
+/// help — no Hub in the process, no free row, and a full copy queue — are
+/// named rather than counted as evidence that D is too small.
 fn deadline_text(status: u32, misses: u64) -> String {
-    if status & (session::NO_HUB | session::NO_ROW) != 0 {
+    if status & (session::NO_HUB | session::NO_ROW | session::RING_FULL) != 0 {
         return "Notes are passing through uncorrected; a larger delay is not the remedy"
             .to_owned();
     }
