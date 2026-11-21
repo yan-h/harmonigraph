@@ -62,3 +62,5 @@ Yan took the recommendations made after the audit was checked against the code (
   This replaces the R1 line's yes or no (2026-11-10) with a time, still answered by each picture's own draw, and replaces the Tape playhead's 144 px/s threshold (#1837).
 - Learn's armed pulse animates at about 30 Hz, as the Record button's breath does, rather than at the display rate. Yan, in chat, #1911.
 - The Record breath and the export stripes keep their 30 Hz cadence (#1861 Q1): every frame of a breath differs, so pacing by pixel would put it back at the display rate.
+- The heatmap's tail is paced too: every frame while the display it reads moves or Stars twinkle, and otherwise at the sooner of its scroll's and its cloud drift's next device pixel, with the colour memory stepped at that pace.
+  Yan accepted the visual change "as long as shader effects are not significantly affected" (2026-11-21, in chat, #1914): the drift keeps its motion, Stars keep every frame, and only the colour memory's ease is stepped, by about twice the 30-against-60 fps difference measured in `MemoryFrame::follow`.
