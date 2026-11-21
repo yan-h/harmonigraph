@@ -47,7 +47,7 @@ In **Exports**, **Queue last take** and **Queue paths** capture the appearance t
 with the current Video output settings and dimensions.
 Under **Recorded** only Output size, Tail, Encoder and Archive copy are the current ones:
 each take keeps the frame (aspect, lattice side and split) and Video history it was recorded with.
-A take recorded without a look is refused, with the reason in the export list.
+The Video pane refuses a take recorded without a look, with the reason in the export list.
 Camera movement is recorded through host parameters;
 see [What is and isn't captured](#what-is-and-isnt-captured).
 
@@ -72,7 +72,7 @@ Take formats before v9 are refused with a version error and must be recorded aga
 there is no converter.
 An unreadable or unsupported selected appearance document refuses the export with an error on stderr.
 A valid replacement overrides the recorded document completely.
-A missing recorded appearance or missing settings groups use their normal defaults.
+The offline renderer draws a take with no recorded appearance in the defaults, and missing settings groups use their normal defaults.
 The retired `record_audio`, `auto_render`, `audio_path` and `audio_offset` saved settings are ignored and are not saved again.
 They were inactive;
 capture and automatic rendering remain unconditional for a finished take.

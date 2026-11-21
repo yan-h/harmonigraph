@@ -87,4 +87,5 @@ Yan took the recommendations made after the audit was checked against the code (
 
 ## 2026-11-20 (Name at, PR #1902)
 
-- A note name's end is stored as the end itself, Now-line or Onset, rather than as the end that reads first or the other one: picking Onset and moving the spectrum to the other side keeps names at the onset. Now-line is the fresh default in every orientation, so the fresh layout (spectrum on the Right) shows names at the now-line where it showed them at the onset. Yan, choosing "Store the end" over relabelling the row as reading-relative (PR #1902 review)
+- A note name's end is stored as the end itself, Now-line or Onset, rather than as the end that reads first or the other one: picking Onset and moving the spectrum to the other side keeps names at the onset. Yan, choosing "Store the end" over relabelling the row as reading-relative (PR #1902 review)
+- Onset is the default in every orientation: the renamed key is skipped without a word, so a project or take saved before opens at the default, and Onset keeps the fresh layout (spectrum on the Right) and projects saved there with the old default as they were. Yan, over the Now-line default first agreed, once told the rename is silent (PR #1902 review)

@@ -877,9 +877,12 @@ mod tests {
     }
 
     /// A state whose pane shows `range` semitones around middle C over a
-    /// `span`-second window, with the whole depth axis given to the roll.
+    /// `span`-second window, with the whole depth axis given to the roll, and
+    /// names at the leading edge.
     fn state(range: f32, span: f32) -> PictureState {
-        turned(range, span, SpectralOrientation::Left)
+        let mut state = turned(range, span, SpectralOrientation::Left);
+        state.appearance.spectrum.note_name_anchor = NameAnchor::Leading;
+        state
     }
 
     /// The same pane with the names anchored on their onsets, so they travel
@@ -888,16 +891,6 @@ mod tests {
         let mut state = state(range, span);
         state.appearance.spectrum.note_name_anchor = NameAnchor::Onset;
         state
-    }
-
-    /// The onset when `travel`, else the leading edge: the two anchors as the
-    /// sweeps below loop over them.
-    fn anchor_for(travel: bool) -> NameAnchor {
-        if travel {
-            NameAnchor::Onset
-        } else {
-            NameAnchor::Leading
-        }
     }
 
     fn turned(range: f32, span: f32, orientation: SpectralOrientation) -> PictureState {
@@ -953,10 +946,10 @@ mod tests {
         recorded.note_off(key(62), 44.0);
         recorded.note_on(key(57), 1.0, 57.0, 45.0);
         recorded.note_off(key(57), 48.0);
-        for travel in [false, true] {
+        for anchor in [NameAnchor::Leading, NameAnchor::Onset] {
             // The leading anchor, or the onset when travelling.
             let mut state = state(24.0, 10.0);
-            state.appearance.spectrum.note_name_anchor = anchor_for(travel);
+            state.appearance.spectrum.note_name_anchor = anchor;
             state.appearance.spectrum.roll_fraction = 0.5;
             let cfg = &state.appearance.spectrum;
             let axes = Axes::new(PANE, cfg);
@@ -971,13 +964,14 @@ mod tests {
             let placed =
                 plan_sources_for_test(&state, &axes, &scale, &sources, 100.0, FLAT, &mut thinning);
             let named: Vec<f32> = placed.iter().map(|label| label.pitch).collect();
-            let expected: &[f32] = if travel { &[67.0, 62.0] } else { &[67.0] };
-            assert_eq!(named, expected, "travel {travel}");
+            let onset = anchor == NameAnchor::Onset;
+            let expected: &[f32] = if onset { &[67.0, 62.0] } else { &[67.0] };
+            assert_eq!(named, expected, "{anchor:?}");
             let near = axes.at(0.5, split);
             for label in &placed {
                 let corners = [label.rect.left_top(), label.rect.right_bottom()];
                 let inside = corners.iter().all(|c| (*c - near).dot(axes.dir_depth()) >= -0.5);
-                assert!(inside, "travel {travel}: {:?} crosses the near edge", label.rect);
+                assert!(inside, "{anchor:?}: {:?} crosses the near edge", label.rect);
             }
         }
     }
@@ -1135,9 +1129,9 @@ mod tests {
     #[test]
     fn surviving_names_are_disjoint_and_paint_in_musical_order() {
         for orientation in SpectralOrientation::ALL {
-            for travel in [false, true] {
+            for anchor in [NameAnchor::Leading, NameAnchor::Onset] {
                 let mut state = turned(24.0, 10.0, orientation);
-                state.appearance.spectrum.note_name_anchor = anchor_for(travel);
+                state.appearance.spectrum.note_name_anchor = anchor;
                 for event in [on(1.0, 67), on(1.0, 64), on(2.0, 60), off(2.5, 60)] {
                     state.runtime.tracker.handle_event(event);
                 }
@@ -1298,9 +1292,9 @@ mod tests {
         // Twelve 1.5-point notes 2.7 points apart at E: their cores come
         // closer than the cut, so they draw as one dense run.
         let run: Vec<f64> = (0..12).map(|k| 7.2 + 0.09 * f64::from(k)).collect();
-        for travel in [false, true] {
+        for anchor in [NameAnchor::Leading, NameAnchor::Onset] {
             let mut state = state(24.0, 10.0); // 48..72
-            state.appearance.spectrum.note_name_anchor = anchor_for(travel);
+            state.appearance.spectrum.note_name_anchor = anchor;
             swelling(&mut state);
             for event in [
                 on(2.0, 60),
@@ -1335,7 +1329,7 @@ mod tests {
             );
             assert!(
                 ribbons.iter().any(|r| r.tremolo[1] > 0.0),
-                "travel {travel}: the fixture is vacuous, the run is not drawn as one",
+                "{anchor:?}: the fixture is vacuous, the run is not drawn as one",
             );
             // Horizontal pane, now at the left: x grows with age. Each body's
             // pitch row and its near and far ends.
@@ -1353,14 +1347,14 @@ mod tests {
             let onset_moved = |raw: f32| bodies.iter().all(|&(_, _, far)| (far - raw).abs() > 0.3);
             assert!(
                 head_moved(x(4.0)) && onset_moved(x(4.03)) && onset_moved(x(1.0)),
-                "travel {travel}: the fixture is vacuous, no drawn end moved off its note",
+                "{anchor:?}: the fixture is vacuous, no drawn end moved off its note",
             );
 
             let placed = labels(&state, 10.0);
             for onset in [2.0, 4.03, 5.0, 1.0, run[0]] {
                 assert!(
                     placed.iter().any(|l| l.onset == onset),
-                    "travel {travel}: the note struck at {onset} is unnamed",
+                    "{anchor:?}: the note struck at {onset} is unnamed",
                 );
             }
             for label in &placed {
@@ -1373,11 +1367,12 @@ mod tests {
                     .expect("every name belongs to a note");
                 let stop = note.stop(10.0);
                 // It anchors on the note's own end...
-                let anchor = x(if travel { note.start } else { stop });
-                let inset = if travel { -LABEL_INSET } else { LABEL_INSET };
+                let at_onset = anchor == NameAnchor::Onset;
+                let end = x(if at_onset { note.start } else { stop });
+                let inset = if at_onset { -LABEL_INSET } else { LABEL_INSET };
                 assert!(
-                    (label.lead.x - (anchor + inset)).abs() < 0.01,
-                    "travel {travel}: the name struck at {} is not {LABEL_INSET} off its note",
+                    (label.lead.x - (end + inset)).abs() < 0.01,
+                    "{anchor:?}: the name struck at {} is not {LABEL_INSET} off its note",
                     label.onset,
                 );
                 // ...and, at unit scales, stands on the body the roll drew for
@@ -1389,10 +1384,10 @@ mod tests {
                         (y - label.lead.y).abs() < 0.01 && near <= middle && middle <= far
                     })
                     .expect("every named note has a body drawn");
-                let over = if travel { label.rect.max.x - far } else { near - label.rect.min.x };
+                let over = if at_onset { label.rect.max.x - far } else { near - label.rect.min.x };
                 assert!(
                     over <= 0.0,
-                    "travel {travel}: the name struck at {} overhangs its ribbon's drawn end \
+                    "{anchor:?}: the name struck at {} overhangs its ribbon's drawn end \
                      by {over} points at unit scales",
                     label.onset,
                 );
@@ -1558,9 +1553,9 @@ mod tests {
         // marks does, by up to 17 points, and that is the pinning trade
         // measured in the measured rectangle rather than anything about the anchor.
         for orientation in SpectralOrientation::ALL {
-            for travel in [false, true] {
+            for anchor in [NameAnchor::Leading, NameAnchor::Onset] {
                 let mut state = turned(24.0, 10.0, orientation);
-                state.appearance.spectrum.note_name_anchor = anchor_for(travel);
+                state.appearance.spectrum.note_name_anchor = anchor;
                 state.runtime.tracker.handle_event(on(2.0, 60));
                 state.runtime.tracker.handle_event(off(6.0, 60));
 
@@ -1568,7 +1563,7 @@ mod tests {
                 let square =
                     egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
                 let placed = labels_in(&state, 10.0, square);
-                assert_eq!(placed.len(), 1, "{orientation:?}, travel {travel}");
+                assert_eq!(placed.len(), 1, "{orientation:?} at {anchor:?}");
 
                 // The ribbon's two ends, and how far the name sits from the one
                 // it is anchored to along the depth axis — signed, so a name
@@ -1576,23 +1571,24 @@ mod tests {
                 let axes = Axes::new(square, &state.appearance.spectrum);
                 let t = scale_of(&state).t_of(60.0);
                 let (head, onset) = (axes.at(t, 0.4), axes.at(t, 0.8));
-                let (anchor, other) = if travel { (onset, head) } else { (head, onset) };
-                let toward = (other - anchor).normalized();
-                let reach = (placed[0].rect.center() - anchor).dot(toward);
+                let (end, other) =
+                    if anchor == NameAnchor::Onset { (onset, head) } else { (head, onset) };
+                let toward = (other - end).normalized();
+                let reach = (placed[0].rect.center() - end).dot(toward);
                 assert!(
                     reach > 0.0,
-                    "{orientation:?}, travel {travel}: the name lies off the far side of \
+                    "{orientation:?} at {anchor:?}: the name lies off the far side of \
                      its anchor, {reach} points from it",
                 );
                 assert!(
-                    reach < (other - anchor).length(),
-                    "{orientation:?}, travel {travel}: the name overruns the far end of \
+                    reach < (other - end).length(),
+                    "{orientation:?} at {anchor:?}: the name overruns the far end of \
                      its own ribbon",
                 );
-                let gap = (placed[0].lead - anchor).dot(toward);
+                let gap = (placed[0].lead - end).dot(toward);
                 assert!(
                     (gap - LABEL_INSET).abs() < 0.01,
-                    "{orientation:?}, travel {travel}: the letter stands {gap} off the end \
+                    "{orientation:?} at {anchor:?}: the letter stands {gap} off the end \
                      it is written on, not {LABEL_INSET} — so it is on the other end",
                 );
             }
@@ -2392,6 +2388,7 @@ mod tests {
         // Top: pitch runs left to right, time runs DOWN, so the leading
         // edge is the top of a ribbon and names grow downward from it.
         let mut state = turned(24.0, 10.0, SpectralOrientation::Top);
+        state.appearance.spectrum.note_name_anchor = NameAnchor::Leading;
         for i in 0..6 {
             let t = i as f64 * 1.2;
             state.runtime.tracker.handle_event(on(t, 60));

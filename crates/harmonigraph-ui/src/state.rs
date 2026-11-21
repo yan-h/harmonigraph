@@ -83,7 +83,7 @@ pub struct TakeState {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ExportLook {
     /// Each take's own, from its header, with the pane's output settings. A
-    /// take that recorded none exports in the current appearance.
+    /// take that recorded none is refused.
     Recorded,
     /// The editor's appearance at the press.
     #[default]

@@ -108,7 +108,6 @@ pub enum NameAnchor {
     /// travelling at the release. A name you can read in one place while you
     /// play, at the price of a movement the music did not make and of a drone
     /// whose name never scrolls at all.
-    #[default]
     Leading,
     /// The onset — the moment the key went down, wherever the layout puts it.
     ///
@@ -121,6 +120,11 @@ pub enum NameAnchor {
     /// instead is the trade the names' placement declines — the gap between a
     /// letter and the end it names is what a name IS here, and a name that
     /// outstays its own end has given that up to stay on screen.
+    ///
+    /// The default: what the fresh layout, spectrum on the Right, drew before
+    /// the end was stored, so a project or take saved then with the old
+    /// default opens as it was (Yan, PR #1902).
+    #[default]
     Onset,
 }
 
@@ -535,7 +539,9 @@ pub struct SpectrumConfig {
     /// (Yan, PR #1902). It once meant "the end that reads first, or the other
     /// one", so turning the analyzer moved every name to its ribbon's other
     /// end. The key was renamed with the change, so a project or take saved
-    /// before it holds a key this skips, and opens at the default.
+    /// before it holds a key this skips, without a word, and opens at the
+    /// default, [`Onset`](NameAnchor::Onset): unchanged where the spectrum was
+    /// on the Right or Bottom with the old setting off.
     pub note_name_anchor: NameAnchor,
     /// Overall size of those names, as a multiple of their built-in size.
     ///
@@ -1005,7 +1011,7 @@ impl Default for SpectrumConfig {
             // goes looking for the note that made it.
             roll_lead_release: 0.25,
             note_names: true,
-            note_name_anchor: NameAnchor::Leading,
+            note_name_anchor: NameAnchor::Onset,
             note_name_scale: 1.415_327_1,
             show_spectrogram: true,
             // Aurora retuned in the DAW on 2026-09-26: a shorter magenta-to-
