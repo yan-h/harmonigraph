@@ -172,7 +172,6 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 **Cases the spectrogram history goes without** (PR #1793), each with its cost when it occurs:
 
 - A column dated wrongly, which no feeder writes: debug tests fail. In release one dated at or before the newest averages into each level's open slab; one dated far ahead erases every level's history and the heatmap draws blank until Clear display history, or until real time reaches that date.
-- An analysis not given back before the next take, which the input worker's recovery after a panic rules out: a release build analyzes on from a fresh analyzer dated from the interrupted run's frame zero, so its columns date backward, as above.
 - A crash inside the slab pyramid's fold: the levels it reached keep that column and the rest miss it, drawn so until the slabs scroll out; the input worker restarts its analysis as before.
 - A Clear pressed while the input worker analyzes: the audio that step took from before the press stays in the emptied history, a few milliseconds normally, and as much as it took when it catches up after a stall (up to the 1.37 s audio ring).
 - A project at 44.1 kHz, which is within the use: the live heatmap's fresh edge reads its lag at 48 kHz, 9% short (15 ms at Precise), inside the strip's 120 ms freshness allowance, so the cost is cheap. An export's edge is exact: it reads ahead at the soundtrack's own rate.
