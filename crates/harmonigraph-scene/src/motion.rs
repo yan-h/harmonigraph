@@ -1783,14 +1783,6 @@ mod tests {
         assert!(tracker.voices().count() > 0, "the fixture's voice must still fade");
         assert_eq!(origin(&fresh).presence_with_opacity, 0.0, "a cleared release came back");
     }
-    /// Hosts send one press as an on, an off and a second on at one sample:
-    /// the pulse between them, a press of its own on the second's node, draws
-    /// exactly as that press alone does (#1883).
-    #[test]
-    fn a_pulse_under_a_press_at_the_same_sample_changes_nothing() {
-        let alone = presences(&[on(1.0, 60)]);
-        assert_eq!(presences(&[on(1.0, 60), off(1.0, 60), on(1.0, 60)]), alone);
-    }
     /// A fade a baseline withdrew (rule 6) and the fresh press it opened at
     /// that fade's own onset are two presses (#1883): once the replay has read
     /// both, it reads nothing new in them, where the two ends of one identity

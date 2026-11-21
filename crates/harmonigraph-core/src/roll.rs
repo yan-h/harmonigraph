@@ -24,7 +24,8 @@
 //! 1. an off at or before its onset pulses as a voice and is no timeline note
 //!    ([`note_off`](NoteRoll::note_off));
 //! 2. a retrigger without an off ends the old press with no fade, and drops it
-//!    when the retrigger is at or before its onset
+//!    when the retrigger is at or before its onset; an on at a rule-1 pulse's
+//!    own onset absorbs the pulse, one press sent as on, off, on
 //!    ([`note_on`](NoteRoll::note_on));
 //! 4. a note hidden at its release is never drawn leaving nor remembered, while
 //!    the timeline follows the current Show switch;
@@ -455,11 +456,26 @@ impl NoteRoll {
     /// trail mark — the retrigger's own release covers the pitch. If that
     /// instant is at or before the previous press's own onset, it is dropped
     /// instead, the note having never sounded.
+    ///
+    /// The same goes for a rule-1 pulse on the key that opened at this very
+    /// instant, though its off has already taken it from the held set: hosts
+    /// send one press as an on, an off and a second on all stamped at one
+    /// sample, and the pulse between them is that press, so the second on
+    /// absorbs it. Every pane then draws the one press once, where the Spiral
+    /// and the note band drew its arrival and fade twice over.
     pub fn note_on(&mut self, key: VoiceKey, velocity: f32, pitch: f32, at: Time) {
         if let Some(mut previous) = self.depart(key) {
             if at > previous.start {
                 previous.end = Some(at);
                 self.retire(previous);
+            }
+        }
+        // The key's newest release, sought from the back: a roll nothing
+        // prunes keeps every release here, and a walk of them all on every
+        // on would make building one quadratic in its notes.
+        if let Some(index) = self.fading.iter().rposition(|note| note.key() == key) {
+            if self.fading[index].pulse && self.fading[index].start == at {
+                self.fading.remove(index);
             }
         }
         let id = self.mint();
@@ -479,7 +495,8 @@ impl NoteRoll {
     /// and the timeline drops it rather than remembering a note of no
     /// duration. Hosts do emit these: one press can arrive as an on, an off
     /// and a second on all stamped at the same sample, and the pair in the
-    /// middle leaves an entry that begins and ends together. As a voice it
+    /// middle leaves an entry that begins and ends together, until the second
+    /// on absorbs it ([`note_on`](Self::note_on)). Alone, as a voice it
     /// still PULSES — a full arrival and departure on the lattice, the Spiral
     /// and the note band, since the release waits out the attack
     /// ([`Voice::release_level`]) — and lands in the trail: it fades marked
@@ -955,6 +972,9 @@ mod tests {
     /// where it ended. So a single press put a letter on the pane that
     /// scrolled away from the letter held at the now-line, as though the key
     /// had been played twice.
+    ///
+    /// Nor a voice of its own: the Spiral and the note band would draw the
+    /// press's arrival and fade twice over.
     #[test]
     fn one_press_delivered_as_on_off_on_is_one_note() {
         let mut tracker = NoteTracker::new();
@@ -962,6 +982,7 @@ mod tests {
         tracker.handle_event(off(9.9314, 60));
         tracker.handle_event(on(9.9314, 60));
         assert_eq!(tracker.roll().len(), 1, "the off/on pair is not a note of its own");
+        assert_eq!(tracker.voices().count(), 1, "the off/on pair is not a voice of its own");
         assert!(tracker.roll().notes().next().unwrap().is_live(), "the press is still sounding");
 
         tracker.handle_event(off(11.6881, 60));

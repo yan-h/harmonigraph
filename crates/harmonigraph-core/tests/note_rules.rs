@@ -8,7 +8,8 @@
 //!
 //! 1. an off at or before its onset is a voice that pulses and no roll note;
 //! 2. a retrigger without an off ends the old note with no fade, and drops it
-//!    when the retrigger lands at or before its onset;
+//!    when the retrigger lands at or before its onset; an on at a pulse's own
+//!    onset absorbs the pulse;
 //! 4. a note hidden at its release is never drawn leaving nor remembered;
 //! 5. a held note a baseline omits leaves with no fade and no trail mark;
 //! 6. a baseline listing a note that has ended withdraws its fade and opens a
@@ -165,6 +166,8 @@ struct Run<'a> {
     /// Notes Clear took off the roll while they sounded or faded, by key and
     /// onset.
     cleared: BTreeSet<(VoiceKey, u64)>,
+    /// Rule-1 pulses still fading, as `tail` lists them.
+    pulses: Vec<(VoiceKey, Time, Time, Option<u64>)>,
     hits: &'a mut BTreeMap<&'static str, usize>,
 }
 
@@ -199,6 +202,8 @@ impl Run<'_> {
             14..=16 => self.advance(&before),
             _ => self.baseline(&before),
         }
+        let released = tail(&snap(&self.tracker).released);
+        self.pulses.retain(|pulse| released.contains(pulse));
         self.one_record();
     }
 
@@ -238,7 +243,20 @@ impl Run<'_> {
         let after = snap(&self.tracker);
         let held = after.held(key).expect("an on holds its key");
         assert_eq!((held.on_time, held.state), (at, VoiceState::Held));
-        assert_eq!(tail(&after.released), tail(&before.released), "an on lets nothing go");
+        // Rule 2: a pulse on the key at this onset is this press, sent as on,
+        // off, on at one sample, when it is the key's newest release. It is
+        // absorbed; nothing else lets go.
+        let mut tail_expected = tail(&before.released);
+        let newest = before.released.iter().rev().find(|v| v.key() == key);
+        let newest = newest.map(|v| tail(std::slice::from_ref(v))[0]);
+        if let Some(index) = self.pulses.iter().position(|p| p.1 == at && Some(*p) == newest) {
+            self.hit("rule 2: an on at a pulse's onset absorbs it");
+            let pulse = self.pulses.remove(index);
+            // That entry alone: a reset at the same onset can leave its twin.
+            let index = tail_expected.iter().position(|t| *t == pulse).expect("a fading pulse");
+            tail_expected.remove(index);
+        }
+        assert_eq!(tail(&after.released), tail_expected, "an on lets nothing else go");
         assert_eq!(after.trail, before.trail);
         let mut expected = rows(&before.roll);
         if let Some(prev) = before.held(key) {
@@ -293,6 +311,7 @@ impl Run<'_> {
         } else {
             if pulse {
                 self.hit("rule 1: an off at its onset pulses");
+                self.pulses.push((key, prev.on_time, at, prev.lifetime));
             }
             tail_expected.push((key, prev.on_time, at, prev.lifetime));
             tail_expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -680,6 +699,7 @@ fn every_press_follows_the_rules() {
             lifetimes: 0,
             played: Vec::new(),
             cleared: BTreeSet::new(),
+            pulses: Vec::new(),
             hits: &mut hits,
         };
         for _ in 0..STEPS {
@@ -690,6 +710,7 @@ fn every_press_follows_the_rules() {
         "rule 1: an off at its onset pulses",
         "rule 2: a retrigger ends its note",
         "rule 2: a retrigger at its onset drops it",
+        "rule 2: an on at a pulse's onset absorbs it",
         "a gap changes nothing",
         "rule 4: hidden at its release",
         "rule 4: a hidden pulse is dropped",
