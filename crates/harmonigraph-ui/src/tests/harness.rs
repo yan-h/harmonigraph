@@ -35,8 +35,6 @@ pub(super) struct RecordingBackend {
     pub(super) instances: Vec<params::TuningInstance>,
     /// The live analysis input, or `None` for a shell with no choice of one.
     pub(super) input: Option<params::AnalysisInput>,
-    /// The audio owner's configuration, or `None` for a synchronous shell.
-    pub(super) config: Option<params::ConfigurationView>,
 }
 
 impl ParamBackend for RecordingBackend {
@@ -54,9 +52,6 @@ impl ParamBackend for RecordingBackend {
     }
     fn analysis_input(&self) -> Option<params::AnalysisInput> {
         self.input
-    }
-    fn configuration(&self) -> Option<params::ConfigurationView> {
-        self.config
     }
 }
 
@@ -434,7 +429,10 @@ impl SettingsCase {
         });
         let appearance = &mut state.picture.appearance;
         match self.variant {
-            Variant::Fresh | Variant::Engine(_) | Variant::Board => {}
+            Variant::Fresh | Variant::Engine(_) => {}
+            // What a frame's configuration view sets (`observe_configuration`),
+            // which these fixtures do not run.
+            Variant::Board => state.picture.runtime.board_drawn = true,
             Variant::Projection(projection) => appearance.camera.projection = projection,
             Variant::Texture(style) => appearance.spectrum.atmosphere.cloud_style = style,
             Variant::Material(material) => appearance.view.atmosphere.material_style = material,
@@ -462,12 +460,6 @@ impl SettingsCase {
             Variant::Board => Some(engine_view(TuningEngine::Off)),
             _ => None,
         };
-        let config = (self.variant == Variant::Board).then(|| params::ConfigurationView {
-            resolved: harmonigraph_core::configuration::ConfigReducer::default().resolved(),
-            board: true,
-            status: 0,
-            unadopted: None,
-        });
         // A plugin's backend, so the controls only a live host offers are
         // drawn too: the Sources table with its Source details and Tuning
         // delay folds, and the Analyzer's Audio input row.
@@ -475,7 +467,6 @@ impl SettingsCase {
             maps,
             instances: super::probe::tuning_instances(),
             input: Some(params::AnalysisInput::Main),
-            config,
             ..Default::default()
         }
     }
@@ -493,8 +484,7 @@ impl SettingsCase {
 /// control's lit form (Texture mix or the glow at 0 grey the controls under
 /// them); a tuner selected in the Sources table,
 /// whose Source details adds a delay row the Hub's lacks; a configuration
-/// view other than the board's (the range guard draws one, at 600 pt) or a
-/// status notice; and held
+/// view (the range guard draws one, at 600 pt) or a status notice; and held
 /// voices.
 ///
 /// Every texture, material, projection and engine, for the reason
