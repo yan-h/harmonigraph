@@ -247,22 +247,32 @@ pub(crate) fn ribbons_section(
                 "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
             );
             ui.add_enabled_ui(cfg.note_names, |ui| {
-                // The box moves a name to its ribbon's other END, which is the
-                // onset only where time runs the screen's way (`Anchor::of`).
-                let (label, hover) = if cfg.orientation.is_time_reversed() {
-                    (
-                        "Labels wait at the now-line",
-                        "Place labels at the newest end of each note, so a held note's name waits at the now-line. \
-                         Turn off to have labels travel with each note's onset.",
-                    )
-                } else {
-                    (
-                        "Labels follow note onset",
-                        "Place labels at the start of each note so they travel with its onset. \
-                         Turn off to keep labels at the newest edge.",
-                    )
-                };
-                crate::widgets::checkbox(ui, &mut cfg.note_names_travel, label).on_hover_text(hover);
+                // Stored as which end against the orientation's
+                // (`Anchor::of`), so flipping the orientation moves the names
+                // and this row with them.
+                use crate::panes::spectral::names::Anchor;
+                let shown = Anchor::at(cfg.orientation, cfg.note_names_travel);
+                let mut anchor = shown;
+                choice_row(
+                    ui,
+                    "Name at",
+                    &mut anchor,
+                    &[
+                        (
+                            Anchor::Leading,
+                            "Now-line",
+                            "Place each name at its note's newest end, so a held note's name waits at the now-line and travels from the release.",
+                        ),
+                        (
+                            Anchor::Onset,
+                            "Onset",
+                            "Place each name at its note's start, so it travels with the onset from the first frame.",
+                        ),
+                    ],
+                );
+                if anchor != shown {
+                    cfg.note_names_travel = anchor.travels(cfg.orientation);
+                }
                 ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Label scale")
                     .default_value(crate::panes::fresh_spectrum().note_name_scale)
                     .unit(1.0, "×")

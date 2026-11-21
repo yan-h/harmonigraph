@@ -505,7 +505,7 @@ struct Edge {
 /// setting's alone: the orientation picks the end that READS first and the
 /// setting asks for the other one.
 #[derive(Clone, Copy, PartialEq)]
-enum Anchor {
+pub(crate) enum Anchor {
     /// The end that touches the now-line: the low-depth end live, which is the
     /// side [`SpectralOrientation`](crate::SpectralOrientation) is named for.
     ///
@@ -567,13 +567,32 @@ impl Anchor {
     ///
     /// [`SpectralOrientation::is_time_reversed`]:
     ///     crate::SpectralOrientation::is_time_reversed
-    fn of(cfg: &crate::SpectrumConfig) -> Anchor {
-        let reads_first =
-            if cfg.orientation.is_time_reversed() { Anchor::Onset } else { Anchor::Leading };
-        if cfg.note_names_travel {
+    pub(crate) fn of(cfg: &crate::SpectrumConfig) -> Anchor {
+        Anchor::at(cfg.orientation, cfg.note_names_travel)
+    }
+
+    /// [`of`](Self::of) from the two fields it reads.
+    pub(crate) fn at(orientation: crate::SpectralOrientation, travel: bool) -> Anchor {
+        let reads_first = Anchor::reads_first(orientation);
+        if travel {
             reads_first.other()
         } else {
             reads_first
+        }
+    }
+
+    /// The [`note_names_travel`](crate::SpectrumConfig::note_names_travel)
+    /// that puts names on this end in `orientation`: the settings' choice of
+    /// end, stored as which end it is against the orientation's.
+    pub(crate) fn travels(self, orientation: crate::SpectralOrientation) -> bool {
+        self != Anchor::reads_first(orientation)
+    }
+
+    fn reads_first(orientation: crate::SpectralOrientation) -> Anchor {
+        if orientation.is_time_reversed() {
+            Anchor::Onset
+        } else {
+            Anchor::Leading
         }
     }
 
@@ -1845,6 +1864,20 @@ mod tests {
                 placed[0].lead.x,
             );
             previous = placed[0].lead.x;
+        }
+    }
+
+    /// The settings' Name at row names an end, and stores it as which end
+    /// against the orientation's: in every orientation the end chosen is the
+    /// end the names go on, and the other choice is the other end.
+    #[test]
+    fn the_end_chosen_in_settings_is_the_end_names_go_on() {
+        for orientation in crate::SpectralOrientation::ALL {
+            for end in [Anchor::Leading, Anchor::Onset] {
+                let travel = end.travels(orientation);
+                assert!(Anchor::at(orientation, travel) == end, "{orientation:?}");
+                assert!(Anchor::at(orientation, !travel) == end.other(), "{orientation:?}");
+            }
         }
     }
 
