@@ -246,7 +246,7 @@ impl Pump {
         let failed = fence.failed.load(Ordering::Acquire);
         if let Some(recording) = self.open.as_mut() {
             if failed && !recording.marked {
-                *status.lock() = CONFIGURATION_FAILURE.into();
+                *status.lock() = fence.failure_status();
             }
             let marked = if failed { recording.mark_incomplete() } else { Ok(()) };
             let written = marked.and_then(|()| recording.flush());
@@ -271,7 +271,7 @@ impl Pump {
                 _ => {}
             }
             if fence.failed.load(Ordering::Acquire) {
-                *status.lock() = CONFIGURATION_FAILURE.into();
+                *status.lock() = fence.failure_status();
             }
             fence.finishing.store(false, Ordering::Release);
         }
@@ -312,14 +312,14 @@ impl Pump {
     }
 }
 
-/// A failure the writer found: keep its cause, and point the status line at
-/// it, so [`Control::status`] reads the whole failure ("recording incomplete:
+/// A failure the writer found: keep its cause, and write it to the status
+/// line, so [`Control::status`] reads the whole failure ("recording incomplete:
 /// `<cause>`; no render started") from the pass that found it. Writing the bare
 /// cause there instead showed it without the rest until the next GUI refresh,
 /// or, after a Stop, until the take sealed (#1843).
 fn fail_with(fence: &RecordFence, status: &Mutex<String>, cause: String) {
     fence.fail_with_message(cause);
-    *status.lock() = CONFIGURATION_FAILURE.into();
+    *status.lock() = fence.failure_status();
 }
 
 /// In-memory endpoints for dependent crates that need to reach their real

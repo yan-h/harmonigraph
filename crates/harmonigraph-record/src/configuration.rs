@@ -89,6 +89,20 @@ impl RecordFence {
         self.failed.store(true, Ordering::Release);
     }
 
+    /// What the status line says of the failure: the worker's cause, or the
+    /// generic line for one the audio thread found.
+    pub fn failure_status(&self) -> String {
+        let message = self.failure_message.lock().clone();
+        message.unwrap_or_else(|| crate::recorder::CONFIGURATION_FAILURE.into())
+    }
+
+    /// The next take starts with no failure: Start only, once the last take
+    /// has sealed.
+    pub fn clear_failure(&self) {
+        *self.failure_message.lock() = None;
+        self.failed.store(false, Ordering::Release);
+    }
+
     /// Worker only: preserve the concrete cause across GUI status refreshes.
     pub fn fail_with_message(&self, message: String) {
         self.failure_message

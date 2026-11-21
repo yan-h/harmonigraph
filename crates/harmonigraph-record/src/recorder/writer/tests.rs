@@ -556,10 +556,8 @@ fn the_shell_reads_recording_failure_and_last_finished_take() {
     let Bench { ctrl, .. } = Bench::new();
     assert_eq!(ctrl.last_take(), None, "nothing recorded this session");
     ctrl.fence.fail_with_message("cannot write take.wav".into());
-    *ctrl.status.lock() = CONFIGURATION_FAILURE.into();
+    *ctrl.status.lock() = ctrl.fence.failure_status();
     assert!(ctrl.status().contains("cannot write take.wav"));
-    ctrl.start(48_000.0, String::new());
-    assert!(ctrl.status().contains("reload the plugin"));
 
     // And the finished take the writer thread reports is the one the button
     // reaches for.

@@ -215,3 +215,21 @@ fn wav_finalization_failure_is_accounted_without_producer_disconnect() {
     worker.stop_with_render();
     worker.assert_failed("WAV finalization failure");
 }
+
+/// A failure is its own take's: once the failed take has sealed, the next
+/// Start records, with nothing of the failure on it (#1893).
+#[test]
+fn the_take_after_a_failed_one_records() {
+    let mut worker = Worker::start("after-failure", false, false);
+    assert_no_alloc(|| worker.recorder.as_mut().unwrap().audio(&mut [1.0, -1.0].into_iter(), 2));
+    worker.stop_with_render();
+    worker.assert_failed("RIFF size limit");
+    *worker.fence.test_wav_limit.lock() = None;
+    let control = worker.control.as_ref().unwrap();
+    control.start(48_000.0, String::new());
+    assert!(control.is_recording(), "{}", control.status());
+    assert_eq!(control.status(), "waiting for playback");
+    assert!(!worker.fence.failed.load(Ordering::Acquire), "the failure was the last take's");
+    control.tick(false, 0);
+    assert_eq!(control.status(), "waiting for playback", "and none is carried into this one");
+}
