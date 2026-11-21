@@ -1482,7 +1482,8 @@ mod tests {
                 assert_eq!(*moving, changes, "{what}: said moving {moving} at {now}");
             }
             let still = after + frames[after..].iter().position(|&(.., moving)| !moving).unwrap();
-            let lattice_off = off_at.max(on_at + f64::from(fade));
+            let env = ViewConfig { fade_time: fade, ..view.clone() }.envelope();
+            let lattice_off = env.release_start(on_at, off_at);
             let summary = lattice_off + view.note_animation.departure(fade);
             let last = frames[still - 1].0;
             assert!(last <= summary + 1e-4, "{what}: moving at {last}, past {summary}");
@@ -1873,18 +1874,24 @@ mod tests {
             tracker.handle_event(off(1.2, 60));
             if detailed {
                 draw(&mut motion, &mut tracker, &view, 1.2, false);
+                draw(&mut motion, &mut tracker, &view, 2.0, false);
             }
-            tracker.handle_event(on(1.25, 60));
-            let scene = draw(&mut motion, &mut tracker, &view, 1.3, false);
+            tracker.handle_event(on(2.6, 60));
+            let scene = draw(&mut motion, &mut tracker, &view, 2.65, false);
             let node = origin(&scene);
-            // The presence holds at full while the off travels the sweep, and
-            // the re-press takes it back before it has moved.
-            assert_eq!(node.presence_with_opacity, 1.0);
+            // The presence holds while the off travels the sweep and has
+            // fallen well short of full when the re-press lands.
+            assert!(
+                (node.presence_with_opacity - 0.2526).abs() < 1e-3,
+                "{}",
+                node.presence_with_opacity
+            );
             snapshots.push((node.presence_with_opacity, node.slice_progress));
-            let repeated = draw(&mut motion, &mut tracker, &view, 1.3, false);
+            let repeated = draw(&mut motion, &mut tracker, &view, 2.65, false);
             assert_eq!(node.slice_progress, origin(&repeated).slice_progress);
         }
         assert!(snapshots[0].1.iter().any(|&p| p < 1.0), "the fixture moved no slice");
+        assert!((snapshots[0].0 - snapshots[1].0).abs() < 1e-5, "the presence");
         for i in 0..11 {
             assert!((snapshots[0].1[i] - snapshots[1].1[i]).abs() < 1e-5, "{i}");
         }
@@ -1992,14 +1999,16 @@ mod tests {
                     value: 1.0,
                 },
             });
-            for frame in 1..10 {
+            for frame in 1..=10 {
                 draw(&mut motion, &mut tracker, &view, f64::from(frame) * 0.1, false);
             }
             if late {
-                draw(&mut motion, &mut tracker, &view, 1.0, false);
+                draw(&mut motion, &mut tracker, &view, 1.1, false);
             }
-            tracker.handle_event(off(0.95, 60));
-            origin(&draw(&mut motion, &mut tracker, &view, 1.2, false)).presence_with_opacity
+            // Past the attack (1.0, `draw`'s Fade), so the off is the
+            // lattice's own and lands behind the late frame.
+            tracker.handle_event(off(1.05, 60));
+            origin(&draw(&mut motion, &mut tracker, &view, 1.3, false)).presence_with_opacity
         };
         let (on_time, late) = (release(false), release(true));
         assert!(on_time > 0.5, "the on-time release is still fading: {on_time}");
@@ -2103,19 +2112,23 @@ mod tests {
             origin(&draw(&mut motion, &mut tracker, &view, 1.5, false)).slice_progress,
             [1.0; 11]
         );
-        tracker.handle_event(off(1.5, 72));
-        tracker.handle_event(on(1.5, 72));
-        assert_eq!(
-            origin(&draw(&mut motion, &mut tracker, &view, 1.5, false)).slice_progress,
-            [1.0; 11]
-        );
-        // Released at 2.0, its off waits out the attack to 2.5, and the
-        // departure from there is over by 4.1.
-        tracker.handle_event(off(2.0, 72));
-        draw(&mut motion, &mut tracker, &view, 4.1, false);
-        tracker.handle_event(on(4.2, 60));
+        // Released past its attack (1.0, `draw`'s Fade) and pressed again at
+        // that instant: the off and the on are one gate update, so no slice
+        // starts to leave.
+        draw(&mut motion, &mut tracker, &view, 2.4, false);
+        tracker.handle_event(off(2.5, 72));
+        tracker.handle_event(on(2.5, 72));
+        for now in [2.5, 2.7] {
+            let scene = draw(&mut motion, &mut tracker, &view, now, false);
+            assert_eq!(origin(&scene).slice_progress, [1.0; 11], "at {now}");
+        }
+        // Released at 3.0, its off waits out the attack to 3.5, and the
+        // departure from there is over by 5.1.
+        tracker.handle_event(off(3.0, 72));
+        draw(&mut motion, &mut tracker, &view, 5.1, false);
+        tracker.handle_event(on(5.2, 60));
         assert!(
-            origin(&draw(&mut motion, &mut tracker, &view, 4.3, false)).slice_progress[0] < 0.2
+            origin(&draw(&mut motion, &mut tracker, &view, 5.3, false)).slice_progress[0] < 0.2
         );
     }
     #[test]

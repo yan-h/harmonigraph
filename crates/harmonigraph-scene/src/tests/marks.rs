@@ -333,6 +333,13 @@ fn an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it() {
     // C5 retook the melody as C6's attack landed; one wait and one ease later
     // its mark is whole, with C6's rejected handoff in the replayed history.
     let retaken = 0.5 + SPAN;
+    // Drawn as C6 arrives and as it leaves, so its edges reach the surface
+    // in time rather than at the edge of the replay horizon.
+    for now in [0.5, retaken] {
+        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, now);
+        let c6 = 1 << (MIDDLE_C_SLOT + 2);
+        assert_eq!(origin_node(&scene).melody_slots & c6, 0, "C6 was marked at {now}");
+    }
     let scene =
         motion_scene(&mut motion, &tracker, &Tuning::default(), &view, retaken + DELAY + SPAN);
     let origin = origin_node(&scene);
@@ -411,6 +418,33 @@ fn a_note_shorter_than_its_arrival_still_marks_level_with_its_sector() {
     }
     assert_eq!(peak, 1.0, "the marks did not arrive in full");
     assert_eq!(mark(ATTACK * 3.0).0, 0.0, "the marks never left");
+}
+
+/// The Delay stays a THRESHOLD now that a mark outlives its key. An end
+/// dropped before the wait is up was never marked, and must not be on the way
+/// out: the threshold is answered at the lattice's off, so the ramp that runs
+/// on from there has nothing to carry. With the Fade between half the Delay
+/// and the Delay, a note held for an instant leaves the lattice inside the
+/// wait, once its attack has landed, and its release runs on past the wait.
+#[test]
+fn an_end_dropped_inside_the_delay_is_never_marked_on_its_way_out() {
+    const DELAY: f64 = 0.5;
+    const FADE: f64 = 0.3;
+    let mut motion = NodeMotion::default();
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(on(0.0, 60));
+    tracker.handle_event(off(0.05, 60));
+    let view = ViewConfig { fade_time: FADE as f32, ..delayed_view(DELAY as f32) };
+    let mut released_past_the_wait = false;
+    for step in 0..=40 {
+        let now = f64::from(step) * 0.02;
+        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, now);
+        let n = origin_node(&scene);
+        assert_eq!(n.melody_level, 0.0, "a mark appeared at {now}s on a note that never had one");
+        assert_eq!(n.bass_level, 0.0, "and a bass mark at {now}s");
+        released_past_the_wait |= now > DELAY && n.presence_with_opacity > 0.0;
+    }
+    assert!(released_past_the_wait, "the fixture's release must outlast the wait");
 }
 
 #[test]

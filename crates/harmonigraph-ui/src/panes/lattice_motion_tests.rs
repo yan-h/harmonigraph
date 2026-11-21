@@ -110,12 +110,14 @@ fn measured_audio_keeps_repress_poses_until_the_tracked_lifetime_expires() {
         for state in [&mut audio, &mut silent] {
             event(state, 0.0, true);
         }
+        // The short press's off waits out its attack to 1.0 (#1893, item 7),
+        // so it is pressed again once its departure is under way.
         let times: &[f64] = if off < 1.0 {
-            &[0.05, 0.1, 0.2, 0.3, 0.35, 1.2, 2.2]
+            &[0.05, 0.1, 0.2, 1.0, 1.1, 1.2, 1.25, 2.2, 3.2]
         } else {
             &[0.05, 1.0, 2.0, 4.9, 5.0, 5.9, 6.0, 6.8, 7.0, 7.1, 7.2, 7.3, 9.2]
         };
-        let again = if off < 1.0 { 0.3 } else { 7.2 };
+        let again = if off < 1.0 { 1.2 } else { 7.2 };
         // One fade after the off, plus the 0.9 spread an ordered release
         // holds its presence for.
         let released = 7.0;
@@ -127,6 +129,10 @@ fn measured_audio_keeps_repress_poses_until_the_tracked_lifetime_expires() {
             let measured = frame(&mut audio, now, 0, true);
             let control = frame(&mut silent, now, 0, false);
             assert!(origin(&measured).audio_ring > 0.0);
+            if off < 1.0 && now == 1.25 {
+                let rippling = pose(&control).1.iter().any(|&p| p < 1.0);
+                assert!(rippling, "the re-press found a node that never left");
+            }
             if off < 1.0 || now < released {
                 assert_eq!(pose(&measured), pose(&control), "off={off}, now={now}");
             } else {

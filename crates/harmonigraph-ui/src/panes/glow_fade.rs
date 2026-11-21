@@ -805,6 +805,10 @@ mod tests {
     fn a_light_no_layer_draws_is_no_light() {
         let held = |band_width: f32, mark_thickness: f32| {
             let mut state = lit(0.0, 2.0);
+            // A stack with room for the band, no audio ring under it.
+            state.appearance.view.ring_inner = 0.3;
+            state.appearance.view.ring_gap = 0.02;
+            state.appearance.view.spectral_ring_width = 0.0;
             state.appearance.view.band_width = band_width;
             state.appearance.view.mark_thickness = mark_thickness;
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
