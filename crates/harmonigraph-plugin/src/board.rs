@@ -300,7 +300,9 @@ impl Wire for Midi {
 pub(crate) struct Lights {
     settings: std::sync::Arc<crate::configuration::Settings>,
     /// The retuning engine the audio thread last published, read with
-    /// `try_lock` so the worker never holds up its publication.
+    /// `try_lock`, so the worker never waits for it; a copy it takes can make
+    /// that callback's own `try_lock` skip one publication, which the next
+    /// callback makes.
     playback: Playback,
     engine: TuningEngine,
     #[cfg(target_os = "macos")]

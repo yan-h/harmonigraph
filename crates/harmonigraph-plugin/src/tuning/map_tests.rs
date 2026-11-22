@@ -722,7 +722,8 @@ fn adaptive_tunes_a_decoded_tune_in_the_strip_the_position_fifths_place() {
     assert_eq!(voice.frozen_offset_microcents, node_pitch(tuning, flat, 72) - 6_100_000_000);
     let five_three = LatticePos::new(-1, 1, 0);
     session.play(vec![note(3, 0, 69, 0, true)], vec![]);
-    assert_eq!(session.voice(true, 0, 69).attack_node, Some(five_three));
+    let held = session.voice(true, 0, 69);
+    assert_eq!(held.attack_node, Some(five_three));
     // A lane's host value is its step plus `OFFSET_LIMIT`: one fifth sharp.
     let raw = session.raw;
     session.hub.run_format(raw, vec![parameter("map-fifths", 10.0, 0)], None, None, 128);
@@ -733,7 +734,12 @@ fn adaptive_tunes_a_decoded_tune_in_the_strip_the_position_fifths_place() {
     assert_eq!(voice.attack_node, Some(pythagorean));
     let correction = node_pitch(tuning, pythagorean, 60) - 8_100_000_000;
     assert_eq!(voice.frozen_offset_microcents, correction);
-    assert_eq!(session.voice(true, 0, 69).attack_node, Some(five_three), "the held A kept");
+    let after = session.voice(true, 0, 69);
+    assert_eq!(
+        (after.frozen_offset_microcents, after.pitch_microcents),
+        (held.frozen_offset_microcents, held.pitch_microcents),
+        "the held A keeps its pitch"
+    );
 }
 
 /// I–vi–ii–V–I, three rounds, each chord released before the next: every

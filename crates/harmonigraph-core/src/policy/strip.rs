@@ -18,15 +18,15 @@ use crate::{LatticePos, Tuning};
 /// columns, so its notes are that map's continued up and down.
 pub const HOME: i32 = -1;
 
-/// How far the strip's flat column may be placed from F, either way: the
-/// strips whose four columns lie among the 25 fifths the lattice-board spells
-/// (E𝄫 to C𝄪). Inside them no note is more than about 59¢ from its key's
-/// pitch on a quarter-comma board, whatever its spelling, since that distance
-/// depends on the column alone.
+/// The flat columns the strip may stand at: every column within eleven
+/// fifths of C, the board's E𝄫 to C𝄪 less its outermost spellings (#1896
+/// §3.1). No note is then more than about 59¢ from its key's pitch on a
+/// quarter-comma board, whatever its spelling, since that distance depends on
+/// the column alone.
 const PLACES: std::ops::RangeInclusive<i32> = -11..=8;
 
 /// The flat column of the strip Lattice Map's Position fifths `position`
-/// places, clamped to the board's spellings.
+/// places, clamped to [`PLACES`].
 pub fn flat_column(position: i32) -> i32 {
     HOME.saturating_add(position).clamp(*PLACES.start(), *PLACES.end())
 }
