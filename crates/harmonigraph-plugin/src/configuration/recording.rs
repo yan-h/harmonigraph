@@ -2,31 +2,13 @@
 //! each sits in the take's audio, and the configuration in force. Every record
 //! is timed where it sounds, and the take's reader places it by that time
 //! (#1760).
+use crate::presentation::Mapping;
 use harmonigraph_record::{configuration::RecordIntent, Recorder};
 
-/// The Hub's mapping from its samples to the take's presentation clock,
-/// pinned at the first valid callback after activation (`Hub::anchor`). The
-/// shell's steady clock runs on across a host reset, so one pin serves the
-/// whole activation. A run states where it opens on it, and every delta is
-/// timed on it, so the two must be one function.
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Presentation {
-    pub anchor: Option<(i64, f64)>,
-    pub rate: f64,
-}
-
-impl Presentation {
-    pub fn at(self, sample: i64) -> f64 {
-        let (anchor, time) = self.anchor.unwrap_or((0, 0.0));
-        if self.rate <= 0.0 {
-            return time;
-        }
-        time + (sample as f64 - anchor as f64) / self.rate
-    }
-}
-
 pub(crate) struct Recording {
-    pub presentation: Presentation,
+    /// The Hub's mapping for this callback (`presentation`). A run states
+    /// where it opens on it, and every delta is timed on it.
+    pub presentation: Mapping,
     registered_through: i64,
     /// The intent captured at this callback's boundary.
     pub captured_intent: RecordIntent,
@@ -36,7 +18,7 @@ pub(crate) struct Recording {
 impl Default for Recording {
     fn default() -> Self {
         Self {
-            presentation: Presentation::default(),
+            presentation: Mapping::default(),
             registered_through: i64::MIN,
             captured_intent: RecordIntent::default(),
             block_start: 0,

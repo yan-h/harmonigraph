@@ -679,10 +679,13 @@ fn a_miss_read_a_callback_late_is_withdrawn_at_that_callbacks_start() {
     hub_block(0);
     // What the Hub's first callback publishes is timed at its first sample.
     let zero = capture.display_events()[0].time();
+    // The Hub's callback at 512 runs before the Tune's first, which it never
+    // sees: the one at 1024 reads the onset and its miss. The Hub processes
+    // every block, so its clock reaches the onset's scheduled time (#1885).
+    hub_block(512);
     tune_block(0, vec![note(1, 0, 64, 0, true)]);
     let sounded = tune_block(512, vec![]);
     assert!(tuning_of(&sounded.values).is_none(), "the fixture must reach a late reply");
-    // No Hub callback at 512: the one at 1024 reads the onset and its miss.
     hub_block(1024);
     // The onset, then the delta that withdraws its correction.
     let events = capture.display_events();
@@ -1637,6 +1640,9 @@ fn channel_bend_fanout_overflow_is_not_silent() {
     let _ = capture.drain_canonical();
     let _ = capture.display_events();
     hub.run(1024, (0..33).map(|i| raw_midi([0xE0, i as u8 + 1, 0x40], i)).collect(), None);
+    // Where the last bend sounds on the presentation clock, which leaves out
+    // the samples between these 64-frame callbacks (#1885).
+    let bent = hub.wrapper().test_inspect_plugin(|plugin| plugin.clock.mapping().at(1024 + 32));
     let records = capture.drain_canonical();
     let notes = records.iter().filter(|r| matches!(r, CanonicalRecord::Delta(_))).count();
     let gaps = records.iter().filter(|r| matches!(r, CanonicalRecord::Gap(_))).count();
@@ -1656,7 +1662,7 @@ fn channel_bend_fanout_overflow_is_not_silent() {
     // The last bend sounds at its own sample: Harmonigraph's own input has no
     // delay, and the repair's block starts 32 samples before it.
     assert!(
-        repaired_at >= (1024.0 + 32.0) / 48000.0,
+        repaired_at >= bent,
         "repair must not place the last bend at an earlier retained delta's time"
     );
 }

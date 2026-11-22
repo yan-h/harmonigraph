@@ -45,7 +45,7 @@ fn ring_block_of(
 ) -> (Block, Vec<f32>) {
     let block = Block {
         epoch: 0,
-        origin: 0.0,
+        start: first_frame as f64 / f64::from(format.sample_rate),
         first_frame,
         frames,
         format,

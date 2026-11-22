@@ -24,7 +24,7 @@ fn a_run_opens_on_the_presentation_clock_with_its_configuration() {
     let origin = recorder.observe_transport(20.0, true, 64.0 / 48_000.0);
     let mut recording =
         Recording { captured_intent: intent, block_start: 1000, ..Default::default() };
-    recording.presentation = Presentation { anchor: Some((1000, 5.0)), rate: 48_000.0 };
+    recording.presentation = crate::presentation::Mapping::pinned(1000, 5.0, 48_000.0);
     recorder.record(recording.presentation.at(recording.block_start), origin);
     recorder.configuration(recording.presentation.at(1000), ConfigReducer::default().resolved());
     recording.registered(1040);
@@ -477,11 +477,11 @@ fn a_tuning_edit_before_a_host_reset_opens_the_run_after_it() {
 /// that take refused to read, and notes only before the reset landed three
 /// blocks late.
 ///
-/// 256 blocks before the reset, because by then the plugin's summed block
-/// durations have run past the Hub's steady-time mapping by more than the
-/// take's song time can hide: the reset's marker for the direct source,
-/// stamped from the sum, sorted after the resumed onset and ended it at once,
-/// though it sounds for two blocks.
+/// 256 blocks before the reset, because by then a plugin that summed block
+/// durations beside the Hub's steady-time mapping had drifted past it by more
+/// than the take's song time can hide: the reset's marker for the direct
+/// source, stamped from the sum, sorted after the resumed onset and ended it
+/// at once, though it sounds for two blocks. One clock now dates both (#1885).
 #[test]
 fn a_host_reset_that_restarts_the_steady_counter_records_as_one_that_does_not() {
     const BEFORE: i64 = 256;
@@ -551,6 +551,54 @@ fn a_host_reset_that_restarts_the_steady_counter_records_as_one_that_does_not() 
         }
         assert_eq!(record(true, after), ran_on, "notes after the reset: {after}");
     }
+}
+
+/// A host counter that skips ahead inside an activation, from sample 192 to
+/// 10,000, takes no picture time: the note struck after it is recorded on its
+/// audio, at the song time the take's soundtrack has it, where before it was
+/// timed about 204 ms ahead (#1885).
+#[test]
+fn a_steady_counter_that_skips_ahead_records_its_notes_on_their_audio() {
+    let _scope = crate::test_scope::enter();
+    let block = 64.0 / 48000.0;
+    let (mut device, mut capture) = crate::test_device::recorded(|| hub().with_retune());
+    device.activate();
+    capture.arm();
+    let dir = std::env::temp_dir().join(format!("harmonigraph-skip-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+    for (i, raw) in [0, 64, 128, 192, 10_000, 10_064, 10_128, 10_192].into_iter().enumerate() {
+        let events = match i {
+            4 => vec![note(11, 64, 0, CLAP_EVENT_NOTE_ON)],
+            6 => vec![note(11, 64, 0, CLAP_EVENT_NOTE_OFF)],
+            _ => vec![],
+        };
+        let position = transport(1.0 + i as f64 * block, 0);
+        device.run_transport(raw, events, false, None, Some(position));
+    }
+    capture.stop();
+    let mut raw = 10_256;
+    for _ in 0..12 {
+        let mut parked = transport(1.0 + 8.0 * block, 0);
+        parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        device.run_transport(raw, vec![], false, None, Some(parked));
+        raw += 64;
+    }
+    writer.stop();
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let notes = drawn(&take, 64);
+    drop(writer);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+    let [(start, Some(end))] = notes[..] else { panic!("one note: {notes:?}") };
+    let struck = 1.0 + 4.0 * block;
+    assert!(
+        (start - struck).abs() < 1e-9 && (end - (struck + 2.0 * block)).abs() < 1e-9,
+        "the note sounds from its block's audio for two blocks: {start}..{end}, struck {struck}"
+    );
 }
 
 /// Armed with the transport stopped, then sent back to the start before

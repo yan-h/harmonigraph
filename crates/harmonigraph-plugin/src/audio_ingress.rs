@@ -4,9 +4,10 @@
 //! the next descriptor's source position exposes the gap. No loss recovery.
 //!
 //! Source frames count from an epoch's first callback, including dropped frames.
-//! An explicit plugin reset or format/input change starts a new epoch. `origin`
-//! is that epoch's first frame in the producer's continuous presentation seconds,
-//! not seekable project transport time. Loops/stops/seeks do not rewind it.
+//! An explicit plugin reset or format/input change starts a new epoch. Each
+//! block carries its first frame's time on the plugin's one presentation clock
+//! (`presentation`), not seekable project transport time: loops, stops and
+//! seeks do not rewind it, and samples nobody processed take none of it.
 //! LiveInput converts it to GUI seconds with the current shared ClockMapper
 //! offset once per drain; no separate analyzer clock estimate is maintained.
 
@@ -24,7 +25,8 @@ pub(crate) struct Format {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Block {
     pub epoch: u64,
-    pub origin: f64,
+    /// The presentation time of the block's first frame.
+    pub start: f64,
     pub first_frame: u64,
     pub frames: usize,
     pub format: Format,
@@ -39,7 +41,7 @@ pub(crate) struct Block {
 impl Block {
     /// The presentation time of the block's first frame.
     pub(crate) fn presentation(&self) -> f64 {
-        self.origin + self.first_frame as f64 / f64::from(self.format.sample_rate)
+        self.start
     }
 }
 
@@ -84,7 +86,6 @@ pub(crate) struct Producer {
     samples: rtrb::Producer<f32>,
     blocks: rtrb::Producer<Block>,
     epoch: u64,
-    origin: f64,
     frame: u64,
     format: Option<Format>,
 }
@@ -100,14 +101,7 @@ pub(crate) fn channel(samples: usize) -> (Producer, Consumer) {
     let (sample_tx, sample_rx) = rtrb::RingBuffer::new(samples);
     let (block_tx, block_rx) = rtrb::RingBuffer::new(DESCRIPTORS);
     (
-        Producer {
-            samples: sample_tx,
-            blocks: block_tx,
-            epoch: 0,
-            origin: 0.0,
-            frame: 0,
-            format: None,
-        },
+        Producer { samples: sample_tx, blocks: block_tx, epoch: 0, frame: 0, format: None },
         Consumer { samples: sample_rx, blocks: block_rx, scratch: Vec::with_capacity(samples) },
     )
 }
@@ -133,7 +127,6 @@ impl Producer {
         if self.format != Some(format) {
             self.reset();
             self.format = Some(format);
-            self.origin = presentation;
         }
         let first_frame = self.frame;
         self.frame += frames as u64;
@@ -150,7 +143,7 @@ impl Producer {
         self.blocks
             .push(Block {
                 epoch: self.epoch,
-                origin: self.origin,
+                start: presentation,
                 first_frame,
                 frames: retained,
                 format,
@@ -236,7 +229,7 @@ mod tests {
         );
         rx.drain(|b, s| {
             assert_eq!(b.first_frame, 7);
-            assert_eq!(b.origin, 11.0);
+            assert_eq!(b.start, 13.0);
             assert_eq!(s, [20.0, 21.0, 22.0, 23.0, 24.0, 25.0]);
         });
         tx.reset();
@@ -251,7 +244,7 @@ mod tests {
         rx.drain(|b, _| {
             assert_ne!(b.epoch, blocks[1].0.epoch);
             assert_eq!(b.first_frame, 0);
-            assert_eq!(b.origin, 14.0);
+            assert_eq!(b.start, 14.0);
         });
 
         // Descriptor exhaustion first must not leave undescribed payload.

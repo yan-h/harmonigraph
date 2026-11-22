@@ -424,7 +424,6 @@ impl Setup for HubSetup {
 }
 
 mod recording;
-pub(crate) use recording::Presentation;
 
 pub struct Owner {
     pub(crate) maps: crate::lattice_maps::AudioMaps,
@@ -526,8 +525,9 @@ impl Owner {
         self.recording.captured_intent
     }
 
-    /// The take's presentation time at this callback's start, on the Hub's
-    /// own mapping: what a parameter recorded here is timed at.
+    /// The take's presentation time at this callback's start, on the
+    /// presentation clock's mapping: what a parameter recorded here is timed
+    /// at.
     pub fn take_time(&self) -> f64 {
         self.recording.presentation.at(self.recording.block_start)
     }

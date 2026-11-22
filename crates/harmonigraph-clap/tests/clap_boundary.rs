@@ -17,8 +17,6 @@ static SERIAL: Mutex<()> = Mutex::new(());
 static OBSERVED: Mutex<Observed> = Mutex::new(Observed::new());
 /// `Setup::notice` calls.
 static NOTICES: AtomicUsize = AtomicUsize::new(0);
-/// Of [`NOTICES`], the lines for a steady counter that skipped ahead.
-static SKIPS: AtomicUsize = AtomicUsize::new(0);
 
 /// What the fixture saw of its callbacks, in order.
 struct Observed {
@@ -101,9 +99,8 @@ impl Setup for FixtureSetup {
     fn service(&self) -> Serviced {
         Serviced::default()
     }
-    fn notice(&self, line: &str) {
+    fn notice(&self, _: &str) {
         NOTICES.fetch_add(1, Ordering::Relaxed);
-        SKIPS.fetch_add(usize::from(line.contains("skipped ahead")), Ordering::Relaxed);
     }
 }
 
@@ -531,7 +528,8 @@ fn a_transport_event_in_the_list_reaches_the_plugin_and_is_noticed_once() {
 /// that runs on or jumps ahead passes through. An invalid callback's counter
 /// takes the offset without moving the clock, and one of -1 is handed over as
 /// given. The activation's first restart asks the main thread to say so, once
-/// (#1881), as does its first jump ahead (#1885).
+/// (#1881). A jump ahead says nothing: the plugin's presentation clock leaves
+/// the samples it never processed out (#1885).
 #[test]
 fn a_restarted_steady_counter_runs_on_and_is_noticed_once() {
     let _serial = serial();
@@ -550,40 +548,7 @@ fn a_restarted_steady_counter_runs_on_and_is_noticed_once() {
     let samples: Vec<_> = observed().events.iter().map(|input| input.sample).collect();
     assert_eq!(samples, [69, 1133, 1261], "an event's sample is read from the boundary's");
     d.main();
-    assert_eq!(NOTICES.load(Ordering::Relaxed), 2, "two restarts and a skip, a line each");
-}
-
-/// A counter that skips ahead between two valid callbacks of one processing
-/// run is said once an activation (#1885). One after an invalid callback,
-/// which skipped samples it never counted, or across `start_processing`, which
-/// resets the plugin, is not.
-#[test]
-fn a_counter_that_skips_ahead_inside_a_run_is_noticed_once() {
-    let _serial = serial();
-    let mut d = Device::new();
-    NOTICES.store(0, Ordering::Relaxed);
-    SKIPS.store(0, Ordering::Relaxed);
-    d.run(0, vec![], None);
-    d.run(64, vec![], None);
-    // Zero frames make a callback invalid with its counter in hand.
-    d.run_frames(128, 0, vec![], None);
-    d.run(500, vec![], None);
-    unsafe {
-        ((*d.plugin).stop_processing.unwrap())(d.plugin);
-        assert!(((*d.plugin).start_processing.unwrap())(d.plugin));
-    }
-    d.run(2000, vec![], None);
-    d.main();
-    assert_eq!(NOTICES.load(Ordering::Relaxed), 0, "after an invalid callback or a new run");
-
-    d.run(3000, vec![], None);
-    d.main();
-    assert_eq!(SKIPS.load(Ordering::Relaxed), 1, "inside a run");
-    d.run(4000, vec![], None);
-    d.main();
-    let steady = observed().steady.clone();
-    assert_eq!(steady[steady.len() - 2..], [3000, 4000], "as given");
-    assert_eq!(NOTICES.load(Ordering::Relaxed), 1, "once");
+    assert_eq!(NOTICES.load(Ordering::Relaxed), 1, "two restarts and a skip, one line");
 }
 
 /// The bytes a save writes and a load reads, those the shell owns: an 8-byte
