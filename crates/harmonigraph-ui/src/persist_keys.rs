@@ -47,17 +47,37 @@ impl std::fmt::Display for Refusal {
     }
 }
 
+/// What [`decode`] made of a document: the value, the pairs it cut, and the
+/// path of each key the value has no field for, dotted like a cut's.
+pub(crate) struct Decoded<T> {
+    pub value: T,
+    pub dropped: Vec<Dropped>,
+    pub unread: Vec<String>,
+}
+
+/// `ron::from_str`, also naming each key serde skipped because `T` has no
+/// field for it (#1927 B): a key a rename retired, whose setting opens at its
+/// default.
+pub(crate) fn from_str_noting<T: serde::de::DeserializeOwned>(
+    text: &str,
+) -> Result<(T, Vec<String>), ron::error::SpannedError> {
+    let mut parser = ron::Deserializer::from_str(text)?;
+    let mut unread = Vec::new();
+    let value = serde_ignored::deserialize(&mut parser, |path| unread.push(path.to_string()))
+        .and_then(|value| parser.end().map(|()| value))
+        .map_err(|err| parser.span_error(err))?;
+    Ok((value, unread))
+}
+
 /// Parse `text`, cutting each pair whose value names an unknown variant.
 /// Any other failure, or an unknown variant no key holds, refuses it whole.
-pub(crate) fn decode<T: serde::de::DeserializeOwned>(
-    text: &str,
-) -> Result<(T, Vec<Dropped>), Refusal> {
+pub(crate) fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<Decoded<T>, Refusal> {
     let mut text = Cow::Borrowed(text);
     let mut cut = Vec::new();
     let mut first = None;
     loop {
-        let err = match ron::from_str::<T>(&text) {
-            Ok(value) => return Ok((value, cut)),
+        let err = match from_str_noting::<T>(&text) {
+            Ok((value, unread)) => return Ok(Decoded { value, dropped: cut, unread }),
             Err(err) => err,
         };
         let pair = match &err.code {
@@ -334,8 +354,9 @@ mod tests {
     }
 
     fn cut(text: &str) -> (Outer, Vec<String>) {
-        let (outer, dropped) = decode::<Outer>(text).unwrap_or_else(|e| panic!("{text}: {e}"));
-        (outer, dropped.into_iter().map(|d| format!("{}:{}", d.key, d.variant)).collect())
+        let decoded = decode::<Outer>(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+        let dropped = decoded.dropped.into_iter().map(|d| format!("{}:{}", d.key, d.variant));
+        (decoded.value, dropped.collect())
     }
 
     /// A variant this build lacks costs the key that holds it, at any depth,

@@ -98,7 +98,7 @@ fn enclosing_struct(blob: &str, at: usize) -> &str {
 /// The shape is what is tested, not the name. A number is skipped by any
 /// parser; a bare identifier (`Fibres`) is an enum token with no type left to
 /// parse it into, and a string, `NaN`, an `Option` and a nested struct are
-/// tokens of their own. Retiring a FIELD costs nothing for every one of them,
+/// tokens of their own. Retiring a FIELD costs only its setting, named, for every one of them,
 /// where retiring a VARIANT costs the key that names it — that is
 /// [`a_document_naming_any_one_unknown_variant_costs_that_key_alone`].
 ///
@@ -128,11 +128,13 @@ const RETIRED_KEYS: &[(&str, &str, bool)] = &[
     ("render_scale", "show_perf:true,show_perf_detail:true,", true),
 ];
 
-/// A retired key costs nothing: through both doors — the editor's
-/// `install_document`, and, for a key inside the appearance, the
+/// A retired key costs nothing but its own setting: through both doors — the
+/// editor's `install_document`, and, for a key inside the appearance, the
 /// `AppearanceDocument::parse` that take replay and explicit export share —
 /// the rest of the document loads at the values it holds, and the key is gone
-/// on the next save.
+/// on the next save. Each door names it (#1927 B): the editor on the Console,
+/// which it opens, and the appearance to the export that asked; a document
+/// carrying none names nothing.
 ///
 /// `AppearanceDocument::parse` takes the whole appearance or nothing, so a key
 /// that failed to parse there would not degrade: it would refuse the take's
@@ -143,6 +145,10 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
     let state = dialled();
     let saved = state.save_persist();
     let appearance = state.picture.appearance.serialize();
+    let mut whole = fresh();
+    assert!(whole.install_document(&saved));
+    assert_eq!(whole.picture.runtime.console.lines().count(), 0, "a whole document is not news");
+    assert_eq!(AppearanceDocument::parse_noting(&appearance).unwrap().1, Vec::<String>::new());
     for &(anchor, retired, in_appearance) in RETIRED_KEYS {
         let splice = |blob: &str| {
             let at = pair_starts(blob, anchor);
@@ -159,19 +165,43 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
             assert!(live.iter().all(|(k, _)| *k != key), "{key:?} is live, not retired");
         }
 
+        let keys: Vec<String> = top_level_pairs(&format!("({})", retired.trim_end_matches(',')))
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+
         let mut restored = fresh();
+        set_console_collapsed(&mut restored, true);
         assert!(restored.install_document(&splice(&saved)), "{retired} sank the editor blob");
-        assert_eq!(restored.save_persist(), saved, "{retired} changed what the editor loaded");
+        assert!(!collapsed(&restored, panes::Tab::Console), "{retired}: the loss is hidden");
+        let lines: Vec<&str> = restored.picture.runtime.console.lines().collect();
+        assert_eq!(lines.len(), keys.len(), "{retired}: {lines:?}");
+        for key in &keys {
+            let named = format!("{key} — ");
+            assert!(lines.iter().any(|line| line.contains(&named)), "{key}: {lines:?}");
+        }
+        set_console_collapsed(&mut restored, false);
+        let mut expected = fresh();
+        expected.install_document(&saved);
+        set_console_collapsed(&mut expected, false);
+        assert_eq!(
+            restored.save_persist(),
+            expected.save_persist(),
+            "{retired} changed what the editor loaded"
+        );
 
         assert_eq!(!pair_starts(&appearance, anchor).is_empty(), in_appearance, "{anchor}: doors");
         if in_appearance {
-            let parsed = AppearanceDocument::parse(&splice(&appearance))
+            let (parsed, unread) = AppearanceDocument::parse_noting(&splice(&appearance))
                 .unwrap_or_else(|e| panic!("{retired} sank the appearance: {e}"));
             assert_eq!(
                 parsed.serialize(),
                 appearance,
                 "{retired} changed what the appearance loaded"
             );
+            let named: Vec<&str> =
+                unread.iter().filter_map(|path| path.rsplit('.').next()).collect();
+            assert_eq!(named, keys, "{retired}: the appearance door names {unread:?}");
         }
     }
 }

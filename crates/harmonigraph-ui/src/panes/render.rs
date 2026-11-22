@@ -794,14 +794,18 @@ fn export_queue(
             interaction.take.export_error.clear();
         }
         for path in paths {
-            match capture_export(appearance, interaction, &path) {
-                Ok(action) => interaction.take.export_actions.push(action),
-                Err(error) => {
-                    if !interaction.take.export_error.is_empty() {
-                        interaction.take.export_error.push('\n');
-                    }
-                    interaction.take.export_error.push_str(&format!("{}: {error}", path.display()));
+            let said = match capture_export(appearance, interaction, &path) {
+                Ok((action, notes)) => {
+                    interaction.take.export_actions.push(action);
+                    notes
                 }
+                Err(error) => vec![error],
+            };
+            for line in said {
+                if !interaction.take.export_error.is_empty() {
+                    interaction.take.export_error.push('\n');
+                }
+                interaction.take.export_error.push_str(&format!("{}: {line}", path.display()));
             }
         }
         if !interaction.take.export_error.is_empty() {
@@ -859,11 +863,15 @@ fn export_queue(
     }
 }
 
+/// The export to queue, and a line for each key a recorded look carries that
+/// this build does not read (#1927 B): the queued look is serialized afresh,
+/// so the renderer never meets those keys to warn of them.
 pub(crate) fn capture_export(
     appearance: &crate::AppearanceDocument,
     interaction: &crate::Interaction,
     path: &std::path::Path,
-) -> Result<crate::ExportAction, String> {
+) -> Result<(crate::ExportAction, Vec<String>), String> {
+    let mut notes = Vec::new();
     let captured = match interaction.take.export_look {
         // A recorded look keeps its own frame and Video history, so queueing it
         // does not recompose the take to the pane's aspect and split; only the
@@ -874,7 +882,8 @@ pub(crate) fn capture_export(
             let header =
                 harmonigraph_take::Header::read(path).map_err(|error| error.to_string())?;
             let look = header.appearance.as_deref().ok_or("the take recorded no appearance")?;
-            let mut recorded = crate::AppearanceDocument::parse(look)?;
+            let (mut recorded, unread) = crate::AppearanceDocument::parse_noting(look)?;
+            notes.extend(unread.iter().map(|key| crate::AppearanceDocument::unread_note(key)));
             recorded.render.take_output_from(&appearance.render);
             recorded
         }
@@ -894,7 +903,7 @@ pub(crate) fn capture_export(
     let appearance = captured.serialize();
     let render = crate::AppearanceDocument::parse(&appearance)?.render;
     let size = render.frame.pixels(render.short_edge);
-    Ok(crate::ExportAction::Queue { take: path.to_owned(), appearance, size })
+    Ok((crate::ExportAction::Queue { take: path.to_owned(), appearance, size }, notes))
 }
 
 #[cfg(test)]
@@ -1711,6 +1720,8 @@ mod export_tests {
     /// history it was composed with, and takes only Output size, Tail and
     /// Encoder from the pane. Recorded as 9:16 with the lattice on top and the
     /// scrolling history, against a pane at the fresh 16:9 and Fit video.
+    /// A key the recorded look holds that this build does not read is named
+    /// to the pane, since the queued look no longer carries it (#1927 B).
     #[test]
     fn a_recorded_look_keeps_its_frame_and_takes_the_panes_output_settings() {
         use crate::{LatticeSide, SpectrogramRender, VideoEncoder};
@@ -1726,10 +1737,9 @@ mod export_tests {
         recorded.render.archive = false;
         let path = std::env::temp_dir()
             .join(format!("harmonigraph-recorded-queue-{}.take", std::process::id()));
-        let header = harmonigraph_take::Header {
-            appearance: Some(recorded.serialize()),
-            ..Default::default()
-        };
+        let look = recorded.serialize().replacen("render:(", "render:(retired_key:1,", 1);
+        assert_ne!(look, recorded.serialize());
+        let header = harmonigraph_take::Header { appearance: Some(look), ..Default::default() };
         drop(harmonigraph_take::Writer::create(&path, &header).unwrap());
 
         let mut pane = crate::AppearanceDocument::default();
@@ -1739,8 +1749,10 @@ mod export_tests {
         pane.render.archive = true;
         let mut interaction = crate::Interaction::default();
         interaction.take.export_look = crate::ExportLook::Recorded;
-        let queued = capture_export(&pane, &interaction, &path).unwrap();
+        let (queued, notes) = capture_export(&pane, &interaction, &path).unwrap();
         std::fs::remove_file(&path).unwrap();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("render.retired_key"), "{notes:?}");
 
         let crate::ExportAction::Queue { appearance, size, .. } = queued else {
             panic!("queue action")

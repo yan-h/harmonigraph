@@ -93,6 +93,9 @@ impl Stages {
 /// the export, and so does a take with no recorded appearance and no
 /// replacement, as the Video pane's export does: every take writer records one,
 /// and the fresh defaults are a look nobody chose.
+///
+/// A key the selected look carries that this build does not read is a
+/// warning on stderr, which the export's row keeps (#1927 B).
 pub fn appearance_for(
     take: &harmonigraph_take::Take,
     replacement: Option<&str>,
@@ -102,11 +105,18 @@ pub fn appearance_for(
                     give one with --appearance"
             .into());
     };
-    AppearanceDocument::parse(blob).map_err(|err| {
-        let source =
-            if replacement.is_some() { "replacement appearance" } else { "recorded appearance" };
-        format!("cannot render {source}: {err}")
-    })
+    let source =
+        if replacement.is_some() { "replacement appearance" } else { "recorded appearance" };
+    let (appearance, unread) = AppearanceDocument::parse_noting(blob)
+        .map_err(|err| format!("cannot render {source}: {err}"))?;
+    for key in unread {
+        eprintln!(
+            "{}{source}: {}",
+            harmonigraph_take::WARNING_PREFIX,
+            AppearanceDocument::unread_note(&key)
+        );
+    }
+    Ok(appearance)
 }
 
 /// Everything the loop needs that isn't the take itself.

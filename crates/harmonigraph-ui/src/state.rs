@@ -710,9 +710,10 @@ impl SharedState {
     /// The empty document is what an editor never opened saves, so it installs
     /// the fresh settings (#1757 Q3); a save then stores `""` only if the
     /// editor has held nothing else and no window has opened. A value naming a variant this build does not have costs its
-    /// own key, which opens at its default (#1757 Q4); refused input leaves the
-    /// current content intact. Either loss opens the Console and says there
-    /// what was lost; a save then stores the settings as they stand, like any
+    /// own key, which opens at its default (#1757 Q4), and a key it does not
+    /// read, such as one a rename retired, is skipped (#1927 B); refused input
+    /// leaves the current content intact. Each loss opens the Console and says
+    /// there what was lost; a save then stores the settings as they stand, like any
     /// other. Appearance normalization is shared with recording/export;
     /// workspace restoration remains editor-only.
     ///
@@ -736,15 +737,16 @@ impl SharedState {
             ));
             return true;
         }
-        let (persist, dropped) = match crate::persist_keys::decode::<UiPersist>(serialized) {
-            Ok(decoded) => decoded,
+        let (persist, dropped, unread) = match crate::persist_keys::decode::<UiPersist>(serialized)
+        {
+            Ok(decoded) => (decoded.value, decoded.dropped, decoded.unread),
             // SAYING SO is the whole point of this arm. Nothing in the tree
             // reads an older spelling any more, so what fails here — a value
             // that is not RON, or a dropped variant no key holds of its own —
             // costs the layout, the camera and every view setting at once. A
             // dropped variant under a key costs that key alone, and a dropped
-            // KEY nothing: serde skips one it has no field for, which is how a
-            // blob still carrying the retired `dock` loads intact. An accepted
+            // KEY its own setting: serde skips one it has no field for, and
+            // the Console names it below (#1927 B). An accepted
             // break, but not a silent one — a project opening at defaults with
             // no explanation reads as data loss, and this is the difference
             // between that and a break someone chose.
@@ -766,13 +768,19 @@ impl SharedState {
         };
         self.apply_persist(UiPersist { appearance, ..persist });
         self.untouched = false;
-        if dropped.is_empty() {
+        if dropped.is_empty() && unread.is_empty() {
             return true;
         }
         for lost in dropped {
             self.log(format!(
                 "persist dropped {} — this build has no {}, so that setting opens at its default",
                 lost.key, lost.variant,
+            ));
+        }
+        for key in unread {
+            self.log(format!(
+                "persist dropped {key} — this build does not read that key; if it was renamed, \
+                 its setting opens at its default",
             ));
         }
         self.reveal_console();
