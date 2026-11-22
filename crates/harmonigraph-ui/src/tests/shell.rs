@@ -719,6 +719,70 @@ fn a_heatmap_slab_still_taking_columns_after_a_sound_asks_for_every_frame() {
     );
 }
 
+/// With the heatmap the only picture of the spectrum on screen, a quiet
+/// passage the curve's floor draws and the colours' floor does not leaves the
+/// editor still once the last loud column has scrolled through the heatmap's
+/// reach, though the curve's bound keeps moving off screen. Sound loud enough
+/// for the heatmap then wakes it: each picture's own stamp wakes it.
+#[test]
+fn a_still_heatmap_alone_wakes_for_sound_after_a_passage_only_the_curve_draws() {
+    const RATE: f32 = 48_000.0;
+    let mut state = fresh();
+    let ctx = super::probe::themed_at(2.0);
+    let cfg = &mut state.picture.appearance.spectrum;
+    // The history takes the whole pane, so the curve draws nothing.
+    (cfg.show_spectrogram, cfg.roll_seconds, cfg.roll_fraction) = (true, 2.0, 1.0);
+    (cfg.tilt, cfg.floor_db, cfg.volume_floor_db) = (0.0, -80.0, -60.0);
+    cfg.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
+    let mut analysis = crate::spectrum::SpectrumAnalysis::default();
+    let mut frames = 0usize;
+    // Ten milliseconds of A4 at `amplitude`, handed over as the plugin's
+    // input worker hands it, then drawn: whether the hand-over woke the
+    // editor, whether it was still before, and the time drawn at.
+    let mut block = |state: &mut SharedState, amplitude: f32| {
+        let samples: Vec<f32> = (frames..frames + 480)
+            .map(|i| amplitude * (std::f32::consts::TAU * 440.0 * i as f32 / RATE).sin())
+            .collect();
+        frames += 480;
+        let t = frames as f64 / f64::from(RATE);
+        let still = !Animating::of(state).asks();
+        let cfg = state.picture.appearance.spectrum;
+        let mut deliveries = Vec::new();
+        analysis.feed_source(&samples, 1, RATE, 0.0, &cfg, |d| deliveries.push(d));
+        let woke = state.picture.runtime.spectrum.give(deliveries, &cfg);
+        draw_panes(&ctx, state, t, &[Pane::Spectral]);
+        (woke, still, t)
+    };
+    for _ in 0..100 {
+        block(&mut state, 1.0);
+    }
+    // At -70 dB: over the curve's floor, under the colours'.
+    let (mut went_still, mut quiet_end) = (None, 0.0);
+    for _ in 0..6000 {
+        let (_, still, t) = block(&mut state, 10f32.powf(-70.0 / 20.0));
+        if still {
+            went_still.get_or_insert(t);
+        }
+        quiet_end = t;
+    }
+    assert!(state.picture.runtime.spectrum.moving(quiet_end), "the curve did not draw it");
+    let went_still = went_still.expect("the quiet passage kept the heatmap asking");
+    let before = state.picture.runtime.spectrum.last_audible().column;
+    let mut woken = false;
+    for _ in 0..30 {
+        let (woke, still, t) = block(&mut state, 1.0);
+        let drawn = state.picture.runtime.spectrum.last_audible().column != before;
+        if drawn && !woken {
+            assert!(
+                woke || !still,
+                "at {t:.2} s, still since {went_still:.2} s, sound woke nothing"
+            );
+            woken = true;
+        }
+    }
+    assert!(woken, "the loud return never reached the heatmap");
+}
+
 /// A Clear takes the heard columns off the heatmap, and with them the Span they
 /// would have scrolled through: the editor idles once the curve has settled.
 #[test]

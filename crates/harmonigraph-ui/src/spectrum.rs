@@ -493,27 +493,39 @@ impl AudioSpectrum {
     /// from just before the press (the worker polls every 4 ms while the
     /// window is open), as if the press had come that much sooner.
     ///
-    /// Whether it brought sound back to a spectrum that had gone still: a
-    /// column that draws, from a batch past the bound the display moved until
-    /// before the hand-over ([`Heard::curve_until`]), or the first. By then
-    /// every picture of it had stopped asking for frames, the heatmap's fresh
-    /// edge with the curve, so a still window has to be asked to draw it. A
-    /// column the heatmap draws draws for the curve's test too, so this one
-    /// bound answers for both. Sound that goes on asks nothing more: a picture
-    /// that shows it keeps the window drawing, and one that does not has
-    /// nothing new to draw.
+    /// Whether it brought sound back to a picture of the spectrum that had
+    /// gone still, each by its own stamp ([`Heard`]), so a still window has to
+    /// be asked to draw it:
+    ///
+    /// - The smoothed display: a column that draws for it, from a batch past
+    ///   the bound it moved until before the hand-over
+    ///   ([`Heard::curve_until`]), or the first.
+    /// - The heatmap: a column it draws, more than
+    ///   [`HOLD_SECONDS`](Self::HOLD_SECONDS) after the one it last drew, or
+    ///   the first. Its own, since the curve's bound keeps moving through a
+    ///   passage only the curve draws, and with the curve off screen nothing
+    ///   asks for frames while it does. Its reach after a column is a Span at
+    ///   least, longer than the hold, so it has gone still by then.
+    ///
+    /// Sound that goes on asks nothing more: a picture that shows it keeps
+    /// the window drawing, and one that does not has nothing new to draw.
     pub fn give(
         &mut self,
         deliveries: impl IntoIterator<Item = Delivery>,
         config: &SpectrumConfig,
     ) -> bool {
-        let still = self.last_audible.curve_until;
+        let Heard { column, curve_until } = self.last_audible;
         let mut back = false;
         for delivery in deliveries {
             let drawn = self.land(delivery, config);
-            back |= drawn.is_some_and(|batch| still.is_none_or(|still| batch > still));
+            back |= drawn.is_some_and(|batch| curve_until.is_none_or(|still| batch > still));
         }
-        back
+        let heatmap = match (column, self.last_audible.column) {
+            (_, None) => false,
+            (None, Some(_)) => true,
+            (Some(was), Some(drawn)) => drawn > was + Self::HOLD_SECONDS,
+        };
+        back || heatmap
     }
 
     /// Keep one delivery as it is made: an inline shell's
