@@ -324,6 +324,8 @@ so it changes nothing heard there and can stay on while Note retuning switches;
 an empty map slot sounds the decoded chain.
 While it is on, a lattice-board plugged into the Mac also lights its keys for every held note the lattice draws, from any track or the Tape:
 the key nearest the note's sounding pitch in the Decoded fifth, sent in the board's own encoding, so a note a Lattice Map moved lights the key it sounds on.
+Under Adaptive a note lights the key it was played on instead, when the board has that key:
+a strip note can sound nearer its enharmonic neighbour's key than its own.
 The board's firmware reads these, and a note whose nearest spelling the board lacks lights the nearest key it has.
 There is nothing to route in Bitwig; the board may be plugged in or out at any time, and the Console says when it is found, missing or lost.
 The Decoded fifth is the fifth a decoded source sounds its chain of fifths at wherever a Lattice Map is not tuning it.
@@ -337,6 +339,8 @@ Learn is suspended while Decode fifths is on.
 Each engine's controls follow in a section of their own.
 Adaptive tuning's **Keyboard** and **Context** are blocks,
 open like the rest of the section.
+With Decode fifths on, a **Strip** block comes first: the strip's four columns and the Position fifths' Fine and Coarse bars that place it, the same lanes the Lattice Map section's Position shows.
+The search's rows below it, Keyboard and Weight per octave among them, are greyed there.
 The **Lattice Map** section starts with the saved map's number, its name field and a menu of rarer actions,
 then **Show map dots**, **Edit shape on lattice**, **Undo shape edit** and **Duplicate as new map**,
 then the **Position** offsets, one row per axis holding its Fine and Coarse bars side by side with the totals beneath, and **Follow harmony**.

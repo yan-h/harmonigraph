@@ -5,8 +5,12 @@
 //! in the board's own tuning (the Decoded fifth, the lattice's C offset):
 //! [`nearest_fifths_key`] over the fifths the board holds, in the
 //! `(channel, key)` encoding its firmware reads. So a note a Lattice Map moved
-//! lights the key it sounds on, not the one played. There is no setting of its
-//! own; Decode fifths is already the board's.
+//! lights the key it sounds on, not the one played. Under Adaptive a decoded
+//! note sounds its own spelling's copy in the strip (`policy::strip`), up to
+//! 59¢ from that key's pitch on the board and nearer its enharmonic
+//! neighbour's, so there every note lights the key it was played on, when the
+//! board has that key. There is no setting of its own; Decode fifths is
+//! already the board's.
 //!
 //! The input worker runs it once a poll, after its step. With decoding on, or
 //! the board still owing a reset, it takes the editor lock once more to copy
@@ -46,8 +50,12 @@ use std::ops::RangeInclusive;
 use std::time::{Duration, Instant};
 
 use harmonigraph_core::configuration::ResolvedConfig;
-use harmonigraph_core::tuning::nearest_fifths_key;
+use harmonigraph_core::lattice_map::TuningEngine;
+use harmonigraph_core::tuning::{fifths_for_midi, nearest_fifths_key};
 use harmonigraph_core::NoteTracker;
+
+/// The editor's copy of the map playback, which names the retuning engine.
+type Playback = std::sync::Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapPlayback>>;
 
 /// A `(channel, key)` the board reads, channel `0..=15`.
 pub(crate) type Key = (u8, u8);
@@ -66,22 +74,34 @@ const LOOK: Duration = Duration::from_secs(1);
 /// whatever the channel.
 const ALL_NOTES_OFF: [u8; 3] = [0xb0, 123, 0];
 
-/// The sounding pitches of the held notes the lattice draws, copied under
-/// the editor lock so the keys are found after it is let go.
-pub(crate) fn sounding(tracker: &NoteTracker) -> Vec<f32> {
-    tracker.held_shown().map(|voice| voice.pitch).collect()
+/// The key each held note the lattice draws was played on, and its sounding
+/// pitch, copied under the editor lock so the keys are found after it is let
+/// go.
+pub(crate) fn sounding(tracker: &NoteTracker) -> Vec<(Key, f32)> {
+    tracker.held_shown().map(|voice| ((voice.channel, voice.note), voice.pitch)).collect()
 }
 
-/// The keys the board should show for `pitches`, sorted: `None` while Decode
-/// fifths is off, when the board is left dark.
-pub(crate) fn wanted(pitches: &[f32], config: &ResolvedConfig) -> Option<Vec<Key>> {
+/// The keys the board should show for `notes`, sorted: `None` while Decode
+/// fifths is off, when the board is left dark. With `played`, Adaptive's,
+/// a note lights the key it was played on when the board has that key.
+pub(crate) fn wanted(
+    notes: &[(Key, f32)],
+    config: &ResolvedConfig,
+    played: bool,
+) -> Option<Vec<Key>> {
     if !config.policy.decode_fifths {
         return None;
     }
     let (c_offset, fifth) = (config.tuning.c_offset, config.policy.decoded_fifth);
-    let mut keys: Vec<Key> = pitches
+    let on_board = |(channel, key): Key| BOARD_FIFTHS.contains(&fifths_for_midi(channel, key));
+    let mut keys: Vec<Key> = notes
         .iter()
-        .filter_map(|&pitch| nearest_fifths_key(pitch, c_offset, fifth, BOARD_FIFTHS))
+        .filter_map(|&(key, pitch)| {
+            if played && on_board(key) {
+                return Some(key);
+            }
+            nearest_fifths_key(pitch, c_offset, fifth, BOARD_FIFTHS)
+        })
         .collect();
     keys.sort_unstable();
     keys.dedup();
@@ -279,6 +299,10 @@ impl Wire for Midi {
 /// worker holds them.
 pub(crate) struct Lights {
     settings: std::sync::Arc<crate::configuration::Settings>,
+    /// The retuning engine the audio thread last published, read with
+    /// `try_lock` so the worker never holds up its publication.
+    playback: Playback,
+    engine: TuningEngine,
     #[cfg(target_os = "macos")]
     board: Board<Midi>,
 }
@@ -288,12 +312,20 @@ impl Lights {
     /// CoreMIDI clients there. `None` off macOS, the one platform the plugin
     /// runs on; when CoreMIDI makes no client; and in tests, which must not
     /// reach a board plugged into the machine running them.
-    pub(crate) fn live(settings: std::sync::Arc<crate::configuration::Settings>) -> Option<Self> {
+    pub(crate) fn live(
+        settings: std::sync::Arc<crate::configuration::Settings>,
+        playback: Playback,
+    ) -> Option<Self> {
         #[cfg(all(target_os = "macos", not(test)))]
-        return Midi::new().map(|midi| Self { settings, board: Board::new(midi) });
+        return Midi::new().map(|midi| Self {
+            settings,
+            playback,
+            engine: TuningEngine::default(),
+            board: Board::new(midi),
+        });
         #[cfg(not(all(target_os = "macos", not(test))))]
         {
-            let _ = settings;
+            let _ = (settings, playback);
             None
         }
     }
@@ -315,7 +347,11 @@ impl Lights {
                 }
                 sounding(&runtime.tracker)
             };
-            self.board.update(wanted(&pitches, &config), Instant::now());
+            if let Some(playback) = self.playback.try_lock() {
+                self.engine = playback.engine;
+            }
+            let played = self.engine == TuningEngine::Adaptive;
+            self.board.update(wanted(&pitches, &config, played), Instant::now());
         }
         #[cfg(not(target_os = "macos"))]
         let _ = (shared, config);
@@ -395,10 +431,24 @@ mod tests {
         let hidden = SourceBaseline::new(SourceId::DIRECT, 0.0, 0, false, &[row]).unwrap();
         tracker.replace_source(&hidden).unwrap();
         assert_eq!(tracker.held_voices().count(), 3, "the hidden G is held");
-        let pitches = sounding(&tracker);
-        assert_eq!(wanted(&pitches, &config), None, "dark with Decode fifths off");
+        let notes = sounding(&tracker);
+        assert_eq!(wanted(&notes, &config, false), None, "dark with Decode fifths off");
         config.policy.decode_fifths = true;
-        assert_eq!(wanted(&pitches, &config), Some(vec![(1, 70)]));
+        assert_eq!(wanted(&notes, &config, false), Some(vec![(1, 70)]));
+        // Under Adaptive each lights the key it was played on: B♭ and A♯.
+        assert_eq!(wanted(&notes, &config, true), Some(vec![(0, 70), (1, 70)]));
+    }
+
+    /// A key the board does not have still lights the key nearest its pitch.
+    #[test]
+    fn a_note_played_off_the_board_lights_its_nearest_key_under_adaptive() {
+        let mut config = harmonigraph_core::configuration::ConfigReducer::default().resolved();
+        (config.tuning.c_offset, config.policy.decode_fifths) = (0, true);
+        config.policy.decoded_fifth = 696_578_428;
+        // C three banks up is 36 fifths, off the board; it sounds a 12-TET C.
+        let notes = [((3, 60), 60.0)];
+        let nearest = nearest_fifths_key(60.0, 0, config.policy.decoded_fifth, BOARD_FIFTHS);
+        assert_eq!(wanted(&notes, &config, true), Some(nearest.into_iter().collect()));
     }
 
     #[test]

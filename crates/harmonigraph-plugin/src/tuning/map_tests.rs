@@ -690,37 +690,76 @@ fn lattice_map_tunes_a_decoded_tune_from_its_keys_slot() {
     }
 }
 
-/// Adaptive hears a decoded Tune as a keyboard tuned in the decoded fifth, so
-/// over a held C its C♯ and D♭ are 25/24 and 16/15.
+/// The pitch `node` sounds at in `tuning`, in the octave of MIDI C `c`.
+fn node_pitch(tuning: Tuning, node: LatticePos, c: i64) -> i64 {
+    c * 100_000_000
+        + i64::from(tuning.c_offset)
+        + i64::from(node.threes) * i64::from(tuning.three)
+        + i64::from(node.fives) * i64::from(tuning.five)
+}
+
+/// Adaptive tunes a decoded Tune's spelling to its one copy in the strip the
+/// Position fifths lane places: C♯ and D♭ are 25/24 and 16/15, and a lane one
+/// fifth sharp moves A from 5/3 to 27/16, while the A already held keeps its
+/// pitch.
 #[test]
-fn adaptive_spells_a_decoded_tunes_notes_from_the_decoded_fifth() {
+fn adaptive_tunes_a_decoded_tune_in_the_strip_the_position_fifths_place() {
     let _scope = crate::test_scope::enter();
     let mut tuning = Tuning::just();
     tuning.c_offset = 3_000_000;
-    let fifth = 696_578_428;
-    let mut session = Decoding::new(1.0, tuning, fifth);
-    session.play(vec![note(1, 0, 60, 0, true)], vec![]);
-    let at = |node: LatticePos, c: i64| {
-        c * 100_000_000
-            + i64::from(tuning.c_offset)
-            + i64::from(node.threes) * i64::from(tuning.three)
-            + i64::from(node.fives) * i64::from(tuning.five)
-    };
+    let mut session = Decoding::new(1.0, tuning, 696_578_428);
     let sharp = LatticePos::new(-1, 2, 0);
-    let flat = LatticePos::new(-1, -1, 0);
-    let [out, _] = session.play(vec![note(2, 1, 61, 0, true)], vec![]);
+    let [out, _] = session.play(vec![note(1, 1, 61, 0, true)], vec![]);
     let voice = session.voice(true, 1, 61);
     assert_eq!(voice.attack_node, Some(sharp));
-    let correction = at(sharp, 60) - 6_100_000_000;
+    let correction = node_pitch(tuning, sharp, 60) - 6_100_000_000;
     assert_eq!(voice.frozen_offset_microcents, correction);
-    assert!((tuning_for(&out, 2).unwrap() - correction as f64 / 1e8).abs() < 1e-9);
-    // Memory and context hold the pitch sounding, the chain's place taken once.
-    let next = inspect_hub(&session.hub, |hub| hub.test_next_context());
-    assert_eq!(next.reference, correction - stage(1, 61, tuning.c_offset, fifth));
-    let held = next.context.iter().find(|pitch| pitch.node == Some(sharp)).unwrap();
-    assert_eq!(held.pitch, 6_100_000_000 + correction);
-    session.play(vec![note(3, 0, 61, 0, true)], vec![]);
+    assert!((tuning_for(&out, 1).unwrap() - correction as f64 / 1e8).abs() < 1e-9);
+    session.play(vec![note(2, 0, 61, 0, true)], vec![]);
+    let flat = LatticePos::new(-1, -1, 0);
     let voice = session.voice(true, 0, 61);
     assert_eq!(voice.attack_node, Some(flat));
-    assert_eq!(voice.frozen_offset_microcents, at(flat, 72) - 6_100_000_000);
+    assert_eq!(voice.frozen_offset_microcents, node_pitch(tuning, flat, 72) - 6_100_000_000);
+    let five_three = LatticePos::new(-1, 1, 0);
+    session.play(vec![note(3, 0, 69, 0, true)], vec![]);
+    assert_eq!(session.voice(true, 0, 69).attack_node, Some(five_three));
+    // A lane's host value is its step plus `OFFSET_LIMIT`: one fifth sharp.
+    let raw = session.raw;
+    session.hub.run_format(raw, vec![parameter("map-fifths", 10.0, 0)], None, None, 128);
+    session.raw += 128;
+    session.play(vec![note(4, 0, 81, 0, true)], vec![]);
+    let pythagorean = LatticePos::new(3, 0, 0);
+    let voice = session.voice(true, 0, 81);
+    assert_eq!(voice.attack_node, Some(pythagorean));
+    let correction = node_pitch(tuning, pythagorean, 60) - 8_100_000_000;
+    assert_eq!(voice.frozen_offset_microcents, correction);
+    assert_eq!(session.voice(true, 0, 69).attack_node, Some(five_three), "the held A kept");
+}
+
+/// I–vi–ii–V–I, three rounds, each chord released before the next: every
+/// spelling sounds one pitch in every chord, D included, so ii's D–A is the
+/// strip's wolf each time and V's D is the same 9/8. Adaptive's search took
+/// ii's D as 10/9 and V's as 9/8.
+#[test]
+fn the_strip_sounds_each_spelling_at_one_pitch_through_a_progression() {
+    let _scope = crate::test_scope::enter();
+    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    let chords: [[i16; 3]; 5] =
+        [[60, 64, 67], [57, 60, 64], [62, 65, 69], [55, 59, 62], [60, 64, 67]];
+    let mut sounded = std::collections::BTreeMap::<i16, Vec<i64>>::new();
+    for (id, chord) in (0..3).flat_map(|_| chords).enumerate() {
+        let id = 3 * id as i32;
+        let play = |on| (0..3).map(|i| note(id + i, 0, chord[i as usize], 0, on)).collect();
+        session.play(play(true), vec![]);
+        for key in chord {
+            let pitch = session.voice(true, 0, key as u8).onset_pitch_microcents;
+            sounded.entry(key).or_default().push(pitch);
+        }
+        session.play(play(false), vec![]);
+    }
+    for (key, pitches) in &sounded {
+        assert!(pitches.iter().all(|&pitch| pitch == pitches[0]), "key {key}: {pitches:?}");
+    }
+    let d = sounded[&62][0] - 6_200_000_000;
+    assert_eq!(d, i64::from(2 * Tuning::just().three) - 1_200_000_000 - 200_000_000, "9/8");
 }
