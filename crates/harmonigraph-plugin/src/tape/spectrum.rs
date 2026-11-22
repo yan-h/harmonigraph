@@ -51,6 +51,9 @@ pub(crate) struct Spectrum {
     changed: BTreeSet<(usize, i64)>,
     /// The view's copy must be emptied before it is given anything.
     cleared: bool,
+    /// View spectrograms retired under [`EditorLock`](crate::editor::EditorLock)
+    /// and kept until the off-lock [`analyze`](Self::analyze) step drops them.
+    retired: Vec<TapeSpectrogram>,
     /// When the levels were last rebuilt.
     settled: Option<Instant>,
 }
@@ -106,6 +109,7 @@ impl Spectrum {
     /// Analyze waiting columns until `budget` has passed, at least one, in
     /// song order.
     pub(crate) fn analyze(&mut self, store: Option<&Store>, budget: Duration) {
+        self.retired.clear();
         let (Some(store), Some(_)) = (store, self.pending.first()) else { return };
         let Some(config) = self.config(store) else { return };
         let started = Instant::now();
@@ -135,7 +139,7 @@ impl Spectrum {
     /// Bring the view's copy up to date.
     pub(crate) fn sync(&mut self, view: &mut TapeSpectrogram) {
         if std::mem::take(&mut self.cleared) {
-            view.clear();
+            self.retired.push(view.take_cleared());
         }
         for (level, key) in std::mem::take(&mut self.changed) {
             view.put(level, key, self.tape.slab(level, key).cloned());
@@ -233,5 +237,50 @@ mod tests {
         spectrum.sync(&mut view);
         assert!(near(peak(&view, column(3.0)), 69.0));
         assert_ne!(view.slab(0, column(3.0)).cloned(), precise, "the column was not re-analyzed");
+    }
+
+    #[test]
+    fn sync_retires_cleared_spectrogram_for_off_lock_drop() {
+        let mut view = TapeSpectrogram::default();
+        let mut changed = BTreeSet::new();
+        for k in 0..64i64 {
+            let slab: harmonigraph_render::SpectrogramSlab = std::sync::Arc::from(
+                [(k as u8).wrapping_add(1); harmonigraph_core::spectrum::SPECTRUM_BINS],
+            );
+            view.set_column(k, Some(slab));
+        }
+        view.settle(&mut changed);
+        let column_probe = view.slab(0, 0).expect("column 0 populated").clone();
+        let level_probe = view.slab(1, 0).expect("level 1 slab 0 populated").clone();
+        assert_eq!(std::sync::Arc::strong_count(&column_probe), 2);
+        assert_eq!(std::sync::Arc::strong_count(&level_probe), 2);
+
+        let mut spectrum = Spectrum::default();
+        spectrum.clear();
+        spectrum.sync(&mut view);
+
+        assert!(view.is_empty());
+        assert_eq!(
+            std::sync::Arc::strong_count(&column_probe),
+            2,
+            "sync under EditorLock must retire cleared column slabs without dropping them"
+        );
+        assert_eq!(
+            std::sync::Arc::strong_count(&level_probe),
+            2,
+            "sync under EditorLock must retire cleared pyramid slabs without dropping them"
+        );
+
+        spectrum.analyze(None, Duration::MAX);
+        assert_eq!(
+            std::sync::Arc::strong_count(&column_probe),
+            1,
+            "analyze off-lock must drop retired column slabs even with no store or pending columns"
+        );
+        assert_eq!(
+            std::sync::Arc::strong_count(&level_probe),
+            1,
+            "analyze off-lock must drop retired pyramid slabs even with no store or pending columns"
+        );
     }
 }

@@ -82,8 +82,12 @@ impl TapeSpectrogram {
         self.levels[0].len()
     }
 
+    pub fn take_cleared(&mut self) -> Self {
+        std::mem::replace(self, Self { revision: next_revision(), ..Self::default() })
+    }
+
     pub fn clear(&mut self) {
-        *self = TapeSpectrogram { revision: next_revision(), ..TapeSpectrogram::default() };
+        let _ = self.take_cleared();
     }
 
     /// A number that changes with every write to any slab, and so names what
@@ -196,10 +200,9 @@ impl ColumnAnalyzer {
         }
         let (bank, _, _) = self.bank.as_mut().expect("built above");
         let (frame, lag) = Self::reach(config);
-        self.scratch.clear();
         self.scratch.resize(frame as usize * channels, 0.0);
         read(centre + lag - frame, &mut self.scratch);
-        bank.restart();
+        // Every column pushes a full `fft_size` frame, overwriting the entire channel ring.
         bank.push_frames(&self.scratch);
         let power = bank.power_sum().expect("a full frame was pushed");
         power.iter().map(|&p| quantize(p)).collect()
