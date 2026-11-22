@@ -378,7 +378,12 @@ fn run_job(
         std::thread::sleep(std::time::Duration::from_millis(10));
     };
     if !result.success() {
-        return Err(format!("render failed: {}", tail.last));
+        // A warning may explain the failure, a renderer of another build's
+        // above all, so it leads the job's detail here as on success.
+        let failed = format!("render failed: {}", tail.last);
+        let warnings = tail.warnings.iter().filter(|warning| **warning != tail.last);
+        let lines: Vec<&str> = warnings.map(String::as_str).chain([failed.as_str()]).collect();
+        return Err(lines.join("\n"));
     }
     #[cfg(test)]
     let _gate = control.before_publish.lock();

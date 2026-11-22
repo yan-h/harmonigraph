@@ -235,7 +235,7 @@ impl Fixture {
 if [ "$1" = --plugin-build ]; then printf '%s' "$2" > "$3.build"; shift 2; fi
 if [ "$4" = --appearance ]; then look=$(cat "$5"); else look=own; fi
 case "$look" in
- retry) if [ ! -e "$1.retry" ]; then touch "$1.retry"; echo 'transient encoder failure' >&2; exit 7; fi ;;
+ retry) if [ ! -e "$1.retry" ]; then touch "$1.retry"; echo 'warning: another build' >&2; echo 'transient encoder failure' >&2; exit 7; fi ;;
  slow) sleep 300 & echo partial > "$3"; echo 'progress: 1/10 frames (10%)' >&2; wait ;;
  archive) printf 'copy' > "${3%.mp4}-archive.mp4" ;;
  nocopy) echo 'warning: take ends mid-record' >&2; echo 'warning: no archive copy: ffmpeg exited with 1: Unknown encoder' >&2 ;;
@@ -320,6 +320,7 @@ fn fifo_variants_capture_settings_keep_existing_files_and_continue_after_failure
         [ExportStatus::Completed, ExportStatus::Failed, ExportStatus::Completed]
     );
     assert!(jobs[1].detail.contains("transient encoder failure"));
+    assert!(jobs[1].detail.contains("warning: another build"), "a failure lost its warnings");
     assert_eq!(std::fs::read_to_string(&jobs[0].output).unwrap(), "first unsized");
     let told = std::fs::read_to_string(f.dir.join("music.take.build")).unwrap();
     assert_eq!(told, "fixture @0000000", "the renderer was not told the plugin's build");

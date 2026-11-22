@@ -65,7 +65,7 @@ the same "matches the last commit" test the table applies to the dylib, and NOT 
 and prints the age of the one it is leaving in place when a worktree built no renderer at all.
 That warning is a backstop for a build that should have happened.
 The renderer checks the pair itself at every export (#1928 B):
-the plugin passes its build tag as `--plugin-build`, and a renderer of another tag writes a `warning:` naming both, which the export's row shows, and renders all the same.
+the plugin passes its build tag as `--plugin-build`, and a renderer built at another commit writes a `warning:` naming both tags first, which the export's row shows whether the render then succeeds or fails, and renders all the same.
 The tag names a commit, so two builds of one commit from different uncommitted source still pass as one.
 A renderer from before this check refuses the flag as an unknown option, so that export fails loudly once, until the renderer is reinstalled.
 
