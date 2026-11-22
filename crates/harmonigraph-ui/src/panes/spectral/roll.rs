@@ -2847,6 +2847,41 @@ mod tests {
         assert!(leaving, "fixture must draw the run after its first attacks have left");
     }
 
+    /// A leaving run walks back only as far as its own attacks: an earlier
+    /// note of its key that a rest keeps apart, culled with them, does not
+    /// date it before a voice that began in that rest.
+    #[test]
+    fn a_leaving_run_walks_back_no_further_than_its_rest() {
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_seconds = 60.0;
+        state.appearance.spectrum.roll_lead = 0.0;
+        let tracker = &mut state.runtime.tracker;
+        tracker.handle_event(NoteEvent::on(1.0, SourceId(0), 0, 60, 1.0));
+        tracker.handle_event(NoteEvent::off(1.012, SourceId(0), 0, 60));
+        tracker.handle_event(NoteEvent::on(2.0, SourceId(1), 0, 60, 1.0));
+        for i in 0..600 {
+            let start = 5.0 + f64::from(i) * 0.025;
+            tracker.handle_event(NoteEvent::on(start, SourceId(0), 0, 60, 1.0));
+            tracker.handle_event(NoteEvent::off(start + 0.012, SourceId(0), 0, 60));
+        }
+        tracker.handle_event(NoteEvent::off(100.0, SourceId(1), 0, 60));
+        let mut leaving = false;
+        for step in 0..30 {
+            let now = 70.0 + f64::from(step) * 0.5;
+            let notes = instances(&state, now);
+            let dense = |n: &RollInstance| n.tremolo[1] > 0.0;
+            if !notes.iter().any(dense) {
+                continue;
+            }
+            // The far edge is past the lone note and the run's first attacks.
+            leaving = true;
+            assert_eq!(notes.len(), 2, "at {now} the run split: {} instances", notes.len());
+            assert!(dense(&notes[1]), "at {now} the run was dated from the note before its rest");
+        }
+        assert!(leaving, "fixture must draw the run after its first attacks have left");
+    }
+
     /// A step in a note's intensity at the instant of a bend is taken at that
     /// instant: the glide before it holds its look up to the step rather than
     /// ramping into it.
