@@ -85,3 +85,8 @@ Yan asked for an audit of checkboxes against switches and a rule, and took the r
 
 - A switch turns on a feature (a section of settings of its own) or a mode (how notes are tuned or read, or what a click does); a checkbox is every other on/off, a lit button one of a row of peers, and a two-option choice an on/off whose both states have names. The rule is on `widgets::toggle_switch` and in `docs/settings.md`. PR #1902
 - Own window and Hide tab bars stay checkboxes: editor preferences, not modes. PR #1902
+
+## 2026-11-21 (egui 0.37, PR #1916, in chat)
+
+- No scroll area rubber-bands: a trackpad scroll stops at the content's end rather than overshooting and springing back, as in otonal, so the two plug-ins scroll alike. One style setting, `theme::style_at`, turns egui 0.37's overshoot off for every scroll area. PR #1916
+- egui 0.37's own behaviour is accepted as it comes: a press that slides off a widget is a drag, submenu arrows are drawn triangles, arrow keys move within menus, a menu opens on hover while another is open, and a popup no longer closes on the release that opened it. PR #1916

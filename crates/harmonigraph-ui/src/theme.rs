@@ -652,6 +652,9 @@ fn style_at(scale: f32) -> egui::Style {
     // A fold's indent, egui's 18 taken down with the rest of the chrome.
     style.spacing.indent = 16.0;
     style.spacing.slider_rail_height = 3.5;
+    // A scroll area stops at its ends rather than overshooting and springing
+    // back, as otonal's do (Yan, 2026-11-21: `docs/intent/editor-shell.md`).
+    style.spacing.scroll.kinetic.rubber_band = false;
 
     let visuals = &mut style.visuals;
     visuals.panel_fill = panel();
