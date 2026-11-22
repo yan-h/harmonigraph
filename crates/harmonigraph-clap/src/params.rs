@@ -554,8 +554,7 @@ mod tests {
     /// A value the editor sets while the host is being told the last one, from
     /// inside the push, is told by the next report, inside the gesture the
     /// host already holds open. The claim of a row's bits in one step, which
-    /// closes the window before the first push, is held by review: no test
-    /// can land an edit between a load and a claim without a hook.
+    /// closes the window before the first push, is the next test's subject.
     #[test]
     fn an_edit_made_during_a_push_is_told_by_the_next_report() {
         let table = Table::new([Spec::float("float", "Float", 0.0, 0.0, 1.0)]);
@@ -582,6 +581,86 @@ mod tests {
         table.end_edit(0);
         assert_eq!(report(&|_| {}), [Report::End]);
         assert!(report(&|_| {}).is_empty());
+    }
+
+    /// Under real threads, one editing as the editor does (clicks and drags)
+    /// and one reporting as the shell does with some pushes refused, the host
+    /// is told a well-formed gesture stream, and once the editor is done it
+    /// holds the editor's last value. A claim split into a load and a clear
+    /// fails within the first rounds (#1924).
+    #[test]
+    fn a_report_racing_editor_edits_tells_a_well_formed_stream() {
+        use std::sync::Arc;
+        const ROUNDS: u32 = 2000;
+        let table = Arc::new(Table::new([Spec::float("float", "Float", 0.0, 0.0, 1.0)]));
+        let mut seed = 0x9e3779b97f4a7c15u64;
+        let mut refuse = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed.is_multiple_of(5)
+        };
+        for round in 0..ROUNDS {
+            let done = Arc::new(AtomicBool::new(false));
+            let editor = {
+                let (table, done) = (table.clone(), done.clone());
+                std::thread::spawn(move || {
+                    let mut last = 0.0f64;
+                    for gesture in 0..8u32 {
+                        let drag = gesture % 2 == 0;
+                        if drag {
+                            table.begin_edit(0);
+                        }
+                        for step in 0..(1 + gesture % 3) {
+                            let plain = ((round * 31 + gesture * 7 + step) % 1000) as f32 / 1000.0;
+                            table.edit(0, plain);
+                            last = table.host_value(0);
+                            if step % 2 == 0 {
+                                std::thread::yield_now();
+                            }
+                        }
+                        if drag {
+                            table.end_edit(0);
+                        }
+                    }
+                    done.store(true, Ordering::Release);
+                    last
+                })
+            };
+            let mut open = false;
+            let mut told = None;
+            let mut report = |refuse: bool| {
+                table.report(|_, report| {
+                    if refuse {
+                        return false;
+                    }
+                    match report {
+                        Report::Begin => {
+                            assert!(!open, "round {round}: Begin inside an open gesture");
+                            open = true;
+                        }
+                        Report::Value(value) => {
+                            assert!(open, "round {round}: a value outside a gesture");
+                            told = Some(value);
+                        }
+                        Report::End => {
+                            assert!(open, "round {round}: End with no gesture open");
+                            open = false;
+                        }
+                    }
+                    true
+                })
+            };
+            while !done.load(Ordering::Acquire) {
+                report(refuse());
+            }
+            let last = editor.join().unwrap();
+            report(false);
+            report(false);
+            assert!(report(false), "round {round}: nothing left to refuse");
+            assert!(!open, "round {round}: the host was left holding a gesture open");
+            assert_eq!(told, Some(last), "round {round}: the host holds a stale value");
+        }
     }
 
     /// A value the host sets while its modulation holds the row at a bound is
