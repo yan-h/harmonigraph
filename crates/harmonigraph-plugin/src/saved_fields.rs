@@ -91,8 +91,9 @@ pub(crate) struct Fields {
     maps: Option<MapDocument>,
     window: Option<SavedWindow>,
     look: Option<String>,
-    /// The Console lines the restore owes.
-    notes: Vec<String>,
+    /// The Console lines the restore owes, the Hub's instance settings' among
+    /// them.
+    pub(crate) notes: Vec<String>,
 }
 
 impl Prepared for Fields {

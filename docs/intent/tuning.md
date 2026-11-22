@@ -124,3 +124,7 @@ Yan: "I want to be able to easily go between improvising in meantone while visua
 - The gap closes in the plugin's presentation clock, not in the shell's steady clock: a Tune's records are matched to the Hub's callbacks on the host's counter, which each instance closing its own gaps would set apart. Session (PR for #1885)
 - A row's note times never go back: a delta the Hub schedules before the row's latest published time is recorded at that time. A record read late across a closed gap or a lost-input callback stays in order, and a take recorded while a Tune's delay is lowered exports, its next notes up to the old delay late, rather than refusing. Yan, 2026-11-22, #1885 Q1
 - A valid callback whose host input was lost takes no picture time either, so notes after it stay on their audio. Yan, 2026-11-22, #1885 Q2
+
+## 2026-11-22 (a tuning field that does not parse, #1927 A)
+
+- A saved `musical-settings` or `tuning-instance` that does not parse opens at its default on its own, with a line in the log and, in a Hub, a Console line naming it, and the rest of the project loads. This supersedes the `persistence-contract` skill's rule that such a field refuses the whole restore with a line in the log: the untouched editor then saved the fresh look over the project's at the next save. A full tuning edit queue still refuses the restore whole, as the issue's option said it would stay. Yan, 2026-11-22, #1927

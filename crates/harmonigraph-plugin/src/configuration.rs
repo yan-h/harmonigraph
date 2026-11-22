@@ -321,12 +321,23 @@ impl Settings {
 
     /// Main thread, like the commit that follows it, as is every editor edit
     /// on macOS: nothing can take the slot this saw free in between.
+    ///
+    /// Settings that do not parse open at their defaults with a Console line,
+    /// as a save that lacks them does, and the rest of the restore goes ahead
+    /// (#1927). Only a full queue refuses the restore whole: that is passing,
+    /// and refusing keeps the instance's look and tuning together until the
+    /// project is loaded again with audio running.
     fn prepare(self: &Arc<Self>, state: &PluginState) -> Result<Restore, &'static str> {
+        let mut note = None;
         let value: MusicalSettings = match state.fields.get(MUSICAL_SETTINGS) {
-            Some(json) => serde_json::from_str(json).map_err(|error| {
-                shell_error!("Musical settings refused: {error}");
-                "invalid musical settings"
-            })?,
+            Some(json) => serde_json::from_str(json).unwrap_or_else(|error| {
+                shell_error!("The saved field {MUSICAL_SETTINGS} could not be read: {error}");
+                note = Some(format!(
+                    "This project's saved {MUSICAL_SETTINGS} could not be read, so the tuning \
+                     opened at its defaults: {error}."
+                ));
+                MusicalSettings::default()
+            }),
             None => MusicalSettings::default(),
         };
         if self.producer.lock().queue.slots() == 0 {
@@ -337,7 +348,7 @@ impl Settings {
         // values of a project saved before #1756 vanish on their own; only
         // the notice is ours to give.
         let legacy = LEGACY_AXIS_IDS.iter().any(|id| state.params.contains_key(*id));
-        Ok(Restore { settings: self.clone(), value, legacy })
+        Ok(Restore { settings: self.clone(), value, legacy, note })
     }
 }
 
@@ -345,6 +356,8 @@ struct Restore {
     settings: Arc<Settings>,
     value: MusicalSettings,
     legacy: bool,
+    /// The Console line for settings that did not parse.
+    note: Option<String>,
 }
 impl Prepared for Restore {
     fn commit(self: Box<Self>) {
@@ -362,6 +375,9 @@ impl Prepared for Restore {
         producer.shadow = Some((id, self.value));
         drop(producer);
         settings.restored.fetch_add(1, Ordering::AcqRel);
+        if let Some(note) = self.note {
+            settings.notify(note);
+        }
         if self.legacy {
             // The log keeps it for a project saved before an editor opens.
             shell_error!("{LEGACY_AXES}");
@@ -390,14 +406,14 @@ impl Setup for HubSetup {
     fn track_name_changed(&self, name: Option<&str>) {
         self.instance.track_name_changed(name);
     }
-    /// Only the musical settings and the instance settings can refuse; the
-    /// other fields are installed first, as nice-plug's derive did before
-    /// either committed.
+    /// Only a full tuning edit queue refuses; a field that does not parse
+    /// costs that field alone. The editor's fields are installed first, as
+    /// nice-plug's derive did before the tuning committed.
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
         let musical = self.params.settings.prepare(state)?;
-        let instance = self.instance.prepare(state)?;
-        let fields = crate::saved_fields::prepare(&self.params, state);
-        Ok(Box::new(All([Box::new(fields), instance, Box::new(musical)])))
+        let mut fields = crate::saved_fields::prepare(&self.params, state);
+        let instance = self.instance.read(state, &mut fields.notes);
+        Ok(Box::new(All([Box::new(fields), Box::new(instance), Box::new(musical)])))
     }
     fn save(&self, state: &mut PluginState) {
         crate::saved_fields::save(&self.params, state);
