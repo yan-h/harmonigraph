@@ -295,7 +295,7 @@ impl Settings {
     }
 
     /// The oldest Console line owed since the last call, if any.
-    pub fn take_notice(&self) -> Option<Notice> {
+    pub fn next_notice(&self) -> Option<Notice> {
         self.notice.lock().pop_front()
     }
 
@@ -307,7 +307,7 @@ impl Settings {
     /// Write every line owed into the editor's Console, the one place they
     /// reach it: a restore's opens the Console, a host's only appends.
     pub(crate) fn deliver_notices(&self, ui: &mut harmonigraph_ui::SharedState) {
-        while let Some(notice) = self.take_notice() {
+        while let Some(notice) = self.next_notice() {
             match notice {
                 Notice::Restore(line) => ui.report_loss(line),
                 Notice::Host(line) => ui.log(line),

@@ -295,7 +295,7 @@ fn a_full_command_queue_keeps_accepted_state() {
     refused.params.insert(ParamKey::CameraDistance.id().into(), ParamValue::F32(20.0));
     assert!(!device.try_load(refused), "a restore needs a free slot");
     assert_eq!(
-        settings.take_notice(),
+        settings.next_notice(),
         Some(Notice::Restore(RESTORE_REFUSED.into())),
         "and says so in the Console"
     );
@@ -427,7 +427,7 @@ fn a_field_that_does_not_parse_is_skipped_with_a_console_line() {
         (plugin.params.editor_state.size(), plugin.params.int(crate::Row::MapFifths))
     });
     assert_eq!((size, fifths), ((901, 702), 3), "the rest of the project");
-    let Some(Notice::Restore(line)) = device.settings().take_notice() else {
+    let Some(Notice::Restore(line)) = device.settings().next_notice() else {
         panic!("no restore line in the Console");
     };
     assert!(line.starts_with("This project's saved lattice-maps could not be read"), "{line}");
@@ -450,6 +450,32 @@ fn the_analysis_input_saves_as_its_index_and_reopens() {
     assert_eq!(input, harmonigraph_ui::params::AnalysisInput::Sidechain);
 }
 
+/// A restore line that reports a loss opens the Console in the open editor,
+/// as the editor door's own losses do (Yan, #1934), and opening it is no edit
+/// the host is told of. A line about the host only appends.
+#[test]
+fn a_restore_that_reports_a_loss_opens_the_console() {
+    let _scope = crate::test_scope::enter();
+    let device = hub();
+    let (settings, lock) = (device.settings(), device.editor_lock());
+    let revealed = || harmonigraph_ui::testing::console_revealed(&lock.lock().ui);
+    settings.notify(Notice::Host("a line about the host".into()));
+    settings.deliver_notices(&mut lock.lock().ui);
+    assert!(!revealed(), "a host line only appends");
+    let mut state = device.wrapper().get_state_object();
+    state.params.insert("tuning-three".into(), ParamValue::F32(696.0));
+    device.load(state);
+    let before = device.service();
+    // As an editor frame takes them: the lock installs the restore, then
+    // its Console lines arrive over it.
+    let mut shared = lock.lock();
+    settings.deliver_notices(&mut shared.ui);
+    harmonigraph_ui::testing::end_frame(&mut shared.ui);
+    drop(shared);
+    assert!(revealed(), "the restore named a retired parameter");
+    assert_eq!(device.service(), before, "the reveal is no edit");
+}
+
 /// A project saved while the axes were host parameters (#1756) holds them
 /// there, beside musical settings without axes. It opens at fresh axes with
 /// one Console notice, keeps its links, and saves no tuning parameter back.
@@ -460,21 +486,21 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     let settings = device.settings();
     let mut state = device.wrapper().get_state_object();
     device.load(state.clone());
-    assert_eq!(settings.take_notice(), None, "a project saved since opens quietly");
+    assert_eq!(settings.next_notice(), None, "a project saved since opens quietly");
     state.params.insert("tuning-three".into(), ParamValue::F32(696.0));
     state.params.insert("tuning-tolerance".into(), ParamValue::F32(3.0));
     state.fields.insert(MUSICAL_SETTINGS.into(), r#"{"meantone":false,"marvel":true}"#.into());
     device.load(state);
     assert_eq!(
-        settings.take_notice(),
+        settings.next_notice(),
         Some(Notice::Restore(
             "This project saved parameters this build no longer has, which were not read: \
              tuning-three, tuning-tolerance."
                 .into()
         ))
     );
-    assert_eq!(settings.take_notice(), Some(Notice::Restore(LEGACY_AXES.into())));
-    assert_eq!(settings.take_notice(), None, "the notice is given once");
+    assert_eq!(settings.next_notice(), Some(Notice::Restore(LEGACY_AXES.into())));
+    assert_eq!(settings.next_notice(), None, "the notice is given once");
     device.activate();
     device.run(0, vec![], None);
     let opened = shown(&device.settings());
