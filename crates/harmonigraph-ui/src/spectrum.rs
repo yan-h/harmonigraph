@@ -82,9 +82,10 @@ pub struct SpectrumAnalysis {
 /// columns look heard for as long as the curve was still falling.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Heard {
-    /// The newest raw column the history folded above silence
-    /// ([`POWER_FLOOR`](harmonigraph_core::spectrogram::POWER_FLOOR)): what
-    /// the heatmap scrolls.
+    /// The newest raw column the history folded that the heatmap draws: one
+    /// with a bucket over the faintest dB the volume colours draw at its pitch
+    /// ([`draws`]), the level the heatmap clamps each bucket at before any
+    /// effect reads it. What the heatmap scrolls.
     pub(crate) column: Option<f64>,
     /// Until when the columns arriving move what is drawn of the smoothed
     /// display (the curve, the Spiral and the lattice ring) and of the
@@ -119,26 +120,22 @@ pub(crate) struct Heard {
 /// The curve falls through the margin in about 35 ms at the default release.
 const DRAWN_MARGIN_DB: f32 = 1.0;
 
-/// Whether some bucket of `columns`, a raw column and the curve it leaves,
-/// holds a power that draws: over [`DRAWN_MARGIN_DB`] under the faintest dB
-/// any reading draws at its pitch, and over
+/// Whether some bucket of `columns` holds a power that draws: over
+/// [`DRAWN_MARGIN_DB`] under `faintest`, the faintest dB its readings draw at
+/// the bucket's pitch, and over
 /// [`POWER_FLOOR`](harmonigraph_core::spectrogram::POWER_FLOOR), which every
-/// reading takes for silence. `peak` is the loudest bucket of either.
+/// reading takes for silence. `peak` is the loudest bucket of any of them.
+/// The one test of "drawn" both readings of the spectrum stamp ([`Heard`]).
 ///
 /// The faintest dB is affine in pitch and the buckets are evenly spaced in
 /// it, so the faintest powers are a geometric run, walked by one multiply a
 /// bucket, and walked only while `peak` is over the faintest of them all:
 /// silence, which a host streams with its transport stopped, walks nothing.
 /// Columns land under the editor's lock.
-fn draws(config: &SpectrumConfig, peak: f32, columns: [&SpectrumBuckets; 2]) -> bool {
+fn draws(faintest: impl Fn(f32) -> f32, peak: f32, columns: &[&SpectrumBuckets]) -> bool {
     use harmonigraph_core::spectrum::{bucket_pitch, SPECTRUM_BINS};
     let silence = harmonigraph_core::spectrogram::POWER_FLOOR;
-    let db = |bucket| {
-        f64::from(
-            crate::panes::spectral::axes::faintest_drawn_db(config, bucket_pitch(bucket))
-                - DRAWN_MARGIN_DB,
-        )
-    };
+    let db = |bucket| f64::from(faintest(bucket_pitch(bucket)) - DRAWN_MARGIN_DB);
     let (first, last) = (db(0), db(SPECTRUM_BINS - 1));
     if peak <= (10f64.powf(first.min(last) / 10.0) as f32).max(silence) {
         return false;
@@ -362,15 +359,16 @@ impl AudioSpectrum {
     /// The curve's attack and release run here, per column, for the reason the
     /// FFT runs on a grid of sample counts ([`SpectrumAnalysis::feed_source`]):
     /// on the frame clock their time constants would depend on the frame rate.
-    fn take(&mut self, column: AnalyzedColumn, config: &SpectrumConfig) {
+    ///
+    /// Answers the batch it came in if it drew, in itself or in the curve.
+    fn take(&mut self, column: AnalyzedColumn, config: &SpectrumConfig) -> Option<f64> {
         // Two coefficients, chosen per bucket by which way it is moving.
         // Derived from the hop actually in use rather than set on the bar,
         // so the times mean seconds at any hop this loop runs at.
         self.display_revision = self.display_revision.wrapping_add(1);
         let attack = hop_alpha(config.attack, column.step);
         let release = hop_alpha(config.release, column.step);
-        let floor = harmonigraph_core::spectrogram::POWER_FLOOR;
-        let (mut column_heard, mut peak) = (false, 0.0_f32);
+        let (mut loudest, mut peak) = (0.0_f32, 0.0_f32);
         for (shown, new) in self.display.iter_mut().zip(&column.power) {
             // Invalid input must not poison the carried smoothing state
             // after clean audio has replaced the analyzer's window.
@@ -379,14 +377,25 @@ impl AudioSpectrum {
             // are mapped through `loudness` well downstream of here.
             let alpha = if new > *shown { attack } else { release };
             *shown += (new - *shown) * alpha;
-            column_heard |= new > floor;
-            peak = peak.max(new).max(*shown);
+            loudest = loudest.max(new);
+            peak = peak.max(*shown);
         }
+        use crate::panes::spectral::axes::{faintest_coloured_db, faintest_drawn_db};
+        // The heatmap reads the raw column through the volume colours alone.
+        let column_drawn =
+            draws(|midi| faintest_coloured_db(config, midi), loudest, &[&column.power]);
         // Every batch delivers its arrival before its columns.
+        let mut drew = None;
         if let Some(batch) = self.last_samples {
             // The raw column as well as the curve: the heatmap's fresh edge
             // draws it while the curve's attack has yet to lift the display.
-            let drawn = draws(config, peak, [&column.power, &self.display]);
+            let drawn = column_drawn
+                || draws(
+                    |midi| faintest_drawn_db(config, midi),
+                    loudest.max(peak),
+                    &[&column.power, &self.display],
+                );
+            drew = drawn.then_some(batch);
             let until = &mut self.last_audible.curve_until;
             *until = if drawn {
                 Some(batch + Self::HOLD_SECONDS)
@@ -396,13 +405,14 @@ impl AudioSpectrum {
         }
         // Keep the RAW spectrum for the spectrogram (the smoothed
         // `display` would smear one column into the next).
-        self.keep(column.time, &column.power, column_heard);
+        self.keep(column.time, &column.power, column_drawn);
+        drew
     }
 
     /// Fold one raw spectrum into the history, through its one entry
     /// ([`SlabPyramid::push`](crate::spectrogram::SlabPyramid::push), which
     /// asserts that dates only move forward), and stamp [`Heard::column`] if
-    /// it was `heard`.
+    /// it was `drawn`.
     ///
     /// Retention is deliberately NOT keyed to the current span: trimming to the
     /// live `roll_seconds` meant shrinking the span popped columns off the
@@ -411,13 +421,13 @@ impl AudioSpectrum {
     /// longest span's reach or its ring, whichever is fewer slabs (see the
     /// pyramid's retention), and the heatmap reads back as far as the span
     /// asks.
-    fn keep(&mut self, time: f64, power: &SpectrumBuckets, heard: bool) {
+    fn keep(&mut self, time: f64, power: &SpectrumBuckets, drawn: bool) {
         #[cfg(any(test, feature = "testing"))]
         {
             self.columns_taken += 1;
         }
         self.pyramid.push(time, power);
-        if heard {
+        if drawn {
             self.last_audible.column = Some(time);
         }
     }
@@ -484,42 +494,42 @@ impl AudioSpectrum {
     /// window is open), as if the press had come that much sooner.
     ///
     /// Whether it brought sound back to a spectrum that had gone still: a
-    /// stamp on either reading ([`Heard`]) more than
-    /// [`HOLD_SECONDS`](Self::HOLD_SECONDS) after the one before it, or the
-    /// first. By then every picture of it had stopped moving (the curve at its
-    /// bound, the heatmap later still), so a still window has to be asked to
-    /// draw it. The curve's bound is [`Heard::curve_until`], a hold past the
-    /// batch a column drew in, so a bound more than a hold past the last is a
-    /// batch drawn after the curve went still: a hold after the last one
-    /// drawn, or after the one it went flat in. Sound that goes on asks nothing more: a
-    /// picture that shows it keeps the window drawing, and one that does not
-    /// has nothing new to draw.
+    /// column that draws, from a batch past the bound the display moved until
+    /// before the hand-over ([`Heard::curve_until`]), or the first. By then
+    /// every picture of it had stopped asking for frames, the heatmap's fresh
+    /// edge with the curve, so a still window has to be asked to draw it. A
+    /// column the heatmap draws draws for the curve's test too, so this one
+    /// bound answers for both. Sound that goes on asks nothing more: a picture
+    /// that shows it keeps the window drawing, and one that does not has
+    /// nothing new to draw.
     pub fn give(
         &mut self,
         deliveries: impl IntoIterator<Item = Delivery>,
         config: &SpectrumConfig,
     ) -> bool {
-        let before = self.last_audible;
+        let still = self.last_audible.curve_until;
+        let mut back = false;
         for delivery in deliveries {
-            self.apply(delivery, config);
+            let drawn = self.land(delivery, config);
+            back |= drawn.is_some_and(|batch| still.is_none_or(|still| batch > still));
         }
-        let after = self.last_audible;
-        let resumed = |was: Option<f64>, heard: Option<f64>| match (was, heard) {
-            (_, None) => false,
-            (None, Some(_)) => true,
-            (Some(was), Some(heard)) => heard > was + Self::HOLD_SECONDS,
-        };
-        resumed(before.curve_until, after.curve_until) || resumed(before.column, after.column)
+        back
     }
 
     /// Keep one delivery as it is made: an inline shell's
     /// [`feed_source`](SpectrumAnalysis::feed_source) delivers here.
     pub fn apply(&mut self, delivery: Delivery, config: &SpectrumConfig) {
+        self.land(delivery, config);
+    }
+
+    /// Keep one delivery, and the batch a column that draws came in.
+    fn land(&mut self, delivery: Delivery, config: &SpectrumConfig) -> Option<f64> {
         match delivery {
             Delivery::Restart => self.restart(),
             Delivery::Arrival { newest } => self.last_samples = Some(newest),
-            Delivery::Column(column) => self.take(*column, config),
+            Delivery::Column(column) => return self.take(*column, config),
         }
+        None
     }
 
     /// The curve to draw, or None while no audio is flowing. The levels are
@@ -532,9 +542,12 @@ impl AudioSpectrum {
     /// A column straight into the history, for a test that needs history
     /// without analyzing audio. See [`AudioSpectrum::keep`].
     #[cfg(test)]
+    /// Stamped as drawn under the fresh look's colours.
     pub(crate) fn push_history(&mut self, now: f64, power: &SpectrumBuckets) {
-        let heard = power.iter().any(|p| *p > harmonigraph_core::spectrogram::POWER_FLOOR);
-        self.keep(now, power, heard);
+        let config = SpectrumConfig::default();
+        let faintest = |midi| crate::panes::spectral::axes::faintest_coloured_db(&config, midi);
+        let loudest = power.iter().copied().fold(0.0, f32::max);
+        self.keep(now, power, draws(faintest, loudest, &[power]));
     }
 
     /// The slab pyramid the heatmap reads, every level folded up to the
@@ -570,7 +583,7 @@ impl AudioSpectrum {
         self.pyramid.newest()
     }
 
-    /// When the spectrum last held anything above silence: see [`Heard`].
+    /// When each reading of the spectrum last drew anything: see [`Heard`].
     pub(crate) fn last_audible(&self) -> Heard {
         self.last_audible
     }

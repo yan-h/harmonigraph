@@ -590,11 +590,8 @@ reasons! {
     /// departure's Fade-out delay, its stagger and the presence it holds for
     /// them), or a node's Background glow still moving on a layer that draws
     /// it: its level falling, or its colour still easing toward its reading
-    /// ([`GlowFade::step_paced`](panes::glow_fade::GlowFade::step_paced)),
-    /// which can outlast the slices by many seconds. The departure asks for
-    /// every frame; the glow asks for the frame its lights next move half a
-    /// code value, which a slow release reaches less often than the display
-    /// refreshes (#1915).
+    /// ([`GlowFade::step_drawn`](panes::glow_fade::GlowFade::step_drawn)),
+    /// which can outlast the slices by many seconds.
     Releasing => "releasing",
     /// A picture drawn from audio above silence. Samples arriving are not
     /// enough, because a host streams silence with its transport stopped and

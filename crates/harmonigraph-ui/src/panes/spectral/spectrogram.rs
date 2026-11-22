@@ -296,7 +296,14 @@ pub(crate) fn draw_spectrogram(
         // the colour memory's ease is stepped at that pace.
         let effects = cfg.atmosphere.effects();
         let twinkles = effects.cloud && cfg.atmosphere.cloud_style == CloudStyle::Stars;
-        let pace = if twinkles || spectrum.moving(now) {
+        // The slab the last drawn column was folded into, still open while
+        // samples arrive: every column after it joins the power mean the
+        // fresh edge draws, silent ones included, until one lands in the next
+        // slab. Its own question, since the curve can go flat at once.
+        let slab = |time: f64| (time / layout.bucket).floor();
+        let open = spectrum.display(now).is_some()
+            && spectrum.last_audible().column.is_some_and(|drawn| slab(drawn) == slab(newest));
+        let pace = if twinkles || open || spectrum.moving(now) {
             0.0
         } else {
             let scroll = time.seconds_per_pixel(axes, view.ppp);
@@ -338,13 +345,14 @@ pub(crate) fn draw_spectrogram(
 }
 
 /// Whether a silent cell of the heatmap draws in anything but the gradient's
-/// floor, which is the bed's colour. The level is affine in pitch, so the
-/// range's two ends decide it.
+/// floor, which is the bed's colour: whether silence is over the faintest dB
+/// the colours draw. That is affine in pitch, so the range's two ends decide
+/// it.
 fn silence_shows(cfg: &crate::SpectrumConfig) -> bool {
     use harmonigraph_core::spectrogram::DB_FLOOR;
     [cfg.low_midi, cfg.high_midi]
         .into_iter()
-        .any(|midi| super::axes::spectrogram_level_raw(cfg, DB_FLOOR, midi) > 0.0)
+        .any(|midi| super::axes::faintest_coloured_db(cfg, midi) < DB_FLOOR)
 }
 
 /// A cell's opaque color: `level` (0..1 loudness) mapped through the heatmap's

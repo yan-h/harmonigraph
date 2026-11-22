@@ -227,7 +227,7 @@ pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32)
 /// window's own dB, which is why a ruling or a drag bound has to read the
 /// affine mapping rather than the clamped display value.
 pub(crate) fn loudness_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
-    let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
+    let db = power_db - tilt_db(cfg, midi);
     let (floor, ceiling) = level_window(cfg);
     (db - floor) / (ceiling - floor)
 }
@@ -249,18 +249,32 @@ pub(crate) fn loudness_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32
 /// `the_shade_table_matches_the_mapping_it_replaces` holds the table to it
 /// byte for byte.
 pub(crate) fn spectrogram_level_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
-    let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
+    let db = power_db - tilt_db(cfg, midi);
     let (floor, ceiling) = spectrogram_window(cfg);
     (db - floor) / (ceiling - floor)
 }
 
-/// The faintest dB that draws at pitch `midi` at all: where the lower of
-/// [`loudness_raw`] (the curve's height) and [`spectrogram_level_raw`] (the
-/// volume colours of the curve, the heatmap, the Spiral and the lattice ring)
-/// crosses 0. Every reading clamps at 0, so a power at or under this draws as
-/// silence does, wherever it stands under it.
+/// The dB the tilt takes off a bucket at pitch `midi` before any window reads
+/// it: a slope per octave about the 1 kHz pivot, lifting the treble when the
+/// tilt is negative.
+fn tilt_db(cfg: &crate::SpectrumConfig, midi: f32) -> f32 {
+    cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0
+}
+
+/// The faintest dB the volume colours draw at pitch `midi`: where
+/// [`spectrogram_level_raw`] crosses 0, the level every colour reading clamps
+/// at. The heatmap, the Spiral, and the colours of the curve and the lattice
+/// ring draw a power at or under it as they draw silence.
+pub(crate) fn faintest_coloured_db(cfg: &crate::SpectrumConfig, midi: f32) -> f32 {
+    spectrogram_window(cfg).0 + tilt_db(cfg, midi)
+}
+
+/// The faintest dB that draws at pitch `midi` at all: the lower of
+/// [`faintest_coloured_db`] and where [`loudness_raw`] (the curve's height and
+/// the lattice ring's levels) crosses 0. Every reading clamps at 0, so a power
+/// at or under this draws as silence does, wherever it stands under it.
 pub(crate) fn faintest_drawn_db(cfg: &crate::SpectrumConfig, midi: f32) -> f32 {
-    level_window(cfg).0.min(spectrogram_window(cfg).0) + cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0
+    faintest_coloured_db(cfg, midi).min(level_window(cfg).0 + tilt_db(cfg, midi))
 }
 
 /// A bucket's level for the audio volume colors, clamped to the gradient's

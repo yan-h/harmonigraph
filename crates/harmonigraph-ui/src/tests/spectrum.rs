@@ -711,31 +711,40 @@ fn batch(newest: f64, power: f32) -> [Delivery; 2] {
 }
 
 /// A hand-over says when it brings sound back to a still spectrum, which is
-/// when the plugin's input worker asks a still window to draw: the first
-/// batch heard, and one heard more than a hold after the last; never
-/// silence, nor sound that goes on.
+/// when the plugin's input worker asks a still window to draw: a batch that
+/// draws, landing past the bound the display moved until before it, or the
+/// first; never silence, nor sound that goes on.
 #[test]
 fn a_hand_over_says_when_sound_comes_back() {
     let cfg = SpectrumConfig::default();
-    let mut spectrum = AudioSpectrum::default();
     let step = crate::spectrogram::FFT_INTERVAL;
+    let mut spectrum = AudioSpectrum::default();
     assert!(!spectrum.give(batch(100.0, 0.0), &cfg), "silence");
     assert!(spectrum.give(batch(100.0 + step, 1.0), &cfg), "the first sound");
     assert!(!spectrum.give(batch(100.0 + 2.0 * step, 1.0), &cfg), "sound going on");
-    let back = 100.0 + 2.0 * step + AudioSpectrum::HOLD_SECONDS + step;
-    assert!(spectrum.give(batch(back, 1.0), &cfg), "sound after a still stretch");
 
-    // A column just over the floor under a slow attack: the raw column is
-    // heard, which the heatmap scrolls, while the smoothed curve stays under.
-    let slow = SpectrumConfig { attack: 1.0, ..SpectrumConfig::default() };
+    // Inside the bound the display moved until, and past it, read off the
+    // spectrum rather than worked out from the hold.
+    let heard = || {
+        let mut spectrum = AudioSpectrum::default();
+        spectrum.give(batch(100.0, 1.0), &cfg);
+        spectrum
+    };
+    let still = heard().moving_until().expect("a sound was drawn");
+    assert!(!heard().give(batch(still - step, 1.0), &cfg), "sound inside the bound");
+    assert!(heard().give(batch(still + step, 1.0), &cfg), "sound after a still stretch");
+
+    // Under every floor nothing draws, for the heatmap or the curve.
     let mut spectrum = AudioSpectrum::default();
     let faint = 2.0 * harmonigraph_core::spectrogram::POWER_FLOOR;
-    assert!(spectrum.give(batch(100.0, faint), &slow), "heard by the heatmap alone");
-    assert!(!spectrum.give(batch(100.0 + step, faint), &slow), "faint sound going on");
-    assert_eq!(spectrum.last_audible().curve_until, None, "the fixture's curve was heard too");
-    // Then loud enough to lift the curve while the heatmap hears on: the
-    // curve comes back alone.
-    assert!(spectrum.give(batch(100.0 + 2.0 * step, 1.0), &slow), "heard again by the curve alone");
+    assert!(!spectrum.give(batch(100.0, faint), &cfg), "sound under every floor");
+    assert_eq!(spectrum.last_audible(), Default::default(), "a reading drew it");
+    // Between the curve's floor and the colours' the curve draws and the
+    // heatmap does not, by the one test of what draws.
+    let apart = SpectrumConfig { tilt: 0.0, floor_db: -80.0, volume_floor_db: -68.0, ..cfg };
+    let between = 10f32.powf(-7.4);
+    assert!(spectrum.give(batch(100.0 + step, between), &apart), "sound the curve draws");
+    assert_eq!(spectrum.last_audible().column, None, "the heatmap drew sound under its floor");
 
     // A curve gone flat under silence still arriving is still at once, so
     // sound back a column later, well inside a hold, is sound after a still
@@ -744,5 +753,6 @@ fn a_hand_over_says_when_sound_comes_back() {
     let mut spectrum = AudioSpectrum::default();
     assert!(spectrum.give(batch(100.0, 1.0), &instant), "the first sound");
     assert!(!spectrum.give(batch(100.0 + step, 0.0), &instant), "the curve going flat");
+    assert_eq!(spectrum.moving_until(), Some(100.0 + step), "a hold after the flat batch");
     assert!(spectrum.give(batch(100.0 + 2.0 * step, 1.0), &instant), "sound on a flat curve");
 }
