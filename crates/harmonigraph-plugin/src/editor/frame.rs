@@ -158,9 +158,8 @@ pub(super) fn frame(
     queue.set_frame_divisor(shared.ui.workspace.interaction.prefs.frame_rate.divisor());
     // What this frame claimed, the editor's until the next frame says
     // otherwise: a key arrives between frames (see `harmonigraph_ui::keys`).
-    // A focused text field's own keys, and the shell's own Escape and Cmd-C
-    // claims (a drag, a popup, a selected label), are the editor's too; every
-    // other key goes to the host.
+    // The keys the shell owns besides are egui-baseview's Patch 18, in
+    // egui-plugin-window's `PATCHES.md`.
     queue.set_shortcuts(&harmonigraph_ui::keys::claimed(ui.ctx()));
 }
 
