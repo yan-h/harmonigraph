@@ -46,9 +46,10 @@ harmonigraph-clap = { path = "crates/harmonigraph-clap" }
 #   eframe must match egui
 # When bumping egui, bump all of these together.
 # egui's bundled faces are the per-glyph fallbacks behind the product face
-# (`harmonigraph-ui`'s `install_fonts`), and egui 0.37 no longer ships them
-# by default.
-egui = { version = "0.37", features = ["default_fonts"] }
+# (`harmonigraph-ui`'s `install_fonts`). Since 0.37 egui ships none by
+# default, and its symbol faces only with its emoji ones, which are where a
+# linked interval's `↔` badge comes from.
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 egui-wgpu = "0.37"
 eframe = { version = "0.37", default-features = false, features = [
     "wgpu",

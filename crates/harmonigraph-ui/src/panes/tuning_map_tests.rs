@@ -244,6 +244,27 @@ fn the_perfect_fifth_edits_the_decoded_fifth_while_the_board_is_drawn() {
     assert!(edit.axes[TuningAxis::Three.index()].is_some() && edit.policy.is_none());
 }
 
+/// A linked interval's badge, `↔`, is in none of the product face's weights;
+/// it is drawn from egui's symbol fallbacks, which egui ships only with its
+/// emoji faces. Without them the badge lays out as a blank.
+#[test]
+fn the_linked_badge_has_a_glyph() {
+    let ctx = themed();
+    let mut inked = false;
+    // The second pass, once the first has rasterized the glyph.
+    for _ in 0..2 {
+        crate::tests::probe::run(&ctx, Default::default(), |ui| {
+            let galley = ui.painter().layout_no_wrap(
+                "↔".into(),
+                egui::TextStyle::Body.resolve(ui.style()),
+                egui::Color32::WHITE,
+            );
+            inked = galley.rows[0].glyphs.iter().all(|glyph| !glyph.uv_rect.is_nothing());
+        });
+    }
+    assert!(inked, "the badge drew no ink");
+}
+
 /// With Learn on, whether the pane's first frame draws the armed ring at
 /// `now`, and when that frame asks for the next for it, if it does, with the
 /// pane `below` points down a 2000-point screen and Decode fifths as given.
