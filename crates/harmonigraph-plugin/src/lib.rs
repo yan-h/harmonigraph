@@ -1308,7 +1308,7 @@ mod tests {
 
         let mut state = empty_state();
         state.fields.insert("ui-state".into(), serde_json::to_string(blob).unwrap());
-        Box::new(saved_fields::prepare(&plugin.params, &state)).commit();
+        Box::new(saved_fields::prepare(&plugin.params, &state, Vec::new())).commit();
     }
 
     /// A host restore of a project whose camera yaw is `yaw`, and its blob.
