@@ -374,14 +374,16 @@ impl Store {
         // seen without allocating a `Vec` for the chain or its seams.
         let mut expected = first.start;
         let mut coverage_end = None;
-        let mut seam_range: Option<(i64, i64)> = None;
+        // Where the chain's last seam after `first` starts; the first is at
+        // `first.end`.
+        let mut last_seam = None;
         for (&start, chunk) in self.chunks.range(first.start..) {
             if start != expected {
                 coverage_end = Some(expected);
                 break;
             }
             if start > first.start {
-                seam_range = Some((seam_range.map_or(start, |(s, _)| s), start));
+                last_seam = Some(start);
             }
             let c_from = from.max(chunk.start);
             let c_end = limit.min(chunk.end);
@@ -405,9 +407,9 @@ impl Store {
         if let Some(before) = before {
             Self::apply_seam(before, first, from, end, fade, ch, out);
         }
-        if let Some((first_seam, last_seam)) = seam_range {
+        if let Some(last_seam) = last_seam {
             let mut prev = first;
-            for (_, b) in self.chunks.range(first_seam..=last_seam) {
+            for (_, b) in self.chunks.range(first.end..=last_seam) {
                 Self::apply_seam(prev, b, from, end, fade, ch, out);
                 prev = b;
             }
@@ -603,6 +605,9 @@ mod tests {
         // Forward-margin seam at 1650 (`a.data_end >= s + fade`): cold 1500..1800 trimmed by warm 1650..1900.
         store.insert(stereo_chunk(1500, 1800, stamp(6, 1500), 6.0, -6.0));
         store.insert(stereo_chunk(1650, 1900, stamp(7, 0), 7.0, -7.0));
+        // And on through a no-margin dip seam at 1900 into cold 1900..1980: one
+        // render from 1500 crosses both seams.
+        store.insert(stereo_chunk(1900, 1980, stamp(8, 1900), 8.0, -8.0));
 
         assert_eq!(
             owners(&store),
@@ -615,6 +620,7 @@ mod tests {
                 (1300, 1400, 5),
                 (1500, 1650, 6),
                 (1650, 1900, 7),
+                (1900, 1980, 8),
             ]
         );
         let fade = fade_frames(f64::from(RATE)) as i64;
@@ -653,7 +659,21 @@ mod tests {
                 "forward-margin seam right at {f}"
             );
         }
-        assert!(truth[1900 * 2..].iter().all(|&s| s == 0.0), "trailing gap");
+        for f in 1900 - fade..1900 + fade {
+            let (base, d, gain) = if f < 1900 {
+                (7.0, (f - 1650) as f32 * 0.001, (1900 - f) as f32)
+            } else {
+                (8.0, (f - 1900) as f32 * 0.001, (f - 1900 + 1) as f32)
+            };
+            for (c, sample) in [base + d, -base - d].into_iter().enumerate() {
+                assert_eq!(
+                    truth[f as usize * 2 + c].to_bits(),
+                    (sample * gain / fade as f32).to_bits(),
+                    "second seam's dip, channel {c} at {f}"
+                );
+            }
+        }
+        assert!(truth[1980 * 2..].iter().all(|&s| s == 0.0), "trailing gap");
 
         // Compare dirty buffer reads (aligned, unaligned partial-frame tail, tiny, and reused)
         // bit-for-bit against zero-initialized reads and `render`.

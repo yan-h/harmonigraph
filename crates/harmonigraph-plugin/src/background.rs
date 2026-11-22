@@ -311,15 +311,18 @@ fn step(
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
 ) {
-    // Declared outside the lock block so even a panic inside drops it after `guard`.
-    let displaced;
+    // What the exchange displaced from the view, freed at the end of the step:
+    // declared before either hold's guard, so it outlives both, an early
+    // return and a panic included, and freeing it delays none of the step's
+    // live work.
+    let _displaced;
     let (taken, struck) = {
         let mut guard = shared.lock();
         let shared = &mut *guard;
         let now = shared.clock.now();
         let open = editor_state.is_open();
         let settings = &shared.ui.picture.appearance.spectrum;
-        displaced = tape.exchange(&mut shared.ui.picture.runtime.tape, settings, open);
+        _displaced = tape.exchange(&mut shared.ui.picture.runtime.tape, settings, open);
         let onset = newest_onset(&shared.ui.picture.runtime);
         // The drain's marks go straight to the tape, which `settle` empties
         // every step.
@@ -350,8 +353,6 @@ fn step(
     tape.settle();
     tape.play();
     tape.roll();
-    let crate::tape::worker::DisplacedView { roll, spectrogram } = displaced;
-    drop((roll, spectrogram));
     tape.analyze();
     tape.report();
     let taken = taken.map(|mut taken| {

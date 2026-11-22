@@ -186,6 +186,8 @@ impl ColumnAnalyzer {
 
     /// The column centred on song frame `centre`, from `read`, which fills
     /// interleaved frames from a song frame on, silence where nothing is held.
+    /// `read` must write every sample of the slice it is given: the scratch
+    /// it fills is not cleared between columns.
     pub fn column(
         &mut self,
         config: AnalyzerConfig,
@@ -203,9 +205,11 @@ impl ColumnAnalyzer {
         }
         let (bank, _, _) = self.bank.as_mut().expect("built above");
         let (frame, lag) = Self::reach(config);
+        // Every column pushes a full `fft_size` frame, overwriting the entire
+        // channel ring, so no column needs the bank restarted.
+        debug_assert_eq!(frame as usize, config.fft_size);
         self.scratch.resize(frame as usize * channels, 0.0);
         read(centre + lag - frame, &mut self.scratch);
-        // Every column pushes a full `fft_size` frame, overwriting the entire channel ring.
         bank.push_frames(&self.scratch);
         let power = bank.power_sum().expect("a full frame was pushed");
         power.iter().map(|&p| quantize(p)).collect()
