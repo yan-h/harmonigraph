@@ -25,13 +25,16 @@ use super::store::{fade_frames, Store};
 /// from the worker's sleep (release build, stereo at 48 kHz, 2026-11-22), so
 /// keeping up with a recording, a column per 32 ms of song, costs 0.3% to 3%
 /// of a core, well inside this. What the budget bounds is a re-analysis of
-/// the whole tape after the window changes: at most about a fifth of a core
-/// with the editor open (a step every [`POLL`](crate::background::POLL) plus
-/// its work) and a sixteenth with it shut. Five minutes of song caught up in
-/// 4 to 9 s through Fast, 8 to 25 s through Balanced and 14 to 38 s through
-/// Precise with the editor open, the spread being how slow a woken step's
-/// columns ran on a loaded machine, and in about a minute through Balanced
-/// with it shut.
+/// the whole tape after the window changes: measured with each step's
+/// overrunning last column and the levels' rebuilds included, about a fifth of
+/// a core with the editor open (a step every
+/// [`POLL`](crate::background::POLL) plus its work) and a sixteenth with it
+/// shut. Five minutes of song caught up in 4 to 9 s through Fast, 8 to 25 s
+/// through Balanced and 14 to 38 s through Precise with the editor open, the
+/// spread being how slow a woken step's columns ran on a loaded machine, and
+/// in about a minute through Balanced with it shut. The step that sees the
+/// switch also queues the whole tape outside this budget, about 2.3 ms for
+/// 25 minutes.
 pub(crate) const STEP_BUDGET: Duration = Duration::from_millis(1);
 
 /// How often the levels above the columns are rebuilt while columns are still
@@ -94,6 +97,7 @@ impl Spectrum {
     /// The store is gone or new: nothing it held is drawn.
     pub(crate) fn clear(&mut self) {
         self.tape.clear();
+        self.scheduled = None;
         self.pending.clear();
         self.changed.clear();
         self.cleared = true;
@@ -103,7 +107,7 @@ impl Spectrum {
     /// changed, seams' crossfades included.
     pub(crate) fn invalidate(&mut self, store: &Store, ranges: &[(i64, i64)]) {
         let Some(config) = self.config(store) else { return };
-        let (frame, lag) = ColumnAnalyzer::reach(config);
+        let (frame, lag) = (config.fft_size as i64, ColumnAnalyzer::lag(config));
         let margin = fade_frames(f64::from(store.rate)) as i64;
         let hop = COLUMN_SECONDS * f64::from(store.rate);
         for &(a, b) in ranges {

@@ -313,8 +313,10 @@ fn step(
 ) {
     // What the exchange displaced from the view, freed at the end of the step:
     // declared before either hold's guard, so it outlives both, an early
-    // return and a panic included, and freeing it delays none of the step's
-    // live work.
+    // return and a panic included. That moves its cost past the step's live
+    // work rather than removing it: a large free, up to about 19 ms after a
+    // format change clears a 25-minute tape, can delay the next step's drain,
+    // though never under the lock.
     let _displaced;
     let (taken, struck) = {
         let mut guard = shared.lock();

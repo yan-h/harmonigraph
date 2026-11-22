@@ -177,17 +177,19 @@ pub struct ColumnAnalyzer {
 }
 
 impl ColumnAnalyzer {
-    /// The frame and lag `config` reads with, in frames: a column centred on
-    /// frame `c` reads `c + lag - frame .. c + lag`.
-    pub fn reach(config: AnalyzerConfig) -> (i64, i64) {
-        let lag = (config.column_lag() * f64::from(config.sample_rate)).round() as i64;
-        (config.fft_size as i64, lag)
+    /// The lag `config` reads with, in frames: a column centred on frame `c`
+    /// reads the `fft_size` frames `c + lag - fft_size .. c + lag`.
+    pub fn lag(config: AnalyzerConfig) -> i64 {
+        (config.column_lag() * f64::from(config.sample_rate)).round() as i64
     }
 
     /// The column centred on song frame `centre`, from `read`, which fills
     /// interleaved frames from a song frame on, silence where nothing is held.
-    /// `read` must write every sample of the slice it is given: the scratch
-    /// it fills is not cleared between columns.
+    ///
+    /// Each column pushes one full `fft_size` window, overwriting the whole
+    /// channel ring, so no column restarts the bank; and `read` must write
+    /// every sample of the slice it is given, since the scratch it fills is not
+    /// cleared between columns.
     pub fn column(
         &mut self,
         config: AnalyzerConfig,
@@ -204,12 +206,9 @@ impl ColumnAnalyzer {
             self.bank = Some((ChannelBank::new(config, channels), config, channels));
         }
         let (bank, _, _) = self.bank.as_mut().expect("built above");
-        let (frame, lag) = Self::reach(config);
-        // Every column pushes a full `fft_size` frame, overwriting the entire
-        // channel ring, so no column needs the bank restarted.
-        debug_assert_eq!(frame as usize, config.fft_size);
-        self.scratch.resize(frame as usize * channels, 0.0);
-        read(centre + lag - frame, &mut self.scratch);
+        let frame = config.fft_size;
+        self.scratch.resize(frame * channels, 0.0);
+        read(centre + Self::lag(config) - frame as i64, &mut self.scratch);
         bank.push_frames(&self.scratch);
         let power = bank.power_sum().expect("a full frame was pushed");
         power.iter().map(|&p| quantize(p)).collect()
@@ -260,7 +259,7 @@ mod tests {
     #[test]
     fn a_column_reads_the_frame_its_lag_places_around_its_centre() {
         let config = AnalyzerConfig { sample_rate: 48_000.0, fft_size: fixed_frame(4096) };
-        let (frame, lag) = ColumnAnalyzer::reach(config);
+        let (frame, lag) = (config.fft_size as i64, ColumnAnalyzer::lag(config));
         let mut analyzer = ColumnAnalyzer::default();
         let mut asked = None;
         let column = analyzer.column(config, 2, 10_000, |from, out| {
