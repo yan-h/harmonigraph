@@ -426,7 +426,7 @@ fn adaptive_controls(
         let fresh = PolicyConfig::default();
         let strip = p.decode_fifths;
         if let Some(view) = view.filter(|_| strip) {
-            super::block(ui, "Strip", |ui| strip_controls(ui, view, params))
+            super::block(ui, "Strip", |ui| strip_controls(ui, view, params, &mut p))
                 .response
                 .on_hover_text(STRIP_HINT);
             crate::widgets::label(ui, SEARCH_OFF_NOTE);
@@ -451,27 +451,40 @@ const STRIP_HINT: &str = "With Decode fifths on, each spelling the lattice-board
 const SEARCH_OFF_NOTE: &str =
     "The search below applies with Decode fifths off, and to no lattice-board note.";
 
-/// The strip's columns and the Position fifths lanes that place it.
+/// The strip's columns, where following has moved it, the Position fifths
+/// lanes that set it and the switch that lets it follow.
 fn strip_controls(
     ui: &mut egui::Ui,
     view: &crate::lattice_maps::MapView,
     params: &dyn ParamBackend,
+    p: &mut PolicyConfig,
 ) {
     use crate::lattice_maps::{MapAxis, MapOffsetLane};
-    let flat = harmonigraph_core::policy::strip::flat_column(view.offsets.total().threes);
+    let set = view.offsets.total().threes;
+    let flat = harmonigraph_core::policy::strip::flat_column(set + view.followed.threes);
     let names: Vec<String> = (flat..flat + 4)
         .map(|column| {
             let name = harmonigraph_core::LatticePos::new(column, 0, 0).note_name();
             format!("{}{}", name.letter, name.accidental_mark())
         })
         .collect();
-    crate::widgets::label(ui, format!("Strip {}", names.join(" ")));
+    let moved = flat - harmonigraph_core::policy::strip::flat_column(set);
+    let moved = if moved == 0 { String::new() } else { format!(", moved {moved:+}") };
+    crate::widgets::label(ui, format!("Strip {}{moved}", names.join(" ")));
     ui.columns(2, |halves| {
         let [fine, coarse] = halves else { unreachable!("asked for two columns") };
         offset_lane(fine, view, params, MapAxis::Fifths, "Fifths", MapOffsetLane::Fine);
         offset_lane(coarse, view, params, MapAxis::Fifths, "Fifths", MapOffsetLane::Extension);
     });
+    crate::widgets::toggle_switch(ui, &mut p.follow_spellings, "Follow spellings")
+        .on_hover_text(FOLLOW_SPELLINGS_HINT);
 }
+
+const FOLLOW_SPELLINGS_HINT: &str = "Slide the strip a fifth when a spelling just past the \
+    key's seven has replaced the one at its other edge, as F♯ replacing F does, and back toward \
+    the Position once that spelling has fallen out of use. A slide waits while a note it would \
+    retune is held, and every context reset returns the strip to the Position. Off, the strip \
+    stays where the Position fifths put it, so a piece plays the same from any bar.";
 
 /// The search's own rows: Adaptive with Decode fifths off.
 fn search_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfig) {

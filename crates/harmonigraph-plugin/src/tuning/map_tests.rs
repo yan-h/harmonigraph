@@ -769,3 +769,46 @@ fn the_strip_sounds_each_spelling_at_one_pitch_through_a_progression() {
     let d = sounded[&62][0] - 6_200_000_000;
     assert_eq!(d, i64::from(2 * Tuning::just().three) - 1_200_000_000 - 200_000_000, "9/8");
 }
+
+/// With Follow spellings on, F♯ struck three times over a strip whose F is
+/// out of use slides the strip a fifth, so A is then 27/16; a reset of the
+/// context returns it to the Position, and with the switch off it never
+/// moves.
+#[test]
+fn follow_spellings_slides_the_strip_until_the_context_resets() {
+    let _scope = crate::test_scope::enter();
+    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    let (five_three, pythagorean) = (LatticePos::new(-1, 1, 0), LatticePos::new(3, 0, 0));
+    let mut id = 0;
+    let mut a = |session: &mut Decoding| {
+        // F♯ in three octaves on one sample counts three strikes exactly.
+        for on in [true, false] {
+            let chord = [54, 66, 78].map(|key| note(id + key as i32, 0, key, 0, on));
+            session.play(chord.into(), vec![]);
+        }
+        session.play(vec![note(id + 1, 0, 69, 0, true)], vec![]);
+        let node = session.voice(true, 0, 69).attack_node;
+        session.play(vec![note(id + 1, 0, 69, 0, false)], vec![]);
+        id += 100;
+        node
+    };
+    assert_eq!(a(&mut session), Some(pythagorean), "slid to C G D A");
+    // Off and back to Adaptive starts the context over.
+    let raw = session.raw;
+    session.hub.run_format(raw, vec![parameter("tuning-engine", 0.0, 0)], None, None, 128);
+    session.hub.run_format(raw + 128, vec![parameter("tuning-engine", 1.0, 0)], None, None, 128);
+    session.raw += 256;
+    session.play(vec![note(1, 0, 69, 0, true)], vec![]);
+    assert_eq!(session.voice(true, 0, 69).attack_node, Some(five_three), "back at the Position");
+    session.play(vec![note(1, 0, 69, 0, false)], vec![]);
+    let policy = harmonigraph_core::configuration::PolicyConfig {
+        follow_spellings: false,
+        decode_fifths: true,
+        decoded_fifth: 696_578_428,
+        ..Default::default()
+    };
+    assert!(
+        settings(&session.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() })
+    );
+    assert_eq!(a(&mut session), Some(five_three), "the strip stays where the Position put it");
+}

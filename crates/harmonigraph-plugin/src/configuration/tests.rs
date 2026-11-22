@@ -785,6 +785,7 @@ fn the_published_record_round_trips_every_word() {
                 reset_loop: false,
                 keyboard: [695_000_007, 380_000_008, 980_000_009],
                 decode_fifths: true,
+                follow_spellings: false,
                 decoded_fifth: 690_000_010,
             },
         },
@@ -907,6 +908,7 @@ fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
         reset_loop: true,
         reset_stop: true,
         decode_fifths: true,
+        follow_spellings: false,
         decoded_fifth: 694_786_840,
         ..Default::default()
     };
@@ -1419,4 +1421,16 @@ fn a_host_size_before_attach_is_the_editors_only_where_it_opens_docked() {
     let host = (host.0 + 40, host.1 + 30);
     set_size(host);
     assert_eq!(size(), host, "docked, the host's size is the editor's");
+}
+
+/// A project saved before Follow spellings existed opens with it on.
+#[test]
+fn follow_spellings_absent_from_a_save_reads_on() {
+    let mut json = serde_json::to_value(MusicalSettings::default()).unwrap();
+    let adaptive = json["adaptive"].as_object_mut().unwrap();
+    assert_eq!(adaptive.remove("follow_spellings"), Some(serde_json::Value::Bool(true)));
+    adaptive.insert("decode_fifths".into(), serde_json::Value::Bool(true));
+    let restored: MusicalSettings = serde_json::from_value(json).unwrap();
+    let policy = PolicyConfig::from(restored.adaptive);
+    assert!(policy.decode_fifths && policy.follow_spellings);
 }

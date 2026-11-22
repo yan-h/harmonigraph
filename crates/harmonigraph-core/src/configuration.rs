@@ -44,6 +44,10 @@ pub struct PolicyConfig {
     /// Every source with Retune on reads its MIDI channels as comma banks
     /// over a chain of fifths: the lattice-board's encoding (yan-h/lattice-board).
     pub decode_fifths: bool,
+    /// Under Adaptive with Decode fifths on, the strip slides by fifths to
+    /// follow the spellings in use (`policy::strip::Follower`); off, it stays
+    /// where the Position fifths put it.
+    pub follow_spellings: bool,
     /// The fifth, in microcents, a decoded source sounds its chain at: what
     /// its keyboard declares rather than the lattice's own.
     pub decoded_fifth: i32,
@@ -85,14 +89,15 @@ impl PolicyConfig {
     pub const WORDS: usize = 10;
     /// The policy as the settings seqlock carries it, one word per field but
     /// the first, which packs the radius, the axes, the two reset flags
-    /// (bits 26 and 27) and Decode fifths (bit 28).
+    /// (bits 26 and 27), Decode fifths (bit 28) and Follow spellings (bit 29).
     pub fn words(self) -> [i32; Self::WORDS] {
         [
             i32::from(self.radius)
                 | i32::from(self.axes) << 8
                 | i32::from(self.reset_stop) << 26
                 | i32::from(self.reset_loop) << 27
-                | i32::from(self.decode_fifths) << 28,
+                | i32::from(self.decode_fifths) << 28
+                | i32::from(self.follow_spellings) << 29,
             i32::from(self.pitch_flexibility),
             i32::from(self.half_life_ms),
             i32::from(self.register),
@@ -111,6 +116,7 @@ impl PolicyConfig {
             reset_stop: w[0] & (1 << 26) != 0,
             reset_loop: w[0] & (1 << 27) != 0,
             decode_fifths: w[0] & (1 << 28) != 0,
+            follow_spellings: w[0] & (1 << 29) != 0,
             pitch_flexibility: w[1].clamp(1, 100) as u16,
             half_life_ms: w[2] as u16,
             register: w[3] as u16,

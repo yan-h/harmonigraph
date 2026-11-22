@@ -145,6 +145,8 @@ struct Sequencer {
     follow: Follow,
     followed: LatticePos,
     followed_at: Option<i64>,
+    /// Adaptive's strip following the spellings in use (`Follow spellings`).
+    follower: policy::strip::Follower,
 }
 
 impl Default for Sequencer {
@@ -166,17 +168,29 @@ impl Default for Sequencer {
             follow: Follow::Off,
             followed: LatticePos::ORIGIN,
             followed_at: None,
+            follower: policy::strip::Follower::default(),
         }
     }
 }
 
 impl Sequencer {
     /// Released memory and everything the moving context carries forward: the
-    /// Adaptive memory and the map's follow offset alike. Held voices stay.
+    /// Adaptive memory, the map's follow offset and the strip's alike. Held
+    /// voices stay.
     fn forget_history(&mut self) {
         self.memory.clear();
         self.last_release = None;
         self.followed = LatticePos::ORIGIN;
+        self.follower.clear();
+    }
+    /// How far following has moved the Position: the map's under Lattice Map,
+    /// the strip's fifths under Adaptive.
+    fn following(&self) -> LatticePos {
+        if self.engine == TuningEngine::Adaptive {
+            LatticePos::new(self.follower.offset(), 0, 0)
+        } else {
+            self.followed
+        }
     }
     /// The next attack after a loop or seek clears the history, if the control
     /// says so. Held notes keep their frozen assignments either way.
@@ -538,7 +552,7 @@ impl Hub {
         // yet reached by an attack has already reset following in effect.
         let current = owner.maps.engine_revision() == self.sequencer.engine_revision;
         owner.maps.publish_followed(if current {
-            self.sequencer.followed
+            self.sequencer.following()
         } else {
             LatticePos::ORIGIN
         });
@@ -829,8 +843,8 @@ impl Hub {
         let adaptive = self.sequencer.engine == TuningEngine::Adaptive;
         if !adaptive || stage.is_some() {
             let assigned = if adaptive {
-                let flat = policy::strip::flat_column(self.sequencer.position.threes);
                 let fifths = fifths_for_midi(channel, key);
+                let flat = self.strip_place(fifths, record.sample, config);
                 let stage = stage.unwrap_or(0);
                 let (node, correction) =
                     policy::strip::assignment(fifths, flat, incoming + stage, config.tuning);
@@ -923,6 +937,25 @@ impl Hub {
             self.status |= session::POLICY;
         }
         Some(Assigned { correction, node, decision, player, channel_pitch })
+    }
+
+    /// The flat column the strip stands at for an attack of `fifths` at
+    /// `sample`: where the Position fifths set it, moved by the follower when
+    /// Follow spellings is on. A slide that would move a held strip note's
+    /// column waits (`Follower::strike`).
+    fn strip_place(&mut self, fifths: i32, sample: i64, config: ResolvedConfig) -> i32 {
+        let sequencer = &mut self.sequencer;
+        let position = sequencer.position.threes;
+        if !config.policy.follow_spellings {
+            sequencer.follower.clear();
+            return policy::strip::flat_column(position);
+        }
+        sequencer.take_loop();
+        let context = &sequencer.context;
+        let holds = |column| {
+            context.iter().flatten().any(|voice| voice.node.is_some_and(|n| n.threes == column))
+        };
+        sequencer.follower.strike(fifths, sample, self.rate, position, holds)
     }
 
     /// What actually arrived, key number and every tuning the source already

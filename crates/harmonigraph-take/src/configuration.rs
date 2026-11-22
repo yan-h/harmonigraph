@@ -18,6 +18,7 @@ pub struct PolicyRecord {
     pub reset_loop: bool,
     pub keyboard: [i32; 3],
     pub decode_fifths: bool,
+    pub follow_spellings: bool,
     pub decoded_fifth: i32,
 }
 impl Default for PolicyRecord {
@@ -39,6 +40,7 @@ impl From<PolicyConfig> for PolicyRecord {
             reset_loop: p.reset_loop,
             keyboard: p.keyboard,
             decode_fifths: p.decode_fifths,
+            follow_spellings: p.follow_spellings,
             decoded_fifth: p.decoded_fifth,
         }
     }
@@ -57,6 +59,7 @@ impl From<PolicyRecord> for PolicyConfig {
             reset_loop: p.reset_loop,
             keyboard: p.keyboard,
             decode_fifths: p.decode_fifths,
+            follow_spellings: p.follow_spellings,
             decoded_fifth: p.decoded_fifth,
         }
         .sanitize()
