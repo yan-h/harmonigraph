@@ -18,6 +18,7 @@ mod board;
 mod configuration;
 mod editor;
 mod lattice_maps;
+mod presentation;
 mod saved_fields;
 /// What a saved state loads as, for the `read-plugin-state` tool.
 pub mod saved_state;
@@ -149,9 +150,10 @@ pub struct Harmonigraph {
     editor_host: Option<Arc<dyn EditorHost>>,
     sample_rate: f64,
     samples_processed: u64,
-    /// Continuous presentation seconds across raw sample-clock resets/rate changes.
-    /// Historical queued records must not be reinterpreted in the new epoch.
-    presentation_seconds: f64,
+    /// Presentation time: what the audio, the tape, notes, reset markers and
+    /// the take's runs are all dated by (#1885). It runs on across a reset
+    /// and an activation, so historical queued records keep their place.
+    clock: presentation::PresentationClock,
     /// Take recording (see `harmonigraph_record`). The recorder is always
     /// present; it only writes while the user has armed it from the Video pane.
     take: RecorderSlot,
@@ -778,7 +780,7 @@ impl Default for Harmonigraph {
             editor_host: None,
             sample_rate: DEFAULT_SAMPLE_RATE,
             samples_processed: 0,
-            presentation_seconds: 0.0,
+            clock: presentation::PresentationClock::default(),
             take: RecorderSlot(Some(take)),
             tape,
             offline: false,
@@ -868,7 +870,7 @@ impl Harmonigraph {
                 sample_rate: self.sample_rate as f32,
                 sidechain: selected == AnalysisInput::Sidechain,
             },
-            self.presentation_seconds,
+            self.clock.start(),
             tape.song.map(|seconds| audio_ingress::Song { seconds, meter: tape_meter(transport) }),
             tape.play,
             (0..block_samples).flat_map(|f| (0..channels).map(move |c| planes[c][f])),
@@ -898,8 +900,8 @@ impl Harmonigraph {
         }
 
         self.samples_processed += block_samples as u64;
-        self.presentation_seconds += block_samples as f64 / self.sample_rate;
-        self.take.publish_clock(self.presentation_seconds);
+        self.clock.processed(block_samples);
+        self.take.publish_clock(self.clock.end());
     }
 }
 
@@ -959,6 +961,7 @@ impl Plugin for Harmonigraph {
             .unwrap()
             .activate(f64::from(config.sample_rate), config.max_buffer_size);
         self.sample_rate = f64::from(config.sample_rate);
+        self.clock.activate(self.sample_rate);
         self.offline = config.process_mode == ProcessMode::Offline;
         // The editor's device and its loading job, started here so a first
         // open finds them (#1746). On macOS, the one platform that ships; not
@@ -1019,14 +1022,12 @@ impl Plugin for Harmonigraph {
         // its own explicit source/session controls after lifecycle validation.
         // Presentation time stays continuous across the reset, so history
         // queued before it keeps its place. The marker is timed where the
-        // Hub's clock left off, which the next callback's notes start at, or,
-        // before any, at the time that clock will be pinned to.
-        self.take.publish_clock(self.presentation_seconds);
-        let at = self.aggregation.as_ref().and_then(|hub| hub.endpoint());
-        let _ = self.take.publish_note(
-            CoreNoteEvent::source_reset(at.unwrap_or(self.presentation_seconds), SourceId::DIRECT)
-                .into(),
-        );
+        // clock left off, which the next callback is pinned at if it does not
+        // run on, so its notes start at or after it.
+        self.take.publish_clock(self.clock.end());
+        let _ = self
+            .take
+            .publish_note(CoreNoteEvent::source_reset(self.clock.end(), SourceId::DIRECT).into());
     }
 
     /// The Hub first, which the configuration's `begin` relies on, then the
@@ -1034,7 +1035,8 @@ impl Plugin for Harmonigraph {
     /// the map state the parameters held before its automation.
     fn begin(&mut self, boundary: &Boundary) {
         let owner = self.configuration.as_mut().unwrap();
-        self.aggregation.as_mut().unwrap().begin(boundary, owner, self.presentation_seconds);
+        self.clock.begin(boundary);
+        self.aggregation.as_mut().unwrap().begin(boundary, owner, self.clock.mapping());
         if boundary.valid {
             let seed = lattice_maps::Seed::read(&self.params);
             owner.begin(boundary, seed, &self.take);
@@ -1155,13 +1157,16 @@ mod tests {
                 sample_rate: DEFAULT_SAMPLE_RATE as f32,
                 sidechain: false,
             },
-            plugin.presentation_seconds,
+            {
+                plugin.clock.step(frames, DEFAULT_SAMPLE_RATE);
+                plugin.clock.start()
+            },
             None,
             audio_ingress::TapePlay::Idle,
             (0..frames).map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5),
         );
-        plugin.presentation_seconds += frames as f64 / DEFAULT_SAMPLE_RATE;
-        plugin.take.publish_clock(plugin.presentation_seconds);
+        plugin.clock.processed(frames);
+        plugin.take.publish_clock(plugin.clock.end());
     }
 
     /// The input worker and the editor share one `EguiState`, and nothing but
@@ -1727,7 +1732,7 @@ mod tests {
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
         let shared = &mut *shared;
-        plugin.presentation_seconds = 11.0;
+        plugin.clock.set_end(11.0);
         plugin.samples_processed = 48_000;
         plugin
             .take
@@ -1736,7 +1741,7 @@ mod tests {
         plugin.reset();
         assert_eq!(plugin.samples_processed, 0);
         plugin.sample_rate = 96_000.0;
-        let next = plugin.presentation_seconds + 48_000.0 / plugin.sample_rate;
+        let next = plugin.clock.end() + 48_000.0 / plugin.sample_rate;
         plugin
             .take
             .publish_note(CoreNoteEvent::on(next, SourceId::DIRECT, 0, 60, 0.8).into())
@@ -1769,13 +1774,11 @@ mod tests {
             transport.playing = playing;
             transport.pos_seconds = position.map(|samples: f64| samples / 48_000.0);
             let mut main = [&mut left[..], &mut right[..]];
+            plugin.clock.step(10_000, plugin.sample_rate);
             plugin.play(&transport, Audio { main: &mut main, aux: &[] });
         }
-        let columns = input.drain_columns(
-            &mut shared.clock,
-            &mut shared.ui.picture,
-            plugin.presentation_seconds,
-        );
+        let columns =
+            input.drain_columns(&mut shared.clock, &mut shared.ui.picture, plugin.clock.end());
         assert!(columns.len() > 40, "all three callbacks must reach the analyzer");
         let before = shared.ui.picture.runtime.spectrum.columns_taken();
         let times: Vec<_> = columns.iter().map(|(time, _)| *time).collect();
@@ -1788,13 +1791,9 @@ mod tests {
         let mut left = [0.0; 384];
         let mut right = [0.0; 384];
         let mut main = [&mut left[..], &mut right[..]];
+        plugin.clock.step(384, plugin.sample_rate);
         plugin.play(&transport, Audio { main: &mut main, aux: &[] });
-        input.drain(
-            &mut shared.clock,
-            &mut shared.ui.picture,
-            &mut Vec::new(),
-            plugin.presentation_seconds,
-        );
+        input.drain(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), plugin.clock.end());
         assert_eq!(shared.ui.picture.runtime.spectrum.columns_taken(), before);
     }
 

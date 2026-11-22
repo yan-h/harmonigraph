@@ -10,8 +10,7 @@
 //! The main thread is reached by one host callback request, deferred past any
 //! process callback in flight, and serves four flags: the setup's service,
 //! a latency the running activation was asked to change, that log line, and
-//! the lines for a restart of the host's steady counter (#1881) and for one
-//! that skips ahead inside a processing run (#1885).
+//! the line for a restart of the host's steady counter (#1881).
 
 use crate::audio_setup::{Audio, BufferConfig, ProcessMode, Silence, Slices, audio};
 use crate::editor::{Editor, EditorHost};
@@ -106,12 +105,9 @@ const TRANSPORT_EVENT: &str = "The host sent a transport event inside a block. H
 /// invalid callback with a counter takes the offset too, so every boundary is
 /// on one clock, but moves nothing.
 ///
-/// A forward jump between two valid callbacks of one processing run is
-/// reported, not repaired: the Hub dates notes by this clock and the audio by
-/// the samples processed, so notes after it draw ahead of their sound (#1885).
-/// Bitwig has been seen to jump only between activations. One after an
-/// invalid callback, or across `start_processing`, is not reported: the first
-/// skips samples it never counted, and the second follows [`Plugin::reset`].
+/// A forward jump is left as it comes, so every instance stays on the host's
+/// counter: Harmonigraph's presentation clock leaves the samples nobody
+/// processed out of picture time itself (#1885).
 ///
 /// Each activation starts the clock over, so across one it may go back. What a
 /// plugin keys on steady time relies on `start_processing`, which calls
@@ -126,71 +122,41 @@ struct SteadyClock {
     offset: i64,
     /// Where the last valid callback ended, on this clock.
     next: Option<i64>,
-    /// The last callback was valid, and no processing run has started since.
-    follows: bool,
-    /// Which [`Jump`]s this activation has reported.
-    reported: [bool; Jump::COUNT],
-}
-
-/// A break in the host's steady counter, each kind reported once an
-/// activation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Jump {
-    /// The counter went back: run on (#1881).
-    Restart,
-    /// The counter skipped ahead inside a processing run (#1885).
-    Skip,
-}
-
-impl Jump {
-    const COUNT: usize = 2;
+    /// This activation has reported a restart.
+    reported: bool,
 }
 
 impl SteadyClock {
-    /// A valid callback's start on this clock, and the activation's first
-    /// jump of its kind: what it was, where the host's counter should have
-    /// been and where it was.
-    fn run_on(&mut self, host: i64, frames: u32) -> (i64, Option<(Jump, i64, i64)>) {
+    /// A valid callback's start on this clock, and, for the activation's
+    /// first restart, where the host's counter should have been and where it
+    /// was.
+    fn run_on(&mut self, host: i64, frames: u32) -> (i64, Option<(i64, i64)>) {
         let mut start = host.saturating_add(self.offset);
-        let mut jump = None;
-        if let Some(next) = self.next {
-            let kind = if start < next {
-                Some(Jump::Restart)
-            } else {
-                (start > next && self.follows).then_some(Jump::Skip)
-            };
-            if let Some(kind) = kind
-                && !std::mem::replace(&mut self.reported[kind as usize], true)
-            {
-                jump = Some((kind, next - self.offset, host));
+        let mut restart = None;
+        if let Some(next) = self.next
+            && start < next
+        {
+            if !std::mem::replace(&mut self.reported, true) {
+                restart = Some((next - self.offset, host));
             }
-            if start < next {
-                self.offset += next - start;
-                start = next;
-            }
+            self.offset += next - start;
+            start = next;
         }
         self.next = Some(start.saturating_add(i64::from(frames)));
-        self.follows = true;
-        (start, jump)
+        (start, restart)
     }
 
     /// An invalid callback's counter, on this clock without moving it, or as
     /// given when it has none.
-    fn invalid(&mut self, host: i64) -> i64 {
-        self.follows = false;
+    fn invalid(&self, host: i64) -> i64 {
         if host >= 0 { host.saturating_add(self.offset) } else { host }
-    }
-
-    /// A processing run starts: the next callback follows no other.
-    fn resume(&mut self) {
-        self.follows = false;
     }
 }
 
-/// A [`Jump`] for the main thread's line, with where the counter should have
+/// A restart for the main thread's line, with where the counter should have
 /// been and where it was.
 #[derive(Default)]
-struct JumpNotice {
+struct RestartNotice {
     due: AtomicBool,
     expected: AtomicI64,
     given: AtomicI64,
@@ -207,9 +173,9 @@ pub struct Wrapper<P: Plugin> {
     /// [`TRANSPORT_EVENT`] has been logged.
     transport_logged: AtomicBool,
     steady: AtomicRefCell<SteadyClock>,
-    /// A process callback found the host's steady counter broken, by
-    /// [`Jump`], for the main thread's line: once an activation each.
-    steady_jumps: [JumpNotice; Jump::COUNT],
+    /// A process callback found the host's steady counter restarted, for the
+    /// main thread's line: once an activation.
+    steady_restart: RestartNotice,
     /// A process callback is running, so a main-thread request waits for its
     /// end rather than calling the host from inside it.
     audio: AtomicBool,
@@ -312,7 +278,7 @@ impl<P: Plugin> Wrapper<P> {
             transport_event: AtomicBool::new(false),
             transport_logged: AtomicBool::new(false),
             steady: AtomicRefCell::new(SteadyClock::default()),
-            steady_jumps: Default::default(),
+            steady_restart: Default::default(),
             audio: AtomicBool::new(false),
             deferred_host_callback: AtomicBool::new(false),
             host_state: AtomicRefCell::new(None),
@@ -631,7 +597,6 @@ impl<P: Plugin> Wrapper<P> {
 
         // A new processing run starts without a tail from the previous run.
         wrapper.processed.store(false, Ordering::Release);
-        wrapper.steady.borrow_mut().resume();
         process_wrapper(|| {
             let mut plugin = wrapper.plugin.lock();
             plugin.reset();
@@ -704,9 +669,9 @@ impl<P: Plugin> Wrapper<P> {
             _ => List::EMPTY,
         };
         let steady_time = if valid {
-            let (start, jump) = self.steady.borrow_mut().run_on(process.steady_time, frames);
-            if let Some((kind, expected, given)) = jump {
-                let notice = &self.steady_jumps[kind as usize];
+            let (start, restart) = self.steady.borrow_mut().run_on(process.steady_time, frames);
+            if let Some((expected, given)) = restart {
+                let notice = &self.steady_restart;
                 notice.expected.store(expected, Ordering::Relaxed);
                 notice.given.store(given, Ordering::Relaxed);
                 notice.due.store(true, Ordering::Release);
@@ -714,7 +679,7 @@ impl<P: Plugin> Wrapper<P> {
             }
             start
         } else {
-            self.steady.borrow_mut().invalid(process.steady_time)
+            self.steady.borrow().invalid(process.steady_time)
         };
         let boundary = Boundary {
             steady_time,
@@ -870,29 +835,16 @@ impl<P: Plugin> Wrapper<P> {
                 setup.notice(TRANSPORT_EVENT);
             }
         }
-        for kind in [Jump::Restart, Jump::Skip] {
-            let notice = &wrapper.steady_jumps[kind as usize];
-            if !notice.due.swap(false, Ordering::AcqRel) {
-                continue;
-            }
+        let notice = &wrapper.steady_restart;
+        if notice.due.swap(false, Ordering::AcqRel) {
             let (given, expected) =
                 (notice.given.load(Ordering::Relaxed), notice.expected.load(Ordering::Relaxed));
-            let line = match kind {
-                Jump::Restart => format!(
-                    "The host restarted its steady sample counter: a block began at {given} where \
-                     {expected} was due. This instance runs its clock on from where it was. Where \
-                     another Harmonigraph or Tune did not see the same restart, note timing \
-                     across them may be off until the plugin is reloaded. Said once per \
-                     activation (#1881)."
-                ),
-                Jump::Skip => format!(
-                    "The host's steady sample counter skipped ahead inside a processing run: a \
-                     block began at {given} where {expected} was due. Notes are timed by that \
-                     counter and audio by the samples processed, so notes after the skip may \
-                     draw ahead of their sound by the skipped time, in the editor and in a take. \
-                     Said once per activation (#1885)."
-                ),
-            };
+            let line = format!(
+                "The host restarted its steady sample counter: a block began at {given} where \
+                 {expected} was due. This instance runs its clock on from where it was. Where \
+                 another Harmonigraph or Tune did not see the same restart, note timing across \
+                 them may be off until the plugin is reloaded. Said once per activation (#1881)."
+            );
             crate::shell_warn!("{line}");
             if let Some(setup) = &wrapper.setup {
                 setup.notice(&line);

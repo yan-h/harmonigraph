@@ -387,7 +387,7 @@ pub(crate) fn last_frame(shot: &Shot, take: Take) -> Option<Vec<u8>> {
     let mut audio = probe_audio();
     let mut replay = Replay::new(take);
     let mut last = Vec::new();
-    let appearance = crate::render::appearance_for(replay.take(), None).unwrap();
+    let appearance = crate::render::appearance_for(replay.take(), None).unwrap().0;
     match render(&mut replay, Some(&mut audio), &settings, appearance, |bytes| {
         // Keep this frame and hand the previous one back to be drawn into
         // again.

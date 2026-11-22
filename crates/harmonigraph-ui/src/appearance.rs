@@ -37,9 +37,26 @@ impl AppearanceDocument {
     /// One parse and normalization at the export boundary, before choosing the
     /// output configuration or initializing the picture.
     pub fn parse(serialized: &str) -> Result<Self, String> {
-        ron::from_str::<Self>(serialized)
-            .map_err(|err| format!("appearance did not parse ({err})"))?
-            .normalize()
+        Self::parse_noting(serialized).map(|(document, _)| document)
+    }
+
+    /// [`parse`](Self::parse), also naming the path of each key the document
+    /// carries that this build does not read, such as one a rename retired:
+    /// the setting it held draws at its default, which an export says
+    /// (#1927 B).
+    pub fn parse_noting(serialized: &str) -> Result<(Self, Vec<String>), String> {
+        let (document, unread) = crate::persist_keys::from_str_noting::<Self>(serialized)
+            .map_err(|err| format!("appearance did not parse ({err})"))?;
+        Ok((document.normalize()?, unread))
+    }
+
+    /// The line an export writes for a key [`parse_noting`](Self::parse_noting)
+    /// named.
+    pub fn unread_note(key: &str) -> String {
+        format!(
+            "the look holds {key}, which this build does not read; if it was renamed, \
+             its setting draws at its default"
+        )
     }
 
     /// Also used on the typed document nested inside an editor save.
