@@ -180,15 +180,9 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
             let named = format!("{key} — ");
             assert!(lines.iter().any(|line| line.contains(&named)), "{key}: {lines:?}");
         }
-        set_console_collapsed(&mut restored, false);
-        let mut expected = fresh();
-        expected.install_document(&saved);
-        set_console_collapsed(&mut expected, false);
-        assert_eq!(
-            restored.save_persist(),
-            expected.save_persist(),
-            "{retired} changed what the editor loaded"
-        );
+        // `saved` was written with the Console folded away, as the fixture left it.
+        set_console_collapsed(&mut restored, true);
+        assert_eq!(restored.save_persist(), saved, "{retired} changed what the editor loaded");
 
         assert_eq!(!pair_starts(&appearance, anchor).is_empty(), in_appearance, "{anchor}: doors");
         if in_appearance {

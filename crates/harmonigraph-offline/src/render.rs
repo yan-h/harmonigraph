@@ -94,12 +94,13 @@ impl Stages {
 /// replacement, as the Video pane's export does: every take writer records one,
 /// and the fresh defaults are a look nobody chose.
 ///
-/// A key the selected look carries that this build does not read is a
-/// warning on stderr, which the export's row keeps (#1927 B).
+/// With it, a `warning:` line for each key the selected look carries that
+/// this build does not read, for stderr, where the export's row keeps it
+/// (#1927 B).
 pub fn appearance_for(
     take: &harmonigraph_take::Take,
     replacement: Option<&str>,
-) -> Result<AppearanceDocument, String> {
+) -> Result<(AppearanceDocument, Vec<String>), String> {
     let Some(blob) = replacement.or(take.header.appearance.as_deref()) else {
         return Err("cannot render: the take recorded no appearance; \
                     give one with --appearance"
@@ -109,14 +110,14 @@ pub fn appearance_for(
         if replacement.is_some() { "replacement appearance" } else { "recorded appearance" };
     let (appearance, unread) = AppearanceDocument::parse_noting(blob)
         .map_err(|err| format!("cannot render {source}: {err}"))?;
-    for key in unread {
-        eprintln!(
+    let warnings = unread.iter().map(|key| {
+        format!(
             "{}{source}: {}",
             harmonigraph_take::WARNING_PREFIX,
-            AppearanceDocument::unread_note(&key)
-        );
-    }
-    Ok(appearance)
+            AppearanceDocument::unread_note(key)
+        )
+    });
+    Ok((appearance, warnings.collect()))
 }
 
 /// Everything the loop needs that isn't the take itself.
@@ -701,7 +702,7 @@ mod tests {
                 &mut Replay::new(take.clone()),
                 audio,
                 &settings,
-                appearance_for(&take, None).unwrap(),
+                appearance_for(&take, None).unwrap().0,
                 |bytes| {
                     frames.push(bytes);
                     Ok(Vec::new())
@@ -783,15 +784,26 @@ mod tests {
         recorded.render.short_edge = 2160;
         let mut take = take();
         take.header.appearance = Some(recorded.serialize());
-        let selected = appearance_for(&take, None).unwrap();
+        let (selected, warnings) = appearance_for(&take, None).unwrap();
         assert_eq!(selected.serialize(), recorded.serialize());
+        assert_eq!(warnings, Vec::<String>::new(), "a whole look is not news");
+        // A key this build does not read draws at its default, and says so.
+        take.header.appearance =
+            Some(recorded.serialize().replacen("view:(", "view:(retired_key:1,", 1));
+        let (selected, warnings) = appearance_for(&take, None).unwrap();
+        assert_eq!(selected.serialize(), recorded.serialize());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        let warning = &warnings[0];
+        assert!(warning.starts_with(harmonigraph_take::WARNING_PREFIX), "{warning}");
+        assert!(warning.contains("recorded appearance") && warning.contains("view.retired_key"));
+        take.header.appearance = Some(recorded.serialize());
         let mut replacement = AppearanceDocument::default();
         replacement.camera.yaw = -0.5;
         replacement.view.max_sevens = 2;
         replacement.spectrum.low_midi = 45.0;
         replacement.spectrum.roll_thickness = 0.5;
         replacement.render.short_edge = 720;
-        let selected = appearance_for(&take, Some(&replacement.serialize())).unwrap();
+        let selected = appearance_for(&take, Some(&replacement.serialize())).unwrap().0;
         assert_eq!(selected.serialize(), replacement.serialize());
         let expected_size = replacement.render.frame.pixels(720);
         assert_eq!(crate::output_size(None, &selected.render), expected_size);
@@ -817,7 +829,7 @@ mod tests {
         let error = appearance_for(&take, None).err().expect("refuse a take with no look");
         assert!(error.contains("recorded no appearance"), "{error}");
         assert_eq!(
-            appearance_for(&take, Some(&replacement.serialize())).unwrap().serialize(),
+            appearance_for(&take, Some(&replacement.serialize())).unwrap().0.serialize(),
             replacement.serialize()
         );
     }
@@ -834,7 +846,7 @@ mod tests {
         let mut take = take();
         take.header.appearance = Some(serialized.clone());
         for replacement in [None, Some(serialized.as_str())] {
-            let selected = appearance_for(&take, replacement).unwrap();
+            let selected = appearance_for(&take, replacement).unwrap().0;
             assert_eq!(selected.view, expected);
         }
     }
@@ -897,7 +909,7 @@ mod tests {
     fn render_take(take: Take, settings: &Settings) -> Option<Vec<Vec<u8>>> {
         let mut replay = Replay::new(take);
         let mut frames = Vec::new();
-        let appearance = appearance_for(replay.take(), None).unwrap();
+        let appearance = appearance_for(replay.take(), None).unwrap().0;
         match render(&mut replay, None, settings, appearance, |bytes| {
             frames.push(bytes);
             Ok(Vec::new())
@@ -1072,7 +1084,7 @@ mod tests {
                 &mut Replay::new(take.clone()),
                 Some(&mut audio),
                 &settings,
-                appearance_for(take, None).unwrap(),
+                appearance_for(take, None).unwrap().0,
                 |bytes| {
                     frames.push(bytes);
                     Ok(Vec::new())

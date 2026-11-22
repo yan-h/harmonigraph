@@ -76,7 +76,10 @@ pub struct TakeState {
     pub export_paths: String,
     /// The look a queued export is drawn in.
     pub export_look: ExportLook,
-    pub export_error: String,
+    /// What the last Export click said under the button, a line per path:
+    /// why one was refused, or a key its recorded look holds that this build
+    /// does not read.
+    pub export_said: String,
 }
 
 /// The look a queued export is drawn in, chosen in the Video pane's Exports.

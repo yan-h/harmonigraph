@@ -63,10 +63,31 @@ pub(crate) fn from_str_noting<T: serde::de::DeserializeOwned>(
 ) -> Result<(T, Vec<String>), ron::error::SpannedError> {
     let mut parser = ron::Deserializer::from_str(text)?;
     let mut unread = Vec::new();
-    let value = serde_ignored::deserialize(&mut parser, |path| unread.push(path.to_string()))
+    let value = serde_ignored::deserialize(&mut parser, |path| unread.push(dotted(&path)))
         .and_then(|value| parser.end().map(|()| value))
         .map_err(|err| parser.span_error(err))?;
     Ok((value, unread))
+}
+
+/// A skipped key's path as the document spells it: keys and list indices
+/// joined by dots, with nothing for the `Some(…)` or newtype it passed
+/// through, which `serde_ignored`'s own `Display` writes as `?`.
+fn dotted(path: &serde_ignored::Path) -> String {
+    use serde_ignored::Path;
+    let (parent, segment) = match path {
+        Path::Root => return String::new(),
+        Path::Seq { parent, index } => (parent, index.to_string()),
+        Path::Map { parent, key } => (parent, key.clone()),
+        Path::Some { parent }
+        | Path::NewtypeStruct { parent }
+        | Path::NewtypeVariant { parent } => {
+            return dotted(parent);
+        }
+    };
+    match dotted(parent) {
+        above if above.is_empty() => segment,
+        above => format!("{above}.{segment}"),
+    }
 }
 
 /// Parse `text`, cutting each pair whose value names an unknown variant.
@@ -370,6 +391,26 @@ mod tests {
         assert_eq!(outer.count, 7);
         let (outer, _) = cut("(count:7,inner:(count:3,mode:Lost))");
         assert_eq!(outer.inner.count, 3, "the last pair of a struct");
+    }
+
+    /// A key this build has no field for is named by its path through
+    /// structs, `Some(…)` and list indices alike, and costs nothing else.
+    #[test]
+    fn a_key_with_no_field_is_named_by_its_path() {
+        let decoded = decode::<Outer>("(gone:1,inner:(count:3,old:B),slots:[(x:1)],mode:B)")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(decoded.unread, ["gone", "inner.old", "slots"]);
+        assert_eq!((decoded.value.inner.count, decoded.value.mode), (3, Mode::B));
+        let decoded = decode::<Wrapped>("(held:Some((count:2,old:1)),list:[(count:1),(stale:0)])")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(decoded.unread, ["held.old", "list.1.stale"]);
+    }
+
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(default)]
+    struct Wrapped {
+        held: Option<Inner>,
+        list: Vec<Inner>,
     }
 
     /// One wrapped in `Some(…)` costs the key the option sits under.

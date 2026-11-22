@@ -791,7 +791,7 @@ fn export_queue(
             }
         });
         if !paths.is_empty() {
-            interaction.take.export_error.clear();
+            interaction.take.export_said.clear();
         }
         for path in paths {
             let said = match capture_export(appearance, interaction, &path) {
@@ -802,14 +802,14 @@ fn export_queue(
                 Err(error) => vec![error],
             };
             for line in said {
-                if !interaction.take.export_error.is_empty() {
-                    interaction.take.export_error.push('\n');
+                if !interaction.take.export_said.is_empty() {
+                    interaction.take.export_said.push('\n');
                 }
-                interaction.take.export_error.push_str(&format!("{}: {line}", path.display()));
+                interaction.take.export_said.push_str(&format!("{}: {line}", path.display()));
             }
         }
-        if !interaction.take.export_error.is_empty() {
-            crate::widgets::label(ui, &interaction.take.export_error);
+        if !interaction.take.export_said.is_empty() {
+            crate::widgets::label(ui, &interaction.take.export_said);
         }
     });
     for job in &interaction.take.exports {
