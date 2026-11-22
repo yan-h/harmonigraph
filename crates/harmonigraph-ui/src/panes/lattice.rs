@@ -224,7 +224,7 @@ pub(crate) fn compose_scene(
     // derivation has already written, and the light is stepped against what a
     // node's MIDI layers say. Per surface, because each surface carries the
     // lights of the window it draws.
-    super::glow_fade::apply(&mut scene, state, surface, now);
+    super::glow_fade::apply(&mut scene, state, surface, aspect, now);
     scene
 }
 

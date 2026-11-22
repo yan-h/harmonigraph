@@ -3235,7 +3235,7 @@ fn glow_layer(light: vec2<f32>, uv: vec2<f32>) -> vec4<f32> {
     let ink = glow_ink(light.y, atan2(uv.y, uv.x), mix_out);
     // A node lighting NOTHING gives off nothing, and the level above does not
     // always say so: it is the node's drawn colour after Opacity (`glow.level`).
-    // The CPU ships no light that no layer draws (`GlowFade::step_drawn` in
+    // The CPU ships no light that no layer draws (`GlowFade::step_until_visible` in
     // harmonigraph-ui), but a light can still miss every texel of this
     // direction's strip, as a slot the ring has no room for does. Lighting
     // that would be a black halo, or a grey one: a colour invented for a node

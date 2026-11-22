@@ -173,9 +173,11 @@ fn draw_panes(ctx: &egui::Context, state: &mut SharedState, t: f64, panes: &[Pan
 
 /// A background glow's release outlasts the note's own departure, and with the
 /// roll hidden and no audio nothing else keeps the frame loop awake through it:
-/// the halo's tail would repaint at the idle poll. The loop stays awake while
-/// the glow's fade state says its light still moves a pixel (level times the
-/// glow gain over half a code value), and settles after.
+/// the halo's tail would repaint at the idle poll. The loop asks for frames
+/// only while the glow's fade state says its light still moves a pixel (level
+/// times the glow gain over half a code value), paced as
+/// `a_background_glows_release_tail_draws_only_the_frames_that_step_it` checks,
+/// and settles after.
 ///
 /// Driven through the real lattice pass, with the stepped levels read back from
 /// the nodes it drew as the independent measure of when the fade is invisible.
@@ -229,10 +231,9 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
                 "the roll must not be what keeps this awake"
             );
             let visible = level * gain > 0.5 / 255.0;
-            assert_eq!(
-                Animating::of(&state).asks_for(Reason::Releasing),
-                visible,
-                "at {t} s the light is {level} at gain {gain}"
+            assert!(
+                visible || !Animating::of(&state).asks_for(Reason::Releasing),
+                "at {t} s the light is {level} at gain {gain}, and still asks for frames"
             );
             if visible {
                 awake += 1;
@@ -288,6 +289,95 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
         !Animating::of(&state).asks_for(Reason::Releasing),
         "a glow that does not draw held the loop awake"
     );
+}
+
+/// A background glow's release asks for every frame while it is bright and
+/// fewer as it fades, and no drawn frame moves the light by more than the half
+/// code value the pace is set by (#1915).
+///
+/// Driven as the shell drives it: through the real lattice pass, at a 144 Hz
+/// refresh, drawing only the refreshes the pass asked for, or the idle poll's
+/// when it asked for none. The stepped levels read back from the drawn nodes
+/// are the independent measure of how far each skipped stretch moved, with the
+/// fresh look's breathing and texture left to the pace as Yan's look has them.
+#[test]
+fn a_background_glows_release_tail_draws_only_the_frames_that_step_it() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    const REFRESH: f64 = 1.0 / 144.0;
+    let mut state = fresh();
+    state.picture.appearance.view.fade_time = 0.0;
+    state.picture.appearance.spectrum.show_roll = false;
+    let gain = state.picture.appearance.view.glow_strength;
+    // Two notes a fifth apart, so two halos fade together.
+    for note in [60, 67] {
+        state.picture.runtime.tracker.handle_event(NoteEvent::on(
+            0.0,
+            SourceId::DIRECT,
+            0,
+            note,
+            1.0,
+        ));
+    }
+    let ctx = super::probe::themed();
+    let lights = |state: &SharedState| {
+        let mut lit: Vec<_> = state
+            .picture
+            .surfaces
+            .spare_nodes
+            .iter()
+            .filter(|n| n.glow.level > 0.0)
+            .map(|n| (n.lattice_pos, n.glow.level))
+            .collect();
+        lit.sort_by_key(|&(pos, _)| (pos.threes, pos.fives, pos.sevens));
+        lit
+    };
+    let mut t = 0.0;
+    while t < 1.0 {
+        draw_panes(&ctx, &mut state, t, &[Pane::Lattice]);
+        t += REFRESH;
+    }
+    for note in [60, 67] {
+        state.picture.runtime.tracker.handle_event(NoteEvent::off(t, SourceId::DIRECT, 0, note));
+    }
+
+    let (mut drawn, mut refreshes, mut paced) = (0, 0, 0);
+    let mut before = lights(&state);
+    assert!(before.len() >= 2, "fixture reach: both halos lit at the release: {before:?}");
+    let end = t + 30.0;
+    while t < end {
+        draw_panes(&ctx, &mut state, t, &[Pane::Lattice]);
+        drawn += 1;
+        let after = lights(&state);
+        if after.len() == before.len() {
+            for (&(pos, was), &(_, is)) in before.iter().zip(&after) {
+                assert!(
+                    (was - is).abs() * gain <= 0.5 / 255.0 + 1e-6,
+                    "{pos:?} moved {} of a code value between drawn frames at {t} s",
+                    (was - is).abs() * gain * 255.0
+                );
+            }
+        }
+        before = after;
+        let next = match Animating::of(&state).after(Reason::Releasing) {
+            Some(seconds) => {
+                if seconds >= REFRESH {
+                    paced += 1;
+                }
+                seconds
+            }
+            None => crate::IDLE_REPAINT_INTERVAL.as_secs_f64(),
+        };
+        // The next refresh at or after the asked-for moment.
+        let steps = (next / REFRESH).ceil().max(1.0);
+        refreshes += steps as usize;
+        t += steps * REFRESH;
+    }
+    assert!(before.is_empty(), "the tail never ended: {before:?}");
+    assert!(paced > 10, "the faint end never asked for a later frame ({paced} draws)");
+    // The bright start still takes every refresh: a pace that skipped it
+    // would have tripped the step check above.
+    assert!(drawn < refreshes, "every refresh was drawn ({drawn})");
 }
 
 /// A released note keeps the loop awake for its whole departure, the

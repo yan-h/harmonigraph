@@ -250,6 +250,38 @@ pub(crate) fn billboard_corners(
         .map(|(x, y)| transform * (center + (right * x + up * y) * radius).extend(1.0))
 }
 
+/// A rectangle a node's Background glow halo can cover, as `vs_glow_splat`
+/// sizes its quad: the scene's node radius at the node's own scale, under the
+/// shader's floor, times the halo's span. Two halos whose rectangles are apart
+/// share no pixel. `None` where a corner is behind the eye, where the
+/// rectangle is no bound at all. In NDC, at the pane's `aspect`.
+pub fn halo_extent(
+    scene: &crate::Scene,
+    node: &crate::NodeInstance,
+    aspect: f32,
+) -> Option<[Vec2; 2]> {
+    let span = crate::glow_span(
+        scene.rings_outer,
+        scene.mark_inner,
+        scene.view.mark_thickness,
+        scene.view.glow_reach,
+    );
+    let radius =
+        scene.node_radius * crate::RADII_PER_UV * node.scale.max(crate::MIN_NODE_SCALE) * span;
+    let transform = scene.camera.view_proj(aspect);
+    let mut lo = Vec2::splat(f32::INFINITY);
+    let mut hi = Vec2::splat(f32::NEG_INFINITY);
+    for clip in billboard_corners(transform, scene.camera.right_up(), node.world_pos, radius) {
+        if clip.w <= 0.0 {
+            return None;
+        }
+        let ndc = clip.truncate().truncate() / clip.w;
+        lo = lo.min(ndc);
+        hi = hi.max(ndc);
+    }
+    Some([lo, hi])
+}
+
 /// The NDC rectangle the nodes' billboards cover, each `(center, radius)`
 /// facing the camera as a node's quad does. `None` where any corner is behind
 /// the eye or nearer than the near plane: that node cannot be on screen at
