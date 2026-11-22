@@ -230,7 +230,9 @@ impl Fixture {
         std::fs::create_dir(&dir).unwrap();
         // With no `--appearance`, the renderer reads the take's own look:
         // this one draws that as `own`.
+        // It notes the plugin build it was told beside the take.
         std::fs::write(dir.join("renderer"), r#"#!/bin/sh
+if [ "$1" = --plugin-build ]; then printf '%s' "$2" > "$3.build"; shift 2; fi
 if [ "$4" = --appearance ]; then look=$(cat "$5"); else look=own; fi
 case "$look" in
  retry) if [ ! -e "$1.retry" ]; then touch "$1.retry"; echo 'transient encoder failure' >&2; exit 7; fi ;;
@@ -247,7 +249,7 @@ echo 'progress: 10/10 frames (100%)' >&2
     }
     /// A queue that launches this fixture's renderer.
     fn queue(dir: &std::path::Path) -> Arc<RenderControl> {
-        let control = RenderControl::default();
+        let control = RenderControl { plugin_build: "fixture @0000000", ..Default::default() };
         *control.test_program.lock() = Some(dir.join("renderer"));
         Arc::new(control)
     }
@@ -319,6 +321,8 @@ fn fifo_variants_capture_settings_keep_existing_files_and_continue_after_failure
     );
     assert!(jobs[1].detail.contains("transient encoder failure"));
     assert_eq!(std::fs::read_to_string(&jobs[0].output).unwrap(), "first unsized");
+    let told = std::fs::read_to_string(f.dir.join("music.take.build")).unwrap();
+    assert_eq!(told, "fixture @0000000", "the renderer was not told the plugin's build");
     assert_eq!(std::fs::read_to_string(&jobs[2].output).unwrap(), "third unsized");
     assert_eq!(jobs[2].progress, RenderProgress { done: 10, total: 10 });
     f.control.retry(2, f.progress.clone());

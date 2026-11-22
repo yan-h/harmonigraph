@@ -268,7 +268,7 @@ mod tests {
     /// here a 144 Hz window's worth, which counted in calls ended it at 139 ms.
     #[test]
     fn recording_stop_debounce_counts_seconds_not_calls() {
-        let (mut recorder, control) = harmonigraph_record::channel();
+        let (mut recorder, control) = harmonigraph_record::channel(crate::BUILD_TAG);
         let directory =
             std::env::temp_dir().join(format!("runtime-recording-cadence-{}", std::process::id()));
         let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
@@ -312,7 +312,7 @@ mod tests {
     /// is unrelated, and later knob edits cannot rewrite the starting look.
     #[test]
     fn arming_captures_the_whole_live_appearance_without_workspace_state() {
-        let (recorder, control) = harmonigraph_record::channel();
+        let (recorder, control) = harmonigraph_record::channel(crate::BUILD_TAG);
         let directory =
             std::env::temp_dir().join(format!("appearance-capture-{}", std::process::id()));
         let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());

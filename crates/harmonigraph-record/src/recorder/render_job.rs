@@ -65,6 +65,10 @@ struct Queue {
 }
 #[derive(Default)]
 pub(super) struct RenderControl {
+    /// The build tag of the plugin this queue renders for, passed to the
+    /// renderer as `--plugin-build` so a renderer of another build says so
+    /// (#1928 B).
+    pub(super) plugin_build: &'static str,
     /// What a fixture launches instead of [`default_renderer_path`].
     #[cfg(any(test, feature = "test-support"))]
     pub(super) test_program: Mutex<Option<PathBuf>>,
@@ -82,6 +86,10 @@ struct InFlight {
 }
 
 impl RenderControl {
+    /// A queue whose renders are told `plugin_build`.
+    pub(super) fn for_plugin(plugin_build: &'static str) -> Self {
+        Self { plugin_build, ..Self::default() }
+    }
     /// The renderer a job launches: the paired one, unless a fixture has
     /// aimed this queue elsewhere.
     fn program(&self) -> PathBuf {
@@ -326,6 +334,7 @@ fn run_job(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
+    command.arg("--plugin-build").arg(control.plugin_build);
     command.arg(&job.take).arg("--out").arg(&partial);
     if let Some(blob) = appearance {
         let file = stage.0.join("appearance.ron");

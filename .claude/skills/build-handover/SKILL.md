@@ -64,6 +64,10 @@ the two share every dependency and the whole UI, so the renderer costs a link on
 the same "matches the last commit" test the table applies to the dylib, and NOT a comparison against the plugin beside it, which flags matched pairs as often as mismatched ones —
 and prints the age of the one it is leaving in place when a worktree built no renderer at all.
 That warning is a backstop for a build that should have happened.
+The renderer checks the pair itself at every export (#1928 B):
+the plugin passes its build tag as `--plugin-build`, and a renderer of another tag writes a `warning:` naming both, which the export's row shows, and renders all the same.
+The tag names a commit, so two builds of one commit from different uncommitted source still pass as one.
+A renderer from before this check refuses the flag as an unknown option, so that export fails loudly once, until the renderer is reinstalled.
 
 To check the live pair directly, without a render:
 

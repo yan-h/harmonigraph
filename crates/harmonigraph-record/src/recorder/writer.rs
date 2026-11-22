@@ -23,7 +23,7 @@ mod tests;
 /// and its render leaves only "could not run" on its export job's detail.
 #[cfg(all(test, feature = "test-support"))]
 fn worker_in(directory: &std::path::Path) -> (Recorder, Control) {
-    let (recorder, control) = channel();
+    let (recorder, control) = channel("test");
     *control.fence.test_directory.lock() = Some(directory.to_path_buf());
     testing::set_renderer_program(&control, directory.join("no-such-renderer"));
     (recorder, control)
@@ -80,8 +80,9 @@ fn endpoints(records: usize, audio: usize) -> (Recorder, Control, Ends) {
 /// Build the ring and start the writer thread. Called once, from the
 /// plugin's `Default`, so neither arming nor disarming ever has to touch
 /// the audio thread's producer.
-pub fn channel() -> (Recorder, Control) {
-    let (recorder, control, ends) = endpoints(TAKE_RING_CAPACITY, AUDIO_RING_CAPACITY);
+pub fn channel(plugin_build: &'static str) -> (Recorder, Control) {
+    let (recorder, mut control, ends) = endpoints(TAKE_RING_CAPACITY, AUDIO_RING_CAPACITY);
+    control.render = Arc::new(RenderControl::for_plugin(plugin_build));
     let Ends { records: mut consumer, audio: mut audio_consumer, mut publications, orders } = ends;
     let thread_fence = control.fence.clone();
     let thread_status = control.status.clone();
