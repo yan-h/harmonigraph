@@ -732,8 +732,17 @@ fn a_hand_over_says_when_sound_comes_back() {
     let faint = 2.0 * harmonigraph_core::spectrogram::POWER_FLOOR;
     assert!(spectrum.give(batch(100.0, faint), &slow), "heard by the heatmap alone");
     assert!(!spectrum.give(batch(100.0 + step, faint), &slow), "faint sound going on");
-    assert_eq!(spectrum.last_audible().curve, None, "the fixture's curve was heard too");
+    assert_eq!(spectrum.last_audible().curve_until, None, "the fixture's curve was heard too");
     // Then loud enough to lift the curve while the heatmap hears on: the
     // curve comes back alone.
     assert!(spectrum.give(batch(100.0 + 2.0 * step, 1.0), &slow), "heard again by the curve alone");
+
+    // A curve gone flat under silence still arriving is still at once, so
+    // sound back a column later, well inside a hold, is sound after a still
+    // stretch (#1917 Q2).
+    let instant = SpectrumConfig { release: 0.0, ..SpectrumConfig::default() };
+    let mut spectrum = AudioSpectrum::default();
+    assert!(spectrum.give(batch(100.0, 1.0), &instant), "the first sound");
+    assert!(!spectrum.give(batch(100.0 + step, 0.0), &instant), "the curve going flat");
+    assert!(spectrum.give(batch(100.0 + 2.0 * step, 1.0), &instant), "sound on a flat curve");
 }

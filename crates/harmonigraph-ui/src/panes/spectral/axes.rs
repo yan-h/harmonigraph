@@ -254,6 +254,15 @@ pub(crate) fn spectrogram_level_raw(cfg: &crate::SpectrumConfig, power_db: f32, 
     (db - floor) / (ceiling - floor)
 }
 
+/// The faintest dB that draws at pitch `midi` at all: where the lower of
+/// [`loudness_raw`] (the curve's height) and [`spectrogram_level_raw`] (the
+/// volume colours of the curve, the heatmap, the Spiral and the lattice ring)
+/// crosses 0. Every reading clamps at 0, so a power at or under this draws as
+/// silence does, wherever it stands under it.
+pub(crate) fn faintest_drawn_db(cfg: &crate::SpectrumConfig, midi: f32) -> f32 {
+    level_window(cfg).0.min(spectrogram_window(cfg).0) + cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0
+}
+
 /// A bucket's level for the audio volume colors, clamped to the gradient's
 /// domain.
 pub(crate) fn spectrogram_level_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {

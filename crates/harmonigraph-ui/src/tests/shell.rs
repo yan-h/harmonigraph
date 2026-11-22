@@ -172,82 +172,126 @@ fn draw_panes(ctx: &egui::Context, state: &mut SharedState, t: f64, panes: &[Pan
 }
 
 /// A background glow's release outlasts the note's own departure, and with the
-/// roll hidden and no audio nothing else keeps the frame loop awake through it:
-/// the halo's tail would repaint at the idle poll. The loop stays awake while
-/// the glow's fade state says its light still moves a pixel (level times the
-/// glow gain over half a code value), and settles after.
+/// roll hidden and no audio nothing else keeps the frame loop awake through it.
+/// The glow asks for the frame its lights could together have moved half a
+/// code value (level times the glow gain), so a slow release draws less often
+/// than the display refreshes, and settles at the idle poll (#1915).
 ///
-/// Driven through the real lattice pass, with the stepped levels read back from
-/// the nodes it drew as the independent measure of when the fade is invisible.
+/// Driven through the real lattice pass, as a shell drawing only the frames
+/// asked for, beside one drawing every refresh and each of those frames too.
+/// The levels the paced loop draws are the ones the other draws at the same
+/// moments, and the lights between two of its frames moved under half a code
+/// value together: the frames it skipped would have drawn nothing different.
 #[test]
-fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
-    use harmonigraph_core::{NoteEvent, SourceId};
+fn a_background_glows_release_tail_draws_each_frame_it_moves_a_pixel_in() {
+    use harmonigraph_core::{LatticePos, NoteEvent, SourceId};
 
     // At a Fade of nothing, so the light arrives at once and the tail is the
-    // glow's own release.
+    // glow's own release, a slow one at a gain of one.
     let fresh = || {
         let mut state = fresh();
-        state.picture.appearance.view.fade_time = 0.0;
+        let view = &mut state.picture.appearance.view;
+        (view.fade_time, view.glow_release, view.glow_strength) = (0.0, 2.5, 1.0);
+        state.picture.appearance.spectrum.show_roll = false;
         state
     };
-    let mut state = fresh();
-    state.picture.appearance.spectrum.show_roll = false;
-    state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-    let view = state.picture.appearance.view.clone();
-    assert!(view.glow_draws(), "the fresh glow draws");
-    let gain = view.glow_strength;
-    let span = view.note_animation.departure(state.picture.appearance.view.fade_time);
-    assert!(span < 2.0, "the note's own departure ({span} s) must be over 3 s after the off");
+    let (mut paced, mut every) = (fresh(), fresh());
+    for state in [&mut paced, &mut every] {
+        state.picture.runtime.tracker.handle_event(NoteEvent::on(
+            0.0,
+            SourceId::DIRECT,
+            0,
+            60,
+            1.0,
+        ));
+    }
+    let view = paced.picture.appearance.view.clone();
+    assert!(view.glow_draws(), "the fixture's glow draws");
+    let span = view.note_animation.departure(view.fade_time);
+    assert!(span < 1.0, "the note's own departure ({span} s) must be over 1 s after the off");
 
     let ctx = super::probe::themed();
-    // The brightest light on the last drawn frame, after the filter stepped it.
+    // Every light the last frame drew, after the filter stepped it.
     let draw = |state: &mut SharedState, t: f64| {
         draw_panes(&ctx, state, t, &[Pane::Lattice]);
-        state.picture.surfaces.spare_nodes.iter().map(|n| n.glow.level).fold(0.0_f32, f32::max)
+        let nodes = &state.picture.surfaces.spare_nodes;
+        nodes.iter().map(|n| (n.lattice_pos, n.glow.level)).collect::<Vec<(LatticePos, f32)>>()
     };
-
-    let (mut awake, mut idle) = (0, 0);
-    let mut first_idle = None;
-    let mut released = false;
-    let mut t = 0.0;
-    while t < 60.0 {
-        // Fed as a shell feeds it, when the clock gets there: an off dated
-        // ahead of the frame is read as no note at all.
-        if t >= 1.0 && !released {
-            released = true;
-            state.picture.runtime.tracker.handle_event(NoteEvent::off(t, SourceId::DIRECT, 0, 60));
+    let refresh = 1.0 / 144.0;
+    let poll = crate::IDLE_REPAINT_INTERVAL.as_secs_f64();
+    let off = 1.0;
+    let (mut t, mut grid) = (0.0, 0.0);
+    let mut last: Option<Vec<(LatticePos, f32)>> = None;
+    let mut on_time = false;
+    let (mut drawn, mut refreshes, mut skipped, mut settled) = (0, 0, false, None);
+    // Fed as a shell feeds it, when the clock gets there: an off dated ahead
+    // of the frame is read as no note at all.
+    let mut released = [false; 2];
+    let mut release = |state: &mut SharedState, which: usize, t: f64| {
+        if t >= off && !released[which] {
+            released[which] = true;
+            state.picture.runtime.tracker.handle_event(NoteEvent::off(
+                off,
+                SourceId::DIRECT,
+                0,
+                60,
+            ));
         }
-        let level = draw(&mut state, t);
-        if t < 0.9 {
-            // Fixture reach: the node is in the window and lit.
-            if t > 0.8 {
-                assert!(level > 0.5, "the held note's light never arrived ({level})");
+    };
+    while t < off + 30.0 {
+        // The refreshes the paced loop skips, which the other draws.
+        while grid + 1e-9 < t {
+            release(&mut every, 1, grid);
+            draw(&mut every, grid);
+            if grid > off + span && settled.is_none() {
+                refreshes += 1;
             }
-        } else if t >= 3.0 {
+            grid += refresh;
+        }
+        release(&mut paced, 0, t);
+        release(&mut every, 1, t);
+        let lights = draw(&mut paced, t);
+        for ((pos, level), (_, other)) in lights.iter().zip(draw(&mut every, t)) {
             assert!(
-                !Animating::of(&state).asks_for(Reason::RollInSpan),
-                "the roll must not be what keeps this awake"
+                (level - other).abs() <= 1e-5 * other.max(1e-3),
+                "at {t:.4} s the paced loop drew {level} at {pos:?} where every refresh drew \
+                 {other}",
             );
-            let visible = level * gain > 0.5 / 255.0;
-            assert_eq!(
-                Animating::of(&state).asks_for(Reason::Releasing),
-                visible,
-                "at {t} s the light is {level} at gain {gain}"
+        }
+        let asked = Animating::of(&paced);
+        if t > off + span {
+            assert!(!asked.asks_for(Reason::RollInSpan), "the roll must not keep this awake");
+            let was: std::collections::HashMap<_, _> = last.iter().flatten().copied().collect();
+            let moved: f32 = lights
+                .iter()
+                // Less the light that ended, which `GONE` cuts at whatever
+                // frame it falls under it on.
+                .filter(|&&(_, now)| now > 0.0)
+                .map(|(pos, now)| (was[pos] - now).abs())
+                .sum();
+            // Where the frame asked for came no later than asked: one asked
+            // for sooner than a refresh waits for the refresh.
+            assert!(
+                !on_time || moved * view.glow_strength <= 0.5 / 255.0 * 1.001,
+                "between the frames ending at {t:.4} s the lights moved {moved}",
             );
-            if visible {
-                awake += 1;
-            } else {
-                idle += 1;
-                first_idle.get_or_insert(t);
+            drawn += usize::from(settled.is_none());
+            if !asked.asks_for(Reason::Releasing) {
+                settled.get_or_insert(t);
             }
         }
-        t += if t < 3.0 { 0.05 } else { 0.25 };
+        skipped |= asked.after(Reason::Releasing).is_some_and(|pace| pace > 1.5 * refresh);
+        last = Some(lights);
+        on_time = asked.next_change().is_none_or(|pace| pace >= refresh);
+        t += asked.next_change().unwrap_or(poll).clamp(refresh, poll);
     }
-    // The tail is a long one and it does end: a loop that never idled would
-    // pass the equality above only by the light never falling.
-    assert!(awake > 20, "the tail never outlasted the note ({awake} frames)");
-    assert!(idle > 20, "the loop never went idle ({idle} frames)");
-    assert!(first_idle.is_some_and(|t| t < 40.0), "went idle at {first_idle:?}");
+    assert!(skipped, "the glow asked for every refresh all through its tail");
+    assert!(
+        drawn < refreshes,
+        "the tail drew {drawn} frames where the display refreshed {refreshes}"
+    );
+    let settled = settled.expect("the tail never settled");
+    assert!(settled > off + 2.0, "the tail settled at {settled:.3} s, before it was a tail");
 
     // A surface that stops being drawn mid-tail holds nothing from the next
     // frame.
@@ -260,7 +304,7 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
         60,
         1.0,
     ));
-    for k in 0..=80 {
+    for k in 0..=24 {
         let t = f64::from(k) * 0.05;
         if k == 20 {
             abandoned.picture.runtime.tracker.handle_event(NoteEvent::off(
@@ -276,16 +320,16 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
         Animating::of(&abandoned).asks_for(Reason::Releasing),
         "the tail was over before the surface hid"
     );
-    draw_panes(&ctx, &mut abandoned, 4.05, &[]);
+    draw_panes(&ctx, &mut abandoned, 1.25, &[]);
     assert!(
         !Animating::of(&abandoned).asks_for(Reason::Releasing),
         "an undrawn surface held the loop awake"
     );
 
-    state.picture.appearance.view.glow_strength = 0.0;
-    draw(&mut state, 60.0);
+    paced.picture.appearance.view.glow_strength = 0.0;
+    draw(&mut paced, 60.0);
     assert!(
-        !Animating::of(&state).asks_for(Reason::Releasing),
+        !Animating::of(&paced).asks_for(Reason::Releasing),
         "a glow that does not draw held the loop awake"
     );
 }
@@ -417,7 +461,7 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
 
     // The curve's release outlasts the tone by seconds; the columns do not.
     let heard = state.picture.runtime.spectrum.last_audible();
-    let (heard, curve) = (heard.column.unwrap(), heard.curve.unwrap());
+    let (heard, curve) = (heard.column.unwrap(), heard.curve_until.unwrap());
     assert!(heard < curve && curve < stopped + 6.0, "column {heard}, curve {curve}, {stopped}");
     let mut paced = None;
     for (now, on) in after {
@@ -565,9 +609,102 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
     }
     assert!(ring_outlasted_the_display, "the ring never held the loop past the curve");
     assert!(wedges_faded, "the ring's gate never opened, so its fade was never measured");
-    let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
+    let heard = state.picture.runtime.spectrum.last_audible().curve_until.unwrap();
     let (idle, _) = still.expect("the ring's release outlasted 20 s");
     assert!(idle - heard < 5.0, "idled {} s after the curve last held anything", idle - heard);
+}
+
+/// A curve fallen under the faintest dB any reading of it draws holds nothing
+/// while silence flows on (#1917 Q2): it stops asking for frames seconds
+/// before the display reaches silence itself, with no hold after the column
+/// it went flat in, and from the first frame nothing asks, the curve, the
+/// Spiral and the lattice ring draw nothing new. Under a tilt, with the
+/// curve's floor and the colours' apart, so each bound is a per-pitch one.
+#[test]
+fn a_spectrum_under_its_floor_holds_nothing_and_draws_nothing_new() {
+    const RATE: f32 = 48_000.0;
+    let mut state = fresh();
+    let ctx = super::probe::themed();
+    let cfg = &mut state.picture.appearance.spectrum;
+    cfg.show_spectrogram = false;
+    (cfg.tilt, cfg.floor_db, cfg.volume_floor_db, cfg.release) = (-6.0, -70.0, -85.0, 0.15);
+    state.picture.appearance.view.spectral_ring_width = 0.1;
+    assert!(state.picture.appearance.view.spectral_ring_draws(), "the ring is drawn");
+    let mut t = 0.0;
+    let mut feed = crate::spectrum::TestFeed::default();
+    stream(&ctx, &mut state, &mut feed, &mut t, 1.0, true, &[Pane::Lattice, Pane::Spectral]);
+    let stopped = t;
+
+    // What each picture drew, its paint callbacks left out: what they draw is
+    // the ring's bytes, read beside them.
+    let mut spiral = crate::panes::spiral::SpiralView::default();
+    let mut frame = |state: &mut SharedState, t: f64| {
+        begin_frame(&mut state.picture, &super::probe::Defaults, t);
+        let mut drawn = Vec::new();
+        for pane in 0..3 {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 200.0),
+                )),
+                time: Some(t),
+                ..Default::default()
+            };
+            let output = crate::tests::probe::run(&ctx, raw, |ui| match pane {
+                0 => {
+                    crate::draw_panes(ui, &[(Pane::Lattice, ui.max_rect())], &mut state.picture, t)
+                }
+                1 => {
+                    crate::draw_panes(ui, &[(Pane::Spectral, ui.max_rect())], &mut state.picture, t)
+                }
+                _ => crate::panes::spiral::spiral_pane(ui, &mut state.picture, &mut spiral, t),
+            });
+            if pane > 0 {
+                let shapes =
+                    output.shapes.iter().filter(|s| !matches!(s.shape, egui::Shape::Callback(_)));
+                drawn.push(format!("{:?}", shapes.collect::<Vec<_>>()));
+            }
+        }
+        (drawn, state.picture.runtime.ring_levels.bytes())
+    };
+    let (mut last, mut changed, mut display_still, mut still) = (None, stopped, None, None);
+    for _ in 0..600 {
+        t += 0.01;
+        let cfg = state.picture.appearance.spectrum;
+        feed.feed(&mut state.picture.runtime.spectrum, &[0.0; 480], 1, RATE, t, &cfg);
+        let drawn = frame(&mut state, t);
+        if last.as_ref().is_some_and(|(pictures, _): &(Vec<String>, Vec<u8>)| *pictures != drawn.0)
+        {
+            changed = t;
+        }
+        // The curve and the Spiral draw nothing new once the display stops,
+        // whatever the ring's own release still moves.
+        let spectrum = &state.picture.runtime.spectrum;
+        match &display_still {
+            Some((at, _, then)) => {
+                assert_eq!(&drawn.0, then, "the curve or the Spiral moved after {at:.2} s")
+            }
+            None if !spectrum.moving(t) => {
+                let peak = spectrum.display.iter().copied().fold(0.0, f32::max);
+                display_still = Some((t, 10.0 * peak.log10(), drawn.0.clone()));
+            }
+            None => {}
+        }
+        match &still {
+            Some((at, then)) => assert_eq!(&drawn, then, "a picture moved after {at:.2} s"),
+            None if !Animating::of(&state).asks() => still = Some((t, drawn.clone())),
+            None => {}
+        }
+        last = Some(drawn);
+    }
+    assert!(changed > stopped + 0.5, "the fixture's decay drew nothing ({changed} s)");
+    let (display_still, peak_db, _) = display_still.expect("the display never went still");
+    assert!(peak_db > -100.0, "went still at {display_still:.2} s with its peak at {peak_db} dB");
+    assert!(
+        display_still - changed < 0.5 * AudioSpectrum::HOLD_SECONDS,
+        "the curve last moved at {changed:.2} s and asked for frames until {display_still:.2} s",
+    );
+    assert!(still.is_some(), "the editor never went still");
 }
 
 /// A Clear takes the heard columns off the heatmap, and with them the Span they
@@ -586,7 +723,7 @@ fn a_cleared_heatmap_holds_no_sound_for_a_span() {
     stream(&ctx, &mut state, &mut feed, &mut t, 1.0, false, &panes);
     state.picture.runtime.spectrum.clear_history();
     let after = stream(&ctx, &mut state, &mut feed, &mut t, 10.0, false, &panes);
-    let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
+    let heard = state.picture.runtime.spectrum.last_audible().curve_until.unwrap();
     let last =
         after.iter().rev().find(|&&(_, on)| on.is_some()).expect("the curve settled at once").0;
     assert!(last - heard < 1.0, "a Clear held the full rate {} s past the sound", last - heard);

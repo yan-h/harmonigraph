@@ -590,8 +590,11 @@ reasons! {
     /// departure's Fade-out delay, its stagger and the presence it holds for
     /// them), or a node's Background glow still moving on a layer that draws
     /// it: its level falling, or its colour still easing toward its reading
-    /// ([`GlowFade::step_drawn`](panes::glow_fade::GlowFade::step_drawn)),
-    /// which can outlast the slices by many seconds.
+    /// ([`GlowFade::step_paced`](panes::glow_fade::GlowFade::step_paced)),
+    /// which can outlast the slices by many seconds. The departure asks for
+    /// every frame; the glow asks for the frame its lights next move half a
+    /// code value, which a slow release reaches less often than the display
+    /// refreshes (#1915).
     Releasing => "releasing",
     /// A picture drawn from audio above silence. Samples arriving are not
     /// enough, because a host streams silence with its transport stopped and
@@ -600,7 +603,9 @@ reasons! {
     /// whether what it drew is still moving:
     ///
     /// - The smoothed display the curve, the Spiral and the ring read
-    ///   ([`AudioSpectrum::moving`]), off when it last held anything.
+    ///   ([`AudioSpectrum::moving`]), off when its columns last drew anything:
+    ///   a curve fallen under the faintest dB any reading draws holds nothing,
+    ///   while silence still arrives (#1917 Q2).
     /// - Each heatmap surface, off the run and slab it drew, its Span and its
     ///   atmosphere's tail
     ///   ([`draw_spectrogram`](panes::spectral::spectrogram::draw_spectrogram)):

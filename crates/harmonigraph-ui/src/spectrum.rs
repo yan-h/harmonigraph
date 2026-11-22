@@ -38,7 +38,7 @@ pub struct AudioSpectrum {
     /// When samples last arrived; the curve hides once the source stops
     /// (silent/unrouted input, switched-off synth) rather than freezing.
     pub(crate) last_samples: Option<f64>,
-    /// When the spectrum last held anything above silence, for
+    /// When the spectrum last held anything that draws, for
     /// [`Animating`](crate::Animating), which asks for frames only while what
     /// that shows can still be in view or still settling. Samples
     /// arriving say nothing about it, because a host streams silence with its
@@ -73,9 +73,8 @@ pub struct SpectrumAnalysis {
     pub(crate) next_hop: u64,
 }
 
-/// The times of the newest columns that held anything above silence
-/// ([`POWER_FLOOR`](harmonigraph_core::spectrogram::POWER_FLOOR)), one per
-/// reading of the spectrum, `None` until one has.
+/// When each reading of the spectrum last held anything, `None` until one
+/// has.
 ///
 /// Two, because the readings fall silent apart: the curve's release carries
 /// it seconds past the sound, and a column the heatmap shows can leave the
@@ -83,14 +82,77 @@ pub struct SpectrumAnalysis {
 /// columns look heard for as long as the curve was still falling.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Heard {
-    /// The newest raw column the history folded: what the heatmap scrolls.
+    /// The newest raw column the history folded above silence
+    /// ([`POWER_FLOOR`](harmonigraph_core::spectrogram::POWER_FLOOR)): what
+    /// the heatmap scrolls.
     pub(crate) column: Option<f64>,
-    /// The newest frame of the newest batch whose columns left the smoothed
-    /// curve above silence: what the curve, the Spiral and the lattice ring
-    /// draw. Dated by its batch's samples, which is what
+    /// Until when the columns arriving move what is drawn of the smoothed
+    /// display (the curve, the Spiral and the lattice ring) and of the
+    /// heatmap's fresh edge, which asks for every frame while they do. On
+    /// shell time, off the newest frame of each batch, which is what
     /// [`display`](AudioSpectrum::display) holds the curve from, rather than
-    /// by the column, which sits a resolution's lag before them.
-    pub(crate) curve: Option<f64>,
+    /// off the column, which sits a resolution's lag before them.
+    ///
+    /// A column that leaves something drawn, in itself or in the curve it
+    /// moves ([`AudioSpectrum::take`]), puts this
+    /// [`HOLD_SECONDS`](AudioSpectrum::HOLD_SECONDS) past its batch, where the
+    /// curve hides if no samples follow. One that leaves nothing drawn brings
+    /// it back to its batch: the curve has gone flat under silence still
+    /// arriving, and each column after it draws the same nothing (#1917 Q2).
+    pub(crate) curve_until: Option<f64>,
+}
+
+/// How far under the faintest dB a reading draws
+/// ([`faintest_drawn_db`](crate::panes::spectral::axes::faintest_drawn_db)) a
+/// bucket still counts as drawn.
+///
+/// The test reads each bucket's own power at its own pitch, while a reading
+/// takes the tilt at the pitch it draws: the curve's and the Spiral's
+/// footprint mean at its pixel's centre, at most half a bucket (1/64 of a
+/// semitone) from the buckets it averages, and the lattice ring's Fold at the
+/// centre of a Gaussian over its neighbours. At the steepest tilt (6 dB per
+/// octave) the first lifts a reading by under 0.01 dB, and the Fold, whose
+/// weighted mean sinks a neighbour's power by more than the tilt raises it,
+/// by about a tenth of a dB at a 200-cent width. The curve falls through the
+/// margin in about 35 ms at the default release.
+const DRAWN_MARGIN_DB: f32 = 1.0;
+
+/// The faintest power each bucket can hold and still draw, bucket by bucket
+/// up the axis: [`DRAWN_MARGIN_DB`] under the faintest dB any reading draws at
+/// its pitch, and never at or under
+/// [`POWER_FLOOR`](harmonigraph_core::spectrogram::POWER_FLOOR), which every
+/// reading takes for silence.
+///
+/// The faintest dB is affine in pitch and the buckets are evenly spaced in
+/// it, so the powers are a geometric run, walked by one multiply a bucket:
+/// columns land under the editor's lock.
+struct Faintest {
+    next: f64,
+    ratio: f64,
+}
+
+impl Faintest {
+    fn new(config: &SpectrumConfig) -> Self {
+        use harmonigraph_core::spectrum::{bucket_pitch, SPECTRUM_BINS};
+        let db = |bucket| {
+            f64::from(
+                crate::panes::spectral::axes::faintest_drawn_db(config, bucket_pitch(bucket))
+                    - DRAWN_MARGIN_DB,
+            )
+        };
+        let (first, last) = (db(0), db(SPECTRUM_BINS - 1));
+        Faintest {
+            next: 10f64.powf(first / 10.0),
+            ratio: 10f64.powf((last - first) / 10.0 / (SPECTRUM_BINS - 1) as f64),
+        }
+    }
+
+    /// The next bucket's faintest drawn power.
+    fn next(&mut self) -> f32 {
+        let power = self.next as f32;
+        self.next *= self.ratio;
+        power.max(harmonigraph_core::spectrogram::POWER_FLOOR)
+    }
 }
 
 /// What the analysis hands [`AudioSpectrum`], in the order it happened: a
@@ -308,7 +370,8 @@ impl AudioSpectrum {
         let attack = hop_alpha(config.attack, column.step);
         let release = hop_alpha(config.release, column.step);
         let floor = harmonigraph_core::spectrogram::POWER_FLOOR;
-        let (mut column_heard, mut curve_heard) = (false, false);
+        let mut faintest = Faintest::new(config);
+        let (mut column_heard, mut drawn) = (false, false);
         for (shown, new) in self.display.iter_mut().zip(&column.power) {
             // Invalid input must not poison the carried smoothing state
             // after clean audio has replaced the analyzer's window.
@@ -318,11 +381,19 @@ impl AudioSpectrum {
             let alpha = if new > *shown { attack } else { release };
             *shown += (new - *shown) * alpha;
             column_heard |= new > floor;
-            curve_heard |= *shown > floor;
+            // The raw column as well as the curve: the heatmap's fresh edge
+            // draws it while the curve's attack has yet to lift the display.
+            let faintest = faintest.next();
+            drawn |= new > faintest || *shown > faintest;
         }
         // Every batch delivers its arrival before its columns.
-        if curve_heard {
-            self.last_audible.curve = self.last_samples;
+        if let Some(batch) = self.last_samples {
+            let until = &mut self.last_audible.curve_until;
+            *until = if drawn {
+                Some(batch + Self::HOLD_SECONDS)
+            } else {
+                until.map(|until| until.min(batch))
+            };
         }
         // Keep the RAW spectrum for the spectrogram (the smoothed
         // `display` would smear one column into the next).
@@ -416,9 +487,12 @@ impl AudioSpectrum {
     /// Whether it brought sound back to a spectrum that had gone still: a
     /// stamp on either reading ([`Heard`]) more than
     /// [`HOLD_SECONDS`](Self::HOLD_SECONDS) after the one before it, or the
-    /// first. By then every picture of it had stopped moving (the curve a hold
-    /// after its last heard batch, the heatmap later still), so a still window
-    /// has to be asked to draw it. Sound that goes on asks nothing more: a
+    /// first. By then every picture of it had stopped moving (the curve at its
+    /// bound, the heatmap later still), so a still window has to be asked to
+    /// draw it. The curve's bound is [`Heard::curve_until`], a hold past the
+    /// batch a column drew in, so a bound more than a hold past the last is a
+    /// batch drawn after the curve went still: a hold after the last one
+    /// drawn, or after the one it went flat in. Sound that goes on asks nothing more: a
     /// picture that shows it keeps the window drawing, and one that does not
     /// has nothing new to draw.
     pub fn give(
@@ -436,7 +510,7 @@ impl AudioSpectrum {
             (None, Some(_)) => true,
             (Some(was), Some(heard)) => heard > was + Self::HOLD_SECONDS,
         };
-        resumed(before.curve, after.curve) || resumed(before.column, after.column)
+        resumed(before.curve_until, after.curve_until) || resumed(before.column, after.column)
     }
 
     /// Keep one delivery as it is made: an inline shell's
@@ -503,18 +577,14 @@ impl AudioSpectrum {
     }
 
     /// When the smoothed display stops moving, which the curve, the Spiral and
-    /// the lattice ring all draw: nothing draws it
-    /// [`HOLD_SECONDS`](Self::HOLD_SECONDS) after the samples it was last
-    /// heard in ([`Heard::curve`]), the same bound
-    /// [`display`](Self::display) hides it at. The display's release is
-    /// inside that stamp, so a curve still above silence counts as heard.
-    /// `None` before anything has been.
-    ///
-    /// A bound from the stamp each landing column writes, beside the constant
-    /// it is built from, rather than a second copy of it in the frame loop.
+    /// the lattice ring all draw: [`Heard::curve_until`], which each landing
+    /// column writes. While the columns leave something drawn it is
+    /// [`HOLD_SECONDS`](Self::HOLD_SECONDS) after their samples, the same
+    /// bound [`display`](Self::display) hides the curve at, and the display's
+    /// release is inside it; once one leaves nothing drawn it is that column's
+    /// samples. `None` before anything has been drawn.
     pub(crate) fn moving_until(&self) -> Option<f64> {
-        let heard = self.last_audible().curve?;
-        Some(heard + Self::HOLD_SECONDS)
+        self.last_audible().curve_until
     }
 
     /// Whether the smoothed display is still moving at `now`: see
