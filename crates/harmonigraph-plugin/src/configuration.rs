@@ -321,14 +321,24 @@ impl Settings {
 
     /// Main thread, like the commit that follows it, as is every editor edit
     /// on macOS: nothing can take the slot this saw free in between.
-    fn prepare(self: &Arc<Self>, state: &PluginState) -> Result<Restore, &'static str> {
-        let value: MusicalSettings = match state.fields.get(MUSICAL_SETTINGS) {
-            Some(json) => serde_json::from_str(json).map_err(|error| {
-                shell_error!("Musical settings refused: {error}");
-                "invalid musical settings"
-            })?,
-            None => MusicalSettings::default(),
-        };
+    ///
+    /// Settings that do not parse open at the defaults a save that lacks them
+    /// opens at, with a Console line pushed onto `notes`, and the rest of the
+    /// restore goes ahead (#1927). Only a full queue refuses the restore
+    /// whole: that is passing, and refusing keeps the instance's look and
+    /// tuning together until the project is loaded again with audio running.
+    fn prepare(
+        self: &Arc<Self>,
+        state: &PluginState,
+        notes: &mut Vec<String>,
+    ) -> Result<Restore, &'static str> {
+        let value: MusicalSettings = crate::saved_fields::parse(
+            state,
+            MUSICAL_SETTINGS,
+            "the tuning opened at its defaults",
+            notes,
+        )
+        .unwrap_or_default();
         if self.producer.lock().queue.slots() == 0 {
             self.notify(RESTORE_REFUSED);
             return Err("the tuning edit queue is full");
@@ -390,14 +400,15 @@ impl Setup for HubSetup {
     fn track_name_changed(&self, name: Option<&str>) {
         self.instance.track_name_changed(name);
     }
-    /// Only the musical settings and the instance settings can refuse; the
-    /// other fields are installed first, as nice-plug's derive did before
-    /// either committed.
+    /// Only a full tuning edit queue refuses; a field that does not parse
+    /// costs that field alone. The editor's fields are installed first, as
+    /// nice-plug's derive did before the tuning committed.
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
-        let musical = self.params.settings.prepare(state)?;
-        let instance = self.instance.prepare(state)?;
-        let fields = crate::saved_fields::prepare(&self.params, state);
-        Ok(Box::new(All([Box::new(fields), instance, Box::new(musical)])))
+        let mut notes = Vec::new();
+        let musical = self.params.settings.prepare(state, &mut notes)?;
+        let instance = self.instance.read(state, &mut notes);
+        let fields = crate::saved_fields::prepare(&self.params, state, notes);
+        Ok(Box::new(All([Box::new(fields), Box::new(instance), Box::new(musical)])))
     }
     fn save(&self, state: &mut PluginState) {
         crate::saved_fields::save(&self.params, state);

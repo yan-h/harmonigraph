@@ -16,8 +16,13 @@ The three editor fields that `crates/harmonigraph-plugin/src/saved_fields.rs` ow
 one that does not parse is skipped with a Console line and the rest of the restore goes ahead,
 and one the save lacks keeps what the instance holds.
 `SavedWindow` (the `editor-state` field) has no container-level default, so a window missing a key is that field skipped.
-The Hub's `musical-settings` (`crates/harmonigraph-plugin/src/configuration.rs`) is prepared before anything restores:
-one that does not parse refuses the whole restore with a line in the log, and one the save lacks restores the defaults.
+The tuning's two fields, the Hub's `musical-settings` (`crates/harmonigraph-plugin/src/configuration.rs`) and every instance's `tuning-instance` (`crates/harmonigraph-plugin/src/tuning/setup.rs`),
+open at their defaults both when the save lacks them and when they do not parse;
+one that does not parse also writes a line in the log and, in a Hub, one in the Console naming it, and the rest of the restore goes ahead.
+This supersedes the rule that such a field refused the whole restore with a line in the log alone:
+the editor then stayed untouched, so the next save wrote the fresh look over the project's (#1927).
+Only a full tuning edit queue still refuses a restore whole, with a Console line:
+it is passing, and refusing keeps the instance's look and tuning together until the project is loaded again.
 A parameter value is saved as an integer or a float (`ParamValue`), a choice by its index.
 One that does not decode, such as one under a variant `ParamValue` no longer has, decodes as `ParamValue::Unread` and costs that value alone:
 its row opens at its default with a line in the log (`Table::defaulted`), and a Hub also writes a Console line; a Tune only logs.
@@ -55,7 +60,9 @@ the captured lattice placement and split persist in `RenderFrame`.
 
 `UI_PERSIST_VERSION` refuses a blob below it whole rather than half-reading it.
 What survives an old blob otherwise:
-an unknown KEY is skipped by serde, so retiring a field costs nothing;
+an unknown KEY is skipped by serde, so retiring a field costs that field's setting alone,
+and each door names it (#1927 B): `install_document` writes its path to the Console and opens it,
+and an export says it as a `warning:` from the renderer or a line under the Video pane's Export button for a Recorded look;
 an unknown VARIANT is cut with the key that names it by the editor's per-key decode (`crates/harmonigraph-ui/src/persist_keys.rs`), so that key opens at its default and the rest of the document loads (#1757).
 A variant no key holds of its own, a bare element of a list or map, still refuses the document whole;
 none is persisted today.

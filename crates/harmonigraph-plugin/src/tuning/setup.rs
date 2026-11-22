@@ -246,7 +246,7 @@ impl Default for InstanceSettings {
         Self { retune: true, show: true, name: String::new(), delay: None }
     }
 }
-struct Restore(Arc<Shared>, InstanceSettings);
+pub(crate) struct Restore(Arc<Shared>, InstanceSettings);
 impl Prepared for Restore {
     /// What the project holds, stored without the edit setters' `changed()`:
     /// opening a project is not a change to it.
@@ -263,28 +263,35 @@ impl Prepared for Restore {
     }
 }
 
+impl Adapter {
+    /// The instance settings `state` holds. Settings that do not parse open at
+    /// the defaults a save without them opens at, with a line in the log and
+    /// one in `notes`, which the Hub's Console says and a Tune, which has no
+    /// Console, drops; the rest of the restore goes ahead (#1927).
+    pub(crate) fn read(&self, state: &PluginState, notes: &mut Vec<String>) -> Restore {
+        // Nothing saved: the Hub's own input starts with Retune off, a Tune on.
+        let fresh = || InstanceSettings { retune: !self.0.is_hub(), ..Default::default() };
+        let outcome = "it opened at its defaults";
+        let Some(settings) =
+            crate::saved_fields::parse::<InstanceSettings>(state, INSTANCE_FIELD, outcome, notes)
+        else {
+            return Restore(self.0.clone(), fresh());
+        };
+        if !self.0.is_hub() && settings.delay.is_none() {
+            harmonigraph_clap::shell_warn!(
+                "This Tune's settings hold no Tuning delay; it opens at 1x"
+            );
+        }
+        Restore(self.0.clone(), settings)
+    }
+}
+
 impl Setup for Adapter {
     fn track_name_changed(&self, name: Option<&str>) {
         *self.0.track_name.lock().unwrap() = name.unwrap_or_default().to_owned();
     }
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
-        let settings = match state.fields.get(INSTANCE_FIELD) {
-            Some(json) => {
-                let settings: InstanceSettings = serde_json::from_str(json).map_err(|error| {
-                    harmonigraph_clap::shell_error!("Tuning instance settings refused: {error}");
-                    "invalid tuning instance settings"
-                })?;
-                if !self.0.is_hub() && settings.delay.is_none() {
-                    harmonigraph_clap::shell_warn!(
-                        "This Tune's settings hold no Tuning delay; it opens at 1x"
-                    );
-                }
-                settings
-            }
-            // Nothing saved: the Hub's own input starts with Retune off, a Tune on.
-            None => InstanceSettings { retune: !self.0.is_hub(), ..Default::default() },
-        };
-        Ok(Box::new(Restore(self.0.clone(), settings)))
+        Ok(Box::new(self.read(state, &mut Vec::new())))
     }
     fn save(&self, state: &mut PluginState) {
         let settings = InstanceSettings {

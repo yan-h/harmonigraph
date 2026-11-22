@@ -828,7 +828,7 @@ mod tests {
         appearance.sync_camera(&Camera);
         appearance.render.short_edge = 1080;
         state.workspace.interaction.take.export_look = crate::ExportLook::Slot(1);
-        let queued = crate::panes::render::capture_export(
+        let (queued, _) = crate::panes::render::capture_export(
             appearance,
             &state.workspace.interaction,
             std::path::Path::new("music.take"),

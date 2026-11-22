@@ -1,5 +1,3 @@
-use std::sync::atomic::AtomicU32;
-use std::sync::Arc;
 use std::time::Instant;
 
 use harmonigraph_ui::SharedState;
@@ -49,13 +47,9 @@ pub struct EditorShared {
 }
 
 impl EditorShared {
-    pub fn new(sample_rate_bits: Arc<AtomicU32>, take: harmonigraph_record::Control) -> Self {
+    pub fn new(take: harmonigraph_record::Control) -> Self {
         EditorShared {
-            clock: DisplayClock {
-                sample_rate_bits,
-                start: Instant::now(),
-                mapper: ClockMapper::new(),
-            },
+            clock: DisplayClock { start: Instant::now(), mapper: ClockMapper::new() },
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             gestures: Default::default(),
             take,
@@ -86,19 +80,15 @@ impl EditorShared {
     /// applied after, in the pass that received the click. Applied at the
     /// next pass instead, a click followed by the editor going unseen would
     /// wait for it to be seen again, since an unseen editor runs no passes.
-    pub(super) fn take_pass<R>(
-        &mut self,
-        sample_rate: f32,
-        draw: impl FnOnce(&mut Self) -> R,
-    ) -> R {
+    pub(super) fn take_pass<R>(&mut self, draw: impl FnOnce(&mut Self) -> R) -> R {
         self.mirror_take();
         let drawn = draw(self);
-        self.apply_take_commands(sample_rate);
+        self.apply_take_commands();
         drawn
     }
 
     /// Reflect the Video pane's toggle and export actions into the recorder.
-    fn apply_take_commands(&mut self, sample_rate: f32) {
+    fn apply_take_commands(&mut self) {
         let recording = self.take.is_recording();
         if self.ui.workspace.interaction.take.recording && !recording {
             // Start from the CURRENT look, not the last-saved one: what
@@ -108,7 +98,7 @@ impl EditorShared {
             // render uses the selected analysis input as the spectrogram,
             // aligned to the picture by construction (no bounce, no offset).
             // Silent-but-harmless if no audio reaches that input.
-            self.take.start(sample_rate, self.ui.picture.appearance.serialize());
+            self.take.start(self.ui.picture.appearance.serialize());
         } else if !self.ui.workspace.interaction.take.recording && recording {
             self.take.stop();
         }
@@ -261,26 +251,24 @@ fn browse(flags: &'static [&'static str], path: &std::path::Path) {
 mod tests {
     use super::EditorShared;
     use harmonigraph_core::notes::SourceId;
-    use std::sync::Arc;
 
     /// The OnTransportStop debounce ends a take a fixed time after the
     /// transport was first seen still, however many polls fall in between:
     /// here a 144 Hz window's worth, which counted in calls ended it at 139 ms.
     #[test]
     fn recording_stop_debounce_counts_seconds_not_calls() {
-        let (mut recorder, control) = harmonigraph_record::channel();
+        let (mut recorder, control) = harmonigraph_record::channel(crate::BUILD_TAG);
         let directory =
             std::env::temp_dir().join(format!("runtime-recording-cadence-{}", std::process::id()));
         let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
-        let mut shared =
-            EditorShared::new(Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())), control);
+        let mut shared = EditorShared::new(control);
         shared.ui.picture.appearance.render.trigger =
             harmonigraph_ui::RenderTrigger::OnTransportStop;
         harmonigraph_record::testing::set_renderer_program(
             &shared.take,
             directory.join("absent-renderer"),
         );
-        shared.take_pass(48_000.0, |shared| shared.ui.workspace.interaction.take.recording = true);
+        shared.take_pass(|shared| shared.ui.workspace.interaction.take.recording = true);
         assert!(shared.take.is_recording());
         // One note captured, as the Hub publishes one into the take's first run.
         recorder.is_armed();
@@ -312,19 +300,18 @@ mod tests {
     /// is unrelated, and later knob edits cannot rewrite the starting look.
     #[test]
     fn arming_captures_the_whole_live_appearance_without_workspace_state() {
-        let (recorder, control) = harmonigraph_record::channel();
+        let (recorder, control) = harmonigraph_record::channel(crate::BUILD_TAG);
         let directory =
             std::env::temp_dir().join(format!("appearance-capture-{}", std::process::id()));
         let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
-        let mut shared =
-            EditorShared::new(Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())), control);
+        let mut shared = EditorShared::new(control);
         shared.ui.picture.appearance.camera.yaw = 1.23;
         shared.ui.picture.appearance.view.max_sevens = 3;
         shared.ui.picture.appearance.spectrum.low_midi = 40.5;
         shared.ui.picture.appearance.render.short_edge = 2160;
         shared.ui.workspace.interaction.prefs.ui_scale = 1.25;
         let expected = shared.ui.picture.appearance.serialize();
-        shared.take_pass(44_100.0, |shared| shared.ui.workspace.interaction.take.recording = true);
+        shared.take_pass(|shared| shared.ui.workspace.interaction.take.recording = true);
         assert!(shared.take.is_recording(), "{}", shared.take.status());
         shared.ui.picture.appearance = Default::default();
         // Closing the producer finalizes the writer without launching an export.
@@ -342,7 +329,6 @@ mod tests {
             .unwrap();
         let take = harmonigraph_take::Take::read(path).unwrap();
         let blob = take.header.appearance.unwrap();
-        assert_eq!(take.header.sample_rate, 44_100.0);
         assert_eq!(blob, expected);
         assert!(
             !blob.contains("dock:") && !blob.contains("ui_scale:") && !blob.contains("spiral:")

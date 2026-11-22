@@ -132,7 +132,6 @@ impl Recorder {
     fn from_env(state: &SharedState) -> Option<Recorder> {
         let path = std::env::var("LATTICE_TAKE").ok()?;
         let header = harmonigraph_take::Header {
-            sample_rate: SYNTH_RATE as f32,
             appearance: Some(state.picture.appearance.serialize()),
             source: "harmonigraph-standalone".into(),
             ..Default::default()

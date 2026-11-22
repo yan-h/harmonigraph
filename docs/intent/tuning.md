@@ -125,6 +125,10 @@ Yan: "I want to be able to easily go between improvising in meantone while visua
 - A row's note times never go back: a delta the Hub schedules before the row's latest published time is recorded at that time. A record read late across a closed gap or a lost-input callback stays in order, and a take recorded while a Tune's delay is lowered exports, its next notes up to the old delay late, rather than refusing. Yan, 2026-11-22, #1885 Q1
 - A valid callback whose host input was lost takes no picture time either, so notes after it stay on their audio. Yan, 2026-11-22, #1885 Q2
 
+## 2026-11-22 (a tuning field that does not parse, #1927 A)
+
+- A saved `musical-settings` or `tuning-instance` that does not parse opens at its default on its own, with a line in the log and, in a Hub, a Console line naming it, and the rest of the project loads. This supersedes the `persistence-contract` skill's rule that such a field refuses the whole restore with a line in the log: the untouched editor then saved the fresh look over the project's at the next save. A full tuning edit queue still refuses the restore whole, as the issue's option said it would stay. Yan, 2026-11-22, #1927
+
 ## 2026-11-22 (Adaptive's strip for the lattice-board, #1896)
 
 Yan, in chat: "Let's try the strip. It seems promising enough to demo." The design pass on #1896 put seven questions with recommendations; the build takes the recommendations for now, and none is decided until Yan has played it at the board. Each line below is the session's, pending his listening check.

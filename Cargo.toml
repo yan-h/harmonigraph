@@ -88,6 +88,8 @@ parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 # Persist format shared by appearance and editor workspace settings.
 ron = "0.12"
+# Names each key a saved look carries that this build no longer reads (#1927).
+serde_ignored = "0.1"
 # Hardware MIDI input for the standalone dev harness.
 midir = "0.11"
 raw-window-handle = "0.5"

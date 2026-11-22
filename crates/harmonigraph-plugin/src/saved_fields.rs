@@ -41,13 +41,18 @@ pub(crate) fn save(params: &HarmonigraphParams, state: &mut PluginState) {
     }
 }
 
-/// Parse the three fields `state` holds, for [`Fields::commit`] to install.
-/// Never refuses: a field that does not parse is skipped.
-pub(crate) fn prepare(params: &Arc<HarmonigraphParams>, state: &PluginState) -> Fields {
-    let mut notes = Vec::new();
-    let maps = parse(state, LATTICE_MAPS, &mut notes);
-    let window = parse(state, EDITOR_STATE, &mut notes);
-    let look = parse(state, UI_STATE, &mut notes);
+/// Parse the three fields `state` holds, for [`Fields::commit`] to install,
+/// after the Console lines `notes` already holds. Never refuses: a field that
+/// does not parse is skipped.
+pub(crate) fn prepare(
+    params: &Arc<HarmonigraphParams>,
+    state: &PluginState,
+    mut notes: Vec<String>,
+) -> Fields {
+    const KEPT: &str = "it kept what it had";
+    let maps = parse(state, LATTICE_MAPS, KEPT, &mut notes);
+    let window = parse(state, EDITOR_STATE, KEPT, &mut notes);
+    let look = parse(state, UI_STATE, KEPT, &mut notes);
     let unknown = params.table.unknown(&state.params);
     if !unknown.is_empty() {
         notes.push(format!(
@@ -67,11 +72,14 @@ pub(crate) fn prepare(params: &Arc<HarmonigraphParams>, state: &PluginState) -> 
     Fields { params: params.clone(), maps, window, look, notes }
 }
 
-/// The field `key` of `state`, or `None` with a Console line when it does not
-/// parse.
-fn parse<T: serde::de::DeserializeOwned>(
+/// The field `key` of `state`, or `None` when the save lacks it or it does
+/// not parse. One that does not parse writes a line in the log and pushes
+/// one for the Console onto `notes`, saying what the restore did instead
+/// (`outcome`). The one reader of every saved field but the parameters.
+pub(crate) fn parse<T: serde::de::DeserializeOwned>(
     state: &PluginState,
     key: &str,
+    outcome: &str,
     notes: &mut Vec<String>,
 ) -> Option<T> {
     let json = state.fields.get(key)?;
@@ -79,7 +87,7 @@ fn parse<T: serde::de::DeserializeOwned>(
         .inspect_err(|error| {
             shell_error!("The saved field {key} could not be read: {error}");
             notes.push(format!(
-                "This project's saved {key} could not be read, so it kept what it had: {error}."
+                "This project's saved {key} could not be read, so {outcome}: {error}."
             ));
         })
         .ok()
@@ -91,7 +99,7 @@ pub(crate) struct Fields {
     maps: Option<MapDocument>,
     window: Option<SavedWindow>,
     look: Option<String>,
-    /// The Console lines the restore owes.
+    /// The Console lines the restore owes, the tuning fields' among them.
     notes: Vec<String>,
 }
 

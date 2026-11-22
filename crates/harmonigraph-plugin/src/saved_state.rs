@@ -344,4 +344,55 @@ mod tests {
         let reading = read(Plugin::Harmonigraph, &json);
         assert!(reading.refused.unwrap().contains("does not decode"));
     }
+
+    /// A tuning field that does not parse opens at the default a save without
+    /// it opens at, with a Console line naming it, and the rest of the
+    /// project loads, its look among it, rather than the restore refusing
+    /// whole and the next save writing the fresh look over it (#1927). Here
+    /// `musical-settings` is an axis short, as a build with another axis
+    /// count would find it, and `tuning-instance` is cut off.
+    #[test]
+    fn a_tuning_field_that_does_not_parse_opens_at_its_default_and_the_rest_loads() {
+        let mut state: Value = serde_json::from_slice(&fixture("harmonigraph")).unwrap();
+        let mut absent = state.clone();
+        let fields = absent["fields"].as_object_mut().unwrap();
+        fields.remove(MUSICAL_SETTINGS);
+        fields.remove(INSTANCE_FIELD);
+        let field = &mut state["fields"][MUSICAL_SETTINGS];
+        let broken = field.as_str().unwrap().replacen(r#""axes":[0,"#, r#""axes":["#, 1);
+        assert_ne!(broken, field.as_str().unwrap());
+        *field = Value::String(broken);
+        state["fields"][INSTANCE_FIELD] = Value::String(r#"{"retune":"#.into());
+        let reading = read(Plugin::Harmonigraph, &serde_json::to_vec(&state).unwrap());
+        let absent = read(Plugin::Harmonigraph, &serde_json::to_vec(&absent).unwrap());
+        assert_eq!(reading.refused, None);
+        for key in [MUSICAL_SETTINGS, INSTANCE_FIELD] {
+            assert_eq!(reading.fields[key], absent.fields[key], "{key} at its default");
+            assert!(
+                reading.notes.iter().any(|note| note.contains(key) && note.contains("defaults")),
+                "no Console line names {key}: {:?}",
+                reading.notes
+            );
+        }
+        assert!(reading.fields["editor-state"].contains("[1147,687]"), "the rest of the project");
+        installed(&reading);
+    }
+
+    /// A Tune's `tuning-instance` that does not parse opens at the settings a
+    /// save without it opens at, rather than refusing its restore.
+    #[test]
+    fn a_tunes_instance_settings_that_do_not_parse_open_at_its_defaults() {
+        let mut state: Value = serde_json::from_slice(&fixture("tune")).unwrap();
+        let mut absent = state.clone();
+        absent["fields"].as_object_mut().unwrap().remove(INSTANCE_FIELD);
+        let absent = read(Plugin::Tune, &serde_json::to_vec(&absent).unwrap());
+        // Readable, and other than the defaults, the test tells the two apart.
+        state["fields"][INSTANCE_FIELD] = Value::String(r#"{"name":"Bass","delay":3}"#.into());
+        let named = read(Plugin::Tune, &serde_json::to_vec(&state).unwrap());
+        assert_ne!(named.fields[INSTANCE_FIELD], absent.fields[INSTANCE_FIELD]);
+        state["fields"][INSTANCE_FIELD] = Value::String(r#"{"name":"Bass","delay":"#.into());
+        let reading = read(Plugin::Tune, &serde_json::to_vec(&state).unwrap());
+        assert_eq!(reading.refused, None);
+        assert_eq!(reading.fields[INSTANCE_FIELD], absent.fields[INSTANCE_FIELD]);
+    }
 }

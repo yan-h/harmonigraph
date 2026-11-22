@@ -82,6 +82,9 @@ OPTIONS:
                            versioned appearance RON (./read-plugin-state --appearance).
         --ffmpeg <PATH>    ffmpeg to run. Normally found automatically, on
                            PATH or in the usual install locations.
+        --plugin-build <TAG>  The build tag of the plugin queueing this render,
+                           which the plugin passes; a renderer of another
+                           build warns, and renders all the same.
     -h, --help             Show this.
 
 ENVIRONMENT:
@@ -127,6 +130,9 @@ struct Args {
     crf: u32,
     appearance: Option<String>,
     ffmpeg: Option<String>,
+    /// The build tag of the plugin that queued this render, which a renderer
+    /// of another build warns of. `None` for a render run by hand.
+    plugin_build: Option<String>,
 }
 
 impl Default for Args {
@@ -151,6 +157,7 @@ impl Default for Args {
             crf: 10,
             appearance: None,
             ffmpeg: None,
+            plugin_build: None,
         }
     }
 }
@@ -199,6 +206,7 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
             "--crf" => args.crf = parse_number::<f64>("--crf", &value("--crf")?)? as u32,
             "--appearance" => args.appearance = Some(value("--appearance")?),
             "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
+            "--plugin-build" => args.plugin_build = Some(value("--plugin-build")?),
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other:?} (--help for the list)"))
             }
@@ -313,6 +321,25 @@ fn size_matches_frame(size: [u32; 2], frame: &harmonigraph_ui::RenderFrame) -> b
     (asked - framed).abs() <= framed * 0.005
 }
 
+/// This renderer's build, stamped like the plugin's from the commit it was
+/// built at.
+const BUILD_TAG: &str = env!("LATTICE_BUILD_TAG");
+
+/// The warning for a render the plugin of another build queued: the video is
+/// drawn by this binary's code, so it may not be the picture the editor
+/// shows (PR #340). The render goes ahead. The tag names a commit, so two
+/// builds of one commit from different source pass as the same.
+fn build_mismatch(own: &str, plugin: Option<&str>) -> Option<String> {
+    // A tag is `<branch> @<sha>`: one commit is one build, whichever branch.
+    let commit = |tag: &str| tag.rsplit_once(" @").map_or(tag, |(_, sha)| sha).to_owned();
+    let plugin = plugin.filter(|plugin| commit(plugin) != commit(own))?;
+    Some(format!(
+        "{WARNING_PREFIX}this renderer is build {own}, but the plugin that queued \
+         the export is build {plugin}, so the video may not draw what the editor \
+         shows; load the plugin and renderer of one build (./load-plugin.sh)"
+    ))
+}
+
 /// What is wrong with the take itself, in the order a person should hear it.
 ///
 /// A `Vec` of warnings and no `Result`: nothing about how the recording went
@@ -357,6 +384,11 @@ fn export(args: Args) -> Result<(), String> {
     // the audio and the encoder's backlog as well as
     // the loop — everything between typing the command and having the file.
     let began = std::time::Instant::now();
+    // First, so a take or look that this build cannot read, which another
+    // build's plugin may have written, still says which builds met.
+    if let Some(warning) = build_mismatch(BUILD_TAG, args.plugin_build.as_deref()) {
+        eprintln!("{warning}");
+    }
     let take_path = args.take.ok_or("no take file given (--help for usage)")?;
     let take = harmonigraph_take::Take::read(&take_path).map_err(|e| e.to_string())?;
     let replacement = args
@@ -365,7 +397,7 @@ fn export(args: Args) -> Result<(), String> {
         .map(|path| std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}")))
         .transpose()?;
     // Ahead of anything the command line can complain about, so the take's own
-    // trouble leads the warnings its export job's row shows.
+    // trouble leads the warnings its export job's row shows, after the build's.
     for warning in take_warnings(&take_path, &take) {
         eprintln!("{warning}");
     }
@@ -374,7 +406,10 @@ fn export(args: Args) -> Result<(), String> {
     // render defaults its size and layout to this, so a plain `harmonigraph-offline
     // take.take` reproduces exactly what was previewed; --appearance and --size
     // explicitly override it.
-    let appearance = render::appearance_for(&take, replacement.as_deref())?;
+    let (appearance, unread) = render::appearance_for(&take, replacement.as_deref())?;
+    for warning in unread {
+        eprintln!("{warning}");
+    }
     let render_config = &appearance.render;
     let frame = render_config.frame;
     let layout = Layout::split(frame.lattice, frame.split);
@@ -835,6 +870,24 @@ mod tests {
         };
         assert_eq!(parse(&["--start", "0"]), Some(0.0));
         assert_eq!(parse(&["--fps", "30"]), None);
+    }
+
+    /// A renderer told the plugin's build checks it against its own (#1928 B):
+    /// another commit is a warning naming both tags, which the export's row
+    /// keeps; the same commit on any branch, or a render nobody queued, says
+    /// nothing. `tests/take_warning.rs` runs the flag through the binary.
+    #[test]
+    fn a_renderer_of_another_build_than_the_plugin_says_so() {
+        let warning = build_mismatch("tape @89abcde", Some("main @1234567"))
+            .expect("another build passed unseen");
+        assert!(warning.starts_with(WARNING_PREFIX), "{warning}");
+        assert!(
+            warning.contains("tape @89abcde") && warning.contains("main @1234567"),
+            "{warning}"
+        );
+        assert_eq!(build_mismatch("main @1234567", Some("main @1234567")), None);
+        assert_eq!(build_mismatch("tape @1234567", Some("main @1234567")), None, "one commit");
+        assert_eq!(build_mismatch("main @1234567", None), None);
     }
 
     #[test]
