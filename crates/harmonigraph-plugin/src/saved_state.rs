@@ -128,20 +128,20 @@ fn read_hub(state: &PluginState, reading: &mut Reading) {
     if !restore(Some(&setup), &params.table, state, reading) {
         return;
     }
-    while let Some(line) = params.settings.take_notice() {
-        reading.notes.push(line);
-    }
     // With no editor attached, the setup saves the document the restore
     // delivered rather than what the editor installs of it, which is the
     // look below.
     reading.fields.remove(UI_STATE);
+    // As an editor frame takes them: the lock installs the look, then the
+    // restore's Console lines arrive over it.
+    let mut editor = SharedState::new(crate::editor::ASSUMED_SURFACE_FORMAT);
+    let delivered = params.ui_state.inbox().install_pending(&mut editor);
+    params.settings.deliver_notices(&mut editor);
+    reading.notes.extend(editor.picture.runtime.console.lines().map(str::to_owned));
     if !state.fields.contains_key(UI_STATE) {
         reading.look = Some(Look::Missing);
         return;
     }
-    let mut editor = SharedState::new(crate::editor::ASSUMED_SURFACE_FORMAT);
-    let delivered = params.ui_state.inbox().install_pending(&mut editor);
-    reading.notes.extend(editor.picture.runtime.console.lines().map(str::to_owned));
     reading.look = Some(match delivered {
         Some((document, _)) if document.is_empty() => Look::Unopened,
         Some((_, true)) => {
@@ -306,6 +306,30 @@ mod tests {
             .iter()
             .any(|note| note.contains("cannot read") && note.contains("analysis-input")));
         installed(&reading);
+    }
+
+    /// A restore line that reports a loss opens the Console on it, as the
+    /// editor door's own losses do (Yan, #1934), and opening it is no edit
+    /// the host is told of. A project that loses nothing opens on its own
+    /// layout: the fixture's Settings section shows the Tuning tab.
+    #[test]
+    fn a_restore_that_reports_a_loss_opens_the_console() {
+        let clean = read(Plugin::Harmonigraph, &fixture("harmonigraph"));
+        assert!(!harmonigraph_ui::testing::console_revealed(installed(&clean)));
+        let mut state: Value = serde_json::from_slice(&fixture("harmonigraph")).unwrap();
+        state["params"]["tuning-three"] = serde_json::json!({ "i32": 7 });
+        let mut reading = read(Plugin::Harmonigraph, &serde_json::to_vec(&state).unwrap());
+        let Some(Look::Installed(editor)) = &mut reading.look else {
+            panic!("the saved look did not install");
+        };
+        assert!(harmonigraph_ui::testing::console_revealed(editor));
+        let edits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let told = edits.clone();
+        editor.on_edit(move || {
+            told.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
+        harmonigraph_ui::testing::end_frame(editor);
+        assert_eq!(edits.load(std::sync::atomic::Ordering::Relaxed), 0, "the reveal is no edit");
     }
 
     /// A Tune reads through its own plugin, with the Tuning delay its

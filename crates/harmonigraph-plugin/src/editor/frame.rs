@@ -66,9 +66,7 @@ pub(super) fn frame(
     // Drained on the clock it arrived by, drawn at the refresh it is for.
     let wall = shared.clock.frame_wall(timing, now);
     let now = shared.clock.display_now(wall);
-    while let Some(line) = state.params.settings.take_notice() {
-        shared.ui.log(line);
-    }
+    state.params.settings.deliver_notices(&mut shared.ui);
     // Snapshot current host movement before arming or queuing a render.
     let configuration = state.params.configuration_view();
     shared.ui.picture.appearance.sync_camera(&PluginParamBackend {

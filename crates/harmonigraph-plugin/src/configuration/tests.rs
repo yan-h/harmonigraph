@@ -295,8 +295,8 @@ fn a_full_command_queue_keeps_accepted_state() {
     refused.params.insert(ParamKey::CameraDistance.id().into(), ParamValue::F32(20.0));
     assert!(!device.try_load(refused), "a restore needs a free slot");
     assert_eq!(
-        settings.take_notice().as_deref(),
-        Some(RESTORE_REFUSED),
+        settings.take_notice(),
+        Some(Notice::Restore(RESTORE_REFUSED.into())),
         "and says so in the Console"
     );
     let after = device.save();
@@ -427,7 +427,9 @@ fn a_field_that_does_not_parse_is_skipped_with_a_console_line() {
         (plugin.params.editor_state.size(), plugin.params.int(crate::Row::MapFifths))
     });
     assert_eq!((size, fifths), ((901, 702), 3), "the rest of the project");
-    let line = device.settings().take_notice().expect("a Console line");
+    let Some(Notice::Restore(line)) = device.settings().take_notice() else {
+        panic!("no restore line in the Console");
+    };
     assert!(line.starts_with("This project's saved lattice-maps could not be read"), "{line}");
 }
 
@@ -464,13 +466,14 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     state.fields.insert(MUSICAL_SETTINGS.into(), r#"{"meantone":false,"marvel":true}"#.into());
     device.load(state);
     assert_eq!(
-        settings.take_notice().as_deref(),
-        Some(
+        settings.take_notice(),
+        Some(Notice::Restore(
             "This project saved parameters this build no longer has, which were not read: \
              tuning-three, tuning-tolerance."
-        )
+                .into()
+        ))
     );
-    assert_eq!(settings.take_notice().as_deref(), Some(LEGACY_AXES));
+    assert_eq!(settings.take_notice(), Some(Notice::Restore(LEGACY_AXES.into())));
     assert_eq!(settings.take_notice(), None, "the notice is given once");
     device.activate();
     device.run(0, vec![], None);

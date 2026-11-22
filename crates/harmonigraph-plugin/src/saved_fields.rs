@@ -119,7 +119,7 @@ impl Prepared for Fields {
             params.ui_state.restore(look);
         }
         for note in notes {
-            params.settings.notify(note);
+            params.settings.notify(crate::configuration::Notice::Restore(note));
         }
     }
 }

@@ -195,10 +195,20 @@ pub(crate) struct Settings {
     /// Counts committed restores, for the map editor's undo.
     restored: AtomicU64,
     /// The Console lines the editor owes, oldest first: a restore that opened
-    /// a project at fresh axes, one the full queue refused, or what a restore
-    /// skipped (`saved_fields`).
-    notice: Mutex<std::collections::VecDeque<String>>,
+    /// a project at fresh axes, one the full queue refused, what a restore
+    /// skipped (`saved_fields`), or a line about the host.
+    notice: Mutex<std::collections::VecDeque<Notice>>,
     wake: OnceLock<Arc<dyn Fn() + Send + Sync>>,
+}
+
+/// A Console line the editor owes, by who left it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Notice {
+    /// A restore lost or refused something: the Console opens on it, as on
+    /// the editor door's own losses (Yan, #1934).
+    Restore(String),
+    /// A line about the host, which only appends.
+    Host(String),
 }
 
 /// The Console line for a project saved while the tuning axes were host
@@ -284,14 +294,25 @@ impl Settings {
         self.restored.load(Ordering::Acquire)
     }
 
-    /// The Console line a restore since the last call left, if any.
-    pub fn take_notice(&self) -> Option<String> {
+    /// The oldest Console line owed since the last call, if any.
+    pub fn take_notice(&self) -> Option<Notice> {
         self.notice.lock().pop_front()
     }
 
     /// Owe the editor a Console line.
-    pub(crate) fn notify(&self, line: impl Into<String>) {
-        self.notice.lock().push_back(line.into());
+    pub(crate) fn notify(&self, notice: Notice) {
+        self.notice.lock().push_back(notice);
+    }
+
+    /// Write every line owed into the editor's Console, the one place they
+    /// reach it: a restore's opens the Console, a host's only appends.
+    pub(crate) fn deliver_notices(&self, ui: &mut harmonigraph_ui::SharedState) {
+        while let Some(notice) = self.take_notice() {
+            match notice {
+                Notice::Restore(line) => ui.report_loss(line),
+                Notice::Host(line) => ui.log(line),
+            }
+        }
     }
 
     /// Something the project saves changed: have the host mark it modified.
@@ -340,7 +361,7 @@ impl Settings {
         )
         .unwrap_or_default();
         if self.producer.lock().queue.slots() == 0 {
-            self.notify(RESTORE_REFUSED);
+            self.notify(Notice::Restore(RESTORE_REFUSED.into()));
             return Err("the tuning edit queue is full");
         }
         // The parameter table skips an id it does not know, so the host
@@ -375,7 +396,7 @@ impl Prepared for Restore {
         if self.legacy {
             // The log keeps it for a project saved before an editor opens.
             shell_error!("{LEGACY_AXES}");
-            settings.notify(LEGACY_AXES);
+            settings.notify(Notice::Restore(LEGACY_AXES.into()));
         }
     }
 }
@@ -430,7 +451,7 @@ impl Setup for HubSetup {
     }
     /// A line about the host, for the editor's Console.
     fn notice(&self, line: &str) {
-        self.params.settings.notify(line);
+        self.params.settings.notify(Notice::Host(line.into()));
     }
 }
 

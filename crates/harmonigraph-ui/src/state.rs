@@ -673,6 +673,14 @@ impl SharedState {
         self.picture.runtime.console.log(line);
     }
 
+    /// A line saying what a host restore lost or refused, written where the
+    /// editor door's own losses are: the Console opens on it. Opening it is
+    /// no edit, so a project that opens with a loss is not marked modified.
+    pub fn report_loss(&mut self, line: impl Into<String>) {
+        self.log(line);
+        self.reveal_console();
+    }
+
     /// Serialize the parts of the UI worth restoring across sessions
     /// (section layout, camera, view settings). Parameters are NOT included —
     /// they live in the host's plugin state.
@@ -828,9 +836,14 @@ impl SharedState {
     /// diagnostic rather than a page visited while playing, so this selects it
     /// and unfolds the settings: the diagnostic is the only thing that
     /// explains why the editor opened on fresh settings.
+    ///
+    /// The layout a save stores as told moves with it, so the reveal is no
+    /// edit to report, while a gesture in flight still reports its own.
     fn reveal_console(&mut self) {
-        self.workspace.layout.select(panes::Tab::Console);
-        self.workspace.layout.folded[workspace::Section::Settings as usize] = false;
+        for layout in [&mut self.workspace.layout, &mut self.reported.layout] {
+            layout.select(panes::Tab::Console);
+            layout.folded[workspace::Section::Settings as usize] = false;
+        }
     }
 
     /// Start drawing in a newly built window. The state outlives every window,
