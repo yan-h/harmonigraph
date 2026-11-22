@@ -15,6 +15,7 @@ use std::time::Instant;
 use harmonigraph_core::NoteRoll;
 
 use harmonigraph_record::transport;
+use harmonigraph_ui::tape::spectrogram::TapeSpectrogram;
 use harmonigraph_ui::tape::{Meter, Speed, TapeRequest, TapeSpan, TapeView};
 use harmonigraph_ui::SpectrumConfig;
 
@@ -83,6 +84,13 @@ enum Source {
     Stretched(Box<Stretched>),
 }
 
+/// Previous view allocations displaced under [`EditorLock`](crate::editor::EditorLock)
+/// so [`background::step`](crate::background) drops them after releasing it.
+pub(crate) struct DisplacedView {
+    pub(crate) roll: Option<Arc<NoteRoll>>,
+    pub(crate) spectrogram: Option<TapeSpectrogram>,
+}
+
 pub(crate) struct Worker {
     shared: Arc<Shared>,
     samples: rtrb::Producer<f32>,
@@ -144,11 +152,9 @@ pub(crate) struct Worker {
     /// Tape mode's roll was on screen at the last exchange, so worth
     /// building.
     visible: bool,
-    /// A roll built between holds, for the next exchange to hand over, and
-    /// the one it replaced, freed between holds too rather than under the
-    /// editor lock.
+    /// A roll built between holds, for the next exchange to hand over; any
+    /// displaced roll returns in [`DisplacedView`] to be freed off-lock.
     built_roll: Option<Arc<NoteRoll>>,
-    retired_roll: Option<Arc<NoteRoll>>,
 }
 
 /// Song seconds as the console prints them.
@@ -199,7 +205,6 @@ impl Worker {
             roll_shown: None,
             visible: false,
             built_roll: None,
-            retired_roll: None,
         }
     }
 
@@ -473,7 +478,15 @@ impl Worker {
 
     /// Take Tape mode's request, and show it the tape as it is now, analyzed
     /// under the Analyzer's `settings`. `open`: the editor's window is.
-    pub(crate) fn exchange(&mut self, view: &mut TapeView, settings: &SpectrumConfig, open: bool) {
+    ///
+    /// Returns any displaced allocations so the caller can drop them once the
+    /// editor lock is released.
+    pub(crate) fn exchange(
+        &mut self,
+        view: &mut TapeView,
+        settings: &SpectrumConfig,
+        open: bool,
+    ) -> DisplacedView {
         if let Some(request) = view.request.take() {
             self.request(request);
         } else if view.speed != self.speed {
@@ -494,7 +507,7 @@ impl Worker {
         }
         self.speed = view.speed;
         self.spectrum.configure(settings, self.store.as_ref());
-        self.spectrum.sync(&mut view.spectrogram);
+        let spectrogram = self.spectrum.sync(&mut view.spectrogram);
         let shared = &self.shared;
         let seconds = |bits: &std::sync::atomic::AtomicU64| {
             Some(f64::from_bits(bits.load(Ordering::Relaxed))).filter(|s| !s.is_nan())
@@ -506,9 +519,7 @@ impl Worker {
         view.heard = seconds(&shared.heard);
         view.bytes = self.store.as_ref().map_or(0, Store::bytes) + self.book.bytes();
         self.visible = view.showing && open && settings.show_roll;
-        if let Some(roll) = self.built_roll.take() {
-            self.retired_roll = Some(std::mem::replace(&mut view.notes, roll));
-        }
+        let roll = self.built_roll.take().map(|roll| std::mem::replace(&mut view.notes, roll));
         if self.shown != Some(self.generation) {
             self.shown = Some(self.generation);
             view.spans = self.store.as_ref().map_or_else(Vec::new, spans);
@@ -516,12 +527,12 @@ impl Worker {
             view.meters =
                 self.meters.iter().map(|(&at, &meter)| (at as f64 / rate, meter)).collect();
         }
+        DisplacedView { roll, spectrogram }
     }
 
     /// Rebuild Tape mode's roll if the recording changed under it, with no
     /// lock held: it walks every note recorded.
     pub(crate) fn roll(&mut self) {
-        self.retired_roll = None;
         let built = (self.generation, self.notes_generation);
         if !self.visible || self.roll_shown == Some(built) {
             return;

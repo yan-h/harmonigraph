@@ -754,3 +754,42 @@ fn a_late_mark_from_before_a_pass_reaches_the_pass_that_opened_without_it() {
     worker.settle();
     assert_eq!(worker.passes()[&1].events, [(0, held), (0, off)]);
 }
+
+#[test]
+fn exchange_returns_displaced_roll_and_spectrogram_for_off_lock_drop() {
+    let (_, mut worker) = pair();
+    let mut source = 0;
+    record(&mut worker, &mut source, 0, 500);
+    let mut view = TapeView { showing: true, ..Default::default() };
+    let rolled = SpectrumConfig { show_roll: true, ..Default::default() };
+
+    let displaced = worker.exchange(&mut view, &rolled, true);
+    assert!(displaced.roll.is_none() && displaced.spectrogram.is_none());
+    worker.roll();
+    worker.exchange(&mut view, &rolled, true);
+    let slab: harmonigraph_render::SpectrogramSlab =
+        Arc::from([7u8; harmonigraph_core::spectrum::SPECTRUM_BINS]);
+    view.spectrogram.set_column(0, Some(slab));
+
+    let roll_probe = view.notes.clone();
+    let slab_probe = view.spectrogram.slab(0, 0).expect("column 0 populated").clone();
+    assert_eq!(Arc::strong_count(&roll_probe), 2);
+    assert_eq!(Arc::strong_count(&slab_probe), 2);
+
+    // Format change clears the spectrum and bumps generation so roll rebuilds.
+    let new_format = Format { channels: 2, sample_rate: 2000.0, sidechain: false };
+    let (block, samples) = ring_block(source, None, new_format);
+    worker.capture(block, &samples);
+    worker.roll();
+
+    let displaced = worker.exchange(&mut view, &rolled, true);
+    assert!(displaced.roll.is_some());
+    assert!(displaced.spectrogram.is_some());
+    assert!(view.spectrogram.is_empty());
+    assert_eq!(Arc::strong_count(&roll_probe), 2);
+    assert_eq!(Arc::strong_count(&slab_probe), 2);
+
+    drop(displaced);
+    assert_eq!(Arc::strong_count(&roll_probe), 1);
+    assert_eq!(Arc::strong_count(&slab_probe), 1);
+}

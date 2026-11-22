@@ -82,6 +82,8 @@ impl TapeSpectrogram {
         self.levels[0].len()
     }
 
+    /// Empty this copy and return its previous contents so the caller can drop
+    /// them outside a lock.
     pub fn take_cleared(&mut self) -> Self {
         std::mem::replace(self, Self { revision: next_revision(), ..Self::default() })
     }
@@ -94,10 +96,11 @@ impl TapeSpectrogram {
     /// the slabs hold: the Tape heatmap's memo is keyed on it (#1869). Not
     /// the newest slab, as the live heatmap's is, since the tape replaces
     /// slabs anywhere in its history: a re-analysis, or a pass that wins a
-    /// stretch. A copy changes only through [`put`](Self::put) and
-    /// [`clear`](Self::clear), which [`set_column`](Self::set_column) and
-    /// [`settle`](Self::settle) go through, so the view's copy, which is
-    /// written and never settled, moves it too.
+    /// stretch. A copy changes only through [`put`](Self::put),
+    /// [`clear`](Self::clear) and [`take_cleared`](Self::take_cleared), which
+    /// [`set_column`](Self::set_column) and [`settle`](Self::settle) go
+    /// through, so the view's copy, which is written and never settled, moves
+    /// it too.
     pub fn revision(&self) -> u64 {
         self.revision
     }

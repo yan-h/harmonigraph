@@ -210,33 +210,44 @@ impl SpectrumAnalyzer {
         self.filled = 0;
     }
 
+    /// Write `total` incoming samples/frames into the circular ring, skipping
+    /// any prefix beyond `fft_size` and preserving per-sample `write` rotation
+    /// across `total >= fft_size` overwrites.
+    fn push_ring(&mut self, total: usize, write: impl FnOnce(usize, &mut [f32], &mut [f32])) {
+        if total == 0 {
+            return;
+        }
+        let (count, skip, start) = if total >= self.fft_size {
+            (
+                self.fft_size,
+                total - self.fft_size,
+                (self.write + total % self.fft_size) % self.fft_size,
+            )
+        } else {
+            (total, 0, self.write)
+        };
+        let first = count.min(self.fft_size - start);
+        let rest = count - first;
+        let (head, tail) = self.ring.split_at_mut(start);
+        write(skip, &mut tail[..first], &mut head[..rest]);
+        self.write = if rest > 0 {
+            rest
+        } else if start + first == self.fft_size {
+            0
+        } else {
+            start + first
+        };
+        self.filled = (self.filled + count).min(self.fft_size);
+    }
+
     /// Append mono samples (most recent last). Any chunk size works; only
     /// the trailing `fft_size` samples are kept.
     pub fn push_samples(&mut self, samples: &[f32]) {
-        if samples.is_empty() {
-            return;
-        }
-        let (tail, start) = if samples.len() >= self.fft_size {
-            (
-                &samples[samples.len() - self.fft_size..],
-                (self.write + samples.len() % self.fft_size) % self.fft_size,
-            )
-        } else {
-            (samples, self.write)
-        };
-        let first = tail.len().min(self.fft_size - start);
-        self.ring[start..start + first].copy_from_slice(&tail[..first]);
-        let rest = tail.len() - first;
-        if rest > 0 {
-            self.ring[..rest].copy_from_slice(&tail[first..]);
-            self.write = rest;
-        } else {
-            self.write = start + first;
-            if self.write == self.fft_size {
-                self.write = 0;
-            }
-        }
-        self.filled = (self.filled + tail.len()).min(self.fft_size);
+        self.push_ring(samples.len(), |skip, first_dst, rest_dst| {
+            let tail = &samples[skip..];
+            first_dst.copy_from_slice(&tail[..first_dst.len()]);
+            rest_dst.copy_from_slice(&tail[first_dst.len()..]);
+        });
     }
 
     /// Append one channel from `interleaved` frames of `stride` samples,
@@ -245,36 +256,15 @@ impl SpectrumAnalyzer {
     fn push_strided(&mut self, interleaved: &[f32], channel: usize, stride: usize) {
         assert!(channel < stride);
         let frames = interleaved.len() / stride;
-        if frames == 0 {
-            return;
-        }
-        let (tail, count, start) = if frames >= self.fft_size {
-            (
-                &interleaved[(frames - self.fft_size) * stride..frames * stride],
-                self.fft_size,
-                (self.write + frames % self.fft_size) % self.fft_size,
-            )
-        } else {
-            (&interleaved[..frames * stride], frames, self.write)
-        };
-        let mut iter = tail.chunks_exact(stride);
-        let first = count.min(self.fft_size - start);
-        for (dst, frame) in self.ring[start..start + first].iter_mut().zip(&mut iter) {
-            *dst = frame[channel];
-        }
-        let rest = count - first;
-        if rest > 0 {
-            for (dst, frame) in self.ring[..rest].iter_mut().zip(iter) {
+        self.push_ring(frames, |skip, first_dst, rest_dst| {
+            let mut iter = interleaved[skip * stride..frames * stride].chunks_exact(stride);
+            for (dst, frame) in first_dst.iter_mut().zip(&mut iter) {
                 *dst = frame[channel];
             }
-            self.write = rest;
-        } else {
-            self.write = start + first;
-            if self.write == self.fft_size {
-                self.write = 0;
+            for (dst, frame) in rest_dst.iter_mut().zip(iter) {
+                *dst = frame[channel];
             }
-        }
-        self.filled = (self.filled + count).min(self.fft_size);
+        });
     }
 
     /// The current power spectrum over the MIDI-pitch axis, or None until
@@ -1099,11 +1089,13 @@ mod tests {
         col_reused.push_samples(&mono[..N]);
         col_reused.push_samples(exact);
         let mut fresh_exact = SpectrumAnalyzer::new(config);
-        fresh_exact.push_samples(exact);
+        for &s in exact {
+            fresh_exact.push_samples(&[s]);
+        }
         assert_eq!(
             bits(col_reused.pitch_spectrum().unwrap()),
             bits(fresh_exact.pitch_spectrum().unwrap()),
-            "exact fft_size overwrite after full-window push must match fresh analyzer"
+            "exact fft_size overwrite after full-window push must match per-sample fresh analyzer"
         );
         chunked.push_samples(exact);
         for &s in exact {
@@ -1175,18 +1167,20 @@ mod tests {
         );
 
         // Exact `fft_size` overwrite on dirty bank without `restart()` (plus trailing odd sample):
-        // full-column reuse matches fresh un-reused bank; arbitrary wrap matches per-frame reference.
+        // full-column reuse matches fresh one-frame-at-a-time bank; arbitrary wrap matches per-frame reference.
         let mut exact_stereo = stereo[frame_pos * 2..(frame_pos + N) * 2].to_vec();
         exact_stereo.push(-8888.0);
         let mut col_bank = ChannelBank::new(config, 2);
         col_bank.push_frames(&stereo[..N * 2]);
         col_bank.push_frames(&exact_stereo);
         let mut fresh_bank_exact = ChannelBank::new(config, 2);
-        fresh_bank_exact.push_frames(&stereo[frame_pos * 2..(frame_pos + N) * 2]);
+        for f in 0..N {
+            fresh_bank_exact.push_frames(&stereo[(frame_pos + f) * 2..(frame_pos + f + 1) * 2]);
+        }
         assert_eq!(
             bits(&col_bank.power_sum().unwrap()),
             bits(&fresh_bank_exact.power_sum().unwrap()),
-            "dirty stereo bank exact fft_size overwrite without restart must match fresh bank"
+            "dirty stereo bank exact fft_size overwrite without restart must match per-frame fresh bank"
         );
         bank.push_frames(&exact_stereo);
         for f in 0..N {

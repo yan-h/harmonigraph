@@ -51,9 +51,6 @@ pub(crate) struct Spectrum {
     changed: BTreeSet<(usize, i64)>,
     /// The view's copy must be emptied before it is given anything.
     cleared: bool,
-    /// View spectrograms retired under [`EditorLock`](crate::editor::EditorLock)
-    /// and kept until the off-lock [`analyze`](Self::analyze) step drops them.
-    retired: Vec<TapeSpectrogram>,
     /// When the levels were last rebuilt.
     settled: Option<Instant>,
 }
@@ -109,7 +106,6 @@ impl Spectrum {
     /// Analyze waiting columns until `budget` has passed, at least one, in
     /// song order.
     pub(crate) fn analyze(&mut self, store: Option<&Store>, budget: Duration) {
-        self.retired.clear();
         let (Some(store), Some(_)) = (store, self.pending.first()) else { return };
         let Some(config) = self.config(store) else { return };
         let started = Instant::now();
@@ -136,14 +132,14 @@ impl Spectrum {
         }
     }
 
-    /// Bring the view's copy up to date.
-    pub(crate) fn sync(&mut self, view: &mut TapeSpectrogram) {
-        if std::mem::take(&mut self.cleared) {
-            self.retired.push(view.take_cleared());
-        }
+    /// Bring the view's copy up to date, returning any cleared spectrogram
+    /// displaced from it so the caller can drop it outside the lock.
+    pub(crate) fn sync(&mut self, view: &mut TapeSpectrogram) -> Option<TapeSpectrogram> {
+        let displaced = std::mem::take(&mut self.cleared).then(|| view.take_cleared());
         for (level, key) in std::mem::take(&mut self.changed) {
             view.put(level, key, self.tape.slab(level, key).cloned());
         }
+        displaced
     }
 }
 
@@ -257,30 +253,31 @@ mod tests {
 
         let mut spectrum = Spectrum::default();
         spectrum.clear();
-        spectrum.sync(&mut view);
+        let displaced = spectrum.sync(&mut view);
 
         assert!(view.is_empty());
+        assert!(displaced.is_some());
         assert_eq!(
             std::sync::Arc::strong_count(&column_probe),
             2,
-            "sync under EditorLock must retire cleared column slabs without dropping them"
+            "sync under EditorLock must return cleared column slabs without dropping them"
         );
         assert_eq!(
             std::sync::Arc::strong_count(&level_probe),
             2,
-            "sync under EditorLock must retire cleared pyramid slabs without dropping them"
+            "sync under EditorLock must return cleared pyramid slabs without dropping them"
         );
 
-        spectrum.analyze(None, Duration::MAX);
+        drop(displaced);
         assert_eq!(
             std::sync::Arc::strong_count(&column_probe),
             1,
-            "analyze off-lock must drop retired column slabs even with no store or pending columns"
+            "dropping displaced spectrogram off-lock must release column slabs"
         );
         assert_eq!(
             std::sync::Arc::strong_count(&level_probe),
             1,
-            "analyze off-lock must drop retired pyramid slabs even with no store or pending columns"
+            "dropping displaced spectrogram off-lock must release pyramid slabs"
         );
     }
 }

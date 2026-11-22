@@ -374,14 +374,14 @@ impl Store {
         // seen without allocating a `Vec` for the chain or its seams.
         let mut expected = first.start;
         let mut coverage_end = None;
-        let mut second_start = None;
-        for (_, chunk) in self.chunks.range(first.start..) {
-            if chunk.start != expected {
+        let mut seam_range: Option<(i64, i64)> = None;
+        for (&start, chunk) in self.chunks.range(first.start..) {
+            if start != expected {
                 coverage_end = Some(expected);
                 break;
             }
-            if expected > first.start && second_start.is_none() {
-                second_start = Some(chunk.start);
+            if start > first.start {
+                seam_range = Some((seam_range.map_or(start, |(s, _)| s), start));
             }
             let c_from = from.max(chunk.start);
             let c_end = limit.min(chunk.end);
@@ -405,19 +405,11 @@ impl Store {
         if let Some(before) = before {
             Self::apply_seam(before, first, from, end, fade, ch, out);
         }
-        if let Some(second_start) = second_start {
+        if let Some((first_seam, last_seam)) = seam_range {
             let mut prev = first;
-            let mut expected_seam = second_start;
-            for (_, b) in self.chunks.range(second_start..) {
-                if b.start != expected_seam {
-                    break;
-                }
+            for (_, b) in self.chunks.range(first_seam..=last_seam) {
                 Self::apply_seam(prev, b, from, end, fade, ch, out);
                 prev = b;
-                expected_seam = b.end;
-                if expected_seam > limit + fade {
-                    break;
-                }
             }
         }
         if let Some(e) = coverage_end {
@@ -605,9 +597,12 @@ mod tests {
         // No-margin dip seam at 900 (pass 3 ends at 900, pass 4 starts at 900).
         store.insert(stereo_chunk(700, 900, stamp(3, 700), 3.0, -3.0));
         store.insert(stereo_chunk(900, 1100, stamp(4, 900), 4.0, -4.0));
-        // Trailing gap 1100..1200, same-pass seam 1300 (no dip), end fade 1395..1400, gap 1400..1500.
+        // Trailing gap 1100..1200, same-pass seam 1300 (no dip), gap 1400..1500.
         store.insert(stereo_chunk(1200, 1300, stamp(5, 1200), 5.0, -5.0));
         store.insert(stereo_chunk(1300, 1400, stamp(5, 1200), 5.1, -5.1));
+        // Forward-margin seam at 1650 (`a.data_end >= s + fade`): cold 1500..1800 trimmed by warm 1650..1900.
+        store.insert(stereo_chunk(1500, 1800, stamp(6, 1500), 6.0, -6.0));
+        store.insert(stereo_chunk(1650, 1900, stamp(7, 0), 7.0, -7.0));
 
         assert_eq!(
             owners(&store),
@@ -618,32 +613,54 @@ mod tests {
                 (900, 1100, 4),
                 (1200, 1300, 5),
                 (1300, 1400, 5),
+                (1500, 1650, 6),
+                (1650, 1900, 7),
             ]
         );
         let fade = fade_frames(f64::from(RATE)) as i64;
         assert_eq!(store.chunks().nth(1).unwrap().data_start, 400 - fade);
         assert_eq!(store.chunks().nth(3).unwrap().data_start, 900);
+        assert_eq!(store.chunks().nth(6).unwrap().data_end(2), 1650 + fade);
+        assert_eq!(store.chunks().nth(7).unwrap().data_start, 1650);
 
-        let mut truth = vec![0.0f32; 1500 * 2];
+        let mut truth = vec![0.0f32; 2000 * 2];
         store.read(0, &mut truth);
         // Check structural ground truth so render itself is independently verified.
         assert!(truth[..100 * 2].iter().all(|&s| s == 0.0), "leading gap");
         assert_eq!(truth[100 * 2], 1.0);
         assert_eq!(truth[100 * 2 + 1], -1.0);
-        assert!(truth[398 * 2] > 1.0 && truth[398 * 2] < 2.0, "margin seam blends");
+        assert!(truth[398 * 2] > 1.0 && truth[398 * 2] < 2.0, "backward-margin seam blends");
         assert!(truth[549 * 2] < 2.30 / fade as f32 + 1e-5, "end-of-coverage fade before gap");
         assert!(truth[550 * 2..700 * 2].iter().all(|&s| s == 0.0), "middle gap");
         assert!(truth[899 * 2] < 1.5 && truth[900 * 2] < 1.5, "no-margin seam dips");
         assert_eq!(truth[1299 * 2], 5.099);
         assert_eq!(truth[1300 * 2], 5.1);
-        assert!(truth[1400 * 2..].iter().all(|&s| s == 0.0), "trailing gap");
+        for d in 0..fade {
+            let f = 1650 + d;
+            let w = d as f32 / fade as f32;
+            let a_l = 6.0 + (f - 1500) as f32 * 0.001;
+            let a_r = -6.0 - (f - 1500) as f32 * 0.001;
+            let b_l = 7.0 + d as f32 * 0.001;
+            let b_r = -7.0 - d as f32 * 0.001;
+            assert_eq!(
+                truth[f as usize * 2].to_bits(),
+                (a_l * (1.0 - w) + b_l * w).to_bits(),
+                "forward-margin seam left at {f}"
+            );
+            assert_eq!(
+                truth[f as usize * 2 + 1].to_bits(),
+                (a_r * (1.0 - w) + b_r * w).to_bits(),
+                "forward-margin seam right at {f}"
+            );
+        }
+        assert!(truth[1900 * 2..].iter().all(|&s| s == 0.0), "trailing gap");
 
         // Compare dirty buffer reads (aligned, unaligned partial-frame tail, tiny, and reused)
         // bit-for-bit against zero-initialized reads and `render`.
         let mut scratch = Vec::new();
         for (from, len) in [
-            (0, 1500 * 2),
-            (0, 1500 * 2 + 1),
+            (0, 2000 * 2),
+            (0, 2000 * 2 + 1),
             (50, 511),
             (395, 22),
             (540, 200),
@@ -651,7 +668,8 @@ mod tests {
             (897, 15),
             (1090, 231),
             (1390, 1),
-            (1450, 99),
+            (1645, 31),
+            (1920, 99),
             (0, 0),
         ] {
             let mut clean = vec![0.0f32; len];
