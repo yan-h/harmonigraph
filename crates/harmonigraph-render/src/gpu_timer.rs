@@ -162,33 +162,26 @@ impl GpuTimer {
             }
             TimerState::Mapping => {
                 let _ = device.poll(wgpu::PollType::Poll);
-                match self.ready.swap(0, Ordering::Acquire) {
+                let ticks = match self.ready.swap(0, Ordering::Acquire) {
                     0 => return None,
-                    2 => {
-                        // Like the host draw timer, replace a failed map's
-                        // buffer: wgpu's API and core can disagree about its
-                        // mapping state, so unmapping/retrying it is unsafe.
-                        self.staging = Self::staging(device);
-                        self.state = TimerState::Idle;
-                        return None;
-                    }
-                    _ => {}
-                }
-                let ms = {
-                    // A range wgpu refuses to hand out is a failed map by
-                    // another name, and is dropped the same way.
-                    let Ok(view) = self.staging.slice(..).get_mapped_range() else {
-                        self.staging = Self::staging(device);
-                        self.state = TimerState::Idle;
-                        return None;
-                    };
-                    let ticks: &[u64] = bytemuck::cast_slice(&view);
-                    let last = std::mem::replace(&mut self.last_opening, ticks[0]);
-                    Self::elapsed_ms(ticks[0], ticks[1], last, self.period)
+                    1 => self.staging.slice(..).get_mapped_range().ok().map(|view| {
+                        let ticks: &[u64] = bytemuck::cast_slice(&view);
+                        [ticks[0], ticks[1]]
+                    }),
+                    _ => None,
+                };
+                self.state = TimerState::Idle;
+                let Some([begin, end]) = ticks else {
+                    // A failed map, or a range wgpu refuses to hand out, which
+                    // is one by another name. Like the host draw timer, replace
+                    // the buffer: wgpu's API and core can disagree about its
+                    // mapping state, so unmapping/retrying it is unsafe.
+                    self.staging = Self::staging(device);
+                    return None;
                 };
                 self.staging.unmap();
-                self.state = TimerState::Idle;
-                ms
+                let last = std::mem::replace(&mut self.last_opening, begin);
+                Self::elapsed_ms(begin, end, last, self.period)
             }
         }
     }
