@@ -111,48 +111,48 @@ pub(crate) struct Heard {
 /// footprint mean at its pixel's centre, at most half a bucket (1/64 of a
 /// semitone) from the buckets it averages, and the lattice ring's Fold at the
 /// centre of a Gaussian over its neighbours. At the steepest tilt (6 dB per
-/// octave) the first lifts a reading by under 0.01 dB, and the Fold, whose
-/// weighted mean sinks a neighbour's power by more than the tilt raises it,
-/// by about a tenth of a dB at a 200-cent width. The curve falls through the
-/// margin in about 35 ms at the default release.
+/// octave) the first lifts a reading by under 0.01 dB, and so does the Fold
+/// at its widest (`SPECTRAL_WIDTH_MAX`, 50 cents, with taps out to three of
+/// them): a Gaussian mean of neighbours each at its own floor stands
+/// `exp(σ²k²/2)` over the centre's, with `σ` in buckets and `k` the tilt's
+/// slope in the natural log of power per bucket.
+/// The curve falls through the margin in about 35 ms at the default release.
 const DRAWN_MARGIN_DB: f32 = 1.0;
 
-/// The faintest power each bucket can hold and still draw, bucket by bucket
-/// up the axis: [`DRAWN_MARGIN_DB`] under the faintest dB any reading draws at
-/// its pitch, and never at or under
+/// Whether some bucket of `columns`, a raw column and the curve it leaves,
+/// holds a power that draws: over [`DRAWN_MARGIN_DB`] under the faintest dB
+/// any reading draws at its pitch, and over
 /// [`POWER_FLOOR`](harmonigraph_core::spectrogram::POWER_FLOOR), which every
-/// reading takes for silence.
+/// reading takes for silence. `peak` is the loudest bucket of either.
 ///
 /// The faintest dB is affine in pitch and the buckets are evenly spaced in
-/// it, so the powers are a geometric run, walked by one multiply a bucket:
-/// columns land under the editor's lock.
-struct Faintest {
-    next: f64,
-    ratio: f64,
-}
-
-impl Faintest {
-    fn new(config: &SpectrumConfig) -> Self {
-        use harmonigraph_core::spectrum::{bucket_pitch, SPECTRUM_BINS};
-        let db = |bucket| {
-            f64::from(
-                crate::panes::spectral::axes::faintest_drawn_db(config, bucket_pitch(bucket))
-                    - DRAWN_MARGIN_DB,
-            )
-        };
-        let (first, last) = (db(0), db(SPECTRUM_BINS - 1));
-        Faintest {
-            next: 10f64.powf(first / 10.0),
-            ratio: 10f64.powf((last - first) / 10.0 / (SPECTRUM_BINS - 1) as f64),
+/// it, so the faintest powers are a geometric run, walked by one multiply a
+/// bucket, and walked only while `peak` is over the faintest of them all:
+/// silence, which a host streams with its transport stopped, walks nothing.
+/// Columns land under the editor's lock.
+fn draws(config: &SpectrumConfig, peak: f32, columns: [&SpectrumBuckets; 2]) -> bool {
+    use harmonigraph_core::spectrum::{bucket_pitch, SPECTRUM_BINS};
+    let silence = harmonigraph_core::spectrogram::POWER_FLOOR;
+    let db = |bucket| {
+        f64::from(
+            crate::panes::spectral::axes::faintest_drawn_db(config, bucket_pitch(bucket))
+                - DRAWN_MARGIN_DB,
+        )
+    };
+    let (first, last) = (db(0), db(SPECTRUM_BINS - 1));
+    if peak <= (10f64.powf(first.min(last) / 10.0) as f32).max(silence) {
+        return false;
+    }
+    let ratio = 10f64.powf((last - first) / 10.0 / (SPECTRUM_BINS - 1) as f64);
+    let mut faintest = 10f64.powf(first / 10.0);
+    for bucket in 0..SPECTRUM_BINS {
+        let at = (faintest as f32).max(silence);
+        if columns.iter().any(|column| column[bucket] > at && column[bucket].is_finite()) {
+            return true;
         }
+        faintest *= ratio;
     }
-
-    /// The next bucket's faintest drawn power.
-    fn next(&mut self) -> f32 {
-        let power = self.next as f32;
-        self.next *= self.ratio;
-        power.max(harmonigraph_core::spectrogram::POWER_FLOOR)
-    }
+    false
 }
 
 /// What the analysis hands [`AudioSpectrum`], in the order it happened: a
@@ -370,8 +370,7 @@ impl AudioSpectrum {
         let attack = hop_alpha(config.attack, column.step);
         let release = hop_alpha(config.release, column.step);
         let floor = harmonigraph_core::spectrogram::POWER_FLOOR;
-        let mut faintest = Faintest::new(config);
-        let (mut column_heard, mut drawn) = (false, false);
+        let (mut column_heard, mut peak) = (false, 0.0_f32);
         for (shown, new) in self.display.iter_mut().zip(&column.power) {
             // Invalid input must not poison the carried smoothing state
             // after clean audio has replaced the analyzer's window.
@@ -381,13 +380,13 @@ impl AudioSpectrum {
             let alpha = if new > *shown { attack } else { release };
             *shown += (new - *shown) * alpha;
             column_heard |= new > floor;
-            // The raw column as well as the curve: the heatmap's fresh edge
-            // draws it while the curve's attack has yet to lift the display.
-            let faintest = faintest.next();
-            drawn |= new > faintest || *shown > faintest;
+            peak = peak.max(new).max(*shown);
         }
         // Every batch delivers its arrival before its columns.
         if let Some(batch) = self.last_samples {
+            // The raw column as well as the curve: the heatmap's fresh edge
+            // draws it while the curve's attack has yet to lift the display.
+            let drawn = draws(config, peak, [&column.power, &self.display]);
             let until = &mut self.last_audible.curve_until;
             *until = if drawn {
                 Some(batch + Self::HOLD_SECONDS)

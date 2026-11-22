@@ -316,11 +316,19 @@ impl GlowFade {
                     }
                     // Asked after the end is said, so the step that ends a
                     // light asks for no frame after it.
+                    // A level rising asks for nothing itself, since that is
+                    // a note being played, but moves pixels as fast as it
+                    // rises between the frames something else asks for.
                     let falling = (lit.level - target).max(0.0);
+                    let level_speed = if target > lit.level {
+                        closing(target - lit.level, attack)
+                    } else {
+                        closing(falling, release)
+                    };
                     let (colour, colour_speed) =
                         easing(lit.level, &lit.light, &goal, attack, release);
                     remaining = remaining.max(falling.max(colour) * strength);
-                    speed += closing(falling, release).max(colour_speed) * strength;
+                    speed += level_speed.max(colour_speed) * strength;
                     GlowStep { level: lit.level, light: lit.light }
                 }
                 // A node with no light yet and none arriving is left alone, and

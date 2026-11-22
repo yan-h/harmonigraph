@@ -462,7 +462,10 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     // The curve's release outlasts the tone by seconds; the columns do not.
     let heard = state.picture.runtime.spectrum.last_audible();
     let (heard, curve) = (heard.column.unwrap(), heard.curve_until.unwrap());
-    assert!(heard < curve && curve < stopped + 6.0, "column {heard}, curve {curve}, {stopped}");
+    assert!(
+        heard < curve && curve < stopped + 6.0,
+        "column {heard}, curve still at {curve}, {stopped}"
+    );
     let mut paced = None;
     for (now, on) in after {
         if state.picture.runtime.spectrum.moving(now) {
@@ -609,9 +612,9 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
     }
     assert!(ring_outlasted_the_display, "the ring never held the loop past the curve");
     assert!(wedges_faded, "the ring's gate never opened, so its fade was never measured");
-    let heard = state.picture.runtime.spectrum.last_audible().curve_until.unwrap();
+    let curve = state.picture.runtime.spectrum.last_audible().curve_until.unwrap();
     let (idle, _) = still.expect("the ring's release outlasted 20 s");
-    assert!(idle - heard < 5.0, "idled {} s after the curve last held anything", idle - heard);
+    assert!(idle - curve < 5.0, "idled {} s after the curve went still", idle - curve);
 }
 
 /// A curve fallen under the faintest dB any reading of it draws holds nothing
@@ -723,10 +726,10 @@ fn a_cleared_heatmap_holds_no_sound_for_a_span() {
     stream(&ctx, &mut state, &mut feed, &mut t, 1.0, false, &panes);
     state.picture.runtime.spectrum.clear_history();
     let after = stream(&ctx, &mut state, &mut feed, &mut t, 10.0, false, &panes);
-    let heard = state.picture.runtime.spectrum.last_audible().curve_until.unwrap();
+    let curve = state.picture.runtime.spectrum.last_audible().curve_until.unwrap();
     let last =
         after.iter().rev().find(|&&(_, on)| on.is_some()).expect("the curve settled at once").0;
-    assert!(last - heard < 1.0, "a Clear held the full rate {} s past the sound", last - heard);
+    assert!(last - curve < 1.0, "a Clear held the full rate {} s past the curve", last - curve);
 }
 
 /// The armed Record button's breath and a running export's progress stripes
