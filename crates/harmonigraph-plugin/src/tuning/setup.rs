@@ -271,29 +271,17 @@ impl Adapter {
     pub(crate) fn read(&self, state: &PluginState, notes: &mut Vec<String>) -> Restore {
         // Nothing saved: the Hub's own input starts with Retune off, a Tune on.
         let fresh = || InstanceSettings { retune: !self.0.is_hub(), ..Default::default() };
-        let settings = match state.fields.get(INSTANCE_FIELD) {
-            Some(json) => match serde_json::from_str::<InstanceSettings>(json) {
-                Ok(settings) => {
-                    if !self.0.is_hub() && settings.delay.is_none() {
-                        harmonigraph_clap::shell_warn!(
-                            "This Tune's settings hold no Tuning delay; it opens at 1x"
-                        );
-                    }
-                    settings
-                }
-                Err(error) => {
-                    harmonigraph_clap::shell_error!(
-                        "The saved field {INSTANCE_FIELD} could not be read: {error}"
-                    );
-                    notes.push(format!(
-                        "This project's saved {INSTANCE_FIELD} could not be read, so it opened \
-                         at its defaults: {error}."
-                    ));
-                    fresh()
-                }
-            },
-            None => fresh(),
+        let outcome = "it opened at its defaults";
+        let Some(settings) =
+            crate::saved_fields::parse::<InstanceSettings>(state, INSTANCE_FIELD, outcome, notes)
+        else {
+            return Restore(self.0.clone(), fresh());
         };
+        if !self.0.is_hub() && settings.delay.is_none() {
+            harmonigraph_clap::shell_warn!(
+                "This Tune's settings hold no Tuning delay; it opens at 1x"
+            );
+        }
         Restore(self.0.clone(), settings)
     }
 }

@@ -322,24 +322,23 @@ impl Settings {
     /// Main thread, like the commit that follows it, as is every editor edit
     /// on macOS: nothing can take the slot this saw free in between.
     ///
-    /// Settings that do not parse open at their defaults with a Console line,
-    /// as a save that lacks them does, and the rest of the restore goes ahead
-    /// (#1927). Only a full queue refuses the restore whole: that is passing,
-    /// and refusing keeps the instance's look and tuning together until the
-    /// project is loaded again with audio running.
-    fn prepare(self: &Arc<Self>, state: &PluginState) -> Result<Restore, &'static str> {
-        let mut note = None;
-        let value: MusicalSettings = match state.fields.get(MUSICAL_SETTINGS) {
-            Some(json) => serde_json::from_str(json).unwrap_or_else(|error| {
-                shell_error!("The saved field {MUSICAL_SETTINGS} could not be read: {error}");
-                note = Some(format!(
-                    "This project's saved {MUSICAL_SETTINGS} could not be read, so the tuning \
-                     opened at its defaults: {error}."
-                ));
-                MusicalSettings::default()
-            }),
-            None => MusicalSettings::default(),
-        };
+    /// Settings that do not parse open at the defaults a save that lacks them
+    /// opens at, with a Console line pushed onto `notes`, and the rest of the
+    /// restore goes ahead (#1927). Only a full queue refuses the restore
+    /// whole: that is passing, and refusing keeps the instance's look and
+    /// tuning together until the project is loaded again with audio running.
+    fn prepare(
+        self: &Arc<Self>,
+        state: &PluginState,
+        notes: &mut Vec<String>,
+    ) -> Result<Restore, &'static str> {
+        let value: MusicalSettings = crate::saved_fields::parse(
+            state,
+            MUSICAL_SETTINGS,
+            "the tuning opened at its defaults",
+            notes,
+        )
+        .unwrap_or_default();
         if self.producer.lock().queue.slots() == 0 {
             self.notify(RESTORE_REFUSED);
             return Err("the tuning edit queue is full");
@@ -348,7 +347,7 @@ impl Settings {
         // values of a project saved before #1756 vanish on their own; only
         // the notice is ours to give.
         let legacy = LEGACY_AXIS_IDS.iter().any(|id| state.params.contains_key(*id));
-        Ok(Restore { settings: self.clone(), value, legacy, note })
+        Ok(Restore { settings: self.clone(), value, legacy })
     }
 }
 
@@ -356,8 +355,6 @@ struct Restore {
     settings: Arc<Settings>,
     value: MusicalSettings,
     legacy: bool,
-    /// The Console line for settings that did not parse.
-    note: Option<String>,
 }
 impl Prepared for Restore {
     fn commit(self: Box<Self>) {
@@ -375,9 +372,6 @@ impl Prepared for Restore {
         producer.shadow = Some((id, self.value));
         drop(producer);
         settings.restored.fetch_add(1, Ordering::AcqRel);
-        if let Some(note) = self.note {
-            settings.notify(note);
-        }
         if self.legacy {
             // The log keeps it for a project saved before an editor opens.
             shell_error!("{LEGACY_AXES}");
@@ -410,9 +404,10 @@ impl Setup for HubSetup {
     /// costs that field alone. The editor's fields are installed first, as
     /// nice-plug's derive did before the tuning committed.
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
-        let musical = self.params.settings.prepare(state)?;
-        let mut fields = crate::saved_fields::prepare(&self.params, state);
-        let instance = self.instance.read(state, &mut fields.notes);
+        let mut notes = Vec::new();
+        let musical = self.params.settings.prepare(state, &mut notes)?;
+        let instance = self.instance.read(state, &mut notes);
+        let fields = crate::saved_fields::prepare(&self.params, state, notes);
         Ok(Box::new(All([Box::new(fields), Box::new(instance), Box::new(musical)])))
     }
     fn save(&self, state: &mut PluginState) {

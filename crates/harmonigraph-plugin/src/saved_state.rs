@@ -378,17 +378,21 @@ mod tests {
         installed(&reading);
     }
 
-    /// A Tune's `tuning-instance` that does not parse opens at a fresh Tune's
-    /// settings rather than refusing its restore.
+    /// A Tune's `tuning-instance` that does not parse opens at the settings a
+    /// save without it opens at, rather than refusing its restore.
     #[test]
     fn a_tunes_instance_settings_that_do_not_parse_open_at_its_defaults() {
         let mut state: Value = serde_json::from_slice(&fixture("tune")).unwrap();
-        state["fields"][INSTANCE_FIELD] = Value::String(r#"{"retune":"#.into());
+        let mut absent = state.clone();
+        absent["fields"].as_object_mut().unwrap().remove(INSTANCE_FIELD);
+        let absent = read(Plugin::Tune, &serde_json::to_vec(&absent).unwrap());
+        // Readable, and other than the defaults, the test tells the two apart.
+        state["fields"][INSTANCE_FIELD] = Value::String(r#"{"name":"Bass","delay":3}"#.into());
+        let named = read(Plugin::Tune, &serde_json::to_vec(&state).unwrap());
+        assert_ne!(named.fields[INSTANCE_FIELD], absent.fields[INSTANCE_FIELD]);
+        state["fields"][INSTANCE_FIELD] = Value::String(r#"{"name":"Bass","delay":"#.into());
         let reading = read(Plugin::Tune, &serde_json::to_vec(&state).unwrap());
         assert_eq!(reading.refused, None);
-        assert_eq!(
-            reading.fields[INSTANCE_FIELD],
-            r#"{"retune":true,"show":true,"name":"","delay":1}"#
-        );
+        assert_eq!(reading.fields[INSTANCE_FIELD], absent.fields[INSTANCE_FIELD]);
     }
 }
