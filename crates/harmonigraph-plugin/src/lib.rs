@@ -742,7 +742,7 @@ fn selected_analysis_input<'a, T: ?Sized>(
 impl Default for Harmonigraph {
     fn default() -> Self {
         let (audio_producer, audio_consumer) = audio_ingress::channel(AUDIO_RING_CAPACITY);
-        let (take, mut take_control) = harmonigraph_record::channel();
+        let (take, mut take_control) = harmonigraph_record::channel(crate::BUILD_TAG);
         let consumer = take_control.take_display().expect("one display consumer");
         #[cfg(test)]
         let take = test_device::injected_recorder().unwrap_or(take);

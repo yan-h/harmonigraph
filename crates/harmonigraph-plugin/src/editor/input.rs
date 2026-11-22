@@ -346,7 +346,7 @@ mod tests {
     use harmonigraph_core::notes::{NoteEvent, SourceId};
 
     fn editor() -> EditorShared {
-        let (_recorder, control) = harmonigraph_record::channel();
+        let (_recorder, control) = harmonigraph_record::channel(crate::BUILD_TAG);
         EditorShared::new(control)
     }
 

@@ -65,6 +65,10 @@ struct Queue {
 }
 #[derive(Default)]
 pub(super) struct RenderControl {
+    /// The build tag of the plugin this queue renders for, passed to the
+    /// renderer as `--plugin-build` so a renderer of another build says so
+    /// (#1928 B).
+    pub(super) plugin_build: &'static str,
     /// What a fixture launches instead of [`default_renderer_path`].
     #[cfg(any(test, feature = "test-support"))]
     pub(super) test_program: Mutex<Option<PathBuf>>,
@@ -82,6 +86,10 @@ struct InFlight {
 }
 
 impl RenderControl {
+    /// A queue whose renders are told `plugin_build`.
+    pub(super) fn for_plugin(plugin_build: &'static str) -> Self {
+        Self { plugin_build, ..Self::default() }
+    }
     /// The renderer a job launches: the paired one, unless a fixture has
     /// aimed this queue elsewhere.
     fn program(&self) -> PathBuf {
@@ -326,6 +334,7 @@ fn run_job(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
+    command.arg("--plugin-build").arg(control.plugin_build);
     command.arg(&job.take).arg("--out").arg(&partial);
     if let Some(blob) = appearance {
         let file = stage.0.join("appearance.ron");
@@ -369,7 +378,12 @@ fn run_job(
         std::thread::sleep(std::time::Duration::from_millis(10));
     };
     if !result.success() {
-        return Err(format!("render failed: {}", tail.last));
+        // A warning may explain the failure, a renderer of another build's
+        // above all, so it leads the job's detail here as on success.
+        let failed = format!("render failed: {}", tail.last);
+        let warnings = tail.warnings.iter().filter(|warning| **warning != tail.last);
+        let lines: Vec<&str> = warnings.map(String::as_str).chain([failed.as_str()]).collect();
+        return Err(lines.join("\n"));
     }
     #[cfg(test)]
     let _gate = control.before_publish.lock();

@@ -1,6 +1,7 @@
 // Stamp the git branch and commit in the leaf binaries as `LATTICE_BUILD_TAG`.
 // Interactive shells show it in the performance overlay; the offline renderer
-// rebuilds so load-plugin.sh's HEAD-based freshness check remains accurate.
+// compares it with the tag of the plugin that queued a render, and rebuilds so
+// load-plugin.sh's HEAD-based freshness check remains accurate.
 // The tag names the last commit, not uncommitted source edits: a dirty marker
 // would require relinking on every edit to stay honest.
 
