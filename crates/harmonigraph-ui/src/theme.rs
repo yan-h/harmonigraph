@@ -654,6 +654,8 @@ fn style_at(scale: f32) -> egui::Style {
     style.spacing.slider_rail_height = 3.5;
     // A scroll area stops at its ends rather than overshooting and springing
     // back, as otonal's do (Yan, 2026-11-21: `docs/intent/editor-shell.md`).
+    // egui overshoots only for a wheel it knows is a trackpad: the
+    // standalone's window says so, while the plug-in's reports no source.
     style.spacing.scroll.kinetic.rubber_band = false;
 
     let visuals = &mut style.visuals;
