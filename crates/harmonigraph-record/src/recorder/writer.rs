@@ -29,11 +29,6 @@ fn worker_in(directory: &std::path::Path) -> (Recorder, Control) {
     (recorder, control)
 }
 
-/// The WAV every fixture's take opens: [`TAKE_CHANNELS`], as `Control::start`
-/// asks for, at the sample rate of [`harmonigraph_take::Header::default`].
-#[cfg(any(test, feature = "test-support"))]
-const FIXTURE_SPEC: AudioSpec = AudioSpec { sample_rate: 48_000.0, channels: TAKE_CHANNELS as u16 };
-
 /// How long the writer thread sleeps when it finds the rings empty.
 const DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(20);
 
@@ -107,8 +102,8 @@ pub fn channel(plugin_build: &'static str) -> (Recorder, Control) {
             let mut processed_stop = false;
             if !pump.disconnected {
                 match orders.try_recv() {
-                    Ok(Command::Start(header, path, spec)) => {
-                        pump.start(*header, path, spec, &thread_status, &thread_fence);
+                    Ok(Command::Start(header, path)) => {
+                        pump.start(*header, path, &thread_status, &thread_fence);
                     }
                     Ok(Command::Stop) => {
                         #[cfg(all(test, feature = "test-support"))]
@@ -193,7 +188,6 @@ impl Pump {
         &mut self,
         header: harmonigraph_take::Header,
         path: std::path::PathBuf,
-        spec: AudioSpec,
         status: &Mutex<String>,
         fence: &RecordFence,
     ) {
@@ -201,7 +195,7 @@ impl Pump {
             fail_with(fence, status, "a take started before the last one sealed".into());
             return;
         }
-        self.open = match Recording::create(header, path, spec) {
+        self.open = match Recording::create(header, path) {
             Ok(recording) => {
                 let mut message = status.lock();
                 if !matches!(message.as_str(), FINISHING | FINISHING_PREVIOUS) {
@@ -357,7 +351,6 @@ impl Recording {
     fn create(
         mut header: harmonigraph_take::Header,
         base: std::path::PathBuf,
-        spec: AudioSpec,
     ) -> Result<Recording, String> {
         let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("take").to_owned();
         for suffix in 0u64.. {
@@ -388,11 +381,8 @@ impl Recording {
                 }
             };
             let initialized = (|| {
-                let audio = harmonigraph_take::WavWriter::from_file(
-                    wav_file,
-                    spec.sample_rate,
-                    spec.channels,
-                )?;
+                let audio =
+                    harmonigraph_take::WavWriter::from_file(wav_file, TAKE_CHANNELS as u16)?;
                 header.audio_file = wav.file_name().and_then(|n| n.to_str()).map(str::to_owned);
                 let writer = harmonigraph_take::Writer::from_file(take_file, &header)?;
                 Ok::<_, std::io::Error>((writer, audio))
@@ -484,9 +474,11 @@ impl Recording {
         result
     }
 
-    fn write_audio(&mut self, first: &[f32], second: &[f32]) -> std::io::Result<()> {
+    /// Append a block produced at `rate`. A block at another rate than the
+    /// take's first fails the WAV, and so the take, here (#1928).
+    fn write_audio(&mut self, rate: f32, first: &[f32], second: &[f32]) -> std::io::Result<()> {
         let Some(audio) = self.audio.as_mut() else { return Ok(()) };
-        if let Err(error) = audio.write(first).and_then(|_| audio.write(second)) {
+        if let Err(error) = audio.write(rate, first).and_then(|_| audio.write(rate, second)) {
             let path = self.wav_path();
             let repair = self.finish_audio();
             let repair = repair.err().map(|error| format!("; {error}")).unwrap_or_default();
@@ -515,7 +507,7 @@ fn drain_records(
     for _ in 0..count {
         let Ok(entry) = consumer.pop() else { break };
         any = true;
-        if let Entry::AudioSamples(count) = entry {
+        if let Entry::AudioSamples { samples: count, rate } = entry {
             // The audio thread commits a block's samples before the entry
             // that counts them, so this holds them all unless the two rings
             // have fallen out of step.
@@ -525,7 +517,7 @@ fn drain_records(
             };
             if let Some(recording) = open.as_mut() {
                 let (first, second) = chunk.as_slices();
-                if let Err(error) = recording.write_audio(first, second) {
+                if let Err(error) = recording.write_audio(rate, first, second) {
                     io_failure(error);
                 }
             }
@@ -554,7 +546,7 @@ fn drain_records(
                     value,
                 })
             }
-            Entry::AudioSamples(_) => unreachable!("handled above"),
+            Entry::AudioSamples { .. } => unreachable!("handled above"),
         };
         if let Err(error) = written {
             io_failure(error);

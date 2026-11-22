@@ -677,7 +677,7 @@ fn pre_play_scrubs_emit_no_records_before_the_real_configuration_and_audio_origi
             Entry::Param { t, .. } => parameters.push(t),
             Entry::Run { at, song } => runs.push((song, at)),
             Entry::Configuration(config) => configurations.push(config.t),
-            Entry::AudioSamples(n) => samples += n,
+            Entry::AudioSamples { samples: n, .. } => samples += n,
             _ => {}
         }
     }
@@ -738,7 +738,7 @@ fn a_short_stopped_export_finishes_with_or_without_midi() {
                 dir.join("absent-renderer"),
             );
             let appearance = shared.ui.picture.appearance.serialize();
-            shared.take.start(48_000.0, appearance);
+            shared.take.start(appearance);
             shared.poll_take_end();
             probe
         };
@@ -820,7 +820,7 @@ fn destruction_closes_a_stopped_take_without_another_process_callback() {
                 &shared.take,
                 dir.join("absent-renderer"),
             );
-            shared.take.start(48_000.0, shared.ui.picture.appearance.serialize());
+            shared.take.start(shared.ui.picture.appearance.serialize());
             probe
         };
         let events = if held { vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)] } else { vec![] };
@@ -914,7 +914,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
                 &shared.take,
                 dir.join("absent-renderer"),
             );
-            shared.take.start(48_000.0, shared.ui.picture.appearance.serialize());
+            shared.take.start(shared.ui.picture.appearance.serialize());
             probe
         };
         let events = if held { vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)] } else { vec![] };
@@ -1012,7 +1012,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         {
             // Start is accepted before another process; its fresh epoch must
             // also survive the pending main wake and reactivation.
-            shared.lock().take.start(48_000.0, String::new());
+            shared.lock().take.start(String::new());
             assert!(shared.lock().take.is_recording());
             unsafe { ((*device.plugin).on_main_thread.unwrap())(device.plugin) };
             assert!(shared.lock().take.is_recording());
@@ -1064,7 +1064,7 @@ fn a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take(
                 dir.join("absent-renderer"),
             );
             let appearance = shared.ui.picture.appearance.serialize();
-            shared.take.start(48_000.0, appearance);
+            shared.take.start(appearance);
             assert!(shared.take.is_recording(), "armed");
             probe
         };
@@ -1285,7 +1285,7 @@ fn camera_automation_is_captured_mid_song() {
         // A trigger that records on through the rewind below; the fresh
         // Transport stop ends at it instead.
         shared.ui.picture.appearance.render.trigger = harmonigraph_ui::RenderTrigger::OnDisarm;
-        shared.take.start(48_000.0, shared.ui.picture.appearance.serialize());
+        shared.take.start(shared.ui.picture.appearance.serialize());
         shared.poll_take_end();
         probe
     };
@@ -1332,4 +1332,102 @@ fn camera_automation_is_captured_mid_song() {
         "nonzero event offset is sampled at block origin"
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// What a take came to after the host reactivated the plugin at another rate.
+struct AcrossRates {
+    failed: bool,
+    status: String,
+    sealed: bool,
+    take: harmonigraph_take::Take,
+    /// The WAV header's rate and the frames it holds.
+    wav_rate: u32,
+    frames: u32,
+    /// Song seconds the take recorded.
+    recorded: f64,
+}
+
+/// A take armed while the engine runs at `armed_at`, recording `before` blocks
+/// there, then just over a second more after the host reactivates the plugin
+/// at `rate` (a Bitwig export at another rate than the engine's, #1928).
+fn take_across_reactivation(armed_at: f64, before: usize, rate: f64) -> AcrossRates {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = crate::test_device::recorded(hub);
+    device.activate_format(armed_at, 512);
+    device.run(0, vec![], None);
+    capture.arm();
+    let dir = std::env::temp_dir()
+        .join(format!("harmonigraph-rate-change-{}-{before}-{rate}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+    let (mut raw, mut song) = (0, 0.0);
+    let mut play = |device: &mut Device, capture: &mut _, writer: &mut _, block_rate: f64| {
+        device.run_transport(raw, vec![], false, None, Some(transport(song, 0)));
+        harmonigraph_record::testing::FileWriter::drain(writer, capture);
+        (raw, song) = (raw + 64, song + 64.0 / block_rate);
+    };
+    for _ in 0..before {
+        play(&mut device, &mut capture, &mut writer, armed_at);
+    }
+    device.reactivate_format(rate, 512);
+    for _ in 0..(rate / 64.0).ceil() as usize {
+        play(&mut device, &mut capture, &mut writer, rate);
+    }
+    capture.stop();
+    let mut parked = transport(song, 0);
+    parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+    device.run_transport(raw, vec![], false, None, Some(parked));
+    writer.stop();
+    writer.drain(&mut capture);
+    writer.drain(&mut capture);
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let wav = std::fs::read(path.with_extension("wav")).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let field = |at: usize| u32::from_le_bytes(wav[at..at + 4].try_into().unwrap());
+    AcrossRates {
+        failed: writer.failed(),
+        status: writer.status(),
+        sealed: writer.finished.is_some(),
+        take,
+        wav_rate: field(24),
+        frames: field(40) / 8,
+        recorded: song,
+    }
+}
+
+/// A take whose audio all arrives after the host reactivates the plugin at
+/// another rate than the one Record was clicked at takes the rate the audio
+/// came at: before #1928 its WAV kept the click's 48 kHz, and its soundtrack
+/// played 8.8% fast with nothing to say so.
+#[test]
+fn a_take_whose_audio_follows_a_rate_change_keeps_its_soundtrack_in_time() {
+    let across = take_across_reactivation(48_000.0, 0, 44_100.0);
+    assert!(!across.failed && across.sealed, "{}", across.status);
+    assert_eq!(across.wav_rate, 44_100);
+    let soundtrack = f64::from(across.frames) / f64::from(across.wav_rate);
+    assert!(
+        (soundtrack - across.recorded).abs() < 1e-3,
+        "the take recorded {:.4} s of song and its soundtrack lasts {soundtrack:.4} s",
+        across.recorded,
+    );
+}
+
+/// A rate change after the take has recorded audio fails the take, loudly:
+/// one WAV cannot state two speeds (#1928). The soundtrack keeps what was
+/// recorded before the change, under its own rate.
+#[test]
+fn a_rate_change_after_a_take_recorded_audio_fails_it() {
+    let before = 8;
+    let across = take_across_reactivation(44_100.0, before, 48_000.0);
+    assert!(across.failed, "the take must fail");
+    assert!(
+        across.status.contains("sample rate changed from 44100 Hz to 48000 Hz")
+            && across.status.contains("no render started"),
+        "{}",
+        across.status,
+    );
+    assert!(!across.sealed, "a failed take is never handed to the renderer");
+    assert!(across.take.incomplete.is_some(), "the take file is marked incomplete");
+    assert_eq!((across.wav_rate, across.frames), (44_100, 64 * before as u32));
 }

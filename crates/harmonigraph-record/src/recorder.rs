@@ -47,7 +47,7 @@ pub(crate) const CONFIGURATION_FAILURE: &str =
 const AUDIO_RING_CAPACITY: usize = 1 << 20;
 
 /// A take's WAV is always stereo, whatever selected audio stream the host
-/// carries. The spec handed to the writer, the reservation in
+/// carries. The WAV the writer opens, the reservation in
 /// [`Recorder::audio`] and the interleaving in `process` all read this one
 /// number: if any of them disagrees, the header describes frames the data does
 /// not have, and nothing downstream checks.
@@ -98,8 +98,13 @@ pub enum Entry {
         at: f64,
     },
     Configuration(harmonigraph_take::ConfigurationRecord),
-    /// Exactly this committed audio prefix belongs at this point in the stream.
-    AudioSamples(usize),
+    /// Exactly this committed audio prefix belongs at this point in the stream,
+    /// produced at `rate`: the take's WAV takes its rate from its first block,
+    /// and a block at another rate fails the take (#1928).
+    AudioSamples {
+        samples: usize,
+        rate: f32,
+    },
     /// `key` is an index into [`ParamKey::ALL`] — an id string would mean
     /// allocating on the audio thread.
     Param {
@@ -122,15 +127,8 @@ pub enum Entry {
 const _: () = assert!(std::mem::size_of::<Entry>() <= 96);
 const _: () = assert!(std::mem::align_of::<Entry>() <= 8);
 
-/// What the writer thread needs to open a WAV beside the take.
-#[derive(Clone, Copy)]
-pub struct AudioSpec {
-    pub sample_rate: f32,
-    pub channels: u16,
-}
-
 enum Command {
-    Start(Box<harmonigraph_take::Header>, std::path::PathBuf, AudioSpec),
+    Start(Box<harmonigraph_take::Header>, std::path::PathBuf),
     /// Close the file once what it recorded is written, and render it.
     Stop,
 }
@@ -505,7 +503,12 @@ impl Recorder {
     /// the free count even today (even capacity, even `samples`, and a drain
     /// that commits everything), but nothing declares that, and an odd
     /// capacity or a partial drain would end the argument silently.
-    pub fn audio(&mut self, block: &mut dyn Iterator<Item = f32>, samples: usize) {
+    ///
+    /// `rate` is the rate the block was produced at, which travels with it to
+    /// the WAV: the host can reactivate the plugin at another rate while a take
+    /// is armed, and a rate fixed when Record was clicked would then state the
+    /// wrong speed for every block after (#1928).
+    pub fn audio(&mut self, block: &mut dyn Iterator<Item = f32>, samples: usize, rate: f32) {
         if self.fence.failed.load(Ordering::Acquire) {
             return;
         }
@@ -533,7 +536,7 @@ impl Recorder {
             false
         };
         if written {
-            self.push(Entry::AudioSamples(room));
+            self.push(Entry::AudioSamples { samples: room, rate });
         }
     }
 
@@ -837,9 +840,10 @@ impl Control {
     }
 
     /// Begin a take. `appearance` is the appearance document that decides how the
-    /// replay will look; `sample_rate` stamps the header and the WAV the
-    /// selected audio stream is recorded to alongside the notes.
-    pub fn start(&self, sample_rate: f32, appearance: String) {
+    /// replay will look. The WAV the selected audio stream is recorded to
+    /// alongside the notes takes its rate from the audio itself
+    /// ([`Recorder::audio`]), not from this moment.
+    pub fn start(&self, appearance: String) {
         if self.is_recording() {
             return;
         }
@@ -870,17 +874,16 @@ impl Control {
         let base =
             dir.join(format!("take-{}.{}", stamp_for(epoch_secs), harmonigraph_take::EXTENSION));
         let path = base;
-        let header = header_for(sample_rate, appearance);
+        let header = header_for(appearance);
 
         self.dropped.store(0, Ordering::Relaxed);
-        let spec = AudioSpec { sample_rate, channels: TAKE_CHANNELS as u16 };
         let Some(epoch) =
             self.fence.epoch().checked_add(1).filter(|epoch| *epoch <= RecordIntent::MAX_EPOCH)
         else {
             *self.status.lock() = "recording epoch exhausted".into();
             return;
         };
-        if self.commands.send(Command::Start(Box::new(header), path, spec)).is_err() {
+        if self.commands.send(Command::Start(Box::new(header), path)).is_err() {
             *self.status.lock() = "take writer thread is gone".into();
             return;
         }
@@ -943,25 +946,19 @@ impl Control {
 /// serialized appearance while this layer remains independent of its types.
 ///
 /// Each field fails SILENTLY rather than loudly if it stops being set, which
-/// is what makes the three of them worth a function and a test of their own
+/// is what makes the two of them worth a function and a test of their own
 /// rather than a struct literal inline:
 ///
 /// - `appearance` is the appearance document that decides how the replay LOOKS. Unset,
 ///   the take still records, but both export doors refuse it unless the user
 ///   names a replacement look: the take has lost the one it was recorded under.
-/// - `sample_rate` is the take's whole time base. Unset it falls back to
-///   [`harmonigraph_take::Header::default`], which is 48 kHz rather than a
-///   zero that would show up at once: every event lands at the wrong offset
-///   and the video drifts against the bounce it was supposed to line up with
-///   by construction.
 /// - `source` says which shell wrote the take — this one, or the standalone,
 ///   which writes its own name. Nothing reads it: it is a field for whoever
 ///   is holding a take and asking where it came from, and the reason it
 ///   belongs here is that a shell which forgets to stamp it leaves that
 ///   question unanswerable later, with nothing at the time to notice.
-pub fn header_for(sample_rate: f32, appearance: String) -> harmonigraph_take::Header {
+pub fn header_for(appearance: String) -> harmonigraph_take::Header {
     harmonigraph_take::Header {
-        sample_rate,
         appearance: Some(appearance),
         source: "harmonigraph".into(),
         ..Default::default()

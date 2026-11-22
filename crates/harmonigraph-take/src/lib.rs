@@ -17,7 +17,7 @@
 //! One RON-encoded [`Record`] per line, appendable and streamable:
 //!
 //! ```text
-//! Header((version:9,sample_rate:48000.0,audio_file:Some("take-….wav"),...))
+//! Header((version:9,audio_file:Some("take-….wav"),...))
 //! Run((at:3.5,song:12.0))
 //! Param((t:3.5,id:"camera-yaw",value:0.5))
 //! Canonical(Delta((event:(t:3.51,...),sequence:4,lifetime:2,...)))
@@ -101,8 +101,6 @@ pub const EXTENSION: &str = "take";
 #[serde(default)]
 pub struct Header {
     pub version: u32,
-    /// The audio clock the event times are in.
-    pub sample_rate: f32,
     /// Opaque serialized appearance at capture start. The UI owns its schema;
     /// take/record transport it without depending on UI or graphics types.
     pub appearance: Option<String>,
@@ -142,7 +140,6 @@ impl Default for Header {
     fn default() -> Self {
         Header {
             version: FORMAT_VERSION,
-            sample_rate: 48_000.0,
             appearance: None,
             source: String::new(),
             audio_file: None,
@@ -625,7 +622,6 @@ mod tests {
 
     fn sample() -> (Header, Vec<NoteRecord>, Vec<ParamRecord>) {
         let header = Header {
-            sample_rate: 44_100.0,
             appearance: Some("(some:\"ron\")".into()),
             source: "test".into(),
             ..Default::default()
@@ -693,7 +689,6 @@ mod tests {
     fn a_take_round_trips_through_a_file() {
         let (header, notes, params) = sample();
         let take = round_trip("round-trip");
-        assert_eq!(take.header.sample_rate, header.sample_rate);
         assert_eq!(take.header.appearance, header.appearance);
         assert_eq!(take.header.source, header.source);
         assert_eq!(take.notes().collect::<Vec<_>>(), notes);
@@ -989,17 +984,18 @@ mod tests {
     /// The keys below are the real ones and in the real shape the pre-prune
     /// writer emitted them in — `coverage_start` after `t`, sixteen `channels`
     /// of 128 controllers after `voices`, `configuration_revision` first inside
-    /// an assignment, `start_samples` after `sample_rate` and `window_points`
-    /// after `appearance` (#895 dropped those two), and a delta's `timing` and
+    /// an assignment, `sample_rate` and then `start_samples` before
+    /// `appearance` and `window_points` after it (#895 dropped the last two,
+    /// #1928 the first), and a delta's `timing` and
     /// a voice's `onset`, each in its last shape with every key it ever had,
     /// and `input_onset` before a voice's `actual_onset` (#1780). A
     /// hand-shortened stand-in would prove nothing about the nested vector RON
     /// actually has to skip.
     ///
-    /// The HEADER's two matter for a second reason the others do not have: the
-    /// version check reads out of the header, so a header that failed to parse
-    /// would be refused as a bad line rather than defaulted, and every take
-    /// already on disk carries both keys.
+    /// The HEADER's three matter for a second reason the others do not have:
+    /// the version check reads out of the header, so a header that failed to
+    /// parse would be refused as a bad line rather than defaulted, and every
+    /// take already on disk carries `sample_rate`.
     #[test]
     fn a_take_carrying_a_since_pruned_field_still_reads() {
         use harmonigraph_core::canonical::*;
@@ -1051,9 +1047,11 @@ mod tests {
         let aged_note = note
             .replace("assignment:Some((", "assignment:Some((configuration_revision:9,")
             .replace(",pitch_microcents:", &format!(",timing:Some({TIMING}),pitch_microcents:"));
-        let aged_header = header
-            .replace("sample_rate:48000.0,", "sample_rate:48000.0,start_samples:Some(1024),")
-            .replace("appearance:None,", "appearance:None,window_points:Some((1000.0,700.0)),");
+        let aged_header = header.replace(
+            "appearance:None,",
+            "sample_rate:48000.0,start_samples:Some(1024),\
+             appearance:None,window_points:Some((1000.0,700.0)),",
+        );
         // Each key named separately, because one `assert_ne!` over the whole
         // line passes when only one of the replacements landed — and each was
         // checked alone against `deny_unknown_fields`.
@@ -1063,6 +1061,7 @@ mod tests {
         assert!(aged_note.contains("configuration_revision:9"), "{aged_note}");
         assert!(aged_frame.contains(&format!("onset:Some({TIMING})")), "{aged_frame}");
         assert!(aged_note.contains(&format!("timing:Some({TIMING})")), "{aged_note}");
+        assert!(aged_header.contains("sample_rate:48000.0"), "{aged_header}");
         assert!(aged_header.contains("start_samples:Some(1024)"), "{aged_header}");
         assert!(aged_header.contains("window_points:Some((1000.0,700.0))"), "{aged_header}");
         let aged = format!("{aged_header}\n{run}\n{aged_frame}\n{aged_note}");
@@ -1101,6 +1100,9 @@ mod tests {
 pub struct WavWriter {
     file: std::fs::File,
     channels: u16,
+    /// The rate the first frames arrived at, which the header states from
+    /// then on; `None` until then.
+    rate: Option<u32>,
     frames: u64,
     max_frames: u64,
     failed: bool,
@@ -1114,39 +1116,45 @@ impl WavWriter {
     const BITS: u16 = 32;
     const FORMAT_FLOAT: u16 = 3;
     const HEADER_BYTES: u32 = 44;
+    /// Where the header's sample-rate and byte-rate fields sit.
+    const RATE_AT: u64 = 24;
+    /// What the header states until frames arrive. A file that never gets any
+    /// keeps it: no frames have no speed, and ffmpeg refuses a rate of zero.
+    const UNSET_RATE: u32 = 48_000;
 
-    pub fn create(
-        path: impl AsRef<std::path::Path>,
-        sample_rate: f32,
-        channels: u16,
-    ) -> std::io::Result<WavWriter> {
-        Self::with_file(|| std::fs::File::create(path), sample_rate, channels)
+    pub fn create(path: impl AsRef<std::path::Path>, channels: u16) -> std::io::Result<WavWriter> {
+        Self::with_file(|| std::fs::File::create(path), channels)
     }
 
     /// Initialize a caller-owned file, allowing exclusive creation at the recording boundary.
-    pub fn from_file(
-        file: std::fs::File,
-        sample_rate: f32,
-        channels: u16,
-    ) -> std::io::Result<WavWriter> {
-        Self::with_file(|| Ok(file), sample_rate, channels)
+    pub fn from_file(file: std::fs::File, channels: u16) -> std::io::Result<WavWriter> {
+        Self::with_file(|| Ok(file), channels)
+    }
+
+    fn invalid() -> std::io::Error {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "WAV format exceeds RIFF header limits",
+        )
+    }
+
+    /// The header's sample-rate and byte-rate fields for `rate`.
+    fn rate_fields(rate: u32, channels: u16) -> std::io::Result<[u8; 8]> {
+        let block_align = u32::from(channels) * u32::from(Self::BITS / 8);
+        let byte_rate = rate.checked_mul(block_align).ok_or_else(Self::invalid)?;
+        let mut fields = [0; 8];
+        fields[..4].copy_from_slice(&rate.to_le_bytes());
+        fields[4..].copy_from_slice(&byte_rate.to_le_bytes());
+        Ok(fields)
     }
 
     fn with_file(
         open: impl FnOnce() -> std::io::Result<std::fs::File>,
-        sample_rate: f32,
         channels: u16,
     ) -> std::io::Result<WavWriter> {
         let channels = channels.max(1);
-        let rate = sample_rate.max(1.0) as u32;
-        let invalid = || {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "WAV format exceeds RIFF header limits",
-            )
-        };
-        let block_align = channels.checked_mul(Self::BITS / 8).ok_or_else(invalid)?;
-        let byte_rate = rate.checked_mul(u32::from(block_align)).ok_or_else(invalid)?;
+        let block_align = channels.checked_mul(Self::BITS / 8).ok_or_else(Self::invalid)?;
+        let rate_fields = Self::rate_fields(Self::UNSET_RATE, channels)?;
         let max_frames = u64::from(u32::MAX - (Self::HEADER_BYTES - 8)) / u64::from(block_align);
         let mut file = open()?;
         let mut header = Vec::with_capacity(Self::HEADER_BYTES as usize);
@@ -1157,8 +1165,7 @@ impl WavWriter {
         header.extend(16u32.to_le_bytes());
         header.extend(Self::FORMAT_FLOAT.to_le_bytes());
         header.extend(channels.to_le_bytes());
-        header.extend(rate.to_le_bytes());
-        header.extend(byte_rate.to_le_bytes());
+        header.extend(rate_fields); // patched by the first write()
         header.extend(block_align.to_le_bytes());
         header.extend(Self::BITS.to_le_bytes());
         header.extend(b"data");
@@ -1168,6 +1175,7 @@ impl WavWriter {
         Ok(WavWriter {
             file,
             channels,
+            rate: None,
             frames: 0,
             max_frames,
             failed: false,
@@ -1180,12 +1188,44 @@ impl WavWriter {
     /// Append whole interleaved frames. Refuse an oversized chunk before
     /// writing any of it, keeping the existing prefix within standard RIFF.
     /// A failed writer accepts no further samples; `finish` repairs its prefix.
-    pub fn write(&mut self, interleaved: &[f32]) -> std::io::Result<()> {
-        self.append(interleaved, std::io::Write::write_all)
+    ///
+    /// `sample_rate` is the rate these frames were produced at. The first
+    /// frames set the header's; frames at any other rate after them fail the
+    /// writer, since one header cannot state two speeds and frames written
+    /// under the wrong one play at the wrong speed with nothing to say so.
+    pub fn write(&mut self, sample_rate: f32, interleaved: &[f32]) -> std::io::Result<()> {
+        self.append(sample_rate, interleaved, std::io::Write::write_all)
+    }
+
+    /// The rate the header states, once frames have set it.
+    #[cfg(test)]
+    fn sample_rate(&self) -> Option<u32> {
+        self.rate
+    }
+
+    /// Fix the header's rate at the first frames', or refuse another one.
+    fn state_rate(&mut self, rate: u32) -> std::io::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        match self.rate {
+            Some(stated) if stated != rate => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("the sample rate changed from {stated} Hz to {rate} Hz during the take"),
+            )),
+            Some(_) => Ok(()),
+            None => {
+                let fields = Self::rate_fields(rate, self.channels)?;
+                self.file.seek(SeekFrom::Start(Self::RATE_AT))?;
+                self.file.write_all(&fields)?;
+                self.file.seek(SeekFrom::End(0))?;
+                self.rate = Some(rate);
+                Ok(())
+            }
+        }
     }
 
     fn append(
         &mut self,
+        sample_rate: f32,
         interleaved: &[f32],
         write: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
     ) -> std::io::Result<()> {
@@ -1205,6 +1245,12 @@ impl WavWriter {
                 std::io::ErrorKind::InvalidInput,
                 "WAV requires whole frames within the 4 GiB RIFF size limit",
             ));
+        }
+        // The rate last: refused frames fix nothing in the header.
+        let rate = sample_rate.max(1.0) as u32;
+        if let Err(error) = self.state_rate(rate) {
+            self.failed = true;
+            return Err(error);
         }
         self.bytes.clear();
         self.bytes.reserve(interleaved.len() * 4);
@@ -1290,9 +1336,9 @@ mod wav_tests {
     fn a_written_wav_has_the_sizes_and_samples_it_claims() {
         let path = temp("basic.wav");
         {
-            let mut writer = WavWriter::create(&path, 48_000.0, 2).unwrap();
-            writer.write(&[0.5, -0.5, 0.25, -0.25]).unwrap();
-            writer.write(&[1.0, -1.0]).unwrap();
+            let mut writer = WavWriter::create(&path, 2).unwrap();
+            writer.write(48_000.0, &[0.5, -0.5, 0.25, -0.25]).unwrap();
+            writer.write(48_000.0, &[1.0, -1.0]).unwrap();
             assert_eq!(writer.frames(), 3);
             writer.finish().unwrap();
         }
@@ -1320,8 +1366,8 @@ mod wav_tests {
     fn dropping_the_writer_still_patches_the_sizes() {
         let path = temp("dropped.wav");
         {
-            let mut writer = WavWriter::create(&path, 44_100.0, 1).unwrap();
-            writer.write(&[0.1, 0.2, 0.3]).unwrap();
+            let mut writer = WavWriter::create(&path, 1).unwrap();
+            writer.write(44_100.0, &[0.1, 0.2, 0.3]).unwrap();
         }
         let bytes = std::fs::read(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -1341,11 +1387,11 @@ mod wav_tests {
     #[test]
     fn wav_limit_refuses_a_chunk_and_preserves_its_playable_prefix() {
         let path = temp("limited.wav");
-        let mut writer = WavWriter::create(&path, 48_000.0, 2).unwrap();
+        let mut writer = WavWriter::create(&path, 2).unwrap();
         writer.limit_frames_for_test(3);
-        writer.write(&[0.5, -0.5, 0.25, -0.25]).unwrap();
-        assert!(writer.write(&[1.0; 4]).is_err());
-        assert!(writer.write(&[1.0; 2]).is_err(), "a failed recording cannot resume");
+        writer.write(48_000.0, &[0.5, -0.5, 0.25, -0.25]).unwrap();
+        assert!(writer.write(48_000.0, &[1.0; 4]).is_err());
+        assert!(writer.write(48_000.0, &[1.0; 2]).is_err(), "a failed recording cannot resume");
         assert_eq!(writer.frames(), 2);
         writer.finish().unwrap();
         let bytes = std::fs::read(&path).unwrap();
@@ -1359,11 +1405,11 @@ mod wav_tests {
     #[test]
     fn wav_accepts_its_exact_frame_limit_and_refuses_partial_frames() {
         let path = temp("whole-frames.wav");
-        let mut writer = WavWriter::create(&path, 48_000.0, 2).unwrap();
+        let mut writer = WavWriter::create(&path, 2).unwrap();
         writer.limit_frames_for_test(1);
-        writer.write(&[0.5, -0.5]).unwrap();
+        writer.write(48_000.0, &[0.5, -0.5]).unwrap();
         assert_eq!(writer.frames(), 1);
-        assert!(writer.write(&[1.0]).is_err());
+        assert!(writer.write(48_000.0, &[1.0]).is_err());
         writer.finish().unwrap();
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 44 + 8);
         std::fs::remove_file(path).unwrap();
@@ -1373,26 +1419,69 @@ mod wav_tests {
     fn unsupported_wav_header_values_do_not_truncate_an_existing_file() {
         let path = temp("invalid-format.wav");
         std::fs::write(&path, b"existing recording").unwrap();
-        for (rate, channels) in [(48_000.0, u16::MAX), (u32::MAX as f32, 2)] {
-            assert!(WavWriter::create(&path, rate, channels).is_err());
-            assert_eq!(std::fs::read(&path).unwrap(), b"existing recording");
-        }
+        assert!(WavWriter::create(&path, u16::MAX).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing recording");
+        std::fs::remove_file(&path).unwrap();
+        // A rate past the header's limits refuses its frames before writing any.
+        let mut writer = WavWriter::create(&path, 2).unwrap();
+        assert!(writer.write(u32::MAX as f32, &[0.5, -0.5]).is_err());
+        assert_eq!((writer.frames(), writer.sample_rate()), (0, None));
+        assert!(writer.write(48_000.0, &[0.5, -0.5]).is_err(), "a failed recording cannot resume");
+        drop(writer);
         std::fs::remove_file(path).unwrap();
+    }
+
+    fn header_rate(bytes: &[u8]) -> (u32, u32) {
+        let at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+        (at(24), at(28))
+    }
+
+    /// The rate travels with the frames (#1928): the first frames set the
+    /// header's, and frames at another rate after them are refused rather
+    /// than written under a header that would play them at the wrong speed.
+    #[test]
+    fn a_wav_states_its_first_frames_rate_and_refuses_frames_at_another() {
+        let path = temp("rate.wav");
+        let mut writer = WavWriter::create(&path, 2).unwrap();
+        writer.write(44_100.0, &[0.5, -0.5]).unwrap();
+        writer.write(44_100.0, &[0.25, -0.25]).unwrap();
+        let error = writer.write(48_000.0, &[1.0, -1.0]).unwrap_err();
+        assert!(error.to_string().contains("from 44100 Hz to 48000 Hz"), "{error}");
+        assert!(writer.write(44_100.0, &[1.0, -1.0]).is_err(), "a failed recording cannot resume");
+        writer.finish().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(header_rate(&bytes), (44_100, 44_100 * 8), "rate and byte rate");
+        assert_eq!(bytes.len(), 44 + 2 * 8, "the frames before the change, and none after");
+        assert_eq!(f32::from_le_bytes(bytes[44..48].try_into().unwrap()), 0.5);
+    }
+
+    /// A WAV no frames reached still states a rate a player accepts: ffmpeg
+    /// refuses a rate of zero, which would fail the export of a take that
+    /// was armed and never played.
+    #[test]
+    fn a_wav_without_frames_states_a_valid_rate() {
+        let path = temp("empty.wav");
+        WavWriter::create(&path, 2).unwrap().finish().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let (rate, byte_rate) = header_rate(&bytes);
+        assert!(rate > 0 && byte_rate == rate * 8, "{rate} Hz, {byte_rate} B/s");
     }
 
     #[test]
     fn a_failed_partial_wav_append_is_removed_when_finalizing() {
         use std::io::Write;
         let path = temp("partial-write.wav");
-        let mut writer = WavWriter::create(&path, 48_000.0, 2).unwrap();
-        writer.write(&[0.5, -0.5]).unwrap();
-        let result = writer.append(&[1.0; 4], |file, bytes| {
+        let mut writer = WavWriter::create(&path, 2).unwrap();
+        writer.write(48_000.0, &[0.5, -0.5]).unwrap();
+        let result = writer.append(48_000.0, &[1.0; 4], |file, bytes| {
             file.write_all(&bytes[..11])?;
             Err(std::io::Error::other("disk stopped during a frame"))
         });
         assert!(result.is_err());
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 44 + 8 + 11);
-        assert!(writer.write(&[1.0; 2]).is_err());
+        assert!(writer.write(48_000.0, &[1.0; 2]).is_err());
         writer.finish().unwrap();
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(bytes.len(), 44 + 8);

@@ -66,7 +66,6 @@ pub(super) fn frame(
     // Drained on the clock it arrived by, drawn at the refresh it is for.
     let wall = shared.clock.frame_wall(timing, now);
     let now = shared.clock.display_now(wall);
-    let sample_rate = shared.clock.sample_rate();
     while let Some(line) = state.params.settings.take_notice() {
         shared.ui.log(line);
     }
@@ -116,7 +115,7 @@ pub(super) fn frame(
         egui_state.window.offered().then(|| !egui_state.docked());
     let take_start = Instant::now();
     let mut drawing = Duration::ZERO;
-    let ask = shared.take_pass(sample_rate, |shared| {
+    let ask = shared.take_pass(|shared| {
         let backend = PluginParamBackend {
             params: &state.params,
             host: context,

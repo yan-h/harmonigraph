@@ -7,28 +7,14 @@ use super::*;
 const BLOCK_SECONDS: f64 = 64.0 / 48_000.0;
 const BLOCK_BARS: f64 = BLOCK_SECONDS / 2.0;
 
-/// The three fields [`header_for`] sets, each asserted against a value the
-/// header could not have arrived at on its own.
-///
-/// That is the whole point of the test. `Header`'s `Default` is not a
-/// zeroed struct — it carries 48 kHz, `None` and `""` — so a field that
-/// stops being set produces a header that still serializes, still opens a
-/// take the renderer will accept, and is simply wrong about the recording.
-/// Nothing downstream can tell that apart from a take genuinely recorded
-/// at 48 kHz with no look saved.
-///
-/// So the rate here is deliberately NOT 48 kHz: at the default value the
-/// assertion would hold whether or not the field were set at all.
+/// The two fields [`header_for`] sets, each asserted against a value the
+/// header could not have arrived at on its own: `Header`'s `Default` carries
+/// `None` and `""`, so a field that stops being set produces a header that
+/// still serializes and is simply wrong about the recording.
 #[test]
-fn the_header_carries_the_rate_the_look_and_the_source() {
+fn the_header_carries_the_look_and_the_source() {
     let blob = "(camera:(distance:9.0),palette:magma)".to_owned();
-    let header = header_for(44_100.0, blob.clone());
-    assert_ne!(
-        44_100.0,
-        harmonigraph_take::Header::default().sample_rate,
-        "the fixture's rate has to differ from the default to test anything",
-    );
-    assert_eq!(header.sample_rate, 44_100.0, "the take's time base is the one it was given");
+    let header = header_for(blob.clone());
     assert_eq!(
         header.appearance.as_deref(),
         Some(blob.as_str()),
@@ -67,13 +53,10 @@ fn simultaneous_recordings_own_distinct_pairs() {
                 let base = base.clone();
                 scope.spawn(move || {
                     barrier.wait();
-                    let mut recording = Recording::create(
-                        header_for(48_000.0, index.to_string()),
-                        base,
-                        FIXTURE_SPEC,
-                    )
-                    .unwrap();
-                    recording.audio.as_mut().unwrap().write(&[index as f32; 4]).unwrap();
+                    let mut recording =
+                        Recording::create(header_for(index.to_string()), base).unwrap();
+                    let audio = recording.audio.as_mut().unwrap();
+                    audio.write(48_000.0, &[index as f32; 4]).unwrap();
                     (index, recording.finish().unwrap())
                 })
             })
@@ -94,22 +77,15 @@ fn simultaneous_recordings_own_distinct_pairs() {
 }
 
 #[test]
-fn collision_and_initialization_failure_remove_only_owned_files() {
+fn a_collision_removes_only_owned_files() {
     let dir = std::env::temp_dir().join(format!("harmonigraph-owned-pair-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let base = dir.join("same.take");
     std::fs::write(base.with_extension("wav"), b"preexisting audio").unwrap();
-    let recording =
-        Recording::create(header_for(48_000.0, String::new()), base.clone(), FIXTURE_SPEC).unwrap();
+    let recording = Recording::create(header_for(String::new()), base.clone()).unwrap();
     assert_eq!(recording.path, dir.join("same_1.take"));
     assert!(!base.exists(), "failed companion acquisition removes our empty take");
     assert_eq!(std::fs::read(base.with_extension("wav")).unwrap(), b"preexisting audio");
-    let failed = dir.join("failed.take");
-    let invalid = AudioSpec { sample_rate: f32::MAX, channels: u16::MAX };
-    let header = header_for(48_000.0, String::new());
-    assert!(Recording::create(header, failed.clone(), invalid).is_err());
-    assert!(!failed.exists());
-    assert!(!failed.with_extension("wav").exists());
     drop(recording);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -123,8 +99,8 @@ fn a_take_that_cannot_be_created_says_so_whole_on_the_status_line() {
     let file = std::env::temp_dir().join(format!("harmonigraph-not-a-dir-{}", std::process::id()));
     std::fs::write(&file, b"").unwrap();
     let mut pump = Pump::default();
-    let header = header_for(48_000.0, String::new());
-    pump.start(header, file.join("take.take"), FIXTURE_SPEC, &ctrl.status, &ctrl.fence);
+    let header = header_for(String::new());
+    pump.start(header, file.join("take.take"), &ctrl.status, &ctrl.fence);
     std::fs::remove_file(&file).unwrap();
     let status = ctrl.status();
     assert!(status.contains("cannot create") && status.contains("no render started"), "{status}");
@@ -176,7 +152,7 @@ impl Bench {
                 Entry::Run { song, .. } => format!("run @{song}"),
                 Entry::RunEnd { .. } => "run-end".to_owned(),
                 Entry::Configuration(_) => "configuration".to_owned(),
-                Entry::AudioSamples(samples) => format!("audio {samples}"),
+                Entry::AudioSamples { samples, .. } => format!("audio {samples}"),
             })
             .collect()
     }
@@ -209,7 +185,7 @@ fn recorded_audio_reserves_whole_frames_and_counts_the_dropped_tail() {
     ctrl.recording.store(true, Ordering::Relaxed);
 
     // Even, into an empty ring: the whole block fits, nothing is dropped.
-    rec.audio(&mut std::iter::repeat_n(0.25f32, 8), 8);
+    rec.audio(&mut std::iter::repeat_n(0.25f32, 8), 8, 48_000.0);
     ctrl.tick(true, 0);
     assert!(
         !ctrl.status().contains("DROPPED"),
@@ -218,7 +194,7 @@ fn recorded_audio_reserves_whole_frames_and_counts_the_dropped_tail() {
     );
 
     // Odd: the last sample is half a frame and must not reach the ring.
-    rec.audio(&mut std::iter::repeat_n(0.25f32, 9), 9);
+    rec.audio(&mut std::iter::repeat_n(0.25f32, 9), 9, 48_000.0);
     ctrl.tick(true, 0);
     assert!(
         ctrl.dropped.load(Ordering::Relaxed) == 1 && ctrl.fence.failed.load(Ordering::Acquire),
@@ -322,7 +298,7 @@ fn the_guis_stop_bar_reaches_the_audio_thread_and_its_end_comes_back() {
 #[test]
 fn configuration_audio_exhaustion_marks_the_recording_incomplete() {
     let mut b = Bench::new();
-    b.rec.audio(&mut std::iter::repeat(0.0), 1026);
+    b.rec.audio(&mut std::iter::repeat(0.0), 1026, 48_000.0);
     assert!(b.ctrl.fence.failed.load(Ordering::Acquire));
     assert_eq!(b.ctrl.dropped.load(Ordering::Relaxed), 1);
     assert_eq!(b.ends.audio.slots(), 1024, "the fixture must fill the actual ring");
@@ -393,14 +369,14 @@ fn each_run_opens_with_its_configuration_and_records_only_changes() {
 fn reserved_audio_is_actually_written() {
     let mut b = Bench::new();
     b.arm();
-    b.rec.audio(&mut [0.25f32, -0.25, 0.5, -0.5].into_iter(), 4);
+    b.rec.audio(&mut [0.25f32, -0.25, 0.5, -0.5].into_iter(), 4, 48_000.0);
     assert_eq!(b.written(), [0.25, -0.25, 0.5, -0.5]);
     assert_eq!(b.pushed(), ["audio 4"], "and the ring says where they belong");
     assert_eq!(b.ctrl.dropped.load(Ordering::Relaxed), 0);
 
     // An odd block still writes its whole frames; only the half frame on
     // the end is dropped.
-    b.rec.audio(&mut [1.0f32, -1.0, 0.75].into_iter(), 3);
+    b.rec.audio(&mut [1.0f32, -1.0, 0.75].into_iter(), 3, 48_000.0);
     assert_eq!(b.written(), [1.0, -1.0], "the whole frame lands, the half frame does not");
     assert_eq!(b.ctrl.dropped.load(Ordering::Relaxed), 1);
 }
@@ -513,7 +489,7 @@ fn the_shipped_rings_have_room_for_what_the_audio_thread_pushes() {
     b.arm();
     b.rec.record(0.0, Some(0.0));
     b.rec.params(0.0, [0.5; ParamKey::ALL.len()]);
-    b.rec.audio(&mut std::iter::repeat_n(0.0f32, 512), 512);
+    b.rec.audio(&mut std::iter::repeat_n(0.0f32, 512), 512, 48_000.0);
     let pushed = b.pushed();
     assert_eq!(pushed.len(), ParamKey::ALL.len() + 2, "the run, every parameter, the audio");
     assert_eq!(pushed.last().map(String::as_str), Some("audio 512"), "{pushed:?}");
@@ -645,9 +621,9 @@ fn every_run_the_recorder_opens_takes_a_new_serial() {
 fn audio_with_no_room_for_its_entry_stays_out_of_the_ring() {
     let mut b = Bench::with_rings(1, 1024);
     b.arm();
-    b.rec.audio(&mut [0.5, -0.5].into_iter(), 2);
+    b.rec.audio(&mut [0.5, -0.5].into_iter(), 2, 48_000.0);
     assert_eq!(b.ends.audio.slots(), 2, "the first block and its entry");
-    b.rec.audio(&mut [0.25, -0.25].into_iter(), 2);
+    b.rec.audio(&mut [0.25, -0.25].into_iter(), 2, 48_000.0);
     assert!(b.ctrl.fence.failed.load(Ordering::Acquire), "the full record ring fails the take");
     assert_eq!(b.ends.audio.slots(), 2, "the second block's samples went in uncounted");
 }
