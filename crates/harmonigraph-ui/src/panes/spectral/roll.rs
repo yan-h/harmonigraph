@@ -729,14 +729,21 @@ fn source_instances(
 
     // One segment per note is the common case (a note is bent rarely), so the
     // note count is the right first guess at how many instances this makes.
-    let mut instances = Vec::with_capacity(notes.len());
     let mut painted = Vec::with_capacity(notes.len());
     let mut tongues = Vec::new();
     let mut motion = RollMotion::default();
+    let intensity_varies = intensity.routes_to(IntensityTarget::Opacity)
+        || intensity.routes_to(IntensityTarget::Thickness);
+    let flat_look = (!intensity_varies)
+        .then(|| Look::of(&intensity, 1.0, Expressions::default()).floored(width_floor));
+    let tremolo_scale = point_scale.max(1e-3);
+    let now_line = axes.at(0.5, time.split);
+    let origin_points = time.origin / per_point;
+    let mut intensity_scratch = IntensityScratch::default();
+    let mut pieces_scratch: Vec<(f64, f64, RollInstance)> = Vec::new();
     let ribbons = density::layout(&notes, now, minimum, gap, edge);
     for ribbon in ribbons {
         let note = ribbon.last();
-        let first_instance = instances.len();
         // How much lead this note still owns: all of it while the key is down,
         // and whatever its release has left once it is up. Per note and decided
         // once for it.
@@ -760,8 +767,10 @@ fn source_instances(
                 let half = 0.5 * (lead_px + seam_px);
                 let center = axes.at(t, split) + axes.dir_depth() * (0.5 * (seam_px - lead_px));
                 // The lead reads the note as it stands at its leading end.
-                let (_, last) = note.expressions()[note.expressions().len() - 1];
-                let look = Look::of(&intensity, note.velocity, last).floored(width_floor);
+                let look = flat_look.unwrap_or_else(|| {
+                    let (_, last) = note.expressions()[note.expressions().len() - 1];
+                    Look::of(&intensity, note.velocity, last).floored(width_floor)
+                });
                 if look.width > 0.0 {
                     let grow = look.grow();
                     let (fade, taper) = read_through(look, grow);
@@ -789,6 +798,8 @@ fn source_instances(
             tongues.push((ribbon.paint_starts[ribbon.paint_starts.len() - 1].0, tongue));
             motion.fading = true;
         }
+        let dense = ribbon.dense();
+        let first_painted = painted.len();
         for ((t0, p0), (t1, p1)) in ribbon.segments(now) {
             // A segment wholly before the region is DROPPED, and the test has
             // to be made on its own end rather than on the clamped one — a
@@ -878,25 +889,55 @@ fn source_instances(
             // Read it only for segments that survive the pitch cull.
             let pitch = (p0 + p1) * 0.5;
             let core = note_color(state, pitch, 1.0);
+            // Uniform inset hatching inside one continuous silhouette; absolute
+            // take time anchors the ornament while scrolling and as old notes leave.
+            let tremolo = if dense {
+                let clock = origin_points - f64::from((center - now_line).dot(axes.dir_depth()));
+                [(clock / f64::from(tremolo_scale)).rem_euclid(6.0) as f32, tremolo_scale]
+            } else {
+                [0.0; 2]
+            };
             let segment = RollInstance {
                 center: [center.x, center.y],
                 half_extent: [half_pitch, half_depth],
                 shear: slope,
                 core: core.to_array(),
                 aura: note_fill(state, pitch, 1.0),
+                tremolo,
                 ..RollInstance::PLAIN
             };
-            // Where a moment of this segment lands along its box, as the
-            // shader's depth offset from the center, which the seam moved.
-            let centre = (d0 + d1) * 0.5;
-            let offset =
-                |at: f64| (time.depth_of_unclamped(at) - centre) * axes.depth_len() + 0.5 * seam;
-            let points = intensity_points(&ribbon, &intensity, t0, t1, width_floor);
-            if points.iter().all(|(_, look)| look.width == 0.0) {
+            pieces_scratch.clear();
+            let flat_single =
+                flat_look.or_else(|| flat_segment_look(&ribbon, &intensity, t0, t1, width_floor));
+            if let Some(look) = flat_single {
+                if look.width > 0.0 {
+                    let grow = look.grow();
+                    let (fade, taper) = read_through(look, grow);
+                    let mut piece = RollInstance { fade, taper, ..segment };
+                    piece.half_extent[0] *= grow;
+                    pieces_scratch.push((t0, t1, piece));
+                }
+            } else {
+                // Where a moment of this segment lands along its box, as the
+                // shader's depth offset from the center, which the seam moved.
+                let centre = (d0 + d1) * 0.5;
+                let offset = |at: f64| {
+                    (time.depth_of_unclamped(at) - centre) * axes.depth_len() + 0.5 * seam
+                };
+                intensity_points(&ribbon, &intensity, t0, t1, width_floor, &mut intensity_scratch);
+                if intensity_scratch.points.iter().any(|(_, look)| look.width > 0.0) {
+                    push_pieces(
+                        &mut pieces_scratch,
+                        segment,
+                        &intensity_scratch.points,
+                        &mut intensity_scratch.spans,
+                        offset,
+                    );
+                }
+            }
+            if pieces_scratch.is_empty() {
                 continue;
             }
-            let pieces = instances.len();
-            push_pieces(&mut instances, segment, &points, offset);
             // At a near edge that bounds the notes, the pieces past its ink
             // are not drawn and the one crossing it draws only up to it: by
             // its draw span, which leaves the segment's box, colour and
@@ -904,51 +945,28 @@ fn source_instances(
             // edge does (#1849). Cropping the segment itself, as the far edge
             // does, would re-read its intensity at the crop.
             if near_edge.is_finite() {
-                let bound = offset(near_edge);
-                instances.truncate(
-                    pieces + instances[pieces..].iter().take_while(|p| p.span[1] >= bound).count(),
-                );
-                for piece in &mut instances[pieces..] {
+                let centre = (d0 + d1) * 0.5;
+                let bound =
+                    (time.depth_of_unclamped(near_edge) - centre) * axes.depth_len() + 0.5 * seam;
+                let keep = pieces_scratch.iter().take_while(|(_, _, p)| p.span[1] >= bound).count();
+                pieces_scratch.truncate(keep);
+                for (_, piece_t1, piece) in &mut pieces_scratch {
                     piece.span[0] = piece.span[0].max(bound);
+                    *piece_t1 = (*piece_t1).min(near_edge);
                 }
             }
-        }
-        if ribbon.dense() {
-            texture_run(&mut instances, first_instance, axes, &time, point_scale);
+            // A later attack in this ribbon must paint above a voice that began
+            // between its members. Split only its draw spans across cuts inside
+            // each piece's own interval: the shared box and ornament continue
+            // through each cut without adding a cap or seam.
+            for (piece_t0, piece_t1, instance) in pieces_scratch.drain(..) {
+                push_painted(&mut painted, &ribbon, axes, &time, piece_t0, piece_t1, instance);
+            }
         }
         // Drawn, and its newest note's body not yet past the far edge: what
         // is left of it is an overhang, which finishes at the idle poll.
         motion.scrolling |=
-            source.now_line && instances.len() > first_instance && note.stop(now) >= oldest;
-        // A later attack in this ribbon must paint above a voice that began
-        // between its members. Split only its draw spans: the shared box and
-        // ornament continue through each cut without adding a cap or seam.
-        for instance in instances.drain(first_instance..) {
-            let center = egui::pos2(instance.center[0], instance.center[1]);
-            let center_depth = (center - axes.at(0.5, time.split)).dot(axes.dir_depth());
-            let offset =
-                |at| (time.depth_of_unclamped(at) - time.split) * axes.depth_len() - center_depth;
-            // The quad's reach along depth: a cut at a pitch-segment end still
-            // owes the outline and antialiasing beyond that body end.
-            let extent = quad.depth(instance.half_extent[1]);
-            let oldest = instance.span[1].min(extent);
-            let newest = instance.span[0].max(-extent);
-            let first = ribbon
-                .paint_starts
-                .partition_point(|&(_, at)| offset(at) >= oldest)
-                .saturating_sub(1);
-            for i in first..ribbon.paint_starts.len() {
-                let (order, start) = ribbon.paint_starts[i];
-                let stop = ribbon.paint_starts.get(i + 1).map_or(f32::MIN, |&(_, at)| offset(at));
-                let span = [instance.span[0].max(stop), instance.span[1].min(offset(start))];
-                if span[0] < span[1] {
-                    painted.push((order, RollInstance { span, ..instance }));
-                }
-                if stop <= newest {
-                    break;
-                }
-            }
-        }
+            source.now_line && painted.len() > first_painted && note.stop(now) >= oldest;
     }
     painted.sort_by_key(|&(order, _)| order);
     tongues.sort_by_key(|&(order, _)| order);
@@ -959,23 +977,39 @@ fn source_instances(
     }
 }
 
-/// Uniform inset hatching inside one continuous silhouette. Absolute take
-/// time anchors the ornament while scrolling and as old notes leave the view.
-/// The shader spaces strokes by composition points, not unresolvable attacks.
-fn texture_run(
-    instances: &mut [RollInstance],
-    first: usize,
+/// Split `instance` across any `paint_starts` strictly inside `(piece_t0, piece_t1)`.
+fn push_painted(
+    painted: &mut Vec<(usize, RollInstance)>,
+    ribbon: &Ribbon<'_>,
     axes: &Axes,
     time: &TimeAxis,
-    point_scale: f32,
+    piece_t0: f64,
+    piece_t1: f64,
+    instance: RollInstance,
 ) {
-    let scale = point_scale.max(1e-3);
-    let now_line = axes.at(0.5, time.split);
-    for instance in &mut instances[first..] {
-        let center = egui::pos2(instance.center[0], instance.center[1]);
-        let clock = time.origin / time.seconds_per_point(axes)
-            - f64::from((center - now_line).dot(axes.dir_depth()));
-        instance.tremolo = [(clock / f64::from(scale)).rem_euclid(6.0) as f32, scale];
+    if ribbon.paint_starts.len() == 1 {
+        if instance.span[0] < instance.span[1] {
+            painted.push((ribbon.paint_starts[0].0, instance));
+        }
+        return;
+    }
+    let center = egui::pos2(instance.center[0], instance.center[1]);
+    let center_depth = (center - axes.at(0.5, time.split)).dot(axes.dir_depth());
+    let offset = |at| (time.depth_of_unclamped(at) - time.split) * axes.depth_len() - center_depth;
+    let mut high = instance.span[1];
+    let first = ribbon.paint_starts.partition_point(|&(_, at)| at <= piece_t0).saturating_sub(1);
+    for i in first..ribbon.paint_starts.len() {
+        let (order, _) = ribbon.paint_starts[i];
+        let next = ribbon.paint_starts.get(i + 1).map(|&(_, at)| at).filter(|&at| at < piece_t1);
+        let low = next.map_or(instance.span[0], |at| instance.span[0].max(offset(at)));
+        let span = [low, high];
+        if span[0] < span[1] {
+            painted.push((order, RollInstance { span, ..instance }));
+        }
+        let Some(at) = next else {
+            break;
+        };
+        high = instance.span[1].min(offset(at));
     }
 }
 
@@ -1013,6 +1047,54 @@ impl Look {
     }
 }
 
+#[derive(Default)]
+struct IntensityScratch {
+    raw: Vec<(f64, Look)>,
+    floored: Vec<(f64, Look)>,
+    keep: Vec<bool>,
+    anchors: Vec<usize>,
+    points: Vec<(f64, Look)>,
+    spans: Vec<[(f64, Look); 2]>,
+}
+
+/// Half-open note index range `[first, end)` covering `[t0, t1)` in `ribbon`.
+fn segment_note_range(ribbon: &Ribbon<'_>, t0: f64, t1: f64) -> (usize, usize) {
+    let first = ribbon.notes.partition_point(|n| n.start <= t0).saturating_sub(1);
+    let end = if t0 < t1 {
+        ribbon.notes.partition_point(|n| n.start < t1).max(first + 1)
+    } else {
+        first + 1
+    };
+    (first, end)
+}
+
+/// Fast path when one note covers `[t0, t1)` with no interior expression
+/// breakpoint and both floored ends match; falls back to [`intensity_points`]
+/// otherwise so threshold crossings and tapers match bit-for-bit.
+fn flat_segment_look(
+    ribbon: &Ribbon<'_>,
+    intensity: &IntensitySettings,
+    t0: f64,
+    t1: f64,
+    width_floor: f32,
+) -> Option<Look> {
+    let (first, end) = segment_note_range(ribbon, t0, t1);
+    if first + 1 != end {
+        return None;
+    }
+    let note = ribbon.notes[first];
+    let exprs = note.expressions();
+    // `expressions_at` clamps to `exprs[0].1` for all `t <= exprs[0].0`, so only
+    // breakpoints from `exprs[1..]` can introduce a change inside `(t0, t1)`.
+    let next = exprs[1..].partition_point(|&(t, _)| t <= t0) + 1;
+    if exprs.get(next).is_some_and(|&(t, _)| t < t1) {
+        return None;
+    }
+    let a = Look::of(intensity, note.velocity, note.expressions_at(t0)).floored(width_floor);
+    let b = Look::of(intensity, note.velocity, note.expressions_at(t1)).floored(width_floor);
+    (a == b).then_some(a)
+}
+
 /// A note's look from `t0` to `t1`, as breakpoints `(time, look)` oldest first
 /// to be read as straight lines: its expression breakpoints between the two,
 /// with the fewest kept that stay within [`INTENSITY_TOLERANCE`] of the rest on
@@ -1026,63 +1108,76 @@ fn intensity_points(
     t0: f64,
     t1: f64,
     width_floor: f32,
-) -> Vec<(f64, Look)> {
-    let look_at = |at| {
-        let note = ribbon.note_at(at);
-        Look::of(intensity, note.velocity, note.expressions_at(at))
-    };
-    let mut points = vec![(t0, look_at(t0))];
-    let first = ribbon.notes.partition_point(|n| n.start <= t0).saturating_sub(1);
-    let end = ribbon.notes.partition_point(|n| n.start <= t1).max(first + 1);
+    scratch: &mut IntensityScratch,
+) {
+    let (first, end) = segment_note_range(ribbon, t0, t1);
+    let first_note = ribbon.notes[first];
+    let last_note = ribbon.notes[end - 1];
+    scratch.raw.clear();
+    scratch.raw.push((t0, Look::of(intensity, first_note.velocity, first_note.expressions_at(t0))));
     for (i, note) in ribbon.notes.iter().enumerate().take(end).skip(first) {
-        if i > 0 && note.start > t0 && note.start <= t1 {
+        if i > first && note.start > t0 && note.start < t1 {
             let prev = ribbon.notes[i - 1];
-            points.push((
+            scratch.raw.push((
                 note.start,
                 Look::of(intensity, prev.velocity, prev.expressions_at(note.start)),
             ));
-            points.push((note.start, look_at(note.start)));
+            scratch.raw.push((
+                note.start,
+                Look::of(intensity, note.velocity, note.expressions_at(note.start)),
+            ));
         }
-        points.extend(
+        scratch.raw.extend(
             note.expressions()
                 .iter()
                 .filter(|(t, _)| *t > t0 && *t < t1)
                 .map(|&(t, e)| (t, Look::of(intensity, note.velocity, e))),
         );
     }
-    points.push((t1, look_at(t1)));
+    scratch.raw.push((t1, Look::of(intensity, last_note.velocity, last_note.expressions_at(t1))));
     // Floor before reducing: tiny positive expression values can become a
     // visible ribbon, so raw mapping error is not a bound on picture error.
-    let points = floor_widths(&points, width_floor);
-    let mut keep = vec![false; points.len()];
-    keep[0] = true;
-    keep[points.len() - 1] = true;
+    floor_widths(&scratch.raw, width_floor, &mut scratch.floored);
+    scratch.keep.clear();
+    scratch.keep.resize(scratch.floored.len(), false);
+    scratch.keep[0] = true;
+    let last = scratch.floored.len() - 1;
+    scratch.keep[last] = true;
     // Each display's whole range, in a `Look`'s own units: opacity's 0..1,
     // and the width's Thickness max.
     let tolerance =
         [1.0, intensity.thickness_max.max(1.0)].map(|range| INTENSITY_TOLERANCE * range);
     // A zero/positive boundary and a step are exact decisions, even when the
     // ordinary approximation tolerance could otherwise erase them.
-    for i in 1..points.len() {
-        if points[i].0 == points[i - 1].0
-            || (points[i].1.width == 0.0) != (points[i - 1].1.width == 0.0)
+    for i in 1..scratch.floored.len() {
+        if scratch.floored[i].0 == scratch.floored[i - 1].0
+            || (scratch.floored[i].1.width == 0.0) != (scratch.floored[i - 1].1.width == 0.0)
         {
-            keep[i - 1] = true;
-            keep[i] = true;
+            scratch.keep[i - 1] = true;
+            scratch.keep[i] = true;
         }
     }
-    let anchors: Vec<_> = keep.iter().enumerate().filter_map(|(i, &k)| k.then_some(i)).collect();
-    for pair in anchors.windows(2) {
-        simplify(&points, tolerance, &mut keep, pair[0], pair[1]);
+    scratch.anchors.clear();
+    scratch.anchors.extend(scratch.keep.iter().enumerate().filter_map(|(i, &k)| k.then_some(i)));
+    for pair in scratch.anchors.windows(2) {
+        simplify(&scratch.floored, tolerance, &mut scratch.keep, pair[0], pair[1]);
     }
-    points.into_iter().zip(keep).filter_map(|(point, kept)| kept.then_some(point)).collect()
+    scratch.points.clear();
+    scratch.points.extend(
+        scratch
+            .floored
+            .iter()
+            .copied()
+            .zip(scratch.keep.iter().copied())
+            .filter_map(|(point, kept)| kept.then_some(point)),
+    );
 }
 
 /// Apply the positive width floor to the piecewise curve, including its
 /// crossings. A zero interval remains absent; a ramp leaving zero steps to
 /// the floor instead of interpolating a new sub-floor hairline.
-fn floor_widths(points: &[(f64, Look)], minimum: f32) -> Vec<(f64, Look)> {
-    let mut out = Vec::with_capacity(points.len());
+fn floor_widths(points: &[(f64, Look)], minimum: f32, out: &mut Vec<(f64, Look)>) {
+    out.clear();
     for pair in points.windows(2) {
         let [(ta, a), (tb, b)] = [pair[0], pair[1]];
         if tb <= ta {
@@ -1107,7 +1202,6 @@ fn floor_widths(points: &[(f64, Look)], minimum: f32) -> Vec<(f64, Look)> {
         out.push((tb, floor(b)));
     }
     out.dedup();
-    out
 }
 
 /// Douglas–Peucker over `points[first..=last]`, marking in `keep` each point
@@ -1166,31 +1260,35 @@ fn read_through(look: Look, grow: f32) -> ([f32; 2], [f32; 4]) {
 /// themselves from the box, so they follow; a segment that never
 /// swells keeps its box, and its widths, exactly.
 fn push_pieces(
-    instances: &mut Vec<RollInstance>,
+    instances: &mut Vec<(f64, f64, RollInstance)>,
     mut segment: RollInstance,
     points: &[(f64, Look)],
+    spans: &mut Vec<[(f64, Look); 2]>,
     offset: impl Fn(f64) -> f32,
 ) {
     let grow = points.iter().map(|(_, look)| look.grow()).fold(1.0, f32::max);
     segment.half_extent[0] *= grow;
     let (oldest, newest) = (points[0].0, points[points.len() - 1].0);
-    let pieces: Vec<_> = points.windows(2).filter(|pair| pair[1].0 > pair[0].0).collect();
+    spans.clear();
+    spans.extend(
+        points.windows(2).filter(|pair| pair[1].0 > pair[0].0).map(|pair| [pair[0], pair[1]]),
+    );
     // A zero-duration onset reads its newest value. A flat interval reads its
     // own value: an endpoint step belongs to the next pitch segment.
-    let flat = if pieces.is_empty() {
+    let flat = if spans.is_empty() {
         Some(points[points.len() - 1].1)
-    } else if pieces.len() == 1 && pieces[0][0].1 == pieces[0][1].1 {
-        Some(pieces[0][0].1)
+    } else if spans.len() == 1 && spans[0][0].1 == spans[0][1].1 {
+        Some(spans[0][0].1)
     } else {
         None
     };
     if let Some(look) = flat {
         let (fade, taper) = read_through(look, grow);
-        instances.push(RollInstance { fade, taper, ..segment });
+        instances.push((oldest, newest, RollInstance { fade, taper, ..segment }));
         return;
     }
     let share = |look: Look| look.width / grow;
-    for (i, pair) in pieces.iter().enumerate() {
+    for (i, pair) in spans.iter().enumerate() {
         let ((older, at_older), (newer, at_newer)) = (pair[0], pair[1]);
         let (low, high) = (offset(newer), offset(older));
         // The neighbour's point to measure against beyond each cut: the far
@@ -1198,7 +1296,7 @@ fn push_pieces(
         // step's other side at the cut itself. Held at this piece's own end
         // past the outermost two.
         let beyond =
-            |neighbour: Option<&&[(f64, Look)]>, end: (f64, Look), near: usize, far: usize| {
+            |neighbour: Option<&[(f64, Look); 2]>, end: (f64, Look), near: usize, far: usize| {
                 match neighbour {
                     Some(pair) if pair[near].1.width != end.1.width => {
                         (offset(end.0), share(pair[near].1))
@@ -1207,20 +1305,24 @@ fn push_pieces(
                     None => (offset(end.0), share(end.1)),
                 }
             };
-        let (newer_at, newer_width) = beyond(pieces.get(i + 1), (newer, at_newer), 0, 1);
+        let (newer_at, newer_width) = beyond(spans.get(i + 1), (newer, at_newer), 0, 1);
         let (older_at, older_width) =
-            beyond(i.checked_sub(1).and_then(|j| pieces.get(j)), (older, at_older), 1, 0);
-        instances.push(RollInstance {
-            span: [
-                if newer == newest { f32::MIN } else { low },
-                if older == oldest { f32::MAX } else { high },
-            ],
-            ramp: [low, high],
-            fade: [at_newer.fade, at_older.fade],
-            taper_depth: [newer_at, low, high, older_at],
-            taper: [newer_width, share(at_newer), share(at_older), older_width],
-            ..segment
-        });
+            beyond(i.checked_sub(1).and_then(|j| spans.get(j)), (older, at_older), 1, 0);
+        instances.push((
+            older,
+            newer,
+            RollInstance {
+                span: [
+                    if newer == newest { f32::MIN } else { low },
+                    if older == oldest { f32::MAX } else { high },
+                ],
+                ramp: [low, high],
+                fade: [at_newer.fade, at_older.fade],
+                taper_depth: [newer_at, low, high, older_at],
+                taper: [newer_width, share(at_newer), share(at_older), older_width],
+                ..segment
+            },
+        ));
     }
 }
 
@@ -1418,7 +1520,8 @@ mod tests {
     #[test]
     fn positive_thickness_is_floored_after_mapping_and_zero_stays_absent() {
         let p = |t, width| (t, Look { width, fade: 1.0 });
-        let curve = floor_widths(&[p(0.0, 0.0), p(1.0, 0.0), p(2.0, 2.0), p(3.0, 0.0)], 0.75);
+        let mut curve = Vec::new();
+        floor_widths(&[p(0.0, 0.0), p(1.0, 0.0), p(2.0, 2.0), p(3.0, 0.0)], 0.75, &mut curve);
         assert_eq!(curve[0].1.width, 0.0);
         assert!(
             curve.windows(2).any(|w| w[0].0 == w[1].0 && w[0].1.width != w[1].1.width),
@@ -3124,5 +3227,228 @@ mod tests {
         let spread = moves.iter().fold(0.0f32, |a, &b| a.max(b))
             - moves.iter().fold(f32::MAX, |a, &b| a.min(b));
         assert!(spread < 1e-3, "the note scrolled unevenly (snapped?): {moves:?}");
+    }
+
+    fn microtonal_dense_state(
+        intensity: IntensitySettings,
+        with_pressure_ramps: bool,
+    ) -> PictureState {
+        let mut state = pinned();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_fraction = 0.8;
+        state.appearance.spectrum.roll_seconds = 900.0;
+        state.appearance.spectrum.roll_lead = 0.0;
+        state.appearance.spectrum.note_cut = 1.0;
+        state.appearance.spectrum.note_cut_reach = 15.0;
+        state.appearance.view.intensity = intensity;
+        for i in 0..1800 {
+            let start = f64::from(i) * 0.5;
+            let note = 60 + (i % 6) as u8;
+            let semitones = ((i % 5) as f32 - 2.0) * 0.14;
+            let velocity = 0.25 + 0.75 * ((i % 4) as f32 / 3.0);
+            state.runtime.tracker.handle_event(NoteEvent::on(
+                start,
+                SourceId::DIRECT,
+                0,
+                note,
+                velocity,
+            ));
+            state.runtime.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
+                time: start,
+                channel: 0,
+                note,
+                kind: NoteEventKind::Tuning { semitones },
+            });
+            if with_pressure_ramps {
+                for (offset, value) in [(0.05, 0.1), (0.30, 0.9)] {
+                    state.runtime.tracker.handle_event(NoteEvent {
+                        source: SourceId::DIRECT,
+                        time: start + offset,
+                        channel: 0,
+                        note,
+                        kind: NoteEventKind::Expression {
+                            expression: harmonigraph_core::Expression::Pressure,
+                            value,
+                        },
+                    });
+                }
+            }
+            state.runtime.tracker.handle_event(NoteEvent::off(
+                start + 0.35,
+                SourceId::DIRECT,
+                0,
+                note,
+            ));
+        }
+        state
+    }
+
+    #[test]
+    fn zoomed_out_microtonal_dense_runs_stay_linear_in_segments() {
+        let intensity = IntensitySettings {
+            velocity: Default::default(),
+            gain: Default::default(),
+            pressure: Default::default(),
+            timbre: Default::default(),
+            opacity_rest: 1.0,
+            thickness_base: 1.0,
+            thickness_max: 2.0,
+        };
+        let state = microtonal_dense_state(intensity, false);
+        let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0));
+        let axes = Axes::new(pane, &state.appearance.spectrum);
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        let notes = note_instances(&axes, &scale, &state, split, 900.0, PPP);
+        assert!(notes.iter().any(|n| n.tremolo[1] > 0.0), "fixture must form dense runs");
+        assert!(
+            notes.len() <= 2 * 1800 + 64,
+            "dense microtonal segments exploded quadratically across paint_starts: {} instances",
+            notes.len()
+        );
+    }
+
+    #[test]
+    fn zoomed_out_microtonal_dense_runs_with_routed_intensity_stay_linear() {
+        let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0));
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+
+        // Routed velocity -> Opacity (exercises `flat_segment_look` across [t0, t1) segments).
+        let velocity_opacity = IntensitySettings {
+            velocity: harmonigraph_scene::IntensitySource { opacity: Some(1.0), thickness: None },
+            gain: Default::default(),
+            pressure: Default::default(),
+            timbre: Default::default(),
+            opacity_rest: 0.0,
+            thickness_base: 1.0,
+            thickness_max: 2.0,
+        };
+        let state = microtonal_dense_state(velocity_opacity, false);
+        let axes = Axes::new(pane, &state.appearance.spectrum);
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
+        let notes = note_instances(&axes, &scale, &state, split, 900.0, PPP);
+        assert!(notes.iter().any(|n| n.tremolo[1] > 0.0), "fixture must form dense runs");
+        assert!(
+            notes.iter().any(|n| n.fade[0] < 0.5) && notes.iter().any(|n| n.fade[0] > 0.9),
+            "routed velocity opacity must vary across segments"
+        );
+        assert!(
+            notes.len() <= 2 * 1800 + 64,
+            "velocity-routed dense segments exploded: {} instances",
+            notes.len()
+        );
+
+        // Interior Pressure expression ramps (exercises `IntensityScratch` + `push_pieces`).
+        let pressure_routed = IntensitySettings {
+            velocity: Default::default(),
+            gain: Default::default(),
+            pressure: harmonigraph_scene::IntensitySource {
+                opacity: Some(1.0),
+                thickness: Some(1.0),
+            },
+            timbre: Default::default(),
+            opacity_rest: 0.1,
+            thickness_base: 0.5,
+            thickness_max: 2.0,
+        };
+        let state = microtonal_dense_state(pressure_routed, true);
+        let axes = Axes::new(pane, &state.appearance.spectrum);
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
+        let notes = note_instances(&axes, &scale, &state, split, 900.0, PPP);
+        assert!(notes.iter().any(|n| n.tremolo[1] > 0.0), "fixture must form dense runs");
+        assert!(
+            notes.len() > 1800,
+            "pressure ramps must produce piecewise segments rather than taking flat path"
+        );
+        assert!(
+            notes.len() <= 6 * 1800 + 64,
+            "piecewise dense segments exploded quadratically: {} instances",
+            notes.len()
+        );
+    }
+
+    #[test]
+    fn flat_segment_look_handles_half_open_segment_end_at_next_note_start() {
+        let mut state = pinned();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_fraction = 0.8;
+        state.appearance.spectrum.roll_seconds = 900.0;
+        state.appearance.spectrum.roll_lead = 0.0;
+        state.appearance.spectrum.note_cut = 1.0;
+        state.appearance.spectrum.note_cut_reach = 15.0;
+        let intensity = IntensitySettings {
+            velocity: harmonigraph_scene::IntensitySource { opacity: Some(1.0), thickness: None },
+            gain: Default::default(),
+            pressure: Default::default(),
+            timbre: Default::default(),
+            opacity_rest: 0.0,
+            thickness_base: 1.0,
+            thickness_max: 2.0,
+        };
+        state.appearance.view.intensity = intensity;
+        for i in 0..4 {
+            let start = 10.0 + f64::from(i) * 0.5;
+            let velocity = 0.25 + 0.2 * f32::from(i as u8);
+            state.runtime.tracker.handle_event(NoteEvent::on(
+                start,
+                SourceId::DIRECT,
+                0,
+                60,
+                velocity,
+            ));
+            state.runtime.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
+                time: start,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Tuning { semitones: 0.14 * i as f32 },
+            });
+            state.runtime.tracker.handle_event(NoteEvent::off(
+                start + 0.1,
+                SourceId::DIRECT,
+                0,
+                60,
+            ));
+        }
+        let notes: Vec<_> = state.roll().notes().collect();
+        let ribbons = density::layout(&notes, 20.0, 2.0, 4.0, f64::NEG_INFINITY);
+        assert_eq!(ribbons.len(), 1, "fixture must form one dense ribbon");
+        let ribbon = &ribbons[0];
+        let segments = ribbon.segments(20.0);
+        assert!(segments.len() >= 3, "fixture must produce multiple pitch segments");
+        let mut scratch = IntensityScratch::default();
+        // Check both the onset-padded first segment (`t0 < notes[0].start`) and an
+        // interior segment (`t0 == notes[1].start`, `t1 == notes[2].start`).
+        for (idx, &((t0, _), (t1, _))) in segments[..2].iter().enumerate() {
+            assert_eq!(
+                t1,
+                ribbon.notes[idx + 1].start,
+                "segment {idx} must end exactly at the next note's start"
+            );
+            intensity_points(ribbon, &intensity, t0, t1, 0.5, &mut scratch);
+            let look = flat_segment_look(ribbon, &intensity, t0, t1, 0.5).unwrap_or_else(|| {
+                panic!("flat_segment_look must handle [t0, t1) on segment {idx}")
+            });
+            let expected = Look::of(&intensity, ribbon.notes[idx].velocity, Expressions::default())
+                .floored(0.5);
+            assert_eq!(look, expected);
+            assert_eq!(scratch.points, vec![(t0, expected), (t1, expected)]);
+        }
+    }
+
+    #[test]
+    fn push_painted_drops_zero_width_span_regardless_of_paint_start_count() {
+        let mut state = pinned();
+        state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::off(1.5, SourceId::DIRECT, 0, 60));
+        let notes: Vec<_> = state.roll().notes().collect();
+        let ribbons = density::layout(&notes, 2.0, 0.1, 0.2, f64::NEG_INFINITY);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
+        let time = TimeAxis::new(&state, 0.5, 2.0);
+        let empty = RollInstance { span: [1.0, 1.0], ..RollInstance::PLAIN };
+        let mut painted = Vec::new();
+        push_painted(&mut painted, &ribbons[0], &axes, &time, 1.0, 1.5, empty);
+        assert!(painted.is_empty(), "single-paint_start fast path must drop empty span");
     }
 }
