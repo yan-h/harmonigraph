@@ -1575,13 +1575,12 @@ mod tests {
         );
         drop(frame);
         readback.unmap();
-        for id in output.textures_delta.free.drain() {
-            renderer.free_texture(&id);
-        }
     }
 
-    /// A pass's texture uploads, drained as the editor's renderer drains them,
-    /// since egui asserts a dropped delta was applied.
+    /// A pass's texture changes, drained as the editor's renderer drains them,
+    /// since egui asserts a dropped delta was applied. The frees go with the
+    /// uploads, ahead of the draw, which egui allows: it frees only textures
+    /// the pass no longer draws.
     fn apply_textures(
         renderer: &mut egui_wgpu::Renderer,
         device: &egui_wgpu::wgpu::Device,
@@ -1592,6 +1591,9 @@ mod tests {
             for image in &images {
                 renderer.update_texture(device, queue, id, image);
             }
+        }
+        for id in delta.free.drain() {
+            renderer.free_texture(&id);
         }
     }
 

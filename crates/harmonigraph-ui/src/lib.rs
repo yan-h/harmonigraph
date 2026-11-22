@@ -528,10 +528,9 @@ const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 
 /// Repaint cadence of the chrome's own cues, about 30 Hz: the armed Record
 /// button's breath and a running export's progress stripes. Each asks for its
-/// next frame this far out rather than holding the
-/// whole editor at the display rate: a full redraw at 144 Hz costs Bitwig's
-/// main thread (#1673), and these run for as long as Record waits armed or an
-/// export runs. They are not [`Reason`]s, which are the picture's
+/// next frame this far out rather than holding the whole editor at the
+/// display rate: a full redraw at 144 Hz costs Bitwig's main thread (#1673),
+/// and these run for as long as Record waits armed or an export runs. They are not [`Reason`]s, which are the picture's
 /// motion alone, so the frame log reads these passes as the idle-rate draws
 /// they are (#1872).
 pub(crate) const CHROME_REPAINT_INTERVAL: std::time::Duration =
