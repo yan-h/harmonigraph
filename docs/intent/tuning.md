@@ -112,3 +112,7 @@ Yan: "I want to be able to easily go between improvising in meantone while visua
 - Decode fifths and the Decoded fifth sit in a section of their own, Lattice-board, after the engines' controls, which a fresh editor opens folded, "so users don't get confused". Yan. Folded through the fresh editor's default fold set rather than a mechanism that folds a section by default, so an existing project keeps its saved folds and shows the section open until folded once. Session; kept by Yan over saving folds as changes from each section's default (#1900 review)
 - Decode fifths can stay on while switching to Lattice Map: a map ignores the decoding, so switching is the Note retuning selector alone. Its hint says so. Yan
 - Under Lattice Map with no map in the selected slot, the board sounds its chain at the Decoded fifth while the lattice and a take draw the saved axes; the picture does not follow the sound there. Yan (#1900 review, leaving it unless he plays from an empty slot)
+
+## 2026-11-22 (Analyzer Audio Input saved as an index, #1886)
+
+- A saved host parameter value that does not decode, such as Analyzer Audio Input's string id from before it saved an index, takes its row's default with a notice (a Console line in a Hub, a log line in a Tune) rather than refusing the whole load; this extends the 2026-11-18 rule that a missing, wrong-typed or unknown value takes the default. Each load of an older save shows the notice once, Main included, until the project is saved again. Yan, 2026-11-22, #1886

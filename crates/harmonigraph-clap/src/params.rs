@@ -181,16 +181,16 @@ impl Spec {
         }
     }
 
-    /// The plain value a restore takes from `saved`: the default for a value
-    /// that is missing or of the wrong type, and the nearest bound for one out
-    /// of range.
-    fn restore(&self, saved: Option<&ParamValue>) -> f32 {
+    /// The plain value a restore takes from `saved`: the nearest bound for
+    /// one out of range, and `None` for one of the wrong type, which a
+    /// restore sets to the default.
+    fn read(&self, saved: &ParamValue) -> Option<f32> {
         match (&self.kind, saved) {
-            (Kind::Int { min, max, .. }, Some(ParamValue::I32(value))) => {
-                (*value).clamp(*min, *max) as f32
+            (Kind::Int { min, max, .. }, ParamValue::I32(value)) => {
+                Some((*value).clamp(*min, *max) as f32)
             }
-            (Kind::Float { min, max }, Some(ParamValue::F32(value))) => value.clamp(*min, *max),
-            _ => self.default,
+            (Kind::Float { min, max }, ParamValue::F32(value)) => Some(value.clamp(*min, *max)),
+            _ => None,
         }
     }
 }
@@ -429,8 +429,9 @@ impl Table {
             .collect()
     }
 
-    /// Set every row from a save, by [`Spec::restore`]'s rules, and write one
-    /// log line naming the ids the save holds that no row has. Leaves the
+    /// Set every row from a save, by [`Spec::read`]'s rules or to its default,
+    /// and write one log line naming the ids the save holds that no row has
+    /// and one naming those [`Table::defaulted`] sets to the default. Leaves the
     /// modulation as it is. A value the editor set and the host has not been
     /// told is dropped: the restore supersedes it, and the host reads the
     /// restored state by rescanning (Yan, 2026-11-18).
@@ -451,12 +452,32 @@ impl Table {
                     Err(now) => bits = now,
                 }
             }
-            row.plain.store(row.spec.restore(saved.get(row.spec.id)), Ordering::Relaxed);
+            let plain = saved.get(row.spec.id).and_then(|value| row.spec.read(value));
+            row.plain.store(plain.unwrap_or(row.spec.default), Ordering::Relaxed);
         }
         let unknown = self.unknown(saved);
         if !unknown.is_empty() {
             crate::shell_warn!("The saved state names parameters this build has not: {unknown:?}");
         }
+        let defaulted = self.defaulted(saved);
+        if !defaulted.is_empty() {
+            crate::shell_warn!(
+                "The saved state holds values these parameters cannot read, which took their \
+                 defaults: {defaulted:?}"
+            );
+        }
+    }
+
+    /// The ids `saved` holds for a row whose value is not of that row's type,
+    /// one this build cannot decode among them, which a restore sets to the
+    /// default.
+    pub fn defaulted<'a>(&self, saved: &'a BTreeMap<String, ParamValue>) -> Vec<&'a str> {
+        self.rows
+            .iter()
+            .filter_map(|row| saved.get_key_value(row.spec.id).map(|entry| (row, entry)))
+            .filter(|(row, (_, value))| row.spec.read(value).is_none())
+            .map(|(_, (id, _))| id.as_str())
+            .collect()
     }
 
     /// The ids `saved` holds that no row has, which a restore skips.
@@ -495,6 +516,13 @@ mod tests {
             (1, 0.5),
             "of the wrong type"
         );
+        // A wrong-typed value is named, one that does not decode among them,
+        // and one under an id no row has is named only as unknown.
+        let unread = || ParamValue::Unread(Default::default());
+        let wrong = [("int", ParamValue::F32(1.0)), ("float", unread()), ("retired", unread())];
+        let wrong = wrong.map(|(id, value)| (id.to_owned(), value)).into();
+        assert_eq!(table.defaulted(&wrong), ["int", "float"]);
+        assert_eq!(table.unknown(&wrong), ["retired"]);
         assert_eq!(
             restore(&[("int", ParamValue::I32(9)), ("float", ParamValue::F32(3.0)),]),
             (2, 1.0),

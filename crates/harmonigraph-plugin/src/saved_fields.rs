@@ -56,11 +56,12 @@ pub(crate) fn prepare(params: &Arc<HarmonigraphParams>, state: &PluginState) -> 
             unknown.join(", ")
         ));
     }
-    if !state.unread.is_empty() {
+    let defaulted = params.table.defaulted(&state.params);
+    if !defaulted.is_empty() {
         notes.push(format!(
             "This project saved parameter values this build cannot read, which opened at their \
              defaults: {}. Set them again and save the project.",
-            state.unread.join(", ")
+            defaulted.join(", ")
         ));
     }
     Fields { params: params.clone(), maps, window, look, notes }

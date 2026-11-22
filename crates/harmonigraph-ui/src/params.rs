@@ -27,6 +27,33 @@ pub enum AnalysisInput {
     Sidechain,
 }
 
+impl AnalysisInput {
+    /// Every input, in host order: `HOST[i].index() == i`.
+    pub const HOST: [Self; 2] = [Self::Main, Self::Sidechain];
+    pub const HOST_MAX: i32 = Self::HOST.len() as i32 - 1;
+
+    /// The host parameter integer. Saved projects hold these, so a number
+    /// never moves.
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Main => 0,
+            Self::Sidechain => 1,
+        }
+    }
+    /// The input at a host integer, clamped into range as the host's label
+    /// clamps, so the two never disagree.
+    pub fn from_index(value: i32) -> Self {
+        Self::HOST[value.clamp(0, Self::HOST_MAX) as usize]
+    }
+    /// What the host and the editor call this input.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Main => "Main",
+            Self::Sidechain => "Sidechain",
+        }
+    }
+}
+
 /// Read/write access to the automatable parameters.
 ///
 /// Continuous edits (drags) should be bracketed with `begin_set`/`end_set`

@@ -17,7 +17,7 @@ pub(crate) fn deserialize_json(state: &[u8]) -> Option<PluginState> {
 
 /// Decode a saved state as a load does: a state that does not decode refuses
 /// the load whole, while a parameter value that does not decode costs that
-/// value alone ([`PluginState::unread`]).
+/// value alone ([`ParamValue::Unread`][crate::plugin::ParamValue::Unread]).
 pub fn decode(state: &[u8]) -> Result<PluginState, serde_json::Error> {
     serde_json::from_slice(state)
 }

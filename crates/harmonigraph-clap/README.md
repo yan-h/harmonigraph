@@ -49,8 +49,8 @@ Each change's reason is a comment at the code it explains; this is the map.
   [The adaptive tuning design](../../docs/adaptive-tuning.md#the-framework-boundary) says what the plugin asks of this boundary.
 - **The parameter table** (`src/params.rs`, #1814 step 5).
   Each row is an integer or a linear float; the host sees it from 0 to its step count, and the conversions repeat nice-plug's `f32` arithmetic step for step, so saves and automation read as before.
-  A save stores each row's unmodulated value under its id; a restore sets every row by one rule (missing or wrong-typed takes the default, out of range is clamped) and logs once the ids no row has.
-  A saved value that does not decode, such as one under a `ParamValue` variant this build no longer has, costs that value alone: its row takes the default, and the restore logs its id (#1886).
+  A save stores each row's unmodulated value under its id; a restore sets every row by one rule (missing or wrong-typed takes the default, out of range is clamped) and logs once the ids no row has and once those it set to the default for a wrong-typed value (`Table::defaulted`).
+  A saved value that does not decode, such as one under a `ParamValue` variant this build no longer has, is `ParamValue::Unread`, wrong-typed for every row, so it costs that value alone (#1886).
   The editor sets a row through its `EditorHost` by its index.
 - **Activation notification ordering** (`Wrapper::activate`, #615): a latency is published only during an activation, and a change while active asks for a restart.
 - **The audio** (`src/audio_setup.rs`, #1814 step 6).

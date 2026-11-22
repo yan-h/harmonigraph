@@ -167,7 +167,11 @@ fn instance_settings_restore_independently_and_default_missing_fields() {
     use harmonigraph_clap::wrapper::clap::setup::Setup;
     let shared = setup::Shared::source();
     let adapter = setup::Adapter(shared.clone());
-    let mut state = harmonigraph_clap::plugin::PluginState::default();
+    let mut state = harmonigraph_clap::plugin::PluginState {
+        version: String::new(),
+        params: Default::default(),
+        fields: Default::default(),
+    };
     shared.set_retune(false);
     shared.set_show(true);
     shared.set_name("Reference".to_owned());

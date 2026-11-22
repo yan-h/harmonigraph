@@ -421,12 +421,12 @@ pub(crate) fn analysis_section(
                 &[
                     (
                         AnalysisInput::Main,
-                        "Main",
+                        AnalysisInput::Main.label(),
                         "Analyze the plug-in's main input without changing its pass-through audio",
                     ),
                     (
                         AnalysisInput::Sidechain,
-                        "Sidechain",
+                        AnalysisInput::Sidechain.label(),
                         "Analyze the sidechain routed by the host. An unrouted sidechain is silence",
                     ),
                 ],

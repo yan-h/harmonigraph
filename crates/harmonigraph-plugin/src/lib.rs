@@ -350,9 +350,19 @@ impl Row {
                     .non_modulatable()
                     .with_to_text(|value| Follow::from_index(value).label().into())
             }
-            Row::AnalysisInput => Spec::int(id, "Analyzer Audio Input", 0, 0, 1)
-                .with_to_text(|value| ["Main", "Sidechain"][value as usize].into())
-                .non_automatable(),
+            Row::AnalysisInput => Spec::int(
+                id,
+                "Analyzer Audio Input",
+                AnalysisInput::default().index(),
+                0,
+                AnalysisInput::HOST_MAX,
+            )
+            .with_to_text(|value| AnalysisInput::from_index(value).label().into())
+            .with_from_text(|text| {
+                let input = AnalysisInput::HOST.into_iter().find(|input| input.label() == text);
+                input.map(AnalysisInput::index)
+            })
+            .non_automatable(),
             Row::CameraYaw => camera(ParamKey::CameraYaw),
             Row::CameraPitch => camera(ParamKey::CameraPitch),
             Row::CameraDistance => camera(ParamKey::CameraDistance),
@@ -372,10 +382,6 @@ impl Row {
         }
     }
 }
-
-/// The Analyzer Audio Input row's inputs, by the index a project saves and
-/// [`Row::spec`] names, so an index never moves.
-const ANALYSIS_INPUTS: [AnalysisInput; 2] = [AnalysisInput::Main, AnalysisInput::Sidechain];
 
 impl Default for HarmonigraphParams {
     fn default() -> Self {
@@ -423,7 +429,7 @@ impl HarmonigraphParams {
 
     /// Which input feeds the analyzer.
     pub fn analysis_input(&self) -> AnalysisInput {
-        ANALYSIS_INPUTS[self.int(Row::AnalysisInput) as usize]
+        AnalysisInput::from_index(self.int(Row::AnalysisInput))
     }
 
     /// What the host shows for `row`'s value.
@@ -516,9 +522,8 @@ impl ParamBackend for PluginParamBackend<'_> {
 
     fn set_analysis_input(&self, input: AnalysisInput) {
         let row = Row::AnalysisInput.index();
-        let index = ANALYSIS_INPUTS.iter().position(|candidate| *candidate == input);
         self.host.begin_set_parameter(row);
-        self.host.set_parameter(row, index.expect("an analysis input has a row value") as f32);
+        self.host.set_parameter(row, input.index() as f32);
         self.host.end_set_parameter(row);
     }
 
@@ -1276,7 +1281,11 @@ mod tests {
     }
 
     fn empty_state() -> harmonigraph_clap::plugin::PluginState {
-        Default::default()
+        harmonigraph_clap::plugin::PluginState {
+            version: String::new(),
+            params: Default::default(),
+            fields: Default::default(),
+        }
     }
 
     /// [`saved`], read back as the camera yaw.

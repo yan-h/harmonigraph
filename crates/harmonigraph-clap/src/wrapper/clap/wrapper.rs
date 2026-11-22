@@ -466,7 +466,7 @@ impl<P: Plugin> Wrapper<P> {
         let mut state = PluginState {
             version: String::from(P::VERSION),
             params: self.params.save(),
-            ..Default::default()
+            fields: Default::default(),
         };
         if let Some(setup) = &self.setup {
             setup.save(&mut state);

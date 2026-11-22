@@ -38,10 +38,8 @@ pub enum Plugin {
 /// One saved state, as the plugin loads it.
 pub struct Reading {
     pub plugin: Plugin,
-    /// Why the load refused the state whole: it does not decode (a parameter
-    /// value that does not decode costs that value alone, with a log line and,
-    /// in a Hub, a Console line),
-    /// or the setup refused it. The instance then keeps what it held, a fresh one's
+    /// Why the load refused the state whole: it does not decode, or the
+    /// setup refused it. The instance then keeps what it held, a fresh one's
     /// defaults here, and nothing below was read.
     pub refused: Option<String>,
     /// Each host parameter as restored, by id: its value, with what the host
@@ -190,7 +188,8 @@ fn restore(
             (spec.id, value)
         })
         .collect();
-    let mut saved = PluginState::default();
+    let mut saved =
+        PluginState { version: String::new(), params: BTreeMap::new(), fields: BTreeMap::new() };
     if let Some(setup) = setup {
         setup.save(&mut saved);
     }
@@ -219,7 +218,7 @@ mod tests {
 
     /// A Harmonigraph state saved by a real project in November 2026, a
     /// Tune's saved beside one before #1795, which still holds the retired
-    /// `tuning_delay` parameter, or the first with a camera value `null`.
+    /// `tuning_delay` parameter, or the first with its `version` `null`.
     fn fixture(name: &str) -> Vec<u8> {
         let path = format!("{}/fixtures/saved-state/{name}.json", env!("CARGO_MANIFEST_DIR"));
         std::fs::read(path).unwrap()

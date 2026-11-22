@@ -37,7 +37,7 @@ parameters of com.yan-h.harmonigraph
   host 1.4: text Some("2 · unavailable") applied {"i32":1} read back 0.9999999962747097
   host 1.6: text Some("3 · unavailable") applied {"i32":2} read back 1.9999999925494194
   host 127.0: text Some("128 · unavailable") applied {"i32":127} read back 127.0
-  typed: "1 · C · 3×4" -> None, "0" -> Some(0.0), "1" -> Some(0.9999999962747097), "3" -> Some(2.999999988824129), "10" -> Some(9.999999962747097), "-1" -> Some(0.0), "200" -> Some(127.0), "0.5" -> None, " 2 " -> Some(1.9999999925494194), "Off" -> None, "Main" -> None
+  typed: "1 · C · 3×4" -> None, "0" -> Some(0.0), "1" -> Some(0.9999999962747097), "3" -> Some(2.999999988824129), "10" -> Some(9.999999962747097), "-1" -> Some(0.0), "200" -> Some(127.0), "0.5" -> None, " 2 " -> Some(1.9999999925494194), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Fifths": id 607475501 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-9") applied {"i32":-9} read back 0.0
   host 1.0000000074505806: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
@@ -47,7 +47,7 @@ parameters of com.yan-h.harmonigraph
   host 1.4: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
   host 1.6: text Some("-7") applied {"i32":-7} read back 2.000000014901161
   host 18.0: text Some("9") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.000000476837158), "3" -> Some(12.000000357627869), "10" -> Some(18.0), "-1" -> Some(8.000000059604645), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(10.99999988079071), "Off" -> None, "Main" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.000000476837158), "3" -> Some(12.000000357627869), "10" -> Some(18.0), "-1" -> Some(8.000000059604645), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(10.99999988079071), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Thirds": id 1007447421 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-9") applied {"i32":-9} read back 0.0
   host 1.0000000074505806: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
@@ -57,7 +57,7 @@ parameters of com.yan-h.harmonigraph
   host 1.4: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
   host 1.6: text Some("-7") applied {"i32":-7} read back 2.000000014901161
   host 18.0: text Some("9") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.000000476837158), "3" -> Some(12.000000357627869), "10" -> Some(18.0), "-1" -> Some(8.000000059604645), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(10.99999988079071), "Off" -> None, "Main" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.000000476837158), "3" -> Some(12.000000357627869), "10" -> Some(18.0), "-1" -> Some(8.000000059604645), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(10.99999988079071), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Sevenths": id 2039451299 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-9") applied {"i32":-9} read back 0.0
   host 1.0000000074505806: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
@@ -67,7 +67,7 @@ parameters of com.yan-h.harmonigraph
   host 1.4: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
   host 1.6: text Some("-7") applied {"i32":-7} read back 2.000000014901161
   host 18.0: text Some("9") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.000000476837158), "3" -> Some(12.000000357627869), "10" -> Some(18.0), "-1" -> Some(8.000000059604645), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(10.99999988079071), "Off" -> None, "Main" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.000000476837158), "3" -> Some(12.000000357627869), "10" -> Some(18.0), "-1" -> Some(8.000000059604645), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(10.99999988079071), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Fifths x10": id 1464730015 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-90") applied {"i32":-9} read back 0.0
   host 1.0000000074505806: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
@@ -77,7 +77,7 @@ parameters of com.yan-h.harmonigraph
   host 1.4: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
   host 1.6: text Some("-70") applied {"i32":-7} read back 2.000000014901161
   host 18.0: text Some("90") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.000000476837158), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.000000476837158), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Thirds x10": id 2100917231 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-90") applied {"i32":-9} read back 0.0
   host 1.0000000074505806: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
@@ -87,7 +87,7 @@ parameters of com.yan-h.harmonigraph
   host 1.4: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
   host 1.6: text Some("-70") applied {"i32":-7} read back 2.000000014901161
   host 18.0: text Some("90") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.000000476837158), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.000000476837158), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Sevenths x10": id 133815701 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-90") applied {"i32":-9} read back 0.0
   host 1.0000000074505806: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
@@ -97,7 +97,7 @@ parameters of com.yan-h.harmonigraph
   host 1.4: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
   host 1.6: text Some("-70") applied {"i32":-7} read back 2.000000014901161
   host 18.0: text Some("90") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.000000476837158), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.000000476837158), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Note Retuning": id 1141170266 module "" range 0..2 default 0 flags stepped
   host 0.0: text Some("Pass through") applied {"i32":0} read back 0.0
   host 1.0: text Some("Adaptive") applied {"i32":1} read back 1.0
@@ -105,7 +105,7 @@ parameters of com.yan-h.harmonigraph
   host 1.4: text Some("Adaptive") applied {"i32":1} read back 1.0
   host 1.6: text Some("Lattice Map") applied {"i32":2} read back 2.0
   host 2.0: text Some("Lattice Map") applied {"i32":2} read back 2.0
-  typed: "Pass through" -> None, "0" -> Some(0.0), "1" -> Some(1.0), "3" -> Some(2.0), "10" -> Some(2.0), "-1" -> Some(0.0), "200" -> Some(2.0), "0.5" -> None, " 2 " -> Some(2.0), "Off" -> None, "Main" -> None
+  typed: "Pass through" -> None, "0" -> Some(0.0), "1" -> Some(1.0), "3" -> Some(2.0), "10" -> Some(2.0), "-1" -> Some(0.0), "200" -> Some(2.0), "0.5" -> None, " 2 " -> Some(2.0), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Follow": id 613187906 module "" range 0..2 default 0 flags stepped,automatable
   host 0.0: text Some("Off") applied {"i32":0} read back 0.0
   host 1.0: text Some("Thirds") applied {"i32":1} read back 1.0
@@ -113,11 +113,11 @@ parameters of com.yan-h.harmonigraph
   host 1.4: text Some("Thirds") applied {"i32":1} read back 1.0
   host 1.6: text Some("Thirds and fifths") applied {"i32":2} read back 2.0
   host 2.0: text Some("Thirds and fifths") applied {"i32":2} read back 2.0
-  typed: "Off" -> None, "0" -> Some(0.0), "1" -> Some(1.0), "3" -> Some(2.0), "10" -> Some(2.0), "-1" -> Some(0.0), "200" -> Some(2.0), "0.5" -> None, " 2 " -> Some(2.0), "Off" -> None, "Main" -> None
+  typed: "Off" -> None, "0" -> Some(0.0), "1" -> Some(1.0), "3" -> Some(2.0), "10" -> Some(2.0), "-1" -> Some(0.0), "200" -> Some(2.0), "0.5" -> None, " 2 " -> Some(2.0), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Analyzer Audio Input": id 253954457 module "" range 0..1 default 0 flags stepped
   host 0.0: text Some("Main") applied {"i32":0} read back 0.0
   host 1.0: text Some("Sidechain") applied {"i32":1} read back 1.0
-  typed: "Main" -> None, "0" -> Some(0.0), "1" -> Some(1.0), "3" -> Some(1.0), "10" -> Some(1.0), "-1" -> Some(0.0), "200" -> Some(1.0), "0.5" -> None, " 2 " -> Some(1.0), "Off" -> None, "Main" -> None
+  typed: "Main" -> Some(0.0), "0" -> None, "1" -> None, "3" -> None, "10" -> None, "-1" -> None, "200" -> None, "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> Some(0.0), "Sidechain" -> Some(1.0)
 "Camera Yaw (rad)": id 134213575 module "" range 0..1 default 0.5636619925498962 flags automatable,modulatable
   host 0.0: text Some("-3.1415927") applied -3.1415927 (0xc0490fdb) read back 0.0
   host 0.125: text Some("-2.3561945") applied -2.3561945 (0xc016cbe4) read back 0.1250000149011612
@@ -125,7 +125,7 @@ parameters of com.yan-h.harmonigraph
   host 0.5: text Some("0") applied 0 (0x00000000) read back 0.5
   host 0.123456789: text Some("-2.3658907") applied -2.3658907 (0xc0176ac1) read back 0.12345680594444275
   host 1.0: text Some("3.1415927") applied 3.1415927 (0x40490fdb) read back 1.0
-  typed: "0.4000001" -> Some(0.5636619925498962), "0" -> Some(0.5), "1" -> Some(0.6591549515724182), "3" -> Some(0.9774648547172546), "10" -> Some(1.0), "-1" -> Some(0.3408450484275818), "200" -> Some(1.0), "0.5" -> Some(0.5795774459838867), " 2 " -> Some(0.8183099031448364), "Off" -> None, "Main" -> None
+  typed: "0.4000001" -> Some(0.5636619925498962), "0" -> Some(0.5), "1" -> Some(0.6591549515724182), "3" -> Some(0.9774648547172546), "10" -> Some(1.0), "-1" -> Some(0.3408450484275818), "200" -> Some(1.0), "0.5" -> Some(0.5795774459838867), " 2 " -> Some(0.8183099031448364), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Camera Pitch (rad)": id 122153624 module "" range 0..1 default 0.5999999642372131 flags automatable,modulatable
   host 0.0: text Some("-1.5") applied -1.5 (0xbfc00000) read back 0.0
   host 0.125: text Some("-1.125") applied -1.125 (0xbf900000) read back 0.125
@@ -133,7 +133,7 @@ parameters of com.yan-h.harmonigraph
   host 0.5: text Some("0") applied 0 (0x00000000) read back 0.5
   host 0.123456789: text Some("-1.1296296") applied -1.1296296 (0xbf9097b4) read back 0.12345679849386215
   host 1.0: text Some("1.5") applied 1.5 (0x3fc00000) read back 1.0
-  typed: "0.29999995" -> Some(0.5999999642372131), "0" -> Some(0.5), "1" -> Some(0.8333333134651184), "3" -> Some(1.0), "10" -> Some(1.0), "-1" -> Some(0.1666666716337204), "200" -> Some(1.0), "0.5" -> Some(0.6666666865348816), " 2 " -> Some(1.0), "Off" -> None, "Main" -> None
+  typed: "0.29999995" -> Some(0.5999999642372131), "0" -> Some(0.5), "1" -> Some(0.8333333134651184), "3" -> Some(1.0), "10" -> Some(1.0), "-1" -> Some(0.1666666716337204), "200" -> Some(1.0), "0.5" -> Some(0.6666666865348816), " 2 " -> Some(1.0), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Camera Distance": id 1789396381 module "" range 0..1 default 0.4545454680919647 flags automatable,modulatable
   host 0.0: text Some("2") applied 2 (0x40000000) read back 0.0
   host 0.125: text Some("4.75") applied 4.75 (0x40980000) read back 0.125
@@ -141,7 +141,7 @@ parameters of com.yan-h.harmonigraph
   host 0.5: text Some("13") applied 13 (0x41500000) read back 0.5
   host 0.123456789: text Some("4.716049") applied 4.716049 (0x4096e9e0) read back 0.12345678359270096
   host 1.0: text Some("24") applied 24 (0x41c00000) read back 1.0
-  typed: "12" -> Some(0.4545454680919647), "0" -> Some(0.0), "1" -> Some(0.0), "3" -> Some(0.04545454680919647), "10" -> Some(0.3636363744735718), "-1" -> Some(0.0), "200" -> Some(1.0), "0.5" -> Some(0.0), " 2 " -> Some(0.0), "Off" -> None, "Main" -> None
+  typed: "12" -> Some(0.4545454680919647), "0" -> Some(0.0), "1" -> Some(0.0), "3" -> Some(0.04545454680919647), "10" -> Some(0.3636363744735718), "-1" -> Some(0.0), "200" -> Some(1.0), "0.5" -> Some(0.0), " 2 " -> Some(0.0), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Camera Pan X (cells)": id 121907872 module "" range 0..1 default 0.50390625 flags automatable,modulatable
   host 0.0: text Some("-128") applied -128 (0xc3000000) read back 0.0
   host 0.125: text Some("-96") applied -96 (0xc2c00000) read back 0.125
@@ -149,7 +149,7 @@ parameters of com.yan-h.harmonigraph
   host 0.5: text Some("0") applied 0 (0x00000000) read back 0.5
   host 0.123456789: text Some("-96.395065") applied -96.395065 (0xc2c0ca46) read back 0.12345677614212036
   host 1.0: text Some("128") applied 128 (0x43000000) read back 1.0
-  typed: "1" -> Some(0.50390625), "0" -> Some(0.5), "1" -> Some(0.50390625), "3" -> Some(0.51171875), "10" -> Some(0.5390625), "-1" -> Some(0.49609375), "200" -> Some(1.0), "0.5" -> Some(0.501953125), " 2 " -> Some(0.5078125), "Off" -> None, "Main" -> None
+  typed: "1" -> Some(0.50390625), "0" -> Some(0.5), "1" -> Some(0.50390625), "3" -> Some(0.51171875), "10" -> Some(0.5390625), "-1" -> Some(0.49609375), "200" -> Some(1.0), "0.5" -> Some(0.501953125), " 2 " -> Some(0.5078125), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Camera Pan Y (cells)": id 121907873 module "" range 0..1 default 0.5 flags automatable,modulatable
   host 0.0: text Some("-128") applied -128 (0xc3000000) read back 0.0
   host 0.125: text Some("-96") applied -96 (0xc2c00000) read back 0.125
@@ -157,7 +157,7 @@ parameters of com.yan-h.harmonigraph
   host 0.5: text Some("0") applied 0 (0x00000000) read back 0.5
   host 0.123456789: text Some("-96.395065") applied -96.395065 (0xc2c0ca46) read back 0.12345677614212036
   host 1.0: text Some("128") applied 128 (0x43000000) read back 1.0
-  typed: "0" -> Some(0.5), "0" -> Some(0.5), "1" -> Some(0.50390625), "3" -> Some(0.51171875), "10" -> Some(0.5390625), "-1" -> Some(0.49609375), "200" -> Some(1.0), "0.5" -> Some(0.501953125), " 2 " -> Some(0.5078125), "Off" -> None, "Main" -> None
+  typed: "0" -> Some(0.5), "0" -> Some(0.5), "1" -> Some(0.50390625), "3" -> Some(0.51171875), "10" -> Some(0.5390625), "-1" -> Some(0.49609375), "200" -> Some(1.0), "0.5" -> Some(0.501953125), " 2 " -> Some(0.5078125), "Off" -> None, "Main" -> None, "Sidechain" -> None
 
 modulation
 Camera Yaw at 0.5 modulated by 0.1: read back 0.6000000238418579 saved 0 (0x00000000)
