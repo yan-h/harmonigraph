@@ -165,7 +165,7 @@ the value on screen is the value the file holds.
 Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 
 - A stalled input worker: a cue reads Playing until the next click, Stop or play.
-- A whole-tape re-analysis: what is on screen fills in song order, about 15 s per 5 minutes of song.
+- A whole-tape re-analysis: what is on screen fills in song order, about 15 s per 5 minutes of song at Balanced, up to about 40 s at Precise, and about a minute with the editor closed (measured in PR #1922).
 - A cue at a speed other than 1× within about 180 ms after a gap: the audio before the gap may smear into its first milliseconds.
 - A tempo change between passes: under a second of bar ticks past a short pass's end lands at its tempo.
 
