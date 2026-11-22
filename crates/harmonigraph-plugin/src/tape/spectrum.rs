@@ -28,7 +28,7 @@ use super::store::{fade_frames, Store};
 /// the whole tape after the window changes: at most about a fifth of a core
 /// with the editor open (a step every [`POLL`](crate::background::POLL) plus
 /// its work) and a sixteenth with it shut. Five minutes of song caught up in
-/// about 5 s through Fast, 8 to 25 s through Balanced and 14 to 38 s through
+/// 4 to 9 s through Fast, 8 to 25 s through Balanced and 14 to 38 s through
 /// Precise with the editor open, the spread being how slow a woken step's
 /// columns ran on a loaded machine, and in about a minute through Balanced
 /// with it shut.
