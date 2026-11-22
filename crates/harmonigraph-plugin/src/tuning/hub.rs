@@ -1004,7 +1004,12 @@ impl Hub {
     ) {
         let index = usize::from(record.source);
         let identity = identity(record.source);
+        // A row's times never go back, so its deltas read in the order it
+        // published them: a record read late across a closed gap or a lost
+        // callback, or one scheduled at a lowered delay, lands at the row's
+        // latest time instead (Yan, #1885).
         let time = self.presentation(scheduled);
+        let time = self.rows[index].applied_time.map_or(time, |applied| applied.max(time));
         self.rows[index].sequence += 1;
         let stamp = Stamp {
             source: identity,

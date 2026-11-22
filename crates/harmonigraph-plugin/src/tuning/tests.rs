@@ -914,11 +914,11 @@ fn a_tune_run_after_the_hub_has_its_last_notes_in_a_stopped_take() {
 }
 
 /// Lowering a Tune's delay while a take records leaves the snapshot after its
-/// cut timed at the old delay and the deltas after it at the new one, so
-/// sorted by time they come before the snapshot that should follow them. The
-/// reader refuses that take rather than export it out of order.
+/// cut timed at the old delay, and a note at the new one would sound before
+/// it. A row's times never go back, so the note is recorded at the row's
+/// latest time, up to the old delay late, and the take exports (#1885).
 #[test]
-fn lowering_a_tunes_delay_while_recording_makes_a_take_the_reader_refuses() {
+fn lowering_a_tunes_delay_while_recording_records_the_next_notes_late() {
     let _scope = crate::test_scope::enter();
     let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
     let mut tune = tune();
@@ -949,11 +949,15 @@ fn lowering_a_tunes_delay_while_recording_makes_a_take_the_reader_refuses() {
     cycle(&hub, &tune, 3584, vec![]);
     writer.drain(&mut capture);
     let sealed = writer.finished.clone().expect("the stopped take seals");
-    let read = harmonigraph_take::Take::read(&sealed);
-    assert!(
-        matches!(read, Err(harmonigraph_take::ReadError::OutOfOrder(_))),
-        "the take must be refused for its order: {read:?}"
-    );
+    let take = harmonigraph_take::Take::read(&sealed).expect("the take reads in order");
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for record in &take.events {
+        record.apply(&mut tracker).unwrap();
+    }
+    let start = |key: u8| tracker.roll().notes().find(|n| n.note == key).map(|n| n.start);
+    let (cut, late) = (start(60).expect("the first note"), start(64).expect("the second"));
+    assert!(late >= cut, "the second note is not before the first: {cut} {late}");
+    assert!(late - cut <= 4.0 * 512.0 / 48_000.0, "it lands at most the old delay late");
     std::fs::remove_dir_all(dir).unwrap();
 }
 

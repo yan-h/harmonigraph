@@ -200,7 +200,7 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 - A tuning expression past CLAP's ±120 semitones, which no host sends: a `debug_assert`; a release build stores a saturated pitch.
 - A display lane overflow: no banner, a note that ended during the outage vanishes at the next snapshot without its fade, and an export draws a note held through the gap as one line; the export warning stays.
 - A note a snapshot omitted and a later snapshot lists again, which no producer writes: it opens a second note rather than continuing the first.
-- Lowering a Tune's delay while a take records: the take refuses to export, its records out of order.
+- Lowering a Tune's delay while a take records: the notes after it are recorded at the row's latest time, up to the old delay late; a row's note times never go back (Yan, #1885).
 - A miss from a full copy ring, read after a transport Stop: the Stop clears the ring's fault bit but keeps the count, so the Tune says "raise the delay", which is no remedy for a full ring.
 - A Tuning pane policy edit landing within one block of a keyboard Learn result (Adaptive with Learn armed): the learned keyboard reverts until Learn runs again.
 - Two policy edits to different fields queued before the Hub's next callback: only the second's fields stay, since each carries the whole policy the pane showed; about one block while audio runs, and while the Hub runs no audio the earlier setting snaps back when audio resumes.
