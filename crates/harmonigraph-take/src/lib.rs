@@ -1198,7 +1198,8 @@ impl WavWriter {
     }
 
     /// The rate the header states, once frames have set it.
-    pub fn sample_rate(&self) -> Option<u32> {
+    #[cfg(test)]
+    fn sample_rate(&self) -> Option<u32> {
         self.rate
     }
 

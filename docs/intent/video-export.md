@@ -75,3 +75,7 @@ Yan took the recommendations made after the audit was checked against the code (
 ## 2026-11-20 (one Appearance row, PR #1902)
 
 - "Use each take's recorded appearance" (above) is the Appearance row's Recorded option, beside Current and the slots; what it keeps from the take is unchanged. Yan ("Go with your recommendations")
+
+## 2026-11-22 (take sample rate, #1928)
+
+- The sample rate travels with the audio: a take's WAV takes its rate from the first audio it records, and a rate change after that fails the take on the status line, with no render; a take whose audio all follows a change is recorded at the new rate. The take header no longer carries a rate. Yan ("build the general fix for A"), #1928 A
