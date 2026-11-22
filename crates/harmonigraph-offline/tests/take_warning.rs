@@ -117,3 +117,22 @@ fn retired_layout_interfaces_fail_visibly() {
     assert!(output.stdout.is_empty(), "the removed dump interface still emitted a layout");
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+/// A renderer told another build's tag says so first, naming both, even when
+/// it then cannot read the take (#1928 B): the failure a mismatched pair
+/// most plausibly meets is a take or look this build cannot read.
+#[test]
+fn a_renderer_of_another_build_says_so_before_anything_fails() {
+    let missing = std::env::temp_dir()
+        .join(format!("harmonigraph-offline-no-such-{}.take", std::process::id()));
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
+        .args(["--plugin-build", "other @0000000"])
+        .arg(&missing)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "a missing take rendered");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let first = stderr.lines().next().unwrap_or_default();
+    assert!(first.starts_with(harmonigraph_take::WARNING_PREFIX), "{stderr}");
+    assert!(first.contains("other @0000000"), "the plugin's build is unnamed: {stderr}");
+}

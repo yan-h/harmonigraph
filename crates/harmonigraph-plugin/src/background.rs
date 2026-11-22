@@ -513,7 +513,7 @@ mod tests {
     fn harness() -> Harness {
         let (notes, note_consumer) = harmonigraph_record::publication::channel();
         let (audio, audio_consumer) = crate::audio_ingress::channel(crate::AUDIO_RING_CAPACITY);
-        let (recorder, take_control) = harmonigraph_record::channel();
+        let (recorder, take_control) = harmonigraph_record::channel(crate::BUILD_TAG);
         let shared =
             EditorShared::new(Arc::new(AtomicU32::new(48_000.0f32.to_bits())), take_control);
         Harness {

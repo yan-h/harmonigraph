@@ -357,7 +357,7 @@ mod tests {
     use std::sync::Arc;
 
     fn editor() -> EditorShared {
-        let (_recorder, control) = harmonigraph_record::channel();
+        let (_recorder, control) = harmonigraph_record::channel(crate::BUILD_TAG);
         EditorShared::new(Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())), control)
     }
 
