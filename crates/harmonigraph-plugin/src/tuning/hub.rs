@@ -19,6 +19,8 @@ use harmonigraph_core::tuning::{fifth_generated, fifths_for_midi, fifths_offset,
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
 
+use crate::presentation::Mapping;
+
 use super::event::Event;
 use super::session::{self, Copied, HubEnds, Reply};
 use super::state::{Stamp, State};
@@ -307,12 +309,9 @@ pub struct Hub {
     sequencer: Box<Sequencer>,
     rate: f64,
     callback: Option<Boundary>,
-    /// Where the presentation clock pins the steady clock: a steady sample
-    /// and the presentation second it maps to. See [`Hub::anchor`].
-    anchor: Option<(i64, f64)>,
-    /// The steady sample just past the last valid callback. See
-    /// [`Hub::endpoint`].
-    ended: Option<i64>,
+    /// This callback's mapping from steady samples to presentation time,
+    /// which the plugin's one clock owns (`presentation`).
+    mapping: Mapping,
     /// The last observation of the host's seconds timeline, for loop and
     /// seek detection.
     seconds: Option<Seconds>,
@@ -341,8 +340,7 @@ impl Hub {
             sequencer: Box::default(),
             rate: 0.0,
             callback: None,
-            anchor: None,
-            ended: None,
+            mapping: Mapping::default(),
             seconds: None,
             opened: None,
             status: 0,
@@ -371,8 +369,6 @@ impl Hub {
 
     pub fn activate(&mut self, rate: f64, frames: u32) {
         self.rate = rate;
-        self.anchor = None;
-        self.ended = None;
         self.seconds = None;
         // No delay at all: the Hub's own input is already at the Hub, and its
         // correction is queued at the input boundary before the same
@@ -381,11 +377,11 @@ impl Hub {
         self.shared.publish_format(rate, frames);
     }
 
-    pub fn begin(&mut self, callback: &Boundary, owner: &mut Owner, presentation: f64) {
+    pub fn begin(&mut self, callback: &Boundary, owner: &mut Owner, mapping: Mapping) {
         self.callback = Some(*callback);
-        self.anchor(callback, presentation);
+        self.mapping = mapping;
         // A run states where it opens on the clock every delta is timed on.
-        owner.recording.presentation = self.mapping();
+        owner.recording.presentation = mapping;
         // Reset all voices is the Hub's own: a cut, which this callback's own
         // row and every Tune adopt like any other, plus forgetting the history
         // once the cut has released its voices into it.
@@ -412,33 +408,6 @@ impl Hub {
         // frontier, which is this callback's start: everything before it has
         // been sequenced, and nothing after it has arrived.
         self.sequencer.expire(callback.steady_time, self.rate);
-    }
-
-    /// The presentation clock is the steady clock pinned once, at the first
-    /// valid callback after activation, to the presentation time the plugin
-    /// has reached, and it runs on from there with the samples. The shell's
-    /// steady clock never goes back within an activation, a host's restarted
-    /// counter included (`Boundary::steady_time`), so neither does this one
-    /// (#1881). An invalid boundary pins nothing: its steady time may be
-    /// CLAP's -1 for "unknown".
-    fn anchor(&mut self, callback: &Boundary, presentation: f64) {
-        if !callback.valid {
-            return;
-        }
-        if self.anchor.is_none() {
-            self.anchor = Some((callback.steady_time, presentation));
-        }
-        self.ended = Some(callback.steady_time + i64::from(callback.frames));
-    }
-
-    /// Where the last valid callback ended on the presentation clock, or
-    /// `None` before the first: the time a host reset is stamped at, which
-    /// the next callback's notes start at or after. Never the plugin's own
-    /// sum of block durations, which drifts from this mapping by rounding,
-    /// and a reset stamped a step after a note struck on the next callback's
-    /// first sample ends that note on read (#1881).
-    pub fn endpoint(&self) -> Option<f64> {
-        self.anchor.and(self.ended).map(|ended| self.presentation(ended))
     }
 
     /// An epoch change ends every voice.
@@ -1035,7 +1004,12 @@ impl Hub {
     ) {
         let index = usize::from(record.source);
         let identity = identity(record.source);
+        // A row's times never go back, so its deltas read in the order it
+        // published them: a record read late across a closed gap or a lost
+        // callback, or one scheduled at a lowered delay, lands at the row's
+        // latest time instead (Yan, #1885).
         let time = self.presentation(scheduled);
+        let time = self.rows[index].applied_time.map_or(time, |applied| applied.max(time));
         self.rows[index].sequence += 1;
         let stamp = Stamp {
             source: identity,
@@ -1158,12 +1132,8 @@ impl Hub {
         count
     }
 
-    fn mapping(&self) -> crate::configuration::Presentation {
-        crate::configuration::Presentation { anchor: self.anchor, rate: self.rate }
-    }
-
     fn presentation(&self, sample: i64) -> f64 {
-        self.mapping().at(sample)
+        self.mapping.at(sample)
     }
 
     /// Everything this callback sequenced, then the snapshots owed: what is

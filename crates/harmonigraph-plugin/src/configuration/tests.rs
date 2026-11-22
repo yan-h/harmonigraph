@@ -953,7 +953,7 @@ fn the_presentation_clock_advances_by_each_blocks_length() {
     for block in 0..3 {
         device.run(block * 64, vec![], None);
     }
-    let seconds = device.wrapper().test_inspect_plugin(|plugin| plugin.presentation_seconds);
+    let seconds = device.wrapper().test_inspect_plugin(|plugin| plugin.clock.end());
     assert!((seconds - 3.0 * 64.0 / 48_000.0).abs() < 1e-12, "{seconds} s after three blocks");
 }
 

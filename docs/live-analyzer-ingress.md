@@ -14,13 +14,13 @@ channel count,
 sample rate,
 selected input identity,
 reset epoch,
-first source frame and presentation origin.
+first source frame and its first frame's presentation time.
 Source positions count frames,
 not interleaved samples,
 including the entire duration of callbacks that were partly or wholly dropped.
 A plugin reset or format/input change starts a new epoch at frame zero.
-Its presentation origin uses the producer's existing continuous seconds clock,
-which advances by processed frames and does not rewind with project transport.
+The presentation time is the block's start on the plugin's one presentation clock (`presentation.rs`),
+which advances only by processed frames and does not rewind with project transport (#1885).
 Queued records keep their old metadata across these changes.
 
 `LiveInput` drains only the descriptor count visible at entry,
