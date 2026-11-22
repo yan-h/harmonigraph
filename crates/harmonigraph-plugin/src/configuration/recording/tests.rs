@@ -1299,13 +1299,13 @@ struct AcrossRates {
     recorded: f64,
 }
 
-/// A take armed while the engine runs at 48 kHz, recording `before` blocks
+/// A take armed while the engine runs at `armed_at`, recording `before` blocks
 /// there, then just over a second more after the host reactivates the plugin
 /// at `rate` (a Bitwig export at another rate than the engine's, #1928).
-fn take_across_reactivation(before: usize, rate: f64) -> AcrossRates {
+fn take_across_reactivation(armed_at: f64, before: usize, rate: f64) -> AcrossRates {
     let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = crate::test_device::recorded(hub);
-    device.activate_format(48_000.0, 512);
+    device.activate_format(armed_at, 512);
     device.run(0, vec![], None);
     capture.arm();
     let dir = std::env::temp_dir()
@@ -1320,7 +1320,7 @@ fn take_across_reactivation(before: usize, rate: f64) -> AcrossRates {
         (raw, song) = (raw + 64, song + 64.0 / block_rate);
     };
     for _ in 0..before {
-        play(&mut device, &mut capture, &mut writer, 48_000.0);
+        play(&mut device, &mut capture, &mut writer, armed_at);
     }
     device.reactivate_format(rate, 512);
     for _ in 0..(rate / 64.0).ceil() as usize {
@@ -1354,7 +1354,7 @@ fn take_across_reactivation(before: usize, rate: f64) -> AcrossRates {
 /// played 8.8% fast with nothing to say so.
 #[test]
 fn a_take_whose_audio_follows_a_rate_change_keeps_its_soundtrack_in_time() {
-    let across = take_across_reactivation(0, 44_100.0);
+    let across = take_across_reactivation(48_000.0, 0, 44_100.0);
     assert!(!across.failed && across.sealed, "{}", across.status);
     assert_eq!(across.wav_rate, 44_100);
     let soundtrack = f64::from(across.frames) / f64::from(across.wav_rate);
@@ -1371,15 +1371,15 @@ fn a_take_whose_audio_follows_a_rate_change_keeps_its_soundtrack_in_time() {
 #[test]
 fn a_rate_change_after_a_take_recorded_audio_fails_it() {
     let before = 8;
-    let across = take_across_reactivation(before, 44_100.0);
+    let across = take_across_reactivation(44_100.0, before, 48_000.0);
     assert!(across.failed, "the take must fail");
     assert!(
-        across.status.contains("sample rate changed from 48000 Hz to 44100 Hz")
+        across.status.contains("sample rate changed from 44100 Hz to 48000 Hz")
             && across.status.contains("no render started"),
         "{}",
         across.status,
     );
     assert!(!across.sealed, "a failed take is never handed to the renderer");
     assert!(across.take.incomplete.is_some(), "the take file is marked incomplete");
-    assert_eq!((across.wav_rate, across.frames), (48_000, 64 * before as u32));
+    assert_eq!((across.wav_rate, across.frames), (44_100, 64 * before as u32));
 }

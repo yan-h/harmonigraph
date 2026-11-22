@@ -1203,6 +1203,26 @@ impl WavWriter {
         self.rate
     }
 
+    /// Fix the header's rate at the first frames', or refuse another one.
+    fn state_rate(&mut self, rate: u32) -> std::io::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        match self.rate {
+            Some(stated) if stated != rate => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("the sample rate changed from {stated} Hz to {rate} Hz during the take"),
+            )),
+            Some(_) => Ok(()),
+            None => {
+                let fields = Self::rate_fields(rate, self.channels)?;
+                self.file.seek(SeekFrom::Start(Self::RATE_AT))?;
+                self.file.write_all(&fields)?;
+                self.file.seek(SeekFrom::End(0))?;
+                self.rate = Some(rate);
+                Ok(())
+            }
+        }
+    }
+
     fn append(
         &mut self,
         sample_rate: f32,
@@ -1215,33 +1235,6 @@ impl WavWriter {
         if interleaved.is_empty() {
             return Ok(());
         }
-        let rate = sample_rate.max(1.0) as u32;
-        match self.rate {
-            Some(stated) if stated != rate => {
-                self.failed = true;
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "the sample rate changed from {stated} Hz to {rate} Hz during the take"
-                    ),
-                ));
-            }
-            Some(_) => {}
-            None => {
-                use std::io::{Seek, SeekFrom, Write};
-                let fields = Self::rate_fields(rate, self.channels)?;
-                let patched = self
-                    .file
-                    .seek(SeekFrom::Start(Self::RATE_AT))
-                    .and_then(|_| self.file.write_all(&fields))
-                    .and_then(|()| self.file.seek(SeekFrom::End(0)));
-                if let Err(error) = patched {
-                    self.failed = true;
-                    return Err(error);
-                }
-                self.rate = Some(rate);
-            }
-        }
         let frames =
             self.frames.checked_add((interleaved.len() / usize::from(self.channels)) as u64);
         if !interleaved.len().is_multiple_of(usize::from(self.channels))
@@ -1252,6 +1245,12 @@ impl WavWriter {
                 std::io::ErrorKind::InvalidInput,
                 "WAV requires whole frames within the 4 GiB RIFF size limit",
             ));
+        }
+        // The rate last: refused frames fix nothing in the header.
+        let rate = sample_rate.max(1.0) as u32;
+        if let Err(error) = self.state_rate(rate) {
+            self.failed = true;
+            return Err(error);
         }
         self.bytes.clear();
         self.bytes.reserve(interleaved.len() * 4);
@@ -1427,6 +1426,7 @@ mod wav_tests {
         let mut writer = WavWriter::create(&path, 2).unwrap();
         assert!(writer.write(u32::MAX as f32, &[0.5, -0.5]).is_err());
         assert_eq!((writer.frames(), writer.sample_rate()), (0, None));
+        assert!(writer.write(48_000.0, &[0.5, -0.5]).is_err(), "a failed recording cannot resume");
         drop(writer);
         std::fs::remove_file(path).unwrap();
     }
