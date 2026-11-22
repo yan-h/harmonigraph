@@ -67,7 +67,7 @@ egui-baseview = { version = "0.3", default-features = false, features = [
 # The editor's own window, from egui-plugin-window at the commit the
 # `[patch.crates-io]` below pins egui-baseview to: the two move together.
 # A plain git dependency, since it is no crates.io crate.
-plugin-own-window = { git = "https://github.com/yan-h/egui-plugin-window", rev = "0e449e917dbddd127876df796659e02e0d15740e" }
+plugin-own-window = { git = "https://github.com/yan-h/egui-plugin-window", rev = "58a48eedbe40973a9370cde35383a9a1f9e0a243" }
 
 # Math / utility
 glam = { version = "0.34", features = ["serde"] }
@@ -114,7 +114,7 @@ nice-assert-no-alloc = { version = "1.0", default-features = false }
 # own to keep in step. A change lands in egui-plugin-window first and reaches
 # Harmonigraph as a bump of this rev, and of plugin-own-window's above;
 # PATCHES.md says how to try one locally.
-egui-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "0e449e917dbddd127876df796659e02e0d15740e" }
+egui-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "58a48eedbe40973a9370cde35383a9a1f9e0a243" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
 
 [profile.release]

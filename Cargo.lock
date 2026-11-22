@@ -145,7 +145,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -213,7 +213,7 @@ dependencies = [
 [[package]]
 name = "baseview"
 version = "0.1.4"
-source = "git+https://github.com/yan-h/egui-plugin-window?rev=0e449e917dbddd127876df796659e02e0d15740e#0e449e917dbddd127876df796659e02e0d15740e"
+source = "git+https://github.com/yan-h/egui-plugin-window?rev=58a48eedbe40973a9370cde35383a9a1f9e0a243#58a48eedbe40973a9370cde35383a9a1f9e0a243"
 dependencies = [
  "block2 0.6.2",
  "keyboard-types",
@@ -771,7 +771,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -879,7 +879,7 @@ dependencies = [
 [[package]]
 name = "egui-baseview"
 version = "0.3.0"
-source = "git+https://github.com/yan-h/egui-plugin-window?rev=0e449e917dbddd127876df796659e02e0d15740e#0e449e917dbddd127876df796659e02e0d15740e"
+source = "git+https://github.com/yan-h/egui-plugin-window?rev=58a48eedbe40973a9370cde35383a9a1f9e0a243#58a48eedbe40973a9370cde35383a9a1f9e0a243"
 dependencies = [
  "baseview",
  "block2 0.6.2",
@@ -1028,7 +1028,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2636,7 +2636,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "plugin-own-window"
 version = "0.1.0"
-source = "git+https://github.com/yan-h/egui-plugin-window?rev=0e449e917dbddd127876df796659e02e0d15740e#0e449e917dbddd127876df796659e02e0d15740e"
+source = "git+https://github.com/yan-h/egui-plugin-window?rev=58a48eedbe40973a9370cde35383a9a1f9e0a243#58a48eedbe40973a9370cde35383a9a1f9e0a243"
 dependencies = [
  "dispatch2",
  "objc2 0.6.5",
@@ -3009,7 +3009,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3941,7 +3941,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
