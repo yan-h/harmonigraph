@@ -799,7 +799,7 @@ fn source_instances(
             motion.fading = true;
         }
         let dense = ribbon.dense();
-        let mut ribbon_drew = false;
+        let first_painted = painted.len();
         for ((t0, p0), (t1, p1)) in ribbon.segments(now) {
             // A segment wholly before the region is DROPPED, and the test has
             // to be made on its own end rather than on the clamped one — a
@@ -955,7 +955,6 @@ fn source_instances(
                     *piece_t1 = (*piece_t1).min(near_edge);
                 }
             }
-            ribbon_drew |= !pieces_scratch.is_empty();
             // A later attack in this ribbon must paint above a voice that began
             // between its members. Split only its draw spans across cuts inside
             // each piece's own interval: the shared box and ornament continue
@@ -966,7 +965,8 @@ fn source_instances(
         }
         // Drawn, and its newest note's body not yet past the far edge: what
         // is left of it is an overhang, which finishes at the idle poll.
-        motion.scrolling |= source.now_line && ribbon_drew && note.stop(now) >= oldest;
+        motion.scrolling |=
+            source.now_line && painted.len() > first_painted && note.stop(now) >= oldest;
     }
     painted.sort_by_key(|&(order, _)| order);
     tongues.sort_by_key(|&(order, _)| order);
@@ -988,7 +988,9 @@ fn push_painted(
     instance: RollInstance,
 ) {
     if ribbon.paint_starts.len() == 1 {
-        painted.push((ribbon.paint_starts[0].0, instance));
+        if instance.span[0] < instance.span[1] {
+            painted.push((ribbon.paint_starts[0].0, instance));
+        }
         return;
     }
     let center = egui::pos2(instance.center[0], instance.center[1]);
@@ -1055,7 +1057,18 @@ struct IntensityScratch {
     spans: Vec<[(f64, Look); 2]>,
 }
 
-/// Fast path when one note covers `[t0, t1]` with no interior expression
+/// Half-open note index range `[first, end)` covering `[t0, t1)` in `ribbon`.
+fn segment_note_range(ribbon: &Ribbon<'_>, t0: f64, t1: f64) -> (usize, usize) {
+    let first = ribbon.notes.partition_point(|n| n.start <= t0).saturating_sub(1);
+    let end = if t0 < t1 {
+        ribbon.notes.partition_point(|n| n.start < t1).max(first + 1)
+    } else {
+        first + 1
+    };
+    (first, end)
+}
+
+/// Fast path when one note covers `[t0, t1)` with no interior expression
 /// breakpoint and both floored ends match; falls back to [`intensity_points`]
 /// otherwise so threshold crossings and tapers match bit-for-bit.
 fn flat_segment_look(
@@ -1065,14 +1078,15 @@ fn flat_segment_look(
     t1: f64,
     width_floor: f32,
 ) -> Option<Look> {
-    let first = ribbon.notes.partition_point(|n| n.start <= t0).saturating_sub(1);
-    let end = ribbon.notes.partition_point(|n| n.start <= t1).max(first + 1);
+    let (first, end) = segment_note_range(ribbon, t0, t1);
     if first + 1 != end {
         return None;
     }
     let note = ribbon.notes[first];
     let exprs = note.expressions();
-    let next = exprs.partition_point(|&(t, _)| t <= t0);
+    // `expressions_at` clamps to `exprs[0].1` for all `t <= exprs[0].0`, so only
+    // breakpoints from `exprs[1..]` can introduce a change inside `(t0, t1)`.
+    let next = exprs[1..].partition_point(|&(t, _)| t <= t0) + 1;
     if exprs.get(next).is_some_and(|&(t, _)| t < t1) {
         return None;
     }
@@ -1096,22 +1110,22 @@ fn intensity_points(
     width_floor: f32,
     scratch: &mut IntensityScratch,
 ) {
-    let look_at = |at| {
-        let note = ribbon.note_at(at);
-        Look::of(intensity, note.velocity, note.expressions_at(at))
-    };
+    let (first, end) = segment_note_range(ribbon, t0, t1);
+    let first_note = ribbon.notes[first];
+    let last_note = ribbon.notes[end - 1];
     scratch.raw.clear();
-    scratch.raw.push((t0, look_at(t0)));
-    let first = ribbon.notes.partition_point(|n| n.start <= t0).saturating_sub(1);
-    let end = ribbon.notes.partition_point(|n| n.start <= t1).max(first + 1);
+    scratch.raw.push((t0, Look::of(intensity, first_note.velocity, first_note.expressions_at(t0))));
     for (i, note) in ribbon.notes.iter().enumerate().take(end).skip(first) {
-        if i > 0 && note.start > t0 && note.start <= t1 {
+        if i > first && note.start > t0 && note.start < t1 {
             let prev = ribbon.notes[i - 1];
             scratch.raw.push((
                 note.start,
                 Look::of(intensity, prev.velocity, prev.expressions_at(note.start)),
             ));
-            scratch.raw.push((note.start, look_at(note.start)));
+            scratch.raw.push((
+                note.start,
+                Look::of(intensity, note.velocity, note.expressions_at(note.start)),
+            ));
         }
         scratch.raw.extend(
             note.expressions()
@@ -1120,7 +1134,7 @@ fn intensity_points(
                 .map(|&(t, e)| (t, Look::of(intensity, note.velocity, e))),
         );
     }
-    scratch.raw.push((t1, look_at(t1)));
+    scratch.raw.push((t1, Look::of(intensity, last_note.velocity, last_note.expressions_at(t1))));
     // Floor before reducing: tiny positive expression values can become a
     // visible ribbon, so raw mapping error is not a bound on picture error.
     floor_widths(&scratch.raw, width_floor, &mut scratch.floored);
@@ -3215,22 +3229,29 @@ mod tests {
         assert!(spread < 1e-3, "the note scrolled unevenly (snapped?): {moves:?}");
     }
 
-    #[test]
-    fn zoomed_out_microtonal_dense_runs_stay_linear_in_segments() {
-        let mut state = fresh();
+    fn microtonal_dense_state(
+        intensity: IntensitySettings,
+        with_pressure_ramps: bool,
+    ) -> PictureState {
+        let mut state = pinned();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_fraction = 0.8;
         state.appearance.spectrum.roll_seconds = 900.0;
         state.appearance.spectrum.roll_lead = 0.0;
+        state.appearance.spectrum.note_cut = 1.0;
+        state.appearance.spectrum.note_cut_reach = 15.0;
+        state.appearance.view.intensity = intensity;
         for i in 0..1800 {
             let start = f64::from(i) * 0.5;
             let note = 60 + (i % 6) as u8;
             let semitones = ((i % 5) as f32 - 2.0) * 0.14;
+            let velocity = 0.25 + 0.75 * ((i % 4) as f32 / 3.0);
             state.runtime.tracker.handle_event(NoteEvent::on(
                 start,
                 SourceId::DIRECT,
                 0,
                 note,
-                1.0,
+                velocity,
             ));
             state.runtime.tracker.handle_event(NoteEvent {
                 source: SourceId::DIRECT,
@@ -3239,6 +3260,20 @@ mod tests {
                 note,
                 kind: NoteEventKind::Tuning { semitones },
             });
+            if with_pressure_ramps {
+                for (offset, value) in [(0.05, 0.1), (0.30, 0.9)] {
+                    state.runtime.tracker.handle_event(NoteEvent {
+                        source: SourceId::DIRECT,
+                        time: start + offset,
+                        channel: 0,
+                        note,
+                        kind: NoteEventKind::Expression {
+                            expression: harmonigraph_core::Expression::Pressure,
+                            value,
+                        },
+                    });
+                }
+            }
             state.runtime.tracker.handle_event(NoteEvent::off(
                 start + 0.35,
                 SourceId::DIRECT,
@@ -3246,6 +3281,21 @@ mod tests {
                 note,
             ));
         }
+        state
+    }
+
+    #[test]
+    fn zoomed_out_microtonal_dense_runs_stay_linear_in_segments() {
+        let intensity = IntensitySettings {
+            velocity: Default::default(),
+            gain: Default::default(),
+            pressure: Default::default(),
+            timbre: Default::default(),
+            opacity_rest: 1.0,
+            thickness_base: 1.0,
+            thickness_max: 2.0,
+        };
+        let state = microtonal_dense_state(intensity, false);
         let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0));
         let axes = Axes::new(pane, &state.appearance.spectrum);
         let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
@@ -3257,5 +3307,148 @@ mod tests {
             "dense microtonal segments exploded quadratically across paint_starts: {} instances",
             notes.len()
         );
+    }
+
+    #[test]
+    fn zoomed_out_microtonal_dense_runs_with_routed_intensity_stay_linear() {
+        let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0));
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+
+        // Routed velocity -> Opacity (exercises `flat_segment_look` across [t0, t1) segments).
+        let velocity_opacity = IntensitySettings {
+            velocity: harmonigraph_scene::IntensitySource { opacity: Some(1.0), thickness: None },
+            gain: Default::default(),
+            pressure: Default::default(),
+            timbre: Default::default(),
+            opacity_rest: 0.0,
+            thickness_base: 1.0,
+            thickness_max: 2.0,
+        };
+        let state = microtonal_dense_state(velocity_opacity, false);
+        let axes = Axes::new(pane, &state.appearance.spectrum);
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
+        let notes = note_instances(&axes, &scale, &state, split, 900.0, PPP);
+        assert!(notes.iter().any(|n| n.tremolo[1] > 0.0), "fixture must form dense runs");
+        assert!(
+            notes.iter().any(|n| n.fade[0] < 0.5) && notes.iter().any(|n| n.fade[0] > 0.9),
+            "routed velocity opacity must vary across segments"
+        );
+        assert!(
+            notes.len() <= 2 * 1800 + 64,
+            "velocity-routed dense segments exploded: {} instances",
+            notes.len()
+        );
+
+        // Interior Pressure expression ramps (exercises `IntensityScratch` + `push_pieces`).
+        let pressure_routed = IntensitySettings {
+            velocity: Default::default(),
+            gain: Default::default(),
+            pressure: harmonigraph_scene::IntensitySource {
+                opacity: Some(1.0),
+                thickness: Some(1.0),
+            },
+            timbre: Default::default(),
+            opacity_rest: 0.1,
+            thickness_base: 0.5,
+            thickness_max: 2.0,
+        };
+        let state = microtonal_dense_state(pressure_routed, true);
+        let axes = Axes::new(pane, &state.appearance.spectrum);
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
+        let notes = note_instances(&axes, &scale, &state, split, 900.0, PPP);
+        assert!(notes.iter().any(|n| n.tremolo[1] > 0.0), "fixture must form dense runs");
+        assert!(
+            notes.len() > 1800,
+            "pressure ramps must produce piecewise segments rather than taking flat path"
+        );
+        assert!(
+            notes.len() <= 6 * 1800 + 64,
+            "piecewise dense segments exploded quadratically: {} instances",
+            notes.len()
+        );
+    }
+
+    #[test]
+    fn flat_segment_look_handles_half_open_segment_end_at_next_note_start() {
+        let mut state = pinned();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_fraction = 0.8;
+        state.appearance.spectrum.roll_seconds = 900.0;
+        state.appearance.spectrum.roll_lead = 0.0;
+        state.appearance.spectrum.note_cut = 1.0;
+        state.appearance.spectrum.note_cut_reach = 15.0;
+        let intensity = IntensitySettings {
+            velocity: harmonigraph_scene::IntensitySource { opacity: Some(1.0), thickness: None },
+            gain: Default::default(),
+            pressure: Default::default(),
+            timbre: Default::default(),
+            opacity_rest: 0.0,
+            thickness_base: 1.0,
+            thickness_max: 2.0,
+        };
+        state.appearance.view.intensity = intensity;
+        for i in 0..4 {
+            let start = 10.0 + f64::from(i) * 0.5;
+            let velocity = 0.25 + 0.2 * f32::from(i as u8);
+            state.runtime.tracker.handle_event(NoteEvent::on(
+                start,
+                SourceId::DIRECT,
+                0,
+                60,
+                velocity,
+            ));
+            state.runtime.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
+                time: start,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Tuning { semitones: 0.14 * i as f32 },
+            });
+            state.runtime.tracker.handle_event(NoteEvent::off(
+                start + 0.1,
+                SourceId::DIRECT,
+                0,
+                60,
+            ));
+        }
+        let notes: Vec<_> = state.roll().notes().collect();
+        let ribbons = density::layout(&notes, 20.0, 2.0, 4.0, f64::NEG_INFINITY);
+        assert_eq!(ribbons.len(), 1, "fixture must form one dense ribbon");
+        let ribbon = &ribbons[0];
+        let segments = ribbon.segments(20.0);
+        assert!(segments.len() >= 3, "fixture must produce multiple pitch segments");
+        let mut scratch = IntensityScratch::default();
+        // Check both the onset-padded first segment (`t0 < notes[0].start`) and an
+        // interior segment (`t0 == notes[1].start`, `t1 == notes[2].start`).
+        for (idx, &((t0, _), (t1, _))) in segments[..2].iter().enumerate() {
+            assert_eq!(
+                t1,
+                ribbon.notes[idx + 1].start,
+                "segment {idx} must end exactly at the next note's start"
+            );
+            intensity_points(ribbon, &intensity, t0, t1, 0.5, &mut scratch);
+            let look = flat_segment_look(ribbon, &intensity, t0, t1, 0.5).unwrap_or_else(|| {
+                panic!("flat_segment_look must handle [t0, t1) on segment {idx}")
+            });
+            let expected = Look::of(&intensity, ribbon.notes[idx].velocity, Expressions::default())
+                .floored(0.5);
+            assert_eq!(look, expected);
+            assert_eq!(scratch.points, vec![(t0, expected), (t1, expected)]);
+        }
+    }
+
+    #[test]
+    fn push_painted_drops_zero_width_span_regardless_of_paint_start_count() {
+        let mut state = pinned();
+        state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::off(1.5, SourceId::DIRECT, 0, 60));
+        let notes: Vec<_> = state.roll().notes().collect();
+        let ribbons = density::layout(&notes, 2.0, 0.1, 0.2, f64::NEG_INFINITY);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
+        let time = TimeAxis::new(&state, 0.5, 2.0);
+        let empty = RollInstance { span: [1.0, 1.0], ..RollInstance::PLAIN };
+        let mut painted = Vec::new();
+        push_painted(&mut painted, &ribbons[0], &axes, &time, 1.0, 1.5, empty);
+        assert!(painted.is_empty(), "single-paint_start fast path must drop empty span");
     }
 }

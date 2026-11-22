@@ -32,11 +32,6 @@ impl<'a> Ribbon<'a> {
         self.notes.len() > 1
     }
 
-    pub fn note_at(&self, at: f64) -> &'a RollNote {
-        let i = self.notes.partition_point(|n| n.start <= at).saturating_sub(1);
-        self.notes[i]
-    }
-
     /// Close only the small rests inside a dense run, holding the preceding
     /// pitch. Merge flat neighbours into one box so subpixel attacks do not
     /// leave individually antialiased ends inside the continuous body.
