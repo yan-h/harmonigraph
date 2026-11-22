@@ -52,11 +52,16 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
     // focused control of any other kind owns no key, so a button Tab left
     // the focus on must not hold the map's arrows (#1844). A number being
     // typed into is a text field, the Stop at bar field's Up and Down
-    // included, so the map leaves those alone.
+    // included, so the map leaves those alone. An open menu moves through its
+    // items by the arrows, and the window hands them to egui while one is.
     let map_mode = state.runtime.lattice_maps.as_ref().is_some_and(|maps| {
         maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
     });
-    if map_mode && response.hovered() && !ui.ctx().text_edit_focused() {
+    if map_mode
+        && response.hovered()
+        && !ui.ctx().text_edit_focused()
+        && !egui::Popup::is_any_open(ui.ctx())
+    {
         state.runtime.map_translation = arrow_translation(ui, &state.appearance.camera, rect);
     }
     if response.double_clicked()
@@ -1009,12 +1014,11 @@ mod tests {
         assert_eq!(annotations(&mut state, true), 0, "the visibility control must hide dots");
     }
 
-    #[test]
-    fn arrows_over_the_lattice_translate_the_map_along_the_axis_on_screen() {
-        use crate::lattice_maps::{MapOffsetLane, MapPlayback, MapView};
-        use crate::tests::probe::events_into;
+    /// A fresh state with a map playing under Lattice Map, whose arrows the
+    /// lattice takes.
+    fn in_map_mode() -> PictureState {
+        use crate::lattice_maps::{MapPlayback, MapView};
         use harmonigraph_core::lattice_map::TuningEngine;
-        use harmonigraph_core::LatticePos;
         let mut state = fresh();
         state.runtime.lattice_maps = Some(MapView {
             playback: MapPlayback { engine: TuningEngine::LatticeMap, ..Default::default() },
@@ -1026,6 +1030,16 @@ mod tests {
             can_undo: false,
             full: false,
         });
+        state
+    }
+
+    #[test]
+    fn arrows_over_the_lattice_translate_the_map_along_the_axis_on_screen() {
+        use crate::lattice_maps::MapOffsetLane;
+        use crate::tests::probe::events_into;
+        use harmonigraph_core::lattice_map::TuningEngine;
+        use harmonigraph_core::LatticePos;
+        let mut state = in_map_mode();
         let ctx = themed();
         let screen = egui::vec2(400.0, 400.0);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen);
@@ -1090,20 +1104,8 @@ mod tests {
     /// holding it keeps them (#1844).
     #[test]
     fn the_map_takes_arrows_past_a_focused_control_but_not_a_text_field() {
-        use crate::lattice_maps::{MapPlayback, MapView};
         use crate::tests::probe::events_into;
-        use harmonigraph_core::lattice_map::TuningEngine;
-        let mut state = fresh();
-        state.runtime.lattice_maps = Some(MapView {
-            playback: MapPlayback { engine: TuningEngine::LatticeMap, ..Default::default() },
-            offsets: Default::default(),
-            followed: harmonigraph_core::LatticePos::ORIGIN,
-            unadopted: None,
-            names: Default::default(),
-            edit_shape: false,
-            can_undo: false,
-            full: false,
-        });
+        let mut state = in_map_mode();
         let ctx = themed();
         let screen = egui::vec2(400.0, 400.0);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen);
@@ -1157,6 +1159,47 @@ mod tests {
         frame(&mut state, vec![]);
         assert!(ctx.text_edit_focused(), "fixture must focus the text field");
         assert_eq!(frame(&mut state, vec![right]), None, "the map took a text field's arrow");
+    }
+
+    /// While a menu is open its arrows are the menu's: the map neither moves
+    /// nor claims them from the host, with the pointer still over it.
+    #[test]
+    fn an_open_menu_keeps_the_arrows_from_the_map() {
+        use crate::tests::probe::events_into;
+        let mut state = in_map_mode();
+        let ctx = themed();
+        let screen = egui::vec2(400.0, 400.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen);
+        let at = rect.center();
+        let combo = std::cell::Cell::new(egui::Id::NULL);
+        let claimed = std::cell::Cell::new(0);
+        let frame = |state: &mut PictureState, events: Vec<egui::Event>| {
+            let mut all = vec![egui::Event::PointerMoved(at)];
+            all.extend(events);
+            events_into(&ctx, screen, rect, all, |ui| {
+                lattice_pane(ui, state, 0.0, 0);
+                claimed.set(crate::keys::claimed(ui.ctx()).len());
+                // Below the lattice, so its menu opens clear of the pointer.
+                let menu = egui::ComboBox::from_id_salt("menu");
+                let menu = crate::widgets::selected_combo(ui, menu, |ui| ui.label("item"));
+                combo.set(menu.response.id);
+            });
+            state.runtime.map_translation.take()
+        };
+        let right = egui::Event::Key {
+            key: egui::Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut state, vec![]);
+        assert!(frame(&mut state, vec![right.clone()]).is_some(), "fixture must move the map");
+        egui::Popup::open_id(&ctx, combo.get().with("popup"));
+        frame(&mut state, vec![]);
+        assert!(egui::Popup::is_any_open(&ctx), "fixture must open the menu");
+        assert_eq!(frame(&mut state, vec![right]), None, "the map took an open menu's arrow");
+        assert_eq!(claimed.get(), 0, "the map claimed an open menu's arrows from the host");
     }
 
     #[test]
