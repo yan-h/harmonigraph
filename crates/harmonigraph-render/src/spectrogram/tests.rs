@@ -818,7 +818,7 @@ fn float_output_uses_linear_palette_for_every_style() {
         let slice = buffer.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map float pixel"));
         device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("mapped range");
         let expected = ((128.0_f32 / 255.0 + 0.055) / 1.055).powf(2.4);
         for channel in mapped[..6].as_chunks::<2>().0 {
             let half = u16::from_le_bytes([channel[0], channel[1]]);
@@ -2176,7 +2176,7 @@ fn cs_wrap_probe() {
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |result| result.expect("map wrap probe"));
     device.poll(wgpu::PollType::wait_indefinitely()).expect("poll wrap probe");
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("mapped range");
     let cells: &[[i32; 2]] = bytemuck::cast_slice(&mapped);
     assert_eq!(cells[0], [39, 7], "negative coordinates did not use positive modulo: {cells:?}");
     for group in [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]] {
@@ -2838,7 +2838,7 @@ fn cs_rotation_probe() {
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |result| result.expect("map rotation probe"));
     device.poll(wgpu::PollType::wait_indefinitely()).expect("poll rotation probe");
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("mapped range");
     let values: &[[f32; 2]] = bytemuck::cast_slice(&mapped);
     let close = |actual: [f32; 2], expected: [f32; 2]| {
         assert!(

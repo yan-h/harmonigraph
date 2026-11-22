@@ -15,7 +15,7 @@ read §5 first if you only want the recommendation.
 
 ## 1. What the window actually is
 
-On macOS the plugin editor is egui 0.35 → egui-wgpu 0.35 → wgpu 29 → **Metal**.
+On macOS the plugin editor is egui 0.37 → egui-wgpu 0.37 → wgpu 30 → **Metal**.
 No OpenGL path exists: the forked egui-baseview keeps only its wgpu renderer (#1810).
 
 `EguiWindow::open_parented` (in `crates/harmonigraph-plugin/src/editor/window.rs`) parents onto the host's `NSView`, and `egui-baseview/src/renderer/wgpu/renderer.rs:59-83` (in egui-plugin-window) creates a wgpu surface on it —

@@ -523,7 +523,8 @@ fn section_ui(
             use crate::widgets::{paint_rail, Rail};
             let (run, direction) =
                 if vertical_rail { (Rail::Column, Vec2::X) } else { (Rail::Row, Vec2::Y) };
-            if paint_rail(&pane, rect, pane.id().with("unfold"), run, direction, title, rail) {
+            if paint_rail(&pane, rect, pane.scope_id().with("unfold"), run, direction, title, rail)
+            {
                 layout.folded[index] = false;
             }
         }
@@ -555,7 +556,7 @@ fn section_ui(
             ui.spacing_mut().item_spacing.x = gap;
             response.widget_info(|| {
                 egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
+                    egui::Role::Button,
                     ui.is_enabled(),
                     format!("Collapse {title}"),
                 )
@@ -639,7 +640,7 @@ fn settings_link(ui: &egui::Ui, rect: Rect, tab: Tab, open: &mut Option<Tab>) {
     let clicked =
         ui.input(|input| input.pointer.secondary_clicked()) && ui.rect_contains_pointer(rect);
     egui::Popup::new(
-        ui.id().with("settings link"),
+        ui.scope_id().with("settings link"),
         ui.ctx().clone(),
         egui::PopupAnchor::PointerFixed,
         ui.layer_id(),
@@ -705,7 +706,7 @@ fn dividers(
             continue;
         }
         let horizontal = below && index == 0;
-        let id = ui.id().with(("section-divider", index));
+        let id = ui.scope_id().with(("section-divider", index));
         let hit =
             if horizontal { bar.expand2(vec2(0.0, 4.0)) } else { bar.expand2(vec2(4.0, 0.0)) };
         let response = ui.interact(

@@ -158,7 +158,7 @@ pub(super) fn after_passes(
             events,
             ..Default::default()
         };
-        let out = ctx.run_ui(raw, |ui| bar.set(add(ui).rect));
+        let out = crate::tests::probe::run(&ctx, raw, |ui| bar.set(add(ui).rect));
         out.shapes.into_iter().map(|s| s.shape).collect::<Vec<_>>()
     };
     let mut last = frame(vec![]);

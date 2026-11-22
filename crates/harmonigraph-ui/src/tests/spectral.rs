@@ -37,7 +37,7 @@ fn the_spectral_divider_drags_through_the_dock() {
 
     // Ask egui where the handle actually landed rather than deriving the
     // dock's arithmetic here, which would just re-encode the layout.
-    let handle = egui::Id::new(("spectral-split", 0usize));
+    let handle = egui::Id::unique(("spectral-split", 0usize));
     let band = h.ctx.read_response(handle).expect("the split handle never registered").rect;
     let grab = band.center();
     let before = state.picture.appearance.spectrum.roll_fraction;
@@ -221,6 +221,7 @@ fn the_wheel_zooms_the_pitch_range_and_leaves_the_time_span_alone() {
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, 40.0),
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
                 modifiers: egui::Modifiers::default(),
             }],
         );
@@ -254,7 +255,7 @@ fn the_divider_still_wins_the_drag_over_the_pane_behind_it() {
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
-    let handle = egui::Id::new(("spectral-split", 0usize));
+    let handle = egui::Id::unique(("spectral-split", 0usize));
     let band = h.ctx.read_response(handle).expect("the split handle never registered").rect;
     let grab = band.center();
     let before = state.picture.appearance.spectrum;
@@ -314,7 +315,7 @@ fn resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum() {
         pane_body(state, &crate::panes::Tab::Spectral)
             .expect("the Spectral pane should be visible in the default dock")
     };
-    let handle = egui::Id::new(("spectral-split", 0usize));
+    let handle = egui::Id::unique(("spectral-split", 0usize));
     // The spectrum's drawn length: its outer edge is the pane's left in this
     // orientation, and the divider's band is centred on the boundary.
     let spectrum = |h: &DockHarness, state: &crate::SharedState| {
@@ -449,7 +450,7 @@ fn a_zoom_let_go_of_unseen_does_not_turn_the_next_pan_into_one() {
         events: vec![press(zoomed, false)],
         ..Default::default()
     };
-    let _ = h.ctx.run_ui(raw, |_| {});
+    let _ = crate::tests::probe::run(&h.ctx, raw, |_| {});
     h.settle(&mut state);
 
     let before = state.picture.appearance.spectrum;

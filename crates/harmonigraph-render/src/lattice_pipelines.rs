@@ -66,7 +66,7 @@ fn create_pipeline(
     shader: &wgpu::ShaderModule,
     layouts: SceneLayouts<'_>,
     entry_points: (&str, &str),
-    vertex_layouts: &[wgpu::VertexBufferLayout<'_>],
+    vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
     bloom: bool,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -126,10 +126,17 @@ pub(super) fn create_pipelines(
             shader,
             layouts,
             ("vs_main", node),
-            &[GpuInstance::LAYOUT, shadow::ShadowBox::BESIDE_NODES],
+            &[Some(GpuInstance::LAYOUT), Some(shadow::ShadowBox::BESIDE_NODES)],
             bloom,
         ),
-        create_pipeline(device, shader, layouts, ("vs_plus", plus), &[GpuPlus::LAYOUT], bloom),
+        create_pipeline(
+            device,
+            shader,
+            layouts,
+            ("vs_plus", plus),
+            &[Some(GpuPlus::LAYOUT)],
+            bloom,
+        ),
     )
 }
 
@@ -218,7 +225,7 @@ pub(super) fn create_cell_pipelines(
         ..Default::default()
     });
     let pipeline = |entries: (&str, &str),
-                    buffers: &[wgpu::VertexBufferLayout<'_>],
+                    buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
                     blend: Option<wgpu::BlendState>| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(entries.0),
@@ -252,7 +259,7 @@ pub(super) fn create_cell_pipelines(
     (
         pipeline(
             ("vs_node_cell", "fs_node_cell"),
-            &[GpuInstance::LAYOUT, shadow::ShadowBox::BESIDE_NODES],
+            &[Some(GpuInstance::LAYOUT), Some(shadow::ShadowBox::BESIDE_NODES)],
             // One node owns one cell, so there is nothing for a blend to
             // combine: Overwrite.
             None,

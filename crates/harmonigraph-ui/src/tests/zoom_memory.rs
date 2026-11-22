@@ -39,15 +39,13 @@ impl Zoom {
         let t = self.t;
         let backend = &self.backend;
         let output = self.ctx.run_ui(raw, |ui| root_ui(ui, state, backend, t, "test @0123456"));
-        AtlasFrame {
-            size: self.atlas(),
-            fill: self.fill(),
-            rebuilt: output
-                .textures_delta
-                .set
-                .iter()
-                .any(|(id, delta)| *id == egui::TextureId::default() && delta.pos.is_none()),
-        }
+        let rebuilt = output
+            .textures_delta
+            .set
+            .get(&egui::TextureId::default())
+            .is_some_and(|deltas| deltas.iter().any(|delta| delta.pos.is_none()));
+        output.drop_without_applying_deltas();
+        AtlasFrame { size: self.atlas(), fill: self.fill(), rebuilt }
     }
 
     fn atlas(&self) -> [usize; 2] {

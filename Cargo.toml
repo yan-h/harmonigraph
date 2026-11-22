@@ -42,12 +42,15 @@ harmonigraph-record = { path = "crates/harmonigraph-record" }
 harmonigraph-clap = { path = "crates/harmonigraph-clap" }
 
 # GUI stack. These versions are coupled:
-#   egui-baseview 0.3 -> egui 0.35 / egui-wgpu 0.35 / wgpu 29 / baseview 0.1
+#   egui-baseview 0.3 -> egui 0.37 / egui-wgpu 0.37 / wgpu 30 / baseview 0.1
 #   eframe must match egui
 # When bumping egui, bump all of these together.
-egui = "0.35"
-egui-wgpu = "0.35"
-eframe = { version = "0.35", default-features = false, features = [
+# egui's bundled faces are the per-glyph fallbacks behind the product face
+# (`harmonigraph-ui`'s `install_fonts`), and egui 0.37 no longer ships them
+# by default.
+egui = { version = "0.37", features = ["default_fonts"] }
+egui-wgpu = "0.37"
+eframe = { version = "0.37", default-features = false, features = [
     "wgpu",
     "default_fonts",
     "wayland",
@@ -63,14 +66,14 @@ egui-baseview = { version = "0.3", default-features = false, features = [
 # The editor's own window, from egui-plugin-window at the commit the
 # `[patch.crates-io]` below pins egui-baseview to: the two move together.
 # A plain git dependency, since it is no crates.io crate.
-plugin-own-window = { git = "https://github.com/yan-h/egui-plugin-window", rev = "55be23f61fc3088694145caff4198f809a42cba4" }
+plugin-own-window = { git = "https://github.com/yan-h/egui-plugin-window", rev = "0e449e917dbddd127876df796659e02e0d15740e" }
 
 # Math / utility
 glam = { version = "0.34", features = ["serde"] }
 # LCH color math, same crate v1 used so channel colors match exactly.
 color_space = "0.5"
 # Shader validation for hot-reload (dev only); version tracks wgpu's.
-naga = "29"
+naga = "30"
 bytemuck = { version = "1", features = ["derive"] }
 # Hashing for maps keyed on lattice positions and note identities, which
 # nothing outside the plugin chooses: SipHash's flooding resistance buys
@@ -110,7 +113,7 @@ nice-assert-no-alloc = { version = "1.0", default-features = false }
 # own to keep in step. A change lands in egui-plugin-window first and reaches
 # Harmonigraph as a bump of this rev, and of plugin-own-window's above;
 # PATCHES.md says how to try one locally.
-egui-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "55be23f61fc3088694145caff4198f809a42cba4" }
+egui-baseview = { git = "https://github.com/yan-h/egui-plugin-window", rev = "0e449e917dbddd127876df796659e02e0d15740e" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
 
 [profile.release]

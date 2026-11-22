@@ -952,7 +952,7 @@ pub(crate) fn create_cell_pipelines(
                     // Share one entry point so Metal can reuse the compiled vertex stage.
                     entry_point: Some("vs_cell"),
                     compilation_options: Default::default(),
-                    buffers: &[ShadowBox::LAYOUT],
+                    buffers: &[Some(ShadowBox::LAYOUT)],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
@@ -1162,7 +1162,10 @@ fn cs_shadow_law() {{
         let slice = readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |result| result.expect("map the shadow law probe"));
         device.poll(wgpu::PollType::wait_indefinitely()).expect("poll the shadow law probe");
-        let law: Vec<[f32; 2]> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+        let law: Vec<[f32; 2]> = bytemuck::cast_slice(
+            &slice.get_mapped_range().expect("mapped range of the shadow law probe"),
+        )
+        .to_vec();
         for (k, [local, spectral]) in law.into_iter().enumerate() {
             let (full, depth) = (SAMPLES[k / N], SAMPLES[k % N]);
             for (lattice, through) in [(true, local), (false, spectral)] {

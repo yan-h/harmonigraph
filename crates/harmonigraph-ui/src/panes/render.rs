@@ -151,7 +151,7 @@ fn preview_layout_controls(
     }
     let rearrange_held = ui.input(|i| i.modifiers.shift);
     let moving_lattice = ui
-        .interact(move_rect, ui.id().with("preview_lattice_move"), Sense::drag())
+        .interact(move_rect, ui.scope_id().with("preview_lattice_move"), Sense::drag())
         .on_hover_cursor(egui::CursorIcon::Grab)
         .on_hover_text(if rearrange_held {
             "Drag the lattice to the left, right, top or bottom edge"
@@ -159,7 +159,7 @@ fn preview_layout_controls(
             "Drag to pan the lattice · Hold Shift and drag to move it to the left, right, top or bottom edge · Scroll or pinch to zoom"
         });
     let resizing = ui
-        .interact(handle, ui.id().with("preview_lattice_resize"), Sense::drag())
+        .interact(handle, ui.scope_id().with("preview_lattice_resize"), Sense::drag())
         .on_hover_cursor(if vertical {
             egui::CursorIcon::ResizeHorizontal
         } else {
@@ -331,7 +331,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
 /// camera is still where that click left it, and no longer: a hand zoom or a
 /// second framing makes it a statement about some other picture.
 fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
-    let id = ui.id().with("frame_notes_outcome");
+    let id = ui.scope_id().with("frame_notes_outcome");
     let tracker = &state.runtime.tracker;
     let drawn = !tracker.history().is_empty() || tracker.voices().next().is_some();
     button_row(ui, |ui| {
@@ -576,7 +576,7 @@ fn preview_lattice(
         Layout::split(state.appearance.render.frame.lattice, state.appearance.render.frame.split)
             .background,
     );
-    let response = ui.interact(rect, ui.id().with("preview_lattice_zoom"), Sense::hover());
+    let response = ui.interact(rect, ui.scope_id().with("preview_lattice_zoom"), Sense::hover());
     if let Some((scroll, zoom)) = super::zoom_gesture(ui, &response) {
         if scroll != 0.0 {
             state.appearance.camera.zoom(scroll);
@@ -934,14 +934,14 @@ mod tests {
             vec![egui::Event::PointerMoved(end)],
             vec![button(end, false)],
         ] {
-            let _ = ctx.run_ui(
+            let _ = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
                         egui::vec2(1000.0, 1000.0),
                     )),
-                    modifiers: egui::Modifiers::SHIFT,
-                    events,
+                    events: crate::tests::probe::holding(&ctx, egui::Modifiers::SHIFT, events),
                     ..Default::default()
                 },
                 |ui| {
@@ -966,14 +966,14 @@ mod tests {
             state.appearance.render.frame.split,
             Pane::Spectral,
         );
-        let _ = ctx.run_ui(
+        let _ = crate::tests::probe::run(
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
                     egui::vec2(800.0, 600.0),
                 )),
-                modifiers,
-                events,
+                events: crate::tests::probe::holding(ctx, modifiers, events),
                 ..Default::default()
             },
             |ui| {
@@ -1085,14 +1085,14 @@ mod tests {
             vec![egui::Event::PointerMoved(end)],
             vec![button(end, false)],
         ] {
-            let _ = ctx.run_ui(
+            let _ = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
                         egui::vec2(800.0, 600.0),
                     )),
-                    modifiers: egui::Modifiers::NONE,
-                    events,
+                    events: crate::tests::probe::holding(&ctx, egui::Modifiers::NONE, events),
                     ..Default::default()
                 },
                 |ui| {
@@ -1351,6 +1351,7 @@ mod tests {
                     unit: egui::MouseWheelUnit::Line,
                     delta: egui::vec2(0.0, 1.0),
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers: egui::Modifiers::NONE,
                 },
                 egui::Modifiers::NONE,
@@ -1361,6 +1362,7 @@ mod tests {
                     unit: egui::MouseWheelUnit::Line,
                     delta: egui::vec2(0.0, 1.0),
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers: egui::Modifiers::SHIFT,
                 },
                 egui::Modifiers::SHIFT,
@@ -1379,14 +1381,14 @@ mod tests {
                 vec![egui::Event::PointerMoved(pointer)],
                 vec![egui::Event::PointerMoved(pointer), event],
             ] {
-                let _ = ctx.run_ui(
+                let _ = crate::tests::probe::run(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
                             egui::vec2(800.0, 600.0),
                         )),
-                        modifiers,
-                        events,
+                        events: crate::tests::probe::holding(&ctx, modifiers, events),
                         ..Default::default()
                     },
                     |ui| {
@@ -1477,7 +1479,8 @@ mod tests {
             vec![egui::Event::PointerMoved(pointer)],
             vec![egui::Event::PointerMoved(pointer), egui::Event::Zoom(PINCH)],
         ] {
-            let output = ctx.run_ui(
+            let output = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput { screen_rect: Some(frame), events, ..Default::default() },
                 |ui| preview_panes(ui, &placements, &mut state, 0.05, 1.0),
             );
@@ -1519,7 +1522,8 @@ mod tests {
         ));
 
         let ctx = crate::tests::probe::themed();
-        let output = ctx.run_ui(
+        let output = crate::tests::probe::run(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1560,7 +1564,8 @@ mod tests {
                 // subsequent export will read.
                 let ctx = egui::Context::default();
                 crate::theme::apply_theme(&ctx);
-                let output = ctx.run_ui(
+                let output = crate::tests::probe::run(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -1633,7 +1638,8 @@ mod tests {
         for width in [480.0, 1_800.0] {
             let _ = crate::panes::spectral::roll::take_roll_draw_probe();
             let ctx = crate::tests::probe::themed();
-            let _ = ctx.run_ui(
+            let _ = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1778,7 +1784,8 @@ mod export_tests {
         let mut time = 0.0;
         let mut frame = |events| {
             time += 0.1;
-            ctx.run_ui(
+            crate::tests::probe::run(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,

@@ -246,7 +246,7 @@ pub fn render(
 
         stages.submit += renderer.submit(
             &primitives,
-            &output.textures_delta,
+            output.textures_delta,
             settings.pixels_per_point,
             background,
         );
@@ -1215,9 +1215,10 @@ mod tests {
         let context = egui::Context::default();
         harmonigraph_ui::theme::apply_theme(&context);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, COMPOSED);
-        let output = context.run_ui(frame_input(screen, now, 8192), |ui| {
+        let mut output = context.run_ui(frame_input(screen, now, 8192), |ui| {
             draw_panes(ui, placements, state, now);
         });
+        output.textures_delta.clear();
         let band = harmonigraph_ui::theme::picture_off_scale().gamma_multiply(0.3);
         let shapes = || output.shapes.iter().map(|s| &s.shape);
         let bands = shapes().filter(|s| matches!(s, egui::Shape::Rect(r) if r.fill == band));
@@ -1233,10 +1234,12 @@ mod tests {
     fn allocated(placement: egui::Rect) -> egui::Rect {
         let mut rect = egui::Rect::NOTHING;
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, COMPOSED);
-        let _ = egui::Context::default().run_ui(frame_input(screen, 0.0, 8192), |ui| {
-            let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(placement));
-            rect = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover()).0;
-        });
+        egui::Context::default()
+            .run_ui(frame_input(screen, 0.0, 8192), |ui| {
+                let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(placement));
+                rect = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover()).0;
+            })
+            .drop_without_applying_deltas();
         rect
     }
 

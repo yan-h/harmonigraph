@@ -357,8 +357,10 @@ pub fn root_ui(
         Some(seconds) if seconds <= 0.0 => ui.ctx().request_repaint(),
         // The shell draws on the first refresh at or after the delay, so a
         // scroll steps one to two device pixels, never more.
-        Some(seconds) => repaint_after(ui.ctx(), std::time::Duration::from_secs_f64(seconds)),
-        None => repaint_after(ui.ctx(), IDLE_REPAINT_INTERVAL),
+        Some(seconds) => {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(seconds))
+        }
+        None => ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL),
     }
     // What the overlay judges against the chosen rate: a picture asking for
     // every frame the link offers, a fast scroll included.
@@ -526,7 +528,7 @@ const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 
 /// Repaint cadence of the chrome's own cues, about 30 Hz: the armed Record
 /// button's breath and a running export's progress stripes. Each asks for its
-/// next frame this far out, through [`repaint_after`], rather than holding the
+/// next frame this far out rather than holding the
 /// whole editor at the display rate: a full redraw at 144 Hz costs Bitwig's
 /// main thread (#1673), and these run for as long as Record waits armed or an
 /// export runs. They are not [`Reason`]s, which are the picture's
@@ -726,19 +728,6 @@ impl std::fmt::Display for Animating {
         }
         Ok(())
     }
-}
-
-/// A repaint after the whole of `delay`.
-///
-/// egui takes the frame time it predicts off any delay, so that the repaint
-/// lands before the deadline rather than after it. Nothing tells it the
-/// display's rate, so it predicts 1/60 s: the 50 ms idle poll became 33 ms,
-/// every fifth refresh at 144 Hz (#1673), and the splash's 16 ms became none
-/// at all. Handing the prediction back makes the delay the one asked for.
-pub(crate) fn repaint_after(ctx: &egui::Context, delay: std::time::Duration) {
-    let predicted = ctx.input(|i| i.predicted_dt);
-    let slack = std::time::Duration::try_from_secs_f32(predicted).unwrap_or_default();
-    ctx.request_repaint_after(delay + slack);
 }
 
 #[cfg(test)]

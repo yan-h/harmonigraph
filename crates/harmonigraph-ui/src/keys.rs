@@ -39,7 +39,7 @@ struct Claims {
 }
 
 fn claims_id() -> egui::Id {
-    egui::Id::new("harmonigraph_ui::keys::Claims")
+    egui::Id::unique("harmonigraph_ui::keys::Claims")
 }
 
 /// Keep `shortcuts` from the host this frame without reading them here: for
@@ -119,12 +119,16 @@ mod tests {
         let tab = KeyboardShortcut::new(Modifiers::NONE, Key::Tab);
         for events in [vec![], vec![press(Key::Tab, Modifiers::NONE)]] {
             let pressed = events.len();
-            let _ = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-                assert_eq!(take(ui.ctx(), tab), pressed);
-                assert_eq!(claimed(ui.ctx()), [tab]);
-            });
+            let _ = crate::tests::probe::run(
+                &ctx,
+                egui::RawInput { events, ..Default::default() },
+                |ui| {
+                    assert_eq!(take(ui.ctx(), tab), pressed);
+                    assert_eq!(claimed(ui.ctx()), [tab]);
+                },
+            );
         }
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::tests::probe::run(&ctx, Default::default(), |ui| {
             assert_eq!(claimed(ui.ctx()), [], "a frame that takes nothing claims nothing");
         });
     }
@@ -141,9 +145,10 @@ mod tests {
             press(Key::Z, Modifiers::COMMAND.plus(Modifiers::ALT)),
             press(Key::Z, undo.modifiers),
         ];
-        let _ = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-            assert_eq!(take_each(ui.ctx(), &[undo, redo]), [redo, undo]);
-            assert_eq!(ui.input(|i| i.events.len()), 1, "Cmd-Option-Z is the host's");
-        });
+        let _ =
+            crate::tests::probe::run(&ctx, egui::RawInput { events, ..Default::default() }, |ui| {
+                assert_eq!(take_each(ui.ctx(), &[undo, redo]), [redo, undo]);
+                assert_eq!(ui.input(|i| i.events.len()), 1, "Cmd-Option-Z is the host's");
+            });
     }
 }

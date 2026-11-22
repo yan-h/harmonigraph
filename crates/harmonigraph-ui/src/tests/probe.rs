@@ -54,6 +54,33 @@ pub(crate) fn themed() -> egui::Context {
     ctx
 }
 
+/// One pass of `ctx`, its texture delta dropped unapplied: egui asserts in a
+/// debug build that a dropped delta was applied, and no fixture here uploads
+/// one. A test that does applies its own and calls `run_ui` itself.
+pub(crate) fn run(
+    ctx: &egui::Context,
+    raw: egui::RawInput,
+    add: impl FnMut(&mut egui::Ui),
+) -> egui::FullOutput {
+    let mut output = ctx.run_ui(raw, add);
+    output.textures_delta.clear();
+    output
+}
+
+/// `events` with `modifiers` held through them. egui keeps the modifiers it
+/// was last sent across passes, and changes them only by a
+/// `ModifiersChanged`, which is sent ahead of the events when `ctx` holds
+/// others, as the editor's window sends it. An event every pass would be input
+/// every pass, and egui repaints at once after input.
+pub(crate) fn holding(
+    ctx: &egui::Context,
+    modifiers: egui::Modifiers,
+    events: Vec<egui::Event>,
+) -> Vec<egui::Event> {
+    let changed = ctx.input(|input| input.modifiers) != modifiers;
+    changed.then_some(egui::Event::ModifiersChanged(modifiers)).into_iter().chain(events).collect()
+}
+
 /// The same at a chosen device scale, which is a second thing entirely: `ppp`
 /// decides what a glyph's quad ROUNDS to, so a clearance that holds at 1 can
 /// be half a pixel at 2. A fixture that leaves it at 1 cannot see that at all.
@@ -128,8 +155,12 @@ pub(crate) fn held_into(
     mut add: impl FnMut(&mut egui::Ui),
 ) -> egui::FullOutput {
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), screen);
-    let raw = egui::RawInput { screen_rect: Some(screen), events, modifiers, ..Default::default() };
-    ctx.run_ui(raw, |ui| {
+    let raw = egui::RawInput {
+        screen_rect: Some(screen),
+        events: holding(ctx, modifiers, events),
+        ..Default::default()
+    };
+    run(ctx, raw, |ui| {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         add(&mut child);
     })
@@ -181,7 +212,7 @@ pub(crate) fn painted_full_at(
 ) -> egui::FullOutput {
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), screen);
     let raw = egui::RawInput { screen_rect: Some(screen), time: Some(time), ..Default::default() };
-    themed().run_ui(raw, |ui| {
+    run(&themed(), raw, |ui| {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(screen));
         add(&mut child);
     })

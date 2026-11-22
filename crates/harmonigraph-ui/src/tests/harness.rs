@@ -229,14 +229,13 @@ impl DockHarness {
         let raw = egui::RawInput {
             screen_rect: Some(self.screen),
             time: Some(self.t),
-            modifiers,
-            events,
+            events: crate::tests::probe::holding(&self.ctx, modifiers, events),
             ..Default::default()
         };
         let t = self.t;
         let backend = &self.backend;
         let mut ui_ms = 0.0;
-        let output = self.ctx.run_ui(raw, |ui| {
+        let output = crate::tests::probe::run(&self.ctx, raw, |ui| {
             let start = std::time::Instant::now();
             root_ui(ui, state, backend, t, "shell-tag-fixture @0123456");
             ui_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -643,7 +642,8 @@ fn tab_body_with(
     let margin = crate::theme::dock_pane_margin(crate::theme::ui_scale(ctx));
     let body =
         egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width + margin.sum().x, height));
-    ctx.run_ui(
+    crate::tests::probe::run(
+        ctx,
         egui::RawInput { screen_rect: Some(body), time: Some(now), events, ..Default::default() },
         |ui| {
             // The body ui's clip is the whole body (the screen here); the pane

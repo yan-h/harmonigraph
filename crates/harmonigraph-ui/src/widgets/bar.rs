@@ -515,7 +515,7 @@ mod tests {
             let ctx = crate::tests::probe::themed_scaled(scale);
             let mut rows = Vec::new();
             let placed = super::super::range_probe::placed(|| {
-                let _ = ctx.run_ui(Default::default(), |ui| {
+                let _ = crate::tests::probe::run(&ctx, Default::default(), |ui| {
                     rows.push(allocate_row(ui, "Page", Sense::hover()).0);
                     ui.indent("nested", |ui| {
                         rows.push(allocate_row(ui, "Nested", Sense::hover()).0)

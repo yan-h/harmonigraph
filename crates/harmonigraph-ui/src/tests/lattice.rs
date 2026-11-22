@@ -32,6 +32,7 @@ fn distance_after_wheel_over_lattice(modifiers: egui::Modifiers) -> (f32, f32) {
         // zoom-factor paths map an upward wheel to a smaller distance).
         delta: egui::vec2(0.0, 1.0),
         phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
         modifiers,
     });
     h.frame(&mut state, wheel);
@@ -137,6 +138,7 @@ fn a_wheel_over_the_lattice_does_not_end_the_drag_it_is_zooming() {
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 1.0),
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             modifiers: egui::Modifiers::NONE,
         }],
     );

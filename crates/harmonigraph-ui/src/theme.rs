@@ -294,7 +294,7 @@ pub const UI_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.75..=1.6;
 
 /// Where [`set_ui_scale`] leaves the factor for the chrome to find.
 fn ui_scale_id() -> egui::Id {
-    egui::Id::new("ui-scale")
+    egui::Id::unique("ui-scale")
 }
 
 /// A scale a context can actually be drawn at: in range, and not a NaN or an
@@ -558,7 +558,7 @@ pub fn apply_theme(ctx: &egui::Context) {
 /// Where [`apply_theme`] and [`set_skin`] leave the dials the context's style
 /// was built in.
 fn skin_id() -> egui::Id {
-    egui::Id::new("skin")
+    egui::Id::unique("skin")
 }
 
 /// Put the skin `dials` make in force for this frame: make it this thread's
@@ -803,7 +803,6 @@ fn scale_chrome(style: &mut egui::Style, scale: f32) {
     v.window_corner_radius = scale_corner_radius(v.window_corner_radius, scale);
     v.menu_corner_radius = scale_corner_radius(v.menu_corner_radius, scale);
     v.resize_corner_size *= scale;
-    v.clip_rect_margin *= scale;
     for shadow in [&mut v.window_shadow, &mut v.popup_shadow] {
         shadow.offset = [scale_i8(shadow.offset[0], scale), scale_i8(shadow.offset[1], scale)];
         shadow.blur = scaled_points(shadow.blur, scale);

@@ -175,7 +175,13 @@ impl GpuTimer {
                     _ => {}
                 }
                 let ms = {
-                    let view = self.staging.slice(..).get_mapped_range();
+                    // A range wgpu refuses to hand out is a failed map by
+                    // another name, and is dropped the same way.
+                    let Ok(view) = self.staging.slice(..).get_mapped_range() else {
+                        self.staging = Self::staging(device);
+                        self.state = TimerState::Idle;
+                        return None;
+                    };
                     let ticks: &[u64] = bytemuck::cast_slice(&view);
                     let last = std::mem::replace(&mut self.last_opening, ticks[0]);
                     Self::elapsed_ms(ticks[0], ticks[1], last, self.period)

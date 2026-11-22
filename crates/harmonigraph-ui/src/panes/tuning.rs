@@ -683,7 +683,7 @@ fn instance_controls(
             }
         }
     };
-    let selection = ui.id().with("tuning-instance-selection");
+    let selection = ui.scope_id().with("tuning-instance-selection");
     let mut selected = ui.data(|data| data.get_temp::<u64>(selection)).unwrap_or(instances[0].id);
     if !instances.iter().any(|row| row.id == selected) {
         selected = instances[0].id;
@@ -722,7 +722,7 @@ fn instance_controls(
         );
         response.widget_info(|| {
             egui::WidgetInfo::selected(
-                egui::WidgetType::Button,
+                egui::Role::Button,
                 ui.is_enabled(),
                 selected == row.id,
                 &row.display_name,
@@ -823,7 +823,7 @@ fn instance_controls(
                 }
                 let delay_text = crate::widgets::label(ui, &row.delay_text);
                 if row.max_delay > 1 {
-                    let id = ui.id().with("delay-draft");
+                    let id = ui.scope_id().with("delay-draft");
                     let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(row.delay);
                     let response = delay_bar(ui, &mut delay, row.max_delay, "Buffers of delay");
                     // Commit one completed drag, preserving the draft between frames.
@@ -856,7 +856,7 @@ fn instance_controls(
             // seeded from still stands: a new first tuner, or its own delay
             // changed in Source details, re-seeds it rather than applying a
             // value nobody chose for the tuners as they now are.
-            let id = ui.id().with("all-delay-draft");
+            let id = ui.scope_id().with("all-delay-draft");
             let seed = (tuner.id, tuner.delay);
             let mut delay = ui
                 .data(|data| data.get_temp::<((u64, u32), u32)>(id))
@@ -1165,9 +1165,8 @@ fn map_list(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &dyn
     let count = view.names.len();
     // A glyph button would otherwise be read aloud as its glyph.
     let named = |button: egui::Response, name: &str| {
-        button.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, button.enabled(), name)
-        });
+        button
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, button.enabled(), name));
         button
     };
     for (index, (id, name)) in view.names.iter().enumerate() {
@@ -1244,7 +1243,7 @@ fn map_name_field(
     width: f32,
     params: &dyn ParamBackend,
 ) {
-    let id = ui.id().with(("map-name", selected));
+    let id = ui.scope_id().with(("map-name", selected));
     let buffer = id.with("typed");
     // Read only while focused: typing a selection change cut short is left
     // behind, and must not stand in for the name when the map comes back.

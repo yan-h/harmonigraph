@@ -148,7 +148,7 @@ pub(crate) fn depth(
         // than one read back off the layers: read back, an end dragged past
         // the other would flatten the layers for good, and an end dragged
         // off a level set would be clamped against the end that followed it.
-        let grab = ui.id().with("range grab");
+        let grab = ui.scope_id().with("range grab");
         let held = ui.data(|d| d.get_temp::<RangeGrab>(grab));
         let (from, small, big) = held.map_or_else(
             || {
@@ -400,7 +400,7 @@ mod shadow_tests {
         let max = harmonigraph_scene::SPECTRAL_SHADOW_MAX;
         let style = harmonigraph_scene::ShadowStyle { width: 0.5 * max, spread: 0.0, depth: DEPTH };
         let ctx = egui::Context::default();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let output = crate::tests::probe::run(&ctx, egui::RawInput::default(), |ui| {
             let rect = egui::Rect::from_min_size(ui.max_rect().min, egui::vec2(200.0, 120.0));
             super::shadow_preview(ui, rect, style, max, false, false);
         });

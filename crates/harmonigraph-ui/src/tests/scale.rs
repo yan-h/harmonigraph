@@ -216,7 +216,7 @@ fn control_row(
             events,
             ..Default::default()
         };
-        let _ = ctx.run_ui(input, |ui| {
+        let _ = crate::tests::probe::run(&ctx, input, |ui| {
             row = ui
                 .horizontal(|ui| {
                     for i in 0..4 {
@@ -347,9 +347,13 @@ fn every_settings_row_is_one_row_high() {
             // whatever it holds, so the checkbox's own rect is what says so.
             if let Control::Checkbox = kind {
                 let mut line = 0.0;
-                let _ = super::probe::themed_scaled(scale).run_ui(Default::default(), |ui| {
-                    line = ui.text_style_height(&egui::TextStyle::Button);
-                });
+                let _ = crate::tests::probe::run(
+                    &super::probe::themed_scaled(scale),
+                    Default::default(),
+                    |ui| {
+                        line = ui.text_style_height(&egui::TextStyle::Button);
+                    },
+                );
                 // Within a point: egui lands an allocation on whole points.
                 for rect in &controls {
                     assert!(

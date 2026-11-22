@@ -37,8 +37,7 @@ pub(crate) fn paint_rail(
     let gap = RAIL_GAP * theme::ui_scale(ui.ctx());
     let response = ui.interact(rect, id, egui::Sense::click());
     let expand = format!("Expand {title}");
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, expand.clone()));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, expand.clone()));
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::header());
     // The button's cell stands at the rail's start, centred across it.

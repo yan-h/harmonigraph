@@ -235,7 +235,10 @@ impl FrameTimer {
         let slice = self.staging.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
         self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-        let ticks: Vec<u64> = bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
+        let ticks: Vec<u64> = bytemuck::cast_slice::<u8, u64>(
+            &slice.get_mapped_range().expect("mapped range of the stamps"),
+        )
+        .to_vec();
         self.staging.unmap();
         // A slot whose stamp never landed keeps the last frame's value rather
         // than reading 0, and a repeated opening is the sign of it.

@@ -60,7 +60,7 @@ fn texels(
     let slice = buffer.slice(..);
     slice.map_async(wgpu::MapMode::Read, |result| result.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("mapped range");
     mapped
         .chunks_exact(stride as usize)
         .flat_map(|row| {

@@ -402,12 +402,11 @@ fn the_name_field_renames_when_left_and_not_while_typing() {
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
             let raw = egui::RawInput {
                 screen_rect: Some(screen),
-                events,
-                modifiers,
+                events: crate::tests::probe::holding(&ctx, modifiers, events),
                 focused: focused.get(),
                 ..Default::default()
             };
-            ctx.run_ui(raw, |ui| {
+            crate::tests::probe::run(&ctx, raw, |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(screen));
                 tuning_pane(&mut child, &mut state, &params, 0.0);
             })

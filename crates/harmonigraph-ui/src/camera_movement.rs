@@ -212,18 +212,23 @@ mod tests {
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, 20.0),
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers: egui::Modifiers::NONE,
                 });
             }
-            let _ = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-                let before = appearance.camera_movement();
-                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-                if scroll != 0.0 {
-                    appearance.camera.zoom(scroll);
-                    zooming_frames += 1;
-                }
-                finish_edits(&mut appearance, before, &backend, ui.ctx());
-            });
+            let _ = crate::tests::probe::run(
+                &ctx,
+                egui::RawInput { events, ..Default::default() },
+                |ui| {
+                    let before = appearance.camera_movement();
+                    let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                    if scroll != 0.0 {
+                        appearance.camera.zoom(scroll);
+                        zooming_frames += 1;
+                    }
+                    finish_edits(&mut appearance, before, &backend, ui.ctx());
+                },
+            );
         }
         assert!(zooming_frames >= 3, "the wheel must zoom over several frames: {zooming_frames}");
         assert_eq!(backend.count.get(), 1, "one zoom, one gesture");
@@ -240,21 +245,22 @@ mod tests {
         strand: bool,
     ) -> bool {
         let mut moved = false;
-        let _ = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-            if strand {
-                // What `end_stranded_drag` does to a drag whose release went
-                // missing: egui still believes the button held.
-                ui.ctx().stop_dragging();
-            }
-            let before = appearance.camera_movement();
-            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
-            let response = ui.interact(rect, egui::Id::new("camera"), egui::Sense::drag());
-            if response.dragged() && response.drag_delta().y != 0.0 {
-                appearance.camera.zoom(response.drag_delta().y);
-                moved = true;
-            }
-            finish_edits(appearance, before, backend, ui.ctx());
-        });
+        let _ =
+            crate::tests::probe::run(ctx, egui::RawInput { events, ..Default::default() }, |ui| {
+                if strand {
+                    // What `end_stranded_drag` does to a drag whose release went
+                    // missing: egui still believes the button held.
+                    ui.ctx().stop_dragging();
+                }
+                let before = appearance.camera_movement();
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
+                let response = ui.interact(rect, egui::Id::unique("camera"), egui::Sense::drag());
+                if response.dragged() && response.drag_delta().y != 0.0 {
+                    appearance.camera.zoom(response.drag_delta().y);
+                    moved = true;
+                }
+                finish_edits(appearance, before, backend, ui.ctx());
+            });
         moved
     }
 

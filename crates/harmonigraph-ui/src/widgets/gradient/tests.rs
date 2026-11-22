@@ -95,7 +95,8 @@ impl Spectrum {
         crate::theme::set_ui_scale(&self.ctx, self.scale);
         let rect = std::cell::Cell::new(egui::Rect::NOTHING);
         let preview = std::cell::Cell::new(egui::Rect::NOTHING);
-        let out = self.ctx.run_ui(
+        let out = crate::tests::probe::run(
+            &self.ctx,
             egui::RawInput {
                 screen_rect: Some(self.screen),
                 time: Some(self.t),
@@ -426,7 +427,8 @@ fn a_band_lands_on_the_pixel_grid_the_bars_beside_it_do() {
     const PPP: f32 = 2.0;
     let ctx = crate::tests::probe::themed_at(PPP);
     let asked = std::cell::Cell::new(egui::Rect::NOTHING);
-    let out = ctx.run_ui(
+    let out = crate::tests::probe::run(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::pos2(0.0, 0.0),
@@ -1890,7 +1892,8 @@ fn double_click_spread(spread: Spread, start: Gradient, home: Gradient) -> (f32,
     let mut t = 0.0;
     let mut frame = |g: &mut Gradient, events: Vec<egui::Event>| {
         t += 1.0 / 60.0;
-        let _ = ctx.run_ui(
+        let _ = crate::tests::probe::run(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(screen),
                 time: Some(t),
@@ -1930,7 +1933,8 @@ fn drag_bar(spread: Spread, pair: (f32, f32), (from, to): (f32, f32)) -> (f32, f
     let mut t = 0.0;
     let mut frame = |g: &mut Gradient, events: Vec<egui::Event>| {
         t += 1.0 / 60.0;
-        let _ = ctx.run_ui(
+        let _ = crate::tests::probe::run(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(screen),
                 time: Some(t),

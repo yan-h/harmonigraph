@@ -81,7 +81,7 @@ pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
     let size = egui::vec2(galley.size().x, galley.size().y - top - bottom + under);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), galley.text())
+        egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), galley.text())
     });
     if ui.is_rect_visible(rect.expand2(egui::vec2(0.0, top.max(bottom)))) {
         ui.painter().galley(rect.min - egui::vec2(0.0, top), galley, ui.visuals().text_color());
@@ -132,7 +132,7 @@ fn wrapped(ui: &Ui, text: WidgetText) -> std::sync::Arc<egui::Galley> {
 pub(crate) const GROUP_GAP: f32 = 7.0;
 
 fn spaced_id() -> egui::Id {
-    egui::Id::new("group-spaced")
+    egui::Id::unique("group-spaced")
 }
 
 /// What room a [`mark_spaced`] or [`mark_heading`] says is over the cursor.
@@ -275,7 +275,7 @@ mod tests {
     fn gap_after(wrap: Wrap, after: fn(&mut egui::Ui) -> egui::Rect) -> f32 {
         let mut gap = 0.0;
         let ctx = crate::tests::probe::themed();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::tests::probe::run(&ctx, Default::default(), |ui| {
             // In a row a line takes no room under it, so its box is its caps.
             let caps = ui.horizontal(|ui| label(ui, "Line").rect.height()).inner;
             let mut top = 0.0;
@@ -313,7 +313,7 @@ mod tests {
         for ppp in [1.0, 2.0] {
             let ctx = crate::tests::probe::themed_at(ppp);
             let mut rect = egui::Rect::NOTHING;
-            let out = ctx.run_ui(Default::default(), |ui| {
+            let out = crate::tests::probe::run(&ctx, Default::default(), |ui| {
                 rect = ui.horizontal(|ui| label(ui, "HEH").rect).inner;
             });
             let ink = out

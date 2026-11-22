@@ -142,6 +142,7 @@ fn dock(h: &mut DockHarness, state: &mut SharedState, position: Position) {
                 egui::Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     delta: egui::vec2(0.0, -100.0),
                     modifiers: egui::Modifiers::NONE,
                 },
@@ -481,7 +482,7 @@ fn split_state() -> SharedState {
 }
 
 fn region_click(h: &mut DockHarness, state: &mut SharedState, index: usize) {
-    let id = egui::Id::new(("analyzer region fold", index));
+    let id = egui::Id::unique(("analyzer region fold", index));
     let at = h.ctx.read_response(id).expect("region control is drawn").rect.center();
     click_at(h, state, at);
 }
@@ -508,7 +509,7 @@ fn analyzer_region_buttons_sit_flush_in_opposite_outer_corners() {
         let (low, high) =
             if horizontal { (body.left(), body.right()) } else { (body.top(), body.bottom()) };
         for index in 0..2 {
-            let id = egui::Id::new(("analyzer region fold", index));
+            let id = egui::Id::unique(("analyzer region fold", index));
             let button = h.ctx.read_response(id).expect("region button is drawn").rect;
             let at_low_end = (index == 0) == first_at_low_end;
             let (button_edge, pane_edge) = if at_low_end {
@@ -613,7 +614,7 @@ fn analyzer_regions_fold_independently_and_restore_the_original_geometry() {
 fn spectrum_length(h: &DockHarness, state: &SharedState) -> (f32, f32) {
     let body = pane_body(state, &panes::Tab::Spectral).unwrap();
     let split =
-        h.ctx.read_response(egui::Id::new(("spectral-split", 0usize))).unwrap().rect.center().x;
+        h.ctx.read_response(egui::Id::unique(("spectral-split", 0usize))).unwrap().rect.center().x;
     (split - body.left(), body.width())
 }
 
@@ -735,7 +736,7 @@ fn analyzer_region_restore_respects_a_split_edited_while_folded() {
     h.settle_folds(&mut state);
     let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
     let split =
-        h.ctx.read_response(egui::Id::new(("spectral-split", 0usize))).unwrap().rect.center().x;
+        h.ctx.read_response(egui::Id::unique(("spectral-split", 0usize))).unwrap().rect.center().x;
     assert!(((split - body.left()) / body.width() - 0.65).abs() < 0.01);
 }
 
@@ -753,7 +754,7 @@ fn analyzer_local_region_folds_restore_the_original_split() {
             let mut h = DockHarness::new();
             h.settle(&mut state);
             let lattice = pane_body(&state, &panes::Tab::Lattice).unwrap();
-            let id = egui::Id::new(("spectral-split", 0usize));
+            let id = egui::Id::unique(("spectral-split", 0usize));
             let before = h.ctx.read_response(id).unwrap().rect.center();
             for &index in sequence {
                 region_click(&mut h, &mut state, index);
@@ -779,7 +780,8 @@ fn section_and_region_chevrons_show_hover_feedback() {
     let section = state.workspace.layout_runtime.rects[Section::Analyzer as usize];
     let section_cell =
         egui::Rect::from_min_size(section.min, egui::Vec2::splat(theme::tab_bar_height(1.0)));
-    let region_cell = h.ctx.read_response(egui::Id::new(("analyzer region fold", 0))).unwrap().rect;
+    let region_cell =
+        h.ctx.read_response(egui::Id::unique(("analyzer region fold", 0))).unwrap().rect;
     for cell in [section_cell, region_cell] {
         let out = h.frame(&mut state, vec![egui::Event::PointerMoved(cell.center())]);
         assert!(
@@ -857,7 +859,7 @@ fn a_region_expand_button_takes_the_place_of_its_collapse_button() {
         state.picture.appearance.spectrum.orientation = orientation;
         let mut h = DockHarness::new();
         h.settle(&mut state);
-        let id = egui::Id::new(("analyzer region fold", index));
+        let id = egui::Id::unique(("analyzer region fold", index));
         let button = |h: &mut DockHarness, state: &mut SharedState| {
             let cell = h.ctx.read_response(id).expect("region control is drawn").rect;
             // The clicked control keeps focus, so it may still draw hot.
@@ -920,7 +922,7 @@ fn the_tape_is_a_tab_of_the_analyzer_and_lays_its_controls_and_overview_below() 
 
     state.picture.runtime.tape.present = true;
     state.picture.runtime.tape.enabled = true;
-    let overview = egui::Id::new(("tape-overview", panes::DOCKED_SURFACE));
+    let overview = egui::Id::unique(("tape-overview", panes::DOCKED_SURFACE));
     let out = h.frame(&mut state, vec![]);
     let tape = at(&out, "Tape", header).expect("the Tape tab is on the header");
     assert!(at(&out, "Spiral", header).is_some(), "the Tape tab pushed Spiral off the strip");
@@ -966,7 +968,7 @@ fn a_short_analyzer_keeps_the_tape_controls_and_drops_the_overview() {
         matches!(&cs.shape, egui::Shape::Text(t) if t.galley.text() == "Stop" && body.contains(t.pos))
     });
     assert!(stop, "the controls went with the overview");
-    let overview = egui::Id::new(("tape-overview", panes::DOCKED_SURFACE));
+    let overview = egui::Id::unique(("tape-overview", panes::DOCKED_SURFACE));
     assert!(h.ctx.read_response(overview).is_none(), "the overview stayed on a short pane");
 }
 
@@ -988,7 +990,7 @@ fn the_tape_overview_follows_the_far_region_the_pane_draws() {
     let body = pane_body(&state, &panes::Tab::Spectral).expect("the Analyzer is drawn");
     let (row, strip) = (theme::tab_bar_height(1.0), 1.5 * theme::tab_bar_height(1.0));
     assert!(body.height() > 3.0 * (row + strip), "fixture is a short pane: {body:?}");
-    let overview = egui::Id::new(("tape-overview", panes::DOCKED_SURFACE));
+    let overview = egui::Id::unique(("tape-overview", panes::DOCKED_SURFACE));
     let mut drawn = |state: &mut SharedState, collapsed: [bool; 2]| {
         state.workspace.interaction.analyzer_regions.collapsed = collapsed;
         // Two, since a response is read from the previous pass as well.
@@ -1017,7 +1019,7 @@ fn a_region_fold_widens_the_open_region_up_to_the_rail() {
         assert!(state.workspace.interaction.analyzer_regions.collapsed[1]);
         let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
         let rail =
-            h.ctx.read_response(egui::Id::new(("analyzer region fold", 1usize))).unwrap().rect;
+            h.ctx.read_response(egui::Id::unique(("analyzer region fold", 1usize))).unwrap().rect;
         let out = h.frame(&mut state, vec![]);
         // The rulings across the depth axis, clipped to what is drawn.
         let rulings: Vec<egui::Rect> = out

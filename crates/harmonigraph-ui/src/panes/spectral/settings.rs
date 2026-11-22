@@ -535,7 +535,8 @@ mod tests {
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 1600.0));
-        ctx.run_ui(
+        crate::tests::probe::run(
+            ctx,
             egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
             |ui| analysis_section(ui, &mut state.appearance.spectrum, backend),
         )

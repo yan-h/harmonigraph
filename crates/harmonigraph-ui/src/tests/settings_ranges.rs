@@ -360,7 +360,8 @@ fn draw(mut state: SharedState, scenario: Scenario, backend: &Backend) -> Vec<Vi
     ctx.options_mut(|options| options.max_passes = std::num::NonZeroUsize::new(1).unwrap());
     ctx.memory_mut(|memory| memory.set_everything_is_visible(scenario.expanded));
     collect(|| {
-        let _ = ctx.run_ui(
+        let _ = crate::tests::probe::run(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,

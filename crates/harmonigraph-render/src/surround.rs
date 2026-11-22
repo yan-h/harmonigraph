@@ -264,7 +264,7 @@ pub(crate) struct SurroundStages<'a> {
     pub(crate) label: &'a str,
     pub(crate) vertex: &'a str,
     pub(crate) fragment: &'a str,
-    pub(crate) buffers: &'a [wgpu::VertexBufferLayout<'a>],
+    pub(crate) buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
 }
 
 /// A producer's notes into its [`SurroundTargets`], the strongest kept with its

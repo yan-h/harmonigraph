@@ -327,7 +327,8 @@ mod tests {
         let changed = Look::capture(&appearance);
         for redo in &APPEARANCE_SHORTCUTS[1..] {
             for (shortcut, expected) in [(APPEARANCE_SHORTCUTS[0], &original), (*redo, &changed)] {
-                let _ = ctx.run_ui(
+                let _ = crate::tests::probe::run(
+                    &ctx,
                     egui::RawInput { events: vec![shortcut_event(shortcut)], ..Default::default() },
                     |ui| {
                         editor.end_frame(
@@ -352,7 +353,8 @@ mod tests {
                 egui::Key::Z,
             ),
         ] {
-            let _ = ctx.run_ui(
+            let _ = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput { events: vec![shortcut_event(shortcut)], ..Default::default() },
                 |ui| {
                     editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx(), false);
@@ -375,7 +377,8 @@ mod tests {
         let mut time = 0.0;
         let mut frame = |events| {
             time += 1.0;
-            let _ = ctx.run_ui(
+            let _ = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput { time: Some(time), events, ..Default::default() },
                 |ui| {
                     let text_edit_was_focused = ui.ctx().text_edit_focused();
@@ -423,7 +426,8 @@ mod tests {
         let mut editor = AppearanceEditor::default();
         let mut rect = egui::Rect::NOTHING;
         let mut frame = |events| {
-            let _ = ctx.run_ui(
+            let _ = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -492,10 +496,12 @@ mod tests {
                     unit: egui::MouseWheelUnit::Point,
                     delta,
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers: egui::Modifiers::NONE,
                 });
             }
-            let _ = ctx.run_ui(
+            let _ = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput { screen_rect: Some(rect), events, focused, ..Default::default() },
                 |ui| {
                     let before = Look::capture(&state.appearance);
@@ -588,7 +594,8 @@ mod tests {
         events.push(vec![]);
         let mut moving_frames = 0;
         for events in events {
-            let _ = ctx.run_ui(
+            let _ = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput { screen_rect: Some(rect), events, ..Default::default() },
                 |ui| {
                     let before = Look::capture(&state.appearance);
@@ -620,7 +627,8 @@ mod tests {
         let ctx = crate::tests::probe::themed();
         let mut editor = AppearanceEditor::default();
         let size = egui::vec2(400.0, 100.0);
-        let out = ctx.run_ui(
+        let out = crate::tests::probe::run(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 ..Default::default()
@@ -664,10 +672,13 @@ mod tests {
             if lost {
                 events.push(egui::Event::WindowFocused(false));
             }
-            let _ =
-                ctx.run_ui(egui::RawInput { events, focused: !lost, ..Default::default() }, |ui| {
+            let _ = crate::tests::probe::run(
+                &ctx,
+                egui::RawInput { events, focused: !lost, ..Default::default() },
+                |ui| {
                     editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx(), false);
-                });
+                },
+            );
             assert_eq!(editor.history.pending.is_none(), finished, "focus lost: {lost}");
             assert_eq!(editor.history.undo.len(), usize::from(finished));
         }
@@ -728,7 +739,8 @@ mod tests {
         let mut appearance = AppearanceDocument::default();
         let mut editor = AppearanceEditor::default();
         let original = appearance.spectrum.attack;
-        let _ = ctx.run_ui(
+        let _ = crate::tests::probe::run(
+            &ctx,
             egui::RawInput {
                 events: vec![shortcut_event(APPEARANCE_SHORTCUTS[0])],
                 ..Default::default()

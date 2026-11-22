@@ -144,7 +144,7 @@ fn flip(ui: &Ui, mut response: Response, on: &mut bool, name: &str) -> Response 
         response.mark_changed();
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, name)
+        egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, name)
     });
     response
 }
@@ -217,7 +217,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
         response.mark_changed();
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), *on, label)
+        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), *on, label)
     });
 
     if ui.is_rect_visible(rect) {
@@ -226,7 +226,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
         // at the chrome's 30 Hz rather than the display rate (#1872).
         let alpha = if *on && !rolling {
             let t = ui.ctx().input(|i| i.time);
-            crate::repaint_after(ui.ctx(), crate::CHROME_REPAINT_INTERVAL);
+            ui.ctx().request_repaint_after(crate::CHROME_REPAINT_INTERVAL);
             0.4 + 0.6 * (0.5 + 0.5 * (t * std::f64::consts::TAU * 1.1).sin()) as f32
         } else {
             1.0
@@ -573,7 +573,7 @@ mod tests {
     fn row_offset(row: RowFn) -> f32 {
         let mut offset = 0.0;
         let ctx = crate::tests::probe::themed();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::tests::probe::run(&ctx, Default::default(), |ui| {
             row(ui, &mut |ui| {
                 let label = ui.label("Node style").rect.center().y;
                 let button = ui.button("Steady").rect.center().y;
@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn a_choice_group_draws_the_width_it_was_judged_by() {
         let ctx = crate::tests::probe::themed_scaled(1.1);
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::tests::probe::run(&ctx, Default::default(), |ui| {
             let judged = choice_buttons_width(ui, &OPTIONS);
             let mut value = 0;
             let drawn = ui.scope(|ui| choice_buttons(ui, "group", &mut value, &OPTIONS)).response;

@@ -259,7 +259,7 @@ fn control(
     name: &str,
     index: usize,
 ) -> bool {
-    let id = egui::Id::new(("analyzer region fold", index));
+    let id = egui::Id::unique(("analyzer region fold", index));
     if rail {
         // Time down the pane stacks the regions, so a folded one is a row
         // across it; time across stands them side by side, each a column.
@@ -270,9 +270,7 @@ fn control(
     }
     let response = ui.interact(rect, id, Sense::click());
     let collapse = format!("Collapse {name}");
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, collapse.clone())
-    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, collapse.clone()));
     crate::widgets::paint_fold(ui, &response, rect, direction);
     response.on_hover_text(collapse).clicked()
 }

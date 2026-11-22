@@ -1110,7 +1110,7 @@ mod tests {
         // A focusable control at the top left and one to its right, where a
         // bare ArrowRight would move the focus, and a text field.
         let (control, beside, field) =
-            (egui::Id::new("control"), egui::Id::new("beside"), egui::Id::new("field"));
+            (egui::Id::unique("control"), egui::Id::unique("beside"), egui::Id::unique("field"));
         let mut text = String::new();
         let at = rect.center();
         let mut frame = |state: &mut PictureState, events: Vec<egui::Event>| {

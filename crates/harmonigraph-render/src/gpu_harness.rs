@@ -35,7 +35,7 @@ pub(crate) fn read_uniform<T: bytemuck::Pod>(
     let slice = buffer.slice(..);
     slice.map_async(wgpu::MapMode::Read, |result| result.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    bytemuck::pod_read_unaligned(&slice.get_mapped_range())
+    bytemuck::pod_read_unaligned(&slice.get_mapped_range().expect("mapped range"))
 }
 
 /// Shared GPU-test setup. CI sets `HARMONIGRAPH_REQUIRE_GPU=1`, so a missing
@@ -173,7 +173,7 @@ pub(crate) fn readback(
     let slice = buffer.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
     device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("mapped range");
     if row_bytes == bytes_per_row {
         return mapped.to_vec();
     }

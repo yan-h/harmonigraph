@@ -137,7 +137,7 @@ mod tests {
             events,
             ..Default::default()
         };
-        let _ = ctx.run_ui(raw, |ui| {
+        let _ = crate::tests::probe::run(ctx, raw, |ui| {
             ask = Frame {
                 ui,
                 state,

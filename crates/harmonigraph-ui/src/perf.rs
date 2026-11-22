@@ -388,7 +388,7 @@ pub(crate) fn draw_overlay(
     //
     // The move is this function's rather than the Area's `movable`, which
     // would place the plate from a position the clamp above never sees.
-    let area = egui::Area::new(egui::Id::new("perf_overlay"))
+    let area = egui::Area::new(egui::Id::unique("perf_overlay"))
         .order(egui::Order::Foreground)
         .sense(egui::Sense::drag())
         .fade_in(false)
@@ -421,7 +421,7 @@ pub(crate) fn draw_overlay(
     // Written back only while it is dragged, so an untouched HUD goes on
     // opening at `home` — and follows the corner as the window resizes —
     // while a placed one is left exactly where it was put.
-    let grabbed_at = egui::Id::new("perf_overlay_grab");
+    let grabbed_at = egui::Id::unique("perf_overlay_grab");
     if area.dragged() {
         // Where the gesture started plus its whole travel, rather than a sum
         // of per-frame deltas: egui calls a press a drag only once it has
@@ -755,7 +755,7 @@ mod tests {
         let font = egui::FontId::proportional(11.0);
         let grid = 160.0;
         let long = "worktree-a-branch-name-nobody-would-type-but-git-will-take @0123456";
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let _ = crate::tests::probe::run(&ctx, egui::RawInput::default(), |ui| {
             let tag = tag_line(ui.ctx(), long, &font, egui::Color32::WHITE, grid);
             assert!(
                 tag.rect.width() <= grid,
@@ -824,7 +824,8 @@ mod tests {
         // paints nothing. The HUD is drawn from the pass after.
         let mut pos = None;
         let mut frame = || {
-            ctx.run_ui(
+            crate::tests::probe::run(
+                &ctx,
                 egui::RawInput { screen_rect: Some(area), ..Default::default() },
                 // Detail on: the widest case.
                 |ui| draw_overlay(ui.ctx(), area, &mut pos, &perf, true, "test @0123456"),

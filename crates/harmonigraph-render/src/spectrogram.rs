@@ -525,7 +525,7 @@ fn create_spectrogram_pipeline(
             module: shader,
             entry_point: Some("vs_heatmap"),
             compilation_options: Default::default(),
-            buffers: &[SpectrogramVertex::LAYOUT],
+            buffers: &[Some(SpectrogramVertex::LAYOUT)],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,

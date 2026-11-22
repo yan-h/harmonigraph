@@ -14,7 +14,7 @@ wgpu-hal is still the unmodified package plus two sites, and is re-vendored as i
 
 ## wgpu-hal — vendored at `vendor/wgpu-hal/`
 
-Based on the unmodified crates.io `wgpu-hal` 29.0.4 package, retaining its licenses and a standalone `[workspace]` table.
+Based on the unmodified crates.io `wgpu-hal` 30.0.2 package, the version wgpu 30 locks, retaining its licenses and a standalone `[workspace]` table.
 It carries two sites, both in `src/metal/mod.rs` and both serving diagnostics:
 
 - `Buffer` gains a public `raw_handle()`, the twin of the one `Texture` already has upstream.

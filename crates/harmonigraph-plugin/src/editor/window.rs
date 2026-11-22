@@ -71,6 +71,8 @@ pub(crate) fn start_graphics(
                 power_preference: create.power_preference,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                // As egui-wgpu asks, so the adapter is the one it would pick.
+                apply_limit_buckets: false,
             };
             let adapter = match pollster::block_on(instance.request_adapter(&options)) {
                 Ok(adapter) => adapter,

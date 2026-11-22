@@ -72,6 +72,7 @@ fn wheel_over_settings_pane(pane: panes::Tab, screen_h: f32) -> f32 {
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, -3.0),
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             modifiers: egui::Modifiers::NONE,
         }],
     );
@@ -885,7 +886,7 @@ const FIXTURE_BAR_GRIP: egui::Pos2 = egui::pos2(FIXTURE_BAR_AT.x + 4.0, FIXTURE_
 /// not any one setting, so the bar is the settings pages' own widget on a
 /// value no page holds.
 fn fixture_bar(ctx: &egui::Context, value: &mut f32) {
-    egui::Area::new(egui::Id::new("fixture bar"))
+    egui::Area::new(egui::Id::unique("fixture bar"))
         .order(egui::Order::Foreground)
         .fixed_pos(FIXTURE_BAR_AT)
         .show(ctx, |ui| {
@@ -967,6 +968,7 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, -3.0),
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             modifiers: egui::Modifiers::NONE,
         }],
     );
