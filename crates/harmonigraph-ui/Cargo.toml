@@ -27,6 +27,7 @@ egui = { workspace = true, features = ["serde"] }
 glam = { workspace = true }
 serde = { workspace = true }
 ron = { workspace = true }
+serde_ignored = { workspace = true }
 foldhash = { workspace = true }
 
 [dev-dependencies]
