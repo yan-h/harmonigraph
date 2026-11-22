@@ -218,7 +218,7 @@ mod tests {
 
     /// A Harmonigraph state saved by a real project in November 2026, a
     /// Tune's saved beside one before #1795, which still holds the retired
-    /// `tuning_delay` parameter, or the first with a camera value `null`.
+    /// `tuning_delay` parameter, or the first with its `version` `null`.
     fn fixture(name: &str) -> Vec<u8> {
         let path = format!("{}/fixtures/saved-state/{name}.json", env!("CARGO_MANIFEST_DIR"));
         std::fs::read(path).unwrap()
@@ -286,6 +286,25 @@ mod tests {
             .contains(r#""axes":[0,696889465,387553406,1006222534,500000]"#));
         assert!(reading.notes.iter().any(|note| note.contains("tuning-three")));
         assert!(!reading.params.iter().any(|(id, _)| *id == "tuning-three"));
+        installed(&reading);
+    }
+
+    /// A parameter value this build cannot read, such as Analyzer Audio
+    /// Input's id from before it saved an index, opens that row at its
+    /// default with a Console line, and the rest of the project loads.
+    #[test]
+    fn an_unreadable_parameter_value_opens_at_its_default_with_a_console_line() {
+        let mut state: Value = serde_json::from_slice(&fixture("harmonigraph")).unwrap();
+        state["params"]["analysis-input"] = serde_json::json!({ "string": "sidechain" });
+        let reading = read(Plugin::Harmonigraph, &serde_json::to_vec(&state).unwrap());
+        assert_eq!(reading.refused, None);
+        let param = |id| &reading.params.iter().find(|(row, _)| *row == id).unwrap().1;
+        assert_eq!(param("analysis-input"), "0 (Main)");
+        assert_eq!(param("tuning-engine"), "2 (Lattice Map)", "the rest of the project");
+        assert!(reading
+            .notes
+            .iter()
+            .any(|note| note.contains("cannot read") && note.contains("analysis-input")));
         installed(&reading);
     }
 

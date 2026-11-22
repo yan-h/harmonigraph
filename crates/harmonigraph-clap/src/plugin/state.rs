@@ -9,9 +9,11 @@ use std::collections::BTreeMap;
 pub enum ParamValue {
     F32(f32),
     I32(i32),
-    Bool(bool),
-    /// An enumeration row's value, by its variant's stable id.
-    String(String),
+    /// A saved value this build cannot read, such as one under a variant it
+    /// no longer has: its row takes the default and the restore names it, and
+    /// the rest of the state loads. Never written.
+    #[serde(untagged, skip_serializing)]
+    Unread(serde::de::IgnoredAny),
 }
 
 /// A plugin's state so it can be restored at a later point. This object can be serialized and

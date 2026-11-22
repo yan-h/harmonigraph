@@ -429,7 +429,20 @@ fn report() -> String {
             .unwrap();
         }
         let shown = to_text(&device, id, info.default_value).unwrap_or_default();
-        let typed = [shown.as_str(), "0", "1", "3", "10", "-1", "200", "0.5", " 2 ", "Off", "Main"];
+        let typed = [
+            shown.as_str(),
+            "0",
+            "1",
+            "3",
+            "10",
+            "-1",
+            "200",
+            "0.5",
+            " 2 ",
+            "Off",
+            "Main",
+            "Sidechain",
+        ];
         let parsed: Vec<String> = typed
             .iter()
             .map(|text| format!("{text:?} -> {:?}", from_text(&device, id, text)))

@@ -18,6 +18,9 @@ and one the save lacks keeps what the instance holds.
 `SavedWindow` (the `editor-state` field) has no container-level default, so a window missing a key is that field skipped.
 The Hub's `musical-settings` (`crates/harmonigraph-plugin/src/configuration.rs`) is prepared before anything restores:
 one that does not parse refuses the whole restore with a line in the log, and one the save lacks restores the defaults.
+A parameter value is saved as an integer or a float (`ParamValue`), a choice by its index.
+One that does not decode, such as one under a variant `ParamValue` no longer has, decodes as `ParamValue::Unread` and costs that value alone:
+its row opens at its default with a line in the log (`Table::defaulted`), and a Hub also writes a Console line; a Tune only logs.
 
 ## Every struct inside the look carries a container-level `#[serde(default)]`
 

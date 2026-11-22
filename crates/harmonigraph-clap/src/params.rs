@@ -1,9 +1,8 @@
 //! The plugin's host parameters, as one fixed table of rows.
 //!
-//! A row is an integer, an enumeration or a float. The host sees every row as
-//! a value from 0 to its step count (0 to 1 for a float), the *host value*;
-//! the plugin reads and writes the row's *plain* value, its integer, its
-//! variant's index or its float. The conversions repeat nice-plug's
+//! A row is an integer or a float. The host sees every row as a value from 0
+//! to its step count (0 to 1 for a float), the *host value*; the plugin reads
+//! and writes the row's *plain* value, its integer or its float. The conversions repeat nice-plug's
 //! `IntRange` and `FloatRange::Linear` arithmetic in `f32`, step for step, so
 //! a project saves and automates as it did before the table replaced them
 //! (#1814).
@@ -37,9 +36,6 @@ pub enum Kind {
     /// An integer from `min` to `max`, with optional text both ways. Without
     /// them it reads and parses as the integer.
     Int { min: i32, max: i32, to_text: Option<IntToText>, from_text: Option<TextToInt> },
-    /// One of `names`, saved by its stable id from `ids`, which are in the
-    /// same order.
-    Enum { ids: &'static [&'static str], names: &'static [&'static str] },
     /// A float from `min` to `max`, linear, read and parsed as the number.
     Float { min: f32, max: f32 },
 }
@@ -51,7 +47,7 @@ pub struct Spec {
     pub id: &'static str,
     pub name: &'static str,
     pub kind: Kind,
-    /// The plain default: an integer or a variant's index as a float.
+    /// The plain default: an integer as a float, or the float.
     pub default: f32,
     pub automatable: bool,
     /// Whether the host may modulate it. Only an automatable row is.
@@ -63,19 +59,6 @@ impl Spec {
     pub fn int(id: &'static str, name: &'static str, default: i32, min: i32, max: i32) -> Spec {
         assert!(min < max && (min..=max).contains(&default), "{id}: a range around its default");
         let kind = Kind::Int { min, max, to_text: None, from_text: None };
-        Spec { id, name, kind, default: default as f32, automatable: true, modulatable: true }
-    }
-
-    /// An automatable, modulatable enumeration of `names`, saved as `ids`.
-    pub fn enumeration(
-        id: &'static str,
-        name: &'static str,
-        default: usize,
-        ids: &'static [&'static str],
-        names: &'static [&'static str],
-    ) -> Spec {
-        assert!(ids.len() == names.len() && ids.len() > 1 && default < ids.len(), "{id}: variants");
-        let kind = Kind::Enum { ids, names };
         Spec { id, name, kind, default: default as f32, automatable: true, modulatable: true }
     }
 
@@ -121,7 +104,6 @@ impl Spec {
     pub fn steps(&self) -> Option<usize> {
         match &self.kind {
             Kind::Int { min, max, .. } => Some((max - min) as usize),
-            Kind::Enum { ids, .. } => Some(ids.len() - 1),
             Kind::Float { .. } => None,
         }
     }
@@ -138,7 +120,6 @@ impl Spec {
         let (min, max) = match &self.kind {
             Kind::Float { min, max } => return (plain.clamp(*min, *max) - min) / (max - min),
             Kind::Int { min, max, .. } => (*min, *max),
-            Kind::Enum { ids, .. } => (0, ids.len() as i32 - 1),
         };
         ((plain as i64 - i64::from(min)) as f32 / (max - min) as f32).clamp(0.0, 1.0)
     }
@@ -150,7 +131,6 @@ impl Spec {
         let (min, max) = match &self.kind {
             Kind::Float { min, max } => return (normalized * (max - min)) + min,
             Kind::Int { min, max, .. } => (*min, *max),
-            Kind::Enum { ids, .. } => (0, ids.len() as i32 - 1),
         };
         ((normalized * (max - min) as f32).round() as i32 + min) as f32
     }
@@ -177,7 +157,6 @@ impl Spec {
         match &self.kind {
             Kind::Int { to_text: Some(f), .. } => f(plain as i32),
             Kind::Int { to_text: None, .. } => (plain as i32).to_string(),
-            Kind::Enum { names, .. } => names[plain as usize].to_string(),
             Kind::Float { .. } => plain.to_string(),
         }
     }
@@ -188,7 +167,6 @@ impl Spec {
         let plain = match &self.kind {
             Kind::Int { from_text: Some(f), .. } => f(text)? as f32,
             Kind::Int { from_text: None, .. } => text.parse::<i32>().ok()? as f32,
-            Kind::Enum { names, .. } => names.iter().position(|name| *name == text)? as f32,
             // A NaN would be saved as `null`, which no load reads back.
             Kind::Float { .. } => text.parse::<f32>().ok().filter(|value| !value.is_nan())?,
         };
@@ -199,27 +177,20 @@ impl Spec {
     fn save(&self, plain: f32) -> ParamValue {
         match &self.kind {
             Kind::Int { .. } => ParamValue::I32(plain as i32),
-            Kind::Enum { ids, .. } => ParamValue::String(ids[plain as usize].to_owned()),
             Kind::Float { .. } => ParamValue::F32(plain),
         }
     }
 
-    /// The plain value a restore takes from `saved`: the default for a value
-    /// that is missing, of the wrong type or an unknown variant, and the
-    /// nearest bound for one out of range.
-    fn restore(&self, saved: Option<&ParamValue>) -> f32 {
+    /// The plain value a restore takes from `saved`: the nearest bound for
+    /// one out of range, and `None` for one of the wrong type, which a
+    /// restore sets to the default.
+    fn read(&self, saved: &ParamValue) -> Option<f32> {
         match (&self.kind, saved) {
-            (Kind::Int { min, max, .. }, Some(ParamValue::I32(value))) => {
-                (*value).clamp(*min, *max) as f32
+            (Kind::Int { min, max, .. }, ParamValue::I32(value)) => {
+                Some((*value).clamp(*min, *max) as f32)
             }
-            (Kind::Enum { ids, .. }, Some(ParamValue::String(id))) => {
-                match ids.iter().position(|candidate| candidate == id) {
-                    Some(index) => index as f32,
-                    None => self.default,
-                }
-            }
-            (Kind::Float { min, max }, Some(ParamValue::F32(value))) => value.clamp(*min, *max),
-            _ => self.default,
+            (Kind::Float { min, max }, ParamValue::F32(value)) => Some(value.clamp(*min, *max)),
+            _ => None,
         }
     }
 }
@@ -323,7 +294,7 @@ impl Table {
         self.rows.is_empty()
     }
 
-    /// An integer or enumeration row's value, modulated.
+    /// An integer row's value, modulated.
     pub fn int(&self, row: usize) -> i32 {
         self.rows[row].modulated() as i32
     }
@@ -458,8 +429,9 @@ impl Table {
             .collect()
     }
 
-    /// Set every row from a save, by [`Spec::restore`]'s rules, and write one
-    /// log line naming the ids the save holds that no row has. Leaves the
+    /// Set every row from a save, by [`Spec::read`]'s rules or to its default,
+    /// and write one log line naming the ids the save holds that no row has
+    /// and one naming those [`Table::defaulted`] sets to the default. Leaves the
     /// modulation as it is. A value the editor set and the host has not been
     /// told is dropped: the restore supersedes it, and the host reads the
     /// restored state by rescanning (Yan, 2026-11-18).
@@ -480,12 +452,32 @@ impl Table {
                     Err(now) => bits = now,
                 }
             }
-            row.plain.store(row.spec.restore(saved.get(row.spec.id)), Ordering::Relaxed);
+            let plain = saved.get(row.spec.id).and_then(|value| row.spec.read(value));
+            row.plain.store(plain.unwrap_or(row.spec.default), Ordering::Relaxed);
         }
         let unknown = self.unknown(saved);
         if !unknown.is_empty() {
             crate::shell_warn!("The saved state names parameters this build has not: {unknown:?}");
         }
+        let defaulted = self.defaulted(saved);
+        if !defaulted.is_empty() {
+            crate::shell_warn!(
+                "The saved state holds values these parameters cannot read, which took their \
+                 defaults: {defaulted:?}"
+            );
+        }
+    }
+
+    /// The ids `saved` holds for a row whose value is not of that row's type,
+    /// one this build cannot decode among them, which a restore sets to the
+    /// default.
+    pub fn defaulted<'a>(&self, saved: &'a BTreeMap<String, ParamValue>) -> Vec<&'a str> {
+        self.rows
+            .iter()
+            .filter_map(|row| saved.get_key_value(row.spec.id).map(|entry| (row, entry)))
+            .filter(|(row, (_, value))| row.spec.read(value).is_none())
+            .map(|(_, (id, _))| id.as_str())
+            .collect()
     }
 
     /// The ids `saved` holds that no row has, which a restore skips.
@@ -503,13 +495,12 @@ mod tests {
     use super::*;
 
     /// A restore sets every row by one rule, whatever the save holds for it:
-    /// the default for a value that is missing, of the wrong type or an
-    /// unknown variant, and the nearest bound for one out of range.
+    /// the default for a value that is missing or of the wrong type, and the
+    /// nearest bound for one out of range.
     #[test]
     fn a_restore_takes_the_default_or_the_nearest_bound() {
         let table = Table::new([
             Spec::int("int", "Int", 1, -2, 2),
-            Spec::enumeration("enum", "Enum", 1, &["a", "b", "c"], &["A", "B", "C"]),
             Spec::float("float", "Float", 0.5, 0.0, 1.0),
         ]);
         let restore = |saved: &[(&str, ParamValue)]| {
@@ -517,32 +508,33 @@ mod tests {
                 table.set_host(row, 0.0);
             }
             table.restore(&saved.iter().map(|(id, v)| (id.to_string(), v.clone())).collect());
-            (table.int(0), table.int(1), table.float(2))
+            (table.int(0), table.float(1))
         };
-        assert_eq!(restore(&[]), (1, 1, 0.5), "missing");
+        assert_eq!(restore(&[]), (1, 0.5), "missing");
         assert_eq!(
-            restore(&[
-                ("int", ParamValue::F32(1.0)),
-                ("enum", ParamValue::I32(2)),
-                ("float", ParamValue::I32(1)),
-            ]),
-            (1, 1, 0.5),
+            restore(&[("int", ParamValue::F32(1.0)), ("float", ParamValue::I32(1))]),
+            (1, 0.5),
             "of the wrong type"
         );
-        assert_eq!(restore(&[("enum", ParamValue::String("z".into()))]).1, 1, "unknown variant");
+        // A wrong-typed value is named, one that does not decode among them,
+        // and one under an id no row has is named only as unknown.
+        let unread = || ParamValue::Unread(Default::default());
+        let wrong = [("int", ParamValue::F32(1.0)), ("float", unread()), ("retired", unread())];
+        let wrong = wrong.map(|(id, value)| (id.to_owned(), value)).into();
+        assert_eq!(table.defaulted(&wrong), ["int", "float"]);
+        assert_eq!(table.unknown(&wrong), ["retired"]);
         assert_eq!(
             restore(&[("int", ParamValue::I32(9)), ("float", ParamValue::F32(3.0)),]),
-            (2, 1, 1.0),
+            (2, 1.0),
             "out of range"
         );
         assert_eq!(
             restore(&[
                 ("int", ParamValue::I32(-1)),
-                ("enum", ParamValue::String("c".into())),
                 ("float", ParamValue::F32(0.25)),
                 ("retired", ParamValue::I32(3)),
             ]),
-            (-1, 2, 0.25),
+            (-1, 0.25),
             "in range, beside an id no row has"
         );
     }

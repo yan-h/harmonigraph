@@ -350,13 +350,18 @@ impl Row {
                     .non_modulatable()
                     .with_to_text(|value| Follow::from_index(value).label().into())
             }
-            Row::AnalysisInput => Spec::enumeration(
+            Row::AnalysisInput => Spec::int(
                 id,
                 "Analyzer Audio Input",
+                AnalysisInput::default().index(),
                 0,
-                &["main", "sidechain"],
-                &["Main", "Sidechain"],
+                AnalysisInput::HOST_MAX,
             )
+            .with_to_text(|value| AnalysisInput::from_index(value).label().into())
+            .with_from_text(|text| {
+                let input = AnalysisInput::HOST.into_iter().find(|input| input.label() == text);
+                input.map(AnalysisInput::index)
+            })
             .non_automatable(),
             Row::CameraYaw => camera(ParamKey::CameraYaw),
             Row::CameraPitch => camera(ParamKey::CameraPitch),
@@ -377,10 +382,6 @@ impl Row {
         }
     }
 }
-
-/// The Analyzer Audio Input row's variants, by index; [`Row::spec`] gives each
-/// its saved id and its name.
-const ANALYSIS_INPUTS: [AnalysisInput; 2] = [AnalysisInput::Main, AnalysisInput::Sidechain];
 
 impl Default for HarmonigraphParams {
     fn default() -> Self {
@@ -428,7 +429,7 @@ impl HarmonigraphParams {
 
     /// Which input feeds the analyzer.
     pub fn analysis_input(&self) -> AnalysisInput {
-        ANALYSIS_INPUTS[self.int(Row::AnalysisInput) as usize]
+        AnalysisInput::from_index(self.int(Row::AnalysisInput))
     }
 
     /// What the host shows for `row`'s value.
@@ -521,9 +522,8 @@ impl ParamBackend for PluginParamBackend<'_> {
 
     fn set_analysis_input(&self, input: AnalysisInput) {
         let row = Row::AnalysisInput.index();
-        let index = ANALYSIS_INPUTS.iter().position(|candidate| *candidate == input);
         self.host.begin_set_parameter(row);
-        self.host.set_parameter(row, index.expect("an analysis input has a row value") as f32);
+        self.host.set_parameter(row, input.index() as f32);
         self.host.end_set_parameter(row);
     }
 
@@ -1573,12 +1573,7 @@ mod tests {
     fn analysis_input_is_a_stable_non_automatable_main_default() {
         let params = HarmonigraphParams::default();
         assert_eq!(params.analysis_input(), AnalysisInput::Main);
-        let spec = params.table.spec(Row::AnalysisInput.index());
-        assert!(!spec.automatable);
-        assert!(matches!(
-            spec.kind,
-            harmonigraph_clap::params::Kind::Enum { ids: &["main", "sidechain"], .. }
-        ));
+        assert!(!params.table.spec(Row::AnalysisInput.index()).automatable);
     }
 
     /// The descriptor is what makes the host show its sidechain routing control.
