@@ -338,7 +338,8 @@ mod tests {
         ] {
             crate::theme::set_skin(&ctx, dials);
             chrome.push(crate::theme::hairline());
-            let output = ctx.run_ui(
+            let output = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, FRAME)),
                     ..Default::default()

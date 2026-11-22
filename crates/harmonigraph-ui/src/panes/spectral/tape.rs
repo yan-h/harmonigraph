@@ -205,7 +205,7 @@ pub(super) fn active(state: &PictureState, navigation: Navigation) -> bool {
 }
 
 fn window_id(surface: usize) -> egui::Id {
-    egui::Id::new(("tape-window", surface))
+    egui::Id::unique(("tape-window", surface))
 }
 
 /// The stretch of song this frame starts from.
@@ -293,7 +293,7 @@ pub(super) fn draw(
     let view = &mut state.runtime.tape;
     coverage(painter, axes, view, &axis);
     let labels = ruler(painter, axes, view, &axis);
-    let pixel = marks(painter, axes, view, &axis, egui::Id::new(("tape-marks", surface)));
+    let pixel = marks(painter, axes, view, &axis, egui::Id::unique(("tape-marks", surface)));
     if let Some(pixel) = pixel {
         state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, pixel);
     }
@@ -708,7 +708,7 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
     let axes = overview_axes(rect, &cfg);
     let whole = Window::fit(&state.runtime.tape);
     let axis = SongAxis::new(&axes, 0.0, whole);
-    let id = egui::Id::new(("tape-overview", surface));
+    let id = egui::Id::unique(("tape-overview", surface));
     let response = ui.interact(rect, id, egui::Sense::click_and_drag());
     let shown = window(ui, &state.runtime.tape, surface);
     // Held to the strip: a drag carried past its end would otherwise take the

@@ -170,14 +170,18 @@ impl Renderer {
     pub fn submit(
         &mut self,
         primitives: &[egui::ClippedPrimitive],
-        textures: &egui::TexturesDelta,
+        mut textures: egui::TexturesDelta,
         pixels_per_point: f32,
         clear: egui::Color32,
     ) -> std::time::Duration {
         assert!(self.in_flight.len() < IN_FLIGHT, "read a frame back before submitting another");
         let handed_over = std::time::Instant::now();
-        for (id, delta) in &textures.set {
-            self.egui.update_texture(&self.device, &self.queue, *id, delta);
+        // Taken and drained, since egui asserts a dropped delta was applied:
+        // textures in any order, each one's deltas in theirs.
+        for (id, deltas) in textures.set.drain() {
+            for delta in &deltas {
+                self.egui.update_texture(&self.device, &self.queue, id, delta);
+            }
         }
         // Paint callbacks need the texture after this frame's deltas, not the
         // image cloned out of the font store. Texture::clone shares the GPU
@@ -253,8 +257,8 @@ impl Renderer {
         let submit = handed_over.elapsed();
 
         // The GPU keeps a freed texture alive until the work using it is done.
-        for id in &textures.free {
-            self.egui.free_texture(id);
+        for id in textures.free.drain() {
+            self.egui.free_texture(&id);
         }
         submit
     }
@@ -292,7 +296,8 @@ impl Renderer {
         frame.clear();
         frame.reserve(row_bytes * self.size[1] as usize);
         {
-            let mapped = readback.slice(..).get_mapped_range();
+            let mapped =
+                readback.slice(..).get_mapped_range().expect("mapped range of the readback");
             for row in 0..self.size[1] as usize {
                 let start = row * self.bytes_per_row as usize;
                 frame.extend_from_slice(&mapped[start..start + row_bytes]);
@@ -309,7 +314,7 @@ impl Renderer {
     pub fn render_to_vec(
         &mut self,
         primitives: &[egui::ClippedPrimitive],
-        textures: &egui::TexturesDelta,
+        textures: egui::TexturesDelta,
         pixels_per_point: f32,
         clear: egui::Color32,
     ) -> Vec<u8> {
@@ -455,7 +460,7 @@ mod tests {
             let primitives = self.context.tessellate(output.shapes, self.pixels_per_point);
             self.renderer.render_to_vec(
                 &primitives,
-                &output.textures_delta,
+                output.textures_delta,
                 self.pixels_per_point,
                 egui::Color32::from_rgb(self.background.0, self.background.1, self.background.2),
             )
@@ -817,7 +822,7 @@ mod tests {
                 });
                 let primitives = sheet.context.tessellate(output.shapes, 1.0);
                 let clear = egui::Color32::BLACK;
-                sheet.renderer.render_to_vec(&primitives, &output.textures_delta, 1.0, clear);
+                sheet.renderer.render_to_vec(&primitives, output.textures_delta, 1.0, clear);
             }
             let device = &sheet.renderer.device;
             (snapshot_of(device), most_copies_of(device))

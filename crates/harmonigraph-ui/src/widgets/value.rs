@@ -360,7 +360,7 @@ impl<'a> ValueBar<'a> {
                 rect,
                 TextEdit::singleline(&mut text)
                     .font(TextStyle::Monospace)
-                    .horizontal_align(egui::Align::Center),
+                    .align(egui::Align2::CENTER_TOP),
             );
             // TextEdit never takes focus by itself; grab it on the first
             // edit-mode frame so typing (and focus-loss commit) works at
@@ -844,7 +844,7 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
     // rather than the display rate, for as long as an export runs (#1872),
     // and only while some of the bar is in view.
     if ui.is_rect_visible(rect) {
-        crate::repaint_after(ui.ctx(), crate::CHROME_REPAINT_INTERVAL);
+        ui.ctx().request_repaint_after(crate::CHROME_REPAINT_INTERVAL);
     }
 
     let painter = ui.painter();
@@ -1056,7 +1056,7 @@ mod tests {
                 focused: false,
                 ..Default::default()
             };
-            let _ = ctx.run_ui(raw, |ui| {
+            let _ = crate::tests::probe::run(&ctx, raw, |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                 ValueBar::new(&mut value, 0.0..=1.0, "Amount").show(&mut child);
             });

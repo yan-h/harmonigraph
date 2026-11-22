@@ -87,7 +87,7 @@ pub(super) fn create_glow_pipelines(
     let make = |vertex,
                 fragment,
                 second_layout,
-                buffers: &[wgpu::VertexBufferLayout<'_>],
+                buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
                 targets: &[Option<wgpu::ColorTargetState>]| {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(fragment),
@@ -119,7 +119,8 @@ pub(super) fn create_glow_pipelines(
             cache: None,
         })
     };
-    let splat = make("vs_glow_splat", "fs_glow_splat", strip, &[GpuInstance::LAYOUT], &targets);
+    let splat =
+        make("vs_glow_splat", "fs_glow_splat", strip, &[Some(GpuInstance::LAYOUT)], &targets);
     let resolve = make(
         "vs_glow_resolve",
         "fs_glow_resolve",

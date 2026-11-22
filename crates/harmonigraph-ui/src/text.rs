@@ -841,7 +841,7 @@ const MARK_SHEET_SOFT_HEIGHT: u32 = 2048;
 /// the context, so it dies with the window that built it — exactly as the
 /// textures a renderer holds do.
 fn mark_sheet(ctx: &egui::Context) -> std::sync::Arc<std::sync::Mutex<MarkAtlas>> {
-    let id = egui::Id::new("harmonigraph-mark-sheet");
+    let id = egui::Id::unique("harmonigraph-mark-sheet");
     type Shared = std::sync::Arc<std::sync::Mutex<MarkAtlas>>;
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Shared>(id).clone())
 }
@@ -1345,7 +1345,7 @@ mod tests {
         assert!(marks_snapshot(&ctx).is_none(), "an empty sheet publishes nothing");
         let mut first = None;
         for _ in 0..3 {
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = crate::tests::probe::run(&ctx, egui::RawInput::default(), |ui| {
                 let mut batch = TextBatch::default();
                 batch.mark(
                     &ctx,
@@ -1429,7 +1429,7 @@ mod tests {
         // pass. Settle the exact run first so this is a shadow test, not the
         // font atlas's one-frame publication latency.
         for _ in 0..2 {
-            let warm = context.run_ui(
+            let mut warm = context.run_ui(
                 egui::RawInput { screen_rect: Some(rect), ..Default::default() },
                 |ui| {
                     let _ = ui.painter().layout_no_wrap(
@@ -1439,16 +1439,14 @@ mod tests {
                     );
                 },
             );
-            for (id, delta) in &warm.textures_delta.set {
-                renderer.update_texture(&device, &queue, *id, delta);
-            }
+            apply_textures(&mut renderer, &device, &queue, &mut warm.textures_delta);
         }
 
         let mut state = crate::PictureState::new(FORMAT);
         state.appearance.view.shadow.spectral_text =
             harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, ..Default::default() };
         let mut k_rect = None;
-        let output = context.run_ui(
+        let mut output = context.run_ui(
             egui::RawInput { screen_rect: Some(rect), ..Default::default() },
             |ui| {
                 let painter = ui.painter_at(rect);
@@ -1490,9 +1488,7 @@ mod tests {
                 );
             },
         );
-        for (id, delta) in &output.textures_delta.set {
-            renderer.update_texture(&device, &queue, *id, delta);
-        }
+        apply_textures(&mut renderer, &device, &queue, &mut output.textures_delta);
         if let Some(texture) =
             renderer.texture(&egui::TextureId::default()).and_then(|entry| entry.texture.clone())
         {
@@ -1548,7 +1544,7 @@ mod tests {
         let slice = readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |result| result.expect("map readback"));
         device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-        let frame = slice.get_mapped_range();
+        let frame = slice.get_mapped_range().expect("mapped range");
         let k = k_rect.expect("the k glyph was laid out");
         let x0 = (k.min.x - 7.0).floor().max(0.0) as u32;
         let x1 = (k.max.x + 7.0).ceil().min(SIZE[0] as f32) as u32;
@@ -1579,8 +1575,25 @@ mod tests {
         );
         drop(frame);
         readback.unmap();
-        for id in &output.textures_delta.free {
-            renderer.free_texture(id);
+    }
+
+    /// A pass's texture changes, drained as the editor's renderer drains them,
+    /// since egui asserts a dropped delta was applied. The frees go with the
+    /// uploads, ahead of the draw, which egui allows: it frees only textures
+    /// the pass no longer draws.
+    fn apply_textures(
+        renderer: &mut egui_wgpu::Renderer,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+        delta: &mut egui::TexturesDelta,
+    ) {
+        for (id, images) in delta.set.drain() {
+            for image in &images {
+                renderer.update_texture(device, queue, id, image);
+            }
+        }
+        for id in delta.free.drain() {
+            renderer.free_texture(&id);
         }
     }
 
@@ -1614,7 +1627,7 @@ mod tests {
     fn a_stacked_name_is_one_name_and_a_bare_label_another() {
         let ctx = crate::tests::probe::themed_at(1.0);
         let mut read = None;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let _ = crate::tests::probe::run(&ctx, egui::RawInput::default(), |ui| {
             let mut batch = TextBatch::default();
             batch.text(
                 ui.painter(),
@@ -1726,7 +1739,7 @@ mod tests {
             let font = crate::theme::picture_font(base * raster);
             let mut batch = TextBatch::default();
             let anchor = egui::pos2(100.0, 100.0);
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = crate::tests::probe::run(&ctx, egui::RawInput::default(), |ui| {
                 batch.magnified(anchor, magnify, |batch| {
                     batch.text(
                         ui.painter(),

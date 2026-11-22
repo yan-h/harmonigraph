@@ -899,7 +899,8 @@ mod tests {
         let mut t = 0.0;
         let mut frame = |lo: &mut f32, hi: &mut f32, events: Vec<egui::Event>| {
             t += 1.0 / 60.0;
-            let _ = ctx.run_ui(
+            let _ = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(screen),
                     time: Some(t),

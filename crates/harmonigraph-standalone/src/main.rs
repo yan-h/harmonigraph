@@ -207,20 +207,15 @@ impl SelfShot {
 
     /// One tick of the capture state machine; call every frame.
     fn step(&mut self, ctx: &egui::Context, now: f64) {
-        if !self.requested && now >= self.at {
-            self.requested = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+        if self.requested || now < self.at {
+            return;
         }
-        let image = ctx.input(|i| {
-            i.events.iter().find_map(|e| match e {
-                egui::Event::Screenshot { image, .. } => Some(image.clone()),
-                _ => None,
-            })
-        });
-        if let Some(image) = image {
+        self.requested = true;
+        let path = self.path.clone();
+        ctx.request_screenshot(move |image| {
             let [w, h] = image.size;
             if let Err(err) = image::save_buffer(
-                &self.path,
+                &path,
                 image.as_raw(),
                 w as u32,
                 h as u32,
@@ -229,11 +224,11 @@ impl SelfShot {
                 eprintln!("screenshot failed: {err}");
                 std::process::exit(1);
             }
-            eprintln!("screenshot saved: {}", self.path);
+            eprintln!("screenshot saved: {path}");
             // Exit without eframe's save(): a scripted run must not
             // overwrite the interactively persisted UI state.
             std::process::exit(0);
-        }
+        });
     }
 }
 

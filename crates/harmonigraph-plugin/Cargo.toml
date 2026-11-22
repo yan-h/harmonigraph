@@ -40,7 +40,7 @@ egui = { workspace = true }
 # The editor's device is made at activation, before any window, from the
 # window's own setup (`editor::start_graphics`).
 egui-wgpu = { workspace = true }
-pollster = "0.4"
+pollster = { workspace = true }
 egui-baseview = { workspace = true }
 raw-window-handle = { workspace = true }
 # The editor's size and own window, shared with otonal (`EditorSize`, in `editor::persist`).

@@ -1,15 +1,10 @@
 //! The keys the editor reads, and the claim the native shell makes on them:
 //! the editor's alone, so the host does not act on the same press.
 //!
-//! The shell's rule (egui-plugin-window's egui-baseview Patch 18). A focused
-//! text field decides first: it gets its typing and editing keys, and a
-//! listed shortcut it does not use goes to the host. With no text field
-//! focused, the editor gets exactly the shortcuts listed here, matched
-//! exactly. Besides those, the shell keeps bare Escape while a drag or a popup
-//! is open or a label holds a selection, and bare Cmd-C on a selected label.
-//! Every other key goes to the host and never reaches egui. A focused widget
-//! of another kind gets no key by its focus: Space or Enter on a focused
-//! button and a slider's arrows go to the host unless listed.
+//! Which keys the editor owns and which go to the host is the shell's rule,
+//! egui-baseview's Patch 18 in egui-plugin-window's `PATCHES.md`. With no
+//! text field focused, the editor owns the shortcuts listed here, matched
+//! exactly; a key nothing owns goes to the host and never reaches egui.
 //!
 //! Taking a shortcut and claiming it are one call, [`take`]: a shortcut read
 //! here is a shortcut kept from the host. The shell hands [`claimed`] to
@@ -39,7 +34,7 @@ struct Claims {
 }
 
 fn claims_id() -> egui::Id {
-    egui::Id::new("harmonigraph_ui::keys::Claims")
+    egui::Id::unique("harmonigraph_ui::keys::Claims")
 }
 
 /// Keep `shortcuts` from the host this frame without reading them here: for
@@ -119,12 +114,16 @@ mod tests {
         let tab = KeyboardShortcut::new(Modifiers::NONE, Key::Tab);
         for events in [vec![], vec![press(Key::Tab, Modifiers::NONE)]] {
             let pressed = events.len();
-            let _ = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-                assert_eq!(take(ui.ctx(), tab), pressed);
-                assert_eq!(claimed(ui.ctx()), [tab]);
-            });
+            let _ = crate::tests::probe::run(
+                &ctx,
+                egui::RawInput { events, ..Default::default() },
+                |ui| {
+                    assert_eq!(take(ui.ctx(), tab), pressed);
+                    assert_eq!(claimed(ui.ctx()), [tab]);
+                },
+            );
         }
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::tests::probe::run(&ctx, Default::default(), |ui| {
             assert_eq!(claimed(ui.ctx()), [], "a frame that takes nothing claims nothing");
         });
     }
@@ -141,9 +140,10 @@ mod tests {
             press(Key::Z, Modifiers::COMMAND.plus(Modifiers::ALT)),
             press(Key::Z, undo.modifiers),
         ];
-        let _ = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-            assert_eq!(take_each(ui.ctx(), &[undo, redo]), [redo, undo]);
-            assert_eq!(ui.input(|i| i.events.len()), 1, "Cmd-Option-Z is the host's");
-        });
+        let _ =
+            crate::tests::probe::run(&ctx, egui::RawInput { events, ..Default::default() }, |ui| {
+                assert_eq!(take_each(ui.ctx(), &[undo, redo]), [redo, undo]);
+                assert_eq!(ui.input(|i| i.events.len()), 1, "Cmd-Option-Z is the host's");
+            });
     }
 }

@@ -713,7 +713,7 @@ impl RollPipelines {
                     label: "roll_surround",
                     vertex: "vs_note_cut",
                     fragment: "fs_note_surround",
-                    buffers: &[RollInstance::LAYOUT],
+                    buffers: &[Some(RollInstance::LAYOUT)],
                 },
             ),
             surround_composite: crate::surround::SurroundComposite::new(device, target_format),
@@ -972,7 +972,7 @@ fn create_core_pipeline(
             // feather wider than itself.
             entry_point: Some("vs_note_body"),
             compilation_options: Default::default(),
-            buffers: &[RollInstance::LAYOUT],
+            buffers: &[Some(RollInstance::LAYOUT)],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
@@ -1020,7 +1020,7 @@ fn create_holdout_pipeline(
             // Body coverage alone, so the body's quad.
             entry_point: Some("vs_note_body"),
             compilation_options: Default::default(),
-            buffers: &[RollInstance::LAYOUT],
+            buffers: &[Some(RollInstance::LAYOUT)],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,

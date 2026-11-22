@@ -204,7 +204,7 @@ impl WindowHandler for Host {
                 assert!(requested.is_none(), "startup fixture unexpectedly resized");
                 queue.set_frame_divisor(shared.workspace.interaction.prefs.frame_rate.divisor());
                 let ready = harmonigraph_ui::editor_loading_status(ui.ctx()).is_none();
-                egui::Area::new(egui::Id::new("startup-measurement-marker"))
+                egui::Area::new(egui::Id::unique("startup-measurement-marker"))
                     .fixed_pos(egui::pos2(10.0, 10.0))
                     .order(egui::Order::Tooltip)
                     .show(ui.ctx(), |ui| {

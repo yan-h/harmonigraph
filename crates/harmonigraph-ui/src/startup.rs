@@ -12,7 +12,7 @@ struct Loading {
 }
 
 fn id() -> egui::Id {
-    egui::Id::new("harmonigraph-editor-startup")
+    egui::Id::unique("harmonigraph-editor-startup")
 }
 
 /// Opt this window into stage progress. Call after restoring its theme/state;
@@ -93,7 +93,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
     }
     if status != Status::Failed {
         // About every 60 Hz refresh.
-        crate::repaint_after(ui.ctx(), std::time::Duration::from_millis(16));
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
     }
     ui.ctx().data_mut(|data| data.insert_temp(id(), loading));
     true
@@ -136,7 +136,7 @@ mod tests {
         ));
         assert_eq!(state.picture.runtime.tracker.voices().count(), 3);
         begin_editor_loading_with(&ctx, WindowStartup::preparing());
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let _ = crate::tests::probe::run(&ctx, egui::RawInput::default(), |ui| {
             crate::root_ui(ui, &mut state, &Defaults, 5.0, "test @0123456");
         });
         assert!(matches!(editor_loading_status(&ctx), Some(Status::Preparing(_))));
@@ -161,7 +161,7 @@ mod tests {
             assert!(!state.workspace.layout.visible(Tab::Lattice), "the lattice shows");
             begin_editor_loading_with(&ctx, WindowStartup::preparing());
             let mut frame = || {
-                ctx.run_ui(egui::RawInput::default(), |ui| {
+                crate::tests::probe::run(&ctx, egui::RawInput::default(), |ui| {
                     crate::root_ui(ui, &mut state, &Defaults, 0.0, "test @0123456");
                 })
             };
@@ -174,11 +174,13 @@ mod tests {
                 })
             };
             assert!(loading(&frame()), "the open skipped the loading screen");
-            // The splash's own pace, which egui's predicted 1/60 s used to take
-            // whole, repainting the splash on every refresh. From the second
-            // frame, since a fresh context asks to repaint at once.
+            assert!(loading(&frame()), "the second frame left the loading screen");
+            // The splash's own pace, the whole 16 ms rather than every
+            // refresh. From the third frame, since a fresh context asks to
+            // repaint at once, and egui's first sync of its theme to the
+            // window asks again.
             let output = frame();
-            assert!(loading(&output), "the second frame left the loading screen");
+            assert!(loading(&output), "the third frame left the loading screen");
             let delay = output.viewport_output.values().map(|v| v.repaint_delay).min().unwrap();
             assert_eq!(delay, std::time::Duration::from_millis(16), "the splash's poll");
             assert!(output

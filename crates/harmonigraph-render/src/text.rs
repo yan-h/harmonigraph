@@ -644,7 +644,7 @@ pub(crate) fn create_glyph_cell_pipeline(
         "glyph_coverage_cell",
         &[Some(layout)],
         ("vs_glyph_cell", "fs_glyph_ink"),
-        &[GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS],
+        &[Some(GlyphInstance::LAYOUT), Some(crate::shadow::ShadowBox::BESIDE_GLYPHS)],
         &[Some(wgpu::ColorTargetState {
             format: crate::shadow::ATLAS_FORMAT,
             blend: Some(wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT }),
@@ -667,7 +667,7 @@ fn create_spectral_shadow_pipeline(
         "spectral_text_shadow",
         &[Some(layout), None, Some(atlas), Some(casters)],
         ("vs_spectral_shadow", "fs_spectral_shadow"),
-        &[GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS],
+        &[Some(GlyphInstance::LAYOUT), Some(crate::shadow::ShadowBox::BESIDE_GLYPHS)],
         &[Some(wgpu::ColorTargetState {
             format: target_format,
             blend: Some(crate::EGUI_BLEND),
@@ -737,7 +737,7 @@ fn glyph_pipeline(
     label: &str,
     groups: &[Option<&wgpu::BindGroupLayout>],
     entries: (&str, &str),
-    buffers: &[wgpu::VertexBufferLayout<'static>],
+    buffers: &[Option<wgpu::VertexBufferLayout<'static>>],
     targets: &[Option<wgpu::ColorTargetState>],
 ) -> wgpu::RenderPipeline {
     let (vertex, fragment) = entries;
@@ -1037,9 +1037,9 @@ pub(crate) fn create_text_pipeline(
         &[Some(layout), scene.map(|s| s.glow), scene.map(|s| s.shadow), scene.map(|s| s.casters)],
         entries,
         &if scene.is_some() {
-            vec![GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS]
+            vec![Some(GlyphInstance::LAYOUT), Some(crate::shadow::ShadowBox::BESIDE_GLYPHS)]
         } else {
-            vec![GlyphInstance::LAYOUT]
+            vec![Some(GlyphInstance::LAYOUT)]
         },
         &targets,
     )

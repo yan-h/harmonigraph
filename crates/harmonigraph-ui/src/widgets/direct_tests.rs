@@ -17,11 +17,11 @@ fn held(
     events: Vec<Event>,
     draw: &mut impl FnMut(&mut Ui),
 ) -> egui::FullOutput {
-    ctx.run_ui(
+    crate::tests::probe::run(
+        ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(320.0, 1000.0))),
-            events,
-            modifiers,
+            events: crate::tests::probe::holding(ctx, modifiers, events),
             ..Default::default()
         },
         |ui| draw(ui),

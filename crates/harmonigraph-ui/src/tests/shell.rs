@@ -156,7 +156,8 @@ fn draw_panes(ctx: &egui::Context, state: &mut SharedState, t: f64, panes: &[Pan
     }
     begin_frame(&mut state.picture, &Host, t);
     for &pane in panes {
-        let _ = ctx.run_ui(
+        let _ = crate::tests::probe::run(
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -609,9 +610,9 @@ fn the_chrome_cues_animate_at_about_30_hz_while_in_view() {
             add(ui);
         };
         // Settled: a fresh context's opening passes ask to be redrawn.
-        let mut output = ctx.run_ui(input(), &mut pass);
+        let mut output = crate::tests::probe::run(&ctx, input(), &mut pass);
         for _ in 0..4 {
-            output = ctx.run_ui(input(), &mut pass);
+            output = crate::tests::probe::run(&ctx, input(), &mut pass);
         }
         output.viewport_output.values().map(|viewport| viewport.repaint_delay).min().unwrap()
     };
@@ -650,8 +651,7 @@ fn a_voice_in_an_idle_editor_asks_for_the_next_tick() {
     for _ in 0..4 {
         idle = harness.frame(&mut state, vec![]);
     }
-    // The whole poll: egui takes its predicted frame time off a delay, which
-    // left 33 ms and drew every fifth refresh at 144 Hz (#1673).
+    // The whole poll, not less (#1673).
     assert_eq!(delay(&idle), crate::IDLE_REPAINT_INTERVAL, "an idle editor waits one poll");
 
     let at = harness.next_time();

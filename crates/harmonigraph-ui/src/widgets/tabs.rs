@@ -75,7 +75,7 @@ fn overflow_width(ui: &Ui, label: Option<&str>) -> f32 {
 
 fn overflow<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, hidden: &[(T, &str)]) {
     let current = hidden.iter().find(|(choice, _)| *choice == *value).map(|&(_, label)| label);
-    let icon = ui.make_persistent_id((id, "overflow icon"));
+    let icon = egui::IdSalt::new("overflow icon");
     let size = Vec2::splat(ui.spacing().icon_width);
     let button = match current {
         Some(label) => {

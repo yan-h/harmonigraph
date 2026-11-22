@@ -35,6 +35,25 @@ fn opening_analyzer_settings_does_not_change_loaded_values() {
 /// position-of-the-ink metric reports movement that isn't there (and misses
 /// movement that is). The y of a string drawn in both frames cannot lie.
 fn wheel_over_settings_pane(pane: panes::Tab, screen_h: f32) -> f32 {
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, -3.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: egui::Modifiers::NONE,
+    };
+    // The wheel arrives smoothed over several frames.
+    let passes = std::iter::once(vec![wheel]).chain(std::iter::repeat_n(vec![], 20));
+    scroll_settings_pane(pane, screen_h, passes)
+}
+
+/// How far the text of `pane` moves, as a median, across `passes` of events
+/// handed to the dock with the pointer over the pane.
+fn scroll_settings_pane(
+    pane: panes::Tab,
+    screen_h: f32,
+    passes: impl IntoIterator<Item = Vec<egui::Event>>,
+) -> f32 {
     let mut state = fresh();
     // The settings section opens on Tuning; every other settings pane is a tab
     // behind it.
@@ -66,19 +85,9 @@ fn wheel_over_settings_pane(pane: panes::Tab, screen_h: f32) -> f32 {
     let over = egui::pos2(body.center().x, body.top() + body.height() * 0.2);
     frame(&mut state, vec![egui::Event::PointerMoved(over)]);
     let before = frame(&mut state, vec![]);
-    frame(
-        &mut state,
-        vec![egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Line,
-            delta: egui::vec2(0.0, -3.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: egui::Modifiers::NONE,
-        }],
-    );
-    // The wheel arrives smoothed over several frames.
     let mut after = before.clone();
-    for _ in 0..20 {
-        after = frame(&mut state, vec![]);
+    for events in passes {
+        after = frame(&mut state, events);
     }
     let mut deltas: Vec<f32> =
         before.iter().filter_map(|(text, y)| after.get(text).map(|moved| moved - y)).collect();
@@ -104,6 +113,24 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
         let moved = wheel_over_settings_pane(pane, 200.0);
         assert!(moved < -8.0, "{pane:?} did not scroll to the wheel (content moved {moved})");
     }
+}
+
+/// Fingers held on the trackpad past the top of a settings pane leave it
+/// where it was rather than pulling it down to spring back on release: no
+/// scroll area rubber-bands, as otonal's do not (Yan, 2026-11-21).
+#[test]
+fn a_settings_pane_stops_at_its_top() {
+    let fingers = |phase| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 40.0),
+        phase,
+        source: egui::MouseWheelSource::Trackpad,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let passes = std::iter::once(vec![fingers(egui::TouchPhase::Start)])
+        .chain(std::iter::repeat_with(|| vec![fingers(egui::TouchPhase::Move)]).take(10));
+    let moved = scroll_settings_pane(panes::Tab::Tuning, 200.0, passes);
+    assert_eq!(moved, 0.0, "the pane was pulled {moved} past its top");
 }
 
 /// The Note section's Fade curve bar draws the curve the NOTES run on, not a
@@ -885,7 +912,7 @@ const FIXTURE_BAR_GRIP: egui::Pos2 = egui::pos2(FIXTURE_BAR_AT.x + 4.0, FIXTURE_
 /// not any one setting, so the bar is the settings pages' own widget on a
 /// value no page holds.
 fn fixture_bar(ctx: &egui::Context, value: &mut f32) {
-    egui::Area::new(egui::Id::new("fixture bar"))
+    egui::Area::new(egui::Id::unique("fixture bar"))
         .order(egui::Order::Foreground)
         .fixed_pos(FIXTURE_BAR_AT)
         .show(ctx, |ui| {
@@ -967,6 +994,7 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, -3.0),
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             modifiers: egui::Modifiers::NONE,
         }],
     );

@@ -306,7 +306,8 @@ mod tests {
         settings: &mut IntensitySettings,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run_ui(
+        crate::tests::probe::run(
+            ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(280.0, 1100.0))),
                 events,

@@ -15,13 +15,13 @@ read §5 first if you only want the recommendation.
 
 ## 1. What the window actually is
 
-On macOS the plugin editor is egui 0.35 → egui-wgpu 0.35 → wgpu 29 → **Metal**.
+On macOS the plugin editor is egui 0.37 → egui-wgpu 0.37 → wgpu 30 → **Metal**.
 No OpenGL path exists: the forked egui-baseview keeps only its wgpu renderer (#1810).
 
-`EguiWindow::open_parented` (in `crates/harmonigraph-plugin/src/editor/window.rs`) parents onto the host's `NSView`, and `egui-baseview/src/renderer/wgpu/renderer.rs:59-83` (in egui-plugin-window) creates a wgpu surface on it —
+`EguiWindow::open_parented` (in `crates/harmonigraph-plugin/src/editor/window.rs`) parents onto the host's `NSView`, and `Renderer::new` in `egui-baseview/src/renderer/wgpu/renderer.rs` (in egui-plugin-window) creates a wgpu surface on it —
 a `CAMetalLayer` swapchain, presented Fifo (vsync).
 
-MSAA is off, so egui renders **straight into the swapchain texture** (`renderer.rs:264-321`).
+MSAA is off, so egui renders **straight into the swapchain texture** (`Renderer::render`).
 The lattice is an `egui_wgpu` paint callback:
 its `prepare()` (in `crates/harmonigraph-render/src/lib.rs`) runs the scene and bloom passes into a pane-sized offscreen texture on egui's own encoder, and its `paint()` blits a single quad inside egui's render pass.
 Node labels and the learn overlay are laid out by `draw_lattice` (`crates/harmonigraph-ui/src/panes/lattice.rs`), which puts the names INTO the paint callback rather than painting them after, so a node in front covers them.
@@ -34,13 +34,13 @@ the swapchain texture.** That single fact drives everything below.
 Two things block a readback from where you'd want to put it:
 
 - **The surface isn't copyable.**
-`egui-baseview/src/renderer/wgpu/renderer.rs:94` configures it `usage = RENDER_ATTACHMENT` —
+`Renderer::configure_surface` in egui-baseview configures it `usage = RENDER_ATTACHMENT` —
 no `COPY_SRC`, so `copy_texture_to_buffer` on the swapchain texture is a validation error.
-Metal *permits* `COPY_SRC` on a surface (`wgpu-hal/src/metal/adapter.rs:428`);
-the cost is that `framebufferOnly` goes false on the layer (`wgpu-hal/src/metal/surface.rs:73`), which is why the flag isn't on by default.
+Metal *permits* `COPY_SRC` on a surface (`surface_capabilities` in `vendor/wgpu-hal/src/metal/adapter.rs`);
+the cost is that `framebufferOnly` goes false on the layer (`Surface::configure` in `vendor/wgpu-hal/src/metal/surface.rs`), which is why the flag isn't on by default.
 - **There is no `Device`/`Queue`/`RenderState` reachable from the
-editor.** egui-baseview's `Renderer` keeps them private (`renderer.rs:48-56`) and hands the app only a small `Queue` of window commands (`egui-baseview/src/window.rs:76-119`).
-`editor.rs:20-29` already documents this gap —
+editor.** egui-baseview's `Renderer` keeps them in private fields and hands the app only a small `Queue` of window commands (`egui-baseview/src/window.rs`).
+`ASSUMED_SURFACE_FORMAT` in `crates/harmonigraph-plugin/src/editor.rs` already documents this gap —
 it's the same missing accessor that forces the `ASSUMED_SURFACE_FORMAT` hack.
 
 A paint callback *can* see a `Device` and `Queue` (`prepare()`'s arguments, `harmonigraph-render/src/lib.rs`) and they're cheap clonable handles, so a callback could stash them.
@@ -52,14 +52,14 @@ see its `PATCHES.md`.)
 Two smaller blockers in the same area:
 `egui-wgpu`'s `capture` feature —
 which contains a ready-made capture texture + readback buffer + blit (upstream `egui-wgpu/src/capture.rs`, not vendored here) —
-**is not enabled in the plugin build** (it is in the standalone, via eframe), and egui-baseview drops `ViewportCommand::Screenshot` on the floor (`window.rs:403-414`), so the standalone's self-screenshot trick is a silent no-op in the plugin.
+**is not enabled in the plugin build** (it is in the standalone, via eframe), and egui-baseview drops `ViewportCommand::Screenshot` on the floor (it answers only `Close` among viewport commands), so the standalone's self-screenshot trick is a silent no-op in the plugin.
 
 ## 3. The problem nobody thinks about until the first clip looks wrong
 
 Frame pacing.
 The plugin repaints **on demand**, not at a fixed rate:
 continuously only while voices are sounding or decaying, otherwise a 50 ms poll (`IDLE_REPAINT_INTERVAL` in `crates/harmonigraph-ui/src/lib.rs`), on top of frames driven by the view's display link on macOS (one per refresh, `baseview/src/platform/macos/view.rs` in egui-plugin-window, of which a still editor's run its UI and draw only when the poll comes due or something asks; `pass_due` in `egui-baseview/src/window.rs`) and a Fifo swapchain.
-Presents are also skipped outright on Occluded/Outdated/Lost (`renderer.rs:214-262`).
+Presents are also skipped outright on Occluded/Outdated/Lost (`Renderer::render`).
 The editor logs gaps between the display link's frames (`STALL_GAP` in `editor/frame.rs`),
 not skipped presents;
 a frame that runs on time but skips its present produces no such warning.
@@ -142,7 +142,7 @@ or wires up upstream `egui-wgpu`'s `CaptureState`, and (b) exposes `RenderState`
 Frames go to a worker thread and out to ffmpeg;
 pool 3-4 readback buffers and memcpy padded rows rather than using egui's per-pixel `ColorImage` conversion, whose own comment warns it isn't built for video.
 The redeeming feature:
-exposing `RenderState` is exactly the accessor `editor.rs:20-29` already wants, so this patch retires the `ASSUMED_SURFACE_FORMAT` hack at the same time —
+exposing `RenderState` is exactly the accessor `ASSUMED_SURFACE_FORMAT` already wants, so this patch retires the `ASSUMED_SURFACE_FORMAT` hack at the same time —
 one more entry in `PATCHES.md`, paying for two things.
 
 **Route 4, ScreenCaptureKit/AVFoundation in-process, rejects itself.** The TCC screen-recording prompt would be attributed to the *host* —

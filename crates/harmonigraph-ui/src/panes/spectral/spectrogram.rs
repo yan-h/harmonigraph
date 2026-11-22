@@ -406,7 +406,8 @@ mod gap_tests {
                 }
                 let cfg = state.appearance.spectrum;
                 let axes = Axes::new(rect, &cfg);
-                let output = ctx.run_ui(
+                let output = crate::tests::probe::run(
+                    &ctx,
                     egui::RawInput { screen_rect: Some(rect), ..Default::default() },
                     |ui| {
                         draw_spectrogram(
@@ -495,8 +496,10 @@ mod gap_tests {
         state.runtime.spectrum.push_history(622.0, &[0.25; SPECTRUM_BINS]);
         let axes = Axes::new(rect, &state.appearance.spectrum);
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
-        let output =
-            ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
+        let output = crate::tests::probe::run(
+            &ctx,
+            egui::RawInput { screen_rect: Some(rect), ..Default::default() },
+            |ui| {
                 draw_spectrogram(
                     ui.painter(),
                     &axes,
@@ -507,7 +510,8 @@ mod gap_tests {
                     0,
                     crate::panes::lattice::NO_SOLO,
                 );
-            });
+            },
+        );
         assert!(
             output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Callback(_))),
             "the long pause regrew the strip from the now-line as at startup",

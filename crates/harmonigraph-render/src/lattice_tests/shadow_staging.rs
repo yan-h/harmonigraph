@@ -79,7 +79,7 @@ fn read_cells(shooter: &Shooter, buffer: &wgpu::Buffer, bytes: usize) -> Vec<u8>
     shooter.queue.submit([encoder.finish()]);
     out.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
     shooter.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    out.slice(..).get_mapped_range().to_vec()
+    out.slice(..).get_mapped_range().expect("mapped range").to_vec()
 }
 
 fn picture(shooter: &Shooter, cb: &LatticeCallback) -> Vec<u8> {

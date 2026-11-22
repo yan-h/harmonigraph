@@ -555,7 +555,8 @@ fn fold_is_shared_by_real_dock_preview_and_discarded_passes() {
     assert!(state.picture.runtime.spectrum.columns_taken() > 2);
     let ctx = super::probe::themed();
     let mut passes = 0;
-    let _ = ctx.run_ui(
+    let _ = crate::tests::probe::run(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,

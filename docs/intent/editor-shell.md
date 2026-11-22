@@ -85,3 +85,10 @@ Yan asked for an audit of checkboxes against switches and a rule, and took the r
 
 - A switch turns on a feature (a section of settings of its own) or a mode (how notes are tuned or read, or what a click does); a checkbox is every other on/off, a lit button one of a row of peers, and a two-option choice an on/off whose both states have names. The rule is on `widgets::toggle_switch` and in `docs/settings.md`. PR #1902
 - Own window and Hide tab bars stay checkboxes: editor preferences, not modes. PR #1902
+
+## 2026-11-21 (egui 0.37, PR #1916, in chat)
+
+- No scroll area rubber-bands: a trackpad scroll stops at the content's end rather than overshooting and springing back, as otonal chose too. One style setting, `theme::style_at`, turns egui 0.37's overshoot off for every scroll area.
+  In Bitwig nothing changes, since egui overshoots only for a wheel it knows is a trackpad and the plug-in's window reports no wheel source; the setting reaches the standalone, which reports one, and holds the choice for a window that comes to report it. PR #1916
+- egui 0.37's own behaviour is accepted as it comes: a press that slides off a widget is a drag, submenu arrows are drawn triangles, a menu opens on hover while another is open, and a popup no longer closes on the release that opened it. PR #1916
+- Menus keep the plug-in's key routing of egui 0.35: while a menu is open, bare arrows, Space and Enter go to Bitwig, so egui 0.37's keyboard navigation of menus is not available in the plug-in (Yan, 2026-11-21; egui-plugin-window #31 closed unmerged). egui moves through a menu's items by the arrows when it receives them, as the standalone's window hands them over, so there it may still work. PR #1916

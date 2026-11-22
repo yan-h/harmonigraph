@@ -326,9 +326,9 @@ camera and appearance settings still load.
 
 ## Dependency coupling
 
-`egui-baseview 0.3` pins egui 0.35,
-egui-wgpu 0.35,
-wgpu 29 and baseview 0.1.
+`egui-baseview 0.3` pins egui 0.37,
+egui-wgpu 0.37,
+wgpu 30 and baseview 0.1.
 `eframe` and `egui-baseview` must use the same egui version.
 The workspace [`Cargo.toml`](../Cargo.toml) centralizes these versions;
 bump the cluster together.

@@ -852,11 +852,11 @@ fn drag_pane_with_navigation(
     let surface = if matches!(navigation, Navigation::Docked) { 0 } else { 1 };
     let modifiers = egui::Modifiers::NONE;
     let frame = |events: Vec<egui::Event>, state: &mut PictureState| {
-        let _ = ctx.run_ui(
+        let _ = crate::tests::probe::run(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
-                modifiers,
-                events,
+                events: crate::tests::probe::holding(&ctx, modifiers, events),
                 ..Default::default()
             },
             |ui| {
@@ -932,18 +932,19 @@ fn preview_wheel_zooms_pitch_with_or_without_shift_and_consumes_both_axes() {
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, 40.0),
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers,
                 },
             ],
         ] {
-            let _ = ctx.run_ui(
+            let _ = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
                         egui::vec2(900.0, 900.0),
                     )),
-                    modifiers,
-                    events,
+                    events: crate::tests::probe::holding(&ctx, modifiers, events),
                     ..Default::default()
                 },
                 |ui| {
@@ -1340,7 +1341,7 @@ fn pane_label_room(rect: egui::Rect, cfg: &SpectrumConfig) -> f32 {
     // wider bundled monospace fallback.
     crate::theme::apply_theme(&ctx);
     let mut room = 0.0;
-    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+    let _ = crate::tests::probe::run(&ctx, egui::RawInput::default(), |ui| {
         let painter = ui.painter();
         // The span reaches only the note names, which this discards; a
         // level number is set in the markings, and those are the pane's
@@ -2605,7 +2606,7 @@ fn a_level_number_with_no_room_is_not_written() {
 fn level_label_room_answers_to_the_axis_the_depth_runs_on() {
     let ctx = egui::Context::default();
     let font = crate::theme::picture_font(MARKING_PT);
-    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+    let _ = crate::tests::probe::run(&ctx, egui::RawInput::default(), |ui| {
         let painter = ui.painter();
         let galley =
             painter.layout_no_wrap("-100".to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
@@ -3281,7 +3282,7 @@ fn tape_frames(
             events,
             ..Default::default()
         };
-        let _ = ctx.run_ui(input, |ui| {
+        let _ = crate::tests::probe::run(&ctx, input, |ui| {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
             spectral_pane(
                 &mut child,
@@ -3529,7 +3530,7 @@ fn overview_frames(ctx: &egui::Context, state: &mut PictureState, frames: Vec<Ve
             events,
             ..Default::default()
         };
-        let _ = ctx.run_ui(input, |ui| {
+        let _ = crate::tests::probe::run(ctx, input, |ui| {
             tape::overview(ui, STRIP, state, 0);
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
             spectral_pane(
@@ -3668,7 +3669,7 @@ fn playhead_frames(
             time: Some(ctx.input(|i| i.time) + dt),
             ..Default::default()
         };
-        let _ = ctx.run_ui(input, |ui| match part {
+        let _ = crate::tests::probe::run(ctx, input, |ui| match part {
             Drawn::Overview => tape::overview(ui, STRIP, state, 0),
             Drawn::Pane => {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
@@ -3788,6 +3789,7 @@ fn a_sideways_scroll_in_tape_mode_stops_at_the_end_of_the_strip() {
         unit: egui::MouseWheelUnit::Point,
         delta: egui::vec2(axes.dir_depth().x.signum() * 400.0, 0.0),
         phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
         modifiers: egui::Modifiers::NONE,
     };
     let frames = (0..30).map(|_| vec![egui::Event::PointerMoved(at), wheel.clone()]).collect();

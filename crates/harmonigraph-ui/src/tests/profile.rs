@@ -515,6 +515,7 @@ fn shape_name(shape: &egui::Shape) -> &'static str {
         egui::Shape::QuadraticBezier(_) => "quad-bezier",
         egui::Shape::CubicBezier(_) => "cubic-bezier",
         egui::Shape::Callback(_) => "callback",
+        egui::Shape::Band(_) => "band",
     }
 }
 

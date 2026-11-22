@@ -509,7 +509,7 @@ fn clicking_the_voice_dots_selects_the_source_button() {
                     instance_controls(ui, &state, &params, &params.tuning_instances());
                     selected.set(
                         ui.data(|data| {
-                            data.get_temp::<u64>(ui.id().with("tuning-instance-selection"))
+                            data.get_temp::<u64>(ui.scope_id().with("tuning-instance-selection"))
                         })
                         .unwrap(),
                     );

@@ -1792,7 +1792,7 @@ mod tests {
     /// The same character as egui's own atlas rasterizes it, at the same size.
     fn typeset_coverage(ch: char, size: f32, ppp: f32) -> Grid {
         let ctx = crate::tests::probe::themed_at(ppp);
-        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+        let _ = crate::tests::probe::run(&ctx, egui::RawInput::default(), |_| {});
         let galley = ctx.fonts_mut(|f| {
             f.layout_no_wrap(ch.to_string(), crate::theme::picture_font(size), egui::Color32::WHITE)
         });
@@ -1925,7 +1925,8 @@ mod tests {
                 .map(|frame| {
                     let anchor = egui::pos2(100.0 + frame as f32 * RATE / PPP, 100.0);
                     let mut batch = crate::text::TextBatch::default();
-                    let _ = ctx.run_ui(
+                    let _ = crate::tests::probe::run(
+                        &ctx,
                         egui::RawInput { screen_rect: Some(screen), ..Default::default() },
                         |ui| {
                             draw_stacked_name(

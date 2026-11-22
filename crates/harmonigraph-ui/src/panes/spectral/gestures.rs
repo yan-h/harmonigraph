@@ -35,7 +35,7 @@ struct Leg {
 }
 
 fn lean_id(surface: usize) -> egui::Id {
-    egui::Id::new(("spectral-lean", surface))
+    egui::Id::unique(("spectral-lean", surface))
 }
 
 /// Whether this drag is a DEPTH gesture (a zoom) rather than a pitch one (a
@@ -127,7 +127,7 @@ pub(super) fn drag_split(
 ) -> egui::Response {
     let band = axes.depth_band(split, SPLIT_GRAB_HALF);
     let response = ui
-        .interact(band, egui::Id::new(("spectral-split", surface)), Sense::drag())
+        .interact(band, egui::Id::unique(("spectral-split", surface)), Sense::drag())
         .on_hover_cursor(axes.resize_cursor());
     if let Some(pointer) = response.dragged().then(|| response.interact_pointer_pos()).flatten() {
         // Track the pointer absolutely rather than accumulating deltas: pushed

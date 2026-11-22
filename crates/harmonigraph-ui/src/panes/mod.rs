@@ -192,7 +192,7 @@ pub fn tab_title(tab: &Tab) -> &'static str {
 
 impl Viewer<'_> {
     pub(crate) fn id(&self, tab: &Tab) -> egui::Id {
-        egui::Id::new(("pane-body", *tab))
+        egui::Id::unique(("pane-body", *tab))
     }
 
     pub(crate) fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
@@ -466,7 +466,7 @@ struct SectionFolds {
 
 impl SectionFolds {
     fn id() -> egui::Id {
-        egui::Id::new("section-folds")
+        egui::Id::unique("section-folds")
     }
 
     /// `f` over the set in place, or `None` outside a [`Viewer`] body. In place
@@ -687,7 +687,7 @@ fn fold_header(
     let response = ui.interact(target, row.id.with("fold"), egui::Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::selected(
-            egui::WidgetType::CollapsingHeader,
+            egui::Role::DisclosureTriangle,
             ui.is_enabled(),
             open.unwrap_or(false),
             title,
@@ -750,7 +750,7 @@ pub(super) fn subsection<R>(
 
 #[cfg(test)]
 fn open_subsections_id() -> egui::Id {
-    egui::Id::new("harmonigraph_ui::panes::open_subsections")
+    egui::Id::unique("harmonigraph_ui::panes::open_subsections")
 }
 
 /// Open every [`subsection`] `ctx` draws that has not been folded yet, for a
@@ -843,7 +843,7 @@ mod block_tests {
             let mut drawn = false;
             let mut header = egui::Rect::NOTHING;
             let input = egui::RawInput { time: Some(t), events, ..Default::default() };
-            let _ = ctx.run_ui(input, |ui| {
+            let _ = crate::tests::probe::run(&ctx, input, |ui| {
                 header = subsection(ui, "Fold", |ui| {
                     drawn = true;
                     row(ui)
@@ -874,11 +874,11 @@ mod block_tests {
     fn a_block_stands_clear_of_the_rows_over_it_and_indents_its_own() {
         let ctx = crate::tests::probe::themed();
         let mut opening = [0.0; 2];
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::tests::probe::run(&ctx, Default::default(), |ui| {
             section(ui, "Plain", |ui| opening[0] = crate::widgets::label(ui, "First").rect.top());
         });
         let mut last = None;
-        let out = ctx.run_ui(Default::default(), |ui| {
+        let out = crate::tests::probe::run(&ctx, Default::default(), |ui| {
             section(ui, "Blocks", |ui| {
                 let first = block(ui, "First", row);
                 opening[1] = first.response.rect.top();
@@ -957,7 +957,8 @@ mod edge_bar_tests {
         let mut time = 0.0;
         let mut click = |reach: &mut f32, fade: &mut f32, events: Vec<egui::Event>| {
             time += 1.0 / 60.0;
-            let _ = ctx.run_ui(
+            let _ = crate::tests::probe::run(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(screen),
                     time: Some(time),
