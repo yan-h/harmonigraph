@@ -8,7 +8,8 @@
 //! and in the log, and the rest of the restore goes ahead, as the fields did
 //! when nice-plug's derive restored them, which skipped one in silence. A
 //! field the save lacks keeps what the instance holds. The parameter ids a
-//! save holds that no row has are named in the Console the same way.
+//! save holds that no row has are named in the Console the same way, and so
+//! are those whose value this build cannot read, which open at their defaults.
 
 use std::sync::Arc;
 
@@ -53,6 +54,13 @@ pub(crate) fn prepare(params: &Arc<HarmonigraphParams>, state: &PluginState) -> 
             "This project saved parameters this build no longer has, which were not read: \
              {}.",
             unknown.join(", ")
+        ));
+    }
+    if !state.unread.is_empty() {
+        notes.push(format!(
+            "This project saved parameter values this build cannot read, which opened at their \
+             defaults: {}. Set them again and save the project.",
+            state.unread.join(", ")
         ));
     }
     Fields { params: params.clone(), maps, window, look, notes }

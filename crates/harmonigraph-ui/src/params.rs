@@ -19,7 +19,7 @@ pub use harmonigraph_take::params::ParamKey;
 /// Shell capability rather than view state: the standalone has only its mock
 /// synth and the offline renderer has only the take's recorded audio, so only a
 /// plugin backend offers this choice. The plugin maps it onto a host parameter
-/// whose own enum carries the persisted stable IDs.
+/// that saves its index.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AnalysisInput {
     #[default]

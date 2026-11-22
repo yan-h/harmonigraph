@@ -38,8 +38,10 @@ pub enum Plugin {
 /// One saved state, as the plugin loads it.
 pub struct Reading {
     pub plugin: Plugin,
-    /// Why the load refused the state whole: it does not decode, or the
-    /// setup refused it. The instance then keeps what it held, a fresh one's
+    /// Why the load refused the state whole: it does not decode (a parameter
+    /// value that does not decode costs that value alone, with a log line and,
+    /// in a Hub, a Console line),
+    /// or the setup refused it. The instance then keeps what it held, a fresh one's
     /// defaults here, and nothing below was read.
     pub refused: Option<String>,
     /// Each host parameter as restored, by id: its value, with what the host
@@ -188,8 +190,7 @@ fn restore(
             (spec.id, value)
         })
         .collect();
-    let mut saved =
-        PluginState { version: String::new(), params: BTreeMap::new(), fields: BTreeMap::new() };
+    let mut saved = PluginState::default();
     if let Some(setup) = setup {
         setup.save(&mut saved);
     }
@@ -286,6 +287,25 @@ mod tests {
             .contains(r#""axes":[0,696889465,387553406,1006222534,500000]"#));
         assert!(reading.notes.iter().any(|note| note.contains("tuning-three")));
         assert!(!reading.params.iter().any(|(id, _)| *id == "tuning-three"));
+        installed(&reading);
+    }
+
+    /// A parameter value this build cannot read, such as Analyzer Audio
+    /// Input's id from before it saved an index, opens that row at its
+    /// default with a Console line, and the rest of the project loads.
+    #[test]
+    fn an_unreadable_parameter_value_opens_at_its_default_with_a_console_line() {
+        let mut state: Value = serde_json::from_slice(&fixture("harmonigraph")).unwrap();
+        state["params"]["analysis-input"] = serde_json::json!({ "string": "sidechain" });
+        let reading = read(Plugin::Harmonigraph, &serde_json::to_vec(&state).unwrap());
+        assert_eq!(reading.refused, None);
+        let param = |id| &reading.params.iter().find(|(row, _)| *row == id).unwrap().1;
+        assert_eq!(param("analysis-input"), "0 (Main)");
+        assert_eq!(param("tuning-engine"), "2 (Lattice Map)", "the rest of the project");
+        assert!(reading
+            .notes
+            .iter()
+            .any(|note| note.contains("cannot read") && note.contains("analysis-input")));
         installed(&reading);
     }
 

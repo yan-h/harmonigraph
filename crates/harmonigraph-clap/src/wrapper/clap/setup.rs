@@ -50,6 +50,13 @@ pub fn restore(
 ) -> Result<(), &'static str> {
     let prepared = setup.map(|setup| setup.prepare(state)).transpose()?;
     params.restore(&state.params);
+    if !state.unread.is_empty() {
+        crate::shell_warn!(
+            "The saved state holds parameter values this build cannot read, which open at their \
+             defaults: {:?}",
+            state.unread
+        );
+    }
     if let Some(prepared) = prepared {
         prepared.commit();
     }

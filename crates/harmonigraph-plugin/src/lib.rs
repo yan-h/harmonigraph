@@ -350,14 +350,9 @@ impl Row {
                     .non_modulatable()
                     .with_to_text(|value| Follow::from_index(value).label().into())
             }
-            Row::AnalysisInput => Spec::enumeration(
-                id,
-                "Analyzer Audio Input",
-                0,
-                &["main", "sidechain"],
-                &["Main", "Sidechain"],
-            )
-            .non_automatable(),
+            Row::AnalysisInput => Spec::int(id, "Analyzer Audio Input", 0, 0, 1)
+                .with_to_text(|value| ["Main", "Sidechain"][value as usize].into())
+                .non_automatable(),
             Row::CameraYaw => camera(ParamKey::CameraYaw),
             Row::CameraPitch => camera(ParamKey::CameraPitch),
             Row::CameraDistance => camera(ParamKey::CameraDistance),
@@ -378,8 +373,8 @@ impl Row {
     }
 }
 
-/// The Analyzer Audio Input row's variants, by index; [`Row::spec`] gives each
-/// its saved id and its name.
+/// The Analyzer Audio Input row's inputs, by the index a project saves and
+/// [`Row::spec`] names, so an index never moves.
 const ANALYSIS_INPUTS: [AnalysisInput; 2] = [AnalysisInput::Main, AnalysisInput::Sidechain];
 
 impl Default for HarmonigraphParams {
@@ -1281,11 +1276,7 @@ mod tests {
     }
 
     fn empty_state() -> harmonigraph_clap::plugin::PluginState {
-        harmonigraph_clap::plugin::PluginState {
-            version: String::new(),
-            params: Default::default(),
-            fields: Default::default(),
-        }
+        Default::default()
     }
 
     /// [`saved`], read back as the camera yaw.
@@ -1573,12 +1564,7 @@ mod tests {
     fn analysis_input_is_a_stable_non_automatable_main_default() {
         let params = HarmonigraphParams::default();
         assert_eq!(params.analysis_input(), AnalysisInput::Main);
-        let spec = params.table.spec(Row::AnalysisInput.index());
-        assert!(!spec.automatable);
-        assert!(matches!(
-            spec.kind,
-            harmonigraph_clap::params::Kind::Enum { ids: &["main", "sidechain"], .. }
-        ));
+        assert!(!params.table.spec(Row::AnalysisInput.index()).automatable);
     }
 
     /// The descriptor is what makes the host show its sidechain routing control.
