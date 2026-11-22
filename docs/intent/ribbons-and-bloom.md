@@ -89,3 +89,9 @@ Yan took the recommendations made after the audit was checked against the code (
 
 - A note name's end is stored as the end itself, Now-line or Onset, rather than as the end that reads first or the other one: picking Onset and moving the spectrum to the other side keeps names at the onset. Yan, choosing "Store the end" over relabelling the row as reading-relative (PR #1902 review)
 - Onset is the default in every orientation: the renamed key is skipped without a word, so a project or take saved before opens at the default, and Onset keeps the fresh layout (spectrum on the Right) and projects saved there with the old default as they were. Yan, over the Now-line default first agreed, once told the rename is silent (PR #1902 review)
+
+## 2026-11-22 (performance audit, #1917)
+
+- A dense hatched run paints at one depth, the onset of its first attack, even once that attack has scrolled out of the window: a voice that begins after it, between two of the run's attacks or on the same instant as a later one, paints over the whole run, its later attacks and its lead included, rather than the run switching in front of that voice at its next attack (#1431). Yan's answer to #1917 Q3, choosing the first onset, behind, 2026-11-22
+- The order still follows zoom: zoomed in far enough that the repeats separate, each repeat is its own ribbon at its own onset, so such a voice paints over the attacks before it and under those after it, and zooming across the point where they join or split changes which of them paint over it. #1917 Q3
+- An intensity step on the instant a pitch segment ends belongs to the segment after it: the segment before holds its look up to the step rather than ramping into it. Yan, #1920 review, 2026-11-22

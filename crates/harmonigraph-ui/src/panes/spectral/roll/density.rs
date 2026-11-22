@@ -8,19 +8,16 @@ use harmonigraph_core::{RollNote, VoiceKey};
 use std::collections::HashMap;
 
 pub(super) const GAP_PT: f64 = 2.0;
-type Segment = ((f64, f32), (f64, f32));
+pub(super) type Segment = ((f64, f32), (f64, f32));
 
 pub(super) struct Ribbon<'a> {
     pub notes: Vec<&'a RollNote>,
     pub start: f64,
     pub stop: f64,
-    /// Original onset index and time where another voice has interleaved.
-    /// Geometry stays shared; the renderer clips and orders these paint runs.
-    pub paint_starts: Vec<(usize, f64)>,
-    /// How many drawing notes had been laid out by its last member.
-    drawn: usize,
-    core_start: f64,
-    core_stop: f64,
+    /// Where its run began: its first note's onset, or an earlier one's that
+    /// the window's cull left out of `notes` ([`reach_back`]). What the
+    /// ribbons paint in order of.
+    onset: f64,
 }
 
 impl<'a> Ribbon<'a> {
@@ -35,8 +32,10 @@ impl<'a> Ribbon<'a> {
     /// Close only the small rests inside a dense run, holding the preceding
     /// pitch. Merge flat neighbours into one box so subpixel attacks do not
     /// leave individually antialiased ends inside the continuous body.
-    pub fn segments(&self, now: f64) -> Vec<Segment> {
-        let mut out: Vec<Segment> = Vec::new();
+    ///
+    /// Into `out`, which it clears first: one buffer serves every ribbon.
+    pub fn segments(&self, now: f64, out: &mut Vec<Segment>) {
+        out.clear();
         let mut push = |((t0, p0), (t1, p1)): Segment| {
             if t1 < self.start || t0 > self.stop {
                 return;
@@ -76,71 +75,132 @@ impl<'a> Ribbon<'a> {
                 }
             }
         }
-        out
     }
 }
 
-/// Input is in onset order; paint runs retain that order across voices.
+/// A note's drawn start, floored to `minimum` before its stop, and the
+/// one-point core centred on that body.
+fn body(note: &RollNote, now: f64, minimum: f64) -> (f64, f64, f64) {
+    let stop = note.stop(now);
+    let start = note.start.min(stop - minimum);
+    let center = (start + stop) * 0.5;
+    (start, center - minimum * 0.5, center + minimum * 0.5)
+}
+
+/// Where the cut between `last` and the next note of its key may fall, as
+/// `(earliest, latest)`. Latest before earliest leaves the cut no room, and
+/// the two join one dense run. `None` where observation is missing, which is
+/// neither a repeated attack nor a rest to fill.
+fn cuts(last: &RollNote, note: &RollNote, now: f64, minimum: f64, gap: f64) -> Option<(f64, f64)> {
+    (last.observed_until.is_none() && last.history_complete && note.history_complete).then(|| {
+        let (_, _, last_core) = body(last, now, minimum);
+        let (_, core, _) = body(note, now, minimum);
+        (last_core + gap * 0.5, core - gap * 0.5)
+    })
+}
+
+fn joins(last: &RollNote, note: &RollNote, now: f64, minimum: f64, gap: f64) -> bool {
+    cuts(last, note, now, minimum, gap).is_some_and(|(earliest, latest)| earliest > latest)
+}
+
+/// Input is in onset order, and so is the output, by each ribbon's first
+/// note: the order the ribbons paint in, until [`reach_back`] finds a run
+/// that began before the window's notes.
 /// The protected cores make both cuts around a middle note compatible.
-///
-/// A note stopping before `drawn_from` draws nothing and is here only to
-/// decide the ends of the note after it, so it is no voice between a run's
-/// members: only a note that draws splits a run's paint span.
 pub(super) fn layout<'a>(
     notes: &[&'a RollNote],
     now: f64,
     minimum: f64,
     gap: f64,
-    drawn_from: f64,
 ) -> Vec<Ribbon<'a>> {
     let mut out: Vec<Ribbon<'a>> = Vec::with_capacity(notes.len());
     let mut previous: HashMap<VoiceKey, usize> = HashMap::new();
-    let mut drawn = 0;
-    for (order, &note) in notes.iter().enumerate() {
+    for &note in notes {
         let stop = note.stop(now);
-        let before = drawn;
-        if stop >= drawn_from {
-            drawn += 1;
-        }
-        let start = note.start.min(stop - minimum);
-        let center = (start + stop) * 0.5;
-        let mut ribbon = Ribbon {
-            notes: vec![note],
-            start,
-            stop,
-            paint_starts: vec![(order, f64::NEG_INFINITY)],
-            drawn,
-            core_start: center - minimum * 0.5,
-            core_stop: center + minimum * 0.5,
-        };
+        let (mut start, _, _) = body(note, now, minimum);
         if let Some(&index) = previous.get(&note.key()) {
             let prev = &mut out[index];
-            let last = prev.last();
-            // Missing observation is not a repeated attack or a rest to fill.
-            if last.observed_until.is_none() && last.history_complete && note.history_complete {
-                let cut_min = prev.core_stop + gap * 0.5;
-                let cut_max = ribbon.core_start - gap * 0.5;
-                if cut_min > cut_max {
-                    if prev.drawn != before {
-                        prev.paint_starts.push((order, note.start));
-                    }
-                    prev.drawn = drawn;
+            if let Some((earliest, latest)) = cuts(prev.last(), note, now, minimum, gap) {
+                if earliest > latest {
                     prev.notes.push(note);
                     prev.stop = stop;
-                    prev.core_stop = ribbon.core_stop;
                     continue;
                 }
-                if ribbon.start - prev.stop < gap {
-                    let cut = ((last.stop(now) + note.start) * 0.5).clamp(cut_min, cut_max);
+                if start - prev.stop < gap {
+                    let cut = ((prev.last().stop(now) + note.start) * 0.5).clamp(earliest, latest);
                     prev.stop = prev.stop.min(cut - gap * 0.5);
-                    ribbon.start = ribbon.start.max(cut + gap * 0.5);
+                    start = start.max(cut + gap * 0.5);
                 }
             }
         }
         previous.insert(note.key(), out.len());
-        out.push(ribbon);
+        out.push(Ribbon { notes: vec![note], start, stop, onset: note.start });
     }
     out
+}
+
+/// Date each ribbon from where its run truly began, and keep the ribbons in
+/// that order: a dense run paints whole at its first onset, beneath a voice
+/// that began between two of its attacks.
+///
+/// `layout` sees only the notes the window's cull kept. A run leaving the
+/// window would otherwise start at its oldest attack still in, and pass over
+/// such a voice as that attack moved past the voice's onset. So the first
+/// ribbon of each key, where its first note is near enough the cull to join a
+/// note it left out, walks back through `culled`, the notes stopping before
+/// `culled_before`, for as long as each joins the next by `layout`'s own rule.
+///
+/// `culled` is in the roll's order, which is the order the notes were
+/// released, and for one key the order they started; walked newest first,
+/// each key's notes come in the order the walk needs, and a ribbon whose
+/// predecessor does not join it is done at the first note of its key.
+pub(super) fn reach_back<'a>(
+    ribbons: &mut [Ribbon<'a>],
+    culled: &[&'a RollNote],
+    culled_before: f64,
+    now: f64,
+    minimum: f64,
+    gap: f64,
+) {
+    // A note left out stops before `culled_before`, and so does its core, so
+    // it can join only a note whose core starts within a gap of that. A later
+    // ribbon of a key has its predecessor in the window, which `layout` did
+    // not join it to.
+    let mut walking: Vec<(usize, &'a RollNote)> = (0..ribbons.len())
+        .map(|i| (i, ribbons[i].notes[0]))
+        .filter(|&(i, first)| {
+            body(first, now, minimum).1 - gap < culled_before
+                && ribbons[..i].iter().all(|r| r.notes[0].key() != first.key())
+        })
+        .collect();
+    let mut moved = false;
+    for &note in culled.iter().rev() {
+        if walking.is_empty() {
+            break;
+        }
+        walking.retain_mut(|(i, first)| {
+            if note.key() != first.key() || note.start >= first.start {
+                return true;
+            }
+            if joins(note, first, now, minimum, gap) {
+                *first = note;
+                return true;
+            }
+            moved |= first.start < ribbons[*i].onset;
+            ribbons[*i].onset = first.start;
+            false
+        });
+    }
+    // Walked back past every note left out.
+    for (i, first) in walking {
+        moved |= first.start < ribbons[i].onset;
+        ribbons[i].onset = first.start;
+    }
+    if moved {
+        ribbons.sort_by(|a, b| {
+            a.onset.total_cmp(&b.onset).then_with(|| a.notes[0].key().cmp(&b.notes[0].key()))
+        });
+    }
 }
 
 #[cfg(test)]
@@ -159,35 +219,14 @@ mod tests {
             roll.note_off(key, start + 0.001);
         }
         let notes: Vec<_> = roll.notes().collect();
-        let ribbons = layout(&notes, 3.0, 0.1, 0.2, f64::NEG_INFINITY);
+        let ribbons = layout(&notes, 3.0, 0.1, 0.2);
         assert_eq!(ribbons.len(), 1, "fixture must form a dense run");
         let ribbon = &ribbons[0];
         assert!(ribbon.start < notes[0].start, "fixture must need onset padding");
-        let segments = ribbon.segments(3.0);
+        let mut segments = Vec::new();
+        ribbon.segments(3.0, &mut segments);
         assert_eq!(segments.len(), 1, "padding left a separate line at the untuned key");
         assert_eq!(segments[0], ((ribbon.start, 60.3), (ribbon.stop, 60.3)));
-    }
-
-    /// A note laid out only to decide its neighbour's ends draws nothing, so
-    /// it is no voice between a run's members: a run splits its paint span
-    /// round a note that draws, and only round one.
-    #[test]
-    fn a_note_that_draws_nothing_splits_no_run() {
-        let key = |note| VoiceKey { source: SourceId::DIRECT, channel: 0, note };
-        for (drawn_from, spans) in [(f64::NEG_INFINITY, 2), (1.03, 1)] {
-            let mut roll = NoteRoll::default();
-            roll.note_on(key(60), 1.0, 60.0, 1.0);
-            roll.note_on(key(61), 1.0, 61.0, 1.01);
-            roll.note_off(key(61), 1.02);
-            roll.note_off(key(60), 1.05);
-            roll.note_on(key(60), 1.0, 60.0, 1.1);
-            roll.note_off(key(60), 1.15);
-            let mut notes: Vec<_> = roll.notes().collect();
-            notes.sort_by(|a, b| a.start.total_cmp(&b.start));
-            let ribbons = layout(&notes, 2.0, 0.1, 0.2, drawn_from);
-            let run = ribbons.iter().find(|r| r.dense()).expect("the two repeats form a run");
-            assert_eq!(run.paint_starts.len(), spans, "drawn from {drawn_from}");
-        }
     }
 
     #[test]
@@ -202,7 +241,7 @@ mod tests {
         }
         let mut notes: Vec<_> = roll.notes().collect();
         notes.sort_by(|a, b| a.start.total_cmp(&b.start).then_with(|| a.key().cmp(&b.key())));
-        let ribbons = layout(&notes, 12.0, 1.0, GAP_PT, f64::NEG_INFINITY);
+        let ribbons = layout(&notes, 12.0, 1.0, GAP_PT);
         assert_eq!(ribbons.len(), 8);
         for ribbon in ribbons {
             assert_eq!(ribbon.notes.len(), 2);
