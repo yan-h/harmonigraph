@@ -86,6 +86,10 @@ enum Source {
 
 /// Previous view allocations displaced under [`EditorLock`](crate::editor::EditorLock)
 /// so [`background::step`](crate::background) drops them after releasing it.
+///
+/// Only tests read its fields: the step holds it for its drop alone.
+#[must_use = "dropped here, it frees the displaced view under the editor lock"]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct DisplacedView {
     pub(crate) roll: Option<Arc<NoteRoll>>,
     pub(crate) spectrogram: Option<TapeSpectrogram>,
@@ -506,7 +510,7 @@ impl Worker {
             }
         }
         self.speed = view.speed;
-        self.spectrum.configure(settings, self.store.as_ref());
+        self.spectrum.configure(settings);
         let spectrogram = self.spectrum.sync(&mut view.spectrogram);
         let shared = &self.shared;
         let seconds = |bits: &std::sync::atomic::AtomicU64| {
@@ -544,16 +548,16 @@ impl Worker {
         self.built_roll = Some(Arc::new(roll));
     }
 
-    /// Analyze what the recording changed, for a step's share of time.
+    /// Analyze what the recording or a new analysis window changed, for a
+    /// step's share of time.
     pub(crate) fn analyze(&mut self) {
         self.spectrum.analyze(self.store.as_ref(), STEP_BUDGET);
     }
 
     #[cfg(test)]
     pub(crate) fn analyze_all(&mut self) {
-        while self.spectrum.pending() > 0 {
-            self.spectrum.analyze(self.store.as_ref(), std::time::Duration::MAX);
-        }
+        self.spectrum.analyze(self.store.as_ref(), std::time::Duration::MAX);
+        assert_eq!(self.spectrum.pending(), 0);
     }
 
     /// The current cue, read consistently: `(serial, song seconds)`.

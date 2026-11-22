@@ -431,6 +431,23 @@ fn a_field_that_does_not_parse_is_skipped_with_a_console_line() {
     assert!(line.starts_with("This project's saved lattice-maps could not be read"), "{line}");
 }
 
+/// Analyzer Audio Input saves as its index, as the other choices do, and a
+/// project saved with Sidechain reopens at Sidechain.
+#[test]
+fn the_analysis_input_saves_as_its_index_and_reopens() {
+    let _scope = crate::test_scope::enter();
+    let device = hub();
+    device
+        .wrapper()
+        .test_inspect_plugin(|plugin| plugin.params.set(crate::Row::AnalysisInput, 1.0));
+    let saved = device.save();
+    assert!(matches!(saved.params["analysis-input"], ParamValue::I32(1)));
+    let reopened = hub();
+    reopened.load(saved);
+    let input = reopened.wrapper().test_inspect_plugin(|plugin| plugin.params.analysis_input());
+    assert_eq!(input, harmonigraph_ui::params::AnalysisInput::Sidechain);
+}
+
 /// A project saved while the axes were host parameters (#1756) holds them
 /// there, beside musical settings without axes. It opens at fresh axes with
 /// one Console notice, keeps its links, and saves no tuning parameter back.

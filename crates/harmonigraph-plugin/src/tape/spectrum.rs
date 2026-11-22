@@ -20,14 +20,21 @@ use super::store::{fade_frames, Store};
 
 /// How long a step may spend analyzing, beyond its first column.
 ///
-/// A column took 0.20, 0.29 and 0.57 ms through the Fast, Balanced and
-/// Precise windows (release build, stereo at 48 kHz, 2026-11-12), so keeping
-/// up with a recording, a column per 32 ms of song, costs 0.6% to 1.8% of a
-/// core, well inside this. What the budget bounds is a re-analysis of the
-/// whole tape after the window changes: at most about a fifth of a core with
-/// the editor open (a step every [`POLL`](crate::background::POLL) plus its
-/// work) and a twentieth with it shut, catching up five minutes of Balanced
-/// song in about fifteen seconds.
+/// A column took about 0.08, 0.15 and 0.30 ms through the Fast, Balanced and
+/// Precise windows back to back, and two to three times that in a step woken
+/// from the worker's sleep (release build, stereo at 48 kHz, 2026-11-22), so
+/// keeping up with a recording, a column per 32 ms of song, costs 0.3% to 3%
+/// of a core, well inside this. What the budget bounds is a re-analysis of
+/// the whole tape after the window changes: measured with each step's
+/// overrunning last column and the levels' rebuilds included, about a fifth of
+/// a core with the editor open (a step every
+/// [`POLL`](crate::background::POLL) plus its work) and a sixteenth with it
+/// shut. Five minutes of song caught up in 4 to 9 s through Fast, 8 to 25 s
+/// through Balanced and 14 to 38 s through Precise with the editor open, the
+/// spread being how slow a woken step's columns ran on a loaded machine, and
+/// in about a minute through Balanced with it shut. The step that sees the
+/// switch also queues the whole tape outside this budget, about 2.3 ms for
+/// 25 minutes.
 pub(crate) const STEP_BUDGET: Duration = Duration::from_millis(1);
 
 /// How often the levels above the columns are rebuilt while columns are still
@@ -42,8 +49,13 @@ const SETTLE_EVERY: Duration = Duration::from_millis(50);
 #[derive(Default)]
 pub(crate) struct Spectrum {
     analyzer: ColumnAnalyzer,
-    /// The settings the analysis window comes from, as last adopted.
+    /// The settings the analysis window comes from, as Tape mode last showed
+    /// them.
     settings: Option<SpectrumConfig>,
+    /// The frame, at the store's rate, that the columns queued and analyzed
+    /// so far were scheduled under: when the settings' differs,
+    /// [`adopt`](Self::adopt) queues the whole tape again.
+    scheduled: Option<usize>,
     tape: TapeSpectrogram,
     /// Columns a change reached and that have not been analyzed since.
     pending: BTreeSet<i64>,
@@ -60,24 +72,32 @@ impl Spectrum {
         Some(self.settings?.analyzer(store.rate))
     }
 
-    /// Adopt the Analyzer's settings. A different analysis window re-analyzes
-    /// everything recorded, so no seam is left where it changed; so do the
-    /// first settings, if anything was recorded before them.
-    pub(crate) fn configure(&mut self, settings: &SpectrumConfig, store: Option<&Store>) {
-        let rate = store.map_or(48_000.0, |s| s.rate);
-        let before = self.settings.map(|s| s.analyzer(rate).fft_size);
+    /// Take the Analyzer's settings: a copy, since it runs under the editor
+    /// lock. A different analysis window is acted on by the next
+    /// [`analyze`](Self::analyze), outside it.
+    pub(crate) fn configure(&mut self, settings: &SpectrumConfig) {
         self.settings = Some(*settings);
-        if before != Some(settings.analyzer(rate).fft_size) {
-            if let Some(store) = store {
-                let all: Vec<(i64, i64)> = store.chunks().map(|c| (c.start, c.end)).collect();
-                self.invalidate(store, &all);
-            }
+    }
+
+    /// A different analysis window re-analyzes everything recorded, so no seam
+    /// is left where it changed; so do the first settings, if anything was
+    /// recorded before them. Never under the lock: on a long tape this queues
+    /// tens of thousands of columns, about 2 ms for 25 minutes.
+    fn adopt(&mut self, store: Option<&Store>) {
+        let Some(store) = store else { return };
+        let Some(config) = self.config(store) else { return };
+        if self.scheduled == Some(config.fft_size) {
+            return;
         }
+        self.scheduled = Some(config.fft_size);
+        let all: Vec<(i64, i64)> = store.chunks().map(|c| (c.start, c.end)).collect();
+        self.invalidate(store, &all);
     }
 
     /// The store is gone or new: nothing it held is drawn.
     pub(crate) fn clear(&mut self) {
         self.tape.clear();
+        self.scheduled = None;
         self.pending.clear();
         self.changed.clear();
         self.cleared = true;
@@ -87,7 +107,7 @@ impl Spectrum {
     /// changed, seams' crossfades included.
     pub(crate) fn invalidate(&mut self, store: &Store, ranges: &[(i64, i64)]) {
         let Some(config) = self.config(store) else { return };
-        let (frame, lag) = ColumnAnalyzer::reach(config);
+        let (frame, lag) = (config.fft_size as i64, ColumnAnalyzer::lag(config));
         let margin = fade_frames(f64::from(store.rate)) as i64;
         let hop = COLUMN_SECONDS * f64::from(store.rate);
         for &(a, b) in ranges {
@@ -104,8 +124,9 @@ impl Spectrum {
     }
 
     /// Analyze waiting columns until `budget` has passed, at least one, in
-    /// song order.
+    /// song order, first queueing the whole tape if the window changed.
     pub(crate) fn analyze(&mut self, store: Option<&Store>, budget: Duration) {
+        self.adopt(store);
         let (Some(store), Some(_)) = (store, self.pending.first()) else { return };
         let Some(config) = self.config(store) else { return };
         let started = Instant::now();
@@ -197,7 +218,7 @@ mod tests {
         // Precise lags its columns about 170 ms, five columns, behind the
         // newest sample each reads.
         let mut settings = SpectrumConfig { window: SpectrumWindow::Precise, ..Default::default() };
-        spectrum.configure(&settings, Some(&store));
+        spectrum.configure(&settings);
         // A4 from the song's start through 4 s.
         insert(&mut spectrum, &mut store, sine(0, seconds(4.0), 69.0, 1, 0));
         let mut view = TapeSpectrogram::default();
@@ -227,8 +248,10 @@ mod tests {
         // Another window re-analyzes every recorded column.
         let precise = view.slab(0, column(3.0)).cloned();
         settings.window = SpectrumWindow::Fast;
-        spectrum.configure(&settings, Some(&store));
-        assert!(spectrum.pending() >= column(4.0) as usize);
+        spectrum.configure(&settings);
+        assert_eq!(spectrum.pending(), 0, "the copy taken under the lock queues nothing");
+        spectrum.analyze(Some(&store), Duration::ZERO);
+        assert!(spectrum.pending() >= column(4.0) as usize - 1, "{}", spectrum.pending());
         spectrum.analyze(Some(&store), Duration::MAX);
         spectrum.sync(&mut view);
         assert!(near(peak(&view, column(3.0)), 69.0));

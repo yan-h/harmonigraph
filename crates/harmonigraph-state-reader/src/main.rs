@@ -420,6 +420,6 @@ mod tests {
         let found = instances(&project);
         let kinds: Vec<Plugin> = found.iter().map(|instance| instance.plugin).collect();
         assert_eq!(kinds, [Plugin::Tune, Plugin::Harmonigraph, Plugin::Tune, Plugin::Harmonigraph]);
-        assert!(found[3].value["params"]["camera-yaw"]["f32"].is_null(), "the state cut short");
+        assert!(found[3].value["version"].is_null(), "the state cut short");
     }
 }
