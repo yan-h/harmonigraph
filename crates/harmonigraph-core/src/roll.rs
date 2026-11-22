@@ -256,11 +256,23 @@ impl RollNote {
     /// at its own time, so `at` on a step reads the value after it; before the
     /// first breakpoint and after the last, the nearest one holds.
     pub fn expressions_at(&self, at: Time) -> Expressions {
-        let after = self.expressions.partition_point(|(time, _)| *time <= at);
+        self.expressions_from(self.expressions.partition_point(|(time, _)| *time <= at), at)
+    }
+
+    /// Where the note's expressions stood just before `at`: what a stretch
+    /// ending at `at` reads at its end. A step at `at` is not yet taken, and a
+    /// ramp arriving at `at` reads its first breakpoint there.
+    pub fn expressions_before(&self, at: Time) -> Expressions {
+        self.expressions_from(self.expressions.partition_point(|(time, _)| *time < at), at)
+    }
+
+    /// The value at `at`, read off the breakpoints either side of `after`.
+    fn expressions_from(&self, after: usize, at: Time) -> Expressions {
         let Some(&(t0, from)) = after.checked_sub(1).map(|i| &self.expressions[i]) else {
             return self.expressions[0].1;
         };
         match self.expressions.get(after) {
+            Some(&(t1, to)) if t1 == at => to,
             Some(&(t1, to)) => from.lerp(to, ((at - t0) / (t1 - t0)) as f32),
             None => from,
         }
