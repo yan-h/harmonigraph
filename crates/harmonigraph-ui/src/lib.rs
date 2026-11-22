@@ -600,7 +600,9 @@ reasons! {
     /// whether what it drew is still moving:
     ///
     /// - The smoothed display the curve, the Spiral and the ring read
-    ///   ([`AudioSpectrum::moving`]), off when it last held anything.
+    ///   ([`AudioSpectrum::moving`]), off when its columns last drew anything:
+    ///   a curve fallen under the faintest dB any reading draws holds nothing,
+    ///   while silence still arrives (#1917 Q2).
     /// - Each heatmap surface, off the run and slab it drew, its Span and its
     ///   atmosphere's tail
     ///   ([`draw_spectrogram`](panes::spectral::spectrogram::draw_spectrogram)):

@@ -417,8 +417,11 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
 
     // The curve's release outlasts the tone by seconds; the columns do not.
     let heard = state.picture.runtime.spectrum.last_audible();
-    let (heard, curve) = (heard.column.unwrap(), heard.curve.unwrap());
-    assert!(heard < curve && curve < stopped + 6.0, "column {heard}, curve {curve}, {stopped}");
+    let (heard, curve) = (heard.column.unwrap(), heard.curve_until.unwrap());
+    assert!(
+        heard < curve && curve < stopped + 6.0,
+        "column {heard}, curve still at {curve}, {stopped}"
+    );
     let mut paced = None;
     for (now, on) in after {
         if state.picture.runtime.spectrum.moving(now) {
@@ -565,9 +568,219 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
     }
     assert!(ring_outlasted_the_display, "the ring never held the loop past the curve");
     assert!(wedges_faded, "the ring's gate never opened, so its fade was never measured");
-    let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
+    let curve = state.picture.runtime.spectrum.last_audible().curve_until.unwrap();
     let (idle, _) = still.expect("the ring's release outlasted 20 s");
-    assert!(idle - heard < 5.0, "idled {} s after the curve last held anything", idle - heard);
+    assert!(idle - curve < 5.0, "idled {} s after the curve went still", idle - curve);
+}
+
+/// A curve fallen under the faintest dB any reading of it draws holds nothing
+/// while silence flows on (#1917 Q2): it stops asking for frames seconds
+/// before the display reaches silence itself, with no hold after the column
+/// it went flat in, and from the first frame nothing asks, the curve, the
+/// Spiral and the lattice ring draw nothing new. Under a tilt, with the
+/// curve's floor and the colours' apart, so each bound is a per-pitch one.
+#[test]
+fn a_spectrum_under_its_floor_holds_nothing_and_draws_nothing_new() {
+    const RATE: f32 = 48_000.0;
+    let mut state = fresh();
+    let ctx = super::probe::themed();
+    let cfg = &mut state.picture.appearance.spectrum;
+    cfg.show_spectrogram = false;
+    (cfg.tilt, cfg.floor_db, cfg.volume_floor_db, cfg.release) = (-6.0, -70.0, -85.0, 0.15);
+    // The curve takes half the pane, over a range the tone's partials sit in.
+    (cfg.roll_fraction, cfg.low_midi, cfg.high_midi) = (0.5, 40.0, 110.0);
+    state.picture.appearance.view.spectral_ring_width = 0.1;
+    assert!(state.picture.appearance.view.spectral_ring_draws(), "the ring is drawn");
+    let mut t = 0.0;
+    let mut feed = crate::spectrum::TestFeed::default();
+    stream(&ctx, &mut state, &mut feed, &mut t, 1.0, true, &[Pane::Lattice, Pane::Spectral]);
+    let stopped = t;
+
+    // What each picture drew, its paint callbacks left out: what they draw is
+    // the ring's bytes, read beside them.
+    let mut spiral = crate::panes::spiral::SpiralView::default();
+    let mut frame = |state: &mut SharedState, t: f64| {
+        begin_frame(&mut state.picture, &super::probe::Defaults, t);
+        let mut drawn = Vec::new();
+        for pane in 0..3 {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 200.0),
+                )),
+                time: Some(t),
+                ..Default::default()
+            };
+            let output = crate::tests::probe::run(&ctx, raw, |ui| match pane {
+                0 => {
+                    crate::draw_panes(ui, &[(Pane::Lattice, ui.max_rect())], &mut state.picture, t)
+                }
+                1 => {
+                    crate::draw_panes(ui, &[(Pane::Spectral, ui.max_rect())], &mut state.picture, t)
+                }
+                _ => crate::panes::spiral::spiral_pane(ui, &mut state.picture, &mut spiral, t),
+            });
+            if pane > 0 {
+                let shapes =
+                    output.shapes.iter().filter(|s| !matches!(s.shape, egui::Shape::Callback(_)));
+                drawn.push(format!("{:?}", shapes.collect::<Vec<_>>()));
+            }
+        }
+        (drawn, state.picture.runtime.ring_levels.bytes())
+    };
+    // When the curve, and the Spiral, last drew something new.
+    let (mut last, mut changed, mut display_still, mut still) = (None, [stopped; 2], None, None);
+    for _ in 0..600 {
+        t += 0.01;
+        let cfg = state.picture.appearance.spectrum;
+        feed.feed(&mut state.picture.runtime.spectrum, &[0.0; 480], 1, RATE, t, &cfg);
+        let drawn = frame(&mut state, t);
+        if let Some((pictures, _)) = &last {
+            let pictures: &Vec<String> = pictures;
+            for (at, (was, now)) in changed.iter_mut().zip(pictures.iter().zip(&drawn.0)) {
+                if was != now {
+                    *at = t;
+                }
+            }
+        }
+        // The curve and the Spiral draw nothing new once the display stops,
+        // whatever the ring's own release still moves.
+        let spectrum = &state.picture.runtime.spectrum;
+        match &display_still {
+            Some((at, _, then)) => {
+                assert_eq!(&drawn.0, then, "the curve or the Spiral moved after {at:.2} s")
+            }
+            None if !spectrum.moving(t) => {
+                let peak = spectrum.display.iter().copied().fold(0.0, f32::max);
+                display_still = Some((t, 10.0 * peak.log10(), drawn.0.clone()));
+            }
+            None => {}
+        }
+        match &still {
+            Some((at, then)) => assert_eq!(&drawn, then, "a picture moved after {at:.2} s"),
+            None if !Animating::of(&state).asks() => still = Some((t, drawn.clone())),
+            None => {}
+        }
+        last = Some(drawn);
+    }
+    for (picture, changed) in ["curve", "Spiral"].into_iter().zip(changed) {
+        assert!(changed > stopped + 0.5, "the {picture}'s decay drew nothing ({changed} s)");
+    }
+    let changed = changed[0].max(changed[1]);
+    let (display_still, peak_db, _) = display_still.expect("the display never went still");
+    assert!(peak_db > -100.0, "went still at {display_still:.2} s with its peak at {peak_db} dB");
+    assert!(
+        display_still - changed < 0.5 * AudioSpectrum::HOLD_SECONDS,
+        "the display last moved at {changed:.2} s and asked for frames until {display_still:.2} s",
+    );
+    assert!(still.is_some(), "the editor never went still");
+}
+
+/// A sound ending partway through a slab leaves that slab open, and each
+/// silent column after it still joins the slab's power mean, which the
+/// heatmap's fresh edge draws. So the heatmap asks for every frame until the
+/// slab holding the last drawn column closes, though the curve, under a
+/// release of nothing, went flat at once (#1917 Q2).
+#[test]
+fn a_heatmap_slab_still_taking_columns_after_a_sound_asks_for_every_frame() {
+    let mut state = fresh();
+    let ctx = super::probe::themed_at(2.0);
+    let cfg = &mut state.picture.appearance.spectrum;
+    (cfg.window, cfg.attack, cfg.release) = (crate::SpectrumWindow::Fast, 0.0, 0.0);
+    (cfg.show_spectrogram, cfg.roll_seconds, cfg.roll_fraction) = (true, 40.0, 0.5);
+    cfg.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
+    let panes = [Pane::Spectral];
+    let mut t = 0.0;
+    let mut feed = crate::spectrum::TestFeed::default();
+    stream(&ctx, &mut state, &mut feed, &mut t, 1.03, true, &panes);
+    let level = state.picture.surfaces.spectrogram.at(0).held_level.expect("the heatmap drew");
+    let width = crate::spectrogram::width(level);
+    let key = |time: f64| (time / width).floor() as i64;
+    let open = |state: &mut SharedState| {
+        state.picture.runtime.spectrum.pyramid().level(level).1.last().cloned()
+    };
+    let (mut slab, mut paced_open, mut moved) = (open(&mut state), 0, 0);
+    for _ in 0..100 {
+        let asked = stream(&ctx, &mut state, &mut feed, &mut t, 0.01, false, &panes)[0].1;
+        let now_slab = open(&mut state);
+        let spectrum = &state.picture.runtime.spectrum;
+        let heard = spectrum.last_audible().column.expect("the tone was drawn");
+        let newest = spectrum.newest_column().expect("columns arrive");
+        if !spectrum.moving(t) && key(newest) == key(heard) {
+            paced_open += 1;
+            moved += usize::from(now_slab != slab);
+            assert_eq!(asked, Some(0.0), "at {t:.2} s the open slab took a column and was paced");
+        }
+        slab = now_slab;
+    }
+    assert!(
+        moved >= 2,
+        "the fixture's open slab moved {moved} times of {paced_open} after the curve"
+    );
+}
+
+/// With the heatmap the only picture of the spectrum on screen, a quiet
+/// passage the curve's floor draws and the colours' floor does not leaves the
+/// editor still once the last loud column has scrolled through the heatmap's
+/// reach, though the curve's bound keeps moving off screen. Sound loud enough
+/// for the heatmap then wakes it: each picture's own stamp wakes it.
+#[test]
+fn a_still_heatmap_alone_wakes_for_sound_after_a_passage_only_the_curve_draws() {
+    const RATE: f32 = 48_000.0;
+    let mut state = fresh();
+    let ctx = super::probe::themed_at(2.0);
+    let cfg = &mut state.picture.appearance.spectrum;
+    // The history takes the whole pane, so the curve draws nothing.
+    (cfg.show_spectrogram, cfg.roll_seconds, cfg.roll_fraction) = (true, 2.0, 1.0);
+    (cfg.tilt, cfg.floor_db, cfg.volume_floor_db) = (0.0, -80.0, -60.0);
+    cfg.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
+    let mut analysis = crate::spectrum::SpectrumAnalysis::default();
+    let mut frames = 0usize;
+    // Ten milliseconds of A4 at `amplitude`, handed over as the plugin's
+    // input worker hands it, then drawn: whether the hand-over woke the
+    // editor, whether it was still before, and the time drawn at.
+    let mut block = |state: &mut SharedState, amplitude: f32| {
+        let samples: Vec<f32> = (frames..frames + 480)
+            .map(|i| amplitude * (std::f32::consts::TAU * 440.0 * i as f32 / RATE).sin())
+            .collect();
+        frames += 480;
+        let t = frames as f64 / f64::from(RATE);
+        let still = !Animating::of(state).asks();
+        let cfg = state.picture.appearance.spectrum;
+        let mut deliveries = Vec::new();
+        analysis.feed_source(&samples, 1, RATE, 0.0, &cfg, |d| deliveries.push(d));
+        let woke = state.picture.runtime.spectrum.give(deliveries, &cfg);
+        draw_panes(&ctx, state, t, &[Pane::Spectral]);
+        (woke, still, t)
+    };
+    for _ in 0..100 {
+        block(&mut state, 1.0);
+    }
+    // At -70 dB: over the curve's floor, under the colours'.
+    let (mut went_still, mut quiet_end) = (None, 0.0);
+    for _ in 0..6000 {
+        let (_, still, t) = block(&mut state, 10f32.powf(-70.0 / 20.0));
+        if still {
+            went_still.get_or_insert(t);
+        }
+        quiet_end = t;
+    }
+    assert!(state.picture.runtime.spectrum.moving(quiet_end), "the curve did not draw it");
+    let went_still = went_still.expect("the quiet passage kept the heatmap asking");
+    let before = state.picture.runtime.spectrum.last_audible().column;
+    let mut woken = false;
+    for _ in 0..30 {
+        let (woke, still, t) = block(&mut state, 1.0);
+        let drawn = state.picture.runtime.spectrum.last_audible().column != before;
+        if drawn && !woken {
+            assert!(
+                woke || !still,
+                "at {t:.2} s, still since {went_still:.2} s, sound woke nothing"
+            );
+            woken = true;
+        }
+    }
+    assert!(woken, "the loud return never reached the heatmap");
 }
 
 /// A Clear takes the heard columns off the heatmap, and with them the Span they
@@ -586,10 +799,10 @@ fn a_cleared_heatmap_holds_no_sound_for_a_span() {
     stream(&ctx, &mut state, &mut feed, &mut t, 1.0, false, &panes);
     state.picture.runtime.spectrum.clear_history();
     let after = stream(&ctx, &mut state, &mut feed, &mut t, 10.0, false, &panes);
-    let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
+    let curve = state.picture.runtime.spectrum.last_audible().curve_until.unwrap();
     let last =
         after.iter().rev().find(|&&(_, on)| on.is_some()).expect("the curve settled at once").0;
-    assert!(last - heard < 1.0, "a Clear held the full rate {} s past the sound", last - heard);
+    assert!(last - curve < 1.0, "a Clear held the full rate {} s past the curve", last - curve);
 }
 
 /// The armed Record button's breath and a running export's progress stripes

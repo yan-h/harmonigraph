@@ -69,3 +69,9 @@ Yan took the recommendations made after the audit was checked against the code (
 
 - The editor's surface is colour-managed as sRGB, as wgpu 30 configures it by default, rather than left unmanaged as under wgpu 29, which showed its colours more saturated on a wide-gamut display.
   Yan kept it: the editor reads closer to the exported video (tagged BT.709). PR #1916
+
+## 2026-11-22 (the spectrum's silent tail, #1917 Q2)
+
+- The smoothed spectrum stops asking for frames once its columns draw nothing at any pitch: no bucket of the column or the curve it leaves stands over the faintest dB any reading draws there (the lower of the curve's floor and the volume colours' floor, under the tilt).
+  No hold follows the column it goes flat in; the hold stays only for samples ceasing to arrive, where the curve hides.
+  The heatmap's fresh edge still asks for every frame while the slab holding its last drawn column takes columns. #1917 Q2
