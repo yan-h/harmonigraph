@@ -38,17 +38,17 @@ pub fn node(fifths: i32, flat: i32) -> LatticePos {
     LatticePos::new(fifths - 4 * row, row, 0)
 }
 
-/// What to add to `declared`, a decoded onset's pitch in microcents (its key
-/// on the chain of fifths at the Decoded fifth), so that it sounds `node` in
-/// `tuning`, in the octave nearest the one it was played in.
-pub fn correction(tuning: Tuning, node: LatticePos, declared: i64) -> i64 {
+/// The node spelling `fifths` takes in the strip from `flat`, and what to add
+/// to `declared`, the onset's pitch in microcents as its key declares it (the
+/// chain of fifths at the Decoded fifth), so that it sounds that node in
+/// `tuning`, in the octave nearest the one it was played in: the strip's
+/// [`LatticeMap::assignment`](crate::lattice_map::LatticeMap::assignment).
+pub fn assignment(fifths: i32, flat: i32, declared: i64, tuning: Tuning) -> (LatticePos, i64) {
+    let node = node(fifths, flat);
     let octave = i64::from(crate::tuning::OCTAVE_MICROCENTS);
-    let class = i64::from(tuning.c_offset)
-        + i64::from(node.threes) * i64::from(tuning.three)
-        + i64::from(node.fives) * i64::from(tuning.five)
-        + i64::from(node.sevens) * i64::from(tuning.seven);
+    let class = i64::from(tuning.pitch_class(node).microcents());
     let octaves = (declared - class + octave / 2).div_euclid(octave);
-    class + octaves * octave - declared
+    (node, class + octaves * octave - declared)
 }
 
 #[cfg(test)]
@@ -90,7 +90,9 @@ mod tests {
                 + i64::from(node.fives) * i64::from(tuning.five);
             let chain = (fifths * fifth).rem_euclid(octave);
             let declared = key / 12 * octave + chain + i64::from(tuning.c_offset);
-            let sounding = declared + correction(tuning, node, declared);
+            let (assigned, correction) = assignment(fifths as i32, HOME, declared, tuning);
+            assert_eq!(assigned, node);
+            let sounding = declared + correction;
             assert_eq!((sounding - class).rem_euclid(octave), 0, "{node:?}");
             assert!((sounding - declared).abs() < 50_000_000, "{node:?} at {sounding}");
         }

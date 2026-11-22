@@ -824,16 +824,27 @@ impl Hub {
             let fifths = fifths_for_midi(channel, key);
             fifths_offset(fifths, config.tuning.c_offset, config.policy.decoded_fifth)
         });
-        if self.sequencer.engine != TuningEngine::Adaptive {
-            let mapped = (self.sequencer.engine == TuningEngine::LatticeMap)
-                .then_some(self.sequencer.map)
-                .flatten()
-                .map(|map| self.follow(position, map));
-            let assigned = mapped.map(|map| map.assignment(incoming, config.tuning));
-            // With no map to assign from, a decoded onset sounds as declared.
+        // Adaptive tunes a decoded onset by the strip, a node chosen by its
+        // spelling alone (`policy::strip`), and searches only the rest.
+        let adaptive = self.sequencer.engine == TuningEngine::Adaptive;
+        if !adaptive || stage.is_some() {
+            let assigned = if adaptive {
+                let flat = policy::strip::flat_column(self.sequencer.position.threes);
+                let fifths = fifths_for_midi(channel, key);
+                let stage = stage.unwrap_or(0);
+                let (node, correction) =
+                    policy::strip::assignment(fifths, flat, incoming + stage, config.tuning);
+                Some((node, stage + correction))
+            } else {
+                (self.sequencer.engine == TuningEngine::LatticeMap)
+                    .then_some(self.sequencer.map)
+                    .flatten()
+                    .map(|map| self.follow(position, map).assignment(incoming, config.tuning))
+            };
+            // With no node to assign, a decoded onset sounds as declared.
             let correction = assigned.map_or(stage.unwrap_or(0), |(_, correction)| correction);
             let node = assigned.map(|(node, _)| node);
-            let decision = if mapped.is_some() || stage.is_some() {
+            let decision = if assigned.is_some() || stage.is_some() {
                 self.sequencer.decision += 1;
                 self.decisions += 1;
                 self.sequencer.decision
@@ -841,8 +852,9 @@ impl Hub {
                 0
             };
             self.reply(record, correction);
-            // A mapped voice is context too: following weighs what is held, and
-            // what was released, through the same memory Adaptive keeps.
+            // A mapped or strip voice is context too: following weighs what is
+            // held, and what was released, through the same memory Adaptive
+            // keeps.
             if let Some(node) = node {
                 let voice = Voice {
                     source: record.source,
@@ -857,9 +869,6 @@ impl Hub {
                 }
             }
             return Some(Assigned { correction, node, decision, player, channel_pitch });
-        }
-        if let Some(stage) = stage {
-            return Some(self.strip(record, channel, key, incoming + stage, stage, config));
         }
         self.sequencer.take_loop();
         self.sequencer.fill(self.rate);
@@ -914,47 +923,6 @@ impl Hub {
             self.status |= session::POLICY;
         }
         Some(Assigned { correction, node, decision, player, channel_pitch })
-    }
-
-    /// Adaptive for a decoded onset, `declared` being its key on the chain at
-    /// the Decoded fifth: the spelling's one copy in the strip the Position
-    /// fifths lane places (`policy::strip`). No search and no memory, so the
-    /// same spelling sounds the same node whenever it is struck; it still joins
-    /// the context, which a later onset's search reads once decoding stops.
-    fn strip(
-        &mut self,
-        record: Record,
-        channel: u8,
-        key: u8,
-        declared: i64,
-        stage: i64,
-        config: ResolvedConfig,
-    ) -> Assigned {
-        let flat = policy::strip::flat_column(self.sequencer.position.threes);
-        let node = policy::strip::node(fifths_for_midi(channel, key), flat);
-        let correction = policy::strip::correction(config.tuning, node, declared);
-        self.sequencer.decision += 1;
-        self.decisions += 1;
-        let decision = self.sequencer.decision;
-        self.reply(record, stage + correction);
-        let voice = Voice {
-            source: record.source,
-            lifetime: record.serial,
-            onset_pitch: declared + correction,
-            node: Some(node),
-            decision,
-            onset: record.sample,
-        };
-        if !self.sequencer.hold(voice) {
-            self.status |= session::POLICY;
-        }
-        Assigned {
-            correction: stage + correction,
-            node: Some(node),
-            decision,
-            player: record.player,
-            channel_pitch: self.rows[usize::from(record.source)].state.channel_pitch(channel),
-        }
     }
 
     /// What actually arrived, key number and every tuning the source already

@@ -350,6 +350,11 @@ impl PitchClass {
         cents(self.0)
     }
 
+    /// The class in microcents above C, `0..OCTAVE_MICROCENTS`.
+    pub fn microcents(self) -> u32 {
+        self.0
+    }
+
     /// Distance to another pitch class, accounting for octave wraparound
     /// (e.g. 10¢ and 1190¢ are 20¢ apart, not 1180¢).
     pub fn distance_to(self, other: PitchClass) -> PitchClassDistance {

@@ -1118,7 +1118,8 @@ const DECODE_FIFTHS_HINT: &str = "For the lattice-board, a custom chain-of-fifth
     Under Pass through the lattice is drawn in the board's tuning, and Learn is suspended while \
     it is on. While it is on, \
     a lattice-board plugged into this Mac lights the key nearest each note the lattice draws, \
-    in the Decoded fifth: the key a note sounds on, from any track or the Tape.";
+    in the Decoded fifth: the key a note sounds on, from any track or the Tape. Under Adaptive \
+    a note lights the key it was played on instead, when the board has that key.";
 
 const DECODED_FIFTH_HINT: &str = "The fifth the lattice-board's chain sounds at with Decode \
     fifths on, independent of the lattice's Perfect fifth. Under Pass through the lattice is drawn \
