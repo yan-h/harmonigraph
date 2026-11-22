@@ -132,14 +132,14 @@ impl Spectrum {
         }
     }
 
-    /// Bring the view's copy up to date.
-    pub(crate) fn sync(&mut self, view: &mut TapeSpectrogram) {
-        if std::mem::take(&mut self.cleared) {
-            view.clear();
-        }
+    /// Bring the view's copy up to date, returning any cleared spectrogram
+    /// displaced from it so the caller can drop it outside the lock.
+    pub(crate) fn sync(&mut self, view: &mut TapeSpectrogram) -> Option<TapeSpectrogram> {
+        let displaced = std::mem::take(&mut self.cleared).then(|| view.take_cleared());
         for (level, key) in std::mem::take(&mut self.changed) {
             view.put(level, key, self.tape.slab(level, key).cloned());
         }
+        displaced
     }
 }
 
@@ -233,5 +233,51 @@ mod tests {
         spectrum.sync(&mut view);
         assert!(near(peak(&view, column(3.0)), 69.0));
         assert_ne!(view.slab(0, column(3.0)).cloned(), precise, "the column was not re-analyzed");
+    }
+
+    #[test]
+    fn sync_retires_cleared_spectrogram_for_off_lock_drop() {
+        let mut view = TapeSpectrogram::default();
+        let mut changed = BTreeSet::new();
+        for k in 0..64i64 {
+            let slab: harmonigraph_render::SpectrogramSlab = std::sync::Arc::from(
+                [(k as u8).wrapping_add(1); harmonigraph_core::spectrum::SPECTRUM_BINS],
+            );
+            view.set_column(k, Some(slab));
+        }
+        view.settle(&mut changed);
+        let column_probe = view.slab(0, 0).expect("column 0 populated").clone();
+        let level_probe = view.slab(1, 0).expect("level 1 slab 0 populated").clone();
+        assert_eq!(std::sync::Arc::strong_count(&column_probe), 2);
+        assert_eq!(std::sync::Arc::strong_count(&level_probe), 2);
+
+        let mut spectrum = Spectrum::default();
+        spectrum.clear();
+        let displaced = spectrum.sync(&mut view);
+
+        assert!(view.is_empty());
+        assert!(displaced.is_some());
+        assert_eq!(
+            std::sync::Arc::strong_count(&column_probe),
+            2,
+            "sync under EditorLock must return cleared column slabs without dropping them"
+        );
+        assert_eq!(
+            std::sync::Arc::strong_count(&level_probe),
+            2,
+            "sync under EditorLock must return cleared pyramid slabs without dropping them"
+        );
+
+        drop(displaced);
+        assert_eq!(
+            std::sync::Arc::strong_count(&column_probe),
+            1,
+            "dropping displaced spectrogram off-lock must release column slabs"
+        );
+        assert_eq!(
+            std::sync::Arc::strong_count(&level_probe),
+            1,
+            "dropping displaced spectrogram off-lock must release pyramid slabs"
+        );
     }
 }

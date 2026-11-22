@@ -210,14 +210,61 @@ impl SpectrumAnalyzer {
         self.filled = 0;
     }
 
+    /// Write `total` incoming samples/frames into the circular ring, skipping
+    /// any prefix beyond `fft_size` and preserving per-sample `write` rotation
+    /// across `total >= fft_size` overwrites.
+    fn push_ring(&mut self, total: usize, write: impl FnOnce(usize, &mut [f32], &mut [f32])) {
+        if total == 0 {
+            return;
+        }
+        let (count, skip, start) = if total >= self.fft_size {
+            (
+                self.fft_size,
+                total - self.fft_size,
+                (self.write + total % self.fft_size) % self.fft_size,
+            )
+        } else {
+            (total, 0, self.write)
+        };
+        let first = count.min(self.fft_size - start);
+        let rest = count - first;
+        let (head, tail) = self.ring.split_at_mut(start);
+        write(skip, &mut tail[..first], &mut head[..rest]);
+        self.write = if rest > 0 {
+            rest
+        } else if start + first == self.fft_size {
+            0
+        } else {
+            start + first
+        };
+        self.filled = (self.filled + count).min(self.fft_size);
+    }
+
     /// Append mono samples (most recent last). Any chunk size works; only
     /// the trailing `fft_size` samples are kept.
     pub fn push_samples(&mut self, samples: &[f32]) {
-        for &s in samples {
-            self.ring[self.write] = s;
-            self.write = (self.write + 1) % self.fft_size;
-        }
-        self.filled = (self.filled + samples.len()).min(self.fft_size);
+        self.push_ring(samples.len(), |skip, first_dst, rest_dst| {
+            let tail = &samples[skip..];
+            first_dst.copy_from_slice(&tail[..first_dst.len()]);
+            rest_dst.copy_from_slice(&tail[first_dst.len()..]);
+        });
+    }
+
+    /// Append one channel from `interleaved` frames of `stride` samples,
+    /// ignoring any trailing partial frame. Only the trailing `fft_size`
+    /// frames are kept.
+    fn push_strided(&mut self, interleaved: &[f32], channel: usize, stride: usize) {
+        assert!(channel < stride);
+        let frames = interleaved.len() / stride;
+        self.push_ring(frames, |skip, first_dst, rest_dst| {
+            let mut iter = interleaved[skip * stride..frames * stride].chunks_exact(stride);
+            for (dst, frame) in first_dst.iter_mut().zip(&mut iter) {
+                *dst = frame[channel];
+            }
+            for (dst, frame) in rest_dst.iter_mut().zip(iter) {
+                *dst = frame[channel];
+            }
+        });
     }
 
     /// The current power spectrum over the MIDI-pitch axis, or None until
@@ -306,8 +353,6 @@ impl SpectrumAnalyzer {
 /// `SpectrumAnalyzer`), so nothing has to branch on mono vs stereo.
 pub struct ChannelBank {
     per_channel: Vec<SpectrumAnalyzer>,
-    /// One channel's samples, de-interleaved. Reused across pushes.
-    scratch: Vec<f32>,
 }
 
 impl ChannelBank {
@@ -315,7 +360,6 @@ impl ChannelBank {
     pub fn new(config: AnalyzerConfig, channels: usize) -> ChannelBank {
         ChannelBank {
             per_channel: (0..channels.max(1)).map(|_| SpectrumAnalyzer::new(config)).collect(),
-            scratch: Vec::new(),
         }
     }
 
@@ -355,11 +399,8 @@ impl ChannelBank {
             self.per_channel[0].push_samples(interleaved);
             return;
         }
-        let frames = interleaved.len() / n;
         for (c, analyzer) in self.per_channel.iter_mut().enumerate() {
-            self.scratch.clear();
-            self.scratch.extend((0..frames).map(|f| interleaved[f * n + c]));
-            analyzer.push_samples(&self.scratch);
+            analyzer.push_strided(interleaved, c, n);
         }
     }
 
@@ -1004,5 +1045,165 @@ mod tests {
         // having to re-set anything.
         bank.push_frames(&vec![0.2; 4096 * 2]);
         assert!(bank.power_sum().is_some());
+    }
+
+    #[test]
+    fn push_samples_and_push_frames_match_across_wrap_and_full_window_overwrites() {
+        const N: usize = 4096;
+        let config = AnalyzerConfig { sample_rate: 48_000.0, fft_size: N };
+        let bits = |slice: &[f32]| slice.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+
+        let mono: Vec<f32> = (0..N * 3 + 777)
+            .map(|i| {
+                let t = i as f32 / 48_000.0;
+                0.45 * (std::f32::consts::TAU * 330.0 * t).sin()
+                    + 0.25 * (std::f32::consts::TAU * 4186.0 * t).cos()
+                    + if i % 113 == 0 { 0.15 } else { 0.0 }
+            })
+            .collect();
+
+        // 1. Wraparound `< fft_size` chunks match per-sample reference bit-for-bit.
+        let mut chunked = SpectrumAnalyzer::new(config);
+        let mut per_sample = SpectrumAnalyzer::new(config);
+        let mut pos = 0;
+        for &size in &[0, 1, 137, N - 1, 513, 1999, 701] {
+            let slice = &mono[pos..pos + size];
+            chunked.push_samples(slice);
+            for &s in slice {
+                per_sample.push_samples(&[s]);
+            }
+            pos += size;
+        }
+        assert!(pos > N, "chunks must wrap the ring");
+        assert_eq!(
+            bits(chunked.pitch_spectrum().unwrap()),
+            bits(per_sample.pitch_spectrum().unwrap()),
+            "mono < fft_size wraparound chunks must match per-sample push"
+        );
+
+        // 2. Exact `fft_size` overwrite on an already-dirty analyzer (no clear_window):
+        //    - on a column-style ring (prior `fft_size` push, write == 0) matches fresh bit-for-bit;
+        //    - on an arbitrarily wrapped ring matches per-sample push bit-for-bit.
+        let exact = &mono[pos..pos + N];
+        let mut col_reused = SpectrumAnalyzer::new(config);
+        col_reused.push_samples(&mono[..N]);
+        col_reused.push_samples(exact);
+        let mut fresh_exact = SpectrumAnalyzer::new(config);
+        for &s in exact {
+            fresh_exact.push_samples(&[s]);
+        }
+        assert_eq!(
+            bits(col_reused.pitch_spectrum().unwrap()),
+            bits(fresh_exact.pitch_spectrum().unwrap()),
+            "exact fft_size overwrite after full-window push must match per-sample fresh analyzer"
+        );
+        chunked.push_samples(exact);
+        for &s in exact {
+            per_sample.push_samples(&[s]);
+        }
+        assert_eq!(
+            bits(chunked.pitch_spectrum().unwrap()),
+            bits(per_sample.pitch_spectrum().unwrap()),
+            "exact fft_size overwrite on wrapped analyzer must match per-sample push"
+        );
+
+        // 3. `> fft_size` push on dirty analyzer and follow-up `< fft_size` chunk match per-sample
+        //    push bit-for-bit (and match fresh when length is a multiple of `fft_size`).
+        let over = &mono[pos..pos + N + 321];
+        chunked.push_samples(over);
+        for &s in over {
+            per_sample.push_samples(&[s]);
+        }
+        assert_eq!(
+            bits(chunked.pitch_spectrum().unwrap()),
+            bits(per_sample.pitch_spectrum().unwrap()),
+            "> fft_size push must match per-sample push"
+        );
+        let tail = &mono[pos + N + 321..pos + N + 321 + 555];
+        chunked.push_samples(tail);
+        for &s in tail {
+            per_sample.push_samples(&[s]);
+        }
+        assert_eq!(
+            bits(chunked.pitch_spectrum().unwrap()),
+            bits(per_sample.pitch_spectrum().unwrap()),
+            "follow-up < fft_size chunk after > fft_size push must match"
+        );
+
+        // 4. Stereo `ChannelBank::push_frames`: wraparound `< fft_size` (with trailing odd sample),
+        // exact `fft_size` overwrite on dirty bank without `restart()`, and `> fft_size` (with odd tail).
+        let stereo: Vec<f32> = (0..N * 3 + 777)
+            .flat_map(|i| {
+                let t = i as f32 / 48_000.0;
+                let l = 0.5 * (std::f32::consts::TAU * 440.0 * t).sin()
+                    + if i % 89 == 0 { 0.2 } else { 0.0 };
+                let r = 0.4 * (std::f32::consts::TAU * 659.25 * t).cos()
+                    - if i % 97 == 0 { 0.1 } else { 0.0 };
+                [l, r]
+            })
+            .collect();
+
+        let mut bank = ChannelBank::new(config, 2);
+        let mut ref_bank = ChannelBank::new(config, 2);
+        let mut frame_pos = 0usize;
+        for &(frames, odd) in &[(0, true), (1, false), (199, true), (N - 1, true), (777, false)] {
+            let start = frame_pos * 2;
+            let end = (frame_pos + frames) * 2;
+            let mut slice = stereo[start..end].to_vec();
+            if odd {
+                slice.push(9999.0);
+            }
+            bank.push_frames(&slice);
+            for f in 0..frames {
+                ref_bank.push_frames(&stereo[(frame_pos + f) * 2..(frame_pos + f + 1) * 2]);
+            }
+            frame_pos += frames;
+        }
+        assert!(frame_pos > N);
+        assert_eq!(
+            bits(&bank.power_sum().unwrap()),
+            bits(&ref_bank.power_sum().unwrap()),
+            "stereo wraparound < fft_size with trailing odd sample must match per-frame reference"
+        );
+
+        // Exact `fft_size` overwrite on dirty bank without `restart()` (plus trailing odd sample):
+        // full-column reuse matches fresh one-frame-at-a-time bank; arbitrary wrap matches per-frame reference.
+        let mut exact_stereo = stereo[frame_pos * 2..(frame_pos + N) * 2].to_vec();
+        exact_stereo.push(-8888.0);
+        let mut col_bank = ChannelBank::new(config, 2);
+        col_bank.push_frames(&stereo[..N * 2]);
+        col_bank.push_frames(&exact_stereo);
+        let mut fresh_bank_exact = ChannelBank::new(config, 2);
+        for f in 0..N {
+            fresh_bank_exact.push_frames(&stereo[(frame_pos + f) * 2..(frame_pos + f + 1) * 2]);
+        }
+        assert_eq!(
+            bits(&col_bank.power_sum().unwrap()),
+            bits(&fresh_bank_exact.power_sum().unwrap()),
+            "dirty stereo bank exact fft_size overwrite without restart must match per-frame fresh bank"
+        );
+        bank.push_frames(&exact_stereo);
+        for f in 0..N {
+            ref_bank.push_frames(&stereo[(frame_pos + f) * 2..(frame_pos + f + 1) * 2]);
+        }
+        assert_eq!(
+            bits(&bank.power_sum().unwrap()),
+            bits(&ref_bank.power_sum().unwrap()),
+            "wrapped stereo bank exact fft_size overwrite must match per-frame reference"
+        );
+
+        // `> fft_size` frames with trailing odd sample on dirty bank.
+        let over_frames = N + 419;
+        let mut over_stereo = stereo[frame_pos * 2..(frame_pos + over_frames) * 2].to_vec();
+        over_stereo.push(7777.0);
+        bank.push_frames(&over_stereo);
+        for f in 0..over_frames {
+            ref_bank.push_frames(&stereo[(frame_pos + f) * 2..(frame_pos + f + 1) * 2]);
+        }
+        assert_eq!(
+            bits(&bank.power_sum().unwrap()),
+            bits(&ref_bank.power_sum().unwrap()),
+            "> fft_size push_frames with trailing odd sample must match per-frame reference"
+        );
     }
 }
