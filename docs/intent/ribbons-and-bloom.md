@@ -89,3 +89,7 @@ Yan took the recommendations made after the audit was checked against the code (
 
 - A note name's end is stored as the end itself, Now-line or Onset, rather than as the end that reads first or the other one: picking Onset and moving the spectrum to the other side keeps names at the onset. Yan, choosing "Store the end" over relabelling the row as reading-relative (PR #1902 review)
 - Onset is the default in every orientation: the renamed key is skipped without a word, so a project or take saved before opens at the default, and Onset keeps the fresh layout (spectrum on the Right) and projects saved there with the old default as they were. Yan, over the Now-line default first agreed, once told the rename is silent (PR #1902 review)
+
+## 2026-11-22 (performance audit, #1917)
+
+- A dense hatched run paints at one depth, its first onset's, as a sustained note does: a voice that begins between two of its attacks paints over the whole run, its later attacks and its lead included, rather than the run switching in front of that voice at its next attack (#1431). Yan's answer to #1917 Q3

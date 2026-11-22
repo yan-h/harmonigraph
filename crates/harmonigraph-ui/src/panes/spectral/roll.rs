@@ -703,9 +703,8 @@ fn source_instances(
     // past `edge` unless its stop is within a cut of it; and it joins the next
     // note into a run only while their one-point cores are within a cut,
     // which for a next note reaching `edge` puts its stop within a floored
-    // length and two cuts of it. A note in the band draws nothing itself —
-    // every segment of it ends before `edge` — and counts for no paint order
-    // (`density::layout`'s `drawn_from`).
+    // length and two cuts of it. A note in the band draws nothing itself:
+    // every segment of it ends before `edge`.
     let minimum = f64::from(2.0 * min_half_depth) * per_point;
     let gap = density::GAP_PT * f64::from(point_scale.max(0.0)) * per_point;
     let band = minimum + 2.0 * gap;
@@ -729,7 +728,7 @@ fn source_instances(
 
     // One segment per note is the common case (a note is bent rarely), so the
     // note count is the right first guess at how many instances this makes.
-    let mut painted = Vec::with_capacity(notes.len());
+    let mut instances = Vec::with_capacity(notes.len());
     let mut tongues = Vec::new();
     let mut motion = RollMotion::default();
     let intensity_varies = intensity.routes_to(IntensityTarget::Opacity)
@@ -740,8 +739,9 @@ fn source_instances(
     let now_line = axes.at(0.5, time.split);
     let origin_points = time.origin / per_point;
     let mut intensity_scratch = IntensityScratch::default();
-    let mut pieces_scratch: Vec<(f64, f64, RollInstance)> = Vec::new();
-    let ribbons = density::layout(&notes, now, minimum, gap, edge);
+    // In onset order by each ribbon's first note, which is the paint order:
+    // a dense run paints whole at its first onset, as a sustained note does.
+    let ribbons = density::layout(&notes, now, minimum, gap);
     for ribbon in ribbons {
         let note = ribbon.last();
         // How much lead this note still owns: all of it while the key is down,
@@ -791,15 +791,15 @@ fn source_instances(
                 }
             }
         }
-        // Painted where its note's newest stretch of history is, among the
-        // tongues as that is among the history, so two overlapping held notes
-        // keep one order across the line.
+        // Painted in its ribbon's order among the tongues, as the ribbon is
+        // among the history, so two overlapping held notes keep one order
+        // across the line.
         if let Some(tongue) = tongue {
-            tongues.push((ribbon.paint_starts[ribbon.paint_starts.len() - 1].0, tongue));
+            tongues.push(tongue);
             motion.fading = true;
         }
         let dense = ribbon.dense();
-        let first_painted = painted.len();
+        let first_instance = instances.len();
         for ((t0, p0), (t1, p1)) in ribbon.segments(now) {
             // A segment wholly before the region is DROPPED, and the test has
             // to be made on its own end rather than on the clamped one — a
@@ -906,7 +906,7 @@ fn source_instances(
                 tremolo,
                 ..RollInstance::PLAIN
             };
-            pieces_scratch.clear();
+            let pieces = instances.len();
             let flat_single =
                 flat_look.or_else(|| flat_segment_look(&ribbon, &intensity, t0, t1, width_floor));
             if let Some(look) = flat_single {
@@ -915,7 +915,7 @@ fn source_instances(
                     let (fade, taper) = read_through(look, grow);
                     let mut piece = RollInstance { fade, taper, ..segment };
                     piece.half_extent[0] *= grow;
-                    pieces_scratch.push((t0, t1, piece));
+                    instances.push(piece);
                 }
             } else {
                 // Where a moment of this segment lands along its box, as the
@@ -927,16 +927,13 @@ fn source_instances(
                 intensity_points(&ribbon, &intensity, t0, t1, width_floor, &mut intensity_scratch);
                 if intensity_scratch.points.iter().any(|(_, look)| look.width > 0.0) {
                     push_pieces(
-                        &mut pieces_scratch,
+                        &mut instances,
                         segment,
                         &intensity_scratch.points,
                         &mut intensity_scratch.spans,
                         offset,
                     );
                 }
-            }
-            if pieces_scratch.is_empty() {
-                continue;
             }
             // At a near edge that bounds the notes, the pieces past its ink
             // are not drawn and the one crossing it draws only up to it: by
@@ -948,69 +945,19 @@ fn source_instances(
                 let centre = (d0 + d1) * 0.5;
                 let bound =
                     (time.depth_of_unclamped(near_edge) - centre) * axes.depth_len() + 0.5 * seam;
-                let keep = pieces_scratch.iter().take_while(|(_, _, p)| p.span[1] >= bound).count();
-                pieces_scratch.truncate(keep);
-                for (_, piece_t1, piece) in &mut pieces_scratch {
+                let keep = instances[pieces..].iter().take_while(|p| p.span[1] > bound).count();
+                instances.truncate(pieces + keep);
+                for piece in &mut instances[pieces..] {
                     piece.span[0] = piece.span[0].max(bound);
-                    *piece_t1 = (*piece_t1).min(near_edge);
                 }
-            }
-            // A later attack in this ribbon must paint above a voice that began
-            // between its members. Split only its draw spans across cuts inside
-            // each piece's own interval: the shared box and ornament continue
-            // through each cut without adding a cap or seam.
-            for (piece_t0, piece_t1, instance) in pieces_scratch.drain(..) {
-                push_painted(&mut painted, &ribbon, axes, &time, piece_t0, piece_t1, instance);
             }
         }
         // Drawn, and its newest note's body not yet past the far edge: what
         // is left of it is an overhang, which finishes at the idle poll.
         motion.scrolling |=
-            source.now_line && painted.len() > first_painted && note.stop(now) >= oldest;
+            source.now_line && instances.len() > first_instance && note.stop(now) >= oldest;
     }
-    painted.sort_by_key(|&(order, _)| order);
-    tongues.sort_by_key(|&(order, _)| order);
-    RollInk {
-        notes: painted.into_iter().map(|(_, instance)| instance).collect(),
-        tongues: tongues.into_iter().map(|(_, tongue)| tongue).collect(),
-        motion,
-    }
-}
-
-/// Split `instance` across any `paint_starts` strictly inside `(piece_t0, piece_t1)`.
-fn push_painted(
-    painted: &mut Vec<(usize, RollInstance)>,
-    ribbon: &Ribbon<'_>,
-    axes: &Axes,
-    time: &TimeAxis,
-    piece_t0: f64,
-    piece_t1: f64,
-    instance: RollInstance,
-) {
-    if ribbon.paint_starts.len() == 1 {
-        if instance.span[0] < instance.span[1] {
-            painted.push((ribbon.paint_starts[0].0, instance));
-        }
-        return;
-    }
-    let center = egui::pos2(instance.center[0], instance.center[1]);
-    let center_depth = (center - axes.at(0.5, time.split)).dot(axes.dir_depth());
-    let offset = |at| (time.depth_of_unclamped(at) - time.split) * axes.depth_len() - center_depth;
-    let mut high = instance.span[1];
-    let first = ribbon.paint_starts.partition_point(|&(_, at)| at <= piece_t0).saturating_sub(1);
-    for i in first..ribbon.paint_starts.len() {
-        let (order, _) = ribbon.paint_starts[i];
-        let next = ribbon.paint_starts.get(i + 1).map(|&(_, at)| at).filter(|&at| at < piece_t1);
-        let low = next.map_or(instance.span[0], |at| instance.span[0].max(offset(at)));
-        let span = [low, high];
-        if span[0] < span[1] {
-            painted.push((order, RollInstance { span, ..instance }));
-        }
-        let Some(at) = next else {
-            break;
-        };
-        high = instance.span[1].min(offset(at));
-    }
+    RollInk { notes: instances, tongues, motion }
 }
 
 /// The largest error a note may be drawn with on any display, as a share of
@@ -1260,7 +1207,7 @@ fn read_through(look: Look, grow: f32) -> ([f32; 2], [f32; 4]) {
 /// themselves from the box, so they follow; a segment that never
 /// swells keeps its box, and its widths, exactly.
 fn push_pieces(
-    instances: &mut Vec<(f64, f64, RollInstance)>,
+    instances: &mut Vec<RollInstance>,
     mut segment: RollInstance,
     points: &[(f64, Look)],
     spans: &mut Vec<[(f64, Look); 2]>,
@@ -1284,7 +1231,7 @@ fn push_pieces(
     };
     if let Some(look) = flat {
         let (fade, taper) = read_through(look, grow);
-        instances.push((oldest, newest, RollInstance { fade, taper, ..segment }));
+        instances.push(RollInstance { fade, taper, ..segment });
         return;
     }
     let share = |look: Look| look.width / grow;
@@ -1308,21 +1255,17 @@ fn push_pieces(
         let (newer_at, newer_width) = beyond(spans.get(i + 1), (newer, at_newer), 0, 1);
         let (older_at, older_width) =
             beyond(i.checked_sub(1).and_then(|j| spans.get(j)), (older, at_older), 1, 0);
-        instances.push((
-            older,
-            newer,
-            RollInstance {
-                span: [
-                    if newer == newest { f32::MIN } else { low },
-                    if older == oldest { f32::MAX } else { high },
-                ],
-                ramp: [low, high],
-                fade: [at_newer.fade, at_older.fade],
-                taper_depth: [newer_at, low, high, older_at],
-                taper: [newer_width, share(at_newer), share(at_older), older_width],
-                ..segment
-            },
-        ));
+        instances.push(RollInstance {
+            span: [
+                if newer == newest { f32::MIN } else { low },
+                if older == oldest { f32::MAX } else { high },
+            ],
+            ramp: [low, high],
+            fade: [at_newer.fade, at_older.fade],
+            taper_depth: [newer_at, low, high, older_at],
+            taper: [newer_width, share(at_newer), share(at_older), older_width],
+            ..segment
+        });
     }
 }
 
@@ -1610,70 +1553,45 @@ mod tests {
 
     #[test]
     fn dense_pitch_changes_keep_each_notes_intensity() {
-        for interleaved in [false, true] {
-            let mut state = fresh();
-            state.appearance.spectrum.roll_seconds = 60.0;
-            state.appearance.spectrum.roll_lead = 0.0;
-            state.appearance.view.intensity = IntensitySettings {
-                velocity: harmonigraph_scene::IntensitySource {
-                    opacity: Some(1.0),
-                    thickness: None,
-                },
-                gain: Default::default(),
-                opacity_rest: 0.0,
-                ..Default::default()
-            };
-            for (start, velocity, tuning) in [(1.0, 0.2, 0.0), (1.02, 0.8, 0.3)] {
-                if interleaved && start == 1.02 {
-                    state.runtime.tracker.handle_event(NoteEvent::on(
-                        1.015,
-                        SourceId(1),
-                        0,
-                        60,
-                        1.0,
-                    ));
-                }
-                state.runtime.tracker.handle_event(NoteEvent::on(
-                    start,
-                    SourceId::DIRECT,
-                    0,
-                    60,
-                    velocity,
-                ));
-                state.runtime.tracker.handle_event(NoteEvent {
-                    source: SourceId::DIRECT,
-                    time: start,
-                    channel: 0,
-                    note: 60,
-                    kind: NoteEventKind::Tuning { semitones: tuning },
-                });
-                state.runtime.tracker.handle_event(NoteEvent::off(
-                    start + 0.01,
-                    SourceId::DIRECT,
-                    0,
-                    60,
-                ));
-            }
-            if interleaved {
-                state.runtime.tracker.handle_event(NoteEvent::off(1.04, SourceId(1), 0, 60));
-            }
-            let notes = instances(&state, 1.2);
-            let dense: Vec<_> = notes.iter().filter(|n| n.tremolo[1] > 0.0).collect();
-            assert!(!dense.is_empty(), "fixture must form a dense run");
-            for (color, fade) in [(dense[0].core, 0.2), (dense.last().unwrap().core, 0.8)] {
-                let pieces: Vec<_> = dense.iter().filter(|n| n.core == color).collect();
-                assert!(
-                    pieces.iter().all(|n| n.fade == [fade; 2]),
-                    "later attack repainted the earlier pitch"
-                );
-                let low = pieces.iter().map(|n| n.span[0]).fold(f32::MAX, f32::min);
-                let high = pieces.iter().map(|n| n.span[1]).fold(f32::MIN, f32::max);
-                assert_eq!(
-                    [low, high],
-                    RollInstance::WHOLE,
-                    "paint cut lost a pitch segment's antialiased end"
-                );
-            }
+        let mut state = fresh();
+        state.appearance.spectrum.roll_seconds = 60.0;
+        state.appearance.spectrum.roll_lead = 0.0;
+        state.appearance.view.intensity = IntensitySettings {
+            velocity: harmonigraph_scene::IntensitySource { opacity: Some(1.0), thickness: None },
+            gain: Default::default(),
+            opacity_rest: 0.0,
+            ..Default::default()
+        };
+        for (start, velocity, tuning) in [(1.0, 0.2, 0.0), (1.02, 0.8, 0.3)] {
+            state.runtime.tracker.handle_event(NoteEvent::on(
+                start,
+                SourceId::DIRECT,
+                0,
+                60,
+                velocity,
+            ));
+            state.runtime.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
+                time: start,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Tuning { semitones: tuning },
+            });
+            state.runtime.tracker.handle_event(NoteEvent::off(
+                start + 0.01,
+                SourceId::DIRECT,
+                0,
+                60,
+            ));
+        }
+        let notes = instances(&state, 1.2);
+        let dense: Vec<_> = notes.iter().filter(|n| n.tremolo[1] > 0.0).collect();
+        assert!(!dense.is_empty(), "fixture must form a dense run");
+        for (color, fade) in [(dense[0].core, 0.2), (dense.last().unwrap().core, 0.8)] {
+            assert!(
+                dense.iter().filter(|n| n.core == color).all(|n| n.fade == [fade; 2]),
+                "later attack repainted the earlier pitch"
+            );
         }
     }
 
@@ -1783,40 +1701,6 @@ mod tests {
             drawn.iter().all(|s| *s < scroll + 1e-3),
             "the survivor's drawn onset jumps outward: {drawn:?}",
         );
-    }
-
-    #[test]
-    fn dense_runs_keep_interleaved_voices_in_onset_paint_order() {
-        let mut state = fresh();
-        state.appearance.spectrum.orientation = SpectralOrientation::Left;
-        state.appearance.spectrum.roll_seconds = 60.0;
-        state.appearance.spectrum.roll_lead = 0.0;
-        for i in 0..64 {
-            let start = 1.0 + f64::from(i) * 0.025;
-            state.runtime.tracker.handle_event(NoteEvent::on(start, SourceId(0), 0, 60, 1.0));
-            if i == 0 {
-                state.runtime.tracker.handle_event(NoteEvent::on(1.010, SourceId(1), 0, 60, 1.0));
-            }
-            state.runtime.tracker.handle_event(NoteEvent::off(start + 0.012, SourceId(0), 0, 60));
-        }
-        state.runtime.tracker.handle_event(NoteEvent::off(3.0, SourceId(1), 0, 60));
-        let notes = instances(&state, 3.1);
-        assert_eq!(notes.len(), 3, "dense run must paint on both sides of the interleaved voice");
-        assert!(notes[0].tremolo[1] > 0.0);
-        assert_eq!(notes[1].tremolo[1], 0.0);
-        assert!(notes[2].tremolo[1] > 0.0);
-        // Both pieces retain the full silhouette and texture phase, meeting
-        // exactly at the next attack without a new cap or antialiased seam.
-        assert_eq!(notes[0].center, notes[2].center);
-        assert_eq!(notes[0].half_extent, notes[2].half_extent);
-        assert_eq!(notes[0].tremolo, notes[2].tremolo);
-        assert_eq!(notes[0].span[0], notes[2].span[1]);
-        let axes = Axes::new(PANE, &state.appearance.spectrum);
-        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
-        let time = TimeAxis::new(&state, split, 3.1);
-        let attack = axes.at(0.5, time.depth_of_unclamped(1.025));
-        let center = egui::pos2(notes[0].center[0], notes[0].center[1]);
-        assert!(((attack - center).dot(axes.dir_depth()) - notes[0].span[0]).abs() < 1e-5);
     }
 
     fn repeated_notes(duration: f64) -> PictureState {
@@ -2938,14 +2822,11 @@ mod tests {
         assert!(at(&state, 4.0).is_none(), "a release of 0 kept the tongue");
     }
 
-    /// Tongues paint in their notes' order, as the history does, so two held
-    /// notes keep one order across the now-line.
-    ///
-    /// A repeat that joins a dense run belongs to a ribbon begun before a note
-    /// of another key, so the ribbons' order and the notes' differ: the
-    /// repeat's history paints over the other note's, and its tongue must too.
+    /// A dense run paints whole at its first onset, as a sustained note does:
+    /// beneath a voice that began while it ran, its history and its tongue
+    /// alike, so two held notes keep one order across the now-line (#1917 Q3).
     #[test]
-    fn tongues_paint_in_their_notes_order() {
+    fn a_dense_run_paints_at_its_first_onset() {
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.roll_seconds = 10.0;
@@ -2960,13 +2841,14 @@ mod tests {
         let (history, tongues) = instance_groups(&state, 0.1);
         let color = |pitch| note_color(&state, pitch, 1.0).to_array();
         assert_ne!(color(60.0), color(64.0), "the fixture's two notes are told apart by color");
-        assert_eq!(
-            history.last().map(|piece| piece.core),
-            Some(color(60.0)),
-            "the repeat's history does not paint last, so the orders do not differ",
+        assert!(
+            history.iter().any(|piece| piece.tremolo[1] > 0.0),
+            "fixture must form a dense run"
         );
+        let order: Vec<_> = history.iter().map(|piece| piece.core).collect();
+        assert_eq!(order, [color(60.0), color(64.0)], "the run split or painted over the voice");
         let order: Vec<_> = tongues.iter().map(|tongue| tongue.core).collect();
-        assert_eq!(order, [color(64.0), color(60.0)], "the tongues paint in ribbon order");
+        assert_eq!(order, [color(60.0), color(64.0)], "the tongues left the history's order");
     }
 
     #[test]
@@ -3304,7 +3186,7 @@ mod tests {
         assert!(notes.iter().any(|n| n.tremolo[1] > 0.0), "fixture must form dense runs");
         assert!(
             notes.len() <= 2 * 1800 + 64,
-            "dense microtonal segments exploded quadratically across paint_starts: {} instances",
+            "dense microtonal segments exploded quadratically: {} instances",
             notes.len()
         );
     }
@@ -3412,7 +3294,7 @@ mod tests {
             ));
         }
         let notes: Vec<_> = state.roll().notes().collect();
-        let ribbons = density::layout(&notes, 20.0, 2.0, 4.0, f64::NEG_INFINITY);
+        let ribbons = density::layout(&notes, 20.0, 2.0, 4.0);
         assert_eq!(ribbons.len(), 1, "fixture must form one dense ribbon");
         let ribbon = &ribbons[0];
         let segments = ribbon.segments(20.0);
@@ -3435,20 +3317,5 @@ mod tests {
             assert_eq!(look, expected);
             assert_eq!(scratch.points, vec![(t0, expected), (t1, expected)]);
         }
-    }
-
-    #[test]
-    fn push_painted_drops_zero_width_span_regardless_of_paint_start_count() {
-        let mut state = pinned();
-        state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
-        state.runtime.tracker.handle_event(NoteEvent::off(1.5, SourceId::DIRECT, 0, 60));
-        let notes: Vec<_> = state.roll().notes().collect();
-        let ribbons = density::layout(&notes, 2.0, 0.1, 0.2, f64::NEG_INFINITY);
-        let axes = Axes::new(PANE, &state.appearance.spectrum);
-        let time = TimeAxis::new(&state, 0.5, 2.0);
-        let empty = RollInstance { span: [1.0, 1.0], ..RollInstance::PLAIN };
-        let mut painted = Vec::new();
-        push_painted(&mut painted, &ribbons[0], &axes, &time, 1.0, 1.5, empty);
-        assert!(painted.is_empty(), "single-paint_start fast path must drop empty span");
     }
 }
