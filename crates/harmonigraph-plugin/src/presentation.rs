@@ -19,27 +19,28 @@ use harmonigraph_clap::plugin::Boundary;
 /// Steady samples to presentation seconds: one segment, from the first sample
 /// of the processed run it was pinned at. A sample before the segment maps to
 /// its start, so the mapping never goes back and every sample from before the
-/// pin, a gap's included, lands at or before what follows it.
+/// pin, a gap's included, lands at or before what follows it. Unpinned, after
+/// an activation and before its first valid callback, every sample maps to
+/// the time the clock stands at.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Mapping {
-    /// The steady sample the segment starts at, and its presentation time.
-    pin: Option<(i64, f64)>,
+    /// The steady sample the segment starts at.
+    pin: Option<i64>,
+    /// The presentation time of the segment's start.
+    time: f64,
     rate: f64,
 }
 
 impl Mapping {
     #[cfg(test)]
     pub fn pinned(start: i64, time: f64, rate: f64) -> Self {
-        Self { pin: Some((start, time)), rate }
+        Self { pin: Some(start), time, rate }
     }
 
     pub fn at(self, sample: i64) -> f64 {
-        let Some((start, time)) = self.pin else { return 0.0 };
-        if self.rate <= 0.0 {
-            return time;
-        }
+        let Some(start) = self.pin.filter(|_| self.rate > 0.0) else { return self.time };
         // In f64: a caller may pass `i64::MIN` for "never registered".
-        time + (sample as f64 - start as f64).max(0.0) / self.rate
+        self.time + (sample as f64 - start as f64).max(0.0) / self.rate
     }
 }
 
@@ -58,7 +59,8 @@ impl PresentationClock {
     /// A new activation, perhaps at a new rate, pins afresh at its first
     /// valid callback, where the previous one left off.
     pub fn activate(&mut self, rate: f64) {
-        *self = Self { mapping: Mapping { pin: None, rate }, end: self.end, ..Self::default() };
+        let mapping = Mapping { pin: None, time: self.end, rate };
+        *self = Self { mapping, end: self.end, ..Self::default() };
     }
 
     /// A callback's boundary. A valid one that does not start where the last
@@ -68,7 +70,8 @@ impl PresentationClock {
     pub fn begin(&mut self, boundary: &Boundary) {
         self.block = boundary.valid.then_some(boundary.steady_time);
         if boundary.valid && self.ended != Some(boundary.steady_time) {
-            self.mapping.pin = Some((boundary.steady_time, self.end));
+            self.mapping.pin = Some(boundary.steady_time);
+            self.mapping.time = self.end;
         }
     }
 
@@ -100,6 +103,7 @@ impl PresentationClock {
     #[cfg(test)]
     pub fn set_end(&mut self, end: f64) {
         self.end = end;
+        self.mapping.time = end;
     }
 
     /// One processed callback of `frames` at `rate`, running on from the
@@ -141,21 +145,27 @@ mod tests {
             clock.processed(64);
         }
         assert_eq!(clock.end(), 3.0);
-        // Not processed: the next callback starts past where audio ended.
+        // Not processed: the next callback, contiguous with it, starts where
+        // audio ended.
         clock.begin(&boundary(192));
         assert_eq!(clock.start(), 3.0);
-        assert_eq!(clock.end(), 3.0);
-        clock.begin(&boundary(10_000));
-        assert_eq!(clock.start(), 3.0, "the skip closes");
-        let mapping = clock.mapping();
-        assert_eq!(mapping.at(10_064), 4.0);
-        assert_eq!(mapping.at(5_000), 3.0, "a sample in the gap lands at its end");
+        clock.begin(&boundary(256));
+        assert_eq!(clock.start(), 3.0, "the unprocessed callback closes");
         clock.processed(64);
         assert_eq!(clock.end(), 4.0);
-        // An activation runs on from there, wherever its counter starts.
+        clock.begin(&boundary(10_000));
+        assert_eq!(clock.start(), 4.0, "the skip closes");
+        let mapping = clock.mapping();
+        assert_eq!(mapping.at(10_064), 5.0);
+        assert_eq!(mapping.at(5_000), 4.0, "a sample in the gap lands at its end");
+        clock.processed(64);
+        assert_eq!(clock.end(), 5.0);
+        // An activation runs on from there, wherever its counter starts, and
+        // maps everything to where it stands until it is pinned.
         clock.activate(128.0);
+        assert_eq!(clock.mapping().at(0), 5.0);
         clock.begin(&boundary(0));
         clock.processed(64);
-        assert_eq!(clock.end(), 4.5);
+        assert_eq!(clock.end(), 5.5);
     }
 }

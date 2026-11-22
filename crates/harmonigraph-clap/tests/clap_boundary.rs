@@ -548,7 +548,7 @@ fn a_restarted_steady_counter_runs_on_and_is_noticed_once() {
     let samples: Vec<_> = observed().events.iter().map(|input| input.sample).collect();
     assert_eq!(samples, [69, 1133, 1261], "an event's sample is read from the boundary's");
     d.main();
-    assert_eq!(NOTICES.load(Ordering::Relaxed), 1, "two restarts and a skip, one line");
+    assert_eq!(NOTICES.load(Ordering::Relaxed), 1, "the first restart alone");
 }
 
 /// The bytes a save writes and a load reads, those the shell owns: an 8-byte

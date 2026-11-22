@@ -116,3 +116,9 @@ Yan: "I want to be able to easily go between improvising in meantone while visua
 ## 2026-11-22 (Analyzer Audio Input saved as an index, #1886)
 
 - A saved host parameter value that does not decode, such as Analyzer Audio Input's string id from before it saved an index, takes its row's default with a notice (a Console line in a Hub, a log line in a Tune) rather than refusing the whole load; this extends the 2026-11-18 rule that a missing, wrong-typed or unknown value takes the default. Each load of an older save shows the notice once, Main included, until the project is saved again. Yan, 2026-11-22, #1886
+
+## 2026-11-22 (one presentation clock, #1885)
+
+- Steady samples the plugin never processed take no presentation time: a forward gap in the host's counter closes, and the note after it sits on its audio in the editor and in a take. Yan, 2026-11-22, answering #1885's question yes
+- One owner, `PresentationClock` (`crates/harmonigraph-plugin/src/presentation.rs`), produces each callback's start and end and the steady-sample-to-presentation mapping for live analysis, Tape, notes, reset markers and take boundaries; the take format stays. Yan, 2026-11-22
+- The gap closes in the plugin's presentation clock, not in the shell's steady clock: a Tune's records are matched to the Hub's callbacks on the host's counter, which each instance closing its own gaps would set apart. Session (PR for #1885)
