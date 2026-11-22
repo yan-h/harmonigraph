@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
 use std::time::Instant;
 
 use egui_baseview::baseview::FrameTiming;
@@ -10,8 +8,6 @@ use super::clock::ClockMapper;
 /// stays under the editor lock, while the input itself ([`LiveInput`]) is the
 /// input worker's.
 pub(crate) struct DisplayClock {
-    /// Latest rate is for recording controls, never for interpreting queued audio.
-    pub(super) sample_rate_bits: Arc<AtomicU32>,
     /// Wall-clock epoch, also used to age the picture when callbacks stop.
     pub(super) start: Instant,
     /// Audio->GUI clock mapping (see ClockMapper).
@@ -299,12 +295,6 @@ impl LiveInput {
 }
 
 impl DisplayClock {
-    /// The host sample rate the audio thread published, as an f32. It lives
-    /// in an `AtomicU32` as the f32's bit pattern (a lock-free f32); this
-    /// names the bit-cast so its readers can't spell it inconsistently.
-    pub(super) fn sample_rate(&self) -> f32 {
-        f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed))
-    }
     /// The wall clock used to observe incoming batches: seconds since
     /// the PLUGIN was instantiated, not since the window opened.
     ///
@@ -354,11 +344,10 @@ mod tests {
     use super::super::shared::EditorShared;
     use super::{FrameTiming, LiveInput};
     use harmonigraph_core::notes::{NoteEvent, SourceId};
-    use std::sync::Arc;
 
     fn editor() -> EditorShared {
         let (_recorder, control) = harmonigraph_record::channel();
-        EditorShared::new(Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())), control)
+        EditorShared::new(control)
     }
 
     fn audio_harness(capacity: usize) -> (crate::audio_ingress::Producer, EditorShared, LiveInput) {

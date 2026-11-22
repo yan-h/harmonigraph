@@ -126,8 +126,7 @@ pub struct FileWriter {
 impl FileWriter {
     /// Opens `path` and the WAV beside it, as every `Start` does.
     pub fn new(capture: &Capture, path: std::path::PathBuf) -> Self {
-        let open =
-            Recording::create(harmonigraph_take::Header::default(), path, FIXTURE_SPEC).unwrap();
+        let open = Recording::create(harmonigraph_take::Header::default(), path).unwrap();
         assert!(open.audio.is_some());
         Self {
             pump: Pump { open: Some(open), ..Default::default() },
@@ -159,6 +158,10 @@ impl FileWriter {
         if let Some(path) = pumped.finished {
             self.finished = Some(path);
         }
+    }
+    /// The status line the writer left, as `Control::status` reads it.
+    pub fn status(&self) -> String {
+        self.status.lock().clone()
     }
     pub fn failed(&self) -> bool {
         self.fence.failed.load(Ordering::Acquire)

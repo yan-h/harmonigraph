@@ -30,7 +30,7 @@ impl Worker {
         let (recorder, control) = worker_in(&directory);
         let fence = control.fence.clone();
         let worker = Self { recorder: Some(recorder), control: Some(control), fence, directory };
-        worker.control.as_ref().unwrap().start(48_000.0, String::new());
+        worker.control.as_ref().unwrap().start(String::new());
         wait_for("Start", || worker.find_wav().is_some());
         worker.fence.worker_before_commands.enabled.store(true, Ordering::Release);
         wait_for("before command poll", || {
@@ -53,7 +53,7 @@ impl Worker {
         // drain must see both the audio and its alignment before it sees Start.
         fence.worker_after_empty.enabled.store(true, Ordering::Release);
         wait_for("empty command poll", || fence.worker_after_empty.entered.load(Ordering::Acquire));
-        worker.control.as_ref().unwrap().start(48_000.0, String::new());
+        worker.control.as_ref().unwrap().start(String::new());
         if !pending_start {
             fence.worker_after_empty.enabled.store(false, Ordering::Release);
             wait_for("Start opened WAV", || worker.find_wav().is_some());
@@ -62,7 +62,7 @@ impl Worker {
         assert_no_alloc(|| {
             assert!(recorder.is_armed());
             recorder.run(0.0, 0.25);
-            recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
+            recorder.audio(&mut PREFIX.into_iter(), PREFIX.len(), 48_000.0);
         });
         fence.worker_after_empty.enabled.store(false, Ordering::Release);
         // The limit only becomes reachable once the two-frame prefix is on
@@ -175,7 +175,7 @@ fn queued_stop_preserves_the_audio_prefix() {
     assert_no_alloc(|| {
         assert!(recorder.is_armed());
         recorder.run(0.0, 0.25);
-        recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
+        recorder.audio(&mut PREFIX.into_iter(), PREFIX.len(), 48_000.0);
     });
     worker.control.as_ref().unwrap().stop();
     worker.close();
@@ -189,7 +189,7 @@ fn wav_limit_is_reported_and_never_renders_an_incomplete_take() {
     for pending_start in [false, true] {
         let mut worker = Worker::start("size-limit", false, pending_start);
         assert_no_alloc(|| {
-            worker.recorder.as_mut().unwrap().audio(&mut [1.0, -1.0].into_iter(), 2)
+            worker.recorder.as_mut().unwrap().audio(&mut [1.0, -1.0].into_iter(), 2, 48_000.0)
         });
         worker.assert_failed("RIFF size limit");
         worker.stop_with_render();
@@ -221,12 +221,14 @@ fn wav_finalization_failure_is_accounted_without_producer_disconnect() {
 #[test]
 fn the_take_after_a_failed_one_records() {
     let mut worker = Worker::start("after-failure", false, false);
-    assert_no_alloc(|| worker.recorder.as_mut().unwrap().audio(&mut [1.0, -1.0].into_iter(), 2));
+    assert_no_alloc(|| {
+        worker.recorder.as_mut().unwrap().audio(&mut [1.0, -1.0].into_iter(), 2, 48_000.0)
+    });
     worker.stop_with_render();
     worker.assert_failed("RIFF size limit");
     *worker.fence.test_wav_limit.lock() = None;
     let control = worker.control.as_ref().unwrap();
-    control.start(48_000.0, String::new());
+    control.start(String::new());
     assert!(control.is_recording(), "{}", control.status());
     assert_eq!(control.status(), "waiting for playback");
     assert!(!worker.fence.failed.load(Ordering::Acquire), "the failure was the last take's");

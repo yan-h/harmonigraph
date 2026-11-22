@@ -543,7 +543,7 @@ fn a_modulated_camera_is_recorded_modulated_and_saved_unmodulated() {
         let mut shared = shared.lock();
         let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
         harmonigraph_record::testing::set_renderer_program(&shared.take, dir.join("absent"));
-        shared.take.start(48_000.0, shared.ui.picture.appearance.serialize());
+        shared.take.start(shared.ui.picture.appearance.serialize());
         shared.poll_take_end();
         probe
     };

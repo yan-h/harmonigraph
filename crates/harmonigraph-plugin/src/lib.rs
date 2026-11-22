@@ -2,7 +2,6 @@
 //! and the CLAP export. All interesting logic lives in the `harmonigraph-*` crates; this
 //! crate only adapts them to the plugin world.
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use editor::gestures::Gesture;
@@ -116,8 +115,6 @@ use tuning::plugin::HarmonigraphTune;
 pub(crate) const AUDIO_RING_CAPACITY: usize = 131_072;
 
 /// Sample rate assumed until the host reports the real one in `activate`.
-/// Held in two representations (the f64 `sample_rate` field and the f32 bit
-/// pattern in `sample_rate_bits`), so derive both from one constant.
 const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
 
 pub struct Harmonigraph {
@@ -142,8 +139,6 @@ pub struct Harmonigraph {
     params: Arc<HarmonigraphParams>,
     /// Coherent, bounded audio and source metadata for the live analyzer.
     audio_producer: audio_ingress::Producer,
-    /// Current rate for recording controls only; queued audio carries its own.
-    sample_rate_bits: Arc<AtomicU32>,
     /// State shared with the editor; created eagerly, since the input worker
     /// drains into it, and installs a host restore through it, before the
     /// GUI opens.
@@ -745,7 +740,6 @@ fn selected_analysis_input<'a, T: ?Sized>(
 impl Default for Harmonigraph {
     fn default() -> Self {
         let (audio_producer, audio_consumer) = audio_ingress::channel(AUDIO_RING_CAPACITY);
-        let sample_rate_bits = Arc::new(AtomicU32::new((DEFAULT_SAMPLE_RATE as f32).to_bits()));
         let (take, mut take_control) = harmonigraph_record::channel();
         let consumer = take_control.take_display().expect("one display consumer");
         #[cfg(test)]
@@ -755,7 +749,7 @@ impl Default for Harmonigraph {
         let aggregation = tuning::hub::Hub::new();
         let wake = aggregation.shared.clone();
         take_control.set_stop_wakeup(move || wake.request_main());
-        let mut editor = editor::EditorShared::new(sample_rate_bits.clone(), take_control);
+        let mut editor = editor::EditorShared::new(take_control);
         // An edit to what `ui-state` saves marks the project modified, as a
         // musical setting's does (#1813).
         let settings = params.settings.clone();
@@ -780,7 +774,6 @@ impl Default for Harmonigraph {
             aggregation: Some(aggregation),
             params,
             audio_producer,
-            sample_rate_bits,
             editor_shared,
             editor_host: None,
             sample_rate: DEFAULT_SAMPLE_RATE,
@@ -900,7 +893,7 @@ impl Harmonigraph {
                 let wanted = block_samples * TAKE_CHANNELS;
                 let mut interleaved =
                     (0..block_samples).flat_map(|frame| take_stereo_frame(planes, frame));
-                self.take.audio(&mut interleaved, wanted);
+                self.take.audio(&mut interleaved, wanted, self.sample_rate as f32);
             }
         }
 
@@ -966,7 +959,6 @@ impl Plugin for Harmonigraph {
             .unwrap()
             .activate(f64::from(config.sample_rate), config.max_buffer_size);
         self.sample_rate = f64::from(config.sample_rate);
-        self.sample_rate_bits.store(config.sample_rate.to_bits(), Ordering::Relaxed);
         self.offline = config.process_mode == ProcessMode::Offline;
         // The editor's device and its loading job, started here so a first
         // open finds them (#1746). On macOS, the one platform that ships; not

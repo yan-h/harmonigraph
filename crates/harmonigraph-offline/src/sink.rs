@@ -949,8 +949,8 @@ mod tests {
         if let Some(click) = click {
             samples[(click * f64::from(rate)).round() as usize] = 0.8;
         }
-        let mut writer = harmonigraph_take::WavWriter::create(path, rate as f32, 1).unwrap();
-        writer.write(&samples).unwrap();
+        let mut writer = harmonigraph_take::WavWriter::create(path, 1).unwrap();
+        writer.write(rate as f32, &samples).unwrap();
         writer.finish().unwrap();
     }
 

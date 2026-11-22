@@ -32,7 +32,7 @@ fn record_block(recorder: &mut Recorder, at: f64, origin: f64, key: u8, level: f
     ] {
         recorder.publish_note(event.into()).expect_both();
     }
-    recorder.audio(&mut std::iter::repeat_n(level, 128), 128);
+    recorder.audio(&mut std::iter::repeat_n(level, 128), 128, 48_000.0);
     recorder.run_end(at + duration);
 }
 
@@ -138,7 +138,7 @@ fn a_failed_take_is_marked_and_sealed_unrendered() {
     let mut writer = testing::FileWriter::new(&capture, file.clone());
     recorder.run(1.0, 0.0);
     let samples = AUDIO_RING_CAPACITY + 256;
-    recorder.audio(&mut std::iter::repeat_n(0.5, samples), samples);
+    recorder.audio(&mut std::iter::repeat_n(0.5, samples), samples, 48_000.0);
     recorder.run_end(2.0);
     writer.drain(&mut capture);
     assert!(writer.failed());
@@ -169,7 +169,7 @@ fn a_recorder_dropped_mid_take_fails_it() {
 fn the_real_worker_seals_a_stopped_take_and_renders_it() {
     let directory = path("worker").parent().unwrap().to_path_buf();
     let (mut recorder, control) = worker_in(&directory);
-    control.start(48000.0, String::new());
+    control.start(String::new());
     assert!(recorder.is_armed());
     let file = || {
         std::fs::read_dir(&directory)
@@ -181,7 +181,7 @@ fn the_real_worker_seals_a_stopped_take_and_renders_it() {
     record_block(&mut recorder, 1.0, 0.0, 60, 0.25);
     control.stop();
     assert!(!recorder.is_armed());
-    control.start(48000.0, String::new());
+    control.start(String::new());
     assert!(!control.is_recording(), "Start waits for the previous take to seal");
     until(|| control.last_take().is_some());
     assert_eq!(control.last_take(), file());

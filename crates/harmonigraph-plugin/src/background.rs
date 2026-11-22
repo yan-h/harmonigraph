@@ -482,7 +482,6 @@ fn run(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicU32;
     use std::time::Instant;
 
     use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
@@ -514,8 +513,7 @@ mod tests {
         let (notes, note_consumer) = harmonigraph_record::publication::channel();
         let (audio, audio_consumer) = crate::audio_ingress::channel(crate::AUDIO_RING_CAPACITY);
         let (recorder, take_control) = harmonigraph_record::channel();
-        let shared =
-            EditorShared::new(Arc::new(AtomicU32::new(48_000.0f32.to_bits())), take_control);
+        let shared = EditorShared::new(take_control);
         Harness {
             shared: Arc::new(EditorLock::new(shared, Arc::default())),
             recorder,
@@ -815,7 +813,7 @@ mod tests {
             // pane's toggle reaches: this test is about what happens with no
             // frame running, so it must not need one to set up either.
             let appearance = shared.ui.picture.appearance.serialize();
-            shared.take.start(48_000.0, appearance);
+            shared.take.start(appearance);
             assert!(shared.take.is_recording(), "armed");
         }
         // Something captured — one note, as the Hub publishes it into the

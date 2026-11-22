@@ -17,8 +17,8 @@ fn take(path: &Path, seconds: f64, trigger: RenderTrigger, tail: Option<f64>, he
     if let Some(tail) = tail {
         appearance.render.tail = tail;
     }
-    let mut wav = WavWriter::create(path.with_extension("wav"), 48_000.0, 1).unwrap();
-    wav.write(&vec![0.0; (seconds * 48_000.0) as usize]).unwrap();
+    let mut wav = WavWriter::create(path.with_extension("wav"), 1).unwrap();
+    wav.write(48_000.0, &vec![0.0; (seconds * 48_000.0) as usize]).unwrap();
     wav.finish().unwrap();
     let wav = path.with_extension("wav").file_name().unwrap().to_str().unwrap().to_owned();
     let mut take = Writer::create(
