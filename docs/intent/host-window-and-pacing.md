@@ -64,3 +64,8 @@ Yan took the recommendations made after the audit was checked against the code (
 - The Record breath and the export stripes keep their 30 Hz cadence (#1861 Q1): every frame of a breath differs, so pacing by pixel would put it back at the display rate.
 - The heatmap's tail is paced too: every frame while the display it reads moves or Stars twinkle, and otherwise at the sooner of its scroll's and its cloud drift's next device pixel, with the colour memory stepped at that pace.
   Yan accepted the visual change "as long as shader effects are not significantly affected" (2026-11-21, in chat, #1914): the drift keeps its motion, Stars keep every frame, and only the colour memory's ease is stepped, by about twice the 30-against-60 fps difference measured in `MemoryFrame::follow`.
+
+## 2026-11-21 (egui 0.37 and wgpu 30, PR #1916, in chat)
+
+- The editor's surface is colour-managed as sRGB, as wgpu 30 configures it by default, rather than left unmanaged as under wgpu 29, which showed its colours more saturated on a wide-gamut display.
+  Yan kept it: the editor reads closer to the exported video (tagged BT.709). PR #1916
