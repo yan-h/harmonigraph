@@ -15,7 +15,7 @@ use harmonigraph_clap::plugin::Boundary;
 use harmonigraph_core::canonical::{NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
-use harmonigraph_core::tuning::{fifths_for_midi, fifths_offset, PitchClass};
+use harmonigraph_core::tuning::{fifths_for_midi, fifths_offset};
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
 
@@ -25,7 +25,7 @@ use super::event::Event;
 use super::session::{self, Copied, HubEnds, Reply};
 use super::state::{Stamp, State};
 use super::tune::Tune;
-use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_VOICES, TUNERS};
+use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, TUNERS};
 
 type Owner = crate::configuration::Owner;
 
@@ -409,9 +409,6 @@ impl Hub {
             session::session().cut();
         }
         self.tune.begin(callback);
-        // Learn reads the rows as this leaves them (`held_classes`), before
-        // this callback's input boundary moves them: a cut or departure
-        // adopted here has already emptied what it ended.
         self.adopt();
         if forget {
             self.sequencer.forget_history();
@@ -419,9 +416,9 @@ impl Hub {
         self.detect_loop(callback);
         // Adopt even on callbacks with no note input, so silence expiry below
         // uses the policy rather than the last onset's configuration. It is
-        // the policy the previous callback left: the configuration owner
-        // reduces this callback's queued editor edits after `begin`, so an
-        // edit governs expiry from the callback after it arrives.
+        // the policy the previous callback left: the configuration owner reads
+        // the document's latest configuration after `begin`, so an edit
+        // governs expiry from the callback after it arrives.
         self.sequencer.config = owner.current().into();
         // Silence expires released memory against the completed input
         // frontier, which is this callback's start: everything before it has
@@ -1223,25 +1220,6 @@ impl Hub {
         }
     }
 
-    /// What Learn reads, written into `scratch` with its count: the pitch
-    /// class of every voice every row holds, in row order and with repeats,
-    /// its adaptive correction taken back off (`State::learnable`).
-    /// `LearningState` sorts and deduplicates. Learn hears every row, Retune
-    /// off included: Retune decides what the Hub corrects, and an uncorrected
-    /// note is the player's pitch Learn reads. Learn does not run while
-    /// Decode fifths is on (`PolicyConfig::learns`), so no row's keys are read
-    /// here as the lattice-board's.
-    pub fn held_classes(&self, scratch: &mut [PitchClass; HELD_VOICES]) -> usize {
-        let mut count = 0;
-        for row in &self.rows {
-            for pitch in row.state.learnable() {
-                scratch[count] = PitchClass::from_microcents(pitch);
-                count += 1;
-            }
-        }
-        count
-    }
-
     fn presentation(&self, sample: i64) -> f64 {
         self.mapping.at(sample)
     }
@@ -1329,12 +1307,6 @@ impl Hub {
         }
     }
 
-    /// Whether any source this Hub sequences, its own included, has Retune on,
-    /// as of this callback's `begin`. The configuration owner also checks the
-    /// engine before reserving Learn's axes for an active retuning target.
-    pub fn retuning(&self) -> bool {
-        self.rows.iter().any(|row| row.live && row.retune & 1 != 0)
-    }
     pub fn end(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
         // A callback whose audio did not run still publishes what it
         // sequenced.

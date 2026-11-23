@@ -209,10 +209,10 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
     hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
     hub.run(256, vec![note(1, 0, 67, 9, true)], None);
     let fifth = harmonigraph_core::tuning::microcents(699.0);
-    assert!(settings(&hub).submit(harmonigraph_core::configuration::ConfigEdit::axis(
+    settings(&hub).submit(harmonigraph_core::configuration::ConfigEdit::axis(
         harmonigraph_core::configuration::TuningAxis::Three,
-        fifth
-    )));
+        fifth,
+    ));
     hub.run(512, vec![note(2, 0, 79, 10, true)], None);
     assert_eq!(
         voice(&hub, crate::tuning::DIRECT, 67).frozen_offset_microcents,
@@ -334,7 +334,7 @@ fn a_held_over_onset_keeps_its_own_blocks_configuration_across_an_editor_edit() 
     hub.run_format(1536, vec![], None, None, 512);
     source.run_format(1536, vec![note(1, 0, 55, 0, true)], None, None, 512);
     let edit = ConfigEdit::axis(harmonigraph_core::configuration::TuningAxis::Three, 699_000_000);
-    assert!(settings(&hub).submit(edit));
+    settings(&hub).submit(edit);
     hub.run_format(2048, vec![note(2, 0, 67, 0, true)], None, None, 512);
     let just = harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST);
     let held_over = voice(&hub, 0, 55);
@@ -584,7 +584,7 @@ impl Decoding {
             follow_spellings,
             ..Default::default()
         };
-        assert!(settings(&hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() }));
+        settings(&hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
         let mut decoded = tune();
         decoded.activate_format(48_000.0, 128);
         let mut plain = tune();
@@ -818,9 +818,7 @@ fn follow_spellings_slides_the_strip_until_the_context_resets() {
         decoded_fifth: 696_578_428,
         ..Default::default()
     };
-    assert!(
-        settings(&session.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() })
-    );
+    settings(&session.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
     assert_eq!(a(&mut session), Some(five_three), "the strip stays where the Position put it");
 }
 
@@ -929,9 +927,7 @@ fn reset_on_loop_counts_the_first_group_after_the_seek() {
         reset_loop: true,
         ..Default::default()
     };
-    assert!(
-        settings(&session.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() })
-    );
+    settings(&session.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
     // Parked at 5 s, then at 1 s: a seek.
     for seconds in [5.0, 5.0, 1.0] {
         let raw = session.raw;

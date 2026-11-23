@@ -22,8 +22,8 @@ open at their defaults both when the save lacks them and when they do not parse;
 one that does not parse also writes a line in the log and, in a Hub, one in the Console naming it, which opens on it, and the rest of the restore goes ahead.
 This supersedes the rule that such a field refused the whole restore with a line in the log alone:
 the editor then stayed untouched, so the next save wrote the fresh look over the project's (#1927).
-Only a full tuning edit queue still refuses a restore whole, with a Console line that opens the Console:
-it is passing, and refusing keeps the instance's look and tuning together until the project is loaded again.
+Nothing in these fields refuses a restore whole:
+the tuning edit queue that once could is gone, since the main thread owns the tuning record and a restore writes it at once (#1938).
 A parameter value is saved as an integer or a float (`ParamValue`), a choice by its index.
 One that does not decode, such as one under a variant `ParamValue` no longer has, decodes as `ParamValue::Unread` and costs that value alone:
 its row opens at its default with a line in the log (`Table::defaulted`), and a Hub also writes a Console line and opens the Console; a Tune only logs.

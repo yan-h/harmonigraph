@@ -64,12 +64,13 @@ impl PolicyConfig {
     pub fn board_drawn(&self, engine: TuningEngine) -> bool {
         engine == TuningEngine::Off && self.decode_fifths
     }
-    /// Whether Learn runs under `engine`. Lattice Map reads its own map
-    /// instead, and with Decode fifths on the lattice-board declares its
-    /// tuning, which the lattice is drawn in under Pass through: Learn is
-    /// suspended in both.
+    /// Whether Learn runs under `engine`: Pass through alone, where nothing
+    /// retunes and the lattice draws what is played (#1938 C). Lattice Map
+    /// reads its own map instead, Adaptive's retuning target is the lattice
+    /// itself, and with Decode fifths on the lattice-board declares its
+    /// tuning, which the lattice is drawn in under Pass through.
     pub fn learns(&self, engine: TuningEngine) -> bool {
-        engine != TuningEngine::LatticeMap && !self.decode_fifths
+        engine == TuningEngine::Off && !self.decode_fifths
     }
     pub fn sanitize(mut self) -> Self {
         self.radius = self.radius.clamp(1, 5);
@@ -85,48 +86,6 @@ impl PolicyConfig {
         self.decoded_fifth = TuningAxis::Three.clamp(self.decoded_fifth);
         self
     }
-    /// Words [`Self::words`] takes.
-    pub const WORDS: usize = 10;
-    /// The policy as the settings seqlock carries it, one word per field but
-    /// the first, which packs the radius, the axes, the two reset flags
-    /// (bits 26 and 27), Decode fifths (bit 28) and Follow spellings (bit 29).
-    pub fn words(self) -> [i32; Self::WORDS] {
-        [
-            i32::from(self.radius)
-                | i32::from(self.axes) << 8
-                | i32::from(self.reset_stop) << 26
-                | i32::from(self.reset_loop) << 27
-                | i32::from(self.decode_fifths) << 28
-                | i32::from(self.follow_spellings) << 29,
-            i32::from(self.pitch_flexibility),
-            i32::from(self.half_life_ms),
-            i32::from(self.register),
-            self.tolerance as i32,
-            self.silence_ms as i32,
-            self.keyboard[0],
-            self.keyboard[1],
-            self.keyboard[2],
-            self.decoded_fifth,
-        ]
-    }
-    pub fn from_words(w: [i32; Self::WORDS]) -> Self {
-        Self {
-            radius: w[0] as u8,
-            axes: (w[0] >> 8) as u8,
-            reset_stop: w[0] & (1 << 26) != 0,
-            reset_loop: w[0] & (1 << 27) != 0,
-            decode_fifths: w[0] & (1 << 28) != 0,
-            follow_spellings: w[0] & (1 << 29) != 0,
-            pitch_flexibility: w[1].clamp(1, 100) as u16,
-            half_life_ms: w[2] as u16,
-            register: w[3] as u16,
-            tolerance: w[4].max(0) as u32,
-            silence_ms: w[5].max(0) as u32,
-            keyboard: [w[6], w[7], w[8]],
-            decoded_fifth: w[9],
-        }
-        .sanitize()
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,6 +97,11 @@ pub struct ResolvedConfig {
 }
 
 impl ResolvedConfig {
+    /// Whether Learn acts under `engine`: armed, and an engine it runs under
+    /// ([`PolicyConfig::learns`]).
+    pub fn learn_acts(&self, engine: TuningEngine) -> bool {
+        self.modes.learning && self.policy.learns(engine)
+    }
     /// This configuration as the lattice is drawn and a take records it under
     /// `engine`. Where [`PolicyConfig::board_drawn`], the fifth is the Decoded fifth
     /// with Meantone linked, since the board names a third as four fifths;
@@ -274,12 +238,10 @@ pub enum ConfigMutation {
         policy: PolicyConfig,
     },
     /// Learn classifies its unconstrained evidence before imposing any links.
-    /// The learned origin replaces the raw one. With retuning active, only the
-    /// origin and keyboard are learned: the lattice intervals remain the
-    /// target. Otherwise every learned interval replaces its raw one too.
+    /// Every learned value replaces its raw one, and the keyboard follows the
+    /// learned fifth.
     LearnResolved {
         learned: LearnedTuning,
-        retuning: bool,
     },
 }
 
@@ -382,19 +344,16 @@ impl ConfigReducer {
                     self.modes.learning = on;
                 }
             }
-            ConfigMutation::LearnResolved { learned, retuning } => {
+            ConfigMutation::LearnResolved { learned } => {
                 if let Some(three) = learned.three {
                     self.resolved.policy.keyboard =
                         crate::tuning::fifth_generated(crate::tuning::microcents(three));
                 }
-                if !retuning {
-                    self.modes = learned_modes(learned, self.modes);
-                }
+                self.modes = learned_modes(learned, self.modes);
                 let mut axes = self.raw.axes();
                 let found = [learned.c_offset, learned.three, learned.five, learned.seven];
                 for (axis, cents) in TuningAxis::ALL.into_iter().zip(found) {
-                    let learns = axis == TuningAxis::COffset || !retuning;
-                    if let Some(cents) = cents.filter(|_| learns) {
+                    if let Some(cents) = cents {
                         axes[axis.index()] = axis.clamp(crate::tuning::microcents(cents));
                     }
                 }
@@ -481,30 +440,8 @@ mod tests {
             five: Some(900.0),
             seven: Some(1.0),
         };
-        reducer.apply(ConfigMutation::LearnResolved { learned, retuning: false });
+        reducer.apply(ConfigMutation::LearnResolved { learned });
         assert!(held(reducer.raw()), "learn: {:?}", reducer.raw());
-    }
-
-    /// Under retuning the lattice intervals are the target, so Learn moves the
-    /// origin alone; without it, every interval it heard too.
-    #[test]
-    fn learn_under_retuning_moves_only_the_origin() {
-        let learned = LearnedTuning {
-            c_offset: Some(10.0),
-            three: Some(THREE_JUST),
-            five: Some(FIVE_JUST),
-            seven: Some(crate::tuning::SEVEN_JUST),
-        };
-        let mut retuned = ConfigReducer::default();
-        let before = retuned.raw();
-        retuned.apply(ConfigMutation::LearnResolved { learned, retuning: true });
-        let raw = retuned.raw();
-        assert_eq!(raw.c_offset, microcents(10.0));
-        assert_eq!([raw.three, raw.five, raw.seven], [before.three, before.five, before.seven]);
-        let mut passed = ConfigReducer::default();
-        passed.apply(ConfigMutation::LearnResolved { learned, retuning: false });
-        assert_eq!(passed.raw().c_offset, microcents(10.0));
-        assert_eq!(passed.raw().five, microcents(FIVE_JUST));
     }
 
     #[test]
@@ -630,7 +567,6 @@ mod tests {
         }
         reducer.apply(ConfigMutation::LearnResolved {
             learned: LearnedTuning { three: Some(696.58), ..Default::default() },
-            retuning: false,
         });
         assert_eq!(reducer.resolved().modes.tempered, Tempered::default());
         reducer.apply(ConfigMutation::LearnResolved {
@@ -640,7 +576,6 @@ mod tests {
                 seven: Some(965.8),
                 ..Default::default()
             },
-            retuning: false,
         });
         assert_eq!(reducer.resolved().modes.tempered, TuningModes::default().tempered);
         let learned = LearnedTuning {
@@ -655,9 +590,5 @@ mod tests {
             modes.tempered.septimal_kleisma,
             "Marvel uses played 386, not the old linked third"
         );
-        let before = reducer.resolved();
-        reducer.apply(ConfigMutation::LearnResolved { learned, retuning: true });
-        assert_eq!(reducer.resolved().tuning, before.tuning);
-        assert_eq!(reducer.resolved().modes, before.modes);
     }
 }

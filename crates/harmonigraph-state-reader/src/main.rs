@@ -64,7 +64,7 @@ enum Output {
 
 fn main() -> ExitCode {
     // The shell's log lines (a parameter the save names and no row has, a
-    // field refused) go to stderr, as they go to the log in a plugin.
+    // field that does not parse) go to stderr, as they go to the log in a plugin.
     harmonigraph_clap::wrapper::setup_logger();
     match run() {
         Ok(()) => ExitCode::SUCCESS,

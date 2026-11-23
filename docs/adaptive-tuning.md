@@ -344,31 +344,34 @@ The UI mirrors that resolved configuration rather than running a competing autho
 The five tuning axes (C offset, fifth, third, seventh and tolerance) are the plugin's own settings, not host parameters ([#1756](https://github.com/yan-h/harmonigraph/issues/1756)):
 nothing automates, modulates or maps them.
 The raw axes, the links, Learn and the adaptive policy are one record in the plugin's `musical-settings` field.
-The editor queues typed edits that the Hub's audio owner applies in arrival order,
-and the owner publishes the result through one seqlock that the editor and a save read.
-A restore queues its record behind any edit already queued, and until the owner applies it the editor shows the restored record and a save stores it.
-An applied editor edit or Learn result has the host mark the project modified;
+The main thread owns that record, as it owns the Lattice Map document ([#1938](https://github.com/yan-h/harmonigraph/issues/1938)):
+the editor's typed edits, Learn and a restore write it at once, so the editor shows and a save stores each as it is made, with or without audio running,
+and the Hub's audio copies it at each callback's start.
+An editor edit or a Learn result that changes what the record saves has the host mark the project modified, when it is made;
+a restore marks nothing.
 Bitwig's own undo does not cover them.
 
 Adoption is **sample-exact**, under every engine.
-At the start of each enclosing Hub audio callback, pending editor edits are adopted coherently and enter one sample-indexed configuration history at the block's start;
+At the start of each enclosing Hub audio callback, the record as it stands is copied and enters one sample-indexed configuration history at the block's start;
+what audio reads is the configuration the last finished write published, wait-free and with no lock, so an edit still being written at that instant enters at the next;
 Lattice Map automation enters it at its own input sample.
 Every assignment group uses the configuration in force at its input sample,
 including a record held over from an earlier callback;
 the batch runs to completion at its input boundary.
 Where the history no longer reaches that sample (a steady-clock regression clears it), every engine assigns from the live state:
-the configuration the reducer holds now, and under Lattice Map the current map (#1792).
+the configuration the callback copied, and under Lattice Map the current map (#1792).
 Once assigned, the adaptive correction and harmonic onset reference stay fixed through later edits and delayed emission.
 Already sounding notes keep that choice while later player expression and MIDI channel bend can still move their emitted pitch.
 
 A recognized temperament link takes effect with the edit that made it.
-Learn results become effective at the next block boundary:
-Learn reads the Hub's rows as the Hub's callback start leaves them, which is everything sequenced through the previous callback,
-and applies at the block's start after the walk, so it rides the next adoption rather than entering the history out of order.
+Learn runs in the plugin's input worker, beside the lattice ([#1938](https://github.com/yan-h/harmonigraph/issues/1938) shape C):
+it hears the notes the lattice holds, with the per-note tuning and channel bend they were played with, every source's but the tape's and a hidden one's included,
+and writes the record as an edit does, so its result rides the next callback's copy.
+It runs whether the editor is open, covered or closed, every 4 ms with the window open and every 20 ms with it shut.
 Display and recording use the configuration actually adopted, and take replay reuses the recorded pitches, times and configurations instead of re-running inference.
 
 Ordinary tuning edits do not reset the plugin or change its reported latency.
-An editor edit or a Learn result can wait about one host block; Lattice Map automation lands at its own sample, so the DAW's block size does not change assignment results near it.
+An editor edit can wait about one host block, and a Learn result one worker step more; Lattice Map automation lands at its own sample, so the DAW's block size does not change assignment results near it.
 Replay of a recorded take still follows the recorded results.
 
 ## Membership
@@ -379,12 +382,8 @@ A successful claim and a return both bump the session epoch.
 
 **Retune** and **Show** are independent saved controls for every instance, including Harmonigraph's own input.
 Retune off passes arriving notes and player expression through without adaptive correction and excludes them from all adaptive context and memory.
-Learn still hears them:
-an uncorrected note is exactly the player's pitch Learn reads, so a tuner in front of Harmonigraph with Retune off everywhere is what Learn learns from.
-What Learn writes depends on Retune and the engine:
-with Retune on anywhere under Adaptive, the lattice is the target, and Learn moves only the C offset and the [keyboard tuning](adaptive-tuning-plugin.md#keyboard-tuning).
-Under Pass through, Learn updates the lattice axes too;
-Lattice Map suspends Learn, and so does Decode fifths under every engine.
+Learn runs under Pass through alone, where nothing is retuned and the lattice draws what is played, so a tuner in front of Harmonigraph is what Learn learns from;
+Lattice Map and Adaptive suspend it, and so does Decode fifths.
 Switching it off removes that source's held context, released memory and owned moving reference on the Hub's next callback.
 Already sounding notes keep their correction through release, including subsequent player expression;
 turning Retune back on admits new attacks only.
@@ -615,7 +614,7 @@ Shrinking a buffer does not make its overflow path unreachable.
 | Constant | Value | Resource |
 |---|---:|---|
 | `TUNERS` | 16 | Tune rows in the session; the Hub's own track is a seventeenth source with a reserved index |
-| `HELD_PER_SOURCE` | 64 | Held voices per source. Learn hears every voice every row holds |
+| `HELD_PER_SOURCE` | 64 | Held voices per source |
 | `PENDING_EVENTS` | 8,192 | Retained events in one Tune's delay line, including unrelated MIDI |
 | `CAPTURE_RING` / `REPLY_RING` | 1,024 / 1,024 | The two rings per row. A full capture ring costs that note its correction |
 | `BATCH_EVENTS` | 2,048 | Records one ordering pass holds across every source, and deltas one callback may publish |
@@ -647,13 +646,9 @@ a receiving instrument may ignore, smooth or modulate the expression.
 
 One provenance reaches the take now rather than two, so records carry none (#1798):
 an unsequenced delta is a direct observation, and a sequenced one is what a source played and names its press by a lifetime.
-Learning is the one consumer that reads something else:
-it is given the **player's** pitch, with the adaptive correction taken back off.
-Every row is tuned now, the Hub's own included, so feeding Learn what was emitted would make it a fixed point that infers the axes it has already chosen.
-The old design avoided that only because the Hub's own track was the one thing it did not retune.
-Learn also reads one callback later than it used to, because it reads the Hub's own input through the Hub's rows like everyone else's;
-the configuration walk that runs it happens before the performance input for that callback is delivered.
-It reads the Hub's rows themselves (`Hub::held_classes`), as the Hub's callback start leaves them.
+Learn reads what the lattice holds (#1938), which under Pass through, the one engine it runs under, is the player's pitch.
+It hears each note at its incoming pitch, the correction a tuner froze on it taken back off, so a chord held across a switch from Lattice Map to Pass through teaches the pitch it was played at, as a note struck decoded does once Decode fifths is off (Yan, #1942).
+A processing stop ends every held note but the tape's in the lattice itself, at its place in the note stream, so Learn needs no cut of its own and a restart's notes after it stay held (Yan, #1948).
 A row that lost a release copy to a full ring and then filled its 64 voices reads its stuck voices, as the lattice draws them, until the next cut (#1798 H5).
 
 Publication is two independent lanes, one for the display and one for the take, and the rule that keeps them independent is stated as a type:
@@ -708,7 +703,7 @@ Bitwig was measured sending none at 44.1 kHz through loops, seeks and export (`a
 
 The [CLAP boundary audit](audits/clap-boundary-1415.md) records the lock ownership and allocation-check reach of the input pool this replaced.
 The owned-parameter mailbox it audited went with #1756, and the pool, its cursors and its walks with #1814.
-The plugin's own edit queue snapshots its queued prefix once per callback, so concurrent edits and restores cannot extend audio-thread work indefinitely.
+Each write of the tuning record publishes its resolved configuration, at most 128 bytes, through a triple buffer audio reads wait-free, so concurrent edits and restores cannot extend audio-thread work and audio takes no lock.
 
 **The output scheduler is gone** ([#789](https://github.com/yan-h/harmonigraph/issues/789), after [#786](https://github.com/yan-h/harmonigraph/issues/786) and [#788](https://github.com/yan-h/harmonigraph/issues/788) had already emptied it of callers).
 `Group`, `Lane`, `Token`, `Completion`, `Disposition`, the ready heap, the cell pool and the emergency lane are deleted, and with them the hooks that had nothing left to decide.
@@ -818,9 +813,7 @@ If what it drops is a note-OFF rather than a note-on, the Hub goes on holding a 
 an unbypass mid-note is Bitwig's bypass behavior, as for any note effect.
 10. A destroyed Tune cannot release what it is holding, because no callback follows its destruction.
 The instrument's own voices end with the device, which is what deleting a note effect mid-note does anyway.
-11. Learn reads one callback later than the input it learns from, and reads the player's pitch rather than the emitted one.
-Both follow from the Hub tuning its own notes;
-the second is what keeps Learn from becoming a fixed point.
+11. Learn reads the lattice in the input worker, a worker step after the notes reach it, and runs under Pass through alone (#1938).
 
 ## Open, deferred and not built
 
@@ -867,6 +860,6 @@ The code seams:
 - [`harmonigraph-plugin/src/tuning`](../crates/harmonigraph-plugin/src/tuning/mod.rs) — the Tune's delay line, the Hub's ordering pass, the process-wide session and the cut;
 - [`harmonigraph-core/src/policy.rs`](../crates/harmonigraph-core/src/policy.rs) — the musical decision, pure and allocation-free;
 - [`harmonigraph-core/src/notes.rs`](../crates/harmonigraph-core/src/notes.rs) and [`roll.rs`](../crates/harmonigraph-core/src/roll.rs) — source-aware tracking and live history, off the audio thread;
-- [`harmonigraph-plugin/src/configuration.rs`](../crates/harmonigraph-plugin/src/configuration.rs) — effective CLAP tuning on audio, including editor-independent learning;
+- [`harmonigraph-plugin/src/configuration.rs`](../crates/harmonigraph-plugin/src/configuration.rs) — the tuning record the main thread owns, and audio's copy of it each callback;
 - [`harmonigraph-record/src/publication.rs`](../crates/harmonigraph-record/src/publication.rs) — the two independent lanes;
 - [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) — take format, source and reset scope.

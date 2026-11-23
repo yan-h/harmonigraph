@@ -110,8 +110,11 @@ pub(crate) const SHUT_POLL: Duration = Duration::from_millis(20);
 
 /// The input worker's thread, and the flag that ends it.
 ///
-/// Held by the plugin purely for its [`Drop`]: a plugin removed from a project
-/// must not leave a thread behind doing FFTs on a ring nobody fills again.
+/// Held by the plugin to stop it: `Plugin::destroy` stops and joins it, so no
+/// step or host wake of its outlives the plugin's destruction, and its
+/// [`Drop`] does the same for a plugin dropped without one. A plugin removed
+/// from a project must not leave a thread behind doing FFTs on a ring nobody
+/// fills again.
 pub(crate) struct InputWorker {
     stop: Arc<AtomicBool>,
     /// Completed loop rounds, exposed only to tests that need an observable
@@ -148,6 +151,7 @@ impl InputWorker {
         tape: crate::tape::Worker,
         input: LiveInput,
         lights: Option<crate::board::Lights>,
+        learn: Option<Arc<crate::HarmonigraphParams>>,
     ) -> InputWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -161,8 +165,9 @@ impl InputWorker {
             .spawn(move || {
                 raise_to_gui_priority();
                 let (mut tape, mut input, mut lights) = (tape, input, lights);
+                let learn = learn.as_deref();
                 #[cfg(not(test))]
-                run(&worker, &editor_state, &mut tape, &mut input, &mut lights, &flag);
+                run(&worker, &editor_state, &mut tape, &mut input, &mut lights, learn, &flag);
                 #[cfg(test)]
                 run(
                     &worker,
@@ -170,6 +175,7 @@ impl InputWorker {
                     &mut tape,
                     &mut input,
                     &mut lights,
+                    learn,
                     &flag,
                     &worker_rounds,
                 );
@@ -199,6 +205,12 @@ impl InputWorker {
     #[cfg(test)]
     pub(crate) fn completed_rounds(&self) -> u64 {
         self.rounds.load(Ordering::Acquire)
+    }
+
+    /// Stop the thread and wait for it, at the plugin's destruction: no step,
+    /// nor a host wake one makes, outlives this.
+    pub(crate) fn stop(&mut self) {
+        self.stop_and_join();
     }
 
     /// Stops the thread and waits for it, and what it handed back; `None`
@@ -310,6 +322,7 @@ fn step(
     editor_state: &EguiState,
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
+    learn: Option<&crate::HarmonigraphParams>,
 ) {
     // What the exchange displaced from the view, freed at the end of the step:
     // declared before either hold's guard, so it outlives both, an early
@@ -318,7 +331,7 @@ fn step(
     // format change clears a 25-minute tape, can delay the next step's drain,
     // though never under the lock.
     let _displaced;
-    let (taken, struck) = {
+    let (taken, struck, learned) = {
         let mut guard = shared.lock();
         let shared = &mut *guard;
         let now = shared.clock.now();
@@ -333,6 +346,8 @@ fn step(
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
         let struck = newest_onset(&shared.ui.picture.runtime) > onset;
+        let learned =
+            learn.is_some_and(|params| self::learn(params, &mut shared.ui.picture.runtime));
         // A frame's duties that must not wait for one: none runs while the
         // editor cannot be seen, open or not. Every trigger but OnDisarm is
         // decided in `poll_take_end`, so without it here an armed take would
@@ -341,8 +356,12 @@ fn step(
         let display = shared.clock.display_now(now);
         shared.ui.picture.runtime.advance_time(display, &shared.ui.picture.appearance);
         shared.poll_take_end();
-        (taken, struck)
+        (taken, struck, learned)
     };
+    // Out of the editor lock: the host's wake must not run under it (#1924 C).
+    if let Some(params) = learn.filter(|_| learned) {
+        params.settings.changed();
+    }
     // Asked once the lock is let go, so the pass it runs does not wait on it.
     if struck {
         editor_state.request_pass();
@@ -401,10 +420,11 @@ fn guarded_step(
     editor_state: &EguiState,
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
+    learn: Option<&crate::HarmonigraphParams>,
     panicked: &mut bool,
 ) -> bool {
     let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        step(shared, editor_state, tape, input)
+        step(shared, editor_state, tape, input, learn)
     }));
     if stepped.is_err() {
         input.restart_analysis();
@@ -422,6 +442,21 @@ fn guarded_step(
     true
 }
 
+/// One step of Learn (#1938 C), from the notes the step just drained: here
+/// rather than in a frame, so it learns with the window covered or shut, as
+/// it did on audio. The gate, the inference and the result are one write of
+/// the document (`Settings::learn`). The editor's lock is held, then the
+/// document's: the order a frame takes them in. Whether what the project
+/// saves changed, for the caller to mark once the editor lock is let go.
+fn learn(params: &crate::HarmonigraphParams, runtime: &mut harmonigraph_ui::VisualRuntime) -> bool {
+    let engine = || {
+        harmonigraph_core::lattice_map::TuningEngine::from_index(
+            params.int(crate::Row::TuningEngine),
+        )
+    };
+    params.settings.learn(engine, |armed| runtime.learn(armed))
+}
+
 /// How many consecutive steps may panic before the worker stops trying.
 const MAX_PANICS_IN_A_ROW: u32 = 8;
 
@@ -429,19 +464,22 @@ const MAX_PANICS_IN_A_ROW: u32 = 8;
 ///
 /// The stop flag is read once per step. Joining waits for any current step
 /// and sleep, followed by the final drain below.
+// The test build's round counter is the eighth.
+#[cfg_attr(test, allow(clippy::too_many_arguments))]
 fn run(
     shared: &EditorLock,
     editor_state: &EguiState,
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
     lights: &mut Option<crate::board::Lights>,
+    learn: Option<&crate::HarmonigraphParams>,
     stop: &AtomicBool,
     #[cfg(test)] rounds: &AtomicU64,
 ) {
     let mut panicked = false;
     let mut in_a_row = 0;
     while !stop.load(Ordering::Relaxed) {
-        if guarded_step(shared, editor_state, tape, input, &mut panicked) {
+        if guarded_step(shared, editor_state, tape, input, learn, &mut panicked) {
             in_a_row = 0;
         } else {
             in_a_row += 1;
@@ -503,6 +541,8 @@ mod tests {
         tape: crate::tape::Worker,
         /// The input the thread would own.
         input: LiveInput,
+        /// The plugin whose tuning Learn writes, when a test has it learn.
+        learn: Option<Arc<crate::HarmonigraphParams>>,
     }
 
     fn tape() -> crate::tape::Worker {
@@ -523,6 +563,7 @@ mod tests {
             editor_state: EguiState::from_size(800, 600),
             tape: tape(),
             input: LiveInput::new(note_consumer, audio_consumer),
+            learn: None,
         }
     }
 
@@ -538,7 +579,13 @@ mod tests {
     impl Harness {
         /// One round of the loop the thread runs.
         fn step(&mut self) {
-            super::step(&self.shared, &self.editor_state, &mut self.tape, &mut self.input);
+            super::step(
+                &self.shared,
+                &self.editor_state,
+                &mut self.tape,
+                &mut self.input,
+                self.learn.as_deref(),
+            );
         }
 
         /// Mono audio at 48 kHz, enough for the analyzer to fill a window and
@@ -895,6 +942,7 @@ mod tests {
                 &h.editor_state,
                 &mut h.tape,
                 &mut h.input,
+                None,
                 &mut panicked,
             );
             BETWEEN_HOLDS.set(None);
@@ -996,7 +1044,7 @@ mod tests {
         );
         let input = std::mem::replace(&mut h.input, unfed);
         let analyzer =
-            InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), tape(), input, None);
+            InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), tape(), input, None, None);
         // Polled to a deadline, so a loaded machine cannot fail this for being
         // slow — it is asserting that steps happen at all, not how fast.
         let started = Instant::now();
@@ -1017,5 +1065,45 @@ mod tests {
         h.push_audio(20_000);
         std::thread::sleep(SHUT_POLL * 10);
         assert_eq!(h.columns(), analyzed, "the thread outlived the plugin that owned it");
+    }
+
+    /// A processing stop publishes a session reset, which ends every live
+    /// source's presses, a Tune's included, at its place in the stream; a
+    /// restart's notes after it stay held and Learn hears them, even when
+    /// one poll drains the stop, the restart and the new chord (#1948).
+    #[test]
+    fn a_stop_ends_what_was_held_and_a_restart_in_the_same_poll_keeps_its_notes() {
+        use harmonigraph_core::canonical::NoteDelta;
+        use harmonigraph_core::configuration::{ConfigEdit, TuningAxis};
+        let params = Arc::new(crate::HarmonigraphParams::default());
+        params.settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
+        let mut h = harness();
+        h.learn = Some(params.clone());
+        // A Tune's fifth, held at the stop.
+        let tune = SourceId(1);
+        h.notes.observe_clock(0.0);
+        for (sequence, note) in [(1, 60u8), (2, 67)] {
+            let on = CoreNoteEvent::on(0.0, tune, 0, note, 1.0);
+            let delta = NoteDelta {
+                event: on,
+                sequence,
+                lifetime: sequence,
+                pitch_microcents: Some(i64::from(note) * 100_000_000),
+                assignment: None,
+            };
+            h.notes.note(delta).expect("the ring is sized for this");
+        }
+        h.step();
+        params.settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
+        // `Plugin::stop`, then `Plugin::reset` and the new run's fifth.
+        h.push_kind(0.1, 0, NoteEventKind::SessionReset);
+        h.push_kind(0.1, 0, NoteEventKind::SourceReset);
+        h.push_note(0.1, 74);
+        h.push_note(0.1, 81);
+        h.step();
+        let held = h.shared.lock().ui.picture.runtime.tracker.held_count();
+        assert_eq!(held, 2, "the fifth held at the stop ended, and Learn cannot hear it");
+        let three = params.settings.resolved().tuning.three;
+        assert_eq!(three, 700_000_000, "the fifth struck after the restart is learned");
     }
 }

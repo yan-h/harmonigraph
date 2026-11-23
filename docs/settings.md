@@ -302,7 +302,7 @@ then impose the relationship exactly.
 Editing a linked interval independently recognizes or releases its link;
 editing its generators keeps it following them.
 Switching a link off keeps the currently displayed interval and stays off until a relevant tuning entry or sufficiently informative Learn result.
-Learn leaves relationships without enough evidence unchanged and preserves target intervals while retuning.
+Learn leaves relationships without enough evidence unchanged.
 The third and seventh ranges include every interval their links can derive,
 so switching off a link does not clamp the pitch to an older slider limit.
 There is no separate Auto setting.

@@ -1,15 +1,17 @@
 //! The tuning configuration, a plugin-owned setting rather than host
-//! parameters (#1756): saved in the plugin's `musical-settings` field, edited
-//! through one queue the audio owner drains at each callback's start, and
-//! published through one seqlock. Learn over the held pitch classes the Hub in
-//! `tuning` reads from its rows applies on the audio thread directly.
+//! parameters (#1756), saved in the plugin's `musical-settings` field. The
+//! main thread owns it, as it owns the Lattice Map document (#1938): the
+//! editor's edits, Learn (`background`) and a restore write it through one
+//! door, and audio copies it at each callback's start.
+use crate::shared::Shared;
 use harmonigraph_clap::plugin::PluginState;
 use harmonigraph_clap::prelude::*;
-use harmonigraph_clap::wrapper::clap::setup::{Prepared, Serviced, Setup};
+use harmonigraph_clap::wrapper::clap::setup::{Parsed, Serviced, Setup};
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
 };
-use harmonigraph_core::tuning::{LearningState, PitchClass, TooManyClasses};
+use harmonigraph_core::lattice_map::TuningEngine;
+use harmonigraph_core::tuning::LearnedTuning;
 use harmonigraph_core::{Tempered, Tuning};
 use harmonigraph_ui::params::ConfigurationView;
 use parking_lot::Mutex;
@@ -18,8 +20,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 pub const MUSICAL_SETTINGS: &str = "musical-settings";
-/// Edits the UI may queue ahead of the audio thread.
-const COMMANDS: usize = 128;
 /// The host parameter ids the axes had until #1756.
 const LEGACY_AXIS_IDS: [&str; 5] =
     ["tuning-c-offset", "tuning-three", "tuning-five", "tuning-seven", "tuning-tolerance"];
@@ -63,126 +63,33 @@ impl MusicalSettings {
             policy: PolicyConfig::from(self.adaptive),
         }
     }
-    /// The reducer this record restores, which holds every axis in its range.
-    fn reducer(self) -> ConfigReducer {
-        let mut reducer = ConfigReducer::default();
-        reducer.apply(self.mutation());
-        reducer
-    }
 }
 
-/// What the audio owner last applied, as the editor and a save read it: the
-/// id of the last edit it took, the reducer's raw axes and resolved
-/// configuration, and its status bits, named on [`ConfigurationView`]. The
-/// editor adds `QUEUE_FULL` when its last submission found the queue full.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Record {
-    pub applied: u64,
-    pub raw: Tuning,
-    pub resolved: ResolvedConfig,
-    pub status: u32,
+/// The tuning document and audio's half of what it publishes.
+struct Document {
+    reducer: ConfigReducer,
+    /// Each write's resolved configuration, published as the write ends, so
+    /// publication keeps the writes' order.
+    audio: triple_buffer::Input<ResolvedConfig>,
 }
 
-const WORDS: usize = 14 + PolicyConfig::WORDS;
-
-/// One writer, the audio owner, and readers off audio that retry. Every word
-/// is atomic, so a torn read is retried rather than undefined.
-struct Published {
-    sequence: AtomicU64,
-    words: [AtomicU64; WORDS],
-}
-impl Published {
-    fn new(record: Record) -> Self {
-        let published =
-            Self { sequence: AtomicU64::new(0), words: std::array::from_fn(|_| AtomicU64::new(0)) };
-        published.publish(record);
-        published
-    }
-    fn publish(&self, record: Record) {
-        let sequence = self.sequence.load(Ordering::Relaxed);
-        self.sequence.store(sequence + 1, Ordering::SeqCst);
-        let modes = record.resolved.modes;
-        let bits = u64::from(modes.tempered.syntonic)
-            | u64::from(modes.tempered.septimal_kleisma) << 1
-            | u64::from(modes.learning) << 2;
-        // Typed to the words left after the header and the two tunings, so a
-        // policy that grew is a type error here rather than a word `zip`
-        // drops.
-        let policy: [i32; WORDS - 14] = record.resolved.policy.words();
-        let mut words = [0u64; WORDS];
-        words[..4].copy_from_slice(&[
-            record.applied,
-            record.resolved.revision,
-            bits,
-            u64::from(record.status),
-        ]);
-        let signed =
-            record.raw.axes().into_iter().chain(record.resolved.tuning.axes()).chain(policy);
-        for (cell, word) in words[4..].iter_mut().zip(signed) {
-            *cell = word as u32 as u64;
-        }
-        for (cell, word) in self.words.iter().zip(words) {
-            cell.store(word, Ordering::SeqCst);
-        }
-        self.sequence.store(sequence + 2, Ordering::SeqCst);
-    }
-    fn load(&self) -> Record {
-        loop {
-            let before = self.sequence.load(Ordering::SeqCst);
-            if before & 1 != 0 {
-                std::hint::spin_loop();
-                continue;
-            }
-            let words = self.words.each_ref().map(|word| word.load(Ordering::SeqCst));
-            if before != self.sequence.load(Ordering::SeqCst) {
-                continue;
-            }
-            let signed = |i: usize| words[i] as u32 as i32;
-            let tuning =
-                |first: usize| Tuning::from_axes(std::array::from_fn(|i| signed(first + i)));
-            return Record {
-                applied: words[0],
-                raw: tuning(4),
-                resolved: ResolvedConfig {
-                    revision: words[1],
-                    tuning: tuning(9),
-                    modes: TuningModes {
-                        tempered: Tempered {
-                            syntonic: words[2] & 1 != 0,
-                            septimal_kleisma: words[2] & 2 != 0,
-                        },
-                        learning: words[2] & 4 != 0,
-                    },
-                    policy: PolicyConfig::from_words(std::array::from_fn(|i| signed(14 + i))),
-                },
-                status: words[3] as u32,
-            };
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct Command {
-    id: u64,
-    mutation: ConfigMutation,
-}
-
-struct Producer {
-    queue: rtrb::Producer<Command>,
-    /// The id the next command takes; the last one queued has the one before.
-    next_id: u64,
-    /// A committed restore the audio owner has not applied yet: what the
-    /// editor shows and a save stores until it has.
-    shadow: Option<(u64, MusicalSettings)>,
-}
-
-/// The configuration's shared half: the editor's edits go in, the audio
-/// owner's record comes out, and the host's save and restore meet both.
+/// The configuration's shared half (#1938): the document the main thread
+/// owns and the editor edits, whose latest value audio reads at each
+/// callback's start; what audio reports back about it; and the host's save
+/// and restore.
 pub(crate) struct Settings {
-    producer: Mutex<Producer>,
-    /// Taken once, by the audio owner.
-    commands: Mutex<Option<rtrb::Consumer<Command>>>,
-    published: Published,
+    /// The tuning configuration. Written by the editor's edits, Learn and a
+    /// restore, never by audio.
+    document: Shared<Document>,
+    /// What audio reads: the latest configuration a write published, wait-free
+    /// and with no lock, which a reader's release could otherwise take while a
+    /// writer is parked. Taken once, by the audio owner.
+    audio: Mutex<Option<triple_buffer::Output<ResolvedConfig>>>,
+    /// The document revision audio last copied, for the pending label.
+    adopted: AtomicU64,
+    /// Host input was lost, until the host's reset: audio's one status bit,
+    /// [`ConfigurationView::INPUT_LOST`].
+    input_lost: AtomicBool,
     /// A UI or Learn edit applied, a lattice-map document edited, or an edit
     /// to what the editor saves in `ui-state` (#1813), since the host last
     /// asked: it marks the project modified.
@@ -190,13 +97,9 @@ pub(crate) struct Settings {
     /// A lattice-map document edit since the host last asked: the Lattice
     /// Map's label names its maps, so the host reads its text again.
     text: AtomicBool,
-    /// The last submission found the queue full.
-    rejected: AtomicBool,
-    /// Counts committed restores, for the map editor's undo.
-    restored: AtomicU64,
     /// The Console lines the editor owes, oldest first: a restore that opened
-    /// a project at fresh axes, one the full queue refused, what a restore
-    /// skipped (`saved_fields`), or a line about the host.
+    /// a project at fresh axes, what a restore skipped (`saved_fields`), or a
+    /// line about the host.
     notice: Mutex<std::collections::VecDeque<Notice>>,
     wake: OnceLock<Arc<dyn Fn() + Send + Sync>>,
 }
@@ -217,27 +120,18 @@ pub enum Notice {
 /// parameters, before #1756: those values are not read.
 pub(crate) const LEGACY_AXES: &str = "This project saved its tuning axes as host parameters, \
      which are no longer read: it opened at fresh axes. Set the tuning again and save the project.";
-/// The Console line for a restore the full edit queue refused.
-const RESTORE_REFUSED: &str = "A tuning restore was refused: 128 tuning edits wait for the audio \
-     thread. Let the host run the plugin, then load the project again.";
 
 impl Default for Settings {
     fn default() -> Self {
-        let (queue, commands) = rtrb::RingBuffer::new(COMMANDS);
         let reducer = ConfigReducer::default();
+        let (audio, output) = triple_buffer::triple_buffer(&reducer.resolved());
         Self {
-            producer: Mutex::new(Producer { queue, next_id: 1, shadow: None }),
-            commands: Mutex::new(Some(commands)),
-            published: Published::new(Record {
-                applied: 0,
-                raw: reducer.raw(),
-                resolved: reducer.resolved(),
-                status: 0,
-            }),
+            document: Shared::new(Document { reducer, audio }),
+            audio: Mutex::new(Some(output)),
+            adopted: AtomicU64::new(0),
+            input_lost: AtomicBool::new(false),
             modified: AtomicBool::new(false),
             text: AtomicBool::new(false),
-            rejected: AtomicBool::new(false),
-            restored: AtomicU64::new(0),
             notice: Mutex::default(),
             wake: OnceLock::new(),
         }
@@ -245,55 +139,80 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Queue one UI edit for the audio owner. False when the queue is full.
-    pub fn submit(&self, edit: ConfigEdit) -> bool {
-        let mut producer = self.producer.lock();
-        let id = producer.next_id;
-        if producer.queue.push(Command { id, mutation: ConfigMutation::Edit(edit) }).is_err() {
-            self.rejected.store(true, Ordering::Release);
-            return false;
+    /// Apply one editor edit to the document, marking the project modified
+    /// when what it saves changed.
+    pub fn submit(&self, edit: ConfigEdit) {
+        if self.apply(|_| Some(ConfigMutation::Edit(edit))) == Some(true) {
+            self.changed();
         }
-        self.rejected.store(false, Ordering::Release);
-        producer.next_id += 1;
-        true
     }
 
-    /// The configuration as the editor shows it and a save stores it, with
-    /// the raw axes the save needs.
-    fn current(&self) -> (Tuning, ConfigurationView) {
-        let mut producer = self.producer.lock();
-        let applied = self.published.load();
-        let status = applied.status
-            | if self.rejected.load(Ordering::Acquire) { ConfigurationView::QUEUE_FULL } else { 0 };
-        // The latest edit queued, while the audio owner has not applied it.
-        let latest = producer.next_id - 1;
-        let unadopted = (latest > applied.applied).then_some(latest);
-        if let Some((id, settings)) = producer.shadow {
-            if applied.applied < id {
-                let reducer = settings.reducer();
-                let mut resolved = reducer.resolved();
-                resolved.revision = applied.resolved.revision;
-                let view = ConfigurationView { resolved, board: false, status, unadopted };
-                return (reducer.raw(), view);
+    /// One step of Learn through the door, in one write: whether Learn acts
+    /// under the engine `engine` reads there, `infer`'s answer given that, and
+    /// what it found applied. Nothing can disarm Learn or change the engine
+    /// between the gate and the result. Whether what the project saves
+    /// changed, for the caller to mark once out of every lock it holds.
+    /// Inference costs at most about 0.10 ms at its class cap, under the lock.
+    pub fn learn(
+        &self,
+        engine: impl FnOnce() -> TuningEngine,
+        infer: impl FnOnce(bool) -> Option<LearnedTuning>,
+    ) -> bool {
+        let decide = |reducer: &ConfigReducer| {
+            let learned = infer(reducer.resolved().learn_acts(engine()))?;
+            Some(ConfigMutation::LearnResolved { learned })
+        };
+        self.apply(decide) == Some(true)
+    }
+
+    /// Apply the mutation `decide` makes of the document, if any: `None`
+    /// when it made none, else whether what the project saves changed.
+    fn apply(&self, decide: impl FnOnce(&ConfigReducer) -> Option<ConfigMutation>) -> Option<bool> {
+        self.write(|reducer| {
+            let mutation = decide(reducer)?;
+            let before = MusicalSettings::of(reducer.raw(), reducer.resolved());
+            reducer.apply(mutation);
+            Some(MusicalSettings::of(reducer.raw(), reducer.resolved()) != before)
+        })
+    }
+
+    fn read<R>(&self, read: impl FnOnce(&ConfigReducer) -> R) -> R {
+        self.document.read(|document| read(&document.reducer))
+    }
+
+    /// Write the document, then publish its configuration to audio before the
+    /// door closes, when the write changed it.
+    fn write<R>(&self, write: impl FnOnce(&mut ConfigReducer) -> R) -> R {
+        self.document.write(|document| {
+            let before = document.reducer.resolved();
+            let written = write(&mut document.reducer);
+            let after = document.reducer.resolved();
+            if after != before {
+                document.audio.write(after);
             }
-            producer.shadow = None;
-        }
-        let resolved = applied.resolved;
-        (applied.raw, ConfigurationView { resolved, board: false, status, unadopted })
+            written
+        })
     }
 
+    /// The configuration as the editor shows it and a save stores it.
     pub fn view(&self) -> ConfigurationView {
-        self.current().1
+        let resolved = self.resolved();
+        let adopted = self.adopted.load(Ordering::Acquire);
+        ConfigurationView {
+            resolved,
+            board: false,
+            status: if self.input_lost.load(Ordering::Acquire) {
+                ConfigurationView::INPUT_LOST
+            } else {
+                0
+            },
+            unadopted: (resolved.revision != adopted).then_some(resolved.revision),
+        }
     }
 
-    /// The configuration the audio owner last applied, read without the
-    /// producer's lock: an edit shows here a host block after the editor.
-    pub fn applied(&self) -> ResolvedConfig {
-        self.published.load().resolved
-    }
-
-    pub fn restored(&self) -> u64 {
-        self.restored.load(Ordering::Acquire)
+    /// The document's resolved configuration.
+    pub fn resolved(&self) -> ResolvedConfig {
+        self.read(ConfigReducer::resolved)
     }
 
     /// The oldest Console line owed since the last call, if any.
@@ -329,8 +248,10 @@ impl Settings {
     }
 
     /// Something the project saves changed: have the host mark it modified.
-    /// Audio-thread safe; the wrapper defers the host call out of a callback.
+    /// Safe from any thread; the wrapper defers the host call out of a
+    /// callback.
     pub fn changed(&self) {
+        crate::shared::assert_unheld();
         self.modified.store(true, Ordering::Release);
         if let Some(wake) = self.wake.get() {
             wake();
@@ -345,27 +266,17 @@ impl Settings {
     }
 
     fn save(&self, state: &mut PluginState) {
-        let (raw, view) = self.current();
+        let saved = self.read(|reducer| MusicalSettings::of(reducer.raw(), reducer.resolved()));
         state.fields.insert(
             MUSICAL_SETTINGS.to_owned(),
-            serde_json::to_string(&MusicalSettings::of(raw, view.resolved))
-                .expect("fixed musical settings serialize"),
+            serde_json::to_string(&saved).expect("fixed musical settings serialize"),
         );
     }
 
-    /// Main thread, like the commit that follows it, as is every editor edit
-    /// on macOS: nothing can take the slot this saw free in between.
-    ///
     /// Settings that do not parse open at the defaults a save that lacks them
     /// opens at, with a Console line pushed onto `notes`, and the rest of the
-    /// restore goes ahead (#1927). Only a full queue refuses the restore
-    /// whole: that is passing, and refusing keeps the instance's look and
-    /// tuning together until the project is loaded again with audio running.
-    fn prepare(
-        self: &Arc<Self>,
-        state: &PluginState,
-        notes: &mut Vec<String>,
-    ) -> Result<Restore, &'static str> {
+    /// restore goes ahead (#1927).
+    fn read_saved(self: &Arc<Self>, state: &PluginState, notes: &mut Vec<String>) -> Restore {
         let value: MusicalSettings = crate::saved_fields::parse(
             state,
             MUSICAL_SETTINGS,
@@ -373,15 +284,26 @@ impl Settings {
             notes,
         )
         .unwrap_or_default();
-        if self.producer.lock().queue.slots() == 0 {
-            self.notify(Notice::Restore(RESTORE_REFUSED.into()));
-            return Err("the tuning edit queue is full");
-        }
         // The parameter table skips an id it does not know, so the host
         // values of a project saved before #1756 vanish on their own; only
         // the notice is ours to give.
         let legacy = LEGACY_AXIS_IDS.iter().any(|id| state.params.contains_key(*id));
-        Ok(Restore { settings: self.clone(), value, legacy })
+        Restore { settings: self.clone(), value, legacy }
+    }
+}
+
+/// What [`HubSetup::parse`] read, installed in its order.
+struct HubParsed {
+    params: Arc<crate::HarmonigraphParams>,
+    fields: crate::saved_fields::Fields,
+    instance: crate::tuning::setup::Restore,
+    musical: Restore,
+}
+impl Parsed for HubParsed {
+    fn install(self: Box<Self>) {
+        self.fields.install(&self.params);
+        self.instance.install();
+        self.musical.install();
     }
 }
 
@@ -390,22 +312,12 @@ struct Restore {
     value: MusicalSettings,
     legacy: bool,
 }
-impl Prepared for Restore {
-    fn commit(self: Box<Self>) {
+impl Restore {
+    /// The document takes the saved value whole, without marking the project
+    /// modified: it holds what the host just gave.
+    fn install(self) {
         let settings = &self.settings;
-        let mut producer = settings.producer.lock();
-        let id = producer.next_id;
-        let queued = producer.queue.push(Command { id, mutation: self.value.mutation() }).is_ok();
-        // Only another thread's edit between prepare and here takes the slot
-        // prepare saw free, and on macOS both run on the main thread (#1631).
-        debug_assert!(queued, "an editor edit took the slot a restore's prepare saw free");
-        if !queued {
-            return;
-        }
-        producer.next_id += 1;
-        producer.shadow = Some((id, self.value));
-        drop(producer);
-        settings.restored.fetch_add(1, Ordering::AcqRel);
+        settings.write(|reducer| reducer.apply(self.value.mutation()));
         if self.legacy {
             // The log keeps it for a project saved before an editor opens.
             shell_error!("{LEGACY_AXES}");
@@ -421,28 +333,21 @@ pub(crate) struct HubSetup {
     pub instance: crate::tuning::setup::Adapter,
     pub params: Arc<crate::HarmonigraphParams>,
 }
-/// Prepared restores, committed in order.
-struct All([Box<dyn Prepared>; 3]);
-impl Prepared for All {
-    fn commit(self: Box<Self>) {
-        for prepared in self.0 {
-            prepared.commit();
-        }
-    }
-}
 impl Setup for HubSetup {
     fn track_name_changed(&self, name: Option<&str>) {
         self.instance.track_name_changed(name);
     }
-    /// Only a full tuning edit queue refuses; a field that does not parse
-    /// costs that field alone. The editor's fields are installed first, as
-    /// nice-plug's derive did before the tuning committed.
-    fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
+    /// Nothing refuses: a field that does not parse costs that field alone.
+    /// Every field is read here, before the parameters are restored, so the
+    /// Console lines come in one order and no callback selects a Lattice Map
+    /// slot the incoming bank alone holds; the editor's fields install
+    /// first, then the instance's and the tuning.
+    fn parse(&self, state: &PluginState) -> Box<dyn Parsed> {
         let mut notes = Vec::new();
-        let musical = self.params.settings.prepare(state, &mut notes)?;
+        let musical = self.params.settings.read_saved(state, &mut notes);
         let instance = self.instance.read(state, &mut notes);
-        let fields = crate::saved_fields::prepare(&self.params, state, notes);
-        Ok(Box::new(All([Box::new(fields), Box::new(instance), Box::new(musical)])))
+        let fields = crate::saved_fields::read(&self.params, state, notes);
+        Box::new(HubParsed { params: self.params.clone(), fields, instance, musical })
     }
     fn save(&self, state: &mut PluginState) {
         crate::saved_fields::save(&self.params, state);
@@ -472,49 +377,39 @@ mod recording;
 
 pub struct Owner {
     pub(crate) maps: crate::lattice_maps::AudioMaps,
-    /// Every edit reduces here, in arrival order, so the reducer's own
-    /// combined-edit/preset/unlock semantics are untouched.
-    reducer: ConfigReducer,
-    learning: LearningState<{ crate::tuning::HELD_VOICES }>,
+    /// The configuration this callback read.
+    config: ResolvedConfig,
+    /// The latest configuration the document published.
+    published: triple_buffer::Output<ResolvedConfig>,
     settings: Arc<Settings>,
-    commands: rtrb::Consumer<Command>,
-    /// The id of the last command applied.
-    applied: u64,
-    status: u32,
-    /// A UI or Learn edit applied this callback.
-    edited: bool,
     pub(crate) recording: recording::Recording,
 }
 impl Owner {
     pub fn new(params: &super::HarmonigraphParams) -> Self {
-        let settings = params.settings.clone();
-        let commands = settings.commands.lock().take().expect("one audio owner");
-        let record = settings.published.load();
-        Self {
+        let published = params.settings.audio.lock().take().expect("one audio owner");
+        let mut owner = Self {
             maps: crate::lattice_maps::AudioMaps::new(params),
-            reducer: ConfigReducer::new(record.raw, record.resolved.modes),
+            config: params.settings.resolved(),
+            published,
+            settings: params.settings.clone(),
             recording: recording::Recording::default(),
-            learning: LearningState::default(),
-            settings,
-            commands,
-            applied: 0,
-            status: 0,
-            edited: false,
-        }
-    }
-    fn publish(&self) {
-        self.settings.published.publish(Record {
-            applied: self.applied,
-            raw: self.reducer.raw(),
-            resolved: self.reducer.resolved(),
-            status: self.status,
-        });
+        };
+        owner.seed();
+        owner
     }
 
-    /// The callback's boundary: apply the edits queued before it, in arrival
-    /// order, then seed its history entry. Edits arriving later wait for the
-    /// next callback; automation the walk observes lands in the history at
-    /// its own sample.
+    /// Read the latest configuration published: at creation, at activation
+    /// and at each callback's start. Wait-free.
+    pub fn seed(&mut self) {
+        let config = *self.published.read();
+        self.config = config;
+        self.settings.adopted.store(config.revision, Ordering::Release);
+    }
+
+    /// The callback's boundary: read the configuration the document last
+    /// published, then seed its history entry. An edit still being written
+    /// sounds a callback later; automation the walk observes lands in the
+    /// history at its own sample.
     pub fn begin(
         &mut self,
         boundary: &Boundary,
@@ -525,13 +420,8 @@ impl Owner {
         self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
         self.recording.block_frames = boundary.frames;
-        for _ in 0..self.commands.slots() {
-            let command = self.commands.pop().expect("a counted command");
-            self.reducer.apply(command.mutation);
-            self.applied = command.id;
-            self.edited |= matches!(command.mutation, ConfigMutation::Edit(_));
-        }
-        self.maps.adopt(self.reducer.resolved(), seed);
+        self.seed();
+        self.maps.adopt(self.config, seed);
     }
 
     /// The configuration, engine and map in force at `sample`: the history's
@@ -541,17 +431,15 @@ impl Owner {
         self.maps.at(sample).unwrap_or_else(|| self.maps.live(self.current()))
     }
 
-    /// The configuration every edit reduced so far leaves.
+    /// The configuration this callback copied.
     pub fn current(&self) -> ResolvedConfig {
-        self.reducer.resolved()
+        self.config
     }
 
     pub fn reset(&mut self, recorder: &mut harmonigraph_record::Recorder) {
         self.maps.reset();
-        self.learning = LearningState::default();
-        self.status = 0;
+        self.settings.input_lost.store(false, Ordering::Release);
         self.recording.reset(recorder);
-        self.publish();
     }
     /// Host input was lost in this callback. A take armed at it fails here,
     /// whatever the host does next: this callback records nothing (it runs no
@@ -560,11 +448,10 @@ impl Owner {
     /// had landed before the loss. A take armed later refuses its
     /// configuration until the host's reset clears the loss (#1832).
     pub fn fault(&mut self, recorder: &harmonigraph_record::Recorder) {
-        self.status |= ConfigurationView::INPUT_LOST;
+        self.settings.input_lost.store(true, Ordering::Release);
         if recorder.capture_recording_intent().is_armed() {
             recorder.fail_configuration();
         }
-        self.publish();
     }
     pub fn recording_intent(&self) -> harmonigraph_record::configuration::RecordIntent {
         self.recording.captured_intent
@@ -582,7 +469,7 @@ impl Owner {
         // refuses its configuration. One armed at the loss failed there
         // (`fault`), and a loss while none is armed fails nothing (#1832).
         let armed = self.recording.captured_intent.is_armed();
-        if self.status & ConfigurationView::INPUT_LOST != 0 && armed {
+        if self.settings.input_lost.load(Ordering::Acquire) && armed {
             recorder.fail_configuration();
         }
         let start = self.recording.block_start;
@@ -602,42 +489,6 @@ impl Owner {
             }
         }
         self.recording.registered(end);
-    }
-
-    /// Learn, then publish the callback's record. A Retune-enabled source
-    /// reserves the lattice axes only while the engine actually retunes. Pass
-    /// through learns the axes from unchanged input. Decode fifths, as edited
-    /// this callback, suspends Learn as Lattice Map does.
-    ///
-    /// `classes` is the Hub's `held_classes`, asked only while Learn is armed.
-    /// `TOO_MANY_CLASSES` reports this evaluation alone rather than latching,
-    /// so it clears as soon as what is held allows Learn again.
-    ///
-    /// Learn applies at the block's start after the observer has pushed
-    /// later samples, so it is not pushed into the history: the next `begin`
-    /// carries it.
-    pub fn group_end(
-        &mut self,
-        retuning: bool,
-        classes: impl FnOnce(&mut [PitchClass; crate::tuning::HELD_VOICES]) -> usize,
-    ) {
-        let retuning = retuning
-            && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
-        self.status &= !ConfigurationView::TOO_MANY_CLASSES;
-        if self.reducer.resolved().policy.learns(self.maps.playback.engine) {
-            match self.learning.infer(self.reducer.resolved().modes.learning, classes) {
-                Ok(Some(learned)) => {
-                    self.reducer.apply(ConfigMutation::LearnResolved { learned, retuning });
-                    self.edited = true;
-                }
-                Err(TooManyClasses) => self.status |= ConfigurationView::TOO_MANY_CLASSES,
-                Ok(None) => {}
-            }
-        }
-        self.publish();
-        if std::mem::take(&mut self.edited) {
-            self.settings.changed();
-        }
     }
 }
 

@@ -440,12 +440,11 @@ impl<P: Plugin> Wrapper<P> {
         state
     }
 
-    /// Restore `state` as a load from the host does, without its framing:
-    /// whether the setup took it.
+    /// Restore `state` as a load from the host does, without its framing.
     #[cfg(feature = "clap-boundary-tests")]
     #[doc(hidden)]
-    pub fn test_restore(&self, state: &PluginState) -> bool {
-        self.restore(state)
+    pub fn test_load(&self, state: &PluginState) {
+        self.load(state)
     }
 
     /// Ask the host for a main-thread call. Inside a process callback the
@@ -465,12 +464,10 @@ impl<P: Plugin> Wrapper<P> {
         unsafe_clap_call! { host=>request_callback(&**host) };
     }
 
-    /// The one restore ([`setup::restore`](super::setup::restore)), from the
-    /// main thread, even while audio runs.
-    fn restore(&self, state: &PluginState) -> bool {
-        super::setup::restore(self.setup.as_deref(), &self.params, state)
-            .inspect_err(|reason| crate::shell_error!("Prepared setup restore refused: {reason}"))
-            .is_ok()
+    /// The one load ([`setup::load`](super::setup::load)), from the main
+    /// thread, even while audio runs.
+    fn load(&self, state: &PluginState) {
+        super::setup::load(self.setup.as_deref(), &self.params, state)
     }
 
     /// Move the number the host reads to the one the plugin asked for, and
@@ -538,9 +535,10 @@ impl<P: Plugin> Wrapper<P> {
     unsafe extern "C" fn destroy(plugin: *const clap_plugin) {
         assert!(!plugin.is_null() && unsafe { !(*plugin).plugin_data.is_null() });
         let this = unsafe { Arc::from_raw((*plugin).plugin_data as *mut Self) };
-        crate::shell_debug_assert_eq!(Arc::strong_count(&this), 1);
-
+        // The plugin's destroy ends whatever thread could hold a wake's
+        // reference, so the last one is this.
         this.plugin.lock().destroy();
+        crate::shell_debug_assert_eq!(Arc::strong_count(&this), 1);
         drop(this);
     }
 
@@ -1451,12 +1449,9 @@ impl<P: Plugin> Wrapper<P> {
 
         match state::deserialize_json(&read_buffer) {
             Some(state) => {
-                let success = wrapper.restore(&state);
-                if success {
-                    crate::shell_trace!("Loaded state ({} bytes)", read_buffer.len());
-                }
-
-                success
+                wrapper.load(&state);
+                crate::shell_trace!("Loaded state ({} bytes)", read_buffer.len());
+                true
             }
             None => false,
         }

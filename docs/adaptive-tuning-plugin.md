@@ -67,7 +67,7 @@ Retune exclusion clears that source's held and released context, including a mov
 A departing source ends its held notes through the session cut;
 the resulting released memory follows the ordinary silence, Stop and Reset controls.
 
-Tuning and temperament settings come from the audio owner's resolved configuration.
+Tuning and temperament settings come from the resolved configuration audio copied at the callback's start.
 Custom axis sizes work through the same score, and locked commas canonicalize equivalent coordinates.
 Changing settings affects subsequent attacks; the adaptive corrections of existing notes remain fixed.
 The lattice's camera reach and display tolerance do not constrain musical travel or determine intent.
@@ -126,28 +126,22 @@ A meantone keyboard has a separate B♯ key, so its C key never becomes the B♯
 it cannot tell the 5-limit A from the Pythagorean one, so context chooses between them.
 A schismatic keyboard has two A keys, and each becomes its own A.
 
-Learn fills it.
+Learn fills it, under Pass through.
 Whenever Learn hears a fifth, the keyboard tuning becomes the one that fifth generates:
 5 and 7 sit at the positions on the chain of fifths, within fourteen either way of C, nearest a just 5/4 and a just 7/4, with ties going to the shorter chain.
 The learned third and seventh are not used, because on a Pythagorean-side keyboard Learn's third is whichever pressed key sits nearest a just third, which spells prime 5 wrong until the other key has been pressed.
 The Tuning pane shows the three sizes, still editable, under Adaptive tuning → Keyboard,
 with a **Derive from fifth** button that does from the fifth shown what Learn does from the fifth it hears.
 
-Pass through, the default, lets Learn update the lattice axes even when a source has Retune checked.
-The lattice is then a picture of unchanged input.
-While Adaptive retunes a source,
-the lattice is its fixed target and Learn moves only the shared C offset and keyboard tuning.
-Lattice Map suspends Learn.
+Learn runs under Pass through, the default, alone, where the lattice is a picture of unchanged input (#1938);
+Adaptive, whose fixed target the lattice is, and Lattice Map suspend it.
 Toggling Retune copies nothing in either direction.
 
 No policy fixture makes the keyboard filter bind, so the fixtures say nothing about it;
 the Rust policy tests cover it on their own.
 
 A policy edit from the pane sends the whole policy it shows, and **Derive from fifth** derives from the fifth on screen (#1798 F2).
-One that lands within a block of Learn changing the keyboard puts back the keyboard it showed, until the next chord change makes Learn run again;
-only Adaptive with Learn armed reaches that, since Lattice Map suspends Learn.
-Two policy edits to different fields queued before the Hub's next callback keep only the second's fields, since each carries the whole policy the pane showed before either applied:
-while audio runs that window is about one block, and while the Hub runs no audio the earlier setting snaps back when audio resumes.
+Each edit applies when it is made and the pane shows it at once (#1938), so the next edit carries it.
 
 With a schismatic keyboard and radius three, C followed by the key four fifths above it cannot reach the Pythagorean E node.
 The fallback can choose the nearby 5/4 E, but cannot double C even at maximum pitch flexibility.

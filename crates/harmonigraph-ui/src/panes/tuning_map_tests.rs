@@ -16,6 +16,9 @@ struct Edits {
     offsets: crate::lattice_maps::MapOffsets,
     edits: RefCell<Vec<MapEdit>>,
     tuning: RefCell<Vec<ConfigEdit>>,
+    /// What an owner returns for each edit, as one that has not taken it
+    /// would; `None` has the picture's own reducer take it.
+    owner: Option<ConfigurationView>,
 }
 impl Edits {
     fn new(engine: TuningEngine, follow: Follow, maps: usize) -> Self {
@@ -27,6 +30,7 @@ impl Edits {
             offsets: Default::default(),
             edits: Default::default(),
             tuning: Default::default(),
+            owner: None,
         }
     }
 }
@@ -61,9 +65,9 @@ impl ParamBackend for Edits {
     fn edit_lattice_map(&self, edit: MapEdit) {
         self.edits.borrow_mut().push(edit);
     }
-    fn submit_tuning(&self, edit: ConfigEdit) -> Option<bool> {
+    fn submit_tuning(&self, edit: ConfigEdit) -> Option<ConfigurationView> {
         self.tuning.borrow_mut().push(edit);
-        Some(true)
+        self.owner
     }
 }
 
@@ -158,11 +162,16 @@ fn derive_from_fifth_sends_the_shown_policy_with_the_shown_fifths_keyboard() {
 #[test]
 fn the_decoding_controls_send_the_shown_policy_under_pass_through() {
     let ctx = themed();
-    let params = Edits::new(TuningEngine::Off, Follow::Off, 1);
+    let mut params = Edits::new(TuningEngine::Off, Follow::Off, 1);
     let mut state = fresh_picture();
     let shown =
         PolicyConfig { pitch_flexibility: 37, decoded_fifth: 700_000_000, ..Default::default() };
     state.runtime.adaptive_policy = shown;
+    // Each control sends the policy shown, which an owner that keeps it shows
+    // on: the toggle's edit must not carry the bar's.
+    let mut resolved = harmonigraph_core::configuration::ConfigReducer::default().resolved();
+    resolved.policy = shown;
+    params.owner = Some(ConfigurationView { resolved, board: false, status: 0, unadopted: None });
     let size = egui::vec2(420.0, 2000.0);
     let mut frame = |events| {
         events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {

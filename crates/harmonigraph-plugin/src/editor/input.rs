@@ -150,6 +150,7 @@ impl LiveInput {
             recorder: Default::default(),
         }
     }
+
     /// Drain exactly what the process callback sent to the live analyzer.
     /// Test-only because production drains through [`Self::take`], which also
     /// maintains the analyzer state around it.
@@ -177,12 +178,12 @@ impl LiveInput {
             clock.observe(observation, now);
         }
         let Some(offset) = clock.offset else { return };
-        let tracker = &mut picture.runtime.tracker;
+        let runtime = &mut picture.runtime;
         let recorder = &mut self.recorder;
         self.consumer.drain(|event| {
-            let result = tracker.handle_canonical_mapped(event, offset);
+            let result = runtime.tracker.handle_canonical_mapped(event, offset);
             debug_assert!(result.is_ok(), "validated canonical publication");
-            recorder.record(tracker, event.time(), marks);
+            recorder.record(&runtime.tracker, event.time(), marks);
             true
         });
     }

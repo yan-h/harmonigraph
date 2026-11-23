@@ -3,13 +3,13 @@
 //! The load a host makes, run on a fresh instance's parameters and settings
 //! with no plugin around them, and read back the way the plugin saves and
 //! draws it: the state decoded as a load decodes it, then the shell's one
-//! restore ([`setup::restore`]); the editor's settings installed from the
+//! load ([`setup::load`]); the editor's settings installed from the
 //! inbox as every holder of the editor lock installs them; and the host's
 //! camera laid over them, as each editor frame lays it. Nothing here parses
 //! a field itself, so a change to a saved shape reaches this reading with the
 //! restore it changes.
 //!
-//! [`setup::restore`]: harmonigraph_clap::wrapper::clap::setup::restore
+//! [`setup::load`]: harmonigraph_clap::wrapper::clap::setup::load
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -38,9 +38,9 @@ pub enum Plugin {
 /// One saved state, as the plugin loads it.
 pub struct Reading {
     pub plugin: Plugin,
-    /// Why the load refused the state whole: it does not decode, or the
-    /// setup refused it. The instance then keeps what it held, a fresh one's
-    /// defaults here, and nothing below was read.
+    /// Why the load refused the state whole: it does not decode. The instance
+    /// then keeps what it held, a fresh one's defaults here, and nothing
+    /// below was read.
     pub refused: Option<String>,
     /// Each host parameter as restored, by id: its value, with what the host
     /// shows for it where that is a name rather than the number.
@@ -115,7 +115,7 @@ pub fn read(plugin: Plugin, json: &[u8]) -> Reading {
         Plugin::Harmonigraph => read_hub(&state, &mut reading),
         Plugin::Tune => {
             let tune = HarmonigraphTune::default();
-            restore(tune.setup().as_deref(), &tune.params(), &state, &mut reading);
+            load(tune.setup().as_deref(), &tune.params(), &state, &mut reading);
         }
     }
     reading
@@ -127,9 +127,7 @@ pub fn read(plugin: Plugin, json: &[u8]) -> Reading {
 fn read_hub(state: &PluginState, reading: &mut Reading) {
     let params = Arc::new(HarmonigraphParams::default());
     let setup = HubSetup { instance: Adapter(Shared::hub()), params: params.clone() };
-    if !restore(Some(&setup), &params.table, state, reading) {
-        return;
-    }
+    load(Some(&setup), &params.table, state, reading);
     // With no editor attached, the setup saves the document the restore
     // delivered rather than what the editor installs of it, which is the
     // look below.
@@ -161,18 +159,10 @@ fn read_hub(state: &PluginState, reading: &mut Reading) {
     });
 }
 
-/// Restore `state` through the shell's one restore, then read the
-/// parameters back and save the fields. False when the setup refused it.
-fn restore(
-    setup: Option<&dyn Setup>,
-    table: &Table,
-    state: &PluginState,
-    reading: &mut Reading,
-) -> bool {
-    if let Err(reason) = setup::restore(setup, table, state) {
-        reading.refused = Some(reason.to_owned());
-        return false;
-    }
+/// Load `state` through the shell's one load, then read the parameters back
+/// and save the fields.
+fn load(setup: Option<&dyn Setup>, table: &Table, state: &PluginState, reading: &mut Reading) {
+    setup::load(setup, table, state);
     reading.params = (0..table.len())
         .map(|row| {
             let spec = table.spec(row);
@@ -200,7 +190,6 @@ fn restore(
         setup.save(&mut saved);
     }
     reading.fields = saved.fields;
-    true
 }
 
 /// The restored camera rows, as the editor frame's backend reads them.
@@ -382,6 +371,28 @@ mod tests {
         }
         assert!(reading.fields["editor-state"].contains("[1147,687]"), "the rest of the project");
         installed(&reading);
+    }
+
+    /// A project saved before the main thread owned the tuning (#1938), the
+    /// fixture's, opens with the tuning it saved and saves it back unchanged,
+    /// key for key: every value away from its default, Learn armed among them.
+    #[test]
+    fn a_saved_tuning_opens_and_saves_back_unchanged() {
+        let mut state: Value = serde_json::from_slice(&fixture("harmonigraph")).unwrap();
+        let field = &mut state["fields"][MUSICAL_SETTINGS];
+        let mut tuning: Value = serde_json::from_str(field.as_str().unwrap()).unwrap();
+        tuning["learning"] = true.into();
+        tuning["marvel"] = true.into();
+        let adaptive = &mut tuning["adaptive"];
+        (adaptive["reset_stop"], adaptive["silence_ms"]) = (true.into(), 1500.into());
+        (adaptive["decode_fifths"], adaptive["decoded_fifth"]) = (true.into(), 695_000_000.into());
+        // Newer than the fixture, and away from its default as the rest are.
+        adaptive["follow_spellings"] = false.into();
+        *field = Value::String(tuning.to_string());
+        let reading = read(Plugin::Harmonigraph, &serde_json::to_vec(&state).unwrap());
+        assert_eq!(reading.refused, None);
+        let back: Value = serde_json::from_str(&reading.fields[MUSICAL_SETTINGS]).unwrap();
+        assert_eq!(back, tuning);
     }
 
     /// A Tune's `tuning-instance` that does not parse opens at the settings a

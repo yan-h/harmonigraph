@@ -48,7 +48,7 @@ pub(super) fn at(seconds: f64, playing: bool) -> Input {
 }
 
 fn submit(hub: &Device, edit: ConfigEdit) {
-    assert!(settings(hub).submit(edit));
+    settings(hub).submit(edit);
 }
 
 /// Three Tunes and one Hub, at 44.1 kHz and 512-frame callbacks, so D is 512
@@ -571,14 +571,14 @@ fn silence_policy_edits_apply_before_expiry_without_note_input() {
             &phrase.hub,
             PolicyConfig { silence_ms: if enable { 1000 } else { 0 }, ..Default::default() },
         );
-        // The wrapper begins performance before reducing queued editor edits.
-        // Reduce this edit while still below either timeout, then cross the
-        // timeout on the next begin, when the reducer already holds the edit.
+        // An edit is in the document at once, and audio adopts it at a
+        // callback's begin. Adopt this one while still below either timeout,
+        // then cross the timeout on the next begin, when audio already holds it.
         phrase.hub.run_format(phrase.raw, vec![], None, None, 512);
         let visible = settings(&phrase.hub).view();
         assert!(
             visible.unadopted.is_none(),
-            "the editor edit must already be reduced before the expiry callback"
+            "the editor edit must already be adopted before the expiry callback"
         );
         assert_eq!(visible.resolved.policy.silence_ms, if enable { 1000 } else { 0 });
         phrase.raw += 2 * 44100;

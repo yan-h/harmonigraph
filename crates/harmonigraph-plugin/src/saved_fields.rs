@@ -12,15 +12,10 @@
 //! save holds that no row has are named in the Console the same way, and so
 //! are those whose value this build cannot read, which open at their defaults.
 
-use std::sync::Arc;
-
 use harmonigraph_clap::plugin::PluginState;
 use harmonigraph_clap::prelude::shell_error;
-use harmonigraph_clap::wrapper::clap::setup::Prepared;
 
-use crate::editor::SavedWindow;
 use crate::HarmonigraphParams;
-use harmonigraph_ui::lattice_maps::MapDocument;
 
 pub(crate) const LATTICE_MAPS: &str = "lattice-maps";
 pub(crate) const EDITOR_STATE: &str = "editor-state";
@@ -42,11 +37,19 @@ pub(crate) fn save(params: &HarmonigraphParams, state: &mut PluginState) {
     }
 }
 
-/// Parse the three fields `state` holds, for [`Fields::commit`] to install,
-/// after the Console lines `notes` already holds. Never refuses: a field that
-/// does not parse is skipped.
-pub(crate) fn prepare(
-    params: &Arc<HarmonigraphParams>,
+/// The three fields a state holds, read, and the Console lines the load owes
+/// the editor, until [`Self::install`].
+pub(crate) struct Fields {
+    maps: Option<harmonigraph_ui::lattice_maps::MapDocument>,
+    window: Option<crate::editor::SavedWindow>,
+    look: Option<String>,
+    notes: Vec<String>,
+}
+
+/// Read the three fields `state` holds, after the lines `notes` already
+/// holds. Never refuses: a field that does not parse is skipped.
+pub(crate) fn read(
+    params: &HarmonigraphParams,
     state: &PluginState,
     mut notes: Vec<String>,
 ) -> Fields {
@@ -70,7 +73,33 @@ pub(crate) fn prepare(
             defaulted.join(", ")
         ));
     }
-    Fields { params: params.clone(), maps, window, look, notes }
+    Fields { maps, window, look, notes }
+}
+
+impl Fields {
+    /// Install what [`read`] found, and owe the editor its Console lines.
+    /// Every present `ui-state`, `""` included, goes to the editor's inbox,
+    /// which reads an empty one as the fresh look (#1757).
+    pub(crate) fn install(self, params: &HarmonigraphParams) {
+        let Fields { maps, window, look, notes } = self;
+        if let Some(maps) = maps {
+            *params.maps.write() = maps;
+        }
+        // Every restore is another project, or another state of one: undo
+        // entries name its slots by identity and would write old shapes into
+        // the new ones.
+        params.map_editor.lock().forget();
+        if let Some(window) = window {
+            params.editor_state.restore(window);
+        }
+        if let Some(look) = look {
+            params.settings.supersede_reveals();
+            params.ui_state.restore(look);
+        }
+        for note in notes {
+            params.settings.notify(crate::configuration::Notice::Restore(note));
+        }
+    }
 }
 
 /// The field `key` of `state`, or `None` when the save lacks it or it does
@@ -92,36 +121,4 @@ pub(crate) fn parse<T: serde::de::DeserializeOwned>(
             ));
         })
         .ok()
-}
-
-/// The fields a restore read, waiting for the parameters to be restored.
-pub(crate) struct Fields {
-    params: Arc<HarmonigraphParams>,
-    maps: Option<MapDocument>,
-    window: Option<SavedWindow>,
-    look: Option<String>,
-    /// The Console lines the restore owes, the tuning fields' among them.
-    notes: Vec<String>,
-}
-
-impl Prepared for Fields {
-    /// Install what was read. Every present `ui-state`, `""` included, goes
-    /// to the editor's inbox, which reads an empty one as the fresh look
-    /// (#1757).
-    fn commit(self: Box<Self>) {
-        let Fields { params, maps, window, look, notes } = *self;
-        if let Some(maps) = maps {
-            *params.maps.write() = maps;
-        }
-        if let Some(window) = window {
-            params.editor_state.restore(window);
-        }
-        if let Some(look) = look {
-            params.settings.supersede_reveals();
-            params.ui_state.restore(look);
-        }
-        for note in notes {
-            params.settings.notify(crate::configuration::Notice::Restore(note));
-        }
-    }
 }
