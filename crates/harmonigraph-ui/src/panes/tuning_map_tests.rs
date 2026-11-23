@@ -596,6 +596,7 @@ fn the_strip_hides_the_rows_it_ignores() {
         "F C G D · wolf D–A",
         "Moved: +0",
         "Follow spellings",
+        "Show strip dots",
         "Silence reset",
         "Reset context on stop",
         "Reset context on loop / seek",

@@ -125,7 +125,7 @@ The pieces often carry tuning automation that moves the Lattice Map over time (Y
 Yan improvises on a lattice-board, a Wicki-Hayden keyboard whose MIDI the project-wide Decode fifths reads, in meantone beside recorded 12-TET tracks,
 and switches Note retuning to Lattice Map to compose in JI (Yan, 2026-11-20).
 Yan no longer uses the Adaptive engine but keeps it in the product, so a case only Adaptive reaches lies outside the use (Yan, 2026-11-15),
-except Adaptive with Decode fifths on, the lattice-board's strip, which is within it; Adaptive's search, with Decode fifths off, stays outside (#1896, pending Yan's listening check at the board).
+except Adaptive with Decode fifths on, the lattice-board's strip, which is within it; Adaptive's search, with Decode fifths off, stays outside (#1896; Yan played it on 2026-11-22 and called the strip useful, and this line still waits on his word).
 The projects run at 44.1 or 48 kHz (Yan, 2026-11-14).
 One or two personal Bitwig projects hold saved state.
 Anyone else builds from source with rough edges promised (README), and no case is handled for their sake.

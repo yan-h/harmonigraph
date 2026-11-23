@@ -919,7 +919,11 @@ mod tests {
         use crate::lattice_maps::{MapPlayback, MapView};
         use harmonigraph_core::lattice_map::TuningEngine;
         let mut state = fresh();
+        // Every input the marks read, set here rather than taken from the
+        // fresh look.
+        state.appearance.view.show_map_indicators = true;
         state.runtime.adaptive_policy.decode_fifths = true;
+        state.runtime.adaptive_policy.follow_spellings = true;
         state.runtime.lattice_maps = Some(MapView {
             playback: MapPlayback { engine: TuningEngine::Adaptive, ..Default::default() },
             offsets: Default::default(),
@@ -931,8 +935,12 @@ mod tests {
             can_undo: false,
             full: false,
         });
+        // Columns −4..6 and rows −2..2 of the home sheet: both strips inside.
+        let window = harmonigraph_scene::DrawnWindow {
+            min: harmonigraph_core::LatticePos::new(-4, -2, 0),
+            max: harmonigraph_core::LatticePos::new(6, 2, 0),
+        };
         let columns = |state: &mut PictureState| {
-            let window = state.appearance.view.scrolled(&state.appearance.camera, 1.0);
             let scene = compose_scene(state, &window, 1.0, None, 0, 0.0);
             let marked = map_assignments(state, &scene, &window, true);
             let mut columns: Vec<i32> =
@@ -943,7 +951,7 @@ mod tests {
         };
         let (home, count) = columns(&mut state);
         assert_eq!(home, [-1, 0, 1, 2], "F C G D");
-        assert!(count > home.len(), "fixture must show more than one row");
+        assert_eq!(count, 4 * 5, "every row of the four columns");
         state.runtime.lattice_maps.as_mut().unwrap().strip_moved = 1;
         assert_eq!(columns(&mut state).0, [0, 1, 2, 3], "slid to C G D A");
         state.runtime.adaptive_policy.decode_fifths = false;

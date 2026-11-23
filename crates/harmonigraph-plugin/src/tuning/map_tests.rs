@@ -567,12 +567,21 @@ struct Decoding {
 }
 impl Decoding {
     fn new(engine: f64, tuning: Tuning, fifth: i32) -> Self {
+        Self::with(engine, tuning, fifth, true)
+    }
+    /// Adaptive's fixed strip: Follow spellings off, so the Position alone
+    /// places it.
+    fn fixed(tuning: Tuning, fifth: i32) -> Self {
+        Self::with(1.0, tuning, fifth, false)
+    }
+    fn with(engine: f64, tuning: Tuning, fifth: i32, follow_spellings: bool) -> Self {
         let mut hub = hub();
         hub.activate_format(48_000.0, 128);
         musical_tests::configure(&hub, tuning);
         let policy = harmonigraph_core::configuration::PolicyConfig {
             decode_fifths: true,
             decoded_fifth: fifth,
+            follow_spellings,
             ..Default::default()
         };
         assert!(settings(&hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() }));
@@ -707,7 +716,7 @@ fn adaptive_tunes_a_decoded_tune_in_the_strip_the_position_fifths_place() {
     let _scope = crate::test_scope::enter();
     let mut tuning = Tuning::just();
     tuning.c_offset = 3_000_000;
-    let mut session = Decoding::new(1.0, tuning, 696_578_428);
+    let mut session = Decoding::fixed(tuning, 696_578_428);
     let sharp = LatticePos::new(-1, 2, 0);
     let [out, _] = session.play(vec![note(1, 1, 61, 0, true)], vec![]);
     let voice = session.voice(true, 1, 61);
@@ -749,7 +758,7 @@ fn adaptive_tunes_a_decoded_tune_in_the_strip_the_position_fifths_place() {
 #[test]
 fn the_strip_sounds_each_spelling_at_one_pitch_through_a_progression() {
     let _scope = crate::test_scope::enter();
-    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    let mut session = Decoding::fixed(Tuning::just(), 696_578_428);
     let chords: [[i16; 3]; 5] =
         [[60, 64, 67], [57, 60, 64], [62, 65, 69], [55, 59, 62], [60, 64, 67]];
     let mut sounded = std::collections::BTreeMap::<i16, Vec<i64>>::new();
@@ -889,4 +898,19 @@ fn triads_modulating_by_fifths_slide_the_strip_and_come_home() {
             assert_eq!(nodes[..4], nodes[8..], "{name}: home again");
         }
     }
+}
+
+/// A held A struck again inside D major, with no note-off between, is taken
+/// over rather than held: the old A leaves the context before the group is
+/// decided, so it pins nothing, and D major slides and sounds pure.
+#[test]
+fn a_retriggered_note_does_not_pin_its_chord_s_slide() {
+    let _scope = crate::test_scope::enter();
+    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    session.play(vec![note(1, 0, 69, 0, true)], vec![]);
+    assert_eq!(session.voice(true, 0, 69).attack_node, Some(LatticePos::new(-1, 1, 0)));
+    let d_major = [62, 66, 69].map(|key| note(10 + i32::from(key), 0, key, 0, true));
+    session.play(d_major.into(), vec![]);
+    let [d, a] = [62, 69].map(|key| session.voice(true, 0, key).attack_node.unwrap());
+    assert_eq!(a - d, LatticePos::new(1, 0, 0), "D–A pure: {d:?} {a:?}");
 }

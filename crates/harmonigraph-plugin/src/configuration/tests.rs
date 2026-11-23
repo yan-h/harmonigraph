@@ -792,6 +792,12 @@ fn the_published_record_round_trips_every_word() {
         status: 16 | 2,
     };
     assert_eq!(Published::new(record).load(), record);
+    // Each of the two flags on with the other off, so a flag the word drops
+    // fails whichever way it was set.
+    let mut flipped = record;
+    flipped.resolved.policy.decode_fifths = false;
+    flipped.resolved.policy.follow_spellings = true;
+    assert_eq!(Published::new(flipped).load(), flipped);
 }
 
 pub(super) fn note(id: i32, key: i16, time: u32, kind: u16) -> Input {

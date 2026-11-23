@@ -48,18 +48,19 @@ and the comma Adaptive's search used to guess chord by chord is fixed by where t
 Lattice Map's Position fifths place the strip, under Adaptive as under Lattice Map:
 at 0 its columns are F C G D, the default map's,
 and automating the lane is how a piece changes key.
-With **Follow spellings** on, the default, the strip also slides by itself a fifth at a time.
-At a chord whose fifth would be the strip's wolf, it slides at once when one slide makes all the chord's fifths pure,
-so D major over F C G D struck together sounds pure from its first stroke,
-and a vi after a ii that slid brings the strip home rather than moving the tonic;
-a pentatonic set, which has a wolf in every strip, never moves it this way.
-A chord rolled by hand is decided note by note,
-and no slide moves a held note's column,
-so a chord whose first notes pin the slide it needs keeps its wolf for that chord;
-it never slides away from the wolf instead, which would walk the strip from the key a fifth a chord, and the tonic keeps its pitch.
-For single notes and melodies it slides once a spelling just past the key's seven has replaced the one at its other edge (three F♯s close together, or about four spread out, with F out of use),
-and back toward the Position when that spelling fades;
-a slide waits while a note it would retune is held, and every context reset returns it to the Position.
+With **Follow spellings** on, the default, the strip also follows the music, in two parts.
+Its key moves a fifth at a time for single notes and melodies,
+once a spelling just past the key's seven has replaced the one at its other edge (three F♯s close together, or about four spread out, with F out of use),
+and back toward the Position when that spelling fades.
+Around the key, each chord stands at most a fifth either way, chosen so its fifths sound pure where they can:
+D major over F C G D struck together slides sharp and sounds pure from its first stroke,
+B♭ major after F major slides flat and keeps its F,
+and the next chord comes back unless it shares notes it would retune.
+Because the strip never stands more than a fifth from the key, no run of chords walks it away,
+and a pentatonic vamp, with a wolf in every strip, keeps its notes rather than pumping one between two commas.
+A held note always keeps the node it sounds at, after a Position lane move too,
+so a chord rolled by hand, decided note by note, keeps its wolf where its first notes pin the strip it needs.
+Every context reset returns the strip to the Position.
 Every fourth fifth along the chain, the one leaving the strip's sharp edge, is a comma narrow (D–A at Position 0).
 The search, with its Keyboard block, Pitch flexibility, radius, axes and register, applies only with Decode fifths off,
 and is hidden while it is on, with its Half-life and Same-note tolerance; the resets move into the Strip block.

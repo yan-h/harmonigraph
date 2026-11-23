@@ -431,9 +431,12 @@ fn adaptive_controls(
         let fresh = PolicyConfig::default();
         if p.decode_fifths {
             if let Some(view) = view {
-                super::block(ui, "Strip", |ui| strip_controls(ui, view, params, &mut p, &fresh))
-                    .response
-                    .on_hover_text(STRIP_HINT);
+                let dots = &mut state.appearance.view.show_map_indicators;
+                super::block(ui, "Strip", |ui| {
+                    strip_controls(ui, view, params, &mut p, &fresh, dots)
+                })
+                .response
+                .on_hover_text(STRIP_HINT);
             }
             crate::widgets::label(ui, "Search settings return with Decode fifths off");
         } else {
@@ -464,6 +467,7 @@ fn strip_controls(
     params: &dyn ParamBackend,
     p: &mut PolicyConfig,
     fresh: &PolicyConfig,
+    dots: &mut bool,
 ) {
     use crate::lattice_maps::{MapAxis, MapOffsetLane};
     let Some(flat) = view.strip_flat(*p) else { return };
@@ -485,6 +489,10 @@ fn strip_controls(
     });
     crate::widgets::toggle_switch(ui, &mut p.follow_spellings, "Follow spellings")
         .on_hover_text(FOLLOW_SPELLINGS_HINT);
+    crate::widgets::checkbox(ui, dots, "Show strip dots").on_hover_text(
+        "Show a dot on each lattice node of the strip's four columns, which move when it \
+         slides. The same setting as the Lattice Map section's Show map dots.",
+    );
     reset_controls(ui, p, fresh);
 }
 
