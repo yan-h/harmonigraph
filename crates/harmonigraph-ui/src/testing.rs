@@ -1,6 +1,7 @@
 //! What the plugin's tests need of a frame without a window to run one in: a
 //! look edit through the frame's undo history, that history's depth (#1740),
-//! whether the Console is open, and a frame's end, which reports an edit.
+//! a Settings section folded off the Console, whether the Console is open, and a
+//! frame's end, which reports an edit.
 //!
 //! Behind the `testing` feature, which only the plugin's dev-dependencies
 //! enable.
@@ -23,6 +24,21 @@ pub fn edit_look(state: &mut SharedState, dragging: bool) {
 /// How many edits the active slot can undo.
 pub fn undo_depth(state: &SharedState) -> usize {
     state.workspace.interaction.appearance_editor.undo_depth()
+}
+
+/// Install the current settings with the Settings section folded on the
+/// Tuning tab, as a restore would: a save then stores that layout rather than
+/// the empty document of an editor never opened.
+pub fn fold_settings_on_tuning(state: &mut SharedState) {
+    state.workspace.layout.select(crate::panes::Tab::Tuning);
+    state.workspace.layout.folded[crate::workspace::Section::Settings as usize] = true;
+    let document = state.save_persist();
+    assert!(state.install_document(&document), "a fixture's own settings install");
+}
+
+/// Whether the Settings section is folded to its rail.
+pub fn settings_folded(state: &SharedState) -> bool {
+    state.workspace.layout.folded[crate::workspace::Section::Settings as usize]
 }
 
 /// Whether the Console is the Settings section's tab and that section is

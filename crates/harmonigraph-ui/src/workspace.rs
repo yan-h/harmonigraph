@@ -371,6 +371,10 @@ fn fit_axis<const N: usize>(
 }
 
 pub(crate) struct Runtime {
+    /// A Console reveal unfolded the settings since the sections were last
+    /// laid out (`SharedState::reveal_console`): the next layout takes it as
+    /// a fold click's unfold, with its window resize.
+    pub revealed: bool,
     area: Option<Vec2>,
     requested: Option<u64>,
     pub rects: [Rect; 3],
@@ -389,6 +393,7 @@ struct Grip {
 impl Default for Runtime {
     fn default() -> Self {
         Self {
+            revealed: false,
             area: None,
             requested: None,
             rects: [Rect::NOTHING; 3],
@@ -417,7 +422,9 @@ impl Runtime {
 /// `told` is the layout the host was last told a save stores
 /// (`SharedState::reported`): fitting the layout to the
 /// window is no edit, so a fit of the layout it was told of settles there too,
-/// while one over an edit not yet told leaves that edit to be reported.
+/// while one over an edit not yet told leaves that edit to be reported. A
+/// Console reveal's unfold (`Runtime::revealed`) already moved both, and asks
+/// for its window here as a fold click's does.
 pub(crate) fn show(
     ui: &mut egui::Ui,
     layout: &mut Layout,
@@ -457,7 +464,13 @@ pub(crate) fn show(
     drawn.fit(area.size(), rail, gap);
     runtime.rects = drawn.rects(area, rail, gap, floor);
     runtime.bodies = [None; 3];
-    let before = layout.clone();
+    let mut before = layout.clone();
+    // A reveal is drawn as the unfold it was: its sizes are the folded
+    // layout's, which `settled` leaves alone while Settings is folded, so the
+    // reshape below moves nothing a save stores beyond what the reveal moved.
+    if std::mem::take(&mut runtime.revealed) {
+        before.folded[Section::Settings as usize] = true;
+    }
     // The dock is set on the Analyzer settings page, which draws through the
     // viewer rather than the layout; it reads and writes this copy.
     viewer.interaction.dock = layout.position;

@@ -451,29 +451,61 @@ fn the_analysis_input_saves_as_its_index_and_reopens() {
 }
 
 /// A restore line that reports a loss opens the Console in the open editor,
-/// as the editor door's own losses do (Yan, #1934), and opening it is no edit
-/// the host is told of. A line about the host only appends.
+/// as the editor door's own losses do (Yan, 2026-11-22, in
+/// `docs/intent/editor-shell.md`), and opening it is no edit the host is told
+/// of. A line about the host only appends, and both reach the scrollback.
 #[test]
 fn a_restore_that_reports_a_loss_opens_the_console() {
+    use harmonigraph_ui::testing;
     let _scope = crate::test_scope::enter();
     let device = hub();
     let (settings, lock) = (device.settings(), device.editor_lock());
-    let revealed = || harmonigraph_ui::testing::console_revealed(&lock.lock().ui);
-    settings.notify(Notice::Host("a line about the host".into()));
-    settings.deliver_notices(&mut lock.lock().ui);
-    assert!(!revealed(), "a host line only appends");
+    // Saved with Settings folded on a tab that is not the Console.
+    testing::fold_settings_on_tuning(&mut lock.lock().ui);
     let mut state = device.wrapper().get_state_object();
-    state.params.insert("tuning-three".into(), ParamValue::F32(696.0));
+    // One id no row has, so the restore owes one line.
+    state.params.insert("a-retired-parameter".into(), ParamValue::F32(1.0));
     device.load(state);
+    settings.notify(Notice::Host("a line about the host".into()));
     let before = device.service();
     // As an editor frame takes them: the lock installs the restore, then
     // its Console lines arrive over it.
     let mut shared = lock.lock();
+    assert!(testing::settings_folded(&shared.ui), "the fixture opens folded");
     settings.deliver_notices(&mut shared.ui);
-    harmonigraph_ui::testing::end_frame(&mut shared.ui);
+    testing::end_frame(&mut shared.ui);
+    assert!(testing::console_revealed(&shared.ui), "the restore named a retired parameter");
+    let lines: Vec<_> = shared.ui.picture.runtime.console.lines().map(str::to_owned).collect();
     drop(shared);
-    assert!(revealed(), "the restore named a retired parameter");
+    assert_eq!(
+        lines,
+        [
+            "This project saved parameters this build no longer has, which were not read: \
+             a-retired-parameter.",
+            "a line about the host",
+        ],
+    );
     assert_eq!(device.service(), before, "the reveal is no edit");
+}
+
+/// A newer restore's look wins over the Console an older one's line owed: the
+/// line stays in the scrollback, and the layout is the newer restore's.
+#[test]
+fn a_newer_restore_keeps_an_older_ones_line_but_not_its_reveal() {
+    use harmonigraph_ui::testing;
+    let _scope = crate::test_scope::enter();
+    let device = hub();
+    let (settings, lock) = (device.settings(), device.editor_lock());
+    testing::fold_settings_on_tuning(&mut lock.lock().ui);
+    let clean = device.wrapper().get_state_object();
+    let mut lossy = clean.clone();
+    lossy.params.insert("a-retired-parameter".into(), ParamValue::F32(1.0));
+    device.load(lossy);
+    device.load(clean);
+    let mut shared = lock.lock();
+    settings.deliver_notices(&mut shared.ui);
+    assert!(testing::settings_folded(&shared.ui), "the newer restore's layout");
+    assert_eq!(shared.ui.picture.runtime.console.lines().count(), 1, "the older restore's line");
 }
 
 /// A project saved while the axes were host parameters (#1756) holds them

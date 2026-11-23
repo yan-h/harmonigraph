@@ -24,9 +24,15 @@ pub(super) fn console_pane(ui: &mut egui::Ui, runtime: &mut crate::VisualRuntime
     // the Clear row above it does not scroll — so it needs the bar's lane
     // reserved out of its width (see [`theme::reserve_scroll_gutter`]).
     theme::reserve_scroll_gutter(ui);
+    let to_bottom = std::mem::take(&mut runtime.console.to_bottom);
     egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
         for line in runtime.console.lines() {
             ui.monospace(line);
+        }
+        // Sticking holds only a view already at the bottom, so a reveal
+        // brings one scrolled up to its newest line.
+        if to_bottom {
+            ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
         }
     });
 }
