@@ -208,6 +208,12 @@ impl InputWorker {
     /// when it was never spawned, already joined, or ended in a panic outside
     /// a step. Joining can wait for the current step, one [`SHUT_POLL`]
     /// sleep at most, and the final drain in [`run`].
+    /// Stop the thread and wait for it, at the plugin's destruction: no step,
+    /// nor a host wake one makes, outlives this.
+    pub(crate) fn stop(&mut self) {
+        self.stop_and_join();
+    }
+
     fn stop_and_join(&mut self) -> Option<Ended> {
         self.stop.store(true, Ordering::Relaxed);
         self.thread.take().and_then(|thread| thread.join().ok())
@@ -322,7 +328,7 @@ fn step(
     // format change clears a 25-minute tape, can delay the next step's drain,
     // though never under the lock.
     let _displaced;
-    let (taken, struck) = {
+    let (taken, struck, learned) = {
         let mut guard = shared.lock();
         let shared = &mut *guard;
         let now = shared.clock.now();
@@ -337,9 +343,8 @@ fn step(
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
         let struck = newest_onset(&shared.ui.picture.runtime) > onset;
-        if let Some(params) = learn {
-            self::learn(params, &mut shared.ui.picture.runtime);
-        }
+        let learned =
+            learn.is_some_and(|params| self::learn(params, &mut shared.ui.picture.runtime));
         // A frame's duties that must not wait for one: none runs while the
         // editor cannot be seen, open or not. Every trigger but OnDisarm is
         // decided in `poll_take_end`, so without it here an armed take would
@@ -348,8 +353,12 @@ fn step(
         let display = shared.clock.display_now(now);
         shared.ui.picture.runtime.advance_time(display, &shared.ui.picture.appearance);
         shared.poll_take_end();
-        (taken, struck)
+        (taken, struck, learned)
     };
+    // Out of the editor lock: the host's wake must not run under it (#1924 C).
+    if let Some(params) = learn.filter(|_| learned) {
+        params.settings.changed();
+    }
     // Asked once the lock is let go, so the pass it runs does not wait on it.
     if struck {
         editor_state.request_pass();
@@ -432,17 +441,25 @@ fn guarded_step(
 
 /// One step of Learn (#1938 C), from the notes the step just drained: here
 /// rather than in a frame, so it learns with the window covered or shut, as
-/// it did on audio. It applies through the document's door, which checks
-/// the gate again there, so a restore or an edit that disarmed Learn since
-/// this read it wins. The editor's lock is held, then the document's: the
-/// order a frame takes them in.
-fn learn(params: &crate::HarmonigraphParams, runtime: &mut harmonigraph_ui::VisualRuntime) {
-    let engine = harmonigraph_core::lattice_map::TuningEngine::from_index(
-        params.int(crate::Row::TuningEngine),
-    );
-    if let Some(learned) = runtime.learn(params.settings.learns(engine)) {
-        params.settings.learn(learned, engine);
-    }
+/// it did on audio. It applies through the document's door, which reads the
+/// engine and checks the gate again inside its write, so a restore or an
+/// edit that disarmed Learn or changed the engine since this read them wins,
+/// and a result refused there is inferred again at the next step. The
+/// editor's lock is held, then the document's: the order a frame takes them
+/// in. Whether what the project saves changed, for the caller to mark once
+/// the editor lock is let go.
+fn learn(params: &crate::HarmonigraphParams, runtime: &mut harmonigraph_ui::VisualRuntime) -> bool {
+    let engine = || {
+        harmonigraph_core::lattice_map::TuningEngine::from_index(
+            params.int(crate::Row::TuningEngine),
+        )
+    };
+    runtime.cut_learn(params.settings.stops());
+    let Some(learned) = runtime.learn(params.settings.learns(engine())) else { return false };
+    params.settings.learn(learned, engine).unwrap_or_else(|| {
+        runtime.relearn();
+        false
+    })
 }
 
 /// How many consecutive steps may panic before the worker stops trying.

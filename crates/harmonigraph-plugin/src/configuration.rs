@@ -65,13 +65,29 @@ impl MusicalSettings {
     }
 }
 
+/// The tuning document and audio's half of what it publishes.
+struct Document {
+    reducer: ConfigReducer,
+    /// Each write's resolved configuration, published as the write ends, so
+    /// publication keeps the writes' order.
+    audio: triple_buffer::Input<ResolvedConfig>,
+}
+
 /// The configuration's shared half (#1938): the document the main thread
-/// owns and the editor edits, which audio copies at each callback's start;
-/// what audio reports back about it; and the host's save and restore.
+/// owns and the editor edits, whose latest value audio reads at each
+/// callback's start; what audio reports back about it; and the host's save
+/// and restore.
 pub(crate) struct Settings {
     /// The tuning configuration. Written by the editor's edits, Learn and a
     /// restore, never by audio.
-    document: Shared<ConfigReducer>,
+    document: Shared<Document>,
+    /// What audio reads: the latest configuration a write published, wait-free
+    /// and with no lock, which a reader's release could otherwise take while a
+    /// writer is parked. Taken once, by the audio owner.
+    audio: Mutex<Option<triple_buffer::Output<ResolvedConfig>>>,
+    /// Processing stops since creation, for Learn to stop hearing what was
+    /// held at one (`VisualRuntime::cut_learn`).
+    stops: AtomicU64,
     /// The document revision audio last copied, for the pending label.
     adopted: AtomicU64,
     /// Host input was lost, until the host's reset: audio's one status bit,
@@ -97,8 +113,12 @@ pub(crate) const LEGACY_AXES: &str = "This project saved its tuning axes as host
 
 impl Default for Settings {
     fn default() -> Self {
+        let reducer = ConfigReducer::default();
+        let (audio, output) = triple_buffer::triple_buffer(&reducer.resolved());
         Self {
-            document: Shared::default(),
+            document: Shared::new(Document { reducer, audio }),
+            audio: Mutex::new(Some(output)),
+            stops: AtomicU64::new(0),
             adopted: AtomicU64::new(0),
             input_lost: AtomicBool::new(false),
             modified: AtomicBool::new(false),
@@ -113,39 +133,67 @@ impl Settings {
     /// Apply one editor edit to the document, marking the project modified
     /// when what it saves changed.
     pub fn submit(&self, edit: ConfigEdit) {
-        self.mutate(|_| Some(ConfigMutation::Edit(edit)));
+        if self.apply(|_| Some(ConfigMutation::Edit(edit))) == Some(true) {
+            self.changed();
+        }
     }
 
-    /// Apply what Learn inferred, if Learn still acts under `engine` as the
-    /// document stands: a restore or an edit that disarmed it since the
-    /// inference wins. True when it applied.
-    pub fn learn(&self, learned: LearnedTuning, engine: TuningEngine) -> bool {
-        self.mutate(|document| {
-            document
+    /// Apply what Learn inferred, if Learn still acts as the document stands,
+    /// under the engine `engine` reads inside the write: a restore or an edit
+    /// that disarmed it or changed the engine since the inference wins. `None`
+    /// when it refused, else whether what the project saves changed. The
+    /// caller marks the project, out of every lock it holds.
+    pub fn learn(
+        &self,
+        learned: LearnedTuning,
+        engine: impl FnOnce() -> TuningEngine,
+    ) -> Option<bool> {
+        self.apply(|reducer| {
+            reducer
                 .resolved()
-                .learn_acts(engine)
+                .learn_acts(engine())
                 .then_some(ConfigMutation::LearnResolved { learned })
         })
     }
 
     /// Whether Learn acts under `engine` as the document stands.
     pub fn learns(&self, engine: TuningEngine) -> bool {
-        self.document.read(|document| document.resolved().learn_acts(engine))
+        self.read(|reducer| reducer.resolved().learn_acts(engine))
     }
 
-    /// Apply the mutation `decide` makes of the document, if any; then, out of
-    /// the door, mark the project modified when what it saves changed.
-    fn mutate(&self, decide: impl FnOnce(&ConfigReducer) -> Option<ConfigMutation>) -> bool {
-        let changed = self.document.write(|document| {
-            let mutation = decide(document)?;
-            let before = MusicalSettings::of(document.raw(), document.resolved());
-            document.apply(mutation);
-            Some(MusicalSettings::of(document.raw(), document.resolved()) != before)
-        });
-        if changed == Some(true) {
-            self.changed();
-        }
-        changed.is_some()
+    /// Apply the mutation `decide` makes of the document, if any: `None`
+    /// when it made none, else whether what the project saves changed.
+    fn apply(&self, decide: impl FnOnce(&ConfigReducer) -> Option<ConfigMutation>) -> Option<bool> {
+        self.write(|reducer| {
+            let mutation = decide(reducer)?;
+            let before = MusicalSettings::of(reducer.raw(), reducer.resolved());
+            reducer.apply(mutation);
+            Some(MusicalSettings::of(reducer.raw(), reducer.resolved()) != before)
+        })
+    }
+
+    fn read<R>(&self, read: impl FnOnce(&ConfigReducer) -> R) -> R {
+        self.document.read(|document| read(&document.reducer))
+    }
+
+    /// Write the document, then publish its configuration to audio before the
+    /// door closes.
+    fn write<R>(&self, write: impl FnOnce(&mut ConfigReducer) -> R) -> R {
+        self.document.write(|document| {
+            let written = write(&mut document.reducer);
+            document.audio.write(document.reducer.resolved());
+            written
+        })
+    }
+
+    /// Processing stopped: audio-thread safe.
+    pub fn stopped(&self) {
+        self.stops.fetch_add(1, Ordering::Release);
+    }
+
+    /// Processing stops since creation.
+    pub fn stops(&self) -> u64 {
+        self.stops.load(Ordering::Acquire)
     }
 
     /// The configuration as the editor shows it and a save stores it.
@@ -166,7 +214,7 @@ impl Settings {
 
     /// The document's resolved configuration.
     pub fn resolved(&self) -> ResolvedConfig {
-        self.document.read(ConfigReducer::resolved)
+        self.read(ConfigReducer::resolved)
     }
 
     /// The Console line a restore since the last call left, if any.
@@ -198,8 +246,7 @@ impl Settings {
     }
 
     fn save(&self, state: &mut PluginState) {
-        let saved =
-            self.document.read(|document| MusicalSettings::of(document.raw(), document.resolved()));
+        let saved = self.read(|reducer| MusicalSettings::of(reducer.raw(), reducer.resolved()));
         state.fields.insert(
             MUSICAL_SETTINGS.to_owned(),
             serde_json::to_string(&saved).expect("fixed musical settings serialize"),
@@ -235,7 +282,7 @@ impl Prepared for Restore {
     /// modified: it holds what the host just gave.
     fn commit(self: Box<Self>) {
         let settings = &self.settings;
-        settings.document.write(|document| document.apply(self.value.mutation()));
+        settings.write(|reducer| reducer.apply(self.value.mutation()));
         if self.legacy {
             // The log keeps it for a project saved before an editor opens.
             shell_error!("{LEGACY_AXES}");
@@ -302,17 +349,20 @@ mod recording;
 
 pub struct Owner {
     pub(crate) maps: crate::lattice_maps::AudioMaps,
-    /// The document as this callback copied it, or an earlier one did when a
-    /// writer held it then.
+    /// The configuration this callback read.
     config: ResolvedConfig,
+    /// The latest configuration the document published.
+    published: triple_buffer::Output<ResolvedConfig>,
     settings: Arc<Settings>,
     pub(crate) recording: recording::Recording,
 }
 impl Owner {
     pub fn new(params: &super::HarmonigraphParams) -> Self {
+        let published = params.settings.audio.lock().take().expect("one audio owner");
         let mut owner = Self {
             maps: crate::lattice_maps::AudioMaps::new(params),
             config: params.settings.resolved(),
+            published,
             settings: params.settings.clone(),
             recording: recording::Recording::default(),
         };
@@ -320,21 +370,18 @@ impl Owner {
         owner
     }
 
-    /// Copy the document with a blocking read: at creation and at activation,
-    /// on the main thread with audio stopped.
+    /// Read the latest configuration published: at creation, at activation
+    /// and at each callback's start. Wait-free.
     pub fn seed(&mut self) {
-        self.adopt(self.settings.resolved());
-    }
-
-    fn adopt(&mut self, config: ResolvedConfig) {
+        let config = *self.published.read();
         self.config = config;
         self.settings.adopted.store(config.revision, Ordering::Release);
     }
 
-    /// The callback's boundary: copy the document as it stands, then seed
-    /// its history entry. A document a writer holds at this instant keeps
-    /// the last copy, and the edit sounds a callback later; automation the
-    /// walk observes lands in the history at its own sample.
+    /// The callback's boundary: read the configuration the document last
+    /// published, then seed its history entry. An edit still being written
+    /// sounds a callback later; automation the walk observes lands in the
+    /// history at its own sample.
     pub fn begin(
         &mut self,
         boundary: &Boundary,
@@ -345,9 +392,7 @@ impl Owner {
         self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
         self.recording.block_frames = boundary.frames;
-        if let Some(config) = self.settings.document.try_read(ConfigReducer::resolved) {
-            self.adopt(config);
-        }
+        self.seed();
         self.maps.adopt(self.config, seed);
     }
 

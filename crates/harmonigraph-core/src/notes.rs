@@ -529,6 +529,10 @@ pub struct Voice {
     /// tuning (PolyTuning/MPE). Equal to `note` until a tuning arrives.
     pub pitch: f32,
     pub pitch_class: PitchClass,
+    /// The correction its source's tuner froze at the attack, in semitones,
+    /// so `pitch - correction` is the pitch the player sent; zero for a note
+    /// no tuner corrected.
+    pub correction: f32,
     /// Where the note's expressions stand now; [`Expressions::NEUTRAL`] until
     /// the host sends one.
     pub expressions: Expressions,
@@ -685,6 +689,8 @@ impl NoteTracker {
                         self.roll.bend(key, delta.event.time, pitch);
                     }
                     self.roll.set_lifetime(key, (delta.lifetime != 0).then_some(delta.lifetime));
+                    let correction = delta.assignment.map_or(0, |a| a.correction_microcents);
+                    self.roll.set_correction(key, semitones(correction));
                 }
             }
             CanonicalEvent::Baseline(frame) => return self.replace_source_mapped(frame, offset),
@@ -841,6 +847,11 @@ impl NoteTracker {
     }
 }
 
+/// Microcents as semitones, the unit the roll keeps pitch in.
+pub(crate) fn semitones(microcents: i64) -> f32 {
+    (microcents as f64 / 100_000_000.0) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -910,6 +921,7 @@ mod tests {
             velocity: 1.0,
             pitch: 60.0,
             pitch_class: PitchClass::from_midi_note(0),
+            correction: 0.0,
             expressions: Expressions::NEUTRAL,
             on_time: 0.0,
             lifetime: None,

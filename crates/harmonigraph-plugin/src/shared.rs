@@ -1,4 +1,7 @@
-//! A saved document the main thread owns and audio copies (#1938).
+//! A saved document the main thread owns (#1938). Audio never takes its
+//! lock: a reader's release can take the parking bucket's lock while a writer
+//! is parked, so what audio needs is published to it wait-free, by the
+//! document's owner, inside the write.
 //!
 //! The lock stays private, so no guard outlives the closure handed to it, and
 //! the door keeps one rule the type cannot spell: nothing inside a closure
@@ -53,7 +56,12 @@ pub(crate) struct Shared<T> {
 }
 
 impl<T> Shared<T> {
-    /// Read the document. Main thread or the editor's threads, never audio.
+    pub fn new(value: T) -> Self {
+        Self { lock: RwLock::new(value) }
+    }
+
+    /// Read the document, off audio: the main thread, a frame or the input
+    /// worker.
     pub fn read<R>(&self, read: impl FnOnce(&T) -> R) -> R {
         let _held = Held::enter();
         read(&self.lock.read())
@@ -64,13 +72,6 @@ impl<T> Shared<T> {
     pub fn write<R>(&self, write: impl FnOnce(&mut T) -> R) -> R {
         let _held = Held::enter();
         write(&mut self.lock.write())
-    }
-
-    /// Audio's read: `None` while a writer holds the document, when the
-    /// callback keeps what it copied last.
-    pub fn try_read<R>(&self, read: impl FnOnce(&T) -> R) -> Option<R> {
-        let _held = Held::enter();
-        self.lock.try_read().map(|document| read(&document))
     }
 }
 

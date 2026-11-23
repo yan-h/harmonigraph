@@ -185,6 +185,67 @@ fn learn_does_not_hear_the_tape() {
     assert!(state.picture.runtime.learn(true).is_some(), "the same fifth played live");
 }
 
+/// A note a tuner corrected at its attack is heard at the pitch the player
+/// sent, as a chord held across a switch from Lattice Map to Pass through is
+/// (Yan, #1942): an E a map lowered to the just third is heard as the 12-TET
+/// E it was played as.
+#[test]
+fn learn_hears_a_corrected_note_at_its_incoming_pitch() {
+    use harmonigraph_core::canonical::{AssignmentMetadata, CanonicalEvent, NoteDelta};
+    let mut state = fresh();
+    let source = harmonigraph_core::SourceId(1);
+    let correction =
+        harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::FIVE_JUST - 400.0);
+    for (sequence, (note, correction)) in
+        [(60u8, 0i64), (64, i64::from(correction)), (67, 0)].into_iter().enumerate()
+    {
+        let sequence = sequence as u64 + 1;
+        let delta = NoteDelta {
+            event: harmonigraph_core::NoteEvent::on(0.0, source, 0, note, 1.0),
+            sequence,
+            lifetime: sequence,
+            pitch_microcents: Some(i64::from(note) * 100_000_000 + correction),
+            assignment: Some(AssignmentMetadata {
+                decision: 1,
+                node: None,
+                correction_microcents: correction,
+                player_tuning: 0.0,
+            }),
+        };
+        state.picture.runtime.tracker.handle_canonical(CanonicalEvent::Note(delta)).unwrap();
+    }
+    let learned = state.picture.runtime.learn(true).expect("a triad");
+    let five = learned.five.expect("a third");
+    assert!((five - 400.0).abs() < 0.01, "the incoming third, not the corrected one: {five}");
+}
+
+/// Processing stopped: the presses held then ended at the stop, though no
+/// callback came to say so, and Learn no longer hears them; a press after it
+/// it hears.
+#[test]
+fn learn_does_not_hear_what_a_processing_stop_ended() {
+    let mut state = fresh();
+    hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
+    let runtime = &mut state.picture.runtime;
+    runtime.cut_learn(1);
+    assert!(runtime.learn(true).is_none(), "the chord held at the stop");
+    runtime.cut_learn(1);
+    hold_chord(&mut state, &[(62, 0.0), (69, 0.0)]);
+    assert!(state.picture.runtime.learn(true).is_some(), "a chord struck after it");
+}
+
+/// A result its owner refused is inferred again from the same chord.
+#[test]
+fn a_refused_learn_is_inferred_again() {
+    let mut state = fresh();
+    hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
+    let runtime = &mut state.picture.runtime;
+    assert!(runtime.learn(true).is_some());
+    assert!(runtime.learn(true).is_none(), "learned once");
+    runtime.relearn();
+    assert!(runtime.learn(true).is_some(), "and again once refused");
+}
+
 /// One frame's observation in a shell with no owner, which runs Learn.
 fn learn(state: &mut SharedState) {
     state.picture.runtime.observe_configuration(&RecordingBackend::default());

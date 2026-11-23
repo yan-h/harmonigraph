@@ -184,10 +184,10 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 
 **Cases the tuning settings go without** (PR #1795, and #1938 when the main thread took the record), each with its cost when it occurs:
 
-- An edit made while the record's lock is held at a callback's start: it sounds one block later.
+- An edit still being written at a callback's start: it sounds one block later.
 - A restore's maps, tuning and host parameters are three writes: a callback between them adopts one without the others for a block, recorded so in a take.
 - A learned change reaches the sound and a take a worker step (4 ms with the window open, 20 ms shut) plus a block after its chord, where it was one block; in a faster-than-real-time bounce with Learn armed that is up to the bounce speed times 20 ms of song, and two runs can differ.
-- A chord held across a switch from Lattice Map to Pass through with Learn armed: Learn hears it at its corrected pitch until the next press.
+- A chord that starts and ends between two worker polls (4 ms with the window open, 20 ms shut): it can go unlearned (Yan, #1942).
 - After lost input, editor edits and Learn keep applying until the host resets; the fault notice stays and a take recorded after the loss refuses its configuration (Yan's answer, #1795, recorded in `docs/intent/tuning.md`).
 
 **Cases the glow goes without** (PR #1791), each with its cost when it occurs:

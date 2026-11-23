@@ -82,7 +82,7 @@ struct Shown {
     view: ConfigurationView,
 }
 fn shown(settings: &Settings) -> Shown {
-    Shown { raw: settings.document.read(ConfigReducer::raw), view: settings.view() }
+    Shown { raw: settings.read(ConfigReducer::raw), view: settings.view() }
 }
 /// The configuration a saved record restores.
 fn reduced(settings: MusicalSettings) -> ResolvedConfig {
@@ -135,19 +135,18 @@ fn edits_and_restores_show_and_save_at_once_and_audio_adopts_them() {
     assert_eq!(sounding(&device).tuning.three, microcents(700.0));
 }
 
-/// While a writer holds the document at a callback's start, the callback
-/// keeps the configuration it copied last, and the next one adopts the edit.
+/// Audio takes no lock: while a writer holds the document at a callback's
+/// start, the callback still reads the last configuration a write published.
 #[test]
-fn a_held_document_keeps_the_previous_configuration_until_the_next_callback() {
+fn a_held_document_does_not_hold_audio() {
     let _scope = crate::test_scope::enter();
     let mut device = hub().with_retune();
     device.activate();
     let settings = device.settings();
     device.run(0, vec![], None);
-    let before = sounding(&device).tuning.three;
     settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0)));
     let (held, release) = (std::sync::Barrier::new(2), std::sync::Barrier::new(2));
-    std::thread::scope(|scope| {
+    let read = std::thread::scope(|scope| {
         scope.spawn(|| {
             settings.document.write(|_| {
                 held.wait();
@@ -156,12 +155,11 @@ fn a_held_document_keeps_the_previous_configuration_until_the_next_callback() {
         });
         held.wait();
         device.run(64, vec![], None);
+        let read = sounding(&device).tuning.three;
         release.wait();
+        read
     });
-    assert_eq!(sounding(&device).tuning.three, before, "the held callback kept its copy");
-    assert!(shown(&settings).view.unadopted.is_some());
-    device.run(128, vec![], None);
-    assert_eq!(sounding(&device).tuning.three, microcents(695.0));
+    assert_eq!(read, microcents(695.0), "read while the document was held");
     assert!(shown(&settings).view.unadopted.is_none());
 }
 
@@ -245,6 +243,46 @@ fn a_save_from_inside_a_host_call_returns() {
     assert_eq!(host.1.load(Ordering::Relaxed), 6, "every host call saved, and returned");
 }
 
+/// The host may destroy the plugin while the input worker is inside a host
+/// wake, here Learn's, holding the wrapper's other reference: destruction
+/// stops and joins the worker first, so the plugin drops on the host's
+/// thread rather than on the worker, which would join itself (#1938).
+#[test]
+fn destruction_waits_out_a_worker_wake_and_drops_on_the_hosts_thread() {
+    let _scope = crate::test_scope::enter();
+    let mut device = hub();
+    device.activate();
+    let settings = device.settings();
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
+    settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
+    let (hold, holding) = (device.host().hold.clone(), device.host().holding.clone());
+    hold.store(true, Ordering::Release);
+    *device.host().hold_thread.lock().unwrap() = Some("harmonigraph-input-worker");
+    device.run(
+        0,
+        vec![note(60, 60, 0, CLAP_EVENT_NOTE_ON), note(67, 67, 0, CLAP_EVENT_NOTE_ON)],
+        None,
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut raw = 64;
+    while !holding.load(Ordering::Acquire) {
+        assert!(std::time::Instant::now() < deadline, "Learn never woke the host");
+        device.run(raw, vec![], None);
+        raw += 64;
+        std::thread::sleep(crate::background::POLL);
+    }
+    *crate::DROPPED_ON.lock().unwrap() = None;
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        hold.store(false, Ordering::Release);
+    });
+    drop(device);
+    let dropped = crate::DROPPED_ON.lock().unwrap().clone();
+    release.join().unwrap();
+    let host = std::thread::current().name().map(str::to_owned);
+    assert_eq!(dropped, host, "the plugin dropped by the end of destroy, on its thread");
+}
+
 /// Learn applies only while it acts, as the document stands when its result
 /// arrives: a restore or an edit that disarmed it since the inference wins.
 #[test]
@@ -252,11 +290,20 @@ fn learn_applies_only_while_the_document_lets_it_act() {
     let settings = Settings::default();
     let learned =
         harmonigraph_core::tuning::LearnedTuning { three: Some(696.0), ..Default::default() };
-    assert!(!settings.learn(learned, TuningEngine::Off), "disarmed");
+    assert_eq!(settings.learn(learned, || TuningEngine::Off), None, "disarmed");
     settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
-    assert!(!settings.learn(learned, TuningEngine::LatticeMap), "suspended in Lattice Map");
-    assert!(!settings.learn(learned, TuningEngine::Adaptive), "and under Adaptive");
-    assert!(settings.learn(learned, TuningEngine::Off), "it acts under Pass through");
+    // A restore switching Pass through to Lattice Map after the inference
+    // read Pass through: the engine is read again inside the write.
+    assert!(settings.learns(TuningEngine::Off));
+    let refused = settings.learn(learned, || TuningEngine::LatticeMap);
+    assert_eq!(refused, None, "suspended in Lattice Map");
+    assert_eq!(settings.learn(learned, || TuningEngine::Adaptive), None, "and under Adaptive");
+    assert_ne!(shown(&settings).raw.three, microcents(696.0), "the axes are left alone");
+    assert_eq!(
+        settings.learn(learned, || TuningEngine::Off),
+        Some(true),
+        "it acts in Pass through"
+    );
     assert_eq!(shown(&settings).raw.three, microcents(696.0));
 }
 
@@ -311,7 +358,12 @@ fn learn_hears_the_played_tuning_with_no_editor_open() {
     assert!(!now.view.resolved.modes.tempered.syntonic);
     let keyboard = now.view.resolved.policy.keyboard;
     assert!((keyboard[0] - microcents(harmonigraph_core::tuning::THREE_JUST)).abs() < 1_000);
-    assert!(device.service() > marked, "Learn marks the project");
+    // The worker marks the project once its editor lock is let go.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while device.service() <= marked {
+        assert!(std::time::Instant::now() < deadline, "Learn never marked the project");
+        std::thread::sleep(crate::background::POLL);
+    }
     assert_eq!(saved(&device.save()).axes, now.raw.axes(), "a save stores what Learn found");
     device.finish_notes(raw, &[(60, 60), (64, 64), (67, 67)]);
 }
@@ -794,6 +846,8 @@ fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
     let mut device = hub();
     device.activate();
     let settings = device.settings();
+    // Seeded away from the 12-TET fifth, so the wait below is Learn's.
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
     settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
     device.run(
         0,

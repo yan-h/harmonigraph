@@ -332,7 +332,7 @@ Bitwig's own undo does not cover them.
 
 Adoption is **sample-exact**, under every engine.
 At the start of each enclosing Hub audio callback, the record as it stands is copied and enters one sample-indexed configuration history at the block's start;
-a writer holding it at that instant leaves the callback on its last copy, and the edit enters at the next;
+what audio reads is the configuration the last finished write published, wait-free and with no lock, so an edit still being written at that instant enters at the next;
 Lattice Map automation enters it at its own input sample.
 Every assignment group uses the configuration in force at its input sample,
 including a record held over from an earlier callback;
@@ -626,7 +626,8 @@ a receiving instrument may ignore, smooth or modulate the expression.
 One provenance reaches the take now rather than two, so records carry none (#1798):
 an unsequenced delta is a direct observation, and a sequenced one is what a source played and names its press by a lifetime.
 Learn reads what the lattice holds (#1938), which under Pass through, the one engine it runs under, is the player's pitch.
-A note struck under Lattice Map and still held when the engine switches to Pass through keeps its correction there, and Learn hears it corrected until the next press.
+It hears each note at its incoming pitch, the correction a tuner froze on it taken back off, so a chord held across a switch from Lattice Map to Pass through teaches the pitch it was played at, as a note struck decoded does once Decode fifths is off (Yan, #1942).
+None held when processing stopped is heard: the stop's cut reaches the lattice only at the next callback.
 A row that lost a release copy to a full ring and then filled its 64 voices reads its stuck voices, as the lattice draws them, until the next cut (#1798 H5).
 
 Publication is two independent lanes, one for the display and one for the take, and the rule that keeps them independent is stated as a type:
@@ -681,7 +682,7 @@ Bitwig was measured sending none at 44.1 kHz through loops, seeks and export (`a
 
 The [CLAP boundary audit](audits/clap-boundary-1415.md) records the lock ownership and allocation-check reach of the input pool this replaced.
 The owned-parameter mailbox it audited went with #1756, and the pool, its cursors and its walks with #1814.
-The tuning record is copied whole under a lock audio only tries, at most 128 bytes, so concurrent edits and restores cannot extend audio-thread work.
+Each write of the tuning record publishes its resolved configuration, at most 128 bytes, through a triple buffer audio reads wait-free, so concurrent edits and restores cannot extend audio-thread work and audio takes no lock.
 
 **The output scheduler is gone** ([#789](https://github.com/yan-h/harmonigraph/issues/789), after [#786](https://github.com/yan-h/harmonigraph/issues/786) and [#788](https://github.com/yan-h/harmonigraph/issues/788) had already emptied it of callers).
 `Group`, `Lane`, `Token`, `Completion`, `Disposition`, the ready heap, the cell pool and the emergency lane are deleted, and with them the hooks that had nothing left to decide.

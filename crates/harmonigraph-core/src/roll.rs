@@ -97,6 +97,8 @@ pub struct RollNote {
     /// The pitch class of the last breakpoint of `bends`, kept beside it
     /// because a voice is read per node and per frame.
     pitch_class: PitchClass,
+    /// The correction its tuner froze at the attack ([`Voice::correction`]).
+    correction: f32,
     /// Released at or before its onset (rule 1): a voice that pulses, and no
     /// timeline note. Filed in `past` like any finished press, where the
     /// timeline leaves it out and the lattice still replays its departure.
@@ -141,6 +143,7 @@ impl RollNote {
             expressions: vec![(at, expressions)],
             expression_spacing: Self::EXPRESSION_SPACING,
             pitch_class: PitchClass::from_cents(pitch * 100.0),
+            correction: 0.0,
             pulse: false,
             cleared: Cleared::No,
             left_hidden: false,
@@ -179,6 +182,7 @@ impl RollNote {
             velocity: self.velocity,
             pitch: self.end_pitch(),
             pitch_class: self.pitch_class,
+            correction: self.correction,
             expressions: self.expressions[self.expressions.len() - 1].1,
             on_time: self.start,
             lifetime: self.lifetime,
@@ -566,6 +570,12 @@ impl NoteRoll {
         }
     }
 
+    pub(crate) fn set_correction(&mut self, key: VoiceKey, semitones: f32) {
+        if let Some(note) = self.live.get_mut(&key) {
+            note.correction = semitones;
+        }
+    }
+
     /// Take the press held on `key` out of the held set, stamped with whether
     /// its source shows as it leaves (rule 4). Every way out goes through here:
     /// a release, a retrigger, a reset, a baseline that omits it.
@@ -660,6 +670,7 @@ impl NoteRoll {
                     note.push_point(at, row.pitch(), true);
                 }
                 note.express(at, row.expressions);
+                note.correction = crate::notes::semitones(row.frozen_offset_microcents);
                 continue;
             }
             let start = row.actual_onset + offset;
@@ -667,6 +678,7 @@ impl NoteRoll {
             let mut note =
                 RollNote::new(id, key, row.velocity, start, at, row.pitch(), row.expressions);
             note.lifetime = Some(row.lifetime);
+            note.correction = crate::notes::semitones(row.frozen_offset_microcents);
             note.history_complete = false;
             self.live.insert(key, note);
         }

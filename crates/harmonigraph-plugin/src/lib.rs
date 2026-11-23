@@ -137,7 +137,7 @@ pub struct Harmonigraph {
     /// the analyzer thread rather than on the one dropping the plugin. That
     /// appears to be sound, but PR #112 was a texture freed from the wrong point
     /// and it cost a crash; ordering the field is cheaper than being sure.
-    _input_worker: background::InputWorker,
+    input_worker: background::InputWorker,
     params: Arc<HarmonigraphParams>,
     /// Coherent, bounded audio and source metadata for the live analyzer.
     audio_producer: audio_ingress::Producer,
@@ -167,8 +167,17 @@ pub struct Harmonigraph {
     offline: bool,
 }
 
+/// The thread the last plugin dropped on, for a teardown test.
+#[cfg(test)]
+pub(crate) static DROPPED_ON: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 impl Drop for Harmonigraph {
     fn drop(&mut self) {
+        #[cfg(test)]
+        {
+            let thread = std::thread::current().name().map(str::to_owned);
+            *DROPPED_ON.lock().unwrap() = thread;
+        }
         // Window state can retain its own Arc during native teardown. Join the
         // graphics worker at plugin destruction, not only at the last Arc drop.
         // One hold for both handles, and each joined with the lock free.
@@ -771,7 +780,7 @@ impl Default for Harmonigraph {
         // would go dark; the editor is the very thing being covered for. It
         // also installs a project's saved settings before any window is built,
         // through the lock both share (#324).
-        let _input_worker = background::InputWorker::spawn(
+        let input_worker = background::InputWorker::spawn(
             editor_shared.clone(),
             params.editor_state.clone(),
             tape_worker,
@@ -793,7 +802,7 @@ impl Default for Harmonigraph {
             take: RecorderSlot(Some(take)),
             tape,
             offline: false,
-            _input_worker,
+            input_worker,
         }
     }
 }
@@ -1006,6 +1015,11 @@ impl Plugin for Harmonigraph {
     /// the recorder's own drop decides: a Tune learns the Hub is gone from the
     /// same slot it learned the Hub was here.
     fn destroy(&mut self) {
+        // First, on the host's main thread: a worker step can be inside a
+        // host wake, holding the wrapper's last other reference, and the
+        // plugin must not then drop on the worker, which joins itself and
+        // whose step may hold the editor lock the drop takes (#1938).
+        self.input_worker.stop();
         let mut hub = self.aggregation.take().unwrap();
         self.configuration.take();
         self.take.0.take();
@@ -1014,6 +1028,9 @@ impl Plugin for Harmonigraph {
 
     fn stop(&mut self) {
         self.aggregation.as_mut().unwrap().stop();
+        // The cut's snapshots wait for a callback that may not come, so the
+        // editor would hold these notes; Learn stops hearing them.
+        self.params.settings.stopped();
     }
 
     fn reset(&mut self) {
@@ -1144,7 +1161,7 @@ mod tests {
     fn a_round_after(plugin: &Harmonigraph, before: u64) -> bool {
         let started = Instant::now();
         loop {
-            if plugin._input_worker.completed_rounds() > before {
+            if plugin.input_worker.completed_rounds() > before {
                 return true;
             }
             if started.elapsed() >= ANALYSIS_DEADLINE {
@@ -1157,8 +1174,8 @@ mod tests {
     /// Stop the plugin's input worker and take the input it owned, after
     /// its final drain: for a test that drains by hand at times it chooses,
     /// or reads what the worker's analysis ran at.
-    fn stop_input_worker(plugin: &mut Harmonigraph) -> editor::input::LiveInput {
-        plugin._input_worker.join().expect("the input worker ran and ended")
+    fn stopinput_worker(plugin: &mut Harmonigraph) -> editor::input::LiveInput {
+        plugin.input_worker.join().expect("the input worker ran and ended")
     }
 
     fn publish_test_audio(plugin: &mut Harmonigraph, frames: usize) {
@@ -1191,7 +1208,7 @@ mod tests {
     /// Driven through the REAL spawned thread rather than by calling `step`,
     /// because the wiring is precisely what a direct call would bypass.
     #[test]
-    fn the_input_worker_asks_the_editors_own_state_for_a_pass() {
+    fn theinput_worker_asks_the_editors_own_state_for_a_pass() {
         let mut plugin = Harmonigraph::default();
         let state = plugin.params.editor_state.clone();
         state.set_open(true);
@@ -1264,7 +1281,7 @@ mod tests {
 
         // The analysis is the worker's own, so read it once the worker has
         // stopped and handed it back.
-        let lag = stop_input_worker(&mut plugin).analysis_lag();
+        let lag = stopinput_worker(&mut plugin).analysis_lag();
         let shared = plugin.editor_shared.lock();
         assert_eq!(shared.ui.picture.appearance.camera.yaw, 1.23);
         assert_eq!(shared.ui.picture.appearance.view.max_sevens, 3);
@@ -1484,7 +1501,7 @@ mod tests {
 
         let _ = plugin.editor_shared.end_window_session();
         plugin.params.editor_state.set_open(false);
-        let rounds = plugin._input_worker.completed_rounds();
+        let rounds = plugin.input_worker.completed_rounds();
         assert!(
             a_round_after(&plugin, rounds + 1),
             "no worker round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
@@ -1595,7 +1612,7 @@ mod tests {
     #[test]
     fn a_sidechain_process_block_feeds_analysis_and_leaves_main_untouched() {
         let mut plugin = Harmonigraph::default();
-        let mut input = stop_input_worker(&mut plugin);
+        let mut input = stopinput_worker(&mut plugin);
         plugin.params.set(Row::AnalysisInput, 1.0);
         assert_eq!(plugin.params.analysis_input(), AnalysisInput::Sidechain);
         let mut main_left = [1.0, 2.0, 3.0, 4.0];
@@ -1740,7 +1757,7 @@ mod tests {
     #[test]
     fn queued_history_keeps_its_clock_across_the_actual_plugin_reset() {
         let mut plugin = Harmonigraph::default();
-        let mut input = stop_input_worker(&mut plugin);
+        let mut input = stopinput_worker(&mut plugin);
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
         let shared = &mut *shared;
@@ -1774,7 +1791,7 @@ mod tests {
     #[test]
     fn analyzer_source_time_ignores_transport_loops_stops_and_missing_positions() {
         let mut plugin = Harmonigraph::default();
-        let mut input = stop_input_worker(&mut plugin);
+        let mut input = stopinput_worker(&mut plugin);
         plugin.sample_rate = 48_000.0;
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
@@ -1837,7 +1854,7 @@ mod tests {
     /// request on: two whole rounds, so one began after it was set.
     fn ask(plugin: &Harmonigraph, request: harmonigraph_ui::tape::TapeRequest) {
         plugin.editor_shared.lock().ui.picture.runtime.tape.request = Some(request);
-        let rounds = plugin._input_worker.completed_rounds();
+        let rounds = plugin.input_worker.completed_rounds();
         assert!(a_round_after(plugin, rounds + 1), "the worker never ran a round");
     }
 
@@ -1924,7 +1941,7 @@ mod tests {
         }
         // Two whole rounds after the stop: one began after it was published,
         // so the pass is committed before the click.
-        let rounds = plugin._input_worker.completed_rounds();
+        let rounds = plugin.input_worker.completed_rounds();
         assert!(a_round_after(&plugin, rounds + 1), "the worker never ran a round");
 
         // The host keeps reporting where playback stopped.
@@ -1938,7 +1955,7 @@ mod tests {
             // A worker round before each block: a cue gives up after half a
             // second of AUDIO time without a piece, so blocks fed on a timer
             // would starve it whenever a busy runner held the worker back.
-            let rounds = plugin._input_worker.completed_rounds();
+            let rounds = plugin.input_worker.completed_rounds();
             assert!(a_round_after(&plugin, rounds), "the worker never ran a round");
             let (left, right) = silence(&mut plugin, parked);
             assert!(plugin.tape.sounding(), "the tape is cued or sounding");
@@ -1970,7 +1987,7 @@ mod tests {
             "{lines:?}",
         );
         // The tab is shown what sounds, and where the transport stopped.
-        let rounds = plugin._input_worker.completed_rounds();
+        let rounds = plugin.input_worker.completed_rounds();
         assert!(a_round_after(&plugin, rounds + 1), "the worker never ran a round");
         {
             let shared = plugin.editor_shared.lock();
