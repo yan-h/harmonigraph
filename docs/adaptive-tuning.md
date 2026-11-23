@@ -62,7 +62,7 @@ and back toward the Position when that spelling fades;
 a slide waits while a note it would retune is held, and every context reset returns it to the Position.
 Every fourth fifth along the chain, the one leaving the strip's sharp edge, is a comma narrow (D–A at Position 0).
 The search, with its Keyboard block, Pitch flexibility, radius, axes and register, applies only with Decode fifths off,
-and is greyed while it is on.
+and is hidden while it is on, with its Half-life and Same-note tolerance; the resets move into the Strip block.
 Learn is suspended while Decode fifths is on, as under Lattice Map:
 the board declares its tuning,
 and what Learn would hear beside it is the 12-TET tracks that pass through undecoded.

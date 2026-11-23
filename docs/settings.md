@@ -314,7 +314,8 @@ and saved links and recorded configurations are restored as saved,
 without running recognition again.
 The standalone app does not save them, and opens with both linked.
 **Note retuning** holds the engine choice.
-**Decode fifths** and the **Decoded fifth** have a section of their own, **Lattice-board**, after the engines' controls, which a fresh editor opens folded.
+**Decode fifths** and the **Decoded fifth** have a section of their own, **Lattice-board**, between **Note matching** and **Note retuning**, which a fresh editor opens folded:
+above the engines, so its switch stays put and everything it changes is drawn below it.
 Decode fifths reads the MIDI of the [lattice-board](https://github.com/yan-h/lattice-board), a custom chain-of-fifths keyboard, and is to be left off for any other input.
 It is one setting for the project, saved with the musical settings:
 while it is on, every source with Retune on is decoded,
@@ -339,11 +340,13 @@ Learn is suspended while Decode fifths is on.
 Each engine's controls follow in a section of their own.
 Adaptive tuning's **Keyboard** and **Context** are blocks,
 open like the rest of the section.
-With Decode fifths on, a **Strip** block comes first: the strip's four columns, how far following has moved it, the Position fifths' Fine and Coarse bars that set it (the same lanes the Lattice Map section's Position shows) and **Follow spellings**.
+With Decode fifths on, the section is a **Strip** block instead:
+the strip's four columns and its wolf ("F C G D · wolf D–A"), a **Moved** line for how far following has moved it, the Position fifths' Fine and Coarse bars that set it (the same lanes the Lattice Map section's Position shows), **Follow spellings**, and the three resets (Silence reset, Reset context on stop, on loop / seek), which return the strip to the Position.
 Follow spellings, on by default, slides the strip a fifth at a time after the spellings in use: at once for a chord whose fifths one slide makes pure, or as F♯ replacing F does in a melody, and back toward the Position once they fade;
 off, the strip stays where the Position puts it, so a piece plays the same from any bar.
-The search's rows below it, Keyboard and Weight per octave among them, are greyed there,
+The search's rows, Keyboard and the Context block are hidden there, since nothing reads them, with a line saying they return with Decode fifths off,
 and the lattice draws Lattice Map's map marks on the strip's four columns.
+A row is greyed while it shows a value in force, as Tuning's intervals are under Pass through, and hidden while it decides nothing.
 The **Lattice Map** section starts with the saved map's number, its name field and a menu of rarer actions,
 then **Show map dots**, **Edit shape on lattice**, **Undo shape edit** and **Duplicate as new map**,
 then the **Position** offsets, one row per axis holding its Fine and Coarse bars side by side with the totals beneath, and **Follow harmony**.
