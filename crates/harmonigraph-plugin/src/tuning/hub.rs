@@ -546,7 +546,8 @@ impl Hub {
         } else {
             LatticePos::ORIGIN
         });
-        owner.maps.publish_strip(if current { self.sequencer.follower.key() } else { 0 });
+        let moved = self.sequencer.follower.moved(self.sequencer.position.threes);
+        owner.maps.publish_strip(if current { moved } else { 0 });
         self.collect();
         self.batch.sort_unstable_by_key(|record| (record.sample, record.order()));
         let mut index = 0;
@@ -934,8 +935,8 @@ impl Hub {
     /// the Position fifths set it, moved by the follower when Follow
     /// spellings is on. The group's first decoded onset decides for the whole
     /// group, before any of it is tuned, as `follow` does for a map: after a
-    /// loop's reset, from every current onset's spelling over the held notes'
-    /// (`Follower::attack`).
+    /// loop's reset, from every current onset's spelling over the nodes the
+    /// held notes sound at (`Follower::attack`).
     fn strip_place(&mut self, position: usize, follow_spellings: bool) -> i32 {
         let sample = self.batch[position].sample;
         let set = self.sequencer.position.threes;
@@ -954,10 +955,9 @@ impl Hub {
                     count += 1;
                 }
             }
-            let mut held = [0; policy::MAX_CONTEXT];
+            let mut held = [LatticePos::ORIGIN; policy::MAX_CONTEXT];
             let nodes = self.sequencer.context.iter().flatten().filter_map(|voice| voice.node);
-            let spellings = nodes.map(|node| node.threes + 4 * node.fives);
-            let held_count = spellings.zip(&mut held).map(|(k, slot)| *slot = k).count();
+            let held_count = nodes.zip(&mut held).map(|(node, slot)| *slot = node).count();
             let follower = &mut self.sequencer.follower;
             follower.attack(&struck[..count], &held[..held_count], set);
         }

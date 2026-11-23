@@ -48,18 +48,17 @@ and the comma Adaptive's search used to guess chord by chord is fixed by where t
 Lattice Map's Position fifths place the strip, under Adaptive as under Lattice Map:
 at 0 its columns are F C G D, the default map's,
 and automating the lane is how a piece changes key.
-With **Follow spellings** on, the default, the strip also follows the music by moving its key.
-The key's seven spellings run from the strip's flat column (F to B at Position 0).
-Whenever a note just past either edge is struck (F♯ or B♭ in C), the key moves a fifth toward it, before that note is tuned.
-A triad moved up or down a fifth always brings in such a note, so it moves the key at that note, whatever order an arpeggio plays it in.
-A note further out, such as A♭ after F, moves nothing by itself: it already sounds pure against F.
-A note already sounding keeps its pitch, so the first time an arpeggio plays such a triad, a note struck before the move keeps the old strip's pitch; every note after it, and the next time through, is in the new strip.
-Then, if two sounding notes a fifth apart, struck or held, would sound the strip's wolf (D–A at Position 0), the key moves a fifth to the one side that makes every sounding fifth pure while its seven still hold every sounding note:
-D struck over a held F major moves it flat, so D sounds 10/9 under the held A,
-and D minor in C moves it flat too, so ii is pure, D sounding 10/9 there and 9/8 in G major.
-Where both sides would clear it, as for D and A alone, the key waits for the triad's third; where neither does, as for a pentatonic set, it stays.
-The key stays where it is until a note outside it, or a wolf, moves it again: after a D major in C, an F moves it home.
-A passing tone outside the key moves it too.
+With **Follow spellings** on, the default, the strip also follows the music, in two parts.
+The **key** moves a fifth whenever a note just past its seven spellings is struck (F♯ or B♭ in C; the seven run from the strip's flat column, F to B at Position 0), before that note is tuned.
+A triad moved up or down a fifth always brings in such a note, so the key follows it whatever order an arpeggio plays it in.
+A note further out, such as A♭ after F, does not move the key.
+The **strip** then stands at the key or a fifth either side of it, wherever the new note's fifths and minor thirds sound pure against the notes before it:
+the held notes, or with nothing held the note played just before, so a staccato arpeggio counts as one chord.
+It keeps its place while that works, goes back to the key when that works, and otherwise stands a fifth to whichever side does.
+So D struck over a held F major stands it a fifth flat, D sounding 10/9 under the held A, and a diatonic ii is pure, its D 10/9 there and 9/8 in G major;
+E♭ after a C in the strip's sharpest column stands it a fifth sharp, a 6/5.
+Because the key moves only for a note just past it, a passage in one key keeps the strip within a fifth of home.
+A note already sounding keeps its pitch, so the first time an arpeggio crosses into a new place, a note struck before the move keeps its old pitch; the next time through, the triad is pure.
 Every context reset returns the strip to the Position.
 Every fourth fifth along the chain, the one leaving the strip's sharp edge, is a comma narrow (D–A at Position 0).
 The search, with its Keyboard block, Pitch flexibility, radius, axes and register, applies only with Decode fifths off,
