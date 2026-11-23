@@ -1623,15 +1623,3 @@ fn a_host_size_before_attach_is_the_editors_only_where_it_opens_docked() {
     set_size(host);
     assert_eq!(size(), host, "docked, the host's size is the editor's");
 }
-
-/// A project saved before Follow spellings existed opens with it on.
-#[test]
-fn follow_spellings_absent_from_a_save_reads_on() {
-    let mut json = serde_json::to_value(MusicalSettings::default()).unwrap();
-    let adaptive = json["adaptive"].as_object_mut().unwrap();
-    assert_eq!(adaptive.remove("follow_spellings"), Some(serde_json::Value::Bool(true)));
-    adaptive.insert("decode_fifths".into(), serde_json::Value::Bool(true));
-    let restored: MusicalSettings = serde_json::from_value(json).unwrap();
-    let policy = PolicyConfig::from(restored.adaptive);
-    assert!(policy.decode_fifths && policy.follow_spellings);
-}

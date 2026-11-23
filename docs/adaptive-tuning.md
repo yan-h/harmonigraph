@@ -55,7 +55,7 @@ What came before is the held notes, or with nothing held the note played just be
 So D struck over a held F major moves it a fifth flat, D sounding 10/9 under the held A, and a diatonic ii is pure, its D 10/9 there and 9/8 in G major;
 E♭ after a C in the strip's sharpest column moves it a fifth sharp, a 6/5;
 and F after A♭, or B after C minor, moves nothing, as both already sound pure.
-The strip may drift: a long passage can leave it several fifths from the Position, and the resets or the lane bring it back.
+The strip may drift: a long passage can leave it several fifths from the Position, and the resets bring it back; a Position lane move shifts it by the lane's change, keeping the drift.
 It moves the way purity asks, not always the way a progression goes: D major after G major, arpeggiated A then D then F♯, moves it flat to keep D pure under the held A, so D sounds a comma lower than in G major.
 A note already sounding keeps its pitch, so the first time an arpeggio crosses into a new place, a note struck before the move keeps its old pitch; the next time through, the triad is pure.
 Every context reset returns the strip to the Position.

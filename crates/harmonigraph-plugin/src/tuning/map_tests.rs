@@ -818,7 +818,8 @@ fn f_sharps(on: bool) -> Vec<Input> {
 const FIVE_THREE: LatticePos = LatticePos::new(-1, 1, 0);
 const PYTHAGOREAN_A: LatticePos = LatticePos::new(3, 0, 0);
 
-/// An F♯ moves the key, so A is then 27/16, and every reset of the context
+/// An A struck after F♯ moves the strip a fifth sharp, so A is 27/16 and
+/// pure under the F♯ just played; every reset of the context
 /// returns the strip to the Position, so A is 5/3 again: a change of
 /// engine, Reset all voices, a transport Stop, a loop or seek, and silence.
 /// With Follow spellings off the strip never moves.
@@ -868,9 +869,9 @@ fn every_reset_returns_the_followed_strip_to_the_position() {
 }
 
 /// A loop's last release and its first strike on one sample, with Reset on
-/// loop on: the strike's group is counted after the reset, so its F♯s move
-/// the key, and the release on that sample does not refill the memory the
-/// reset cleared.
+/// loop on: the reset comes before the strike's group is read, so the A
+/// after it moves the strip against those F♯s, and the release on that
+/// sample does not refill the memory the reset cleared.
 #[test]
 fn a_loop_resets_after_its_last_release_and_before_its_first_strike() {
     let _scope = crate::test_scope::enter();

@@ -116,12 +116,14 @@ impl Follower {
 }
 
 /// Whether two nodes a fifth or a minor third apart by spelling sound it
-/// pure: 3/2 or 6/5, either way up. Other intervals pass.
+/// pure, 3/2 or 6/5 either way up, and two of one spelling are one node, so
+/// an octave doubling never beats a comma. Other intervals pass.
 fn in_tune(a: LatticePos, b: LatticePos) -> bool {
     let spelling = |n: LatticePos| n.threes + 4 * n.fives;
     let (step, low, high) = match spelling(b) - spelling(a) {
         1 | -3 => (spelling(b) - spelling(a), a, b),
         -1 | 3 => (spelling(a) - spelling(b), b, a),
+        0 => return a == b,
         _ => return true,
     };
     high - low == if step == 1 { LatticePos::new(1, 0, 0) } else { LatticePos::new(1, -1, 0) }
@@ -236,6 +238,12 @@ mod tests {
         }
         assert_eq!(play(1, &[0, -3, 1, -1], false), -1, "C E♭ G then F");
         assert_eq!(play(0, &[-1, 3, 0, 2], false), -1, "F A C then D");
+        // A held G A D, whose D finds no pure place: an A struck in another
+        // octave doubles the held A's node rather than moving off it.
+        let mut follower = Follower::default();
+        let held = arpeggio(&mut follower, &[1, 3, 2], &[0, 1, 2], false);
+        follower.attack(&[3], &held, 0);
+        assert_eq!(node(3, follower.flat(0)), held[1], "A doubled at the held A");
         for moved in -6..=6 {
             for before in -6..=7 {
                 let mut follower = Follower { moved, ..Follower::default() };
