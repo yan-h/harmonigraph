@@ -49,11 +49,11 @@ Lattice Map's Position fifths place the strip, under Adaptive as under Lattice M
 at 0 its columns are F C G D, the default map's,
 and automating the lane is how a piece changes key.
 With **Follow spellings** on, the default, the strip also follows the music by moving its key, a fifth at a time.
-The key's seven spellings run from the strip's flat column (F to B at Position 0); any other spelling is foreign.
-A chord, two spellings or more struck together, holding a foreign spelling moves the key a fifth toward it before any of its notes is tuned:
+The key's seven spellings run from the strip's flat column (F to B at Position 0).
+A chord, two spellings or more struck together, holding a spelling just past either edge (F♯ or B♭ in C) moves the key a fifth toward it before any of its notes is tuned:
 D major from C sounds pure from its first stroke, as do B♭ major from C and A major from G.
 The key stays there until the old key's spellings bring it back: after a D major in C, an F, or a chord holding one, moves it home.
-A chord with foreign spellings on both sides moves nothing.
+A chord holding both moves nothing, and a spelling further out, such as A major's C♯ from C, moves nothing either.
 A single note goes through the count rule alone, so a passing tone moves nothing:
 the key moves once a spelling just past its seven has replaced the one at the other edge (three F♯s close together, or about four spread out, with F out of use),
 and back toward the Position once that spelling fades.

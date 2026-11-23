@@ -78,8 +78,7 @@ const SPELLINGS: usize = 16 * 12;
 /// Follows the spellings in use by moving the key, a whole number of fifths
 /// from where the Position sets the strip (§3.4; simplified to this one
 /// state on 2026-11-23, `docs/intent/tuning.md`). The key's seven spellings
-/// run from the strip's flat column, F to B at Position 0; any other is
-/// foreign.
+/// run from the strip's flat column, F to B at Position 0.
 #[derive(Clone, Debug)]
 pub struct Follower {
     /// Each spelling's count of recent attacks, as of sample `at`.
@@ -115,8 +114,9 @@ impl Follower {
     /// `struck`, the group's spellings, then moves the key at most a fifth,
     /// unless that would change the column of a node in `held`.
     ///
-    /// - **A chord**, two spellings or more, holding foreign spellings on one
-    ///   side moves it toward them, so D–F♯–A from C sounds pure at once.
+    /// - **A chord**, two spellings or more, holding a spelling just past one
+    ///   edge of the key's seven (F♯ or B♭ in C) moves it toward that one, so
+    ///   D–F♯–A from C sounds pure at once; holding both, it does not move.
     /// - **Otherwise the count rule**, so a lone passing tone moves nothing:
     ///   toward a spelling just past an edge once it has replaced the one at
     ///   the other edge, and back toward the Position once the spelling that
@@ -142,8 +142,8 @@ impl Follower {
         let set = flat_column(position);
         let flat = moved_column(position, self.key);
         let chord = struck.iter().any(|&k| k != struck[0]);
-        let sharp = struck.iter().any(|&k| k > flat + 6);
-        let flat_side = struck.iter().any(|&k| k < flat);
+        let sharp = struck.contains(&(flat + 7));
+        let flat_side = struck.contains(&(flat - 1));
         let step = if chord && (sharp || flat_side) {
             i32::from(sharp) - i32::from(flat_side)
         } else if replaced(flat + 7, flat) || flat < set && count(flat) < OUT_OF_USE {
@@ -254,7 +254,7 @@ mod tests {
     /// Triads modulating by a fifth, I–IV–V–I in each key: the first chord
     /// with the new key's spelling moves the key toward it, so every chord
     /// sounds pure, and the key is home by the last C section's V. A–C♯–E
-    /// from G moves it on to D.
+    /// from G moves it on to D; from C, two fifths past, it moves nothing.
     #[test]
     fn a_chord_with_a_foreign_spelling_moves_the_key_and_sounds_pure() {
         let [f, g, d, b_flat] = [[-1, 3, 0], [1, 5, 2], [2, 6, 3], [-2, 2, -1]];
@@ -273,6 +273,12 @@ mod tests {
         }
         let flat = group(&mut in_g(), &[3, 7, 4], &[], 1.0);
         assert_eq!((flat, wolves(&[3, 7, 4], flat)), (HOME + 2, 0), "A–C♯–E from G");
+        // A spelling further out moves nothing: A major and C♯ minor from C
+        // stay home, and pure.
+        for chord in [[3, 7, 4], [7, 4, 8]] {
+            let flat = group(&mut Follower::default(), &chord, &[], 0.0);
+            assert_eq!((flat, wolves(&chord, flat)), (HOME, 0), "{chord:?} from C");
+        }
     }
 
     /// Chords inside the key's seven never move it: a C pentatonic vamp and

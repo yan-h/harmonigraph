@@ -493,7 +493,7 @@ fn strip_controls(
     reset_controls(ui, p, fresh);
 }
 
-const FOLLOW_SPELLINGS_HINT: &str = "Move the strip's key a fifth toward a spelling outside \
+const FOLLOW_SPELLINGS_HINT: &str = "Move the strip's key a fifth toward a spelling just past \
     its seven when a chord holds one, so D major from C sounds pure at once; it stays there until \
     the old key's spellings bring it back. A single note moves it only once a spelling just past \
     the key's seven has replaced the one at its other edge, as F♯ replacing F does, and back toward \
