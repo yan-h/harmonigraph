@@ -391,6 +391,9 @@ pub(super) enum Variant {
     /// Decoded fifth in the Perfect fifth's place, the interval rows greyed,
     /// and the note that says why.
     Board,
+    /// Adaptive decoding the lattice-board, so its section draws the strip's
+    /// block and greys the search under it.
+    Strip,
 }
 
 /// One settings page drawn one way: what the layout sweeps iterate.
@@ -432,6 +435,7 @@ impl SettingsCase {
             // What a frame's configuration view sets (`observe_configuration`),
             // which these fixtures do not run.
             Variant::Board => state.picture.runtime.board_drawn = true,
+            Variant::Strip => state.picture.runtime.adaptive_policy.decode_fifths = true,
             Variant::Projection(projection) => appearance.camera.projection = projection,
             Variant::Texture(style) => appearance.spectrum.atmosphere.cloud_style = style,
             Variant::Material(material) => appearance.view.atmosphere.material_style = material,
@@ -457,6 +461,7 @@ impl SettingsCase {
             Variant::Engine(TuningEngine::LatticeMap) => Some(lattice_map_view()),
             Variant::Engine(engine) => Some(engine_view(engine)),
             Variant::Board => Some(engine_view(TuningEngine::Off)),
+            Variant::Strip => Some(engine_view(TuningEngine::Adaptive)),
             _ => None,
         };
         // A plugin's backend, so the controls only a live host offers are
@@ -473,7 +478,8 @@ impl SettingsCase {
 
 /// The cases the layout sweeps draw: each page fresh, then every texture on
 /// the Analyzer page, every material and projection on the Lattice page,
-/// every retuning engine and the lattice-board's tuning ([`Variant::Board`])
+/// every retuning engine, the lattice-board's tuning ([`Variant::Board`]) and
+/// Adaptive's strip ([`Variant::Strip`])
 /// on the Tuning page, the Mappings page with two mappings routed
 /// ([`Variant::Routed`]), and [`Variant::Lit`] on the
 /// Lattice, Analyzer and System pages — all against a plugin's backend
@@ -510,10 +516,11 @@ pub(super) fn settings_cases() -> Vec<SettingsCase> {
             Tab::Mappings => vec![Variant::Fresh, Variant::Routed],
             Tab::System => vec![Variant::Fresh, Variant::Lit],
             // No engine selector at all, then each engine behind one, then
-            // the lattice-board's tuning drawn under Pass through.
+            // the lattice-board's tuning drawn under Pass through, and
+            // Adaptive's strip.
             Tab::Tuning => std::iter::once(Variant::Fresh)
                 .chain(engines.map(Variant::Engine))
-                .chain([Variant::Board])
+                .chain([Variant::Board, Variant::Strip])
                 .collect(),
             _ => vec![Variant::Fresh],
         };
