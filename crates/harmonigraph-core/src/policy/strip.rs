@@ -155,11 +155,15 @@ impl Follower {
     /// - **The chord rule.** Where a fifth among the sounding spellings is a
     ///   wolf (D–A on F C G D), the strip slides where that leaves none: the
     ///   count rule's way first, then back toward the set key, then toward
-    ///   the wolf, then away from it. So D major over F C G D slides sharp and sounds pure (Yan,
+    ///   the wolf; never away from it, which would walk the strip from the
+    ///   key a fifth a chord. So D major over F C G D slides sharp and sounds
+    ///   pure (Yan,
     ///   #1896: "I run into wolf fifths when modulating up or down by fifths
     ///   playing triads only"), and a vi after a ii that slid comes home
     ///   rather than sliding on and moving the tonic. A set with a wolf in
-    ///   every strip, as any five consecutive spellings have, stays.
+    ///   every strip, as any five consecutive spellings have, stays, and so
+    ///   does a chord rolled by hand whose held notes pin every such slide:
+    ///   it keeps its wolf, and the tonic keeps its pitch.
     /// - **The count rule**, for single notes and melodies: the seven
     ///   spellings from the flat column are the key's; the strip slides
     ///   toward a spelling just past either edge once it has replaced the
@@ -216,7 +220,7 @@ impl Follower {
             );
         let chord = (here > 0)
             .then(|| {
-                [toward, back, wolf_way, -wolf_way]
+                [toward, -self.offset.signum(), wolf_way]
                     .into_iter()
                     .find(|&step| place(step).is_some_and(|moved| wolves(moved) == 0))
             })
@@ -383,35 +387,40 @@ mod tests {
     }
 
     /// I–ii–vi–IV–I in C: ii's wolf slides the strip, and vi brings it home
-    /// rather than sliding on, so C keeps its node throughout.
+    /// rather than sliding on, so C keeps its node throughout. The same with a
+    /// D major for ii, whose F♯ is still in use when vi comes: the way home is
+    /// offered whatever the counts say.
     #[test]
     fn a_ii_that_slides_comes_home_at_vi() {
-        let mut follower = Follower::default();
-        let progression: [&[i32]; 5] =
-            [&[0, 4, 1], &[2, -1, 3], &[3, 0, 4], &[-1, 3, 0], &[0, 4, 1]];
-        let mut wolves = 0;
-        for (round, chord) in progression.into_iter().enumerate() {
-            let flat = group(&mut follower, chord, second(round as f64), |_| false);
-            assert_eq!(node(C, flat), LatticePos::ORIGIN, "chord {round}: C stays 1/1");
-            for &k in chord {
-                wolves += usize::from(chord.contains(&(k + 1)) && (k - flat).rem_euclid(4) == 3);
+        let ii: [&[i32]; 5] = [&[0, 4, 1], &[2, -1, 3], &[3, 0, 4], &[-1, 3, 0], &[0, 4, 1]];
+        let secondary: [&[i32]; 5] = [&[0, 4, 1], &[2, 6, 3], &[3, 0, 4], &[-1, 3, 0], &[0, 4, 1]];
+        for progression in [ii, secondary] {
+            let mut follower = Follower::default();
+            let mut wolves = 0;
+            for (round, chord) in progression.into_iter().enumerate() {
+                let flat = group(&mut follower, chord, second(round as f64), |_| false);
+                assert_eq!(node(C, flat), LatticePos::ORIGIN, "{progression:?} {round}: C 1/1");
+                for &k in chord {
+                    wolves +=
+                        usize::from(chord.contains(&(k + 1)) && (k - flat).rem_euclid(4) == 3);
+                }
             }
+            assert_eq!(wolves, 0, "{progression:?}");
         }
-        assert_eq!(wolves, 0);
     }
 
-    /// No chord slide moves a held note's column: D major over a held F,
-    /// whose column a sharp slide would move, slides flat instead, which
-    /// also makes it pure; with both slides' columns held it stays.
+    /// No chord slide moves a held note's column, and none goes away from the
+    /// wolf: D major over a held F, whose column the sharp slide would move,
+    /// keeps its wolf rather than sliding flat; over a held D it slides.
     #[test]
     fn a_chord_slide_never_moves_a_held_note_s_column() {
-        let d_major = [2, 6, 3];
+        let d_major_over_f = [2, 6, 3, -1];
         let mut follower = Follower::default();
         let held_f = |column| column == HOME;
-        assert_eq!(group(&mut follower, &d_major, 0, held_f), HOME - 1, "away from F's column");
+        assert_eq!(group(&mut follower, &d_major_over_f, 0, held_f), HOME, "F's column pinned");
         let mut follower = Follower::default();
-        let both = |column| column == HOME || column == HOME + 3;
-        assert_eq!(group(&mut follower, &d_major, 0, both), HOME, "F and D held");
+        let held_d = |column| column == HOME + 3;
+        assert_eq!(group(&mut follower, &[2, 6, 3], 0, held_d), HOME + 1, "D's column moves not");
     }
 
     /// A count slide that would put the chord struck with it on a wolf waits:

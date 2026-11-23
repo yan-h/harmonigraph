@@ -55,8 +55,8 @@ and a vi after a ii that slid brings the strip home rather than moving the tonic
 a pentatonic set, which has a wolf in every strip, never moves it this way.
 A chord rolled by hand is decided note by note,
 and no slide moves a held note's column,
-so a chord whose first notes pin the slide toward the new key slides the other way, still pure,
-or, where both ways are pinned, keeps its wolf.
+so a chord whose first notes pin the slide it needs keeps its wolf for that chord;
+it never slides away from the wolf instead, which would walk the strip from the key a fifth a chord, and the tonic keeps its pitch.
 For single notes and melodies it slides once a spelling just past the key's seven has replaced the one at its other edge (three F♯s close together, or about four spread out, with F out of use),
 and back toward the Position when that spelling fades;
 a slide waits while a note it would retune is held, and every context reset returns it to the Position.
