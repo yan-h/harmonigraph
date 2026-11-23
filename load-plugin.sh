@@ -530,7 +530,7 @@ case "${1:-}" in
     fi
     tag_dylib="$(find_dylib "${WT_PATH[$tag_idx]}")" || {
       echo "No build in ${WT_PATH[$tag_idx]}/target/release." >&2; exit 1; }
-    tag_out="$(build_tag "$tag_dylib" "${WT_BRANCH[$tag_idx]}")"
+    tag_out="$(build_tag "$tag_dylib" "${WT_BRANCH[$tag_idx]}")" || true
     [[ -n "$tag_out" ]] || { echo "No build tag readable in $tag_dylib." >&2; exit 1; }
     echo "$tag_out"
     ;;
