@@ -37,7 +37,7 @@ fn position(seconds: i64) -> Input {
 }
 
 /// A transport at `seconds` on the host's seconds timeline, playing or not.
-fn at(seconds: f64, playing: bool) -> Input {
+pub(super) fn at(seconds: f64, playing: bool) -> Input {
     let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
     value.flags |= CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
     if !playing {

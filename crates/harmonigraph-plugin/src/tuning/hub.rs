@@ -888,7 +888,6 @@ impl Hub {
             }
             return Some(Assigned { correction, node, decision, player, channel_pitch });
         }
-        self.sequencer.take_loop();
         self.sequencer.fill(self.rate);
         let musical: policy::MusicalConfig = config.into();
         let onset = policy::OrderedOnset { pitch: incoming };
@@ -964,7 +963,8 @@ impl Hub {
     }
 
     /// The attack group at `position`'s sample, scanned at its first onset in
-    /// each pass, before any of it is scored: what each same-key onset
+    /// each pass, before any of it is scored: a pending loop reset applies,
+    /// what each same-key onset
     /// displaces leaves the context, so neither the map's following nor the
     /// strip's weighs a pitch against the voice it replaces, and under
     /// Adaptive's strip every current onset drained this pass is counted
@@ -976,6 +976,9 @@ impl Hub {
             return;
         }
         self.sequencer.scanned = Some((sample, pass));
+        // A loop or seek's reset goes first, so the group it clears for is
+        // counted after it, not wiped with what came before.
+        self.sequencer.take_loop();
         let mut index = position;
         while index < self.batch.len() && self.batch[index].sample == sample {
             let record = self.batch[index];
@@ -1007,7 +1010,6 @@ impl Hub {
     /// first decoded onset, before any of it is tuned (`Follower::decide`).
     fn strip_place(&mut self, position: usize, config: ResolvedConfig) -> i32 {
         let sample = self.batch[position].sample;
-        self.sequencer.take_loop();
         let set = self.sequencer.position.threes;
         if !config.policy.follow_spellings {
             self.sequencer.follower.clear();
@@ -1055,7 +1057,6 @@ impl Hub {
         let sample = self.batch[position].sample;
         if self.sequencer.decided != Some(sample) {
             self.sequencer.decided = Some(sample);
-            self.sequencer.take_loop();
             self.sequencer.followed = if self.sequencer.follow == Follow::Off {
                 LatticePos::ORIGIN
             } else {

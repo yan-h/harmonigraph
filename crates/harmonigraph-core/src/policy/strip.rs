@@ -177,8 +177,10 @@ impl Follower {
     ///   excursion; then nearer the Position.
     ///
     /// The strip stands at most a fifth from the key, so no run of chords
-    /// walks it away, and a pentatonic vamp, with a wolf in every strip,
-    /// keeps its common tones rather than pumping one between two commas. A
+    /// walks it away. A pentatonic vamp, with a wolf in every strip, still
+    /// moves one column a comma where the chord rule purifies one of its
+    /// voicings and not the next (E in a C pentatonic vamp at the key G;
+    /// pending Yan's answer on #1941). A
     /// chord rolled by hand is decided note by note, so one whose held notes
     /// pin the strip it needs keeps its wolf.
     pub fn decide(
@@ -418,9 +420,10 @@ mod tests {
     }
 
     /// Five consecutive spellings have a wolf in every strip, so no chord of
-    /// them moves the strip, nor does a vamp pump one column between two
-    /// commas: A–D–G slides to make D–A pure, and the whole set and
-    /// D–E–G–A then keep its notes, C at 1/1 throughout.
+    /// them moves the strip. At the Position, a vamp keeps its notes: A–D–G
+    /// slides to make D–A pure, and the whole set and D–E–G–A then keep
+    /// them, C at 1/1 throughout. At a followed key it does not; see
+    /// `a_pentatonic_vamp_at_a_followed_key_keeps_each_pitch`.
     #[test]
     fn a_pentatonic_voicing_never_slides_the_strip() {
         for root in -6..=6 {
@@ -519,5 +522,32 @@ mod tests {
         let flat = group(&mut follower, &[3, 0, 4, F_SHARP], 0);
         assert_eq!(wolves(&[3, 0, 4], flat), 0, "A minor pure");
         assert_eq!(group(&mut follower, &[F_SHARP], 0), HOME + 1, "alone, it slides");
+    }
+
+    /// A C pentatonic vamp at the key G (F♯ having replaced F): A–D–G,
+    /// C–D–E–G–A, D–E–G–A, three rounds. E should keep one pitch. It does not
+    /// yet: the chord rule purifies D–E–G–A and cannot purify the pentatonic
+    /// chord, so E moves between 5/4 and 81/64 each round. Option (b), which
+    /// slides only for a group holding a spelling outside the key's seven, is
+    /// put to Yan on #1941; under it this passes.
+    #[test]
+    #[ignore = "E pumps until Yan answers option (b) on #1941"]
+    fn a_pentatonic_vamp_at_a_followed_key_keeps_each_pitch() {
+        let mut follower = Follower::default();
+        for _ in 0..strikes() {
+            group(&mut follower, &[F_SHARP], 0);
+        }
+        assert_eq!(follower.offset(), 1, "in G");
+        let vamp: [&[i32]; 3] = [&[3, 2, 1], &[0, 2, 4, 1, 3], &[2, 4, 1, 3]];
+        let mut e = Vec::new();
+        for round in 0..3 {
+            for (index, chord) in vamp.into_iter().enumerate() {
+                let flat = group(&mut follower, chord, second((3 * round + index) as f64 / 2.0));
+                if chord.contains(&4) {
+                    e.push(node(4, flat));
+                }
+            }
+        }
+        assert!(e.iter().all(|&node| node == e[0]), "E keeps one pitch: {e:?}");
     }
 }

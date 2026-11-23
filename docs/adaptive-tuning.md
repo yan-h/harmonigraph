@@ -57,7 +57,8 @@ D major over F C G D struck together slides sharp and sounds pure from its first
 B♭ major after F major slides flat and keeps its F,
 and the next chord comes back unless it shares notes it would retune.
 Because the strip never stands more than a fifth from the key, no run of chords walks it away,
-and a pentatonic vamp, with a wolf in every strip, keeps its notes rather than pumping one between two commas.
+and at the Position a pentatonic vamp, with a wolf in every strip, keeps its notes;
+at a followed key it can still move one note a comma between voicings (E in a C pentatonic vamp in G), which waits on a decision on #1941.
 A held note always keeps the node it sounds at, after a Position lane move too,
 so a chord rolled by hand, decided note by note, keeps its wolf where its first notes pin the strip it needs.
 Every context reset returns the strip to the Position.

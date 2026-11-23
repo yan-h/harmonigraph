@@ -914,3 +914,39 @@ fn a_retriggered_note_does_not_pin_its_chord_s_slide() {
     let [d, a] = [62, 69].map(|key| session.voice(true, 0, key).attack_node.unwrap());
     assert_eq!(a - d, LatticePos::new(1, 0, 0), "D–A pure: {d:?} {a:?}");
 }
+
+/// With Reset on loop on, the first attack group after a seek is counted
+/// after the reset rather than wiped with what came before it: F♯ in as many
+/// octaves as a slide takes strikes, struck first after the seek, moves the
+/// key, so the A after it is 27/16.
+#[test]
+fn reset_on_loop_counts_the_first_group_after_the_seek() {
+    let _scope = crate::test_scope::enter();
+    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    let policy = harmonigraph_core::configuration::PolicyConfig {
+        decode_fifths: true,
+        decoded_fifth: 696_578_428,
+        reset_loop: true,
+        ..Default::default()
+    };
+    assert!(
+        settings(&session.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() })
+    );
+    // Parked at 5 s, then at 1 s: a seek.
+    for seconds in [5.0, 5.0, 1.0] {
+        let raw = session.raw;
+        let event = || musical_tests::at(seconds, false);
+        for tune in [&session.decoded, &session.plain] {
+            tune.run_format(raw, vec![event()], None, None, 128);
+        }
+        session.hub.run_format(raw, vec![event()], None, None, 128);
+        session.raw += 128;
+    }
+    let strikes = harmonigraph_core::policy::strip::SLIDE_STRIKES.ceil() as i16;
+    for on in [true, false] {
+        let chord = (0..strikes).map(|i| 90 - 12 * i).map(|key| note(key as i32, 0, key, 0, on));
+        session.play(chord.collect(), vec![]);
+    }
+    session.play(vec![note(1, 0, 69, 0, true)], vec![]);
+    assert_eq!(session.voice(true, 0, 69).attack_node, Some(LatticePos::new(3, 0, 0)), "C G D A");
+}
