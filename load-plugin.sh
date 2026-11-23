@@ -414,8 +414,10 @@ load_build() {  # $1 = worktree index
   # session builds `-p harmonigraph-plugin` and nothing rebuilds the renderer
   # unless it asked for `-p harmonigraph-offline` by name. A worktree that
   # built only the plugin therefore hands over whatever renderer was last left
-  # in its target/release, which can be from any commit at all, and the
-  # divergence shows up nowhere until an export comes out drawn the old way.
+  # in its target/release, which can be from any commit at all. The check
+  # below warns of that here, before a render is spent, and the renderer warns
+  # again on each export's row when the plugin that queued it is another
+  # build (#1936).
   local offline="$path/target/release/harmonigraph-offline"
   local support="$HOME/Library/Application Support/$NAME"
   if [[ -f "$offline" ]]; then
