@@ -391,6 +391,8 @@ impl Hub {
     pub fn activate(&mut self, rate: f64, frames: u32) {
         self.rate = rate;
         self.seconds = None;
+        // A seek seen before the reactivation is on a clock that has restarted.
+        self.sequencer.loop_at = None;
         // No delay at all: the Hub's own input is already at the Hub, and its
         // correction is queued at the input boundary before the same
         // callback is scheduled, so the round trip needs none.
@@ -500,8 +502,8 @@ impl Hub {
     /// milliseconds either way. That one rule covers a playing transport, a
     /// stopped one a host holds still, a stop that returns to where play began,
     /// and an export that reports not playing while its position climbs. What
-    /// a jump does then is the `reset_loop` control's business, at the next
-    /// attack.
+    /// a jump does then is the `reset_loop` control's business, at the first
+    /// retuned onset at or after the sample the jump was seen at.
     fn detect_loop(&mut self, callback: &Boundary) {
         if let Some(transport) = callback.transport {
             self.observe_seconds(&transport, callback.steady_time);
@@ -587,13 +589,6 @@ impl Hub {
             self.sequencer.position = attack.playback.offset;
             self.sequencer.follow = attack.playback.follow;
             self.sequencer.config = attack.config.into();
-            // A loop or seek's reset goes first, so the group it clears for
-            // is counted after it, not wiped with what came before; and only
-            // for a group that retunes, as only such a group reads the history.
-            let retuned = |record: &Record| record.event.attack().is_some() && self.current(record);
-            if self.batch[index..end].iter().any(retuned) {
-                self.sequencer.take_loop(sample);
-            }
             for position in index..end {
                 self.apply(position, attack.config);
             }
@@ -823,6 +818,15 @@ impl Hub {
         // displaced voice would still be there at HELD weight — a second
         // full-weight copy of the very pitch being scored.
         self.forget_replaced(record.source, channel, key);
+        // A loop or seek's reset, where main has always taken it: at the first
+        // retuned onset at or after the seek, so after that sample's releases,
+        // which sort first and would otherwise write the last pass's ending
+        // chord back into the memory it clears; and before the group is
+        // counted, so the group it clears for is not wiped with what came
+        // before. An onset with Retune off reads no history, so it waits.
+        if self.current(&record) {
+            self.sequencer.take_loop(record.sample);
+        }
         self.scan_group(position, config);
         let player = record.player;
         let channel_pitch = self.rows[source].state.channel_pitch(channel);

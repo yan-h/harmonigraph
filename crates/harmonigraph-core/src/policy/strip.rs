@@ -115,10 +115,14 @@ fn index(fifths: i32) -> Option<usize> {
 pub struct Follower {
     /// Each spelling's count of attacks, as of the attack sample beside it.
     counts: [(f64, i64); SPELLINGS],
-    /// Fifths the key has moved from where the Position places the strip,
-    /// only as far as [`PLACES`] lets it.
+    /// Fifths the key stands from the column the Position places the strip
+    /// at, which [`flat_column`] has already clamped. Each decision first cuts
+    /// it back to what [`PLACES`] lets through at that decision's Position,
+    /// and keeps a step only as far as the clamp lets it go, so what is stored
+    /// is movement the strip made.
     key: i32,
-    /// The last group's excursion from the key, −1..=1.
+    /// The last group's excursion from the key: the column it was tuned in
+    /// less the key's, −1..=1, and 0 where the clamp held it.
     excursion: i32,
     /// The last group's spellings and the flat column it was tuned in: the
     /// common tones a next group should not retune.
@@ -233,7 +237,7 @@ impl Follower {
             let moved = self.best(sounding, struck, held, position, self.key + step);
             let holds = |best: &Choice| best.holds || held.is_empty();
             if holds(&moved) && moved.wolves.within(&best_now.wolves) {
-                self.key += step;
+                self.key = moved_column(position, self.key + step) - flat_column(position);
             }
         }
         let best = self.best(sounding, struck, held, position, self.key);

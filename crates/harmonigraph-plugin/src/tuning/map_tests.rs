@@ -1021,3 +1021,32 @@ fn reset_on_loop_waits_for_a_retuned_attack() {
     hub.run(3584, vec![on(5, 62)], None);
     assert_eq!(node(&hub, 62), Some(map.node(62)), "D starts over at 9/8");
 }
+
+/// A loop reset clears what the loop's last chord leaves on the very sample
+/// the first chord strikes: D–F–A ends as D is struck again after a seek, and
+/// D starts over on the automated map rather than at that chord's 10/9.
+#[test]
+fn reset_on_loop_clears_releases_on_the_sample_it_applies_at() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = hub().with_adaptive();
+    hub.activate();
+    install(&hub);
+    let policy =
+        harmonigraph_core::configuration::PolicyConfig { reset_loop: true, ..Default::default() };
+    settings(&hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
+    let map = LatticeMap::default();
+    let node = |hub: &Device, key| voice(hub, crate::tuning::DIRECT, key).attack_node;
+    let on = |id, key| note(id, 0, key, 0, true);
+    let off = |id, key| note(id, 0, key, 0, false);
+    hub.run(0, vec![parameter("tuning-engine", 2.0, 0), parameter("map-follow", 2.0, 0)], None);
+    hub.run(512, vec![on(1, 62), on(2, 65), on(3, 69), musical_tests::at(5.0, false)], None);
+    let down = LatticeMap { position: LatticePos::new(-1, 0, 0), ..map };
+    assert_eq!(node(&hub, 62), Some(down.node(62)), "D at 10/9");
+    hub.run(1024, vec![musical_tests::at(5.0, false)], None);
+    hub.run(
+        1536,
+        vec![musical_tests::at(1.0, false), off(1, 62), off(2, 65), off(3, 69), on(4, 62)],
+        None,
+    );
+    assert_eq!(node(&hub, 62), Some(map.node(62)), "D starts over at 9/8");
+}
