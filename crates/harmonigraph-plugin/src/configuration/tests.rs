@@ -256,8 +256,8 @@ fn destruction_waits_out_a_worker_wake_and_drops_on_the_hosts_thread() {
     settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
     settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
     let (hold, holding) = (device.host().hold.clone(), device.host().holding.clone());
-    hold.store(true, Ordering::Release);
     *device.host().hold_thread.lock().unwrap() = Some("harmonigraph-input-worker");
+    hold.store(true, Ordering::Release);
     device.run(
         0,
         vec![note(60, 60, 0, CLAP_EVENT_NOTE_ON), note(67, 67, 0, CLAP_EVENT_NOTE_ON)],

@@ -167,8 +167,13 @@ unsafe extern "C" fn request_callback(host: *const clap_host) {
     let stats = unsafe { stats(host) };
     stats.callbacks.fetch_add(1, Ordering::Relaxed);
     // The thread is looked at only while a hold is set: `thread::current`
-    // can allocate, and this runs at the end of `process`, under the
-    // allocation guard.
+    // can allocate, and so can a first lock of `hold_thread` on macOS, where
+    // a std mutex boxes its pthread one lazily, and this runs at the end of
+    // `process`, under the allocation guard. Whoever sets the hold has
+    // locked it already.
+    if !stats.hold.load(Ordering::Acquire) {
+        return;
+    }
     let held = *stats.hold_thread.lock().unwrap();
     if held.is_some() && std::thread::current().name() == held {
         // Clones, so the wait reads nothing of a host freed meanwhile.
