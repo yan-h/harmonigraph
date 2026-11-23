@@ -349,11 +349,11 @@ Hub assignment,
 then editor controls and annotations.
 There are no parallel mutating streams.
 
-The UI owns the map document and the editor's edit mode and undo history behind separate locks;
-the audio thread reads only the document.
-At callback adoption audio takes bounded nonblocking reads and copies only fixed geometry into its own bank.
-A contended edit waits for a later callback;
-audio never waits or copies names.
+The UI owns the map document, behind the same door as the tuning record (`Shared`, #1938), and the editor's edit mode and undo history behind separate locks;
+no document closure calls the host, so a host that saves from inside a call the editor makes never waits on the document;
+the audio thread never takes its lock.
+Each write publishes the slots' fixed geometry through a triple buffer, and at callback adoption audio reads the latest published bank, wait-free;
+an edit still being written lands at a later callback, and audio never waits or copies names.
 Each timestamped history entry captures complete geometry and effective shared tuning,
 so a later document edit cannot reinterpret an older attack.
 

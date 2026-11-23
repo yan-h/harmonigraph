@@ -195,9 +195,10 @@ fn an_edit_with_no_audio_shows_and_saves_in_the_tuning_it_is_drawn_in() {
 }
 
 /// A host may save from inside a call the editor makes into it
-/// (`editor/lock.rs`). No document door is held across one, so the save
-/// returns, for a map edit's parameter set and a camera set made beside a
-/// tuning edit.
+/// (`editor/lock.rs`). No document door is held across one, so the save,
+/// which reads both documents, returns: for a Duplicate, which writes the map
+/// document and then selects its copy, and a camera set made beside a tuning
+/// edit. The host is the plugin's checked one.
 #[test]
 fn a_save_from_inside_a_host_call_returns() {
     struct Saving(Arc<crate::HarmonigraphParams>, std::sync::atomic::AtomicUsize);
@@ -206,6 +207,7 @@ fn a_save_from_inside_a_host_call_returns() {
             let fields = Default::default();
             let mut state =
                 PluginState { version: String::new(), params: Default::default(), fields };
+            crate::saved_fields::save(&self.0, &mut state);
             self.0.settings.save(&mut state);
             self.1.fetch_add(1, Ordering::Relaxed);
         }
@@ -228,8 +230,10 @@ fn a_save_from_inside_a_host_call_returns() {
         }
     }
     let params = Arc::new(crate::HarmonigraphParams::default());
-    let host = Saving(params.clone(), Default::default());
-    crate::lattice_maps::edit(&params, &host, harmonigraph_ui::lattice_maps::MapEdit::Select(0));
+    let saving = Arc::new(Saving(params.clone(), Default::default()));
+    let host = crate::shared::Checked(saving.clone());
+    crate::lattice_maps::edit(&params, &host, harmonigraph_ui::lattice_maps::MapEdit::Duplicate);
+    assert_eq!(saving.1.load(Ordering::Relaxed), 3, "the copy was selected");
     let gestures = std::cell::Cell::default();
     let backend = crate::PluginParamBackend {
         params: &params,
@@ -240,7 +244,7 @@ fn a_save_from_inside_a_host_call_returns() {
     use harmonigraph_ui::params::ParamBackend;
     backend.submit_tuning(ConfigEdit::axis(TuningAxis::Three, microcents(696.0)));
     backend.set(ParamKey::CameraDistance, 6.0);
-    assert_eq!(host.1.load(Ordering::Relaxed), 6, "every host call saved, and returned");
+    assert_eq!(saving.1.load(Ordering::Relaxed), 6, "every host call saved, and returned");
 }
 
 /// The host may destroy the plugin while the input worker is inside a host
@@ -586,9 +590,9 @@ fn a_field_that_does_not_parse_is_skipped_with_a_console_line() {
     let _scope = crate::test_scope::enter();
     let device = hub().with_retune();
     let maps = |device: &Device| {
-        device.wrapper().test_inspect_plugin(|plugin| {
-            serde_json::to_string(&*plugin.params.maps.read()).unwrap()
-        })
+        device
+            .wrapper()
+            .test_inspect_plugin(|plugin| plugin.params.maps.read(serde_json::to_string).unwrap())
     };
     let before = maps(&device);
     let mut state = device.wrapper().get_state_object();
@@ -1256,7 +1260,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert!(preview.editing() && preview.can_undo);
         assert_eq!(preview.playback.map, Some(changed));
         assert_eq!(
-            plugin.params.maps.read().map(1),
+            plugin.params.maps.read(|d| d.map(1)),
             Some(LatticeMap { position: harmonigraph_core::LatticePos::ORIGIN, ..changed }),
             "an edit is saved to the selected map itself"
         );

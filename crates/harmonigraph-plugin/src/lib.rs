@@ -9,7 +9,7 @@ use harmonigraph_clap::prelude::*;
 use harmonigraph_core::lattice_map::{Follow, TuningEngine};
 use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, SourceId};
 use harmonigraph_record::TAKE_CHANNELS;
-use harmonigraph_ui::lattice_maps::{MapDocument, MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
+use harmonigraph_ui::lattice_maps::{MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
 use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
 
 mod audio_ingress;
@@ -208,7 +208,7 @@ pub struct HarmonigraphParams {
     /// The host parameters, one row per [`Row`].
     pub table: Arc<Table>,
     /// Saved in the `lattice-maps` field (`saved_fields`).
-    pub maps: Arc<parking_lot::RwLock<harmonigraph_ui::lattice_maps::MapDocument>>,
+    pub(crate) maps: Arc<lattice_maps::Maps>,
     pub map_editor: Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapEditor>>,
     pub map_playback: Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapPlayback>>,
     /// Where following has moved the map, packed by [`lattice_maps::pack`]:
@@ -304,7 +304,7 @@ impl Row {
 
     /// The row's declaration. The Lattice Map's label names the map in its
     /// slot, which it reads from `maps`.
-    fn spec(self, maps: &Arc<parking_lot::RwLock<MapDocument>>) -> Spec {
+    fn spec(self, maps: &Arc<lattice_maps::Maps>) -> Spec {
         let id = self.id();
         let lane = |name, grain| {
             let spec = Spec::int(id, name, 0, -OFFSET_LIMIT, OFFSET_LIMIT).non_modulatable();
@@ -331,9 +331,11 @@ impl Row {
                 let names = maps.clone();
                 Spec::int(id, "Lattice Map", 0, 0, lattice_maps::LAST_MAP)
                     .non_modulatable()
-                    .with_to_text(move |slot| match names.read().name(slot as usize) {
-                        Some(name) => format!("{} · {name}", slot + 1),
-                        None => format!("{} · unavailable", slot + 1),
+                    .with_to_text(move |slot| {
+                        names.read(|document| match document.name(slot as usize) {
+                            Some(name) => format!("{} · {name}", slot + 1),
+                            None => format!("{} · unavailable", slot + 1),
+                        })
                     })
             }
             Row::MapFifths => lane("Map Fifths", MapOffsetLane::Fine),
@@ -391,9 +393,7 @@ impl Row {
 
 impl Default for HarmonigraphParams {
     fn default() -> Self {
-        let maps = Arc::new(parking_lot::RwLock::new(
-            harmonigraph_ui::lattice_maps::MapDocument::default(),
-        ));
+        let maps = Arc::new(lattice_maps::Maps::default());
         let table = Table::new(Row::ALL.map(|row| row.spec(&maps)));
         HarmonigraphParams {
             table: Arc::new(table),
@@ -517,7 +517,6 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn set(&self, key: ParamKey, value: f32) {
-        shared::assert_unheld();
         let row = Row::camera(key).index();
         if self.gestures.get().is_open(Gesture::Param(key)) {
             // Inside an explicit gesture (drag): just set.
@@ -536,7 +535,6 @@ impl ParamBackend for PluginParamBackend<'_> {
 
     fn set_analysis_input(&self, input: AnalysisInput) {
         let row = Row::AnalysisInput.index();
-        shared::assert_unheld();
         self.host.begin_set_parameter(row);
         self.host.set_parameter(row, input.index() as f32);
         self.host.end_set_parameter(row);
@@ -554,7 +552,6 @@ impl ParamBackend for PluginParamBackend<'_> {
 impl PluginParamBackend<'_> {
     /// Open `gesture` in the registry, and send its begin if it was closed.
     fn begin(&self, gesture: Gesture) {
-        shared::assert_unheld();
         let mut gestures = self.gestures.get();
         if gestures.begin(gesture) {
             self.gestures.set(gestures);
@@ -564,7 +561,6 @@ impl PluginParamBackend<'_> {
 
     /// Close `gesture` in the registry, and send its end if it was open.
     fn end(&self, gesture: Gesture) {
-        shared::assert_unheld();
         let mut gestures = self.gestures.get();
         if gestures.end(gesture) {
             self.gestures.set(gestures);
@@ -964,8 +960,10 @@ impl Plugin for Harmonigraph {
         }))
     }
 
+    /// Every call the editor makes into the host goes through the document
+    /// doors' check (`shared::Checked`).
     fn editor_host(&mut self, host: Arc<dyn EditorHost>) {
-        self.editor_host = Some(host);
+        self.editor_host = Some(Arc::new(shared::Checked(host)));
     }
 
     fn editor(&mut self) -> Option<Box<dyn Editor>> {

@@ -16,11 +16,11 @@
 //! lock type rather than a step each of its holders remembers: the raw mutex
 //! is private, and no accessor skips the delivery.
 //!
-//! Lock order: editor, then the tuning document (a frame's edit or view, and
-//! the input worker's Learn); editor, then inbox (a delivery, a save, a
-//! close). A restore takes the document and the inbox each alone, and no
-//! document closure takes the editor lock (`crate::shared`), so the graph has
-//! no cycle.
+//! Lock order: editor, then a document, the tuning's or the maps' (a frame's
+//! edit or view, the input worker's Learn and its tape's map); editor, then
+//! inbox (a delivery, a save, a close). A restore takes each document and
+//! the inbox alone, no document closure takes the editor lock or opens the
+//! other's door (`crate::shared`), so the graph has no cycle.
 
 use std::sync::Arc;
 use std::time::Duration;
