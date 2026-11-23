@@ -170,7 +170,7 @@ otherwise it leaves the installed renderer alone.
 The offline renderer draws through the same UI and render crates,
 so a change to a pane can change an exported video even when no file under `crates/harmonigraph-offline/` moved.
 Building only `harmonigraph-plugin` can therefore leave export on an old picture.
-`load-plugin.sh` warns when its renderer predates the branch's `HEAD`.
+`load-plugin.sh` warns when the renderer it installs or keeps was built at another commit than the plugin.
 
 After installing,
 deactivate and reactivate Bitwig's audio engine.
