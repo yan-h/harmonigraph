@@ -49,7 +49,7 @@ cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
 ```
 
 **Both packages.** The offline renderer draws through `harmonigraph-ui` and `harmonigraph-render`, so any picture change is a video-export change even when nothing under `crates/harmonigraph-offline/` moved;
-skipping it leaves exports drawn by an old binary with nothing on screen saying so (PR #340).
+skipping it leaves exports drawn by an old binary (PR #340), which only the loader's warning and each export's row then point out (#1936, #1937).
 Skip the build only when nothing plugin-visible changed (docs, backlog, pure-test edits).
 
 Push and open the draft PR first, then run `./session-lifecycle.sh handoff`, which builds both packages while CI runs.

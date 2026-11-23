@@ -57,11 +57,12 @@ Video export does not run in the plugin.
 The Video pane spawns `~/Library/Application Support/Harmonigraph/harmonigraph-offline` (`harmonigraph-record`'s default path), and `load-plugin.sh` installs that binary from the same worktree it takes the dylib from —
 so a load is really two swaps, and only the first one is guaranteed to be current.
 
-Nothing rebuilds the renderer unless a session names `-p harmonigraph-offline`, and `load-plugin.sh` copies whatever is in `target/release` without minding its age, so a plugin-only build hands over a renderer from some earlier commit (`CLAUDE.md` has the rule and PR #340).
+Nothing rebuilds the renderer unless a session names `-p harmonigraph-offline`, so a plugin-only build leaves a renderer from some earlier commit in `target/release` (`CLAUDE.md` has the rule and PR #340).
 Naming both is not a second full build either:
 the two share every dependency and the whole UI, so the renderer costs a link on top of a plugin build that is already done.
-`load-plugin.sh` asks the renderer it installs, or the one it keeps when a worktree built none, for its build tag (`--build-tag`),
-and warns when that names another commit than the plugin's tag, or when a renderer too old to answer prints none (#1937).
+`load-plugin.sh` asks the worktree's renderer and the installed one for their build tags (`--build-tag`) and compares each with the plugin's by commit (#1937).
+It installs the worktree's renderer, by rename as it does the dylib, unless that one is of another commit and the installed one matches, which then stays.
+It warns when the renderer left in place names another commit, prints no tag because it predates the flag, or fails to run.
 That warning is a backstop for a build that should have happened, and comes before a render is spent.
 The renderer checks the pair itself at every export (#1928 B):
 the plugin passes its build tag as `--plugin-build`, and a renderer built at another commit writes a `warning:` naming both tags first, which the export's row shows whether the render then succeeds or fails, and renders all the same.

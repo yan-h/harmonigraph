@@ -89,8 +89,10 @@ LOADED="$BUNDLED/.loaded"   # records which worktree build is currently in the s
 # looking at a variable that exists once the function has returned.
 STAGE=""
 PENDING_BIN=""
+PENDING_RENDERER=""
 cleanup() {
   [[ -n "$PENDING_BIN" ]] && rm -f "$PENDING_BIN"
+  [[ -n "$PENDING_RENDERER" ]] && rm -f "$PENDING_RENDERER"
   [[ -n "$STAGE" ]] && rm -rf "$STAGE"
   return 0
 }
@@ -137,45 +139,91 @@ find_dylib() {
 # The plugin stores the tag NUL-terminated, so the sha is anchored to the end
 # of its `strings` line: unanchored, the next string's leading hex digits read
 # as more of the sha (#1428).
+#
+# Nothing read is an empty answer and not a failure, so a caller under
+# `set -e` reaches its own message for it.
 build_tag() {
   local name="${2#worktree-}"
-  strings -a "$1" 2>/dev/null | grep -oE "$name @[0-9a-f]{7,40}\$" | head -1
+  strings -a "$1" 2>/dev/null | grep -oE "$name @[0-9a-f]{7,40}\$" | head -1 || true
 }
 
-# Echo the build tag renderer $1 prints, or nothing from one too old to print
-# it (#1937).
+# Echo the commit sha that $1 names, a build tag `<branch> @<sha>` or a bare
+# sha, or nothing when it names none (an empty read, or the tag "unknown").
+tag_sha() {
+  local sha="${1##* @}"
+  [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]] && echo "$sha"
+  return 0
+}
+
+# Whether $1 and $2, each a build tag or a sha, name one commit: the one rule
+# every build comparison here uses. By commit, as the renderer's own check at
+# every export is, so one commit is one build whichever branch it was built on.
+# One sha a prefix of the other rather than equal, because a tag carries git's
+# abbreviation (8 digits in this repository) and `build_short` cuts HEAD's to 7.
+same_commit() {
+  local a b
+  a="$(tag_sha "$1")" b="$(tag_sha "$2")"
+  [[ -n "$a" && -n "$b" ]] && [[ "$a" == "$b"* || "$b" == "$a"* ]]
+}
+
+# Echo the build tag renderer $1 prints and return 0. Otherwise return 2 for a
+# renderer from before `--build-tag` (#1937), which refuses it as an unknown
+# option, or 1 for one that failed to run, echoing its exit status and first line.
 #
 # Asked of the binary rather than read with `strings` as the dylib's is: that
 # read anchors on the branch name, and the renderer a load keeps installed can
 # be any branch's.
 renderer_tag() {
-  "$1" --build-tag 2>/dev/null || true
+  local out status=0
+  out="$("$1" --build-tag 2>&1)" || status=$?
+  if (( status == 0 )) && [[ -n "$out" ]]; then
+    echo "$out"
+  elif [[ "$out" == *'unknown option "--build-tag"'* ]]; then
+    return 2
+  else
+    echo "exit $status${out:+: ${out%%$'\n'*}}"
+    return 1
+  fi
 }
 
-# Warn unless renderer $1 was built at the commit of the plugin tagged $2.
-# By commit, as the renderer's own check at every export is: one commit is one
-# build, whichever branch, so two builds of one commit from different
-# uncommitted source pass as the same. $3 is the worktree to rebuild in and $4
-# its branch, for the advice.
+# Whether renderer $1 prints a tag naming the commit of plugin tag $2.
+renderer_matches() {
+  local tag
+  tag="$(renderer_tag "$1")" && same_commit "$tag" "$2"
+}
+
+# Say whether installed renderer $1 is the build of the plugin tagged $2, on
+# stdout when it is and as a warning when it is not, or cannot tell.
+# Two builds of one commit from different uncommitted source pass as one.
+# $3 and $4 are the loaded build's directory and branch, for the advice.
 check_renderer() {
-  local renderer="$1" plugin_tag="$2" path="$3" branch="$4" tag sha plugin_sha
-  tag="$(renderer_tag "$renderer")"
-  sha="${tag##* @}" plugin_sha="${plugin_tag##* @}"
-  if [[ -z "$tag" ]]; then
+  local renderer="$1" plugin_tag="$2" path="$3" branch="$4" tag status=0
+  tag="$(renderer_tag "$renderer")" || status=$?
+  if (( status == 1 )); then
+    echo "WARNING: that renderer failed to run ($tag), so it cannot be checked against" >&2
+    echo "         the plugin, and video export may fail with it." >&2
+    return 0
+  elif (( status == 2 )); then
     echo "WARNING: that renderer prints no build tag, so it was built before #1937 and cannot" >&2
     echo "         be checked against the plugin; video exports may not draw what the editor shows." >&2
   elif [[ -z "$plugin_tag" ]]; then
-    echo "NOTE: that renderer is build $tag; the plugin's tag is unreadable, so the pair is unchecked." >&2
+    echo "WARNING: that renderer is build $tag, but no build tag is readable in the plugin" >&2
+    echo "         (a detached or renamed branch), so the pair is unchecked." >&2
     return 0
-  elif [[ "$sha" == "$plugin_sha"* || "$plugin_sha" == "$sha"* ]]; then
+  elif same_commit "$tag" "$plugin_tag"; then
     echo "      It is build $tag, the plugin's commit."
     return 0
   else
     echo "WARNING: that renderer is build $tag, but the plugin is build $plugin_tag." >&2
     echo "         Video exports are drawn by the renderer's build, not the one the editor shows." >&2
   fi
-  echo "         To match them:" >&2
-  echo "         (cd \"$path\" && cargo build --release -p harmonigraph-plugin -p harmonigraph-offline) && ./load-plugin.sh $branch" >&2
+  echo "         To match them, build both packages at one commit and load that:" >&2
+  if [[ -f "$path/Cargo.toml" ]]; then
+    echo "         (cd \"$path\" && cargo build --release -p harmonigraph-plugin -p harmonigraph-offline) && ./load-plugin.sh $branch" >&2
+  else
+    # A preserved handoff holds artifacts and no source to build from.
+    echo "         ./build-pr.sh --load $branch" >&2
+  fi
 }
 
 # Echo the display fields for worktree index $1 as:
@@ -190,8 +238,7 @@ build_info() {
     head_ct="$(build_commit_time "$path" 2>/dev/null || echo 0)"
     head_short="$(build_short "$path")"
     tag="$(build_tag "$dylib" "${WT_BRANCH[$1]}")"
-    sha="${tag##*@}"
-    [[ "$sha" == "$tag" ]] && sha=""   # no tag read; ${..##*@} echoes the input
+    sha="$(tag_sha "$tag")"
     overlay="${sha:+@$sha}"; overlay="${overlay:-@?}"
     # Judged on the stamped sha ahead of the mtime: it names the commit the
     # binary was actually built at, where an mtime only says which of the two
@@ -199,7 +246,7 @@ build_info() {
     # reads as fresh on time alone. The mtime stays as the fallback for a build
     # carrying no readable tag (a source tarball, or no git when it compiled).
     if [[ -n "$sha" && "$head_short" != '?' ]]; then
-      if [[ "$head_short" == "$sha"* || "$sha" == "$head_short"* ]]; then
+      if same_commit "$sha" "$head_short"; then
         vshead="ok fresh"
       elif git -C "$path" cat-file -e "$sha^{commit}" 2>/dev/null; then
         vshead="! built at $sha, HEAD $head_short"
@@ -339,6 +386,13 @@ load_build() {  # $1 = worktree index
   STAGE="$(mktemp -d)"
 
   local updated=0 ext bundle staged live_bin old_id current_id diagnostic_path
+  # `commit` is where the WORKTREE stands; `tag` is what the binary in the slot
+  # says about itself. They are different facts and they disagree whenever a
+  # session committed after building, so both are recorded and only `tag`
+  # answers "which build am I looking at?". Read from the signed copy that is
+  # installed rather than from target/release, which a build finishing during
+  # the load can replace; the renderer is checked against it below.
+  local loaded_tag=""
   for ext in clap; do
     bundle="$BUNDLED/$NAME.$ext"
     if [[ ! -d "$bundle" ]]; then
@@ -355,6 +409,7 @@ load_build() {  # $1 = worktree index
     cp "$dylib" "$staged/Contents/MacOS/$NAME"
     codesign --force --sign - "$staged"
     codesign --verify --verbose=1 "$staged"
+    loaded_tag="$(build_tag "$staged/Contents/MacOS/$NAME" "$branch")"
 
     live_bin="$bundle/Contents/MacOS/$NAME"
     # The sibling is on the destination filesystem, so rename is atomic.
@@ -397,13 +452,6 @@ load_build() {  # $1 = worktree index
   (( updated > 0 )) || { echo "No bundles updated — see warnings above." >&2; exit 1; }
   link_clap_slot
 
-  # `commit` is where the WORKTREE stands; `tag` is what the binary in the slot
-  # says about itself. They are different facts and they disagree whenever a
-  # session committed after building, so both are recorded and only `tag`
-  # answers "which build am I looking at?". Read before the renderer, which is
-  # checked against it. Nothing read is a warning below, not an abort.
-  local loaded_tag; loaded_tag="$(build_tag "$dylib" "$branch")" || true
-
   # Keep the renderer matched to the build being loaded (they share the take
   # format). Only if this worktree built one; otherwise leave the installed one.
   #
@@ -418,15 +466,29 @@ load_build() {  # $1 = worktree index
   # below warns of that here, before a render is spent, and the renderer warns
   # again on each export's row when the plugin that queued it is another
   # build (#1936).
+  #
+  # Chosen before anything is replaced: a renderer of another commit is not
+  # installed over one that matches the plugin.
   local offline="$path/target/release/harmonigraph-offline"
   local support="$HOME/Library/Application Support/$NAME"
-  if [[ -f "$offline" ]]; then
-    mkdir -p "$support"; cp "$offline" "$support/harmonigraph-offline"
-    echo "Loaded renderer: $support/harmonigraph-offline"
-    check_renderer "$support/harmonigraph-offline" "$loaded_tag" "$path" "$branch"
-  elif [[ -f "$support/harmonigraph-offline" ]]; then
-    echo "NOTE: no harmonigraph-offline in this build; offline render keeps the installed renderer." >&2
-    check_renderer "$support/harmonigraph-offline" "$loaded_tag" "$path" "$branch"
+  local installed="$support/harmonigraph-offline"
+  if [[ -f "$offline" ]] && ! renderer_matches "$offline" "$loaded_tag" \
+     && [[ -f "$installed" ]] && renderer_matches "$installed" "$loaded_tag"; then
+    echo "NOTE: this build's renderer is another commit than its plugin, so the installed" >&2
+    echo "      renderer, build $(renderer_tag "$installed"), the plugin's commit, stays." >&2
+  elif [[ -f "$offline" ]]; then
+    # Replaced by rename, as the dylib is (#705): copying over a renderer an
+    # export still maps gets the next run of that file killed at launch.
+    mkdir -p "$support"
+    PENDING_RENDERER="$(mktemp "$support/.harmonigraph-offline.XXXXXX")"
+    cp -p "$offline" "$PENDING_RENDERER"
+    mv -f "$PENDING_RENDERER" "$installed"
+    PENDING_RENDERER=""
+    echo "Loaded renderer: $installed"
+    check_renderer "$installed" "$loaded_tag" "$path" "$branch"
+  elif [[ -f "$installed" ]]; then
+    echo "This build has no harmonigraph-offline; offline render keeps the installed renderer."
+    check_renderer "$installed" "$loaded_tag" "$path" "$branch"
   else
     # The plugin resolves one fixed path under the product name, and nothing
     # puts a binary there until some worktree builds -p harmonigraph-offline
@@ -446,11 +508,9 @@ load_build() {  # $1 = worktree index
   echo "Installed: $branch. Deactivate and reactivate Bitwig's audio engine to load this build."
   if [[ -n "$loaded_tag" ]]; then
     echo "The performance overlay will read:  build  $loaded_tag"
-    local head_short loaded_sha
+    local head_short
     head_short="$(build_short "$path")"
-    loaded_sha="${loaded_tag##*@}"
-    if [[ "$head_short" != '?' \
-       && "$head_short" != "$loaded_sha"* && "$loaded_sha" != "$head_short"* ]]; then
+    if [[ "$head_short" != '?' ]] && ! same_commit "$loaded_tag" "$head_short"; then
       echo "  (that is NOT the branch's HEAD, $head_short — this build predates the last" >&2
       echo "   commit on it, which is what building before committing leaves behind.)" >&2
     fi
@@ -532,7 +592,7 @@ case "${1:-}" in
     fi
     tag_dylib="$(find_dylib "${WT_PATH[$tag_idx]}")" || {
       echo "No build in ${WT_PATH[$tag_idx]}/target/release." >&2; exit 1; }
-    tag_out="$(build_tag "$tag_dylib" "${WT_BRANCH[$tag_idx]}")" || true
+    tag_out="$(build_tag "$tag_dylib" "${WT_BRANCH[$tag_idx]}")"
     [[ -n "$tag_out" ]] || { echo "No build tag readable in $tag_dylib." >&2; exit 1; }
     echo "$tag_out"
     ;;
