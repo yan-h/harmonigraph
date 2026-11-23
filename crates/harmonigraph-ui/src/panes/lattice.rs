@@ -421,6 +421,8 @@ fn map_assignments(
     let strip = state.runtime.lattice_maps.as_ref().and_then(|maps| {
         maps.strip_flat(state.runtime.adaptive_policy)
             .filter(|_| interactive && state.appearance.view.show_map_indicators)
+            // An audition marks the map its spot was recorded under alone.
+            .filter(|_| state.runtime.tape.map.is_none())
     });
     if let Some(flat) = strip {
         let columns = flat..=flat + 3;

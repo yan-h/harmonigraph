@@ -816,9 +816,10 @@ fn follow_spellings_slides_the_strip_until_the_context_resets() {
 }
 
 /// Modulating by a fifth with triads alone, I–IV–V–I in each key, C → G → C
-/// and C → F → C: the chord rule slides the strip at the first D major, or
-/// B♭ major, and back, so no chord sounds a wolf fifth and the last C sounds
-/// the first C's pitch.
+/// and C → F → C, each chord on one sample and then rolled root first: no
+/// chord sounds a wolf fifth. On one sample the chord rule slides the strip at
+/// the first D major, or B♭ major, toward the new key and back, so C major's
+/// four chords sound the same nodes at the end as at the start.
 #[test]
 fn triads_modulating_by_fifths_sound_no_wolf() {
     let _scope = crate::test_scope::enter();
@@ -831,13 +832,24 @@ fn triads_modulating_by_fifths_sound_no_wolf() {
     // flat.
     let a = (d, 69, LatticePos::new(3, 0, 0));
     let flat = (b_flat, 58, LatticePos::new(-2, 0, 0));
-    for (name, progression, turn) in [("up to G", up, a), ("down to F", down, flat)] {
+    let cases = [("up to G", up, a), ("down to F", down, flat)];
+    // Each chord on one sample, then rolled root first as a hand strikes
+    // it, a callback (2.7 ms) between notes, each held.
+    for ((name, progression, turn), rolled) in
+        cases.into_iter().flat_map(|case| [(case, false), (case, true)])
+    {
         let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
-        let mut c_pitches = Vec::new();
+        let mut nodes = Vec::new();
         for (index, chord) in progression.into_iter().enumerate() {
             let id = 3 * index as i32;
             let play = |on| (0..3).map(|i| note(id + i, 0, chord[i as usize], 0, on)).collect();
-            session.play(play(true), vec![]);
+            if rolled {
+                for i in 0..3 {
+                    session.play(vec![note(id + i, 0, chord[i as usize], 0, true)], vec![]);
+                }
+            } else {
+                session.play(play(true), vec![]);
+            }
             let spelled: Vec<(i32, LatticePos)> = chord
                 .iter()
                 .map(|&key| {
@@ -851,19 +863,24 @@ fn triads_modulating_by_fifths_sound_no_wolf() {
                     assert_eq!(
                         fifth,
                         LatticePos::new(1, 0, 0),
-                        "{name}, chord {index}: {spelled:?}"
+                        "{name}, rolled {rolled}, chord {index}: {spelled:?}"
                     );
                 }
             }
-            if chord == turn.0 {
+            if chord == turn.0 && !rolled {
                 let node = session.voice(true, 0, turn.1).attack_node;
-                assert_eq!(node, Some(turn.2), "{name}: the strip slides toward the new key");
+                assert_eq!(node, Some(turn.2), "{name}, rolled {rolled}: toward the new key");
             }
-            if chord == c {
-                c_pitches.push(session.voice(true, 0, 60).onset_pitch_microcents);
-            }
+            nodes.push(spelled.clone());
             session.play(play(false), vec![]);
         }
-        assert_eq!(c_pitches.first(), c_pitches.last(), "{name}: home again");
+        // The last key's four chords, F's A and G's D among them, sound the
+        // first key's nodes: the strip came home. A rolled chord whose notes
+        // pin both slides' columns can slide away from home instead, pure
+        // but a column a comma off, until the count rule's return seconds
+        // later, which this fixture's milliseconds do not reach.
+        if !rolled {
+            assert_eq!(nodes[..4], nodes[8..], "{name}: home again");
+        }
     }
 }

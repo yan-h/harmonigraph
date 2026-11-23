@@ -50,8 +50,13 @@ at 0 its columns are F C G D, the default map's,
 and automating the lane is how a piece changes key.
 With **Follow spellings** on, the default, the strip also slides by itself a fifth at a time.
 At a chord whose fifth would be the strip's wolf, it slides at once when one slide makes all the chord's fifths pure,
-so D major over F C G D sounds pure from its first stroke;
+so D major over F C G D struck together sounds pure from its first stroke,
+and a vi after a ii that slid brings the strip home rather than moving the tonic;
 a pentatonic set, which has a wolf in every strip, never moves it this way.
+A chord rolled by hand is decided note by note,
+and no slide moves a held note's column,
+so a chord whose first notes pin the slide toward the new key slides the other way, still pure,
+or, where both ways are pinned, keeps its wolf.
 For single notes and melodies it slides once a spelling just past the key's seven has replaced the one at its other edge (three F♯s close together, or about four spread out, with F out of use),
 and back toward the Position when that spelling fades;
 a slide waits while a note it would retune is held, and every context reset returns it to the Position.
