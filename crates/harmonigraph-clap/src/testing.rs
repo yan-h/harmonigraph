@@ -166,8 +166,11 @@ unsafe extern "C" fn extension(host: *const clap_host, id: *const c_char) -> *co
 unsafe extern "C" fn request_callback(host: *const clap_host) {
     let stats = unsafe { stats(host) };
     stats.callbacks.fetch_add(1, Ordering::Relaxed);
-    let thread = std::thread::current();
-    if thread.name().is_some() && *stats.hold_thread.lock().unwrap() == thread.name() {
+    // The thread is looked at only while a hold is set: `thread::current`
+    // can allocate, and this runs at the end of `process`, under the
+    // allocation guard.
+    let held = *stats.hold_thread.lock().unwrap();
+    if held.is_some() && std::thread::current().name() == held {
         // Clones, so the wait reads nothing of a host freed meanwhile.
         let (hold, holding) = (stats.hold.clone(), stats.holding.clone());
         holding.store(true, Ordering::Release);
