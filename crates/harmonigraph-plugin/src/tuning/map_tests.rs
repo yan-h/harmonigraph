@@ -814,3 +814,56 @@ fn follow_spellings_slides_the_strip_until_the_context_resets() {
     );
     assert_eq!(a(&mut session), Some(five_three), "the strip stays where the Position put it");
 }
+
+/// Modulating by a fifth with triads alone, I–IV–V–I in each key, C → G → C
+/// and C → F → C: the chord rule slides the strip at the first D major, or
+/// B♭ major, and back, so no chord sounds a wolf fifth and the last C sounds
+/// the first C's pitch.
+#[test]
+fn triads_modulating_by_fifths_sound_no_wolf() {
+    let _scope = crate::test_scope::enter();
+    let [c, f, g, d, b_flat]: [[i16; 3]; 5] =
+        [[60, 64, 67], [65, 69, 72], [67, 71, 74], [62, 66, 69], [58, 62, 65]];
+    let up = [c, f, g, c, g, c, d, g, c, f, g, c];
+    let down = [c, f, g, c, f, b_flat, c, f, c, f, g, c];
+    // The chord that slides the strip, and the node that shows which way:
+    // D major's A at 27/16, a fifth sharp, or B♭ major's B♭ at 16/9, a fifth
+    // flat.
+    let a = (d, 69, LatticePos::new(3, 0, 0));
+    let flat = (b_flat, 58, LatticePos::new(-2, 0, 0));
+    for (name, progression, turn) in [("up to G", up, a), ("down to F", down, flat)] {
+        let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+        let mut c_pitches = Vec::new();
+        for (index, chord) in progression.into_iter().enumerate() {
+            let id = 3 * index as i32;
+            let play = |on| (0..3).map(|i| note(id + i, 0, chord[i as usize], 0, on)).collect();
+            session.play(play(true), vec![]);
+            let spelled: Vec<(i32, LatticePos)> = chord
+                .iter()
+                .map(|&key| {
+                    let node = session.voice(true, 0, key as u8).attack_node.unwrap();
+                    (harmonigraph_core::tuning::fifths_for_midi(0, key as u8), node)
+                })
+                .collect();
+            for &(k, low) in &spelled {
+                if let Some(&(_, high)) = spelled.iter().find(|&&(other, _)| other == k + 1) {
+                    let fifth = high - low;
+                    assert_eq!(
+                        fifth,
+                        LatticePos::new(1, 0, 0),
+                        "{name}, chord {index}: {spelled:?}"
+                    );
+                }
+            }
+            if chord == turn.0 {
+                let node = session.voice(true, 0, turn.1).attack_node;
+                assert_eq!(node, Some(turn.2), "{name}: the strip slides toward the new key");
+            }
+            if chord == c {
+                c_pitches.push(session.voice(true, 0, 60).onset_pitch_microcents);
+            }
+            session.play(play(false), vec![]);
+        }
+        assert_eq!(c_pitches.first(), c_pitches.last(), "{name}: home again");
+    }
+}

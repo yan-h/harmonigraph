@@ -48,8 +48,11 @@ and the comma Adaptive's search used to guess chord by chord is fixed by where t
 Lattice Map's Position fifths place the strip, under Adaptive as under Lattice Map:
 at 0 its columns are F C G D, the default map's,
 and automating the lane is how a piece changes key.
-With **Follow spellings** on, the default, the strip also slides by itself a fifth at a time,
-once a spelling just past the key's seven has replaced the one at its other edge (three F♯s close together, or about four spread out, with F out of use),
+With **Follow spellings** on, the default, the strip also slides by itself a fifth at a time.
+At a chord whose fifth would be the strip's wolf, it slides at once when one slide makes all the chord's fifths pure,
+so D major over F C G D sounds pure from its first stroke;
+a pentatonic set, which has a wolf in every strip, never moves it this way.
+For single notes and melodies it slides once a spelling just past the key's seven has replaced the one at its other edge (three F♯s close together, or about four spread out, with F out of use),
 and back toward the Position when that spelling fades;
 a slide waits while a note it would retune is held, and every context reset returns it to the Position.
 Every fourth fifth along the chain, the one leaving the strip's sharp edge, is a comma narrow (D–A at Position 0).

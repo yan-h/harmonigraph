@@ -844,7 +844,7 @@ impl Hub {
         if !adaptive || stage.is_some() {
             let assigned = if adaptive {
                 let fifths = fifths_for_midi(channel, key);
-                let flat = self.strip_place(fifths, record.sample, config);
+                let flat = self.strip_place(position, fifths, config);
                 let stage = stage.unwrap_or(0);
                 let (node, correction) =
                     policy::strip::assignment(fifths, flat, incoming + stage, config.tuning);
@@ -939,11 +939,15 @@ impl Hub {
         Some(Assigned { correction, node, decision, player, channel_pitch })
     }
 
-    /// The flat column the strip stands at for an attack of `fifths` at
-    /// `sample`: where the Position fifths set it, moved by the follower when
-    /// Follow spellings is on. A slide that would move a held strip note's
-    /// column waits (`Follower::strike`).
-    fn strip_place(&mut self, fifths: i32, sample: i64, config: ResolvedConfig) -> i32 {
+    /// The flat column the strip stands at for the onset at `position`, of
+    /// spelling `fifths`: where the Position fifths set it, moved by the
+    /// follower when Follow spellings is on. Its chord rule reads the whole
+    /// attack group, once, at its first decoded onset. A slide that would
+    /// move a held strip note's column waits.
+    fn strip_place(&mut self, position: usize, fifths: i32, config: ResolvedConfig) -> i32 {
+        let sample = self.batch[position].sample;
+        let sounding = (config.policy.follow_spellings && !self.sequencer.follower.decided(sample))
+            .then(|| self.sounding(position));
         let sequencer = &mut self.sequencer;
         sequencer.take_loop();
         let position = sequencer.position.threes;
@@ -955,7 +959,28 @@ impl Hub {
         let holds = |column| {
             context.iter().flatten().any(|voice| voice.node.is_some_and(|n| n.threes == column))
         };
+        if let Some(sounding) = sounding {
+            sequencer.follower.chord(sample, &sounding, position, holds);
+        }
         sequencer.follower.strike(fifths, sample, self.rate, position, holds)
+    }
+
+    /// The spellings sounding at the attack group from `position`: the held
+    /// notes' nodes and the group's decoded onsets.
+    fn sounding(&self, position: usize) -> policy::strip::Spellings {
+        let mut sounding = policy::strip::Spellings::default();
+        for node in self.sequencer.context.iter().flatten().filter_map(|voice| voice.node) {
+            sounding.insert(node.threes + 4 * node.fives);
+        }
+        let sample = self.batch[position].sample;
+        for record in self.batch[position..].iter().take_while(|record| record.sample == sample) {
+            let Some((_, channel, key, _)) = record.event.attack() else { continue };
+            let retune = self.rows[usize::from(record.source)].retune;
+            if record.retune & 1 != 0 && record.retune == retune {
+                sounding.insert(fifths_for_midi(channel, key));
+            }
+        }
+        sounding
     }
 
     /// What actually arrived, key number and every tuning the source already

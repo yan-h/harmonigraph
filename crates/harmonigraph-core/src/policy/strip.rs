@@ -71,22 +71,48 @@ pub const OUT_OF_USE: f64 = 0.25;
 const LOWEST: i32 = -5 - 12 * 8;
 const SPELLINGS: usize = 16 * 12;
 
+/// A set of spellings, the ones a decoded `(channel, key)` can carry.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Spellings([u64; SPELLINGS / 64]);
+impl Spellings {
+    pub fn insert(&mut self, fifths: i32) {
+        if let Some(i) = index(fifths) {
+            self.0[i / 64] |= 1 << (i % 64);
+        }
+    }
+    pub fn contains(&self, fifths: i32) -> bool {
+        index(fifths).is_some_and(|i| self.0[i / 64] & (1 << (i % 64)) != 0)
+    }
+    fn iter(&self) -> impl Iterator<Item = i32> + '_ {
+        (0..SPELLINGS).filter(|&i| self.0[i / 64] & (1 << (i % 64)) != 0).map(|i| i as i32 + LOWEST)
+    }
+}
+fn index(fifths: i32) -> Option<usize> {
+    usize::try_from(fifths - LOWEST).ok().filter(|&i| i < SPELLINGS)
+}
+
 /// Follows the spellings in use by sliding the strip a fifth at a time away
-/// from where the Position fifths set it, as a key change would (§3.4): the
-/// seven spellings from the strip's flat column are the key's, and the strip
-/// slides toward a spelling just past either edge once it has replaced the
-/// spelling at the other, and back toward the set key once that spelling
-/// has fallen out of use. It reads spellings and never an interval.
+/// from where the Position fifths set it, as a key change would (§3.4), by
+/// two rules. The chord rule slides at a chord whose fifths one slide makes
+/// pure ([`Follower::chord`]). The count rule takes the seven spellings from
+/// the strip's flat column as the key's, slides toward a spelling just past
+/// either edge once it has replaced the spelling at the other, and back
+/// toward the set key once that spelling has fallen out of use
+/// ([`Follower::strike`]).
 #[derive(Clone, Debug)]
 pub struct Follower {
     /// Each spelling's count of attacks, as of the attack sample beside it.
     counts: [(f64, i64); SPELLINGS],
     /// Fifths the strip has slid from its set place.
     offset: i32,
+    /// The attack sample the chord rule last decided, and the one it last
+    /// slid at: one slide per attack group.
+    decided: Option<i64>,
+    slid: Option<i64>,
 }
 impl Default for Follower {
     fn default() -> Self {
-        Self { counts: [(0.0, 0); SPELLINGS], offset: 0 }
+        Self { counts: [(0.0, 0); SPELLINGS], offset: 0, decided: None, slid: None }
     }
 }
 impl Follower {
@@ -100,10 +126,54 @@ impl Follower {
         self.offset
     }
 
+    /// Whether the chord rule has decided the attack group at sample `at`.
+    pub fn decided(&self, at: i64) -> bool {
+        self.decided == Some(at)
+    }
+
+    /// The chord rule, decided once per attack group at sample `at`, before
+    /// its notes are tuned: `sounding` is the group's spellings and the held
+    /// notes'. Where a fifth among them straddles the strip's edge (a wolf:
+    /// D–A on F C G D), and one slide toward it leaves no sounding fifth a
+    /// wolf without moving a held note's column, the strip slides, so the
+    /// chord sounds pure (Yan, #1896: "I run into wolf fifths when
+    /// modulating up or down by fifths playing triads only"). A set with
+    /// wolves on both sides, or whose every strip has one, as a pentatonic
+    /// set's has, leaves the strip to the count rule.
+    pub fn chord(
+        &mut self,
+        at: i64,
+        sounding: &Spellings,
+        position: i32,
+        holds: impl Fn(i32) -> bool,
+    ) {
+        self.decided = Some(at);
+        let flat = flat_column(position + self.offset);
+        // A fifth k–k+1 is a wolf where k stands in a strip's sharp column.
+        let wolves = move |flat: i32| {
+            sounding
+                .iter()
+                .filter(move |&k| sounding.contains(k + 1) && (k - flat).rem_euclid(4) == 3)
+        };
+        let mut step = 0;
+        for k in wolves(flat) {
+            let toward = if k >= flat + 3 { 1 } else { -1 };
+            if step == -toward {
+                return;
+            }
+            step = toward;
+        }
+        let moved = flat_column(position + self.offset + step);
+        let column = if step > 0 { flat } else { flat + 3 };
+        if step == 0 || moved == flat || wolves(moved).next().is_some() || holds(column) {
+            return;
+        }
+        self.offset += step;
+        self.slid = Some(at);
+    }
+
     fn count(&self, fifths: i32, at: i64, per_second: f64) -> f64 {
-        let Some(&(count, then)) =
-            usize::try_from(fifths - LOWEST).ok().and_then(|i| self.counts.get(i))
-        else {
+        let Some(&(count, then)) = index(fifths).map(|i| &self.counts[i]) else {
             return 0.0;
         };
         // A steady clock that went back across a reactivation ages nothing.
@@ -111,7 +181,8 @@ impl Follower {
     }
 
     /// Counts an attack of `fifths` at sample `at`, then slides the strip at
-    /// most one fifth, and returns the flat column the attack is tuned in.
+    /// most one fifth, unless the chord rule slid for this attack group, and
+    /// returns the flat column the attack is tuned in.
     /// `position` is the Position fifths the strip is set by, and `holds`
     /// says whether a sounding note sits in a column: a slide that would move
     /// a held note's column waits for an attack after it ends.
@@ -123,12 +194,13 @@ impl Follower {
         position: i32,
         holds: impl Fn(i32) -> bool,
     ) -> i32 {
-        if let Ok(i) = usize::try_from(fifths - LOWEST) {
-            if i < SPELLINGS {
-                self.counts[i] = (self.count(fifths, at, per_second) + 1.0, at);
-            }
+        if let Some(i) = index(fifths) {
+            self.counts[i] = (self.count(fifths, at, per_second) + 1.0, at);
         }
         let flat = flat_column(position + self.offset);
+        if self.slid == Some(at) {
+            return flat;
+        }
         let count = |fifths| self.count(fifths, at, per_second);
         // The window is flat..=flat + 6; a step sharp pushes out `flat` and
         // moves its column, a step flat pushes out `flat + 6` and moves
@@ -273,5 +345,48 @@ mod tests {
         }
         let held_d = |column| column == HOME + 3;
         assert_eq!(follower.strike(F_SHARP, 0, RATE, 0, held_d), HOME + 1, "F let go");
+    }
+
+    fn sounding(fifths: &[i32]) -> Spellings {
+        let mut set = Spellings::default();
+        fifths.iter().for_each(|&k| set.insert(k));
+        set
+    }
+
+    /// D major's D–A straddles F C G D's sharp edge, and one slide sharp makes
+    /// it pure: the strip slides at the chord. B♭ major's B♭–F mirrors it flat.
+    #[test]
+    fn a_chord_whose_fifth_straddles_the_strip_slides_it_toward_that_fifth() {
+        for (chord, moved) in [([2, 6, 3], 1), ([-2, 2, -1], -1)] {
+            let mut follower = Follower::default();
+            follower.chord(0, &sounding(&chord), 0, |_| false);
+            assert_eq!(follower.offset(), moved, "{chord:?}");
+            assert_eq!(follower.strike(chord[0], 0, RATE, 0, |_| false), HOME + moved);
+        }
+    }
+
+    /// Five consecutive spellings have a wolf in every strip, so the chord
+    /// rule never moves a pentatonic voicing, wherever the strip stands.
+    #[test]
+    fn a_pentatonic_voicing_never_slides_the_strip() {
+        for root in -6..=6 {
+            for position in -3..=3 {
+                let mut follower = Follower::default();
+                let set: Vec<i32> = (root..root + 5).collect();
+                follower.chord(0, &sounding(&set), position, |_| false);
+                assert_eq!(follower.offset(), 0, "{set:?} at {position}");
+            }
+        }
+    }
+
+    /// A chord slide that would move a held note's column waits, as a count
+    /// slide does.
+    #[test]
+    fn a_chord_slide_waits_while_a_note_in_its_column_is_held() {
+        let mut follower = Follower::default();
+        follower.chord(0, &sounding(&[2, 6, 3, -1]), 0, |column| column == HOME);
+        assert_eq!(follower.offset(), 0, "the held F's column");
+        follower.chord(1, &sounding(&[2, 6, 3]), 0, |column| column == HOME + 3);
+        assert_eq!(follower.offset(), 1, "a held D's column does not move");
     }
 }
