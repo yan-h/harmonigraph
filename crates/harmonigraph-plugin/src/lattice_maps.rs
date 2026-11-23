@@ -41,6 +41,13 @@ fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
     }
 }
 
+/// Fifths Adaptive's strip stands from its Position, as the Hub last
+/// published it in a word of its own: nothing moved when the strip is not
+/// following, or a mode change has yet to reach an attack.
+fn strip_moved(params: &crate::HarmonigraphParams) -> i32 {
+    params.strip_moved.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// The host parameter behind one lane: the plugin's one place an axis and a
 /// grain name a row.
 pub(crate) fn lane_row(axis: MapAxis, grain: MapOffsetLane) -> Row {
@@ -146,6 +153,7 @@ fn view_of(params: &crate::HarmonigraphParams, document: &MapDocument) -> MapVie
         playback: shown,
         offsets,
         followed,
+        strip_moved: strip_moved(params),
         unadopted,
         names: editor.names(document),
         edit_shape: editor.edit_shape,
@@ -347,6 +355,7 @@ impl Maps {
 pub struct AudioMaps {
     published: Arc<Mutex<MapPlayback>>,
     followed: Arc<std::sync::atomic::AtomicU64>,
+    strip: Arc<std::sync::atomic::AtomicI32>,
     /// The geometry the document last published, brought up to date once a
     /// callback, at [`adopt`](Self::adopt), so a callback reads one bank.
     bank: triple_buffer::Output<Bank>,
@@ -365,6 +374,7 @@ impl AudioMaps {
         Self {
             published: params.map_playback.clone(),
             followed: params.map_followed.clone(),
+            strip: params.strip_moved.clone(),
             bank: params.maps.audio.lock().take().expect("one audio owner"),
             playback: MapPlayback::default(),
             history: VecDeque::with_capacity(HISTORY),
@@ -378,6 +388,11 @@ impl AudioMaps {
     /// The Hub's follow offset, for the editor to draw the map where it sounds.
     pub fn publish_followed(&self, offset: LatticePos) {
         self.followed.store(pack(offset), std::sync::atomic::Ordering::Release);
+    }
+    /// Where the Hub's strip stands from its Position, for the Strip block and
+    /// the strip's marks.
+    pub fn publish_strip(&self, offset: i32) {
+        self.strip.store(offset, std::sync::atomic::Ordering::Release);
     }
     pub fn begin(&mut self, boundary: &Boundary) {
         self.start = boundary.steady_time;

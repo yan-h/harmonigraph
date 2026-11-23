@@ -386,6 +386,8 @@ mod tests {
         let adaptive = &mut tuning["adaptive"];
         (adaptive["reset_stop"], adaptive["silence_ms"]) = (true.into(), 1500.into());
         (adaptive["decode_fifths"], adaptive["decoded_fifth"]) = (true.into(), 695_000_000.into());
+        // Newer than the fixture, and away from its default as the rest are.
+        adaptive["follow_spellings"] = false.into();
         *field = Value::String(tuning.to_string());
         let reading = read(Plugin::Harmonigraph, &serde_json::to_vec(&state).unwrap());
         assert_eq!(reading.refused, None);

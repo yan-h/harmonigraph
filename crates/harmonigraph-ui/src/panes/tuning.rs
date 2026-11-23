@@ -328,15 +328,17 @@ pub(super) fn tuning_pane(
     section(ui, "Note matching", |ui| {
         axis_bar(ui, state, params, TuningAxis::Tolerance);
     });
+    // Above the engines, so its switch stays put while everything it changes
+    // is drawn below it. Only a Hub decodes: a shell with no engine selector
+    // has no board to read.
+    if maps.is_some() {
+        board_section(ui, state, params);
+    }
 
     match (retuning_controls(ui, state, params, maps.as_ref()), &maps) {
         (TuningEngine::Adaptive, view) => adaptive_controls(ui, state, params, view.as_ref()),
         (TuningEngine::LatticeMap, Some(view)) => map_controls(ui, state, params, view),
         _ => {}
-    }
-    // Only a Hub decodes: a shell with no engine selector has no board to read.
-    if maps.is_some() {
-        board_section(ui, state, params);
     }
     instance_section(ui, state, params);
     // Keep transient status after every control so it cannot move a held slider.
@@ -409,8 +411,11 @@ fn fifths(steps: i32) -> String {
 /// reads as the end of a block. Any change sends the whole policy shown.
 ///
 /// With Decode fifths on, a decoded note takes its spelling's copy in the
-/// strip (`policy::strip`) and the search's rows decide nothing: they are
-/// greyed, as the board-drawn bars are, under the strip's own block.
+/// strip (`policy::strip`), and the search's rows and its context decide
+/// nothing, so they are hidden: a row is greyed while it shows a value in
+/// force, as the board-drawn bars are, and hidden while it decides nothing
+/// (Yan, 2026-11-22). The resets still return the strip to the Position, so
+/// they move into the strip's block.
 fn adaptive_controls(
     ui: &mut egui::Ui,
     state: &mut PictureState,
@@ -421,19 +426,24 @@ fn adaptive_controls(
         let mut p = state.runtime.adaptive_policy;
         let before = p;
         let fresh = PolicyConfig::default();
-        let strip = p.decode_fifths;
-        if let Some(view) = view.filter(|_| strip) {
-            super::block(ui, "Strip", |ui| strip_controls(ui, view, params))
+        if p.decode_fifths {
+            if let Some(view) = view {
+                let dots = &mut state.appearance.view.show_map_indicators;
+                super::block(ui, "Strip", |ui| {
+                    strip_controls(ui, view, params, &mut p, &fresh, dots)
+                })
                 .response
                 .on_hover_text(STRIP_HINT);
-            crate::widgets::label(ui, SEARCH_OFF_NOTE);
+            }
+            crate::widgets::label(ui, "Search settings return with Decode fifths off");
+        } else {
+            search_controls(ui, &mut p, &fresh);
+            super::block(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, true))
+                .response
+                .on_hover_text(
+                    "New notes follow the moving context; sounding notes keep their correction.",
+                );
         }
-        ui.add_enabled_ui(!strip, |ui| search_controls(ui, &mut p, &fresh));
-        super::block(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, Some(!strip)))
-            .response
-            .on_hover_text(
-                "New notes follow the moving context; sounding notes keep their correction.",
-            );
         if p != before {
             state.runtime.edit_tuning(params, ConfigEdit { policy: Some(p), ..Default::default() });
         }
@@ -445,30 +455,49 @@ const STRIP_HINT: &str = "With Decode fifths on, each spelling the lattice-board
     Lattice Map's Position fifths place the strip, under Adaptive as under Lattice Map: \
     at 0 it is F C G D, and the fifth leaving its sharp edge (D–A there) is the wolf.";
 
-const SEARCH_OFF_NOTE: &str =
-    "The search below applies with Decode fifths off, and to no lattice-board note.";
-
-/// The strip's columns and the Position fifths lanes that place it.
+/// The strip's columns and its wolf, where following has moved it, the
+/// Position fifths lanes that set it, the switch that lets it follow and the
+/// resets that return it to the Position.
 fn strip_controls(
     ui: &mut egui::Ui,
     view: &crate::lattice_maps::MapView,
     params: &dyn ParamBackend,
+    p: &mut PolicyConfig,
+    fresh: &PolicyConfig,
+    dots: &mut bool,
 ) {
     use crate::lattice_maps::{MapAxis, MapOffsetLane};
-    let flat = harmonigraph_core::policy::strip::flat_column(view.offsets.total().threes);
-    let names: Vec<String> = (flat..flat + 4)
-        .map(|column| {
-            let name = harmonigraph_core::LatticePos::new(column, 0, 0).note_name();
-            format!("{}{}", name.letter, name.accidental_mark())
-        })
-        .collect();
-    crate::widgets::label(ui, format!("Strip {}", names.join(" ")));
+    let Some(flat) = view.strip_flat(*p) else { return };
+    let name = |column| {
+        let name = harmonigraph_core::LatticePos::new(column, 0, 0).note_name();
+        format!("{}{}", name.letter, name.accidental_mark())
+    };
+    let columns: Vec<String> = (flat..flat + 4).map(name).collect();
+    // The wolf is the fifth leaving the strip's sharp column.
+    let wolf = format!("{}–{}", name(flat + 3), name(flat + 4));
+    crate::widgets::label(ui, format!("{} · wolf {wolf}", columns.join(" ")));
+    let moved = flat - harmonigraph_core::policy::strip::flat_column(view.offsets.total().threes);
+    crate::widgets::label(ui, format!("Moved: {moved:+}"))
+        .on_hover_text("How far following has moved the strip beyond its Position fifths.");
     ui.columns(2, |halves| {
         let [fine, coarse] = halves else { unreachable!("asked for two columns") };
         offset_lane(fine, view, params, MapAxis::Fifths, "Fifths", MapOffsetLane::Fine);
         offset_lane(coarse, view, params, MapAxis::Fifths, "Fifths", MapOffsetLane::Extension);
     });
+    crate::widgets::toggle_switch(ui, &mut p.follow_spellings, "Follow spellings")
+        .on_hover_text(FOLLOW_SPELLINGS_HINT);
+    crate::widgets::checkbox(ui, dots, "Show strip dots").on_hover_text(
+        "Show a dot on each lattice node of the strip's four columns, which move when it \
+         slides. The same setting as the Lattice Map section's Show map dots.",
+    );
+    reset_controls(ui, p, fresh);
 }
+
+const FOLLOW_SPELLINGS_HINT: &str = "Move the strip the fewest fifths that make each new note's \
+    fifths and minor thirds pure against the held notes, or the note just played, and leave it \
+    where it is when they already are: D over a held F major moves it a fifth flat. Notes already \
+    sounding keep their pitch, and every context reset returns the strip to the Position. Off, \
+    the strip stays where the Position fifths put it, so a piece plays the same from any bar.";
 
 /// The search's own rows: Adaptive with Decode fifths off.
 fn search_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfig) {
@@ -548,7 +577,7 @@ fn follow_controls(
     .on_hover_text("How far following has moved the map beyond its Position offsets.");
     let mut p = state.runtime.adaptive_policy;
     let before = p;
-    context_controls(ui, &mut p, &PolicyConfig::default(), None);
+    context_controls(ui, &mut p, &PolicyConfig::default(), false);
     if p != before {
         state.runtime.edit_tuning(params, ConfigEdit { policy: Some(p), ..Default::default() });
     }
@@ -558,14 +587,7 @@ fn follow_controls(
 /// block, and under Lattice Map in the Follow harmony block, which reads it.
 /// Follow reads the decayed context alone, so only Adaptive's own scoring
 /// takes `register`, the weight per octave.
-/// `register` shows the weight per octave, enabled or greyed; `None` leaves
-/// it out.
-fn context_controls(
-    ui: &mut egui::Ui,
-    p: &mut PolicyConfig,
-    fresh: &PolicyConfig,
-    register: Option<bool>,
-) {
+fn context_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfig, register: bool) {
     p.half_life_ms = adaptive_value(
         ui,
         (p.half_life_ms.into(), fresh.half_life_ms.into()),
@@ -575,18 +597,16 @@ fn context_controls(
         "s",
         "A note struck this long before the newest counts half. 0: no decay.",
     ) as u16;
-    if let Some(enabled) = register {
-        ui.add_enabled_ui(enabled, |ui| {
-            p.register = adaptive_value(
-                ui,
-                (p.register.into(), fresh.register.into()),
-                10..=1000,
-                1000.0,
-                "Weight per octave",
-                "",
-                "Each octave between two notes multiplies the vote by this. 1: ignore register.",
-            ) as u16;
-        });
+    if register {
+        p.register = adaptive_value(
+            ui,
+            (p.register.into(), fresh.register.into()),
+            10..=1000,
+            1000.0,
+            "Weight per octave",
+            "",
+            "Each octave between two notes multiplies the vote by this. 1: ignore register.",
+        ) as u16;
     }
     p.tolerance = adaptive_value(
         ui,
@@ -597,6 +617,12 @@ fn context_controls(
         "¢",
         "Onsets this close in pitch count as one note.",
     );
+    reset_controls(ui, p, fresh);
+}
+
+/// The context's resets: the search's and map following's, and the strip's,
+/// which each returns to the Position.
+fn reset_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfig) {
     p.silence_ms = adaptive_value(
         ui,
         (p.silence_ms, fresh.silence_ms),
@@ -1037,7 +1063,7 @@ fn retuning_controls(
                 (
                     TuningEngine::Adaptive,
                     TuningEngine::Adaptive.label(),
-                    "Choose tuning for new notes from the musical context.",
+                    "Choose tuning for new notes from the musical context. With Decode fifths on, tune each lattice-board spelling to its one just copy in the strip the Position fifths place instead.",
                 ),
             ],
         );
@@ -1115,13 +1141,16 @@ const DECODE_FIFTHS_HINT: &str = "For the lattice-board, a custom chain-of-fifth
     it is on. While it is on, \
     a lattice-board plugged into this Mac lights the key nearest each note the lattice draws, \
     in the Decoded fifth: the key a note sounds on, from any track or the Tape. Under Adaptive \
-    a note lights the key it was played on instead, when the board has that key.";
+    a note lights the key it was played on instead, when the board has that key. Under Adaptive, Decode fifths also switches to the strip: each \
+    spelling sounds its one just copy in a \
+    strip four fifths wide, placed by the Position fifths, rather than a searched one.";
 
 const DECODED_FIFTH_HINT: &str = "The fifth the lattice-board's chain sounds at with Decode \
     fifths on, independent of the lattice's Perfect fifth. Under Pass through the lattice is drawn \
     in it with Meantone linked; under Lattice Map in the lattice's own tuning, so switching Note \
     retuning switches both what the board sounds and how the lattice draws it. A Lattice Map with \
-    no map to play sounds it too.";
+    no map to play sounds it too. Under Adaptive, which tunes by spelling, it decides only the octave a note sounds in \
+    and, for a key the board lacks, which key lights.";
 
 /// Lattice Map's own controls, in the order a passage is made with them: the
 /// saved map that plays, its shape edited on the lattice, where the shape

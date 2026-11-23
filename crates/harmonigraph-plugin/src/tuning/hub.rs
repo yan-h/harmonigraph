@@ -144,7 +144,11 @@ struct Sequencer {
     /// input sample of the attack group that offset was last decided for.
     follow: Follow,
     followed: LatticePos,
+    /// The attack sample whose following was last decided, the map's or the
+    /// strip's: one decision per attack group.
     followed_at: Option<i64>,
+    /// Adaptive's strip following the spellings in use (`Follow spellings`).
+    follower: policy::strip::Follower,
 }
 
 impl Default for Sequencer {
@@ -166,17 +170,20 @@ impl Default for Sequencer {
             follow: Follow::Off,
             followed: LatticePos::ORIGIN,
             followed_at: None,
+            follower: policy::strip::Follower::default(),
         }
     }
 }
 
 impl Sequencer {
     /// Released memory and everything the moving context carries forward: the
-    /// Adaptive memory and the map's follow offset alike. Held voices stay.
+    /// Adaptive memory, the map's follow offset and the strip's key alike.
+    /// Held voices stay.
     fn forget_history(&mut self) {
         self.memory.clear();
         self.last_release = None;
         self.followed = LatticePos::ORIGIN;
+        self.follower.clear();
     }
     /// The next attack after a loop or seek clears the history, if the control
     /// says so. Held notes keep their frozen assignments either way.
@@ -539,6 +546,8 @@ impl Hub {
         } else {
             LatticePos::ORIGIN
         });
+        let moved = self.sequencer.follower.moved(self.sequencer.position.threes);
+        owner.maps.publish_strip(if current { moved } else { 0 });
         self.collect();
         self.batch.sort_unstable_by_key(|record| (record.sample, record.order()));
         let mut index = 0;
@@ -826,8 +835,8 @@ impl Hub {
         let adaptive = self.sequencer.engine == TuningEngine::Adaptive;
         if !adaptive || stage.is_some() {
             let assigned = if adaptive {
-                let flat = policy::strip::flat_column(self.sequencer.position.threes);
                 let fifths = fifths_for_midi(channel, key);
+                let flat = self.strip_place(position, config.policy.follow_spellings);
                 let stage = stage.unwrap_or(0);
                 let (node, correction) =
                     policy::strip::assignment(fifths, flat, incoming + stage, config.tuning);
@@ -920,6 +929,39 @@ impl Hub {
             self.status |= session::POLICY;
         }
         Some(Assigned { correction, node, decision, player, channel_pitch })
+    }
+
+    /// The flat column the strip stands at for the onset at `position`: where
+    /// the Position fifths set it, moved by the follower when Follow
+    /// spellings is on. The group's first decoded onset decides for the whole
+    /// group, before any of it is tuned, as `follow` does for a map: after a
+    /// loop's reset, from every current onset's spelling over the nodes the
+    /// held notes sound at (`Follower::attack`).
+    fn strip_place(&mut self, position: usize, follow_spellings: bool) -> i32 {
+        let sample = self.batch[position].sample;
+        let set = self.sequencer.position.threes;
+        if !follow_spellings {
+            self.sequencer.follower.clear();
+        } else if self.sequencer.followed_at != Some(sample) {
+            self.sequencer.followed_at = Some(sample);
+            self.sequencer.take_loop();
+            let mut struck = [0; BATCH_EVENTS];
+            let mut count = 0;
+            for record in self.batch[position..].iter().take_while(|r| r.sample == sample) {
+                let Some((_, channel, key, _)) = record.event.attack() else { continue };
+                let retune = self.rows[usize::from(record.source)].retune;
+                if record.retune & 1 != 0 && record.retune == retune && count < struck.len() {
+                    struck[count] = fifths_for_midi(channel, key);
+                    count += 1;
+                }
+            }
+            let mut held = [LatticePos::ORIGIN; policy::MAX_CONTEXT];
+            let nodes = self.sequencer.context.iter().flatten().filter_map(|voice| voice.node);
+            let held_count = nodes.zip(&mut held).map(|(node, slot)| *slot = node).count();
+            let follower = &mut self.sequencer.follower;
+            follower.attack(&struck[..count], &held[..held_count], set);
+        }
+        self.sequencer.follower.flat(set)
     }
 
     /// What actually arrived, key number and every tuning the source already

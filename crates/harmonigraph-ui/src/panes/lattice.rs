@@ -400,7 +400,9 @@ fn marked_map(state: &PictureState) -> Option<Option<harmonigraph_core::lattice_
 
 /// Resolve only ordinary, visible map destinations, using scene indices rather
 /// than window indices because sparse halo owners can precede ordinary nodes.
-/// Preview/export never carries these editor annotations.
+/// Under Adaptive with Decode fifths on, the same marks stand on the strip's
+/// four columns, every visible row (`MapView::strip_flat`), so they move when
+/// it slides. Preview/export never carries these editor annotations.
 fn map_assignments(
     state: &PictureState,
     scene: &harmonigraph_scene::Scene,
@@ -416,6 +418,20 @@ fn map_assignments(
         .filter(|&pos| window.contains(pos))
         .filter_map(|pos| scene.node_index(pos))
         .collect();
+    let strip = state.runtime.lattice_maps.as_ref().and_then(|maps| {
+        maps.strip_flat(state.runtime.adaptive_policy)
+            .filter(|_| interactive && state.appearance.view.show_map_indicators)
+            // An audition marks the map its spot was recorded under alone.
+            .filter(|_| state.runtime.tape.map.is_none())
+    });
+    if let Some(flat) = strip {
+        let columns = flat..=flat + 3;
+        indices.extend(scene.nodes.iter().enumerate().filter_map(|(index, node)| {
+            let pos = node.lattice_pos;
+            (pos.sevens == 0 && columns.contains(&pos.threes) && window.contains(pos))
+                .then_some(index)
+        }));
+    }
     indices.sort_unstable();
     indices.dedup();
     indices
@@ -872,6 +888,7 @@ mod tests {
                 playback: MapPlayback { engine, ..Default::default() },
                 offsets: Default::default(),
                 followed: harmonigraph_core::LatticePos::ORIGIN,
+                strip_moved: 0,
                 unadopted: None,
                 names: Default::default(),
                 edit_shape: false,
@@ -894,6 +911,53 @@ mod tests {
         assert_eq!(pulsing(TuningEngine::LatticeMap), (false, None), "a still pane held the loop");
     }
 
+    /// Under Adaptive with Decode fifths on the map marks stand on the strip's
+    /// four columns and nowhere else, and move with a slide; with decoding
+    /// off Adaptive marks nothing.
+    #[test]
+    fn adaptive_with_decoding_marks_the_strip_s_columns() {
+        use crate::lattice_maps::{MapPlayback, MapView};
+        use harmonigraph_core::lattice_map::TuningEngine;
+        let mut state = fresh();
+        // Every input the marks read, set here rather than taken from the
+        // fresh look.
+        state.appearance.view.show_map_indicators = true;
+        state.runtime.adaptive_policy.decode_fifths = true;
+        state.runtime.adaptive_policy.follow_spellings = true;
+        state.runtime.lattice_maps = Some(MapView {
+            playback: MapPlayback { engine: TuningEngine::Adaptive, ..Default::default() },
+            offsets: Default::default(),
+            followed: harmonigraph_core::LatticePos::ORIGIN,
+            strip_moved: 0,
+            unadopted: None,
+            names: Default::default(),
+            edit_shape: false,
+            can_undo: false,
+            full: false,
+        });
+        // Columns −4..6 and rows −2..2 of the home sheet: both strips inside.
+        let window = harmonigraph_scene::DrawnWindow {
+            min: harmonigraph_core::LatticePos::new(-4, -2, 0),
+            max: harmonigraph_core::LatticePos::new(6, 2, 0),
+        };
+        let columns = |state: &mut PictureState| {
+            let scene = compose_scene(state, &window, 1.0, None, 0, 0.0);
+            let marked = map_assignments(state, &scene, &window, true);
+            let mut columns: Vec<i32> =
+                marked.iter().map(|&index| scene.nodes[index].lattice_pos.threes).collect();
+            columns.sort_unstable();
+            columns.dedup();
+            (columns, marked.len())
+        };
+        let (home, count) = columns(&mut state);
+        assert_eq!(home, [-1, 0, 1, 2], "F C G D");
+        assert_eq!(count, 4 * 5, "every row of the four columns");
+        state.runtime.lattice_maps.as_mut().unwrap().strip_moved = 1;
+        assert_eq!(columns(&mut state).0, [0, 1, 2, 3], "slid to C G D A");
+        state.runtime.adaptive_policy.decode_fifths = false;
+        assert_eq!(columns(&mut state).1, 0, "the search marks nothing");
+    }
+
     /// An audition marks the nodes of the map its spot was recorded under,
     /// where its notes were assigned; editing a shape marks the live map,
     /// which a click edits.
@@ -913,6 +977,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
+            strip_moved: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: false,
@@ -952,6 +1017,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
+            strip_moved: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: true,
@@ -1020,6 +1086,7 @@ mod tests {
             playback: MapPlayback { engine: TuningEngine::LatticeMap, ..Default::default() },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
+            strip_moved: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: false,
@@ -1098,6 +1165,7 @@ mod tests {
             playback: MapPlayback { engine: TuningEngine::LatticeMap, ..Default::default() },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
+            strip_moved: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: false,
@@ -1198,6 +1266,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
+            strip_moved: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: true,
@@ -1265,6 +1334,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: LatticePos::ORIGIN,
+            strip_moved: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: true,
@@ -1306,6 +1376,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: LatticePos::ORIGIN,
+            strip_moved: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: false,

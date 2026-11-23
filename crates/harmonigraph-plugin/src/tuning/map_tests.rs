@@ -570,12 +570,21 @@ struct Decoding {
 }
 impl Decoding {
     fn new(engine: f64, tuning: Tuning, fifth: i32) -> Self {
+        Self::with(engine, tuning, fifth, true)
+    }
+    /// Adaptive's fixed strip: Follow spellings off, so the Position alone
+    /// places it.
+    fn fixed(tuning: Tuning, fifth: i32) -> Self {
+        Self::with(1.0, tuning, fifth, false)
+    }
+    fn with(engine: f64, tuning: Tuning, fifth: i32, follow_spellings: bool) -> Self {
         let mut hub = hub();
         hub.activate_format(48_000.0, 128);
         musical_tests::configure(&hub, tuning);
         let policy = harmonigraph_core::configuration::PolicyConfig {
             decode_fifths: true,
             decoded_fifth: fifth,
+            follow_spellings,
             ..Default::default()
         };
         settings(&hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
@@ -710,7 +719,7 @@ fn adaptive_tunes_a_decoded_tune_in_the_strip_the_position_fifths_place() {
     let _scope = crate::test_scope::enter();
     let mut tuning = Tuning::just();
     tuning.c_offset = 3_000_000;
-    let mut session = Decoding::new(1.0, tuning, 696_578_428);
+    let mut session = Decoding::fixed(tuning, 696_578_428);
     let sharp = LatticePos::new(-1, 2, 0);
     let [out, _] = session.play(vec![note(1, 1, 61, 0, true)], vec![]);
     let voice = session.voice(true, 1, 61);
@@ -752,7 +761,7 @@ fn adaptive_tunes_a_decoded_tune_in_the_strip_the_position_fifths_place() {
 #[test]
 fn the_strip_sounds_each_spelling_at_one_pitch_through_a_progression() {
     let _scope = crate::test_scope::enter();
-    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    let mut session = Decoding::fixed(Tuning::just(), 696_578_428);
     let chords: [[i16; 3]; 5] =
         [[60, 64, 67], [57, 60, 64], [62, 65, 69], [55, 59, 62], [60, 64, 67]];
     let mut sounded = std::collections::BTreeMap::<i16, Vec<i64>>::new();
@@ -771,4 +780,123 @@ fn the_strip_sounds_each_spelling_at_one_pitch_through_a_progression() {
     }
     let d = sounded[&62][0] - 6_200_000_000;
     assert_eq!(d, i64::from(2 * Tuning::just().three) - 1_200_000_000 - 200_000_000, "9/8");
+}
+
+impl Decoding {
+    /// Follow spellings on with `edit` on top, as a fresh policy.
+    fn policy(&self, edit: impl FnOnce(&mut harmonigraph_core::configuration::PolicyConfig)) {
+        let mut policy = harmonigraph_core::configuration::PolicyConfig {
+            decode_fifths: true,
+            decoded_fifth: 696_578_428,
+            ..Default::default()
+        };
+        edit(&mut policy);
+        settings(&self.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
+    }
+    /// `events` to both Tunes and the Hub, one callback.
+    fn everywhere(&mut self, events: impl Fn() -> Vec<Input>) {
+        let raw = self.raw;
+        for device in [&self.decoded, &self.plain, &self.hub] {
+            device.run_format(raw, events(), None, None, 128);
+        }
+        self.raw += 128;
+    }
+    /// The node a lone A struck now and let go sounds at.
+    fn a(&mut self) -> Option<LatticePos> {
+        self.play(vec![note(1, 0, 69, 0, true)], vec![]);
+        let node = self.voice(true, 0, 69).attack_node;
+        self.play(vec![note(1, 0, 69, 0, false)], vec![]);
+        node
+    }
+}
+
+/// F♯ in two octaves on one sample, on or off.
+fn f_sharps(on: bool) -> Vec<Input> {
+    [78, 90].map(|key| note(key.into(), 0, key, 0, on)).into()
+}
+
+const FIVE_THREE: LatticePos = LatticePos::new(-1, 1, 0);
+const PYTHAGOREAN_A: LatticePos = LatticePos::new(3, 0, 0);
+
+/// An A struck after F♯ moves the strip a fifth sharp, so A is 27/16 and
+/// pure under the F♯ just played; every reset of the context
+/// returns the strip to the Position, so A is 5/3 again: a change of
+/// engine, Reset all voices, a transport Stop, a loop or seek, and silence.
+/// With Follow spellings off the strip never moves.
+#[test]
+fn every_reset_returns_the_followed_strip_to_the_position() {
+    let _scope = crate::test_scope::enter();
+    type Reset = fn(&mut Decoding);
+    let resets: [(&str, Reset); 5] = [
+        ("engine", |session| {
+            session.everywhere(|| vec![parameter("tuning-engine", 0.0, 0)]);
+            session.everywhere(|| vec![parameter("tuning-engine", 1.0, 0)]);
+        }),
+        ("Reset all voices", |session| {
+            crate::tuning::session::session().request_reset();
+            session.everywhere(Vec::new);
+        }),
+        ("Stop", |session| {
+            session.everywhere(|| vec![transport(0, 120.0)]);
+            session.everywhere(|| vec![musical_tests::at(0.0, false)]);
+        }),
+        ("loop", |session| {
+            for seconds in [5.0, 5.0, 1.0] {
+                session.everywhere(|| vec![musical_tests::at(seconds, false)]);
+            }
+        }),
+        ("silence", |session| (0..8).for_each(|_| session.everywhere(Vec::new))),
+    ];
+    for (name, reset) in resets {
+        let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+        session.policy(|policy| {
+            (policy.reset_stop, policy.reset_loop, policy.silence_ms) = (true, true, 10);
+        });
+        for on in [true, false] {
+            session.play(f_sharps(on), vec![]);
+        }
+        // Struck at once after the F♯, before silence's 10 ms.
+        assert_eq!(session.a(), Some(PYTHAGOREAN_A), "{name}: moved to C G D A");
+        reset(&mut session);
+        assert_eq!(session.a(), Some(FIVE_THREE), "{name}: back at the Position");
+    }
+    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    session.policy(|policy| policy.follow_spellings = false);
+    for on in [true, false] {
+        session.play(f_sharps(on), vec![]);
+    }
+    assert_eq!(session.a(), Some(FIVE_THREE), "the strip stays where the Position put it");
+}
+
+/// A loop's last release and its first strike on one sample, with Reset on
+/// loop on: the reset comes before the strike's group is read, so the A
+/// after it moves the strip against those F♯s, and the release on that
+/// sample does not refill the memory the reset cleared.
+#[test]
+fn a_loop_resets_after_its_last_release_and_before_its_first_strike() {
+    let _scope = crate::test_scope::enter();
+    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    session.policy(|policy| policy.reset_loop = true);
+    session.play(vec![note(1, 0, 60, 0, true)], vec![]);
+    for seconds in [5.0, 5.0, 1.0] {
+        session.everywhere(|| vec![musical_tests::at(seconds, false)]);
+    }
+    let mut wrap = f_sharps(true);
+    wrap.insert(0, note(1, 0, 60, 0, false));
+    session.play(wrap, vec![]);
+    assert_eq!(inspect_hub(&session.hub, |hub| hub.test_memory()), 0, "the release is gone");
+    session.play(f_sharps(false), vec![]);
+    assert_eq!(session.a(), Some(PYTHAGOREAN_A), "the strike moved the key");
+}
+
+/// D struck over a held F major moves the strip flat, so D sounds 10/9, a
+/// pure fifth under the held A.
+#[test]
+fn a_note_over_held_notes_moves_the_strip_off_their_wolf() {
+    let _scope = crate::test_scope::enter();
+    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    session.play([65, 69, 72].map(|key| note(key.into(), 0, key, 0, true)).into(), vec![]);
+    session.play(vec![note(62, 0, 62, 0, true)], vec![]);
+    let [d, a] = [62, 69].map(|key| session.voice(true, 0, key).attack_node.unwrap());
+    assert_eq!((d, a - d), (LatticePos::new(-2, 1, 0), LatticePos::new(1, 0, 0)), "D–A pure");
 }

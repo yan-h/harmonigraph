@@ -44,6 +44,10 @@ pub struct PolicyConfig {
     /// Every source with Retune on reads its MIDI channels as comma banks
     /// over a chain of fifths: the lattice-board's encoding (yan-h/lattice-board).
     pub decode_fifths: bool,
+    /// Under Adaptive with Decode fifths on, the strip slides by fifths to
+    /// follow the spellings in use (`policy::strip::Follower`); off, it stays
+    /// where the Position fifths put it.
+    pub follow_spellings: bool,
     /// The fifth, in microcents, a decoded source sounds its chain at: what
     /// its keyboard declares rather than the lattice's own.
     pub decoded_fifth: i32,

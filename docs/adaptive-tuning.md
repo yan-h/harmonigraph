@@ -48,9 +48,20 @@ and the comma Adaptive's search used to guess chord by chord is fixed by where t
 Lattice Map's Position fifths place the strip, under Adaptive as under Lattice Map:
 at 0 its columns are F C G D, the default map's,
 and automating the lane is how a piece changes key.
+With **Follow spellings** on, the default, the strip also follows the music, a fifth at a time, and only to keep a new note pure.
+When a note is struck, the strip stays where it is if every fifth and minor third the note makes with what came before sounds pure there,
+and otherwise moves the fewest fifths that make them pure, before the note is tuned.
+What came before is the held notes, or with nothing held the note played just before, so a staccato arpeggio counts too.
+So D struck over a held F major moves it a fifth flat, D sounding 10/9 under the held A, and a diatonic ii is pure, its D 10/9 there and 9/8 in G major;
+E♭ after a C in the strip's sharpest column moves it a fifth sharp, a 6/5;
+and F after A♭, or B after C minor, moves nothing, as both already sound pure.
+The strip may drift: a long passage can leave it several fifths from the Position, and the resets bring it back; a Position lane move shifts it by the lane's change, keeping the drift.
+It moves the way purity asks, not always the way a progression goes: D major after G major, arpeggiated A then D then F♯, moves it flat to keep D pure under the held A, so D sounds a comma lower than in G major.
+A note already sounding keeps its pitch, so the first time an arpeggio crosses into a new place, a note struck before the move keeps its old pitch; the next time through, the triad is pure.
+Every context reset returns the strip to the Position.
 Every fourth fifth along the chain, the one leaving the strip's sharp edge, is a comma narrow (D–A at Position 0).
 The search, with its Keyboard block, Pitch flexibility, radius, axes and register, applies only with Decode fifths off,
-and is greyed while it is on.
+and is hidden while it is on, with its Half-life and Same-note tolerance; the resets move into the Strip block.
 Learn is suspended while Decode fifths is on, as under Lattice Map:
 the board declares its tuning,
 and what Learn would hear beside it is the 12-TET tracks that pass through undecoded.

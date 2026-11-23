@@ -64,6 +64,7 @@ pub(super) fn engine_view(
         playback: crate::lattice_maps::MapPlayback { engine, ..Default::default() },
         offsets: Default::default(),
         followed: harmonigraph_core::LatticePos::ORIGIN,
+        strip_moved: 0,
         unadopted: None,
         names: crate::lattice_maps::MapDocument::default().names(),
         edit_shape: false,

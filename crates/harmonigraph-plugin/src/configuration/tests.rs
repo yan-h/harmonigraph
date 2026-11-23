@@ -1093,32 +1093,40 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
 #[test]
 fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
     let _scope = crate::test_scope::enter();
-    let mut device = hub().with_retune();
-    device.activate();
-    let policy = PolicyConfig {
-        pitch_flexibility: 37,
-        axes: 3,
-        silence_ms: 4500,
-        reset_loop: true,
-        reset_stop: true,
-        decode_fifths: true,
-        decoded_fifth: 694_786_840,
-        ..Default::default()
-    };
-    let mut state = restored(&device, 700.0);
-    state.fields.insert(
-        MUSICAL_SETTINGS.into(),
-        serde_json::to_string(&MusicalSettings { adaptive: policy.into(), ..Default::default() })
+    // Each of the two policy flags on with the other off, so a reader that
+    // drops either fails whichever way it was saved.
+    for (decode_fifths, follow_spellings) in [(true, false), (false, true)] {
+        let mut device = hub().with_retune();
+        device.activate();
+        let policy = PolicyConfig {
+            pitch_flexibility: 37,
+            axes: 3,
+            silence_ms: 4500,
+            reset_loop: true,
+            reset_stop: true,
+            decode_fifths,
+            follow_spellings,
+            decoded_fifth: 694_786_840,
+            ..Default::default()
+        };
+        let mut state = restored(&device, 700.0);
+        state.fields.insert(
+            MUSICAL_SETTINGS.into(),
+            serde_json::to_string(&MusicalSettings {
+                adaptive: policy.into(),
+                ..Default::default()
+            })
             .unwrap(),
-    );
-    device.load(state);
-    let settings = device.settings();
-    assert_eq!(shown(&settings).view.resolved.policy, policy);
-    let saved: MusicalSettings =
-        serde_json::from_str(&device.save().fields[MUSICAL_SETTINGS]).unwrap();
-    assert_eq!(PolicyConfig::from(saved.adaptive), policy);
-    device.run(0, vec![], None);
-    assert_eq!(shown(&settings).view.resolved.policy, policy);
+        );
+        device.load(state);
+        let settings = device.settings();
+        assert_eq!(shown(&settings).view.resolved.policy, policy);
+        let saved: MusicalSettings =
+            serde_json::from_str(&device.save().fields[MUSICAL_SETTINGS]).unwrap();
+        assert_eq!(PolicyConfig::from(saved.adaptive), policy);
+        device.run(0, vec![], None);
+        assert_eq!(sounding(&device).policy, policy, "the audio owner adopts it");
+    }
     let defaults: MusicalSettings = serde_json::from_str("{\"adaptive\":{}}").unwrap();
     assert_eq!(PolicyConfig::from(defaults.adaptive), PolicyConfig::default());
     let old: MusicalSettings =

@@ -55,6 +55,7 @@ impl ParamBackend for Edits {
             names: document.names(),
             offsets: self.offsets,
             followed: harmonigraph_core::LatticePos::ORIGIN,
+            strip_moved: 0,
             unadopted: self.pending.then_some(playback),
             edit_shape: false,
             can_undo: false,
@@ -567,4 +568,75 @@ fn a_double_click_resets_an_offset_lane_in_one_gesture() {
             "EndOffset(Fifths, Extension)"
         ]
     );
+}
+
+/// The Tuning pane under Adaptive, decoding the lattice-board or not, as one
+/// settled frame.
+fn adaptive_pane(decoding: bool) -> egui::FullOutput {
+    let ctx = themed();
+    let params = Edits::new(TuningEngine::Adaptive, Follow::Off, 1);
+    let mut state = fresh_picture();
+    state.runtime.adaptive_policy.decode_fifths = decoding;
+    let size = egui::vec2(420.0, 3000.0);
+    let mut frame = || {
+        events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), vec![], |ui| {
+            tuning_pane(ui, &mut state, &params, 0.0)
+        })
+    };
+    frame();
+    frame()
+}
+
+/// Under the strip the rows it ignores are hidden rather than greyed, the
+/// resets that return it to the Position sit in its block with its columns,
+/// wolf and slide, and the search's rows come back with Decode fifths off.
+#[test]
+fn the_strip_hides_the_rows_it_ignores() {
+    let ignored = [
+        "Pitch flexibility",
+        "Search radius",
+        "Search axes",
+        "Keyboard",
+        "Weight per octave",
+        "Half-life",
+        "Same-note tolerance",
+    ];
+    let strip = [
+        "F C G D · wolf D–A",
+        "Moved: +0",
+        "Follow spellings",
+        "Show strip dots",
+        "Silence reset",
+        "Reset context on stop",
+        "Reset context on loop / seek",
+        "Search settings return with Decode fifths off",
+    ];
+    let out = adaptive_pane(true);
+    for label in ignored {
+        assert!(text_at(&out, label).is_none(), "{label} is hidden under the strip");
+    }
+    for label in strip {
+        assert!(text_at(&out, label).is_some(), "{label} is drawn under the strip");
+    }
+    let follow = text_at(&out, "Follow spellings").unwrap();
+    assert!(text_at(&out, "Silence reset").unwrap().y > follow.y, "the resets sit in its block");
+    let out = adaptive_pane(false);
+    for label in ignored {
+        assert!(text_at(&out, label).is_some(), "{label} is drawn for the search");
+    }
+    assert!(text_at(&out, "F C G D").is_none() && text_at(&out, "Search settings").is_none());
+}
+
+/// The Lattice-board section stands between Note matching and Note retuning,
+/// above the engine whose controls it changes.
+#[test]
+fn the_lattice_board_section_comes_before_note_retuning() {
+    let out = adaptive_pane(true);
+    // Headings are drawn in capitals.
+    let y = |title: &str| {
+        let heading = title.to_uppercase();
+        text_at(&out, &heading).unwrap_or_else(|| panic!("{heading} drawn")).y
+    };
+    assert!(y("Note matching") < y(BOARD_SECTION), "after Note matching");
+    assert!(y(BOARD_SECTION) < y("Note retuning"), "before Note retuning");
 }
