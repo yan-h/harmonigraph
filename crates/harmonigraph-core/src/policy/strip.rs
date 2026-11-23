@@ -57,18 +57,12 @@ pub fn assignment(fifths: i32, flat: i32, declared: i64, tuning: Tuning) -> (Lat
     (node, class + octaves * octave - declared)
 }
 
-/// Follows the music in two parts (§3.4; simplified on 2026-11-23,
-/// `docs/intent/tuning.md`). The **key** is a whole number of fifths from
-/// where the Position sets the strip; its seven spellings run from its flat
-/// column, F to B at Position 0. The **strip** stands at the key or a fifth
-/// either side of it, wherever the newest notes sound pure.
+/// Follows the music by moving the strip a fifth at a time, and only to keep
+/// a new note pure (§3.4; simplified on 2026-11-23, `docs/intent/tuning.md`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Follower {
-    /// Fifths the key stands from where the Position places the strip, only
-    /// as far as [`PLACES`] lets it.
-    key: i32,
-    /// Fifths the strip stands from the key, −1..=1.
-    excursion: i32,
+    /// Fifths the strip stands from where the Position places it.
+    moved: i32,
     /// The node the last note took: the context when nothing is held, so a
     /// staccato arpeggio is heard as one.
     last: Option<LatticePos>,
@@ -82,7 +76,7 @@ impl Follower {
     /// The flat column the strip stands at under the Position fifths
     /// `position`.
     pub fn flat(&self, position: i32) -> i32 {
-        moved_column(position, self.key.saturating_add(self.excursion))
+        moved_column(position, self.moved)
     }
 
     /// Fifths the strip stands from where the Position fifths `position`
@@ -92,36 +86,30 @@ impl Follower {
     }
 
     /// An attack group's spellings `struck`, over the nodes the held notes
-    /// sound at, `held`, before any of the group is tuned:
-    ///
-    /// - **The key** moves a fifth toward a struck spelling just past its
-    ///   seven: F♯ in C moves it sharp, B♭ flat, both together nothing. A
-    ///   triad moved a fifth always brings one in, and a spelling further
-    ///   out, such as A♭ after F, moves nothing.
-    /// - **The strip** keeps its place if every fifth and minor third the
-    ///   struck notes make, with each other and with the context, sounds
-    ///   pure there; otherwise it returns to the key if that is pure, or
-    ///   else stands a fifth to whichever side is. The context is the held
-    ///   notes, or with nothing held the last note. So D over a held F major
-    ///   stands it a fifth flat, D 10/9 under A, and E♭ after a C in the
-    ///   strip's sharpest column stands it a fifth sharp, a 6/5.
-    ///
-    /// Held notes keep the node they sound at.
+    /// sound at, `held`, before any of the group is tuned. The strip stays
+    /// where it is if every fifth and minor third the struck notes make, with
+    /// each other and with the context, sounds pure there; otherwise it moves
+    /// the fewest fifths that make them pure. The context is the held notes,
+    /// or with nothing held the last note. So D over a held F major moves it
+    /// a fifth flat, D 10/9 under A, and E♭ after a C in its sharpest column a
+    /// fifth sharp, a 6/5. Held notes keep the node they sound at.
     pub fn attack(&mut self, struck: &[i32], held: &[LatticePos], position: i32) {
-        let flat = moved_column(position, self.key);
-        let past = |edge: i32| i32::from(struck.contains(&edge));
-        let key = self.key.saturating_add(past(flat + 7) - past(flat - 1));
-        self.key = moved_column(position, key) - flat_column(position);
         let context = if held.is_empty() { self.last.as_slice() } else { held };
-        let pure = |excursion: i32| {
-            let flat = moved_column(position, self.key + excursion);
+        let pure = |moved: i32| {
+            let flat = moved_column(position, moved);
             struck.iter().enumerate().all(|(i, &k)| {
                 let others = struck[i + 1..].iter().map(|&j| node(j, flat));
                 others.chain(context.iter().copied()).all(|other| in_tune(node(k, flat), other))
             })
         };
-        if let Some(excursion) = [self.excursion, 0, -1, 1].into_iter().find(|&e| pure(e)) {
-            self.excursion = excursion;
+        if !pure(self.moved) {
+            // Outward a fifth at a time, so a step the clamp would not let
+            // the strip sound is never the one found.
+            let reach = PLACES.end() - PLACES.start();
+            let steps = (1..=reach).flat_map(|d| [-d, d]);
+            if let Some(step) = steps.into_iter().find(|&step| pure(self.moved + step)) {
+                self.moved += step;
+            }
         }
         self.last = struck.last().map(|&k| node(k, self.flat(position)));
     }
@@ -211,43 +199,35 @@ mod tests {
     const MINOR: fn(i32) -> [i32; 3] = |root| [root, root - 3, root + 1];
 
     /// Major and minor triads moving by a fifth, up and down from C, each
-    /// arpeggiated twice in every order, held or staccato: the key follows
-    /// them a fifth at a time, and the second time each triad is pure.
+    /// arpeggiated twice in every order, held or staccato: the second time
+    /// each triad is pure.
     #[test]
     fn a_triad_moved_a_fifth_is_pure_the_second_time_in_any_order() {
         let orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
-        // The key each triad leaves: G major, F major, E minor and D minor
-        // lie inside C's seven, and each after brings one spelling past it.
-        let cases = [
-            (MAJOR, [0, 1, 2, 3, 4], [0, 0, 1, 2, 3]),
-            (MAJOR, [0, -1, -2, -3, -4], [0, 0, -1, -2, -3]),
-            (MINOR, [3, 4, 5, 6, 7], [0, 0, 1, 2, 3]),
-            (MINOR, [3, 2, 1, 0, -1], [0, 0, -1, -2, -3]),
-        ];
-        for ((triad, roots, keys), staccato) in
-            cases.into_iter().flat_map(|c| [(c, false), (c, true)])
-        {
-            for order in orders {
+        let roots = [[0, 1, 2, 3, 4], [0, -1, -2, -3, -4]];
+        for (triad, roots) in [MAJOR, MINOR].into_iter().flat_map(|t| roots.map(|r| (t, r))) {
+            for (order, staccato) in orders.into_iter().flat_map(|o| [(o, false), (o, true)]) {
                 let mut follower = Follower::default();
-                for (root, key) in roots.into_iter().zip(keys) {
+                for root in roots {
                     arpeggio(&mut follower, &triad(root), &order, staccato);
                     let again = arpeggio(&mut follower, &triad(root), &order, staccato);
                     assert!(pure(&again), "{:?} {order:?} staccato {staccato}", triad(root));
-                    assert_eq!(follower.key, key, "{:?} {order:?}", triad(root));
                 }
             }
         }
     }
 
-    /// Yan's cases: F then A♭ and C minor then B stay where they are; C
-    /// minor then F, with C in the strip's flat column, and D over a held F
-    /// major move it flat; E♭ after a C in its sharpest column moves it sharp.
+    /// Yan's cases: F then A♭ and C minor then B leave the strip; C then E♭,
+    /// with C in the strip's sharpest column, moves it sharp; C minor then F,
+    /// with C in its flat column, and D over a held F major move it flat; and
+    /// C then F, from wherever the strip and the note before left C, never
+    /// sound the wolf.
     #[test]
-    fn a_note_out_of_tune_with_its_context_moves_the_strip_a_fifth() {
-        let play = |key: i32, notes: &[i32], staccato: bool| {
-            let mut follower = Follower { key, ..Follower::default() };
+    fn a_note_out_of_tune_with_its_context_moves_the_strip() {
+        let play = |moved: i32, notes: &[i32], staccato: bool| {
+            let mut follower = Follower { moved, ..Follower::default() };
             arpeggio(&mut follower, notes, &(0..notes.len()).collect::<Vec<_>>(), staccato);
-            follower.moved(0) - key
+            follower.moved - moved
         };
         for staccato in [false, true] {
             assert_eq!(play(0, &[-1, -4], staccato), 0, "F then A♭");
@@ -256,40 +236,34 @@ mod tests {
         }
         assert_eq!(play(1, &[0, -3, 1, -1], false), -1, "C E♭ G then F");
         assert_eq!(play(0, &[-1, 3, 0, 2], false), -1, "F A C then D");
+        for moved in -6..=6 {
+            for before in -6..=7 {
+                let mut follower = Follower { moved, ..Follower::default() };
+                let sounded = arpeggio(&mut follower, &[before, 0, -1], &[0, 1, 2], true);
+                assert!(in_tune(sounded[1], sounded[2]), "C then F from {moved} after {before}");
+            }
+        }
     }
 
-    /// Triads of C major in any order and succession, held or staccato,
-    /// never take the strip more than a fifth from home, so C keeps 1/1.
+    /// 2,000 random major and minor triads on every root from G♭ to F♯,
+    /// held or staccato, each arpeggiated twice: the second time is pure.
     #[test]
-    fn c_major_s_triads_keep_the_strip_near_home() {
-        let chords = [MAJOR(0), MAJOR(-1), MAJOR(1), MINOR(3), MINOR(2), MINOR(4)];
+    fn random_triads_are_pure_the_second_time() {
         let mut seed = 1u32;
         let mut next = |n: usize| {
             seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
             (seed >> 16) as usize % n
         };
+        let orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
         for staccato in [false, true] {
             let mut follower = Follower::default();
             for _ in 0..2_000 {
-                let chord = chords[next(chords.len())];
-                let first = next(3);
-                let order = [first, (first + 1 + next(2)) % 3, 0];
-                let order = [order[0], order[1], 3 - order[0] - order[1]];
-                arpeggio(&mut follower, &chord, &order, staccato);
-                assert!(follower.moved(0).abs() <= 1, "{chord:?} took it to {}", follower.moved(0));
+                let triad = [MAJOR, MINOR][next(2)](next(13) as i32 - 6);
+                let order = orders[next(6)];
+                arpeggio(&mut follower, &triad, &order, staccato);
+                let again = arpeggio(&mut follower, &triad, &order, staccato);
+                assert!(pure(&again), "{triad:?} {order:?} staccato {staccato}");
             }
         }
-    }
-
-    /// F♯ and B♭ together move nothing, and the key stores no movement past
-    /// the clamp, so back at Position 0 the strip is home.
-    #[test]
-    fn the_key_stores_only_movement_it_can_sound() {
-        let mut follower = Follower::default();
-        follower.attack(&[-2, 6], &[], 0);
-        assert_eq!(follower.key, 0, "B♭ and F♯ together");
-        let mut follower = Follower::default();
-        follower.attack(&[15], &[], 20);
-        assert_eq!((follower.flat(20), follower.key), (flat_column(20), 0));
     }
 }

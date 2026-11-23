@@ -48,16 +48,15 @@ and the comma Adaptive's search used to guess chord by chord is fixed by where t
 Lattice Map's Position fifths place the strip, under Adaptive as under Lattice Map:
 at 0 its columns are F C G D, the default map's,
 and automating the lane is how a piece changes key.
-With **Follow spellings** on, the default, the strip also follows the music, in two parts.
-The **key** moves a fifth whenever a note just past its seven spellings is struck (F♯ or B♭ in C; the seven run from the strip's flat column, F to B at Position 0), before that note is tuned.
-A triad moved up or down a fifth always brings in such a note, so the key follows it whatever order an arpeggio plays it in.
-A note further out, such as A♭ after F, does not move the key.
-The **strip** then stands at the key or a fifth either side of it, wherever the new note's fifths and minor thirds sound pure against the notes before it:
-the held notes, or with nothing held the note played just before, so a staccato arpeggio counts as one chord.
-It keeps its place while that works, goes back to the key when that works, and otherwise stands a fifth to whichever side does.
-So D struck over a held F major stands it a fifth flat, D sounding 10/9 under the held A, and a diatonic ii is pure, its D 10/9 there and 9/8 in G major;
-E♭ after a C in the strip's sharpest column stands it a fifth sharp, a 6/5.
-Because the key moves only for a note just past it, a passage in one key keeps the strip within a fifth of home.
+With **Follow spellings** on, the default, the strip also follows the music, a fifth at a time, and only to keep a new note pure.
+When a note is struck, the strip stays where it is if every fifth and minor third the note makes with what came before sounds pure there,
+and otherwise moves the fewest fifths that make them pure, before the note is tuned.
+What came before is the held notes, or with nothing held the note played just before, so a staccato arpeggio counts too.
+So D struck over a held F major moves it a fifth flat, D sounding 10/9 under the held A, and a diatonic ii is pure, its D 10/9 there and 9/8 in G major;
+E♭ after a C in the strip's sharpest column moves it a fifth sharp, a 6/5;
+and F after A♭, or B after C minor, moves nothing, as both already sound pure.
+The strip may drift: a long passage can leave it several fifths from the Position, and the resets or the lane bring it back.
+It moves the way purity asks, not always the way a progression goes: D major after G major, arpeggiated A then D then F♯, moves it flat to keep D pure under the held A, so D sounds a comma lower than in G major.
 A note already sounding keeps its pitch, so the first time an arpeggio crosses into a new place, a note struck before the move keeps its old pitch; the next time through, the triad is pure.
 Every context reset returns the strip to the Position.
 Every fourth fifth along the chain, the one leaving the strip's sharp edge, is a comma narrow (D–A at Position 0).

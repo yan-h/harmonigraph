@@ -342,7 +342,7 @@ Adaptive tuning's **Keyboard** and **Context** are blocks,
 open like the rest of the section.
 With Decode fifths on, the section is a **Strip** block instead:
 the strip's four columns and its wolf ("F C G D · wolf D–A"), a **Moved** line for how far following has moved it, the Position fifths' Fine and Coarse bars that set it (the same lanes the Lattice Map section's Position shows), **Follow spellings**, **Show strip dots** (the same setting as Show map dots), and the three resets (Silence reset, Reset context on stop, on loop / seek), which return the strip to the Position.
-Follow spellings, on by default, moves the strip's key a fifth toward a note struck just past its seven spellings (F♯ in C moves it a fifth sharp, B♭ a fifth flat), and stands the strip at the key or a fifth either side, wherever the new note's fifths and minor thirds sound pure against the held notes, or the note just played (D over a held F major stands it a fifth flat);
+Follow spellings, on by default, moves the strip the fewest fifths that make a new note's fifths and minor thirds sound pure against the held notes, or the note just played, and leaves it where it is when they already do (D over a held F major moves it a fifth flat);
 off, the strip stays where the Position puts it, so a piece plays the same from any bar.
 The search's rows, Keyboard and the Context block are hidden there, since nothing reads them, with a line saying they return with Decode fifths off,
 and the lattice draws Lattice Map's map marks on the strip's four columns.
