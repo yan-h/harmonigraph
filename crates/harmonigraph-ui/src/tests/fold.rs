@@ -1046,3 +1046,40 @@ fn a_region_fold_widens_the_open_region_up_to_the_rail() {
         );
     }
 }
+
+/// A restore that reports a loss over a folded Settings section unfolds it as
+/// the rail's own click does, the window growing to hold it rather than the
+/// pictures being squeezed, and tells the host of no edit: what a save stores
+/// moved with the reveal, and the window it asks for is the editor's own.
+#[test]
+fn a_console_reveal_unfolds_the_settings_as_a_click_does() {
+    for position in [Position::Right, Position::Below] {
+        let mut state = fresh();
+        state.workspace.layout.position = position;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        let unfolded = h.screen.size();
+        h.collapse_click(&mut state, panes::Tab::Tuning);
+        assert!(collapsed(&state, panes::Tab::Tuning), "{position:?}: the fixture folds Settings");
+        assert!(!state.workspace.take_own_resize(), "{position:?}: a click's window is an edit");
+        let edits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = edits.clone();
+        state.on_edit(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
+        h.settle(&mut state);
+        let pictures = state.workspace.layout_runtime.rects;
+        state.report_loss("a restore lost something");
+        h.frame(&mut state, vec![]);
+        assert!(state.workspace.take_own_resize(), "{position:?}: a reveal's window is no edit");
+        h.settle_folds(&mut state);
+        assert_eq!(state.workspace.layout.settings_tab, panes::Tab::Console, "{position:?}");
+        assert!(!collapsed(&state, panes::Tab::Console), "{position:?}");
+        near(h.screen.size(), unfolded);
+        for section in [Section::Lattice, Section::Analyzer] {
+            let index = section as usize;
+            near(state.workspace.layout_runtime.rects[index].size(), pictures[index].size());
+        }
+        assert_eq!(edits.load(std::sync::atomic::Ordering::Relaxed), 0, "{position:?}: an edit");
+    }
+}

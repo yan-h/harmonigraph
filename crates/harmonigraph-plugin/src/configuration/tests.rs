@@ -295,8 +295,8 @@ fn a_full_command_queue_keeps_accepted_state() {
     refused.params.insert(ParamKey::CameraDistance.id().into(), ParamValue::F32(20.0));
     assert!(!device.try_load(refused), "a restore needs a free slot");
     assert_eq!(
-        settings.take_notice().as_deref(),
-        Some(RESTORE_REFUSED),
+        settings.next_notice(),
+        Some(Notice::Restore(RESTORE_REFUSED.into())),
         "and says so in the Console"
     );
     let after = device.save();
@@ -427,7 +427,9 @@ fn a_field_that_does_not_parse_is_skipped_with_a_console_line() {
         (plugin.params.editor_state.size(), plugin.params.int(crate::Row::MapFifths))
     });
     assert_eq!((size, fifths), ((901, 702), 3), "the rest of the project");
-    let line = device.settings().take_notice().expect("a Console line");
+    let Some(Notice::Restore(line)) = device.settings().next_notice() else {
+        panic!("no restore line in the Console");
+    };
     assert!(line.starts_with("This project's saved lattice-maps could not be read"), "{line}");
 }
 
@@ -448,6 +450,64 @@ fn the_analysis_input_saves_as_its_index_and_reopens() {
     assert_eq!(input, harmonigraph_ui::params::AnalysisInput::Sidechain);
 }
 
+/// A restore line that reports a loss opens the Console in the open editor,
+/// as the editor door's own losses do (Yan, 2026-11-22, in
+/// `docs/intent/editor-shell.md`), and opening it is no edit the host is told
+/// of. A line about the host only appends, and both reach the scrollback.
+#[test]
+fn a_restore_that_reports_a_loss_opens_the_console() {
+    use harmonigraph_ui::testing;
+    let _scope = crate::test_scope::enter();
+    let device = hub();
+    let (settings, lock) = (device.settings(), device.editor_lock());
+    // Saved with Settings folded on a tab that is not the Console.
+    testing::fold_settings_on_tuning(&mut lock.lock().ui);
+    let mut state = device.wrapper().get_state_object();
+    // One id no row has, so the restore owes one line.
+    state.params.insert("a-retired-parameter".into(), ParamValue::F32(1.0));
+    device.load(state);
+    settings.notify(Notice::Host("a line about the host".into()));
+    let before = device.service();
+    // As an editor frame takes them: the lock installs the restore, then
+    // its Console lines arrive over it.
+    let mut shared = lock.lock();
+    assert!(testing::settings_folded(&shared.ui), "the fixture opens folded");
+    settings.deliver_notices(&mut shared.ui);
+    testing::end_frame(&mut shared.ui);
+    assert!(testing::console_revealed(&shared.ui), "the restore named a retired parameter");
+    let lines: Vec<_> = shared.ui.picture.runtime.console.lines().map(str::to_owned).collect();
+    drop(shared);
+    assert_eq!(
+        lines,
+        [
+            "This project saved parameters this build no longer has, which were not read: \
+             a-retired-parameter.",
+            "a line about the host",
+        ],
+    );
+    assert_eq!(device.service(), before, "the reveal is no edit");
+}
+
+/// A newer restore's look wins over the Console an older one's line owed: the
+/// line stays in the scrollback, and the layout is the newer restore's.
+#[test]
+fn a_newer_restore_keeps_an_older_ones_line_but_not_its_reveal() {
+    use harmonigraph_ui::testing;
+    let _scope = crate::test_scope::enter();
+    let device = hub();
+    let (settings, lock) = (device.settings(), device.editor_lock());
+    testing::fold_settings_on_tuning(&mut lock.lock().ui);
+    let clean = device.wrapper().get_state_object();
+    let mut lossy = clean.clone();
+    lossy.params.insert("a-retired-parameter".into(), ParamValue::F32(1.0));
+    device.load(lossy);
+    device.load(clean);
+    let mut shared = lock.lock();
+    settings.deliver_notices(&mut shared.ui);
+    assert!(testing::settings_folded(&shared.ui), "the newer restore's layout");
+    assert_eq!(shared.ui.picture.runtime.console.lines().count(), 1, "the older restore's line");
+}
+
 /// A project saved while the axes were host parameters (#1756) holds them
 /// there, beside musical settings without axes. It opens at fresh axes with
 /// one Console notice, keeps its links, and saves no tuning parameter back.
@@ -458,20 +518,21 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     let settings = device.settings();
     let mut state = device.wrapper().get_state_object();
     device.load(state.clone());
-    assert_eq!(settings.take_notice(), None, "a project saved since opens quietly");
+    assert_eq!(settings.next_notice(), None, "a project saved since opens quietly");
     state.params.insert("tuning-three".into(), ParamValue::F32(696.0));
     state.params.insert("tuning-tolerance".into(), ParamValue::F32(3.0));
     state.fields.insert(MUSICAL_SETTINGS.into(), r#"{"meantone":false,"marvel":true}"#.into());
     device.load(state);
     assert_eq!(
-        settings.take_notice().as_deref(),
-        Some(
+        settings.next_notice(),
+        Some(Notice::Restore(
             "This project saved parameters this build no longer has, which were not read: \
              tuning-three, tuning-tolerance."
-        )
+                .into()
+        ))
     );
-    assert_eq!(settings.take_notice().as_deref(), Some(LEGACY_AXES));
-    assert_eq!(settings.take_notice(), None, "the notice is given once");
+    assert_eq!(settings.next_notice(), Some(Notice::Restore(LEGACY_AXES.into())));
+    assert_eq!(settings.next_notice(), None, "the notice is given once");
     device.activate();
     device.run(0, vec![], None);
     let opened = shown(&device.settings());
@@ -616,7 +677,7 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
         if let Some(opened) = opened.get() {
             crate::editor::next_size(&state, opened, host.as_ref(), &lock);
         }
-        state.end_frame(own, None, || settings.changed());
+        state.end_frame(own, None, false, || settings.changed());
     };
     let resize = |grow: u32| {
         let (width, height) = state.size();
@@ -704,6 +765,36 @@ fn a_border_drag_stops_at_the_editors_limits_and_a_size_outside_them_is_refused(
     assert_eq!(state.size(), limits.min);
 }
 
+/// The window a Console reveal asks for, after a restore that reported a loss
+/// unfolded a folded Settings section, is the editor's own write: applying it
+/// marks the project modified no more than the reveal does (#1813). The same
+/// ask made as an edit, a fold click's, marks it once.
+#[test]
+fn a_reveals_window_marks_nothing_where_a_folds_marks_once() {
+    let _scope = crate::test_scope::enter();
+    let device = hub().with_retune();
+    device.host().grants_resize.store(true, Ordering::Relaxed);
+    let state = device.wrapper().test_inspect_plugin(|plugin| plugin.params.editor_state.clone());
+    let settings = device.settings();
+    let (host, lock) = (device.editor_host(), device.editor_lock());
+    state.set_docked(true);
+    let opened = state.open();
+    let frame = |ask: Option<(u32, u32)>, own: bool| {
+        crate::editor::next_size(&state, opened, host.as_ref(), &lock);
+        state.end_frame(None, ask, own, || settings.changed());
+    };
+    frame(None, false);
+    for own in [true, false] {
+        let marks = device.service();
+        let (width, height) = state.size();
+        frame(Some((width + 300, height)), own);
+        frame(None, false);
+        frame(None, false);
+        assert_eq!(state.size(), (width + 300, height), "the window took the ask");
+        assert_eq!(device.service(), marks + usize::from(!own), "own: {own}");
+    }
+}
+
 /// A restore while the editor is open (a preset, Bitwig's undo) resizes its
 /// window to the restored size at the next frame, through the host, and
 /// marks nothing (Yan, #1814); until then the editor keeps the size its
@@ -720,7 +811,7 @@ fn a_restore_while_the_editor_is_open_resizes_its_window_at_the_next_frame() {
     let opened = state.open();
     let frame = || {
         let laid_out = crate::editor::next_size(&state, opened, host.as_ref(), &lock);
-        state.end_frame(None, None, || settings.changed());
+        state.end_frame(None, None, false, || settings.changed());
         laid_out
     };
     frame();
