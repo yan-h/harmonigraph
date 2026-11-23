@@ -129,7 +129,7 @@ impl Renderer {
     /// Draw every later frame at `size`, as a window resized between frames
     /// would. The frames in flight are read first, being copies out of the
     /// target this replaces.
-    #[cfg(test)]
+    #[cfg(all(test, target_vendor = "apple"))]
     pub fn resize(&mut self, size: [u32; 2]) {
         while self.read(&mut Vec::new()).is_some() {}
         (self.target, self.view, self.readback, self.bytes_per_row) = targets(&self.device, size);
@@ -616,6 +616,7 @@ mod tests {
 
     /// Mono `samples` analyzed into `state`'s spectrum as one run, its newest
     /// frame heard at `now`.
+    #[cfg(target_vendor = "apple")]
     fn analyze(
         state: &mut PictureState,
         samples: &[f32],
@@ -632,6 +633,7 @@ mod tests {
 
     /// A sawtooth at MIDI `midi`, one second of it: every harmonic to Nyquist
     /// at amplitude 1/k, a sound with energy across the analyzer's axis.
+    #[cfg(target_vendor = "apple")]
     fn sawtooth(midi: f32, rate: f32) -> Vec<f32> {
         let f = harmonigraph_core::spectrum::midi_to_hz(midi);
         (0..rate as usize)
