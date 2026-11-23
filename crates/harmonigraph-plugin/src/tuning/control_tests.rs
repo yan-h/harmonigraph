@@ -178,12 +178,12 @@ fn instance_settings_restore_independently_and_default_missing_fields() {
     shared.request_delay(4);
     adapter.save(&mut state);
     let restored = setup::Shared::hub();
-    setup::Adapter(restored.clone()).restore(&state);
+    setup::Adapter(restored.clone()).parse(&state).install();
     assert_eq!(restored.retuning() & 1, 0);
     assert!(restored.show.load(Ordering::Acquire));
     assert_eq!(*restored.name.lock().unwrap(), "Reference");
     state.fields.insert("tuning-instance".to_owned(), r#"{"show":false}"#.to_owned());
-    adapter.restore(&state);
+    adapter.parse(&state).install();
     assert_eq!(shared.retuning() & 1, 1, "a missing field falls back to its default");
     assert!(!shared.show.load(Ordering::Acquire));
     assert!(shared.name.lock().unwrap().is_empty());
@@ -196,7 +196,7 @@ fn instance_settings_restore_independently_and_default_missing_fields() {
     // Only an instance with nothing saved at all starts by role.
     restored.set_retune(true);
     state.fields.clear();
-    setup::Adapter(restored.clone()).restore(&state);
+    setup::Adapter(restored.clone()).parse(&state).install();
     assert_eq!(restored.retuning() & 1, 0, "the Hub's own input starts with Retune off");
 }
 

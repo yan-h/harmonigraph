@@ -3,7 +3,7 @@
 use clap_sys::{events::*, ext::gui::*, plugin::clap_plugin, process::*};
 use harmonigraph_clap::prelude::*;
 use harmonigraph_clap::testing::{self, Audio, Call, Event, Host, Offer, Resize, Sink, header};
-use harmonigraph_clap::wrapper::clap::setup::{Serviced, Setup};
+use harmonigraph_clap::wrapper::clap::setup::{Parsed, Serviced, Setup};
 use std::{
     ffi::c_void,
     ptr,
@@ -78,12 +78,23 @@ impl Default for Fixture {
 /// The setup's one saved field: opaque to the shell, which only frames it.
 static FIELD: Mutex<String> = Mutex::new(String::new());
 
-struct FixtureSetup;
-impl Setup for FixtureSetup {
-    fn restore(&self, state: &PluginState) {
-        if let Some(field) = state.fields.get("field").cloned() {
+/// The axis value the setup's parse saw, with the field it read.
+static PARSED: Mutex<Option<(f32, Option<String>)>> = Mutex::new(None);
+
+struct FixtureSetup(Arc<Table>);
+struct FixtureParsed(Option<String>);
+impl Parsed for FixtureParsed {
+    fn install(self: Box<Self>) {
+        if let Some(field) = self.0 {
             *FIELD.lock().unwrap_or_else(|e| e.into_inner()) = field;
         }
+    }
+}
+impl Setup for FixtureSetup {
+    fn parse(&self, state: &PluginState) -> Box<dyn Parsed> {
+        let field = state.fields.get("field").cloned();
+        *PARSED.lock().unwrap_or_else(|e| e.into_inner()) = Some((self.0.float(0), field.clone()));
+        Box::new(FixtureParsed(field))
     }
     fn save(&self, state: &mut PluginState) {
         let field = FIELD.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -115,7 +126,7 @@ impl Plugin for Fixture {
         self.params.clone()
     }
     fn setup(&self) -> Option<Arc<dyn Setup>> {
-        Some(Arc::new(FixtureSetup))
+        Some(Arc::new(FixtureSetup(self.params.clone())))
     }
     fn editor_host(&mut self, host: Arc<dyn EditorHost>) {
         self.host = Some(host);
@@ -641,6 +652,20 @@ fn a_restore_drops_an_edit_the_host_was_not_told() {
     d.run(0, vec![], None);
     assert_eq!(d.told(), ["note"]);
     assert_eq!(d.value(), 0.5);
+}
+
+/// A load reads every saved field before it writes a parameter, so no
+/// callback meets restored parameters beside fields not yet read; it installs
+/// them after.
+#[test]
+fn a_load_reads_every_field_before_the_first_parameter_write() {
+    let _serial = serial();
+    let d = Device::new();
+    d.load(br#"{"version":"1","params":{"axis":{"f32":0.5}},"fields":{"field":"\"read\""}}"#);
+    let parsed = PARSED.lock().unwrap_or_else(|e| e.into_inner()).take();
+    assert_eq!(parsed, Some((0.0, Some("\"read\"".into()))), "read before the axis was");
+    assert_eq!(d.value(), 0.5);
+    assert_eq!(*FIELD.lock().unwrap_or_else(|e| e.into_inner()), "\"read\"", "installed");
 }
 
 /// The editor's open path, through `gui.set_parent`: a resize the editor

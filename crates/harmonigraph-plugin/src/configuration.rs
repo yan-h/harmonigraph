@@ -6,7 +6,7 @@
 use crate::shared::Shared;
 use harmonigraph_clap::plugin::PluginState;
 use harmonigraph_clap::prelude::*;
-use harmonigraph_clap::wrapper::clap::setup::{Serviced, Setup};
+use harmonigraph_clap::wrapper::clap::setup::{Parsed, Serviced, Setup};
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
 };
@@ -292,6 +292,21 @@ impl Settings {
     }
 }
 
+/// What [`HubSetup::parse`] read, installed in its order.
+struct HubParsed {
+    params: Arc<crate::HarmonigraphParams>,
+    fields: crate::saved_fields::Fields,
+    instance: crate::tuning::setup::Restore,
+    musical: Restore,
+}
+impl Parsed for HubParsed {
+    fn install(self: Box<Self>) {
+        self.fields.install(&self.params);
+        self.instance.install();
+        self.musical.install();
+    }
+}
+
 struct Restore {
     settings: Arc<Settings>,
     value: MusicalSettings,
@@ -323,16 +338,16 @@ impl Setup for HubSetup {
         self.instance.track_name_changed(name);
     }
     /// Nothing refuses: a field that does not parse costs that field alone.
-    /// Every field is read before any installs, so the Console lines come in
-    /// one order; the editor's fields install first, then the instance's and
-    /// the tuning.
-    fn restore(&self, state: &PluginState) {
+    /// Every field is read here, before the parameters are restored, so the
+    /// Console lines come in one order and no callback selects a Lattice Map
+    /// slot the incoming bank alone holds; the editor's fields install
+    /// first, then the instance's and the tuning.
+    fn parse(&self, state: &PluginState) -> Box<dyn Parsed> {
         let mut notes = Vec::new();
         let musical = self.params.settings.read_saved(state, &mut notes);
         let instance = self.instance.read(state, &mut notes);
-        crate::saved_fields::restore(&self.params, state, notes);
-        instance.install();
-        musical.install();
+        let fields = crate::saved_fields::read(&self.params, state, notes);
+        Box::new(HubParsed { params: self.params.clone(), fields, instance, musical })
     }
     fn save(&self, state: &mut PluginState) {
         crate::saved_fields::save(&self.params, state);

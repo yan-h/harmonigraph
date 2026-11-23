@@ -3,13 +3,13 @@
 //! The load a host makes, run on a fresh instance's parameters and settings
 //! with no plugin around them, and read back the way the plugin saves and
 //! draws it: the state decoded as a load decodes it, then the shell's one
-//! restore ([`setup::restore`]); the editor's settings installed from the
+//! load ([`setup::load`]); the editor's settings installed from the
 //! inbox as every holder of the editor lock installs them; and the host's
 //! camera laid over them, as each editor frame lays it. Nothing here parses
 //! a field itself, so a change to a saved shape reaches this reading with the
 //! restore it changes.
 //!
-//! [`setup::restore`]: harmonigraph_clap::wrapper::clap::setup::restore
+//! [`setup::load`]: harmonigraph_clap::wrapper::clap::setup::load
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -115,7 +115,7 @@ pub fn read(plugin: Plugin, json: &[u8]) -> Reading {
         Plugin::Harmonigraph => read_hub(&state, &mut reading),
         Plugin::Tune => {
             let tune = HarmonigraphTune::default();
-            restore(tune.setup().as_deref(), &tune.params(), &state, &mut reading);
+            load(tune.setup().as_deref(), &tune.params(), &state, &mut reading);
         }
     }
     reading
@@ -127,7 +127,7 @@ pub fn read(plugin: Plugin, json: &[u8]) -> Reading {
 fn read_hub(state: &PluginState, reading: &mut Reading) {
     let params = Arc::new(HarmonigraphParams::default());
     let setup = HubSetup { instance: Adapter(Shared::hub()), params: params.clone() };
-    restore(Some(&setup), &params.table, state, reading);
+    load(Some(&setup), &params.table, state, reading);
     // With no editor attached, the setup saves the document the restore
     // delivered rather than what the editor installs of it, which is the
     // look below.
@@ -159,10 +159,10 @@ fn read_hub(state: &PluginState, reading: &mut Reading) {
     });
 }
 
-/// Restore `state` through the shell's one restore, then read the
-/// parameters back and save the fields.
-fn restore(setup: Option<&dyn Setup>, table: &Table, state: &PluginState, reading: &mut Reading) {
-    setup::restore(setup, table, state);
+/// Load `state` through the shell's one load, then read the parameters back
+/// and save the fields.
+fn load(setup: Option<&dyn Setup>, table: &Table, state: &PluginState, reading: &mut Reading) {
+    setup::load(setup, table, state);
     reading.params = (0..table.len())
         .map(|row| {
             let spec = table.spec(row);
