@@ -460,17 +460,14 @@ fn strip_controls(
     p: &mut PolicyConfig,
 ) {
     use crate::lattice_maps::{MapAxis, MapOffsetLane};
-    let set = view.offsets.total().threes;
-    // A slide the switch has just turned off is cleared at the next attack.
-    let slid = if p.follow_spellings { view.strip_moved } else { 0 };
-    let flat = harmonigraph_core::policy::strip::flat_column(set + slid);
+    let Some(flat) = view.strip_flat(*p) else { return };
     let names: Vec<String> = (flat..flat + 4)
         .map(|column| {
             let name = harmonigraph_core::LatticePos::new(column, 0, 0).note_name();
             format!("{}{}", name.letter, name.accidental_mark())
         })
         .collect();
-    let moved = flat - harmonigraph_core::policy::strip::flat_column(set);
+    let moved = flat - harmonigraph_core::policy::strip::flat_column(view.offsets.total().threes);
     let moved = if moved == 0 { String::new() } else { format!(", moved {moved:+}") };
     crate::widgets::label(ui, format!("Strip {}{moved}", names.join(" ")));
     ui.columns(2, |halves| {
@@ -482,7 +479,9 @@ fn strip_controls(
         .on_hover_text(FOLLOW_SPELLINGS_HINT);
 }
 
-const FOLLOW_SPELLINGS_HINT: &str = "Slide the strip a fifth when a spelling just past the \
+const FOLLOW_SPELLINGS_HINT: &str = "Slide the strip a fifth at a chord whose fifth would \
+    otherwise be its wolf, when one slide makes all of the chord's fifths pure (D major over \
+    F C G D; never a pentatonic set). Also slide when a spelling just past the \
     key's seven has replaced the one at its other edge, as F♯ replacing F does, and back toward \
     the Position once that spelling has fallen out of use. A slide waits while a note it would \
     retune is held, and every context reset returns the strip to the Position. Off, the strip \

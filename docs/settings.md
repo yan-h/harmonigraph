@@ -340,9 +340,10 @@ Each engine's controls follow in a section of their own.
 Adaptive tuning's **Keyboard** and **Context** are blocks,
 open like the rest of the section.
 With Decode fifths on, a **Strip** block comes first: the strip's four columns, how far following has moved it, the Position fifths' Fine and Coarse bars that set it (the same lanes the Lattice Map section's Position shows) and **Follow spellings**.
-Follow spellings, on by default, slides the strip a fifth at a time after the spellings in use, as F♯ replacing F does, and back toward the Position once they fade;
+Follow spellings, on by default, slides the strip a fifth at a time after the spellings in use: at once for a chord whose fifths one slide makes pure, or as F♯ replacing F does in a melody, and back toward the Position once they fade;
 off, the strip stays where the Position puts it, so a piece plays the same from any bar.
-The search's rows below it, Keyboard and Weight per octave among them, are greyed there.
+The search's rows below it, Keyboard and Weight per octave among them, are greyed there,
+and the lattice draws Lattice Map's map marks on the strip's four columns.
 The **Lattice Map** section starts with the saved map's number, its name field and a menu of rarer actions,
 then **Show map dots**, **Edit shape on lattice**, **Undo shape edit** and **Duplicate as new map**,
 then the **Position** offsets, one row per axis holding its Fine and Coarse bars side by side with the totals beneath, and **Follow harmony**.
