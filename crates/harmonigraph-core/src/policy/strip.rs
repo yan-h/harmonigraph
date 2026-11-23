@@ -219,7 +219,8 @@ mod tests {
 
     /// D struck over a held F major moves the key flat, so D–A is pure; D
     /// over a held A alone waits, as either side clears it, and F♯ then
-    /// moves it sharp. F then A♭, a pure minor third where it stands, a
+    /// moves it sharp. F then A♭, a pure minor third where it stands, C
+    /// minor then B, a
     /// pentatonic set, whose wolf no side clears, and C major's notes never
     /// move it.
     #[test]
@@ -236,6 +237,11 @@ mod tests {
         follower.attack(&[-1], &[], 0);
         follower.attack(&[-4], &[-1], 0);
         assert_eq!(follower.key(), 0, "F then A♭, a pure minor third already");
+        follower.attack(&[0], &[], 0);
+        follower.attack(&[-3], &[0], 0);
+        follower.attack(&[1], &[0, -3], 0);
+        follower.attack(&[5], &[0, -3, 1], 0);
+        assert_eq!(follower.key(), 0, "C E♭ G, then B");
         for k in [0, 2, 4, 1, 3] {
             follower.attack(&[k], &[0, 2, 4, 1, 3], 0);
         }
