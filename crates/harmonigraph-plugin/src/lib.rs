@@ -1329,15 +1329,13 @@ mod tests {
         state.picture.appearance.camera.yaw
     }
 
-    /// A host restore of `blob`: through `saved_fields`' prepare and commit,
-    /// which is what a host's state load calls, so it reaches
-    /// `UiState::restore` the way a project or preset load does.
+    /// A host restore of `blob`: through `saved_fields`' read and install,
+    /// which a host's state load calls, so it reaches `UiState::restore` the
+    /// way a project or preset load does.
     fn restore(plugin: &Harmonigraph, blob: &str) {
-        use harmonigraph_clap::wrapper::clap::setup::Prepared;
-
         let mut state = empty_state();
         state.fields.insert("ui-state".into(), serde_json::to_string(blob).unwrap());
-        Box::new(saved_fields::prepare(&plugin.params, &state, Vec::new())).commit();
+        saved_fields::read(&plugin.params, &state, Vec::new()).install(&plugin.params);
     }
 
     /// A host restore of a project whose camera yaw is `yaw`, and its blob.

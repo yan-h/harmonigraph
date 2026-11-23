@@ -40,7 +40,7 @@ Each change's reason is a comment at the code it explains; this is the map.
   - `Output::push(value, time)` calls `try_push` and returns the host's answer; keeping the list sorted is the plugin's contract, checked by a `debug_assert`.
   - A flush applies its values to the table at once, and an editor edit writes the table at once; each row remembers the gesture and value the host has not been told, which the shell reports at offset 0 at the next callback or flush, stopping at the first refusal.
   - The main thread is reached by one deferred host callback request, and serves four flags: the setup's service, a latency change, the transport line, and the line for a restart of the host's steady counter.
-  - A prepared `Setup` owns every saved field: it validates before the parameters restore, and commits after; the plugin adopts what it commits at its next callback.
+  - A `Setup` owns every saved field: it parses every one before the parameters are restored and installs them after, and nothing in them refuses a load; the plugin's audio adopts what it installs at its next callback.
     Its `service` reports what it changed as `Serviced`: a modified project is marked dirty, and changed parameter values or text are rescanned, each only when reported.
   - Main-thread lifecycle calls (`init`, `activate`, `deactivate`, `inactive`, `destroy`) keep registry locking and endpoint reclamation outside audio callbacks.
   - The seams also expose the parameter hash (`wrapper::hash_param_id`), serialize the setup's saved fields beside the parameters, and give tests `Wrapper::test_inspect_plugin`.

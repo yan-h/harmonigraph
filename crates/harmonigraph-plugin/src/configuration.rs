@@ -6,7 +6,7 @@
 use crate::shared::Shared;
 use harmonigraph_clap::plugin::PluginState;
 use harmonigraph_clap::prelude::*;
-use harmonigraph_clap::wrapper::clap::setup::{Prepared, Serviced, Setup};
+use harmonigraph_clap::wrapper::clap::setup::{Parsed, Serviced, Setup};
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
 };
@@ -276,7 +276,7 @@ impl Settings {
     /// Settings that do not parse open at the defaults a save that lacks them
     /// opens at, with a Console line pushed onto `notes`, and the rest of the
     /// restore goes ahead (#1927).
-    fn prepare(self: &Arc<Self>, state: &PluginState, notes: &mut Vec<String>) -> Restore {
+    fn read_saved(self: &Arc<Self>, state: &PluginState, notes: &mut Vec<String>) -> Restore {
         let value: MusicalSettings = crate::saved_fields::parse(
             state,
             MUSICAL_SETTINGS,
@@ -292,15 +292,30 @@ impl Settings {
     }
 }
 
+/// What [`HubSetup::parse`] read, installed in its order.
+struct HubParsed {
+    params: Arc<crate::HarmonigraphParams>,
+    fields: crate::saved_fields::Fields,
+    instance: crate::tuning::setup::Restore,
+    musical: Restore,
+}
+impl Parsed for HubParsed {
+    fn install(self: Box<Self>) {
+        self.fields.install(&self.params);
+        self.instance.install();
+        self.musical.install();
+    }
+}
+
 struct Restore {
     settings: Arc<Settings>,
     value: MusicalSettings,
     legacy: bool,
 }
-impl Prepared for Restore {
+impl Restore {
     /// The document takes the saved value whole, without marking the project
     /// modified: it holds what the host just gave.
-    fn commit(self: Box<Self>) {
+    fn install(self) {
         let settings = &self.settings;
         settings.write(|reducer| reducer.apply(self.value.mutation()));
         if self.legacy {
@@ -318,28 +333,21 @@ pub(crate) struct HubSetup {
     pub instance: crate::tuning::setup::Adapter,
     pub params: Arc<crate::HarmonigraphParams>,
 }
-/// Prepared restores, committed in order.
-struct All([Box<dyn Prepared>; 3]);
-impl Prepared for All {
-    fn commit(self: Box<Self>) {
-        for prepared in self.0 {
-            prepared.commit();
-        }
-    }
-}
 impl Setup for HubSetup {
     fn track_name_changed(&self, name: Option<&str>) {
         self.instance.track_name_changed(name);
     }
     /// Nothing refuses: a field that does not parse costs that field alone.
-    /// The editor's fields are installed first, as nice-plug's derive did
-    /// before the tuning committed.
-    fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
+    /// Every field is read here, before the parameters are restored, so the
+    /// Console lines come in one order and no callback selects a Lattice Map
+    /// slot the incoming bank alone holds; the editor's fields install
+    /// first, then the instance's and the tuning.
+    fn parse(&self, state: &PluginState) -> Box<dyn Parsed> {
         let mut notes = Vec::new();
-        let musical = self.params.settings.prepare(state, &mut notes);
+        let musical = self.params.settings.read_saved(state, &mut notes);
         let instance = self.instance.read(state, &mut notes);
-        let fields = crate::saved_fields::prepare(&self.params, state, notes);
-        Ok(Box::new(All([Box::new(fields), Box::new(instance), Box::new(musical)])))
+        let fields = crate::saved_fields::read(&self.params, state, notes);
+        Box::new(HubParsed { params: self.params.clone(), fields, instance, musical })
     }
     fn save(&self, state: &mut PluginState) {
         crate::saved_fields::save(&self.params, state);

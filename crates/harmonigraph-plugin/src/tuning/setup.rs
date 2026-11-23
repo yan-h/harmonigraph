@@ -1,7 +1,7 @@
 //! Instance settings and diagnostics. Saved participation and visibility are
 //! independent; pairing remains automatic and has no persisted identity.
 use harmonigraph_clap::plugin::PluginState;
-use harmonigraph_clap::wrapper::clap::setup::{Prepared, Serviced, Setup};
+use harmonigraph_clap::wrapper::clap::setup::{Parsed, Serviced, Setup};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -247,11 +247,16 @@ impl Default for InstanceSettings {
     }
 }
 pub(crate) struct Restore(Arc<Shared>, InstanceSettings);
-impl Prepared for Restore {
+impl Parsed for Restore {
+    fn install(self: Box<Self>) {
+        (*self).install();
+    }
+}
+impl Restore {
     /// What the project holds, stored without the edit setters' `changed()`:
     /// opening a project is not a change to it.
-    fn commit(self: Box<Self>) {
-        let Self(shared, settings) = *self;
+    pub(crate) fn install(self) {
+        let Self(shared, settings) = self;
         shared.store_retune(settings.retune);
         shared.show.store(settings.show, Ordering::Release);
         shared.store_name(settings.name);
@@ -290,8 +295,8 @@ impl Setup for Adapter {
     fn track_name_changed(&self, name: Option<&str>) {
         *self.0.track_name.lock().unwrap() = name.unwrap_or_default().to_owned();
     }
-    fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
-        Ok(Box::new(self.read(state, &mut Vec::new())))
+    fn parse(&self, state: &PluginState) -> Box<dyn Parsed> {
+        Box::new(self.read(state, &mut Vec::new()))
     }
     fn save(&self, state: &mut PluginState) {
         let settings = InstanceSettings {

@@ -54,8 +54,9 @@ pub trait Plugin: Default + Send + 'static {
 
     /// The host parameters. Queried once, after creation.
     fn params(&self) -> Arc<Table>;
-    /// Plugin-owned saved settings, prepared before and committed after a
-    /// restore. Queried once, after creation, and used independently of the
+    /// Plugin-owned saved settings: at a load, [`Setup::parse`] reads them
+    /// before the parameters are restored, and what it returns installs
+    /// after. Queried once, after creation, and used independently of the
     /// plugin's lock.
     fn setup(&self) -> Option<Arc<dyn Setup>> {
         None
