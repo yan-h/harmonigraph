@@ -782,271 +782,125 @@ fn the_strip_sounds_each_spelling_at_one_pitch_through_a_progression() {
     assert_eq!(d, i64::from(2 * Tuning::just().three) - 1_200_000_000 - 200_000_000, "9/8");
 }
 
-/// With Follow spellings on, F♯ struck three times over a strip whose F is
-/// out of use slides the strip a fifth, so A is then 27/16; a reset of the
-/// context returns it to the Position, and with the switch off it never
-/// moves.
-#[test]
-fn follow_spellings_slides_the_strip_until_the_context_resets() {
-    let _scope = crate::test_scope::enter();
-    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
-    let (five_three, pythagorean) = (LatticePos::new(-1, 1, 0), LatticePos::new(3, 0, 0));
-    let mut id = 0;
-    let mut a = |session: &mut Decoding| {
-        // F♯ in as many octaves as a slide takes strikes, on one sample.
-        let strikes = harmonigraph_core::policy::strip::SLIDE_STRIKES.ceil() as i16;
-        for on in [true, false] {
-            let chord =
-                (0..strikes).map(|i| 90 - 12 * i).map(|key| note(id + key as i32, 0, key, 0, on));
-            session.play(chord.collect(), vec![]);
+impl Decoding {
+    /// Follow spellings on with `edit` on top, as a fresh policy.
+    fn policy(&self, edit: impl FnOnce(&mut harmonigraph_core::configuration::PolicyConfig)) {
+        let mut policy = harmonigraph_core::configuration::PolicyConfig {
+            decode_fifths: true,
+            decoded_fifth: 696_578_428,
+            ..Default::default()
+        };
+        edit(&mut policy);
+        settings(&self.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
+    }
+    /// `events` to both Tunes and the Hub, one callback.
+    fn everywhere(&mut self, events: impl Fn() -> Vec<Input>) {
+        let raw = self.raw;
+        for device in [&self.decoded, &self.plain, &self.hub] {
+            device.run_format(raw, events(), None, None, 128);
         }
-        session.play(vec![note(id + 1, 0, 69, 0, true)], vec![]);
-        let node = session.voice(true, 0, 69).attack_node;
-        session.play(vec![note(id + 1, 0, 69, 0, false)], vec![]);
-        id += 100;
+        self.raw += 128;
+    }
+    /// The node a lone A struck now and let go sounds at.
+    fn a(&mut self) -> Option<LatticePos> {
+        self.play(vec![note(1, 0, 69, 0, true)], vec![]);
+        let node = self.voice(true, 0, 69).attack_node;
+        self.play(vec![note(1, 0, 69, 0, false)], vec![]);
         node
-    };
-    assert_eq!(a(&mut session), Some(pythagorean), "slid to C G D A");
-    // Off and back to Adaptive starts the context over.
-    let raw = session.raw;
-    session.hub.run_format(raw, vec![parameter("tuning-engine", 0.0, 0)], None, None, 128);
-    session.hub.run_format(raw + 128, vec![parameter("tuning-engine", 1.0, 0)], None, None, 128);
-    session.raw += 256;
-    session.play(vec![note(1, 0, 69, 0, true)], vec![]);
-    assert_eq!(session.voice(true, 0, 69).attack_node, Some(five_three), "back at the Position");
-    session.play(vec![note(1, 0, 69, 0, false)], vec![]);
-    let policy = harmonigraph_core::configuration::PolicyConfig {
-        follow_spellings: false,
-        decode_fifths: true,
-        decoded_fifth: 696_578_428,
-        ..Default::default()
-    };
-    settings(&session.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
-    assert_eq!(a(&mut session), Some(five_three), "the strip stays where the Position put it");
-}
-
-/// Modulating by a fifth with triads alone, I–IV–V–I in each key, C → G → C
-/// and C → F → C. Each chord on one sample: no chord sounds a wolf fifth, the
-/// strip slides at the first D major, or B♭ major, toward the new key, and
-/// C major's four chords sound the same nodes at the end as at the start.
-/// Rolled by hand, root first or fifth first, a chord whose held notes pin
-/// the slide may keep its wolf, but C keeps 1/1 in every chord: no slide
-/// goes away from the wolf.
-#[test]
-fn triads_modulating_by_fifths_slide_the_strip_and_come_home() {
-    let _scope = crate::test_scope::enter();
-    let [c, f, g, d, b_flat]: [[i16; 3]; 5] =
-        [[60, 64, 67], [65, 69, 72], [67, 71, 74], [62, 66, 69], [58, 62, 65]];
-    let up = [c, f, g, c, g, c, d, g, c, f, g, c];
-    let down = [c, f, g, c, f, b_flat, c, f, c, f, g, c];
-    // The chord that slides the strip, and the node that shows which way:
-    // D major's A at 27/16, a fifth sharp, or B♭ major's B♭ at 16/9, a fifth
-    // flat.
-    let a = (d, 69, LatticePos::new(3, 0, 0));
-    let flat = (b_flat, 58, LatticePos::new(-2, 0, 0));
-    let cases = [("up to G", up, a), ("down to F", down, flat)];
-    // Each chord on one sample, then rolled as a hand strikes it, a callback
-    // (2.7 ms) between notes, each held: root first, and fifth first.
-    let rolls = [None, Some([0, 1, 2]), Some([2, 0, 1])];
-    for ((name, progression, turn), rolled) in
-        cases.into_iter().flat_map(|case| rolls.map(|roll| (case, roll)))
-    {
-        let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
-        let mut nodes = Vec::new();
-        for (index, chord) in progression.into_iter().enumerate() {
-            let at = format!("{name}, rolled {rolled:?}, chord {index}");
-            let id = 3 * index as i32;
-            let play = |on| (0..3).map(|i| note(id + i, 0, chord[i as usize], 0, on)).collect();
-            match rolled {
-                Some(order) => {
-                    for i in order {
-                        session.play(vec![note(id + i, 0, chord[i as usize], 0, true)], vec![]);
-                    }
-                }
-                None => {
-                    session.play(play(true), vec![]);
-                }
-            }
-            let spelled: Vec<(i32, LatticePos)> = chord
-                .iter()
-                .map(|&key| {
-                    let node = session.voice(true, 0, key as u8).attack_node.unwrap();
-                    (harmonigraph_core::tuning::fifths_for_midi(0, key as u8), node)
-                })
-                .collect();
-            if rolled.is_none() {
-                for &(k, low) in &spelled {
-                    if let Some(&(_, high)) = spelled.iter().find(|&&(other, _)| other == k + 1) {
-                        assert_eq!(high - low, LatticePos::new(1, 0, 0), "{at}: {spelled:?}");
-                    }
-                }
-                if chord == turn.0 {
-                    let node = session.voice(true, 0, turn.1).attack_node;
-                    assert_eq!(node, Some(turn.2), "{at}: toward the new key");
-                }
-            }
-            if let Some(&(_, node)) = spelled.iter().find(|&&(k, _)| k == 0) {
-                assert_eq!(node, LatticePos::ORIGIN, "{at}: C keeps 1/1");
-            }
-            nodes.push(spelled);
-            session.play(play(false), vec![]);
-        }
-        // The last key's four chords, F's A and G's D among them, sound the
-        // first key's nodes: the strip came home. Rolled, a pinned IV can
-        // keep the strip a fifth out until the count rule's return, seconds
-        // on, past this fixture's milliseconds.
-        if rolled.is_none() {
-            assert_eq!(nodes[..4], nodes[8..], "{name}: home again");
-        }
     }
 }
 
+/// F♯ in as many octaves as the count rule takes strikes, on one sample, on
+/// or off.
+fn f_sharps(on: bool) -> Vec<Input> {
+    let strikes = harmonigraph_core::policy::strip::SLIDE_STRIKES.ceil() as i16;
+    (0..strikes).map(|i| 90 - 12 * i).map(|key| note(key.into(), 0, key, 0, on)).collect()
+}
+
+const FIVE_THREE: LatticePos = LatticePos::new(-1, 1, 0);
+const PYTHAGOREAN_A: LatticePos = LatticePos::new(3, 0, 0);
+
+/// F♯s move the key, so A is then 27/16, and every reset of the context
+/// returns the strip to the Position, so A is 5/3 again: a change of
+/// engine, Reset all voices, a transport Stop, a loop or seek, and silence.
+/// With Follow spellings off the strip never moves.
+#[test]
+fn every_reset_returns_the_followed_strip_to_the_position() {
+    let _scope = crate::test_scope::enter();
+    type Reset = fn(&mut Decoding);
+    let resets: [(&str, Reset); 5] = [
+        ("engine", |session| {
+            session.everywhere(|| vec![parameter("tuning-engine", 0.0, 0)]);
+            session.everywhere(|| vec![parameter("tuning-engine", 1.0, 0)]);
+        }),
+        ("Reset all voices", |session| {
+            crate::tuning::session::session().request_reset();
+            session.everywhere(Vec::new);
+        }),
+        ("Stop", |session| {
+            session.everywhere(|| vec![transport(0, 120.0)]);
+            session.everywhere(|| vec![musical_tests::at(0.0, false)]);
+        }),
+        ("loop", |session| {
+            for seconds in [5.0, 5.0, 1.0] {
+                session.everywhere(|| vec![musical_tests::at(seconds, false)]);
+            }
+        }),
+        ("silence", |session| (0..8).for_each(|_| session.everywhere(Vec::new))),
+    ];
+    for (name, reset) in resets {
+        let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+        session.policy(|policy| {
+            (policy.reset_stop, policy.reset_loop, policy.silence_ms) = (true, true, 10);
+        });
+        for on in [true, false] {
+            session.play(f_sharps(on), vec![]);
+        }
+        // Struck at once after the F♯s, before silence's 10 ms.
+        assert_eq!(session.a(), Some(PYTHAGOREAN_A), "{name}: moved to C G D A");
+        reset(&mut session);
+        assert_eq!(session.a(), Some(FIVE_THREE), "{name}: back at the Position");
+    }
+    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    session.policy(|policy| policy.follow_spellings = false);
+    for on in [true, false] {
+        session.play(f_sharps(on), vec![]);
+    }
+    assert_eq!(session.a(), Some(FIVE_THREE), "the strip stays where the Position put it");
+}
+
 /// A held A struck again inside D major, with no note-off between, is taken
-/// over rather than held: the old A leaves the context before the group is
-/// decided, so it pins nothing, and D major slides and sounds pure.
+/// over rather than held: the old A pins nothing, so D major moves the key
+/// and sounds pure.
 #[test]
 fn a_retriggered_note_does_not_pin_its_chord_s_slide() {
     let _scope = crate::test_scope::enter();
     let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
     session.play(vec![note(1, 0, 69, 0, true)], vec![]);
-    assert_eq!(session.voice(true, 0, 69).attack_node, Some(LatticePos::new(-1, 1, 0)));
+    assert_eq!(session.voice(true, 0, 69).attack_node, Some(FIVE_THREE));
     let d_major = [62, 66, 69].map(|key| note(10 + i32::from(key), 0, key, 0, true));
     session.play(d_major.into(), vec![]);
     let [d, a] = [62, 69].map(|key| session.voice(true, 0, key).attack_node.unwrap());
     assert_eq!(a - d, LatticePos::new(1, 0, 0), "D–A pure: {d:?} {a:?}");
 }
 
-/// With Reset on loop on, the first attack group after a seek is counted
-/// after the reset rather than wiped with what came before it: F♯ in as many
-/// octaves as a slide takes strikes, struck first after the seek, moves the
-/// key, so the A after it is 27/16.
+/// A loop's last release and its first strike on one sample, with Reset on
+/// loop on: the strike's group is counted after the reset, so its F♯s move
+/// the key, and the release on that sample does not refill the memory the
+/// reset cleared.
 #[test]
-fn reset_on_loop_counts_the_first_group_after_the_seek() {
+fn a_loop_resets_after_its_last_release_and_before_its_first_strike() {
     let _scope = crate::test_scope::enter();
     let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
-    let policy = harmonigraph_core::configuration::PolicyConfig {
-        decode_fifths: true,
-        decoded_fifth: 696_578_428,
-        reset_loop: true,
-        ..Default::default()
-    };
-    settings(&session.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
-    // Parked at 5 s, then at 1 s: a seek.
+    session.policy(|policy| policy.reset_loop = true);
+    session.play(vec![note(1, 0, 54, 0, true)], vec![]);
     for seconds in [5.0, 5.0, 1.0] {
-        let raw = session.raw;
-        let event = || musical_tests::at(seconds, false);
-        for tune in [&session.decoded, &session.plain] {
-            tune.run_format(raw, vec![event()], None, None, 128);
-        }
-        session.hub.run_format(raw, vec![event()], None, None, 128);
-        session.raw += 128;
+        session.everywhere(|| vec![musical_tests::at(seconds, false)]);
     }
-    let strikes = harmonigraph_core::policy::strip::SLIDE_STRIKES.ceil() as i16;
-    for on in [true, false] {
-        let chord = (0..strikes).map(|i| 90 - 12 * i).map(|key| note(key as i32, 0, key, 0, on));
-        session.play(chord.collect(), vec![]);
-    }
-    session.play(vec![note(1, 0, 69, 0, true)], vec![]);
-    assert_eq!(session.voice(true, 0, 69).attack_node, Some(LatticePos::new(3, 0, 0)), "C G D A");
-}
-
-/// A seek later in the callback than an attack group leaves that group's
-/// history alone: F♯ struck before the seek still clears with it, so the A
-/// after lands in C's strip, F C G D, not G's.
-#[test]
-fn reset_on_loop_waits_for_a_group_at_or_after_the_seek() {
-    let _scope = crate::test_scope::enter();
-    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
-    let policy = harmonigraph_core::configuration::PolicyConfig {
-        decode_fifths: true,
-        decoded_fifth: 696_578_428,
-        reset_loop: true,
-        ..Default::default()
-    };
-    settings(&session.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
-    let at = |seconds, time| {
-        let Input::Transport(mut value) = musical_tests::at(seconds, false) else { unreachable!() };
-        value.header.time = time;
-        Input::Transport(value)
-    };
-    for seconds in [5.0, 5.0] {
-        session.hub.run_format(session.raw, vec![at(seconds, 0)], None, None, 128);
-        session.raw += 128;
-    }
-    // F♯ at the callback's start, the seek to 1 s half a callback later.
-    let strikes = harmonigraph_core::policy::strip::SLIDE_STRIKES.ceil() as i16;
-    let chord =
-        |on| (0..strikes).map(move |i| 90 - 12 * i).map(move |key| note(key as i32, 0, key, 0, on));
-    let raw = session.raw;
-    session.decoded.run_format(raw, chord(true).collect(), None, None, 128);
-    session.plain.run_format(raw, vec![], None, None, 128);
-    session.hub.run_format(raw, vec![at(1.0, 64)], None, None, 128);
-    session.raw += 128;
-    session.play(chord(false).collect(), vec![]);
-    session.play(vec![note(1, 0, 69, 0, true)], vec![]);
-    assert_eq!(session.voice(true, 0, 69).attack_node, Some(LatticePos::new(-1, 1, 0)), "F C G D");
-}
-
-/// A loop reset waits for an attack the Hub retunes: one from a Tune with
-/// Retune off neither reads the history nor clears it, so D replayed after a
-/// seek starts over on the automated map rather than at the 10/9 D held
-/// across the seek.
-#[test]
-fn reset_on_loop_waits_for_a_retuned_attack() {
-    let _scope = crate::test_scope::enter();
-    let mut hub = hub().with_adaptive();
-    hub.activate();
-    install(&hub);
-    let mut plain = tune();
-    plain.shared().set_retune(false);
-    plain.activate();
-    let policy =
-        harmonigraph_core::configuration::PolicyConfig { reset_loop: true, ..Default::default() };
-    settings(&hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
-    let map = LatticeMap::default();
-    let node = |hub: &Device, key| voice(hub, crate::tuning::DIRECT, key).attack_node;
-    let on = |id, key| note(id, 0, key, 0, true);
-    let off = |id, key| note(id, 0, key, 0, false);
-    plain.run(0, vec![], None);
-    hub.run(0, vec![parameter("tuning-engine", 2.0, 0), parameter("map-follow", 2.0, 0)], None);
-    hub.run(512, vec![on(1, 62), on(2, 65), on(3, 69)], None);
-    let down = LatticeMap { position: LatticePos::new(-1, 0, 0), ..map };
-    assert_eq!(node(&hub, 62), Some(down.node(62)), "D at 10/9");
-    hub.run(1024, vec![off(2, 65), off(3, 69), musical_tests::at(5.0, false)], None);
-    hub.run(1536, vec![musical_tests::at(5.0, false)], None);
-    hub.run(2048, vec![musical_tests::at(1.0, false)], None);
-    plain.run(2560, vec![on(4, 60)], None);
-    hub.run(2560, vec![], None);
-    hub.run(3072, vec![off(1, 62)], None);
-    hub.run(3584, vec![on(5, 62)], None);
-    assert_eq!(node(&hub, 62), Some(map.node(62)), "D starts over at 9/8");
-}
-
-/// A loop reset clears what the loop's last chord leaves on the very sample
-/// the first chord strikes: D–F–A ends as D is struck again after a seek, and
-/// D starts over on the automated map rather than at that chord's 10/9.
-#[test]
-fn reset_on_loop_clears_releases_on_the_sample_it_applies_at() {
-    let _scope = crate::test_scope::enter();
-    let mut hub = hub().with_adaptive();
-    hub.activate();
-    install(&hub);
-    let policy =
-        harmonigraph_core::configuration::PolicyConfig { reset_loop: true, ..Default::default() };
-    settings(&hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
-    let map = LatticeMap::default();
-    let node = |hub: &Device, key| voice(hub, crate::tuning::DIRECT, key).attack_node;
-    let on = |id, key| note(id, 0, key, 0, true);
-    let off = |id, key| note(id, 0, key, 0, false);
-    hub.run(0, vec![parameter("tuning-engine", 2.0, 0), parameter("map-follow", 2.0, 0)], None);
-    hub.run(512, vec![on(1, 62), on(2, 65), on(3, 69), musical_tests::at(5.0, false)], None);
-    let down = LatticeMap { position: LatticePos::new(-1, 0, 0), ..map };
-    assert_eq!(node(&hub, 62), Some(down.node(62)), "D at 10/9");
-    hub.run(1024, vec![musical_tests::at(5.0, false)], None);
-    hub.run(
-        1536,
-        vec![musical_tests::at(1.0, false), off(1, 62), off(2, 65), off(3, 69), on(4, 62)],
-        None,
-    );
-    assert_eq!(node(&hub, 62), Some(map.node(62)), "D starts over at 9/8");
+    let mut wrap = f_sharps(true);
+    wrap.insert(0, note(1, 0, 54, 0, false));
+    session.play(wrap, vec![]);
+    assert_eq!(inspect_hub(&session.hub, |hub| hub.test_memory()), 0, "the release is gone");
+    session.play(f_sharps(false), vec![]);
+    assert_eq!(session.a(), Some(PYTHAGOREAN_A), "the strike moved the key");
 }

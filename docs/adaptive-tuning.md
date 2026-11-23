@@ -48,20 +48,18 @@ and the comma Adaptive's search used to guess chord by chord is fixed by where t
 Lattice Map's Position fifths place the strip, under Adaptive as under Lattice Map:
 at 0 its columns are F C G D, the default map's,
 and automating the lane is how a piece changes key.
-With **Follow spellings** on, the default, the strip also follows the music, in two parts.
-Its key moves a fifth at a time for single notes and melodies,
-once a spelling just past the key's seven has replaced the one at its other edge (three F♯s close together, or about four spread out, with F out of use),
-and back toward the Position when that spelling fades.
-A chord holding a spelling outside the key's seven, such as F♯ or B♭ in C, may stand a fifth either way from the key, chosen so its fifths sound pure:
-D major from C struck together slides sharp and sounds pure from its first stroke,
-B♭ major from C slides flat, and after F major keeps its F,
-and A major in G slides sharp.
-A chord whose spellings all lie inside the key's seven takes the key's own strip and its wolf (Yan, #1941):
-a pentatonic or sus voicing never moves it, at the Position or at a followed key, so no note of a vamp pumps between two commas,
+With **Follow spellings** on, the default, the strip also follows the music by moving its key, a fifth at a time.
+The key's seven spellings run from the strip's flat column (F to B at Position 0); any other spelling is foreign.
+A chord, two spellings or more struck together, holding a foreign spelling moves the key a fifth toward it before any of its notes is tuned:
+D major from C sounds pure from its first stroke, as do B♭ major from C and A major from G.
+The key stays there until the old key's spellings bring it back: after a D major in C, an F, or a chord holding one, moves it home.
+A chord with foreign spellings on both sides moves nothing.
+A single note goes through the count rule alone, so a passing tone moves nothing:
+the key moves once a spelling just past its seven has replaced the one at the other edge (three F♯s close together, or about four spread out, with F out of use),
+and back toward the Position once that spelling fades.
+A chord inside the key's seven never moves it, so a pentatonic or sus voicing keeps the key's wolf and every note of a vamp keeps its pitch,
 and a diatonic ii keeps its D–A wolf.
-Because the strip never stands more than a fifth from the key, no run of chords walks it away.
-A held note always keeps the node it sounds at, after a Position lane move too,
-so a chord rolled by hand, decided note by note, keeps its wolf where its first notes pin the strip it needs.
+No move changes the column of a held note, so a chord rolled by hand, struck one note at a time, keeps its wolf.
 Every context reset returns the strip to the Position.
 Every fourth fifth along the chain, the one leaving the strip's sharp edge, is a comma narrow (D–A at Position 0).
 The search, with its Keyboard block, Pitch flexibility, radius, axes and register, applies only with Decode fifths off,

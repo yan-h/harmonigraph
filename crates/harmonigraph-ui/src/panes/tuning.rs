@@ -493,14 +493,13 @@ fn strip_controls(
     reset_controls(ui, p, fresh);
 }
 
-const FOLLOW_SPELLINGS_HINT: &str = "Slide the strip a fifth at a chord whose fifth would \
-    otherwise be its wolf, when the chord holds a spelling outside the key's seven and one \
-    slide makes all its fifths pure (D major over F C G D; never a pentatonic or sus voicing, nor a \
-    diatonic ii). Also slide when a spelling just past the \
-    key's seven has replaced the one at its other edge, as F♯ replacing F does, and back toward \
-    the Position once that spelling has fallen out of use. A slide waits while a note it would \
-    retune is held, and every context reset returns the strip to the Position. Off, the strip \
-    stays where the Position fifths put it, so a piece plays the same from any bar.";
+const FOLLOW_SPELLINGS_HINT: &str = "Move the strip's key a fifth toward a spelling outside \
+    its seven when a chord holds one, so D major from C sounds pure at once; it stays there until \
+    the old key's spellings bring it back. A single note moves it only once a spelling just past \
+    the key's seven has replaced the one at its other edge, as F♯ replacing F does, and back toward \
+    the Position once that spelling has fallen out of use. No move retunes a held note, and every \
+    context reset returns the strip to the Position. Off, the strip stays where the Position \
+    fifths put it, so a piece plays the same from any bar.";
 
 /// The search's own rows: Adaptive with Decode fifths off.
 fn search_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfig) {

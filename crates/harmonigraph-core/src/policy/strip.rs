@@ -6,8 +6,8 @@
 //! `(k + 4, -1)` and so on. A strip of four columns holds exactly one of them,
 //! so the comma, the guess Adaptive's search kept getting wrong, is one
 //! integer the key sets rather than something each chord decides. There is no
-//! candidate, no score and no memory: the same spelling in the same strip is
-//! the same node whenever it is struck, so nothing drifts.
+//! candidate and no score: the same spelling in the same strip is the same
+//! node whenever it is struck, so nothing drifts.
 //!
 //! The price is the wolf. Every fourth fifth along the chain is the one that
 //! leaves the strip's sharp edge, 40/27 rather than 3/2: with the strip on
@@ -31,10 +31,8 @@ pub fn flat_column(position: i32) -> i32 {
     HOME.saturating_add(position).clamp(*PLACES.start(), *PLACES.end())
 }
 
-/// The flat column following moves the strip to, `moved` fifths from where
-/// the Position fifths `position` place it, clamped to [`PLACES`]. The
-/// follower stores only movement the clamp lets through, so the strip
-/// stands `moved` fifths from its set place.
+/// The flat column `moved` fifths from where the Position fifths `position`
+/// place the strip, clamped to [`PLACES`].
 pub fn moved_column(position: i32, moved: i32) -> i32 {
     flat_column(position).saturating_add(moved).clamp(*PLACES.start(), *PLACES.end())
 }
@@ -59,18 +57,16 @@ pub fn assignment(fifths: i32, flat: i32, declared: i64, tuning: Tuning) -> (Lat
     (node, class + octaves * octave - declared)
 }
 
-/// The follower's constants, for the ear to settle (#1896 §3.4): a spelling's
-/// count of recent attacks halves once per this many seconds between attacks.
-/// Not Adaptive's Half-life, which is read at a chord's timescale.
+/// The count rule's constants, for the ear to settle (#1896 §3.4): a
+/// spelling's count of recent attacks halves once per this many seconds.
 pub const KEY_HALF_LIFE_S: f64 = 8.0;
 /// The count the spelling just past an edge of the key's seven needs before
-/// the strip slides toward it.
+/// the key moves toward it.
 pub const SLIDE_STRIKES: f64 = 3.0;
 /// How many times the count of the spelling at the window's other edge it
 /// needs: F♯ against F, B♭ against B.
 pub const SLIDE_MARGIN: f64 = 2.0;
-/// The count under which a spelling is out of use, so a slide back toward the
-/// set key that pushes it out of the window may go ahead.
+/// The count under which a spelling is out of use.
 pub const OUT_OF_USE: f64 = 0.25;
 
 /// The spellings a decoded `(channel, key)` can carry
@@ -79,241 +75,89 @@ pub const OUT_OF_USE: f64 = 0.25;
 const LOWEST: i32 = -5 - 12 * 8;
 const SPELLINGS: usize = 16 * 12;
 
-/// A set of spellings, the ones a decoded `(channel, key)` can carry.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Spellings([u64; SPELLINGS / 64]);
-impl Spellings {
-    pub fn insert(&mut self, fifths: i32) {
-        if let Some(i) = index(fifths) {
-            self.0[i / 64] |= 1 << (i % 64);
-        }
-    }
-    pub fn contains(&self, fifths: i32) -> bool {
-        index(fifths).is_some_and(|i| self.0[i / 64] & (1 << (i % 64)) != 0)
-    }
-    fn len(&self) -> u32 {
-        self.0.iter().map(|word| word.count_ones()).sum()
-    }
-    fn within(&self, other: &Spellings) -> bool {
-        self.0.iter().zip(other.0).all(|(mine, theirs)| mine & !theirs == 0)
-    }
-    fn iter(&self) -> impl Iterator<Item = i32> + '_ {
-        (0..SPELLINGS).filter(|&i| self.0[i / 64] & (1 << (i % 64)) != 0).map(|i| i as i32 + LOWEST)
-    }
-}
-fn index(fifths: i32) -> Option<usize> {
-    usize::try_from(fifths - LOWEST).ok().filter(|&i| i < SPELLINGS)
-}
-
-/// Follows the spellings in use by sliding the strip away from where the
-/// Position fifths set it (§3.4), in two parts. The **key** moves a fifth at
-/// a time by the count rule alone. Around it, each attack group takes an
-/// **excursion** of a fifth either way or none, chosen so the group's fifths
-/// sound pure where they can ([`Follower::decide`]). Every onset of a group is
-/// counted ([`Follower::strike`]) before the group is decided.
+/// Follows the spellings in use by moving the key, a whole number of fifths
+/// from where the Position sets the strip (§3.4; simplified to this one
+/// state on 2026-11-23, `docs/intent/tuning.md`). The key's seven spellings
+/// run from the strip's flat column, F to B at Position 0; any other is
+/// foreign.
 #[derive(Clone, Debug)]
 pub struct Follower {
-    /// Each spelling's count of attacks, as of the attack sample beside it.
-    counts: [(f64, i64); SPELLINGS],
-    /// Fifths the key stands from the column the Position places the strip
-    /// at, which [`flat_column`] has already clamped. Each decision first cuts
-    /// it back to what [`PLACES`] lets through at that decision's Position,
-    /// and keeps a step only as far as the clamp lets it go, so what is stored
-    /// is movement the strip made.
+    /// Each spelling's count of recent attacks, as of sample `at`.
+    counts: [f64; SPELLINGS],
+    at: i64,
+    /// Fifths the key stands from where the Position places the strip, only
+    /// as far as [`PLACES`] lets it.
     key: i32,
-    /// The last group's excursion from the key: the column it was tuned in
-    /// less the key's, −1..=1, and 0 where the clamp held it.
-    excursion: i32,
-    /// The last group's spellings and the flat column it was tuned in: the
-    /// common tones a next group should not retune.
-    last: Option<(Spellings, i32)>,
 }
 impl Default for Follower {
     fn default() -> Self {
-        Self { counts: [(0.0, 0); SPELLINGS], key: 0, excursion: 0, last: None }
+        Self { counts: [0.0; SPELLINGS], at: 0, key: 0 }
     }
 }
 impl Follower {
-    /// Back to the set key, with nothing counted: every reset of the context.
+    /// Back to the Position, with nothing counted: every reset of the context.
     pub fn clear(&mut self) {
         *self = Self::default();
     }
 
-    /// Fifths the strip stands from its set place: the key's and the last
-    /// group's excursion together.
-    pub fn offset(&self) -> i32 {
-        self.key + self.excursion
+    /// Fifths the key stands from the Position.
+    pub fn key(&self) -> i32 {
+        self.key
     }
 
-    /// The flat column the strip stands at, set by the Position fifths
-    /// `position` and moved by following.
+    /// The flat column the strip stands at under the Position fifths
+    /// `position`.
     pub fn flat(&self, position: i32) -> i32 {
-        moved_column(position, self.offset())
+        moved_column(position, self.key)
     }
 
-    fn count(&self, fifths: i32, at: i64, per_second: f64) -> f64 {
-        let Some(&(count, then)) = index(fifths).map(|i| &self.counts[i]) else {
-            return 0.0;
-        };
-        // A steady clock that went back across a reactivation ages nothing.
-        count * 0.5f64.powf((at - then).max(0) as f64 / per_second / KEY_HALF_LIFE_S)
-    }
-
-    /// Counts an attack of `fifths` at sample `at`.
-    pub fn strike(&mut self, fifths: i32, at: i64, per_second: f64) {
-        if let Some(i) = index(fifths) {
-            self.counts[i] = (self.count(fifths, at, per_second) + 1.0, at);
-        }
-    }
-
-    /// Decides the attack group at sample `at`, once its onsets are counted
-    /// and before they are tuned. `sounding` is its spellings and the held
-    /// notes', `struck` the group's own, `held` each held note's spelling and
-    /// the node it sounds at, and `position` the Position fifths.
+    /// The attack group at sample `at`, before any of it is tuned: counts
+    /// `struck`, the group's spellings, then moves the key at most a fifth,
+    /// unless that would change the column of a node in `held`.
     ///
-    /// - **The key**, by the count rule, for single notes and melodies: the
-    ///   seven spellings from the key's flat column are the key's; it moves
-    ///   toward a spelling just past either edge once that has replaced the
-    ///   spelling at the other, and back toward the Position once the
-    ///   spelling that step pushes out has fallen out of use. It moves only
-    ///   where its excursions can still hold every held note and add no wolf
-    ///   the group did not already have, so the step itself adds no wolf; a
-    ///   later group, whose spellings all lie inside the moved key's seven,
-    ///   takes that key's strip and its wolf, which may be one the old key
-    ///   left pure (Yan's (b)).
-    /// - **The excursion**, −1..=1 around the key, per group: a strip that
-    ///   holds every held note where it sounds, if one does; then none at all
-    ///   unless the group holds a spelling outside the key's seven, so a
-    ///   pentatonic or sus voicing and a diatonic ii keep the key's strip and
-    ///   its wolf (Yan's (b), #1941); then the fewest wolves among the
-    ///   group's fifths (D–A on F C G D), so D major there slides sharp and
-    ///   sounds pure (Yan, #1896: "I run into wolf fifths when modulating up
-    ///   or down by fifths playing triads only"), a struck spelling counted at
-    ///   its copy in the strip as well as where any held copy sounds; then the
-    ///   fewest common tones with the last group retuned, so B♭ major after F
-    ///   major slides flat and keeps its F; then none toward the side away
-    ///   from the foreign spelling, so B♭ major from C slides flat; then the
-    ///   fewest sounding spellings retuned from where the strip last stood, so
-    ///   a lone C♯ after D major stays where D major stood; then no
-    ///   excursion; then nearer the Position.
-    ///
-    /// The strip stands at most a fifth from the key, so no run of chords
-    /// walks it away, and a vamp inside the key's seven never moves it, so
-    /// no note of it pumps between two commas. A
-    /// chord rolled by hand is decided note by note, so one whose held notes
-    /// pin the strip it needs keeps its wolf.
-    pub fn decide(
+    /// - **A chord**, two spellings or more, holding foreign spellings on one
+    ///   side moves it toward them, so D–F♯–A from C sounds pure at once.
+    /// - **Otherwise the count rule**, so a lone passing tone moves nothing:
+    ///   toward a spelling just past an edge once it has replaced the one at
+    ///   the other edge, and back toward the Position once the spelling that
+    ///   step pushes out is out of use.
+    pub fn attack(
         &mut self,
+        struck: &[i32],
+        held: &[LatticePos],
         at: i64,
         per_second: f64,
-        sounding: &Spellings,
-        struck: &Spellings,
-        held: &[(i32, LatticePos)],
         position: i32,
     ) {
-        // Only movement the clamp lets through is kept: a key at a clamped
-        // Position would otherwise run on unseen, and land the strip far off
-        // once the Position comes back.
-        self.key = moved_column(position, self.key) - flat_column(position);
-        let count = |fifths| self.count(fifths, at, per_second);
-        let key_flat = moved_column(position, self.key);
+        // A steady clock that went back across a reactivation ages nothing.
+        let decay = 0.5f64.powf((at - self.at).max(0) as f64 / per_second / KEY_HALF_LIFE_S);
+        self.counts.iter_mut().for_each(|count| *count *= decay);
+        self.at = at;
+        let index = |k: i32| usize::try_from(k - LOWEST).ok().filter(|&i| i < SPELLINGS);
+        struck.iter().filter_map(|&k| index(k)).for_each(|i| self.counts[i] += 1.0);
+        let count = |k| index(k).map_or(0.0, |i| self.counts[i]);
         let replaced = |past: i32, other: i32| {
             count(past) >= SLIDE_STRIKES && count(past) >= SLIDE_MARGIN * count(other)
         };
-        let toward = match (replaced(key_flat + 7, key_flat), replaced(key_flat - 1, key_flat + 6))
-        {
-            (true, _) => 1,
-            (false, true) => -1,
-            (false, false) => 0,
+        let set = flat_column(position);
+        let flat = moved_column(position, self.key);
+        let chord = struck.iter().any(|&k| k != struck[0]);
+        let sharp = struck.iter().any(|&k| k > flat + 6);
+        let flat_side = struck.iter().any(|&k| k < flat);
+        let step = if chord && (sharp || flat_side) {
+            i32::from(sharp) - i32::from(flat_side)
+        } else if replaced(flat + 7, flat) || flat < set && count(flat) < OUT_OF_USE {
+            1
+        } else if replaced(flat - 1, flat + 6) || flat > set && count(flat + 6) < OUT_OF_USE {
+            -1
+        } else {
+            0
         };
-        let back = match self.key.signum() {
-            1 if count(key_flat + 6) < OUT_OF_USE => -1,
-            -1 if count(key_flat) < OUT_OF_USE => 1,
-            _ => 0,
-        };
-        let step = if toward != 0 { toward } else { back };
-        let best_now = self.best(sounding, struck, held, position, self.key);
-        if step != 0 {
-            let moved = self.best(sounding, struck, held, position, self.key + step);
-            let holds = |best: &Choice| best.holds || held.is_empty();
-            if holds(&moved) && moved.wolves.within(&best_now.wolves) {
-                self.key = moved_column(position, self.key + step) - flat_column(position);
-            }
-        }
-        let best = self.best(sounding, struck, held, position, self.key);
-        self.excursion = best.flat - moved_column(position, self.key);
-        self.last = Some((*sounding, best.flat));
+        let moved = moved_column(position, self.key + step);
+        let holds = held.iter().all(|node| (moved..=moved + 3).contains(&node.threes));
+        // Only movement the clamp lets through is kept.
+        self.key = if holds { moved } else { flat } - set;
     }
-
-    /// The best excursion around `key` for this group, by the order
-    /// [`Follower::decide`] gives.
-    fn best(
-        &self,
-        sounding: &Spellings,
-        struck: &Spellings,
-        held: &[(i32, LatticePos)],
-        position: i32,
-        key: i32,
-    ) -> Choice {
-        let key_flat = moved_column(position, key);
-        // The side of the key's seven, `key_flat..=key_flat + 6`, a spelling
-        // outside it lies on: only a group holding one may take an excursion
-        // (Yan's (b), #1941), and it leans toward that side.
-        let outside = |k: i32| if k > key_flat + 6 { 1 } else { -i32::from(k < key_flat) };
-        let foreign = sounding.iter().any(|k| outside(k) != 0);
-        let sharp = sounding.iter().any(|k| outside(k) == 1);
-        let flat_side = sounding.iter().any(|k| outside(k) == -1);
-        let side = i32::from(sharp) - i32::from(flat_side);
-        let choices = (-1..=1).map(|excursion| {
-            let flat = moved_column(position, key + excursion);
-            // Where each sounding spelling sounds: a held note where it is
-            // held, and a struck one at its copy in this strip, so a spelling
-            // both held and struck sounds at both.
-            let copies = |k: i32| {
-                let struck = struck.contains(k).then(|| node(k, flat));
-                held.iter().filter(move |&&(s, _)| s == k).map(|&(_, n)| n).chain(struck)
-            };
-            let holds = held.iter().all(|&(k, n)| node(k, flat) == n);
-            let mut wolves = Spellings::default();
-            sounding
-                .iter()
-                .filter(|&k| {
-                    sounding.contains(k + 1)
-                        && copies(k).any(|low| {
-                            copies(k + 1).any(|high| high - low != LatticePos::new(1, 0, 0))
-                        })
-                })
-                .for_each(|k| wolves.insert(k));
-            // Spellings this strip retunes from where the strip last stood:
-            // first the last group's own, the common tones; then any.
-            let (last, last_flat) = self.last.unwrap_or((Spellings::default(), key_flat));
-            let moved = |k: i32| node(k, flat) != node(k, last_flat);
-            let common = sounding.iter().filter(|&k| last.contains(k) && moved(k)).count();
-            let retuned = sounding.iter().filter(|&k| moved(k)).count();
-            let rank = (
-                !holds,
-                !foreign && excursion != 0,
-                wolves.len(),
-                common,
-                side != 0 && excursion != 0 && excursion != side,
-                retuned,
-                excursion != 0,
-                (key + excursion).abs(),
-            );
-            (rank, Choice { flat, holds, wolves })
-        });
-        choices.min_by_key(|(rank, _)| *rank).map(|(_, choice)| choice).unwrap()
-    }
-}
-
-/// One excursion [`Follower::best`] weighed.
-#[derive(Clone, Copy, Debug)]
-struct Choice {
-    flat: i32,
-    /// Every held note sounds at its node in this strip.
-    holds: bool,
-    /// The fifths it leaves wolves, by their lower spelling.
-    wolves: Spellings,
 }
 
 #[cfg(test)]
@@ -364,274 +208,125 @@ mod tests {
     }
 
     const RATE: f64 = 48_000.0;
-    const F: i32 = -1;
     const F_SHARP: i32 = 6;
-    const C: i32 = 0;
+    const STRIKES: usize = SLIDE_STRIKES.ceil() as usize;
+    const C: [i32; 3] = [0, 4, 1];
 
-    fn second(n: f64) -> i64 {
-        (n * RATE) as i64
+    /// One attack group at `seconds` over `held` spellings, at Position 0:
+    /// the flat column it is tuned in.
+    fn group(follower: &mut Follower, struck: &[i32], held: &[i32], seconds: f64) -> i32 {
+        let held: Vec<_> = held.iter().map(|&k| node(k, HOME)).collect();
+        follower.attack(struck, &held, (seconds * RATE) as i64, RATE, 0);
+        follower.flat(0)
     }
 
-    /// Strikes on one sample that reach [`SLIDE_STRIKES`].
-    fn strikes() -> usize {
-        SLIDE_STRIKES.ceil() as usize
-    }
-
-    /// One attack group struck at `at`, over `held` notes (each spelling with
-    /// the node it sounds at), at Position `position`: the flat column it is
-    /// tuned in.
-    fn group_at(
-        follower: &mut Follower,
-        struck: &[i32],
-        held: &[(i32, LatticePos)],
-        at: i64,
-        position: i32,
-    ) -> i32 {
-        struck.iter().for_each(|&k| follower.strike(k, at, RATE));
-        let mut sounding = Spellings::default();
-        struck.iter().chain(held.iter().map(|(k, _)| k)).for_each(|&k| sounding.insert(k));
-        let mut group = Spellings::default();
-        struck.iter().for_each(|&k| group.insert(k));
-        follower.decide(at, RATE, &sounding, &group, held, position);
-        follower.flat(position)
-    }
-    fn group(follower: &mut Follower, struck: &[i32], at: i64) -> i32 {
-        group_at(follower, struck, &[], at, 0)
-    }
-
-    /// A follower whose key three F♯s have moved to G.
+    /// A follower whose key lone F♯s have moved to G.
     fn in_g() -> Follower {
         let mut follower = Follower::default();
-        for _ in 0..strikes() {
-            group(&mut follower, &[F_SHARP], 0);
-        }
-        assert_eq!(follower.offset(), 1, "in G");
+        (0..STRIKES).for_each(|_| _ = group(&mut follower, &[F_SHARP], &[], 0.0));
         follower
     }
 
     /// The fifths among `chord` that sound wolves in the strip from `flat`.
     fn wolves(chord: &[i32], flat: i32) -> usize {
-        chord
-            .iter()
-            .filter(|&&k| {
-                chord.contains(&(k + 1))
-                    && node(k + 1, flat) - node(k, flat) != LatticePos::new(1, 0, 0)
-            })
-            .count()
+        let pure = |k: i32| node(k + 1, flat) - node(k, flat) == LatticePos::new(1, 0, 0);
+        chord.iter().filter(|&&k| chord.contains(&(k + 1)) && !pure(k)).count()
     }
 
-    /// F♯ as often as F moves nothing; once both have faded, F♯ moves the key
-    /// a fifth at the strike that reaches the count, from F C G D to
-    /// C G D A, and not before.
+    /// The count rule: F♯ as often as F moves nothing; once both have faded,
+    /// F♯ moves the key at the strike that reaches the count, and back once
+    /// F♯ is out of use.
     #[test]
-    fn the_strip_slides_once_a_spelling_past_the_key_has_replaced_the_one_opposite() {
+    fn the_count_rule_moves_the_key_and_brings_it_back() {
         let mut follower = Follower::default();
-        for fifths in [F, F_SHARP] {
-            for _ in 0..strikes() {
-                assert_eq!(group(&mut follower, &[fifths], 0), HOME, "as often as F");
-            }
+        for fifths in [-1, F_SHARP].repeat(STRIKES) {
+            assert_eq!(group(&mut follower, &[fifths], &[], 0.0), HOME, "as often as F");
         }
-        let at = second(10.0 * KEY_HALF_LIFE_S);
-        for _ in 1..strikes() {
-            assert_eq!(group(&mut follower, &[F_SHARP], at), HOME);
-        }
-        assert_eq!(group(&mut follower, &[F_SHARP], at), HOME + 1, "C G D A");
+        let faded = 10.0 * KEY_HALF_LIFE_S;
+        let slides: Vec<_> =
+            (0..STRIKES).map(|_| group(&mut follower, &[F_SHARP], &[], faded)).collect();
+        assert_eq!(slides[STRIKES - 2..], [HOME, HOME + 1], "at the count, not before");
+        let fade = faded + (STRIKES as f64 / OUT_OF_USE).log2() * KEY_HALF_LIFE_S;
+        assert_eq!(group(&mut follower, &[0], &[], 0.95 * fade), HOME + 1);
+        assert_eq!(group(&mut follower, &[0], &[], 1.05 * fade), HOME, "home");
     }
 
-    /// Once the spelling that moved the key is out of use, it steps back
-    /// toward the Position.
+    /// Triads modulating by a fifth, I–IV–V–I in each key: the first chord
+    /// with the new key's spelling moves the key toward it, so every chord
+    /// sounds pure, and the key is home by the last C section's V. A–C♯–E
+    /// from G moves it on to D.
     #[test]
-    fn the_strip_returns_toward_the_set_key_once_its_reason_is_out_of_use() {
-        let mut follower = Follower::default();
-        for _ in 0..strikes() {
-            group(&mut follower, &[F_SHARP], 0);
-        }
-        assert_eq!(follower.offset(), 1);
-        // The half-lives F♯'s count takes to fall to `OUT_OF_USE`.
-        let fade = (strikes() as f64 / OUT_OF_USE).log2() * KEY_HALF_LIFE_S;
-        assert_eq!(group(&mut follower, &[C], second(0.95 * fade)), HOME + 1);
-        assert_eq!(group(&mut follower, &[C], second(1.05 * fade)), HOME, "home");
-    }
-
-    /// A held note keeps its node: with F held, the key may move, but the
-    /// strip stays where F sounds until F ends.
-    #[test]
-    fn a_slide_waits_while_a_note_in_its_column_is_held() {
-        let mut follower = Follower::default();
-        let f = [(F, node(F, HOME))];
-        for _ in 0..strikes() {
-            assert_eq!(group_at(&mut follower, &[F_SHARP], &f, 0, 0), HOME, "F held");
-        }
-        assert_eq!(group(&mut follower, &[F_SHARP], 0), HOME + 1, "F let go");
-    }
-
-    /// Triad modulation slides at its first chord with a spelling outside the
-    /// key's seven, toward that spelling, and sounds pure: D–F♯–A and
-    /// B♭–D–F from C, A–C♯–E from G. B♭ major after F major slides flat too,
-    /// keeping its F.
-    #[test]
-    fn a_chord_whose_fifth_straddles_the_strip_slides_it_toward_that_fifth() {
-        for (chord, moved) in [([2, 6, 3], 1), ([-2, 2, -1], -1)] {
+    fn a_chord_with_a_foreign_spelling_moves_the_key_and_sounds_pure() {
+        let [f, g, d, b_flat] = [[-1, 3, 0], [1, 5, 2], [2, 6, 3], [-2, 2, -1]];
+        let up = [C, f, g, C, g, C, d, g, C, f, g, C];
+        let down = [C, f, g, C, f, b_flat, C, f, C, f, g, C];
+        for (progression, turn, moved) in [(up, d, 1), (down, b_flat, -1)] {
             let mut follower = Follower::default();
-            assert_eq!(group(&mut follower, &[0, 4, 1], 0), HOME);
-            let flat = group(&mut follower, &chord, 1);
-            assert_eq!((flat, wolves(&chord, flat)), (HOME + moved, 0), "{chord:?} from C");
+            let mut flats = Vec::new();
+            for (index, chord) in progression.into_iter().enumerate() {
+                let flat = group(&mut follower, &chord, &[], index as f64);
+                assert_eq!(wolves(&chord, flat), 0, "{progression:?}, chord {index}");
+                assert!(chord != turn || flat == HOME + moved, "{turn:?} moves the key");
+                flats.push(flat);
+            }
+            assert_eq!(flats[10..], [HOME; 2], "home again");
         }
-        let mut follower = Follower::default();
-        assert_eq!(group(&mut follower, &[-1, 3, 0], 0), HOME);
-        assert_eq!(group(&mut follower, &[-2, 2, -1], 1), HOME - 1, "B♭ major after F major");
-        let mut follower = in_g();
-        let a_major = [3, 7, 4];
-        let flat = group(&mut follower, &a_major, 1);
-        assert_eq!((flat, wolves(&a_major, flat)), (HOME + 2, 0), "A–C♯–E from G");
+        let flat = group(&mut in_g(), &[3, 7, 4], &[], 1.0);
+        assert_eq!((flat, wolves(&[3, 7, 4], flat)), (HOME + 2, 0), "A–C♯–E from G");
     }
 
-    /// A chord all of whose spellings lie inside the key's seven never moves
-    /// the strip (Yan's (b), #1941): pentatonic and sus voicings keep the
-    /// key's wolf, at the Position and at a followed key, round after round.
+    /// Chords inside the key's seven never move it: a C pentatonic vamp and
+    /// sus and quartal voicings, at the Position and at G, with E at one node
+    /// throughout. A diatonic ii keeps its wolf, D–A.
     #[test]
-    fn a_pentatonic_voicing_never_slides_the_strip() {
+    fn a_chord_inside_the_key_never_moves_it() {
         let voicings: [&[i32]; 6] =
             [&[3, 2, 1], &[0, 2, 4, 1, 3], &[2, 4, 1, 3], &[-1, 0, 1], &[0, 2, 1], &[2, 1, 3]];
-        for (name, mut follower, key_flat) in
-            [("C", Follower::default(), HOME), ("G", in_g(), HOME + 1)]
-        {
-            for round in 0..3 {
-                for (index, voicing) in voicings.iter().enumerate() {
-                    // In G, the same shapes a fifth up.
-                    let shifted: Vec<i32> = voicing.iter().map(|k| k + key_flat - HOME).collect();
-                    let at = second((round * voicings.len() + index) as f64 / 2.0);
-                    let flat = group(&mut follower, &shifted, at);
-                    assert_eq!(flat, key_flat, "in {name}, {shifted:?}, round {round}");
-                }
+        for (mut follower, key) in [(Follower::default(), 0), (in_g(), 1)] {
+            for (index, voicing) in voicings.repeat(3).into_iter().enumerate() {
+                let shifted: Vec<i32> = voicing.iter().map(|k| k + key).collect();
+                let flat = group(&mut follower, &shifted, &[], index as f64 / 2.0);
+                assert_eq!((flat, node(4, flat)), (HOME + key, node(4, HOME + key)), "{index}");
             }
         }
-    }
-
-    /// I–ii–vi–IV–I in C: a diatonic ii keeps its wolf, D–A, every time; with
-    /// a D major for ii, its F♯ slides the strip and D major sounds pure. C
-    /// keeps 1/1 throughout.
-    #[test]
-    fn a_diatonic_ii_keeps_its_wolf_and_a_secondary_dominant_slides() {
-        let ii: [&[i32]; 5] = [&[0, 4, 1], &[2, -1, 3], &[3, 0, 4], &[-1, 3, 0], &[0, 4, 1]];
-        let secondary: [&[i32]; 5] = [&[0, 4, 1], &[2, 6, 3], &[3, 0, 4], &[-1, 3, 0], &[0, 4, 1]];
-        for (progression, ii_wolves) in [(ii, 1), (secondary, 0)] {
-            let mut follower = Follower::default();
-            for (round, chord) in progression.into_iter().enumerate() {
-                let flat = group(&mut follower, chord, second(round as f64));
-                assert_eq!(node(C, flat), LatticePos::ORIGIN, "{progression:?} {round}: C 1/1");
-                let expected = if round == 1 { ii_wolves } else { 0 };
-                assert_eq!(wolves(chord, flat), expected, "{progression:?} {round}");
-            }
+        let mut follower = Follower::default();
+        for (index, chord) in [C, [2, -1, 3], [3, 0, 4], [-1, 3, 0], C].iter().enumerate() {
+            let flat = group(&mut follower, chord, &[], index as f64);
+            assert_eq!(wolves(chord, flat), usize::from(index == 1), "ii keeps D–A: {index}");
         }
     }
 
-    /// At a key the count rule followed to G, chords inside its seven take
-    /// its own strip: E–A–D keeps G's wolf, A–E, and A minor keeps C at 1/1.
+    /// A lone F♯ passing over a held C major moves nothing.
     #[test]
-    fn a_followed_key_tunes_its_chords_around_it() {
-        for chord in [[4, 3, 2], [3, 0, 4]] {
-            let flat = group(&mut in_g(), &chord, 1);
-            assert_eq!((flat, node(C, flat)), (HOME + 1, LatticePos::ORIGIN), "{chord:?}");
+    fn passing_tones_do_not_move_the_key() {
+        let mut follower = Follower::default();
+        for bar in 0..2 {
+            assert_eq!(group(&mut follower, &C, &[], bar as f64), HOME);
+            assert_eq!(group(&mut follower, &[F_SHARP], &C, bar as f64 + 0.5), HOME, "{bar}");
         }
     }
 
-    /// A held note sounds where it was struck, whatever the Position since:
-    /// A held from Position 0, the lane moved to +1, an E struck against it
-    /// takes the strip that holds A, so E–A is a pure fifth.
+    /// No move changes a held note's column: neither D major nor F♯s that
+    /// have replaced F move the key over a held F; once F is let go they do,
+    /// and D major over a held D does.
     #[test]
-    fn a_lane_move_keeps_a_held_note_s_fifths_pure() {
+    fn a_held_note_s_column_is_never_moved() {
         let mut follower = Follower::default();
-        let a = node(3, HOME);
-        let flat = group_at(&mut follower, &[4], &[(3, a)], 0, 1);
-        assert_eq!(node(4, flat) - a, LatticePos::new(1, 0, 0), "E a fifth over the held A");
-    }
-
-    /// No slide moves a held note's column: D major over a held F keeps its
-    /// wolf rather than retune F; over a held D it slides.
-    #[test]
-    fn a_chord_slide_never_moves_a_held_note_s_column() {
-        let mut follower = Follower::default();
-        let flat = group_at(&mut follower, &[2, 6, 3], &[(F, node(F, HOME))], 0, 0);
-        assert_eq!(node(F, flat), node(F, HOME), "F's column pinned");
-        let mut follower = Follower::default();
-        assert_eq!(group_at(&mut follower, &[6, 3], &[(2, node(2, HOME))], 0, 0), HOME + 1);
-    }
-
-    /// Strikes past a clamped Position move the key only as far as the strip
-    /// can go: sixteen C♯s at Position +20 slide it one column, and back at
-    /// the Position of C an A lands near C's strip, not eleven fifths flat;
-    /// strikes past the flat edge at Position −20 store nothing.
-    #[test]
-    fn a_clamped_slide_stores_only_the_movement_it_makes() {
-        const C_SHARP: i32 = 7;
-        let mut follower = Follower::default();
-        for at in 0..16 {
-            group_at(&mut follower, &[C_SHARP], &[], at, 20);
+        assert_eq!(group(&mut follower, &[2, F_SHARP, 3], &[-1], 0.0), HOME, "chord over F");
+        for _ in 0..STRIKES {
+            assert_eq!(group(&mut follower, &[F_SHARP], &[-1], 0.0), HOME, "F held");
         }
-        assert_eq!(follower.flat(20), flat_column(20) - 1, "one column flat");
-        let flat = group_at(&mut follower, &[3], &[], 16, 0);
-        assert!((HOME - 1..=HOME).contains(&flat), "A lands near C's strip: {flat}");
-        // At the flat edge the strip cannot move, so nothing is stored.
-        let mut follower = Follower::default();
-        for at in 0..16 {
-            group_at(&mut follower, &[flat_column(-20) - 1], &[], at, -20);
-        }
-        assert_eq!(group_at(&mut follower, &[3], &[], 16, 0), HOME, "A at C's strip");
+        assert_eq!(group(&mut follower, &[F_SHARP], &[], 0.0), HOME + 1, "F let go");
+        let flat = group(&mut Follower::default(), &[F_SHARP, 3], &[2], 0.0);
+        assert_eq!(flat, HOME + 1, "over D");
     }
 
-    /// A spelling struck again while an earlier copy of it is held sounds at
-    /// its copy in the strip, so its fifths there count: holding F from C's
-    /// strip at Position +2, F–C–G–A–E keeps its struck F–C pure.
+    /// A chord past the strip's sharpest place stores nothing, so back at
+    /// Position 0 the strip is home.
     #[test]
-    fn a_struck_copy_of_a_held_spelling_is_scored_where_it_sounds() {
+    fn a_clamped_key_stores_only_the_movement_it_sounds() {
         let mut follower = Follower::default();
-        let flat = group_at(&mut follower, &[F, C, 1, 3, 4], &[(F, node(F, HOME))], 0, 2);
-        assert_eq!(node(C, flat) - node(F, flat), LatticePos::new(1, 0, 0), "F–C pure at {flat}");
-    }
-
-    /// A lone foreign spelling keeps the copy the last group tuned it near:
-    /// C♯ after D major from C stays in D major's strip.
-    #[test]
-    fn a_lone_foreign_note_stays_where_the_last_chord_stood() {
-        let mut follower = Follower::default();
-        let d_major = group(&mut follower, &[2, F_SHARP, 3], 0);
-        assert_eq!(d_major, HOME + 1, "D major slides sharp");
-        let flat = group(&mut follower, &[7], 1);
-        assert_eq!(node(7, flat), LatticePos::new(3, 1, 0), "C♯ at D major's copy");
-    }
-
-    /// A key move that would put the chord struck with it on a wolf waits:
-    /// F♯ has replaced F, but A minor's A–E would be C G D A's wolf.
-    #[test]
-    fn a_count_slide_adds_no_wolf() {
-        let mut follower = Follower::default();
-        for _ in 1..strikes() {
-            group(&mut follower, &[F_SHARP], 0);
-        }
-        let flat = group(&mut follower, &[3, 0, 4, F_SHARP], 0);
-        assert_eq!(wolves(&[3, 0, 4], flat), 0, "A minor pure");
-        assert_eq!(group(&mut follower, &[F_SHARP], 0), HOME + 1, "alone, it slides");
-    }
-
-    /// A C pentatonic vamp at the key G (F♯ having replaced F): A–D–G,
-    /// C–D–E–G–A, D–E–G–A, three rounds. E keeps one pitch: none of them
-    /// holds a spelling outside G's seven, so none slides (Yan's (b), #1941).
-    /// Before (b), the chord rule purified D–E–G–A and not the pentatonic
-    /// chord, and E moved between 5/4 and 81/64 each round.
-    #[test]
-    fn a_pentatonic_vamp_at_a_followed_key_keeps_each_pitch() {
-        let mut follower = in_g();
-        let vamp: [&[i32]; 3] = [&[3, 2, 1], &[0, 2, 4, 1, 3], &[2, 4, 1, 3]];
-        let mut e = Vec::new();
-        for round in 0..3 {
-            for (index, chord) in vamp.into_iter().enumerate() {
-                let flat = group(&mut follower, chord, second((3 * round + index) as f64 / 2.0));
-                if chord.contains(&4) {
-                    e.push(node(4, flat));
-                }
-            }
-        }
-        assert!(e.iter().all(|&node| node == e[0]), "E keeps one pitch: {e:?}");
+        follower.attack(&[15, 16, 19], &[], 0, RATE, 20);
+        assert_eq!((follower.flat(20), follower.flat(0)), (flat_column(20), HOME));
     }
 }

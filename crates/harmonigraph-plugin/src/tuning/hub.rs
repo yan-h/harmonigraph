@@ -135,27 +135,20 @@ struct Sequencer {
     working: Vec<policy::ContextPitch>,
     last_release: Option<i64>,
     decision: u64,
-    /// The input sample a loop or seek was detected at: the first attack
-    /// group at or after it with a retuned onset clears memory, if the
+    /// A loop or seek was detected and the next attack clears memory, if the
     /// control says so. Held notes keep their frozen assignments either way.
-    loop_at: Option<i64>,
+    loop_pending: bool,
     reference_source: Option<u8>,
     /// Lattice Map following: the mode the current attack group runs under,
     /// how far the Hub has moved the map beyond its automated place, and the
     /// input sample of the attack group that offset was last decided for.
     follow: Follow,
     followed: LatticePos,
+    /// The attack sample whose following was last decided, the map's or the
+    /// strip's: one decision per attack group.
+    followed_at: Option<i64>,
     /// Adaptive's strip following the spellings in use (`Follow spellings`).
     follower: policy::strip::Follower,
-    /// This callback's ordering pass, and the attack group (its sample, in a
-    /// pass) last scanned: a group is scanned once in each pass it has
-    /// onsets in, so a Tune's onset drained a pass after its sample's first
-    /// is still seen.
-    pass: u64,
-    scanned: Option<(i64, u64)>,
-    /// The attack sample whose following was last decided, map's or strip's:
-    /// one decision per attack group.
-    decided: Option<i64>,
 }
 
 impl Default for Sequencer {
@@ -172,37 +165,34 @@ impl Default for Sequencer {
             working: Vec::with_capacity(policy::MAX_CONTEXT + policy::MAX_MEMORY),
             last_release: None,
             decision: 0,
-            loop_at: None,
+            loop_pending: false,
             reference_source: None,
             follow: Follow::Off,
             followed: LatticePos::ORIGIN,
+            followed_at: None,
             follower: policy::strip::Follower::default(),
-            pass: 0,
-            scanned: None,
-            decided: None,
         }
     }
 }
 
 impl Sequencer {
     /// Released memory and everything the moving context carries forward: the
-    /// Adaptive memory, the map's follow offset and the strip's alike. Held
-    /// voices stay.
+    /// Adaptive memory, the map's follow offset and the strip's key alike.
+    /// Held voices stay.
     fn forget_history(&mut self) {
         self.memory.clear();
         self.last_release = None;
         self.followed = LatticePos::ORIGIN;
         self.follower.clear();
     }
-    /// The attack group at `sample` clears the history after a loop or seek
-    /// at or before it, if the control says so. Held notes keep their frozen
-    /// assignments either way.
-    fn take_loop(&mut self, sample: i64) {
-        if self.loop_at.is_some_and(|at| at <= sample) {
+    /// The next attack after a loop or seek clears the history, if the control
+    /// says so. Held notes keep their frozen assignments either way.
+    fn take_loop(&mut self) {
+        if self.loop_pending {
             if self.config.policy.reset_loop {
                 self.forget_history();
             }
-            self.loop_at = None;
+            self.loop_pending = false;
         }
     }
     /// A newly assigned voice joins the context, or `false` when the context
@@ -391,8 +381,6 @@ impl Hub {
     pub fn activate(&mut self, rate: f64, frames: u32) {
         self.rate = rate;
         self.seconds = None;
-        // A seek seen before the reactivation is on a clock that has restarted.
-        self.sequencer.loop_at = None;
         // No delay at all: the Hub's own input is already at the Hub, and its
         // correction is queued at the input boundary before the same
         // callback is scheduled, so the round trip needs none.
@@ -502,8 +490,8 @@ impl Hub {
     /// milliseconds either way. That one rule covers a playing transport, a
     /// stopped one a host holds still, a stop that returns to where play began,
     /// and an export that reports not playing while its position climbs. What
-    /// a jump does then is the `reset_loop` control's business, at the first
-    /// retuned onset at or after the sample the jump was seen at.
+    /// a jump does then is the `reset_loop` control's business, at the next
+    /// attack.
     fn detect_loop(&mut self, callback: &Boundary) {
         if let Some(transport) = callback.transport {
             self.observe_seconds(&transport, callback.steady_time);
@@ -519,9 +507,7 @@ impl Hub {
             let moved = song - previous.song;
             let elapsed = (sample - previous.sample) as f64 / self.rate;
             if moved.abs().min((moved - elapsed).abs()) > 0.002 {
-                // A later jump before any attack takes the earlier one's
-                // place: either clears the same history.
-                self.sequencer.loop_at = Some(sample);
+                self.sequencer.loop_pending = true;
             }
         }
         self.seconds = Some(Seconds { song, sample });
@@ -560,8 +546,7 @@ impl Hub {
         } else {
             LatticePos::ORIGIN
         });
-        owner.maps.publish_strip(if current { self.sequencer.follower.offset() } else { 0 });
-        self.sequencer.pass += 1;
+        owner.maps.publish_strip(if current { self.sequencer.follower.key() } else { 0 });
         self.collect();
         self.batch.sort_unstable_by_key(|record| (record.sample, record.order()));
         let mut index = 0;
@@ -818,21 +803,11 @@ impl Hub {
         // displaced voice would still be there at HELD weight — a second
         // full-weight copy of the very pitch being scored.
         self.forget_replaced(record.source, channel, key);
-        // A loop or seek's reset, where main has always taken it: at the first
-        // retuned onset at or after the seek, so after that sample's releases,
-        // which sort first and would otherwise write the last pass's ending
-        // chord back into the memory it clears; and before the group is
-        // counted, so the group it clears for is not wiped with what came
-        // before. An onset with Retune off reads no history, so it waits.
-        if self.current(&record) {
-            self.sequencer.take_loop(record.sample);
-        }
-        self.scan_group(position, config);
         let player = record.player;
         let channel_pitch = self.rows[source].state.channel_pitch(channel);
         // Captures remain visible with Retune off. Only a still-current,
         // enabled arrival may make a decision or enter the musical context.
-        if !self.current(&record) {
+        if record.retune & 1 == 0 || record.retune != self.rows[source].retune {
             if record.retune & 1 != 0 {
                 self.reply(record, 0);
             }
@@ -860,7 +835,7 @@ impl Hub {
         if !adaptive || stage.is_some() {
             let assigned = if adaptive {
                 let fifths = fifths_for_midi(channel, key);
-                let flat = self.strip_place(position, config);
+                let flat = self.strip_place(position, config.policy.follow_spellings);
                 let stage = stage.unwrap_or(0);
                 let (node, correction) =
                     policy::strip::assignment(fifths, flat, incoming + stage, config.tuning);
@@ -900,6 +875,7 @@ impl Hub {
             }
             return Some(Assigned { correction, node, decision, player, channel_pitch });
         }
+        self.sequencer.take_loop();
         self.sequencer.fill(self.rate);
         let musical: policy::MusicalConfig = config.into();
         let onset = policy::OrderedOnset { pitch: incoming };
@@ -954,93 +930,39 @@ impl Hub {
         Some(Assigned { correction, node, decision, player, channel_pitch })
     }
 
-    /// Whether `record` may decide and enter the musical context: a
-    /// still-current arrival from a source with Retune on. Captures stay
-    /// visible with Retune off.
-    fn current(&self, record: &Record) -> bool {
-        record.retune & 1 != 0 && record.retune == self.rows[usize::from(record.source)].retune
-    }
-
-    /// The current onsets of the attack group at `position`'s sample, from
-    /// `position` on, with their channel and key.
-    fn group(&self, position: usize) -> impl Iterator<Item = (Record, u8, u8)> + '_ {
-        let sample = self.batch[position].sample;
-        self.batch[position..]
-            .iter()
-            .take_while(move |record| record.sample == sample)
-            .filter(|record| self.current(record))
-            .filter_map(|&record| {
-                record.event.attack().map(|(_, channel, key, _)| (record, channel, key))
-            })
-    }
-
-    /// The attack group at `position`'s sample, scanned at its first onset in
-    /// each pass, before any of it is scored: what each same-key onset
-    /// displaces leaves the context, so neither the map's following nor the
-    /// strip's weighs a pitch against the voice it replaces, and under
-    /// Adaptive's strip every current onset drained this pass is counted
-    /// once (`Follower::strike`).
-    fn scan_group(&mut self, position: usize, config: ResolvedConfig) {
-        let sample = self.batch[position].sample;
-        let pass = self.sequencer.pass;
-        if self.sequencer.scanned == Some((sample, pass)) {
-            return;
-        }
-        self.sequencer.scanned = Some((sample, pass));
-        let mut index = position;
-        while index < self.batch.len() && self.batch[index].sample == sample {
-            let record = self.batch[index];
-            index += 1;
-            if let Some((_, channel, key, _)) = record.event.attack() {
-                self.forget_replaced(record.source, channel, key);
-            }
-        }
-        let policy = config.policy;
-        if self.sequencer.engine == TuningEngine::Adaptive
-            && policy.decode_fifths
-            && policy.follow_spellings
-        {
-            let mut strikes = [0i32; BATCH_EVENTS];
-            let mut count = 0;
-            for (_, channel, key) in self.group(position).take(BATCH_EVENTS) {
-                strikes[count] = fifths_for_midi(channel, key);
-                count += 1;
-            }
-            for &fifths in &strikes[..count] {
-                self.sequencer.follower.strike(fifths, sample, self.rate);
-            }
-        }
-    }
-
-    /// The flat column the strip stands at for the onset at `position`:
-    /// where the Position fifths set it, moved by the follower when Follow
-    /// spellings is on. The follower decides each attack group once, at its
-    /// first decoded onset, before any of it is tuned (`Follower::decide`).
-    fn strip_place(&mut self, position: usize, config: ResolvedConfig) -> i32 {
+    /// The flat column the strip stands at for the onset at `position`: where
+    /// the Position fifths set it, moved by the follower when Follow
+    /// spellings is on. The group's first decoded onset decides for the whole
+    /// group, before any of it is tuned, as `follow` does for a map: after a
+    /// loop's reset, with what each same-key onset displaces let go, and with
+    /// every current onset counted (`Follower::attack`).
+    fn strip_place(&mut self, position: usize, follow_spellings: bool) -> i32 {
         let sample = self.batch[position].sample;
         let set = self.sequencer.position.threes;
-        if !config.policy.follow_spellings {
+        if !follow_spellings {
             self.sequencer.follower.clear();
-            return policy::strip::flat_column(set);
-        }
-        if self.sequencer.decided != Some(sample) {
-            self.sequencer.decided = Some(sample);
-            let mut sounding = policy::strip::Spellings::default();
-            let mut struck = policy::strip::Spellings::default();
-            let mut held = [(0, LatticePos::ORIGIN); policy::MAX_CONTEXT];
+        } else if self.sequencer.followed_at != Some(sample) {
+            self.sequencer.followed_at = Some(sample);
+            self.sequencer.take_loop();
+            let mut struck = [0; BATCH_EVENTS];
             let mut count = 0;
-            for node in self.sequencer.context.iter().flatten().filter_map(|voice| voice.node) {
-                let fifths = node.threes + 4 * node.fives;
-                sounding.insert(fifths);
-                held[count] = (fifths, node);
-                count += 1;
+            let mut index = position;
+            while index < self.batch.len() && self.batch[index].sample == sample {
+                let record = self.batch[index];
+                index += 1;
+                let Some((_, channel, key, _)) = record.event.attack() else { continue };
+                self.forget_replaced(record.source, channel, key);
+                let retune = self.rows[usize::from(record.source)].retune;
+                if record.retune & 1 != 0 && record.retune == retune && count < struck.len() {
+                    struck[count] = fifths_for_midi(channel, key);
+                    count += 1;
+                }
             }
-            for (_, channel, key) in self.group(position) {
-                sounding.insert(fifths_for_midi(channel, key));
-                struck.insert(fifths_for_midi(channel, key));
-            }
-            let sequencer = &mut self.sequencer;
-            sequencer.follower.decide(sample, self.rate, &sounding, &struck, &held[..count], set);
+            let mut held = [LatticePos::ORIGIN; policy::MAX_CONTEXT];
+            let nodes = self.sequencer.context.iter().flatten().filter_map(|voice| voice.node);
+            let held_count = nodes.zip(&mut held).map(|(node, slot)| *slot = node).count();
+            let (rate, sequencer) = (self.rate, &mut self.sequencer);
+            sequencer.follower.attack(&struck[..count], &held[..held_count], sample, rate, set);
         }
         self.sequencer.follower.flat(set)
     }
@@ -1065,8 +987,9 @@ impl Hub {
     /// on one sample is weighed against what is actually still held.
     fn follow(&mut self, position: usize, map: LatticeMap) -> LatticeMap {
         let sample = self.batch[position].sample;
-        if self.sequencer.decided != Some(sample) {
-            self.sequencer.decided = Some(sample);
+        if self.sequencer.followed_at != Some(sample) {
+            self.sequencer.followed_at = Some(sample);
+            self.sequencer.take_loop();
             self.sequencer.followed = if self.sequencer.follow == Follow::Off {
                 LatticePos::ORIGIN
             } else {
@@ -1076,17 +999,27 @@ impl Hub {
         LatticeMap { position: map.position + self.sequencer.followed, ..map }
     }
 
-    /// The follow offset for the attack group starting at `position`, whose
-    /// replaced voices `scan_group` has already let go.
+    /// The follow offset for the attack group starting at `position`.
     fn decide_follow(&mut self, position: usize, map: LatticeMap) -> LatticePos {
+        let sample = self.batch[position].sample;
         let mut keys = [0i64; FOLLOW_GROUP];
         let mut struck = 0;
-        for (record, channel, key) in self.group(position) {
+        let mut index = position;
+        while index < self.batch.len() && self.batch[index].sample == sample {
+            let record = self.batch[index];
+            index += 1;
+            let Some((_, channel, key, _)) = record.event.attack() else { continue };
+            // What a same-key onset displaces leaves the context before the
+            // group is scored, as `assign` does before it scores one onset:
+            // otherwise the pitch being decided is weighed against itself.
+            self.forget_replaced(record.source, channel, key);
+            let retune = self.rows[usize::from(record.source)].retune;
+            if record.retune & 1 == 0 || record.retune != retune {
+                continue;
+            }
             // One per pitch class, so octave doublings never crowd a class out.
             let key = LatticeMap::rounded_key(self.arriving(record, channel, key));
-            if struck < FOLLOW_GROUP
-                && !keys[..struck].iter().any(|k| (k - key).rem_euclid(12) == 0)
-            {
+            if !keys[..struck].iter().any(|k| (k - key).rem_euclid(12) == 0) {
                 keys[struck] = key;
                 struck += 1;
             }
