@@ -17,7 +17,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
 | System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame rate (a fraction of the display's) and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
-| Console | The log, the held-note count and Clear. When this build refuses a project's saved editor settings, the editor opens on this tab with the reason. |
+| Console | The log, the held-note count and Clear. When a restore loses something, such as saved editor settings this build refuses or a field or parameter it cannot read, the editor opens on this tab with the reason. |
 
 Settings opens on Tuning in a fresh workspace.
 Tabs that do not fit the column move, from the right, into a trailing overflow menu.

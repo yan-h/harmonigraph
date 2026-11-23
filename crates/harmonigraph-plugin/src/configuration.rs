@@ -107,7 +107,7 @@ pub(crate) struct Settings {
 /// A Console line the editor owes, by who left it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Notice {
-    /// A restore lost or refused something: the Console opens on it, as on
+    /// A restore lost something: the Console opens on it, as on
     /// the editor door's own losses (Yan, 2026-11-22, in
     /// `docs/intent/editor-shell.md`).
     Restore(String),
