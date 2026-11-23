@@ -93,7 +93,6 @@ impl Fields {
             params.editor_state.restore(window);
         }
         if let Some(look) = look {
-            params.settings.supersede_reveals();
             params.ui_state.restore(look);
         }
         for note in notes {

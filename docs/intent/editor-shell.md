@@ -60,6 +60,10 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 
 - Every restore line that reports a loss opens the Console, the host restore's (a field or parameter it could not read, the legacy axes, a full queue's refusal) as well as the editor door's; a line about the host only appends. Opening it is no edit, by the #1813 line above, and the next save stores Settings unfolded on the Console tab, by the #1757 rule that a save stores what the editor holds. Built in PR #1940
 
+## 2026-11-23 (#1949, in chat)
+
+- The Console reveal above asks for no window: over a folded Settings section it unfolds Settings on the Console tab and the pictures squeeze until the next resize or fold click, rather than the window growing as a fold click's unfold does. And no restore's reveal yields to a newer restore's: two restores before an editor frame can leave the Console showing from the older one. Both cases are cheap, and the window-size and restore-order mechanisms PR #1940 built for them are removed. Yan, 2026-11-23, #1949
+
 ## 2026-11-18 (#1824, in chat)
 
 - An edit to what `editor-state` saves, the window's size and the System tab's Own window choice, marks the Bitwig project modified too, through the same notice as `ui-state` (option A). #1824

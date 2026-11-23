@@ -325,7 +325,7 @@ pub fn root_ui(
         },
         frameless,
     ) {
-        (workspace.window_size_change, workspace.window_size_own) = change;
+        workspace.window_size_change = change;
     }
     state.workspace.interaction.appearance_editor.end_frame(
         before_edit,
