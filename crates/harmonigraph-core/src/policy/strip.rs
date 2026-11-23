@@ -84,11 +84,22 @@ impl Follower {
         moved_column(position, self.key)
     }
 
-    /// An attack group's spellings, before any of it is tuned: the key moves
-    /// the fewest fifths that put every one of them inside its seven, so F♯
-    /// in C moves it a fifth sharp, and B♭ a fifth flat. A group no seven
-    /// spellings hold moves nothing. Held notes keep the node they sound at.
-    pub fn attack(&mut self, struck: &[i32], position: i32) {
+    /// An attack group's spellings `struck`, over the held notes' spellings
+    /// `held`, before any of the group is tuned. Two steps:
+    ///
+    /// - **Bring the struck notes inside.** The key moves the fewest fifths
+    ///   that put every struck spelling inside its seven: F♯ in C moves it a
+    ///   fifth sharp, B♭ a fifth flat. A group no seven spellings hold
+    ///   moves nothing.
+    /// - **Clear a wolf.** If two sounding spellings a fifth apart straddle
+    ///   the strip's sharp edge (D–A at Position 0), the key moves a fifth to
+    ///   the side where no sounding fifth is a wolf and its seven still hold
+    ///   every sounding spelling, if exactly one side does: D over a held F
+    ///   major moves it flat. D and A alone, which either side clears, wait
+    ///   for the third.
+    ///
+    /// Held notes keep the node they sound at.
+    pub fn attack(&mut self, struck: &[i32], held: &[i32], position: i32) {
         let (Some(&low), Some(&high)) = (struck.iter().min(), struck.iter().max()) else {
             return;
         };
@@ -100,7 +111,23 @@ impl Follower {
         } else {
             (low - flat).min(0)
         };
-        // Only movement the clamp lets through is kept.
+        self.step(step, position);
+        let sounding = || struck.iter().chain(held);
+        let wolf = |flat: i32| {
+            sounding().any(|&k| sounding().any(|&j| j == k + 1) && (k - flat).rem_euclid(4) == 3)
+        };
+        let clears = |flat: i32| !wolf(flat) && sounding().all(|&k| (flat..=flat + 6).contains(&k));
+        if wolf(self.flat(position)) {
+            let sides = [-1, 1].map(|side| clears(moved_column(position, self.key + side)));
+            if sides[0] != sides[1] {
+                self.step(if sides[0] { -1 } else { 1 }, position);
+            }
+        }
+    }
+
+    /// Moves the key `step` fifths, keeping only what the clamp at
+    /// [`PLACES`] lets the strip sound.
+    fn step(&mut self, step: i32, position: i32) {
         self.key = moved_column(position, self.key.saturating_add(step)) - flat_column(position);
     }
 }
@@ -158,56 +185,67 @@ mod tests {
         chord.iter().filter(|&&k| chord.contains(&(k + 1)) && !pure(k)).count()
     }
 
-    /// Triads moving by a fifth, up from C to E and down to A♭, each played
-    /// as a staggered arpeggio in every order: the key moves a fifth at the
-    /// first note past its seven, and the next time the triad is played
-    /// every fifth in it is pure. Struck together, it is pure at once.
+    /// Plays `chord` one note at a time in `order`, each over the ones before.
+    fn arpeggio(follower: &mut Follower, chord: [i32; 3], order: [usize; 3]) {
+        for (count, &i) in order.iter().enumerate() {
+            let held: Vec<i32> = order[..count].iter().map(|&i| chord[i]).collect();
+            follower.attack(&[chord[i]], &held, 0);
+        }
+    }
+
+    /// Major and minor triads moving by a fifth, up and down from C, each
+    /// played as a staggered arpeggio in every order: the key moves the way
+    /// they move, and the next time the triad is played every fifth in it is
+    /// pure. Struck together, they are pure at once.
     #[test]
     fn a_triad_moved_a_fifth_moves_the_key_in_any_order() {
-        let triad = |root: i32| [root, root + 4, root + 1];
+        let major = |root: i32| [root, root + 4, root + 1];
+        let minor = |root: i32| [root, root - 3, root + 1];
         let orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
-        for (roots, direction) in [([0, 1, 2, 3, 4], 1), ([0, -1, -2, -3, -4], -1)] {
+        type Triad = fn(i32) -> [i32; 3];
+        let cases: [(Triad, [i32; 5], [i32; 5]); 4] = [
+            (major, [0, 1, 2, 3, 4], [0, 0, 1, 2, 3]),
+            (major, [0, -1, -2, -3, -4], [0, 0, -1, -2, -3]),
+            (minor, [3, 4, 5, 6, 7], [0, 0, 1, 2, 3]),
+            (minor, [3, 2, 1, 0, -1], [0, -1, -2, -3, -4]),
+        ];
+        for (triad, roots, keys) in cases {
             for order in orders {
                 let mut follower = Follower::default();
-                for (index, root) in roots.into_iter().enumerate() {
-                    let chord = triad(root);
-                    order.iter().for_each(|&i| follower.attack(&[chord[i]], 0));
-                    // G major and F major lie inside C's seven: D major and
-                    // B♭ major are the first to move it.
-                    let expected = index.saturating_sub(1);
-                    assert_eq!(follower.key(), direction * expected as i32, "{chord:?} {order:?}");
-                    assert_eq!(wolves(&chord, follower.flat(0)), 0, "{chord:?} again");
+                for (root, key) in roots.into_iter().zip(keys) {
+                    arpeggio(&mut follower, triad(root), order);
+                    assert_eq!(follower.key(), key, "{:?} {order:?}", triad(root));
+                    assert_eq!(wolves(&triad(root), follower.flat(0)), 0, "{:?}", triad(root));
                 }
             }
         }
-        for chord in [[2, 6, 3], [-2, 2, -1], [-3, 1, -2], [3, 7, 4]] {
+        for chord in [[2, 6, 3], [-2, 2, -1], [-3, 1, -2], [3, 7, 4], [2, -1, 3]] {
             let mut follower = Follower::default();
-            follower.attack(&chord, 0);
+            follower.attack(&chord, &[], 0);
             assert_eq!(wolves(&chord, follower.flat(0)), 0, "{chord:?} struck together");
         }
     }
 
-    /// Notes inside the key's seven never move it: a C pentatonic vamp and
-    /// sus and quartal voicings, struck together or one by one, and a
-    /// diatonic ii, which keeps its wolf, D–A.
+    /// D struck over a held F major moves the key flat, so D–A is pure; D
+    /// over a held A alone waits, as either side clears it, and F♯ then
+    /// moves it sharp. A pentatonic set, whose wolf no side clears, and C
+    /// major's notes never move it.
     #[test]
-    fn notes_inside_the_key_never_move_it() {
-        let voicings: [&[i32]; 7] = [
-            &[3, 2, 1],
-            &[0, 2, 4, 1, 3],
-            &[2, 4, 1, 3],
-            &[-1, 0, 1],
-            &[0, 2, 1],
-            &[2, 1, 3],
-            &[2, -1, 3],
-        ];
+    fn a_wolf_moves_the_key_to_the_one_side_that_clears_it() {
         let mut follower = Follower::default();
-        for voicing in voicings {
-            follower.attack(voicing, 0);
-            voicing.iter().for_each(|&k| follower.attack(&[k], 0));
-            assert_eq!(follower.key(), 0, "{voicing:?}");
+        follower.attack(&[2], &[-1, 3, 0], 0);
+        assert_eq!((follower.key(), wolves(&[-1, 3, 0, 2], follower.flat(0))), (-1, 0), "F A C D");
+        let mut follower = Follower::default();
+        follower.attack(&[2], &[3], 0);
+        assert_eq!(follower.key(), 0, "D over A");
+        follower.attack(&[6], &[3, 2], 0);
+        assert_eq!(follower.key(), 1, "then F♯");
+        let mut follower = Follower::default();
+        for k in [0, 2, 4, 1, 3] {
+            follower.attack(&[k], &[0, 2, 4, 1, 3], 0);
         }
-        assert_eq!(wolves(&[2, -1, 3], follower.flat(0)), 1, "ii keeps D–A");
+        follower.attack(&[0, 4, 1], &[], 0);
+        assert_eq!(follower.key(), 0, "pentatonic, then C major");
     }
 
     /// A group no seven spellings hold moves nothing, and the key stores no
@@ -215,9 +253,9 @@ mod tests {
     #[test]
     fn the_key_moves_only_where_it_can_hold_the_group() {
         let mut follower = Follower::default();
-        follower.attack(&[-2, 6], 0);
+        follower.attack(&[-2, 6], &[], 0);
         assert_eq!(follower.key(), 0, "B♭ and F♯ together");
-        follower.attack(&[15, 16, 19], 20);
+        follower.attack(&[15, 16, 19], &[], 20);
         assert_eq!((follower.flat(20), follower.flat(0)), (flat_column(20), HOME));
     }
 }

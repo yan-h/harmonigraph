@@ -934,7 +934,8 @@ impl Hub {
     /// the Position fifths set it, moved by the follower when Follow
     /// spellings is on. The group's first decoded onset decides for the whole
     /// group, before any of it is tuned, as `follow` does for a map: after a
-    /// loop's reset, from every current onset's spelling (`Follower::attack`).
+    /// loop's reset, from every current onset's spelling over the held notes'
+    /// (`Follower::attack`).
     fn strip_place(&mut self, position: usize, follow_spellings: bool) -> i32 {
         let sample = self.batch[position].sample;
         let set = self.sequencer.position.threes;
@@ -953,7 +954,12 @@ impl Hub {
                     count += 1;
                 }
             }
-            self.sequencer.follower.attack(&struck[..count], set);
+            let mut held = [0; policy::MAX_CONTEXT];
+            let nodes = self.sequencer.context.iter().flatten().filter_map(|voice| voice.node);
+            let spellings = nodes.map(|node| node.threes + 4 * node.fives);
+            let held_count = spellings.zip(&mut held).map(|(k, slot)| *slot = k).count();
+            let follower = &mut self.sequencer.follower;
+            follower.attack(&struck[..count], &held[..held_count], set);
         }
         self.sequencer.follower.flat(set)
     }

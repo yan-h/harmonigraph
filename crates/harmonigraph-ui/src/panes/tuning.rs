@@ -495,8 +495,9 @@ fn strip_controls(
 
 const FOLLOW_SPELLINGS_HINT: &str = "Move the strip's key the fewest fifths that bring a note \
     struck outside its seven spellings inside them, before that note is tuned: F♯ over F C G D \
-    moves it a fifth sharp, so D major sounds pure. It stays there until another such note moves \
-    it, and every context reset returns it to the Position. Notes already sounding keep their \
+    moves it a fifth sharp, so D major sounds pure. Then, where a sounding fifth would be the \
+    strip's wolf and one side alone clears it, the key moves a fifth that way: D over a held F \
+    major moves it flat. It stays there until another such note moves it, and every context reset returns it to the Position. Notes already sounding keep their \
     pitch. Off, the strip stays where the Position fifths put it, so a piece plays the same from \
     any bar.";
 

@@ -55,9 +55,11 @@ F♯ in C moves it a fifth sharp, B♭ a fifth flat.
 Notes struck together move it once, as far as brings them all inside, so D major, B♭ major, E♭ major and A major from C sound pure from their first stroke.
 A triad moved up or down a fifth therefore moves the key at its first note past the edge, whatever order an arpeggio plays it in.
 A note already sounding keeps its pitch, so the first time an arpeggio plays such a triad, a note struck before the move keeps the old strip's pitch; every note after it, and the next time through, is in the new strip.
-The key stays where it is until a note outside it moves it again: after a D major in C, an F moves it home.
-Notes inside the key's seven never move it, so a pentatonic or sus voicing keeps the key's wolf and every note of a vamp keeps its pitch,
-and a diatonic ii keeps its D–A wolf.
+Then, if two sounding notes a fifth apart, struck or held, would sound the strip's wolf (D–A at Position 0), the key moves a fifth to the one side that makes every sounding fifth pure while its seven still hold every sounding note:
+D struck over a held F major moves it flat, so D sounds 10/9 under the held A,
+and D minor in C moves it flat too, so ii is pure, D sounding 10/9 there and 9/8 in G major.
+Where both sides would clear it, as for D and A alone, the key waits for the triad's third; where neither does, as for a pentatonic set, it stays.
+The key stays where it is until a note outside it, or a wolf, moves it again: after a D major in C, an F moves it home.
 A passing tone outside the key moves it too.
 Every context reset returns the strip to the Position.
 Every fourth fifth along the chain, the one leaving the strip's sharp edge, is a comma narrow (D–A at Position 0).

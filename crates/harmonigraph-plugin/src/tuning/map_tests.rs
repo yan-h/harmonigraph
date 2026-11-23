@@ -887,3 +887,15 @@ fn a_loop_resets_after_its_last_release_and_before_its_first_strike() {
     session.play(f_sharps(false), vec![]);
     assert_eq!(session.a(), Some(PYTHAGOREAN_A), "the strike moved the key");
 }
+
+/// D struck over a held F major moves the strip flat, so D sounds 10/9, a
+/// pure fifth under the held A.
+#[test]
+fn a_note_over_held_notes_moves_the_strip_off_their_wolf() {
+    let _scope = crate::test_scope::enter();
+    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    session.play([65, 69, 72].map(|key| note(key.into(), 0, key, 0, true)).into(), vec![]);
+    session.play(vec![note(62, 0, 62, 0, true)], vec![]);
+    let [d, a] = [62, 69].map(|key| session.voice(true, 0, key).attack_node.unwrap());
+    assert_eq!((d, a - d), (LatticePos::new(-2, 1, 0), LatticePos::new(1, 0, 0)), "D–A pure");
+}
