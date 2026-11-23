@@ -135,9 +135,10 @@ struct Sequencer {
     working: Vec<policy::ContextPitch>,
     last_release: Option<i64>,
     decision: u64,
-    /// A loop or seek was detected and the next attack clears memory, if the
+    /// The input sample a loop or seek was detected at: the first attack
+    /// group at or after it with a retuned onset clears memory, if the
     /// control says so. Held notes keep their frozen assignments either way.
-    loop_pending: bool,
+    loop_at: Option<i64>,
     reference_source: Option<u8>,
     /// Lattice Map following: the mode the current attack group runs under,
     /// how far the Hub has moved the map beyond its automated place, and the
@@ -171,7 +172,7 @@ impl Default for Sequencer {
             working: Vec::with_capacity(policy::MAX_CONTEXT + policy::MAX_MEMORY),
             last_release: None,
             decision: 0,
-            loop_pending: false,
+            loop_at: None,
             reference_source: None,
             follow: Follow::Off,
             followed: LatticePos::ORIGIN,
@@ -193,14 +194,15 @@ impl Sequencer {
         self.followed = LatticePos::ORIGIN;
         self.follower.clear();
     }
-    /// The next attack after a loop or seek clears the history, if the control
-    /// says so. Held notes keep their frozen assignments either way.
-    fn take_loop(&mut self) {
-        if self.loop_pending {
+    /// The attack group at `sample` clears the history after a loop or seek
+    /// at or before it, if the control says so. Held notes keep their frozen
+    /// assignments either way.
+    fn take_loop(&mut self, sample: i64) {
+        if self.loop_at.is_some_and(|at| at <= sample) {
             if self.config.policy.reset_loop {
                 self.forget_history();
             }
-            self.loop_pending = false;
+            self.loop_at = None;
         }
     }
     /// A newly assigned voice joins the context, or `false` when the context
@@ -515,7 +517,9 @@ impl Hub {
             let moved = song - previous.song;
             let elapsed = (sample - previous.sample) as f64 / self.rate;
             if moved.abs().min((moved - elapsed).abs()) > 0.002 {
-                self.sequencer.loop_pending = true;
+                // A later jump before any attack takes the earlier one's
+                // place: either clears the same history.
+                self.sequencer.loop_at = Some(sample);
             }
         }
         self.seconds = Some(Seconds { song, sample });
@@ -583,6 +587,13 @@ impl Hub {
             self.sequencer.position = attack.playback.offset;
             self.sequencer.follow = attack.playback.follow;
             self.sequencer.config = attack.config.into();
+            // A loop or seek's reset goes first, so the group it clears for
+            // is counted after it, not wiped with what came before; and only
+            // for a group that retunes, as only such a group reads the history.
+            let retuned = |record: &Record| record.event.attack().is_some() && self.current(record);
+            if self.batch[index..end].iter().any(retuned) {
+                self.sequencer.take_loop(sample);
+            }
             for position in index..end {
                 self.apply(position, attack.config);
             }
@@ -960,8 +971,7 @@ impl Hub {
     }
 
     /// The attack group at `position`'s sample, scanned at its first onset in
-    /// each pass, before any of it is scored: a pending loop reset applies,
-    /// what each same-key onset
+    /// each pass, before any of it is scored: what each same-key onset
     /// displaces leaves the context, so neither the map's following nor the
     /// strip's weighs a pitch against the voice it replaces, and under
     /// Adaptive's strip every current onset drained this pass is counted
@@ -973,9 +983,6 @@ impl Hub {
             return;
         }
         self.sequencer.scanned = Some((sample, pass));
-        // A loop or seek's reset goes first, so the group it clears for is
-        // counted after it, not wiped with what came before.
-        self.sequencer.take_loop();
         let mut index = position;
         while index < self.batch.len() && self.batch[index].sample == sample {
             let record = self.batch[index];
@@ -1015,6 +1022,7 @@ impl Hub {
         if self.sequencer.decided != Some(sample) {
             self.sequencer.decided = Some(sample);
             let mut sounding = policy::strip::Spellings::default();
+            let mut struck = policy::strip::Spellings::default();
             let mut held = [(0, LatticePos::ORIGIN); policy::MAX_CONTEXT];
             let mut count = 0;
             for node in self.sequencer.context.iter().flatten().filter_map(|voice| voice.node) {
@@ -1025,9 +1033,10 @@ impl Hub {
             }
             for (_, channel, key) in self.group(position) {
                 sounding.insert(fifths_for_midi(channel, key));
+                struck.insert(fifths_for_midi(channel, key));
             }
             let sequencer = &mut self.sequencer;
-            sequencer.follower.decide(sample, self.rate, &sounding, &held[..count], set);
+            sequencer.follower.decide(sample, self.rate, &sounding, &struck, &held[..count], set);
         }
         self.sequencer.follower.flat(set)
     }

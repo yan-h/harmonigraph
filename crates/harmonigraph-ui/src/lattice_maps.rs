@@ -431,7 +431,7 @@ impl MapView {
     ) -> Option<i32> {
         let slid = if policy.follow_spellings { self.strip_moved } else { 0 };
         (self.playback.engine == TuningEngine::Adaptive && policy.decode_fifths).then(|| {
-            harmonigraph_core::policy::strip::flat_column(self.offsets.total().threes + slid)
+            harmonigraph_core::policy::strip::moved_column(self.offsets.total().threes, slid)
         })
     }
     /// Lattice clicks edit the selected saved map, so there must be one.

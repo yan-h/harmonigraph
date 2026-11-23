@@ -949,3 +949,75 @@ fn reset_on_loop_counts_the_first_group_after_the_seek() {
     session.play(vec![note(1, 0, 69, 0, true)], vec![]);
     assert_eq!(session.voice(true, 0, 69).attack_node, Some(LatticePos::new(3, 0, 0)), "C G D A");
 }
+
+/// A seek later in the callback than an attack group leaves that group's
+/// history alone: F♯ struck before the seek still clears with it, so the A
+/// after lands in C's strip, F C G D, not G's.
+#[test]
+fn reset_on_loop_waits_for_a_group_at_or_after_the_seek() {
+    let _scope = crate::test_scope::enter();
+    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    let policy = harmonigraph_core::configuration::PolicyConfig {
+        decode_fifths: true,
+        decoded_fifth: 696_578_428,
+        reset_loop: true,
+        ..Default::default()
+    };
+    settings(&session.hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
+    let at = |seconds, time| {
+        let Input::Transport(mut value) = musical_tests::at(seconds, false) else { unreachable!() };
+        value.header.time = time;
+        Input::Transport(value)
+    };
+    for seconds in [5.0, 5.0] {
+        session.hub.run_format(session.raw, vec![at(seconds, 0)], None, None, 128);
+        session.raw += 128;
+    }
+    // F♯ at the callback's start, the seek to 1 s half a callback later.
+    let strikes = harmonigraph_core::policy::strip::SLIDE_STRIKES.ceil() as i16;
+    let chord =
+        |on| (0..strikes).map(move |i| 90 - 12 * i).map(move |key| note(key as i32, 0, key, 0, on));
+    let raw = session.raw;
+    session.decoded.run_format(raw, chord(true).collect(), None, None, 128);
+    session.plain.run_format(raw, vec![], None, None, 128);
+    session.hub.run_format(raw, vec![at(1.0, 64)], None, None, 128);
+    session.raw += 128;
+    session.play(chord(false).collect(), vec![]);
+    session.play(vec![note(1, 0, 69, 0, true)], vec![]);
+    assert_eq!(session.voice(true, 0, 69).attack_node, Some(LatticePos::new(-1, 1, 0)), "F C G D");
+}
+
+/// A loop reset waits for an attack the Hub retunes: one from a Tune with
+/// Retune off neither reads the history nor clears it, so D replayed after a
+/// seek starts over on the automated map rather than at the 10/9 D held
+/// across the seek.
+#[test]
+fn reset_on_loop_waits_for_a_retuned_attack() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = hub().with_adaptive();
+    hub.activate();
+    install(&hub);
+    let mut plain = tune();
+    plain.shared().set_retune(false);
+    plain.activate();
+    let policy =
+        harmonigraph_core::configuration::PolicyConfig { reset_loop: true, ..Default::default() };
+    settings(&hub).submit(ConfigEdit { policy: Some(policy), ..Default::default() });
+    let map = LatticeMap::default();
+    let node = |hub: &Device, key| voice(hub, crate::tuning::DIRECT, key).attack_node;
+    let on = |id, key| note(id, 0, key, 0, true);
+    let off = |id, key| note(id, 0, key, 0, false);
+    plain.run(0, vec![], None);
+    hub.run(0, vec![parameter("tuning-engine", 2.0, 0), parameter("map-follow", 2.0, 0)], None);
+    hub.run(512, vec![on(1, 62), on(2, 65), on(3, 69)], None);
+    let down = LatticeMap { position: LatticePos::new(-1, 0, 0), ..map };
+    assert_eq!(node(&hub, 62), Some(down.node(62)), "D at 10/9");
+    hub.run(1024, vec![off(2, 65), off(3, 69), musical_tests::at(5.0, false)], None);
+    hub.run(1536, vec![musical_tests::at(5.0, false)], None);
+    hub.run(2048, vec![musical_tests::at(1.0, false)], None);
+    plain.run(2560, vec![on(4, 60)], None);
+    hub.run(2560, vec![], None);
+    hub.run(3072, vec![off(1, 62)], None);
+    hub.run(3584, vec![on(5, 62)], None);
+    assert_eq!(node(&hub, 62), Some(map.node(62)), "D starts over at 9/8");
+}

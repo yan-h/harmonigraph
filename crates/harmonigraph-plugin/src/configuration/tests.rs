@@ -1125,7 +1125,7 @@ fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
             serde_json::from_str(&device.save().fields[MUSICAL_SETTINGS]).unwrap();
         assert_eq!(PolicyConfig::from(saved.adaptive), policy);
         device.run(0, vec![], None);
-        assert_eq!(shown(&settings).view.resolved.policy, policy);
+        assert_eq!(sounding(&device).policy, policy, "the audio owner adopts it");
     }
     let defaults: MusicalSettings = serde_json::from_str("{\"adaptive\":{}}").unwrap();
     assert_eq!(PolicyConfig::from(defaults.adaptive), PolicyConfig::default());

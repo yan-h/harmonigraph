@@ -31,6 +31,14 @@ pub fn flat_column(position: i32) -> i32 {
     HOME.saturating_add(position).clamp(*PLACES.start(), *PLACES.end())
 }
 
+/// The flat column following moves the strip to, `moved` fifths from where
+/// the Position fifths `position` place it, clamped to [`PLACES`]. The
+/// follower stores only movement the clamp lets through, so the strip
+/// stands `moved` fifths from its set place.
+pub fn moved_column(position: i32, moved: i32) -> i32 {
+    flat_column(position).saturating_add(moved).clamp(*PLACES.start(), *PLACES.end())
+}
+
 /// The node spelling `fifths` takes in the strip whose flat column is `flat`:
 /// its one copy with `flat <= threes <= flat + 3`.
 pub fn node(fifths: i32, flat: i32) -> LatticePos {
@@ -107,7 +115,8 @@ fn index(fifths: i32) -> Option<usize> {
 pub struct Follower {
     /// Each spelling's count of attacks, as of the attack sample beside it.
     counts: [(f64, i64); SPELLINGS],
-    /// Fifths the key has moved from the Position.
+    /// Fifths the key has moved from where the Position places the strip,
+    /// only as far as [`PLACES`] lets it.
     key: i32,
     /// The last group's excursion from the key, −1..=1.
     excursion: i32,
@@ -135,7 +144,7 @@ impl Follower {
     /// The flat column the strip stands at, set by the Position fifths
     /// `position` and moved by following.
     pub fn flat(&self, position: i32) -> i32 {
-        flat_column(position + self.offset())
+        moved_column(position, self.offset())
     }
 
     fn count(&self, fifths: i32, at: i64, per_second: f64) -> f64 {
@@ -155,8 +164,8 @@ impl Follower {
 
     /// Decides the attack group at sample `at`, once its onsets are counted
     /// and before they are tuned. `sounding` is its spellings and the held
-    /// notes', `held` each held note's spelling and the node it sounds at,
-    /// and `position` the Position fifths.
+    /// notes', `struck` the group's own, `held` each held note's spelling and
+    /// the node it sounds at, and `position` the Position fifths.
     ///
     /// - **The key**, by the count rule, for single notes and melodies: the
     ///   seven spellings from the key's flat column are the key's; it moves
@@ -164,7 +173,10 @@ impl Follower {
     ///   spelling at the other, and back toward the Position once the
     ///   spelling that step pushes out has fallen out of use. It moves only
     ///   where its excursions can still hold every held note and add no wolf
-    ///   the group did not already have, so it never trades one for another.
+    ///   the group did not already have, so the step itself adds no wolf; a
+    ///   later group, whose spellings all lie inside the moved key's seven,
+    ///   takes that key's strip and its wolf, which may be one the old key
+    ///   left pure (Yan's (b)).
     /// - **The excursion**, −1..=1 around the key, per group: a strip that
     ///   holds every held note where it sounds, if one does; then none at all
     ///   unless the group holds a spelling outside the key's seven, so a
@@ -172,12 +184,14 @@ impl Follower {
     ///   its wolf (Yan's (b), #1941); then the fewest wolves among the
     ///   group's fifths (D–A on F C G D), so D major there slides sharp and
     ///   sounds pure (Yan, #1896: "I run into wolf fifths when modulating up
-    ///   or down by fifths playing triads only"); then the fewest common tones
-    ///   with the last group retuned, so B♭ major after F major slides flat
-    ///   and keeps its F; then no excursion; then toward the side the foreign
-    ///   spelling lies on, so B♭ major from C slides flat; then the fewest
-    ///   sounding spellings retuned from where the strip last stood; then
-    ///   nearer the Position.
+    ///   or down by fifths playing triads only"), a struck spelling counted at
+    ///   its copy in the strip as well as where any held copy sounds; then the
+    ///   fewest common tones with the last group retuned, so B♭ major after F
+    ///   major slides flat and keeps its F; then none toward the side away
+    ///   from the foreign spelling, so B♭ major from C slides flat; then the
+    ///   fewest sounding spellings retuned from where the strip last stood, so
+    ///   a lone C♯ after D major stays where D major stood; then no
+    ///   excursion; then nearer the Position.
     ///
     /// The strip stands at most a fifth from the key, so no run of chords
     /// walks it away, and a vamp inside the key's seven never moves it, so
@@ -189,11 +203,16 @@ impl Follower {
         at: i64,
         per_second: f64,
         sounding: &Spellings,
+        struck: &Spellings,
         held: &[(i32, LatticePos)],
         position: i32,
     ) {
+        // Only movement the clamp lets through is kept: a key at a clamped
+        // Position would otherwise run on unseen, and land the strip far off
+        // once the Position comes back.
+        self.key = moved_column(position, self.key) - flat_column(position);
         let count = |fifths| self.count(fifths, at, per_second);
-        let key_flat = flat_column(position + self.key);
+        let key_flat = moved_column(position, self.key);
         let replaced = |past: i32, other: i32| {
             count(past) >= SLIDE_STRIKES && count(past) >= SLIDE_MARGIN * count(other)
         };
@@ -209,16 +228,16 @@ impl Follower {
             _ => 0,
         };
         let step = if toward != 0 { toward } else { back };
-        let best_now = self.best(sounding, held, position, self.key);
+        let best_now = self.best(sounding, struck, held, position, self.key);
         if step != 0 {
-            let moved = self.best(sounding, held, position, self.key + step);
+            let moved = self.best(sounding, struck, held, position, self.key + step);
             let holds = |best: &Choice| best.holds || held.is_empty();
             if holds(&moved) && moved.wolves.within(&best_now.wolves) {
                 self.key += step;
             }
         }
-        let best = self.best(sounding, held, position, self.key);
-        self.excursion = best.excursion;
+        let best = self.best(sounding, struck, held, position, self.key);
+        self.excursion = best.flat - moved_column(position, self.key);
         self.last = Some((*sounding, best.flat));
     }
 
@@ -227,11 +246,12 @@ impl Follower {
     fn best(
         &self,
         sounding: &Spellings,
+        struck: &Spellings,
         held: &[(i32, LatticePos)],
         position: i32,
         key: i32,
     ) -> Choice {
-        let key_flat = flat_column(position + key);
+        let key_flat = moved_column(position, key);
         // The side of the key's seven, `key_flat..=key_flat + 6`, a spelling
         // outside it lies on: only a group holding one may take an excursion
         // (Yan's (b), #1941), and it leans toward that side.
@@ -241,17 +261,23 @@ impl Follower {
         let flat_side = sounding.iter().any(|k| outside(k) == -1);
         let side = i32::from(sharp) - i32::from(flat_side);
         let choices = (-1..=1).map(|excursion| {
-            let flat = flat_column(position + key + excursion);
+            let flat = moved_column(position, key + excursion);
             // Where each sounding spelling sounds: a held note where it is
-            // held, a struck one at its copy in this strip.
-            let at =
-                |k: i32| held.iter().find(|&&(s, _)| s == k).map_or(node(k, flat), |&(_, n)| n);
+            // held, and a struck one at its copy in this strip, so a spelling
+            // both held and struck sounds at both.
+            let copies = |k: i32| {
+                let struck = struck.contains(k).then(|| node(k, flat));
+                held.iter().filter(move |&&(s, _)| s == k).map(|&(_, n)| n).chain(struck)
+            };
             let holds = held.iter().all(|&(k, n)| node(k, flat) == n);
             let mut wolves = Spellings::default();
             sounding
                 .iter()
                 .filter(|&k| {
-                    sounding.contains(k + 1) && at(k + 1) - at(k) != LatticePos::new(1, 0, 0)
+                    sounding.contains(k + 1)
+                        && copies(k).any(|low| {
+                            copies(k + 1).any(|high| high - low != LatticePos::new(1, 0, 0))
+                        })
                 })
                 .for_each(|k| wolves.insert(k));
             // Spellings this strip retunes from where the strip last stood:
@@ -265,12 +291,12 @@ impl Follower {
                 !foreign && excursion != 0,
                 wolves.len(),
                 common,
-                excursion != 0,
-                side != 0 && excursion != side,
+                side != 0 && excursion != 0 && excursion != side,
                 retuned,
+                excursion != 0,
                 (key + excursion).abs(),
             );
-            (rank, Choice { excursion, flat, holds, wolves })
+            (rank, Choice { flat, holds, wolves })
         });
         choices.min_by_key(|(rank, _)| *rank).map(|(_, choice)| choice).unwrap()
     }
@@ -279,7 +305,6 @@ impl Follower {
 /// One excursion [`Follower::best`] weighed.
 #[derive(Clone, Copy, Debug)]
 struct Choice {
-    excursion: i32,
     flat: i32,
     /// Every held note sounds at its node in this strip.
     holds: bool,
@@ -361,7 +386,9 @@ mod tests {
         struck.iter().for_each(|&k| follower.strike(k, at, RATE));
         let mut sounding = Spellings::default();
         struck.iter().chain(held.iter().map(|(k, _)| k)).for_each(|&k| sounding.insert(k));
-        follower.decide(at, RATE, &sounding, held, position);
+        let mut group = Spellings::default();
+        struck.iter().for_each(|&k| group.insert(k));
+        follower.decide(at, RATE, &sounding, &group, held, position);
         follower.flat(position)
     }
     fn group(follower: &mut Follower, struck: &[i32], at: i64) -> i32 {
@@ -525,6 +552,49 @@ mod tests {
         assert_eq!(node(F, flat), node(F, HOME), "F's column pinned");
         let mut follower = Follower::default();
         assert_eq!(group_at(&mut follower, &[6, 3], &[(2, node(2, HOME))], 0, 0), HOME + 1);
+    }
+
+    /// Strikes past a clamped Position move the key only as far as the strip
+    /// can go: sixteen C♯s at Position +20 slide it one column, and back at
+    /// the Position of C an A lands near C's strip, not eleven fifths flat;
+    /// strikes past the flat edge at Position −20 store nothing.
+    #[test]
+    fn a_clamped_slide_stores_only_the_movement_it_makes() {
+        const C_SHARP: i32 = 7;
+        let mut follower = Follower::default();
+        for at in 0..16 {
+            group_at(&mut follower, &[C_SHARP], &[], at, 20);
+        }
+        assert_eq!(follower.flat(20), flat_column(20) - 1, "one column flat");
+        let flat = group_at(&mut follower, &[3], &[], 16, 0);
+        assert!((HOME - 1..=HOME).contains(&flat), "A lands near C's strip: {flat}");
+        // At the flat edge the strip cannot move, so nothing is stored.
+        let mut follower = Follower::default();
+        for at in 0..16 {
+            group_at(&mut follower, &[flat_column(-20) - 1], &[], at, -20);
+        }
+        assert_eq!(group_at(&mut follower, &[3], &[], 16, 0), HOME, "A at C's strip");
+    }
+
+    /// A spelling struck again while an earlier copy of it is held sounds at
+    /// its copy in the strip, so its fifths there count: holding F from C's
+    /// strip at Position +2, F–C–G–A–E keeps its struck F–C pure.
+    #[test]
+    fn a_struck_copy_of_a_held_spelling_is_scored_where_it_sounds() {
+        let mut follower = Follower::default();
+        let flat = group_at(&mut follower, &[F, C, 1, 3, 4], &[(F, node(F, HOME))], 0, 2);
+        assert_eq!(node(C, flat) - node(F, flat), LatticePos::new(1, 0, 0), "F–C pure at {flat}");
+    }
+
+    /// A lone foreign spelling keeps the copy the last group tuned it near:
+    /// C♯ after D major from C stays in D major's strip.
+    #[test]
+    fn a_lone_foreign_note_stays_where_the_last_chord_stood() {
+        let mut follower = Follower::default();
+        let d_major = group(&mut follower, &[2, F_SHARP, 3], 0);
+        assert_eq!(d_major, HOME + 1, "D major slides sharp");
+        let flat = group(&mut follower, &[7], 1);
+        assert_eq!(node(7, flat), LatticePos::new(3, 1, 0), "C♯ at D major's copy");
     }
 
     /// A key move that would put the chord struck with it on a wolf waits:
