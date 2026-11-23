@@ -52,13 +52,14 @@ With **Follow spellings** on, the default, the strip also follows the music, in 
 Its key moves a fifth at a time for single notes and melodies,
 once a spelling just past the key's seven has replaced the one at its other edge (three F♯s close together, or about four spread out, with F out of use),
 and back toward the Position when that spelling fades.
-Around the key, each chord stands at most a fifth either way, chosen so its fifths sound pure where they can:
-D major over F C G D struck together slides sharp and sounds pure from its first stroke,
-B♭ major after F major slides flat and keeps its F,
-and the next chord comes back unless it shares notes it would retune.
-Because the strip never stands more than a fifth from the key, no run of chords walks it away,
-and at the Position a pentatonic vamp, with a wolf in every strip, keeps its notes;
-at a followed key it can still move one note a comma between voicings (E in a C pentatonic vamp in G), which waits on a decision on #1941.
+A chord holding a spelling outside the key's seven, such as F♯ or B♭ in C, may stand a fifth either way from the key, chosen so its fifths sound pure:
+D major from C struck together slides sharp and sounds pure from its first stroke,
+B♭ major from C slides flat, and after F major keeps its F,
+and A major in G slides sharp.
+A chord whose spellings all lie inside the key's seven takes the key's own strip and its wolf (Yan, #1941):
+a pentatonic or sus voicing never moves it, at the Position or at a followed key, so no note of a vamp pumps between two commas,
+and a diatonic ii keeps its D–A wolf.
+Because the strip never stands more than a fifth from the key, no run of chords walks it away.
 A held note always keeps the node it sounds at, after a Position lane move too,
 so a chord rolled by hand, decided note by note, keeps its wolf where its first notes pin the strip it needs.
 Every context reset returns the strip to the Position.

@@ -166,21 +166,22 @@ impl Follower {
     ///   where its excursions can still hold every held note and add no wolf
     ///   the group did not already have, so it never trades one for another.
     /// - **The excursion**, −1..=1 around the key, per group: a strip that
-    ///   holds every held note where it sounds, if one does; then the fewest
-    ///   wolves among the group's fifths (D–A on F C G D), so D major there
-    ///   slides sharp and sounds pure (Yan, #1896: "I run into wolf fifths
-    ///   when modulating up or down by fifths playing triads only"); then the
-    ///   fewest common tones with the last group retuned, so B♭ major after F
-    ///   major slides flat and keeps its F; then the fewest sounding spellings
-    ///   retuned from where the strip last stood, so D major after C major
-    ///   slides sharp and a tie keeps the strip where it is; then no
-    ///   excursion; then nearer the Position.
+    ///   holds every held note where it sounds, if one does; then none at all
+    ///   unless the group holds a spelling outside the key's seven, so a
+    ///   pentatonic or sus voicing and a diatonic ii keep the key's strip and
+    ///   its wolf (Yan's (b), #1941); then the fewest wolves among the
+    ///   group's fifths (D–A on F C G D), so D major there slides sharp and
+    ///   sounds pure (Yan, #1896: "I run into wolf fifths when modulating up
+    ///   or down by fifths playing triads only"); then the fewest common tones
+    ///   with the last group retuned, so B♭ major after F major slides flat
+    ///   and keeps its F; then no excursion; then toward the side the foreign
+    ///   spelling lies on, so B♭ major from C slides flat; then the fewest
+    ///   sounding spellings retuned from where the strip last stood; then
+    ///   nearer the Position.
     ///
     /// The strip stands at most a fifth from the key, so no run of chords
-    /// walks it away. A pentatonic vamp, with a wolf in every strip, still
-    /// moves one column a comma where the chord rule purifies one of its
-    /// voicings and not the next (E in a C pentatonic vamp at the key G;
-    /// pending Yan's answer on #1941). A
+    /// walks it away, and a vamp inside the key's seven never moves it, so
+    /// no note of it pumps between two commas. A
     /// chord rolled by hand is decided note by note, so one whose held notes
     /// pin the strip it needs keeps its wolf.
     pub fn decide(
@@ -231,6 +232,14 @@ impl Follower {
         key: i32,
     ) -> Choice {
         let key_flat = flat_column(position + key);
+        // The side of the key's seven, `key_flat..=key_flat + 6`, a spelling
+        // outside it lies on: only a group holding one may take an excursion
+        // (Yan's (b), #1941), and it leans toward that side.
+        let outside = |k: i32| if k > key_flat + 6 { 1 } else { -i32::from(k < key_flat) };
+        let foreign = sounding.iter().any(|k| outside(k) != 0);
+        let sharp = sounding.iter().any(|k| outside(k) == 1);
+        let flat_side = sounding.iter().any(|k| outside(k) == -1);
+        let side = i32::from(sharp) - i32::from(flat_side);
         let choices = (-1..=1).map(|excursion| {
             let flat = flat_column(position + key + excursion);
             // Where each sounding spelling sounds: a held note where it is
@@ -251,8 +260,16 @@ impl Follower {
             let moved = |k: i32| node(k, flat) != node(k, last_flat);
             let common = sounding.iter().filter(|&k| last.contains(k) && moved(k)).count();
             let retuned = sounding.iter().filter(|&k| moved(k)).count();
-            let rank =
-                (!holds, wolves.len(), common, retuned, excursion != 0, (key + excursion).abs());
+            let rank = (
+                !holds,
+                !foreign && excursion != 0,
+                wolves.len(),
+                common,
+                excursion != 0,
+                side != 0 && excursion != side,
+                retuned,
+                (key + excursion).abs(),
+            );
             (rank, Choice { excursion, flat, holds, wolves })
         });
         choices.min_by_key(|(rank, _)| *rank).map(|(_, choice)| choice).unwrap()
@@ -351,6 +368,16 @@ mod tests {
         group_at(follower, struck, &[], at, 0)
     }
 
+    /// A follower whose key three F♯s have moved to G.
+    fn in_g() -> Follower {
+        let mut follower = Follower::default();
+        for _ in 0..strikes() {
+            group(&mut follower, &[F_SHARP], 0);
+        }
+        assert_eq!(follower.offset(), 1, "in G");
+        follower
+    }
+
     /// The fifths among `chord` that sound wolves in the strip from `flat`.
     fn wolves(chord: &[i32], flat: i32) -> usize {
         chord
@@ -407,75 +434,75 @@ mod tests {
         assert_eq!(group(&mut follower, &[F_SHARP], 0), HOME + 1, "F let go");
     }
 
-    /// D major's D–A is F C G D's wolf: the strip slides sharp at the chord
-    /// and it sounds pure. B♭ major after F major slides flat, keeping F.
+    /// Triad modulation slides at its first chord with a spelling outside the
+    /// key's seven, toward that spelling, and sounds pure: D–F♯–A and
+    /// B♭–D–F from C, A–C♯–E from G. B♭ major after F major slides flat too,
+    /// keeping its F.
     #[test]
     fn a_chord_whose_fifth_straddles_the_strip_slides_it_toward_that_fifth() {
-        let mut follower = Follower::default();
-        assert_eq!(group(&mut follower, &[0, 4, 1], 0), HOME);
-        assert_eq!(group(&mut follower, &[2, 6, 3], 1), HOME + 1, "D major");
-        let mut follower = Follower::default();
-        assert_eq!(group(&mut follower, &[-1, 3, 0], 0), HOME);
-        assert_eq!(group(&mut follower, &[-2, 2, -1], 1), HOME - 1, "B♭ major");
-    }
-
-    /// Five consecutive spellings have a wolf in every strip, so no chord of
-    /// them moves the strip. At the Position, a vamp keeps its notes: A–D–G
-    /// slides to make D–A pure, and the whole set and D–E–G–A then keep
-    /// them, C at 1/1 throughout. At a followed key it does not; see
-    /// `a_pentatonic_vamp_at_a_followed_key_keeps_each_pitch`.
-    #[test]
-    fn a_pentatonic_voicing_never_slides_the_strip() {
-        for root in -6..=6 {
-            let set: Vec<i32> = (root..root + 5).collect();
+        for (chord, moved) in [([2, 6, 3], 1), ([-2, 2, -1], -1)] {
             let mut follower = Follower::default();
-            group(&mut follower, &set, 0);
-            assert_eq!(follower.offset(), 0, "{set:?}");
+            assert_eq!(group(&mut follower, &[0, 4, 1], 0), HOME);
+            let flat = group(&mut follower, &chord, 1);
+            assert_eq!((flat, wolves(&chord, flat)), (HOME + moved, 0), "{chord:?} from C");
         }
         let mut follower = Follower::default();
-        let vamp: [&[i32]; 5] =
-            [&[3, 2, 1], &[0, 2, 4, 1, 3], &[2, 4, 1, 3], &[3, 2, 1], &[2, 4, 1, 3]];
-        let flats: Vec<i32> = vamp
-            .into_iter()
-            .enumerate()
-            .map(|(round, set)| group(&mut follower, set, second(round as f64)))
-            .collect();
-        assert_eq!(flats, [HOME + 1; 5], "no pump");
-        assert!(flats.iter().all(|&flat| node(C, flat) == LatticePos::ORIGIN));
+        assert_eq!(group(&mut follower, &[-1, 3, 0], 0), HOME);
+        assert_eq!(group(&mut follower, &[-2, 2, -1], 1), HOME - 1, "B♭ major after F major");
+        let mut follower = in_g();
+        let a_major = [3, 7, 4];
+        let flat = group(&mut follower, &a_major, 1);
+        assert_eq!((flat, wolves(&a_major, flat)), (HOME + 2, 0), "A–C♯–E from G");
     }
 
-    /// I–ii–vi–IV–I in C, and with a D major for ii: C keeps 1/1 throughout
-    /// and no chord has a wolf.
+    /// A chord all of whose spellings lie inside the key's seven never moves
+    /// the strip (Yan's (b), #1941): pentatonic and sus voicings keep the
+    /// key's wolf, at the Position and at a followed key, round after round.
     #[test]
-    fn a_ii_that_slides_comes_home_at_vi() {
+    fn a_pentatonic_voicing_never_slides_the_strip() {
+        let voicings: [&[i32]; 6] =
+            [&[3, 2, 1], &[0, 2, 4, 1, 3], &[2, 4, 1, 3], &[-1, 0, 1], &[0, 2, 1], &[2, 1, 3]];
+        for (name, mut follower, key_flat) in
+            [("C", Follower::default(), HOME), ("G", in_g(), HOME + 1)]
+        {
+            for round in 0..3 {
+                for (index, voicing) in voicings.iter().enumerate() {
+                    // In G, the same shapes a fifth up.
+                    let shifted: Vec<i32> = voicing.iter().map(|k| k + key_flat - HOME).collect();
+                    let at = second((round * voicings.len() + index) as f64 / 2.0);
+                    let flat = group(&mut follower, &shifted, at);
+                    assert_eq!(flat, key_flat, "in {name}, {shifted:?}, round {round}");
+                }
+            }
+        }
+    }
+
+    /// I–ii–vi–IV–I in C: a diatonic ii keeps its wolf, D–A, every time; with
+    /// a D major for ii, its F♯ slides the strip and D major sounds pure. C
+    /// keeps 1/1 throughout.
+    #[test]
+    fn a_diatonic_ii_keeps_its_wolf_and_a_secondary_dominant_slides() {
         let ii: [&[i32]; 5] = [&[0, 4, 1], &[2, -1, 3], &[3, 0, 4], &[-1, 3, 0], &[0, 4, 1]];
         let secondary: [&[i32]; 5] = [&[0, 4, 1], &[2, 6, 3], &[3, 0, 4], &[-1, 3, 0], &[0, 4, 1]];
-        for progression in [ii, secondary] {
+        for (progression, ii_wolves) in [(ii, 1), (secondary, 0)] {
             let mut follower = Follower::default();
             for (round, chord) in progression.into_iter().enumerate() {
                 let flat = group(&mut follower, chord, second(round as f64));
                 assert_eq!(node(C, flat), LatticePos::ORIGIN, "{progression:?} {round}: C 1/1");
-                assert_eq!(wolves(chord, flat), 0, "{progression:?} {round}");
+                let expected = if round == 1 { ii_wolves } else { 0 };
+                assert_eq!(wolves(chord, flat), expected, "{progression:?} {round}");
             }
         }
     }
 
-    /// At a key the count rule followed to G: E–A–D sounds pure, and A minor
-    /// keeps C at 1/1.
+    /// At a key the count rule followed to G, chords inside its seven take
+    /// its own strip: E–A–D keeps G's wolf, A–E, and A minor keeps C at 1/1.
     #[test]
     fn a_followed_key_tunes_its_chords_around_it() {
-        let in_g = || {
-            let mut follower = Follower::default();
-            for _ in 0..strikes() {
-                group(&mut follower, &[F_SHARP], 0);
-            }
-            assert_eq!(follower.offset(), 1, "in G");
-            follower
-        };
-        let flat = group(&mut in_g(), &[4, 3, 2], 1);
-        assert_eq!(wolves(&[4, 3, 2], flat), 0, "E–A–D pure");
-        let flat = group(&mut in_g(), &[3, 0, 4], 1);
-        assert_eq!((node(C, flat), wolves(&[3, 0, 4], flat)), (LatticePos::ORIGIN, 0), "A minor");
+        for chord in [[4, 3, 2], [3, 0, 4]] {
+            let flat = group(&mut in_g(), &chord, 1);
+            assert_eq!((flat, node(C, flat)), (HOME + 1, LatticePos::ORIGIN), "{chord:?}");
+        }
     }
 
     /// A held note sounds where it was struck, whatever the Position since:
@@ -487,17 +514,6 @@ mod tests {
         let a = node(3, HOME);
         let flat = group_at(&mut follower, &[4], &[(3, a)], 0, 1);
         assert_eq!(node(4, flat) - a, LatticePos::new(1, 0, 0), "E a fifth over the held A");
-    }
-
-    /// The key moving under a held F does not move the wolf: F♯ in three
-    /// octaves over a held F, then C–D–E–G–A, keeps D–A as the wolf, as at
-    /// the Position, rather than trading it for A–E.
-    #[test]
-    fn a_count_slide_trades_no_wolf_for_another() {
-        let mut follower = Follower::default();
-        let f_sharps = vec![F_SHARP; strikes()];
-        group_at(&mut follower, &f_sharps, &[(F, node(F, HOME))], 0, 0);
-        assert_eq!(group(&mut follower, &[0, 2, 4, 1, 3], 0), HOME, "the wolf stays D–A");
     }
 
     /// No slide moves a held note's column: D major over a held F keeps its
@@ -525,19 +541,13 @@ mod tests {
     }
 
     /// A C pentatonic vamp at the key G (F♯ having replaced F): A–D–G,
-    /// C–D–E–G–A, D–E–G–A, three rounds. E should keep one pitch. It does not
-    /// yet: the chord rule purifies D–E–G–A and cannot purify the pentatonic
-    /// chord, so E moves between 5/4 and 81/64 each round. Option (b), which
-    /// slides only for a group holding a spelling outside the key's seven, is
-    /// put to Yan on #1941; under it this passes.
+    /// C–D–E–G–A, D–E–G–A, three rounds. E keeps one pitch: none of them
+    /// holds a spelling outside G's seven, so none slides (Yan's (b), #1941).
+    /// Before (b), the chord rule purified D–E–G–A and not the pentatonic
+    /// chord, and E moved between 5/4 and 81/64 each round.
     #[test]
-    #[ignore = "E pumps until Yan answers option (b) on #1941"]
     fn a_pentatonic_vamp_at_a_followed_key_keeps_each_pitch() {
-        let mut follower = Follower::default();
-        for _ in 0..strikes() {
-            group(&mut follower, &[F_SHARP], 0);
-        }
-        assert_eq!(follower.offset(), 1, "in G");
+        let mut follower = in_g();
         let vamp: [&[i32]; 3] = [&[3, 2, 1], &[0, 2, 4, 1, 3], &[2, 4, 1, 3]];
         let mut e = Vec::new();
         for round in 0..3 {

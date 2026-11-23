@@ -497,8 +497,9 @@ fn strip_controls(
 }
 
 const FOLLOW_SPELLINGS_HINT: &str = "Slide the strip a fifth at a chord whose fifth would \
-    otherwise be its wolf, when one slide makes all of the chord's fifths pure (D major over \
-    F C G D; never a pentatonic set). Also slide when a spelling just past the \
+    otherwise be its wolf, when the chord holds a spelling outside the key's seven and one \
+    slide makes all its fifths pure (D major over F C G D; never a pentatonic or sus voicing, nor a \
+    diatonic ii). Also slide when a spelling just past the \
     key's seven has replaced the one at its other edge, as F♯ replacing F does, and back toward \
     the Position once that spelling has fallen out of use. A slide waits while a note it would \
     retune is held, and every context reset returns the strip to the Position. Off, the strip \
