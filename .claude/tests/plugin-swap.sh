@@ -79,8 +79,13 @@ int fixture_value(void) { return 0; }
 C
 cc -dynamiclib -o "$repo/target/release/libharmonigraph_plugin.dylib" "$TMP/new.c" 2>/dev/null || {
   echo "✗ could not build the fixture's Mach-O" >&2; exit 1; }
-printf '#!/bin/sh\ntrue\n' > "$repo/target/release/harmonigraph-offline"
-chmod +x "$repo/target/release/harmonigraph-offline"
+# Renderers answer `--build-tag` as the real one does. Main's was built at
+# another commit than its plugin; the Codex worktree's matches its own.
+renderer_stub() {
+  printf '#!/bin/sh\n[ "$1" = --build-tag ] && echo "%s"\nexit 0\n' "$2" > "$1"
+  chmod +x "$1"
+}
+renderer_stub "$repo/target/release/harmonigraph-offline" "main @0000000"
 
 mkdir -p "$codex_wt/target/release"
 cat > "$TMP/codex.c" <<C
@@ -90,8 +95,7 @@ C
 cc -dynamiclib -o "$codex_wt/target/release/libharmonigraph_plugin.dylib" \
   "$TMP/codex.c" 2>/dev/null || {
   echo "✗ could not build the Codex worktree fixture's Mach-O" >&2; exit 1; }
-printf '#!/bin/sh\ntrue\n' > "$codex_wt/target/release/harmonigraph-offline"
-chmod +x "$codex_wt/target/release/harmonigraph-offline"
+renderer_stub "$codex_wt/target/release/harmonigraph-offline" "$codex_branch @$sha"
 
 # A DIFFERENT binary in the slot to begin with, so "the new bytes arrived" is
 # a real question rather than one the fixture answers by construction.
@@ -277,6 +281,16 @@ if [ "$status" -ne 0 ]; then
 fi
 check_discovery_metadata "no-argument load-plugin.sh"
 
+# 0. The renderer is checked against the plugin it was loaded with, by commit,
+#    and installed anyway when nothing installed matches.
+installed_renderer="$TMP/home/Library/Application Support/$NAME/harmonigraph-offline"
+if ! grep -Fq "WARNING: that renderer is build main @0000000, but the plugin is build main @$sha." "$out" \
+  || ! cmp -s "$installed_renderer" "$repo/target/release/harmonigraph-offline"; then
+  echo "✗ a renderer of another commit was not installed with a warning naming both builds" >&2
+  sed 's/^/    /' "$out" >&2
+  failures=$((failures + 1))
+fi
+
 # 0. A fresh HOME gets the slot linked into the CLAP folder Bitwig scans.
 link="$TMP/home/Library/Audio/Plug-Ins/CLAP/$NAME.clap"
 if [ ! -L "$link" ] \
@@ -348,6 +362,7 @@ if ! printf '%s\n' "$codex_list" | grep -Fq "$codex_branch"; then
 fi
 
 before_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
+before_renderer=$(stat -f %i "$installed_renderer")
 exec 3< "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME"
 cp "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME" "$TMP/old-open-bin"
 codex_out="$TMP/codex-load.log"
@@ -376,6 +391,18 @@ elif ! grep -Fq "branch=$codex_branch" "$loaded" \
   failures=$((failures + 1))
 fi
 check_discovery_metadata load-plugin.sh
+# The renderer is replaced by rename, like the dylib: copying over one an
+# export still maps gets the next run of that file killed (#705), and it
+# matches this plugin.
+if [ "$before_renderer" = "$(stat -f %i "$installed_renderer")" ]; then
+  echo "✗ load-plugin.sh copied the renderer over the installed one's inode" >&2
+  failures=$((failures + 1))
+fi
+if ! grep -Fq "It is build $codex_branch @$sha, the plugin's commit." "$codex_out"; then
+  echo "✗ a matching renderer was not reported as the plugin's commit" >&2
+  sed 's/^/    /' "$codex_out" >&2
+  failures=$((failures + 1))
+fi
 if [ "$(cd "$link" && pwd -P)" != "$(cd "$repo/target/bundled/$NAME.clap" && pwd -P)" ]; then
   echo "✗ load-plugin.sh did not repoint a link left at a moved checkout" >&2
   failures=$((failures + 1))
@@ -398,6 +425,18 @@ if ! cmp -s "$TMP/old-open-bin" "$TMP/old-open-after"; then
   failures=$((failures + 1))
 fi
 check_loads load-plugin.sh "$codex_branch @$sha"
+
+# 5b. A worktree renderer of another commit is not installed over one that
+# matches the plugin: main's stale renderer leaves the Codex one, which names
+# the same commit as main's plugin from another branch.
+stale_out="$TMP/stale-renderer.log"
+(cd "$repo" && PATH="$TMP/bin:$PATH" HOME="$TMP/home" ./load-plugin.sh main) >"$stale_out" 2>&1
+if ! grep -Fq "build $codex_branch @$sha, the plugin's commit, stays." "$stale_out" \
+  || ! cmp -s "$installed_renderer" "$codex_wt/target/release/harmonigraph-offline"; then
+  echo "✗ a stale worktree renderer replaced an installed one that matched the plugin" >&2
+  sed 's/^/    /' "$stale_out" >&2
+  failures=$((failures + 1))
+fi
 
 # 6. Diagnostics use executable identity, tolerate incomplete OS queries, and
 # never turn a successful swap into failure. The first two swaps above model

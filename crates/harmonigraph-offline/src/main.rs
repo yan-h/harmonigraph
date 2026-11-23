@@ -85,6 +85,8 @@ OPTIONS:
         --plugin-build <TAG>  The build tag of the plugin queueing this render,
                            which the plugin passes; a renderer of another
                            build warns, and renders all the same.
+        --build-tag        Print this renderer's build tag and exit, which
+                           load-plugin.sh compares with the plugin's.
     -h, --help             Show this.
 
 ENVIRONMENT:
@@ -184,6 +186,14 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
         match arg.as_str() {
             "-h" | "--help" => {
                 print!("{USAGE}");
+                return Ok(None);
+            }
+            // Asked of the binary rather than read out of it with `strings`,
+            // as the plugin's tag must be: that read anchors on the branch
+            // name, and the renderer a load keeps installed can be any
+            // branch's.
+            "--build-tag" => {
+                println!("{BUILD_TAG}");
                 return Ok(None);
             }
             "-o" | "--out" => args.out = Some(value("--out")?),

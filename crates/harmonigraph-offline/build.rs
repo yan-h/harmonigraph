@@ -1,3 +1,3 @@
-// Keep this leaf binary current with HEAD for load-plugin.sh's freshness
-// check, and stamp the tag it compares with the plugin's `--plugin-build`.
+// Stamp the tag this renderer compares with the plugin's `--plugin-build`, and
+// prints with `--build-tag` for load-plugin.sh's check of the pair.
 include!("../../build/build_tag.rs");

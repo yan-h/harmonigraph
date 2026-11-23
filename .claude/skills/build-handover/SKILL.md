@@ -57,27 +57,26 @@ Video export does not run in the plugin.
 The Video pane spawns `~/Library/Application Support/Harmonigraph/harmonigraph-offline` (`harmonigraph-record`'s default path), and `load-plugin.sh` installs that binary from the same worktree it takes the dylib from —
 so a load is really two swaps, and only the first one is guaranteed to be current.
 
-Nothing rebuilds the renderer unless a session names `-p harmonigraph-offline`, and `load-plugin.sh` copies whatever is in `target/release` without minding its age, so a plugin-only build hands over a renderer from some earlier commit (`CLAUDE.md` has the rule and PR #340).
+Nothing rebuilds the renderer unless a session names `-p harmonigraph-offline`, so a plugin-only build leaves a renderer from some earlier commit in `target/release` (`CLAUDE.md` has the rule and PR #340).
 Naming both is not a second full build either:
 the two share every dependency and the whole UI, so the renderer costs a link on top of a plugin build that is already done.
-`load-plugin.sh` warns when the renderer it installs predates the branch's HEAD —
-the same "matches the last commit" test the table applies to the dylib, and NOT a comparison against the plugin beside it, which flags matched pairs as often as mismatched ones —
-and prints the age of the one it is leaving in place when a worktree built no renderer at all.
-That warning is a backstop for a build that should have happened.
+`load-plugin.sh` asks the worktree's renderer and the installed one for their build tags (`--build-tag`) and compares each with the plugin's by commit (#1937).
+It installs the worktree's renderer, by rename as it does the dylib, unless that one is of another commit and the installed one matches, which then stays.
+It warns when the renderer left in place names another commit, prints no tag because it predates the flag, or fails to run.
+That warning is a backstop for a build that should have happened, and comes before a render is spent.
 The renderer checks the pair itself at every export (#1928 B):
 the plugin passes its build tag as `--plugin-build`, and a renderer built at another commit writes a `warning:` naming both tags first, which the export's row shows whether the render then succeeds or fails, and renders all the same.
 The tag names a commit, so two builds of one commit from different uncommitted source still pass as one.
 A renderer from before this check refuses the flag as an unknown option, so that export fails loudly once, until the renderer is reinstalled.
 
-To check the live pair directly, without a render:
+To check the live pair directly, without a render, compare the installed renderer's tag with the `tag=` line the last load recorded:
 
 ```
-ls -la ~/Library/Application\ Support/Harmonigraph/harmonigraph-offline
-strings -a ~/Library/Application\ Support/Harmonigraph/harmonigraph-offline | grep -c "<new symbol>"
+~/Library/Application\ Support/Harmonigraph/harmonigraph-offline --build-tag
+grep '^tag=' "$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')/target/bundled/.loaded"
 ```
 
-A persisted config key is the reliable symbol —
-the serde field names are in the binary, so `roll_lead` answers "does this renderer know about the lead?" the same way a WGSL const answers it for the plugin.
+The two match when their `@<sha>` does; the branch may differ.
 
 ## Every build says which build it is
 

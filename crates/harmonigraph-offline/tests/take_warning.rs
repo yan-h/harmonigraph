@@ -136,3 +136,15 @@ fn a_renderer_of_another_build_says_so_before_anything_fails() {
     assert!(first.starts_with(harmonigraph_take::WARNING_PREFIX), "{stderr}");
     assert!(first.contains("other @0000000"), "the plugin's build is unnamed: {stderr}");
 }
+
+/// `--build-tag` prints the tag alone, the line `load-plugin.sh` compares
+/// with the plugin's before it installs this renderer (#1937).
+#[test]
+fn the_renderer_prints_its_build_tag() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
+        .arg("--build-tag")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), concat!(env!("LATTICE_BUILD_TAG"), "\n"));
+}
