@@ -443,6 +443,9 @@ pub struct Workspace {
     pub(crate) layout_runtime: workspace::Runtime,
     /// One-shot change to the outer window, consumed by its shell.
     pub(crate) window_size_change: egui::Vec2,
+    /// That change is the editor's own write, a Console reveal's unfold,
+    /// rather than an edit: consumed by [`Self::take_own_resize`].
+    pub(crate) window_size_own: bool,
     pub min_window_size: egui::Vec2,
 }
 
@@ -453,6 +456,7 @@ impl Default for Workspace {
             layout: workspace::Layout::default(),
             layout_runtime: workspace::Runtime::default(),
             window_size_change: egui::Vec2::ZERO,
+            window_size_own: false,
             min_window_size: egui::Vec2::ZERO,
         }
     }
@@ -463,6 +467,13 @@ impl Workspace {
     pub fn take_window_size_change(&mut self) -> Option<egui::Vec2> {
         let change = std::mem::take(&mut self.window_size_change);
         (change.abs().max_elem() >= 0.5).then_some(change)
+    }
+
+    /// Whether the window change this frame asked for is the editor's own
+    /// write rather than an edit, taken once: a shell that tells its host of
+    /// window edits takes the size it brings as told (#1813).
+    pub fn take_own_resize(&mut self) -> bool {
+        std::mem::take(&mut self.window_size_own)
     }
 
     /// Return to the default arrangement after this frame's panes finish.
@@ -814,6 +825,7 @@ impl SharedState {
         // divider drag in flight was made for.
         self.workspace.layout_runtime = workspace::Runtime::default();
         self.workspace.window_size_change = egui::Vec2::ZERO;
+        self.workspace.window_size_own = false;
         self.picture.install_appearance(persist.appearance);
         // The regions' geometry and the dial are new: the spectrum hold is
         // taken from them.
@@ -868,6 +880,7 @@ impl SharedState {
         self.workspace.layout_runtime = workspace::Runtime::default();
         self.workspace.layout_runtime.revealed = revealed;
         self.workspace.window_size_change = egui::Vec2::ZERO;
+        self.workspace.window_size_own = false;
         self.workspace.interaction.appearance_editor.start_window_session();
         // The new window lays the Analyzer out afresh.
         self.workspace.interaction.analyzer_regions.relayout(&mut self.picture);

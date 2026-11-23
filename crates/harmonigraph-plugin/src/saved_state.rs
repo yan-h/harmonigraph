@@ -63,7 +63,9 @@ pub enum Look {
     /// opens at the fresh look of whichever build loads it.
     Unopened,
     /// The editor installed the settings, whole or in part (the notes say
-    /// which), with the host's camera laid over them.
+    /// which), as it opens them: the host's camera laid over them, and the
+    /// Console selected with Settings unfolded where a restore line reports a
+    /// loss. The raw dump (`--raw`) is the file as it holds them.
     Installed(Box<SharedState>),
     /// The editor refused the settings, or the field did not parse, and opens
     /// at the fresh look; the notes say why.

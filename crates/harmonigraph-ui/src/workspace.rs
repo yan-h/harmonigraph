@@ -425,6 +425,9 @@ impl Runtime {
 /// while one over an edit not yet told leaves that edit to be reported. A
 /// Console reveal's unfold (`Runtime::revealed`) already moved both, and asks
 /// for its window here as a fold click's does.
+///
+/// The window change the layout asks for, if any, and whether it is the
+/// editor's own write (a reveal's alone) rather than an edit.
 pub(crate) fn show(
     ui: &mut egui::Ui,
     layout: &mut Layout,
@@ -432,7 +435,7 @@ pub(crate) fn show(
     runtime: &mut Runtime,
     viewer: &mut Viewer<'_>,
     frameless: bool,
-) -> Option<Vec2> {
+) -> Option<(Vec2, bool)> {
     let area = ui.available_rect_before_wrap();
     if !area.is_positive() || !area.is_finite() {
         return None;
@@ -465,10 +468,12 @@ pub(crate) fn show(
     runtime.rects = drawn.rects(area, rail, gap, floor);
     runtime.bodies = [None; 3];
     let mut before = layout.clone();
+    let shown = (layout.position, layout.folded);
     // A reveal is drawn as the unfold it was: its sizes are the folded
     // layout's, which `settled` leaves alone while Settings is folded, so the
     // reshape below moves nothing a save stores beyond what the reveal moved.
-    if std::mem::take(&mut runtime.revealed) {
+    let revealed = std::mem::take(&mut runtime.revealed);
+    if revealed {
         before.folded[Section::Settings as usize] = true;
     }
     // The dock is set on the Analyzer settings page, which draws through the
@@ -501,10 +506,13 @@ pub(crate) fn show(
         *layout = Layout { sized: true, ..Layout::default() };
     }
     if reset || edited {
+        // The window a reveal alone asks for is the editor's own write, as
+        // the reveal is: no edit to tell the host of (#1813).
+        let own = revealed && !reset && shown == (layout.position, layout.folded);
         runtime.grip = None;
         runtime.requested = Some(frame);
         ui.ctx().request_repaint();
-        return Some(layout.natural_size(rail, gap, floor) - area.size());
+        return Some((layout.natural_size(rail, gap, floor) - area.size(), own));
     }
     None
 }

@@ -261,7 +261,11 @@ fn summary(readings: &[Reading]) {
                 println!("\n(ui-state refused: the editor opens at the fresh look; the Console says why)")
             }
             Some(Look::Installed(editor)) => {
-                println!("\n--- ui-state (as the editor installs it, with the host's camera) ---");
+                println!(
+                    "\n--- ui-state (as the editor opens it: the host's camera laid over it, and \
+                     the Console revealed for a restore that reports a loss; --raw shows the \
+                     file) ---"
+                );
                 println!("{}", editor.save_persist_pretty(LOOK_DEPTH));
             }
         }
