@@ -108,11 +108,6 @@ pub struct VisualRuntime {
     learning: Box<LearningState<LEARN_VOICES>>,
     /// Learn's last step heard more distinct classes than it reads.
     learn_too_many: bool,
-    /// Presses held when processing last stopped ([`cut_learn`](Self::cut_learn)),
-    /// which Learn no longer hears.
-    learn_cut: Vec<harmonigraph_core::PressId>,
-    /// The processing stops [`cut_learn`](Self::cut_learn) last saw.
-    learn_stops: u64,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
     /// How far open the audio ring's Gate stands at each bucket of the
@@ -153,8 +148,6 @@ impl Default for VisualRuntime {
             maps_unadopted: PendingLabel::default(),
             learning: Box::default(),
             learn_too_many: false,
-            learn_cut: Vec::new(),
-            learn_stops: 0,
             spectrum: AudioSpectrum::default(),
             ring_fade: harmonigraph_scene::RingFade::default(),
             ring_levels: crate::panes::spectral_fold::RingLevels::default(),
@@ -296,18 +289,16 @@ impl VisualRuntime {
     /// One step of Learn (#1938 C): while `armed`, what the held pitch
     /// classes imply, whenever their set changes. It hears every held voice,
     /// a hidden source's included, but none the tape plays, which no source
-    /// is playing now, and none held when processing stopped. It hears each
+    /// is playing now; a processing stop ends what was held in the tracker
+    /// itself (#1948). It hears each
     /// at its incoming pitch, the correction a tuner froze on it taken back
     /// off, as a note struck decoded is heard once decoding is off (Yan,
     /// #1898, #1942). More classes than Learn reads set the Tuning pane's
     /// notice instead, until a step reads few enough. No egui types.
     pub fn learn(&mut self, armed: bool) -> Option<LearnedTuning> {
-        let (tracker, cut) = (&self.tracker, &mut self.learn_cut);
-        cut.retain(|id| tracker.held_voices().any(|voice| voice.id() == *id));
+        let tracker = &self.tracker;
         let inferred = self.learning.infer(armed, |scratch| {
-            let held = tracker
-                .held_voices()
-                .filter(|voice| !voice.source.is_tape() && !cut.contains(&voice.id()));
+            let held = tracker.held_voices().filter(|voice| !voice.source.is_tape());
             let mut count = 0;
             for (slot, voice) in scratch.iter_mut().zip(held) {
                 *slot = PitchClass::from_cents((voice.pitch - voice.correction) * 100.0);
@@ -319,23 +310,6 @@ impl VisualRuntime {
         });
         self.learn_too_many = inferred.is_err();
         inferred.ok().flatten()
-    }
-
-    /// Given how many times processing has stopped, ahead of the notes a
-    /// step drains: at a new stop every press held then ended there, though
-    /// no callback came to say so, and Learn no longer hears it.
-    pub fn cut_learn(&mut self, stops: u64) {
-        if self.learn_stops != stops {
-            self.restart_learn(stops);
-        }
-    }
-
-    /// Processing started again, at this point of the notes drained, after
-    /// `stops` stops: every press held now ended at the last one, and the
-    /// notes after this are the new run's.
-    pub fn restart_learn(&mut self, stops: u64) {
-        self.learn_stops = stops;
-        self.learn_cut = self.tracker.held_voices().map(|voice| voice.id()).collect();
     }
 }
 

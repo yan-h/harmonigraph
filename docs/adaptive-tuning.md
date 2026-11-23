@@ -633,7 +633,7 @@ One provenance reaches the take now rather than two, so records carry none (#179
 an unsequenced delta is a direct observation, and a sequenced one is what a source played and names its press by a lifetime.
 Learn reads what the lattice holds (#1938), which under Pass through, the one engine it runs under, is the player's pitch.
 It hears each note at its incoming pitch, the correction a tuner froze on it taken back off, so a chord held across a switch from Lattice Map to Pass through teaches the pitch it was played at, as a note struck decoded does once Decode fifths is off (Yan, #1942).
-None held when processing stopped is heard: the stop's cut reaches the lattice only at the next callback.
+A processing stop ends every held note but the tape's in the lattice itself, at its place in the note stream, so Learn needs no cut of its own and a restart's notes after it stay held (Yan, #1948).
 A row that lost a release copy to a full ring and then filled its 64 voices reads its stuck voices, as the lattice draws them, until the next cut (#1798 H5).
 
 Publication is two independent lanes, one for the display and one for the take, and the rule that keeps them independent is stated as a type:

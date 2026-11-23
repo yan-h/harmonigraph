@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 
 use egui_baseview::baseview::FrameTiming;
@@ -36,20 +35,6 @@ pub(crate) struct LiveInput {
     /// The analysis over this input, dated from `audio_origin`.
     analysis: harmonigraph_ui::SpectrumAnalysis,
     recorder: crate::tape::notes::Recorder,
-    /// The plugin's processing stops, for Learn to stop hearing what each one
-    /// ended ([`Self::learn_stops`]).
-    stops: Option<Arc<crate::configuration::Settings>>,
-}
-
-/// A reset of the direct source: what `Plugin::reset` publishes as
-/// processing starts again.
-fn restarted(event: &harmonigraph_core::canonical::CanonicalEvent<'_>) -> bool {
-    matches!(
-        event,
-        harmonigraph_core::canonical::CanonicalEvent::Note(delta)
-            if delta.event.kind == harmonigraph_core::NoteEventKind::SourceReset
-                && delta.event.source == harmonigraph_core::SourceId::DIRECT
-    )
 }
 
 /// The audio one [`LiveInput::take`] moved out of the ring, until
@@ -163,17 +148,9 @@ impl LiveInput {
             scratch: Scratch::default(),
             analysis: Default::default(),
             recorder: Default::default(),
-            stops: None,
         }
     }
 
-    /// Cut what Learn hears at each processing stop the plugin's `settings`
-    /// count: at a stop seen before a drain, and at the reset marker a
-    /// restart publishes ahead of its notes, in the order the drain meets it,
-    /// so the presses a stop ended are cut and none played after it.
-    pub(crate) fn learn_stops(&mut self, settings: Arc<crate::configuration::Settings>) {
-        self.stops = Some(settings);
-    }
     /// Drain exactly what the process callback sent to the live analyzer.
     /// Test-only because production drains through [`Self::take`], which also
     /// maintains the analyzer state around it.
@@ -202,19 +179,10 @@ impl LiveInput {
         }
         let Some(offset) = clock.offset else { return };
         let runtime = &mut picture.runtime;
-        let stops = self.stops.as_deref();
-        if let Some(settings) = stops {
-            runtime.cut_learn(settings.stops());
-        }
         let recorder = &mut self.recorder;
         self.consumer.drain(|event| {
             let result = runtime.tracker.handle_canonical_mapped(event, offset);
             debug_assert!(result.is_ok(), "validated canonical publication");
-            // `Plugin::reset`'s, the one producer of a direct source reset:
-            // processing starts again, and what was held before it ended.
-            if let (Some(settings), true) = (stops, restarted(&event)) {
-                runtime.restart_learn(settings.stops());
-            }
             recorder.record(&runtime.tracker, event.time(), marks);
             true
         });

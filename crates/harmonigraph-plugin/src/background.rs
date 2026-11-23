@@ -1067,21 +1067,19 @@ mod tests {
         assert_eq!(h.columns(), analyzed, "the thread outlived the plugin that owned it");
     }
 
-    /// A restart publishes a reset of the direct source ahead of its notes:
-    /// Learn stops hearing what was held before it at that point of the
-    /// drain, a Tune's notes the reset itself does not end included, and
-    /// hears the notes after it, even in the poll that drains both, and even
-    /// with no stop counted (a host's reset).
+    /// A processing stop publishes a session reset, which ends every live
+    /// source's presses, a Tune's included, at its place in the stream; a
+    /// restart's notes after it stay held and Learn hears them, even when
+    /// one poll drains the stop, the restart and the new chord (#1948).
     #[test]
-    fn a_restart_cuts_only_what_was_held_before_it() {
+    fn a_stop_ends_what_was_held_and_a_restart_in_the_same_poll_keeps_its_notes() {
         use harmonigraph_core::canonical::NoteDelta;
         use harmonigraph_core::configuration::{ConfigEdit, TuningAxis};
         let params = Arc::new(crate::HarmonigraphParams::default());
         params.settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
         let mut h = harness();
-        h.input.learn_stops(params.settings.clone());
         h.learn = Some(params.clone());
-        // A Tune's fifth, held across the restart.
+        // A Tune's fifth, held at the stop.
         let tune = SourceId(1);
         h.notes.observe_clock(0.0);
         for (sequence, note) in [(1, 60u8), (2, 67)] {
@@ -1097,12 +1095,15 @@ mod tests {
         }
         h.step();
         params.settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
+        // `Plugin::stop`, then `Plugin::reset` and the new run's fifth.
+        h.push_kind(0.1, 0, NoteEventKind::SessionReset);
         h.push_kind(0.1, 0, NoteEventKind::SourceReset);
-        h.push_note(0.1, 72);
-        h.push_note(0.1, 76);
+        h.push_note(0.1, 74);
+        h.push_note(0.1, 81);
         h.step();
-        assert_eq!(h.shared.lock().ui.picture.runtime.tracker.held_count(), 4);
+        let held = h.shared.lock().ui.picture.runtime.tracker.held_count();
+        assert_eq!(held, 2, "the fifth held at the stop ended, and Learn cannot hear it");
         let three = params.settings.resolved().tuning.three;
-        assert_eq!(three, 690_000_000, "the fifth held before the restart is not heard");
+        assert_eq!(three, 700_000_000, "the fifth struck after the restart is learned");
     }
 }

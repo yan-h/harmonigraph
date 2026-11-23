@@ -219,21 +219,6 @@ fn learn_hears_a_corrected_note_at_its_incoming_pitch() {
     assert!((five - 400.0).abs() < 0.01, "the incoming third, not the corrected one: {five}");
 }
 
-/// Processing stopped: the presses held then ended at the stop, though no
-/// callback came to say so, and Learn no longer hears them; a press after it
-/// it hears.
-#[test]
-fn learn_does_not_hear_what_a_processing_stop_ended() {
-    let mut state = fresh();
-    hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
-    let runtime = &mut state.picture.runtime;
-    runtime.cut_learn(1);
-    assert!(runtime.learn(true).is_none(), "the chord held at the stop");
-    runtime.cut_learn(1);
-    hold_chord(&mut state, &[(62, 0.0), (69, 0.0)]);
-    assert!(state.picture.runtime.learn(true).is_some(), "a chord struck after it");
-}
-
 /// One frame's observation in a shell with no owner, which runs Learn.
 fn learn(state: &mut SharedState) {
     state.picture.runtime.observe_configuration(&RecordingBackend::default());

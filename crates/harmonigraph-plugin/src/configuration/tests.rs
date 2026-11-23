@@ -313,11 +313,12 @@ fn learn_applies_only_while_the_document_lets_it_act() {
 }
 
 /// A processing stop ends what was held, though no callback follows to say
-/// so: Learn, armed while processing is stopped, does not learn the chord
-/// held at the stop. The whole path: `Plugin::stop` counts the stop, and the
-/// input worker cuts what it holds.
+/// so (#1948): the chord leaves the lattice and the board's keys at once, and
+/// Learn, armed while stopped, learns nothing from it. A chord struck after a
+/// quick restart stays held and is learned. The whole path: `Plugin::stop`
+/// publishes the end, and the input worker drains it in order.
 #[test]
-fn learn_armed_after_a_processing_stop_does_not_hear_what_it_ended() {
+fn a_processing_stop_ends_what_was_held_and_a_restart_plays_on() {
     let _scope = crate::test_scope::enter();
     let mut device = hub();
     device.activate();
@@ -330,6 +331,7 @@ fn learn_armed_after_a_processing_stop_does_not_hear_what_it_ended() {
     );
     let lock = device.editor_lock();
     let held = || lock.lock().ui.picture.runtime.tracker.held_count();
+    let lit = || crate::board::sounding(&lock.lock().ui.picture.runtime.tracker).len();
     let rounds = |device: &Device| {
         device.wrapper().test_inspect_plugin(|plugin| plugin.input_worker.completed_rounds())
     };
@@ -341,15 +343,30 @@ fn learn_armed_after_a_processing_stop_does_not_hear_what_it_ended() {
         raw += 64;
         std::thread::sleep(crate::background::POLL);
     }
+    assert_eq!(lit(), 2, "the board lights the chord");
     device.deactivate();
     settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
+    while held() > 0 {
+        assert!(std::time::Instant::now() < deadline, "the stop never ended the chord");
+        std::thread::sleep(crate::background::POLL);
+    }
+    assert_eq!(lit(), 0, "the board's keys go out");
     let from = rounds(&device);
     while rounds(&device) < from + 4 {
         assert!(std::time::Instant::now() < deadline, "the worker stopped stepping");
         std::thread::sleep(crate::background::POLL);
     }
-    assert_eq!(held(), 2, "the editor still holds the chord");
     assert_eq!(shown(&settings).raw.three, 690_000_000, "Learn did not hear it");
+    device.activate();
+    let mut raw = 0;
+    device.run(
+        raw,
+        vec![note(62, 62, 0, CLAP_EVENT_NOTE_ON), note(69, 69, 0, CLAP_EVENT_NOTE_ON)],
+        None,
+    );
+    raw += 64;
+    until(&mut device, &mut raw, |now| now.raw.three == 700_000_000);
+    assert_eq!(held(), 2, "the new chord stays held");
 }
 
 /// Activation reads the document again, so an edit made while the plugin

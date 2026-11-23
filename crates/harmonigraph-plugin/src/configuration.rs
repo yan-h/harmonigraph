@@ -85,9 +85,6 @@ pub(crate) struct Settings {
     /// and with no lock, which a reader's release could otherwise take while a
     /// writer is parked. Taken once, by the audio owner.
     audio: Mutex<Option<triple_buffer::Output<ResolvedConfig>>>,
-    /// Processing stops since creation, for Learn to stop hearing what was
-    /// held at one (`VisualRuntime::cut_learn`).
-    stops: AtomicU64,
     /// The document revision audio last copied, for the pending label.
     adopted: AtomicU64,
     /// Host input was lost, until the host's reset: audio's one status bit,
@@ -131,7 +128,6 @@ impl Default for Settings {
         Self {
             document: Shared::new(Document { reducer, audio }),
             audio: Mutex::new(Some(output)),
-            stops: AtomicU64::new(0),
             adopted: AtomicU64::new(0),
             input_lost: AtomicBool::new(false),
             modified: AtomicBool::new(false),
@@ -196,16 +192,6 @@ impl Settings {
             }
             written
         })
-    }
-
-    /// Processing stopped: audio-thread safe.
-    pub fn stopped(&self) {
-        self.stops.fetch_add(1, Ordering::Release);
-    }
-
-    /// Processing stops since creation.
-    pub fn stops(&self) -> u64 {
-        self.stops.load(Ordering::Acquire)
     }
 
     /// The configuration as the editor shows it and a save stores it.

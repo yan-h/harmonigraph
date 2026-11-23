@@ -783,8 +783,7 @@ impl Default for Harmonigraph {
         // would go dark; the editor is the very thing being covered for. It
         // also installs a project's saved settings before any window is built,
         // through the lock both share (#324).
-        let mut input = editor::input::LiveInput::new(consumer, audio_consumer);
-        input.learn_stops(params.settings.clone());
+        let input = editor::input::LiveInput::new(consumer, audio_consumer);
         let input_worker = background::InputWorker::spawn(
             editor_shared.clone(),
             params.editor_state.clone(),
@@ -1035,9 +1034,11 @@ impl Plugin for Harmonigraph {
 
     fn stop(&mut self) {
         self.aggregation.as_mut().unwrap().stop();
-        // The cut's snapshots wait for a callback that may not come, so the
-        // editor would hold these notes; Learn stops hearing them.
-        self.params.settings.stopped();
+        // The cut's snapshots wait for a callback that may not come: what was
+        // held ends here, for the lattice, the board's keys and Learn alike,
+        // in the stream's own order, so a restart's notes after it stay held
+        // (#1948). The tape is no source of the session's, and plays on.
+        let _ = self.take.publish_note(CoreNoteEvent::session_reset(self.clock.end()).into());
     }
 
     fn reset(&mut self) {
