@@ -16,6 +16,9 @@ use crate::{panes, workspace};
 #[derive(Default)]
 pub struct Console {
     pub(crate) lines: VecDeque<String>,
+    /// A reveal owes the scrollback its newest line: the pane scrolls to the
+    /// bottom the next time it draws, wherever it was left.
+    pub(crate) to_bottom: bool,
 }
 
 impl Console {
@@ -440,6 +443,9 @@ pub struct Workspace {
     pub(crate) layout_runtime: workspace::Runtime,
     /// One-shot change to the outer window, consumed by its shell.
     pub(crate) window_size_change: egui::Vec2,
+    /// That change is the editor's own write, a Console reveal's unfold,
+    /// rather than an edit: consumed by [`Self::take_own_resize`].
+    pub(crate) window_size_own: bool,
     pub min_window_size: egui::Vec2,
 }
 
@@ -450,6 +456,7 @@ impl Default for Workspace {
             layout: workspace::Layout::default(),
             layout_runtime: workspace::Runtime::default(),
             window_size_change: egui::Vec2::ZERO,
+            window_size_own: false,
             min_window_size: egui::Vec2::ZERO,
         }
     }
@@ -460,6 +467,13 @@ impl Workspace {
     pub fn take_window_size_change(&mut self) -> Option<egui::Vec2> {
         let change = std::mem::take(&mut self.window_size_change);
         (change.abs().max_elem() >= 0.5).then_some(change)
+    }
+
+    /// Whether the window change this frame asked for is the editor's own
+    /// write rather than an edit, taken once: a shell that tells its host of
+    /// window edits takes the size it brings as told (#1813).
+    pub fn take_own_resize(&mut self) -> bool {
+        std::mem::take(&mut self.window_size_own)
     }
 
     /// Return to the default arrangement after this frame's panes finish.
@@ -673,6 +687,15 @@ impl SharedState {
         self.picture.runtime.console.log(line);
     }
 
+    /// A line saying what a restore lost or refused, the editor door's own
+    /// and the host's alike: the Console opens on it (Yan, 2026-11-22, in
+    /// `docs/intent/editor-shell.md`). Opening it is no edit, so a project
+    /// that opens with a loss is not marked modified.
+    pub fn report_loss(&mut self, line: impl Into<String>) {
+        self.log(line);
+        self.reveal_console();
+    }
+
     /// Serialize the parts of the UI worth restoring across sessions
     /// (section layout, camera, view settings). Parameters are NOT included —
     /// they live in the host's plugin state.
@@ -775,18 +798,17 @@ impl SharedState {
             return true;
         }
         for lost in dropped {
-            self.log(format!(
+            self.report_loss(format!(
                 "persist dropped {} — this build has no {}, so that setting opens at its default",
                 lost.key, lost.variant,
             ));
         }
         for key in unread {
-            self.log(format!(
+            self.report_loss(format!(
                 "persist dropped {key} — this build does not read that key; if it was renamed, \
                  its setting opens at its default",
             ));
         }
-        self.reveal_console();
         true
     }
 
@@ -803,6 +825,7 @@ impl SharedState {
         // divider drag in flight was made for.
         self.workspace.layout_runtime = workspace::Runtime::default();
         self.workspace.window_size_change = egui::Vec2::ZERO;
+        self.workspace.window_size_own = false;
         self.picture.install_appearance(persist.appearance);
         // The regions' geometry and the dial are new: the spectrum hold is
         // taken from them.
@@ -819,18 +842,30 @@ impl SharedState {
 
     /// Reject a saved document loudly, leaving the current content as it was.
     fn refuse_persist(&mut self, reason: String) -> bool {
-        self.log(format!("persist ignored — {reason}"));
-        self.reveal_console();
+        self.report_loss(format!("persist ignored — {reason}"));
         false
     }
 
-    /// An install lost something. The Console is the last settings tab, a
-    /// diagnostic rather than a page visited while playing, so this selects it
-    /// and unfolds the settings: the diagnostic is the only thing that
-    /// explains why the editor opened on fresh settings.
+    /// A restore lost something. The Console is the last settings tab, a
+    /// diagnostic rather than a page visited while playing, so this selects it,
+    /// unfolds the settings and scrolls to the newest line: the diagnostic is
+    /// the only thing that explains why the editor opened as it did.
+    ///
+    /// The layout a save stores as told moves with it, so the reveal is no
+    /// edit to report, while a gesture in flight still reports its own. An
+    /// unfold asks for the window a fold click's does, at the next frame to
+    /// lay the sections out (`workspace::show`), rather than squeezing the
+    /// pictures into the folded layout's window.
     fn reveal_console(&mut self) {
-        self.workspace.layout.select(panes::Tab::Console);
-        self.workspace.layout.folded[workspace::Section::Settings as usize] = false;
+        let settings = workspace::Section::Settings as usize;
+        if self.workspace.layout.folded[settings] {
+            self.workspace.layout_runtime.revealed = true;
+        }
+        for layout in [&mut self.workspace.layout, &mut self.reported.layout] {
+            layout.select(panes::Tab::Console);
+            layout.folded[settings] = false;
+        }
+        self.picture.runtime.console.to_bottom = true;
     }
 
     /// Start drawing in a newly built window. The state outlives every window,
@@ -839,8 +874,13 @@ impl SharedState {
     /// From the first window on, a save stores the settings it shows.
     pub(crate) fn start_window_session(&mut self) {
         self.untouched = false;
+        // An unfold a reveal made with no window open is still owed its
+        // resize, which the new window's first frame asks for.
+        let revealed = self.workspace.layout_runtime.revealed;
         self.workspace.layout_runtime = workspace::Runtime::default();
+        self.workspace.layout_runtime.revealed = revealed;
         self.workspace.window_size_change = egui::Vec2::ZERO;
+        self.workspace.window_size_own = false;
         self.workspace.interaction.appearance_editor.start_window_session();
         // The new window lays the Analyzer out afresh.
         self.workspace.interaction.analyzer_regions.relayout(&mut self.picture);
