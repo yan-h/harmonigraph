@@ -810,17 +810,15 @@ impl Decoding {
     }
 }
 
-/// F♯ in as many octaves as the count rule takes strikes, on one sample, on
-/// or off.
+/// F♯ in two octaves on one sample, on or off.
 fn f_sharps(on: bool) -> Vec<Input> {
-    let strikes = harmonigraph_core::policy::strip::SLIDE_STRIKES.ceil() as i16;
-    (0..strikes).map(|i| 90 - 12 * i).map(|key| note(key.into(), 0, key, 0, on)).collect()
+    [78, 90].map(|key| note(key.into(), 0, key, 0, on)).into()
 }
 
 const FIVE_THREE: LatticePos = LatticePos::new(-1, 1, 0);
 const PYTHAGOREAN_A: LatticePos = LatticePos::new(3, 0, 0);
 
-/// F♯s move the key, so A is then 27/16, and every reset of the context
+/// An F♯ moves the key, so A is then 27/16, and every reset of the context
 /// returns the strip to the Position, so A is 5/3 again: a change of
 /// engine, Reset all voices, a transport Stop, a loop or seek, and silence.
 /// With Follow spellings off the strip never moves.
@@ -856,7 +854,7 @@ fn every_reset_returns_the_followed_strip_to_the_position() {
         for on in [true, false] {
             session.play(f_sharps(on), vec![]);
         }
-        // Struck at once after the F♯s, before silence's 10 ms.
+        // Struck at once after the F♯, before silence's 10 ms.
         assert_eq!(session.a(), Some(PYTHAGOREAN_A), "{name}: moved to C G D A");
         reset(&mut session);
         assert_eq!(session.a(), Some(FIVE_THREE), "{name}: back at the Position");
@@ -869,21 +867,6 @@ fn every_reset_returns_the_followed_strip_to_the_position() {
     assert_eq!(session.a(), Some(FIVE_THREE), "the strip stays where the Position put it");
 }
 
-/// A held A struck again inside D major, with no note-off between, is taken
-/// over rather than held: the old A pins nothing, so D major moves the key
-/// and sounds pure.
-#[test]
-fn a_retriggered_note_does_not_pin_its_chord_s_slide() {
-    let _scope = crate::test_scope::enter();
-    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
-    session.play(vec![note(1, 0, 69, 0, true)], vec![]);
-    assert_eq!(session.voice(true, 0, 69).attack_node, Some(FIVE_THREE));
-    let d_major = [62, 66, 69].map(|key| note(10 + i32::from(key), 0, key, 0, true));
-    session.play(d_major.into(), vec![]);
-    let [d, a] = [62, 69].map(|key| session.voice(true, 0, key).attack_node.unwrap());
-    assert_eq!(a - d, LatticePos::new(1, 0, 0), "D–A pure: {d:?} {a:?}");
-}
-
 /// A loop's last release and its first strike on one sample, with Reset on
 /// loop on: the strike's group is counted after the reset, so its F♯s move
 /// the key, and the release on that sample does not refill the memory the
@@ -893,12 +876,12 @@ fn a_loop_resets_after_its_last_release_and_before_its_first_strike() {
     let _scope = crate::test_scope::enter();
     let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
     session.policy(|policy| policy.reset_loop = true);
-    session.play(vec![note(1, 0, 54, 0, true)], vec![]);
+    session.play(vec![note(1, 0, 60, 0, true)], vec![]);
     for seconds in [5.0, 5.0, 1.0] {
         session.everywhere(|| vec![musical_tests::at(seconds, false)]);
     }
     let mut wrap = f_sharps(true);
-    wrap.insert(0, note(1, 0, 54, 0, false));
+    wrap.insert(0, note(1, 0, 60, 0, false));
     session.play(wrap, vec![]);
     assert_eq!(inspect_hub(&session.hub, |hub| hub.test_memory()), 0, "the release is gone");
     session.play(f_sharps(false), vec![]);

@@ -934,8 +934,7 @@ impl Hub {
     /// the Position fifths set it, moved by the follower when Follow
     /// spellings is on. The group's first decoded onset decides for the whole
     /// group, before any of it is tuned, as `follow` does for a map: after a
-    /// loop's reset, with what each same-key onset displaces let go, and with
-    /// every current onset counted (`Follower::attack`).
+    /// loop's reset, from every current onset's spelling (`Follower::attack`).
     fn strip_place(&mut self, position: usize, follow_spellings: bool) -> i32 {
         let sample = self.batch[position].sample;
         let set = self.sequencer.position.threes;
@@ -946,23 +945,15 @@ impl Hub {
             self.sequencer.take_loop();
             let mut struck = [0; BATCH_EVENTS];
             let mut count = 0;
-            let mut index = position;
-            while index < self.batch.len() && self.batch[index].sample == sample {
-                let record = self.batch[index];
-                index += 1;
+            for record in self.batch[position..].iter().take_while(|r| r.sample == sample) {
                 let Some((_, channel, key, _)) = record.event.attack() else { continue };
-                self.forget_replaced(record.source, channel, key);
                 let retune = self.rows[usize::from(record.source)].retune;
                 if record.retune & 1 != 0 && record.retune == retune && count < struck.len() {
                     struck[count] = fifths_for_midi(channel, key);
                     count += 1;
                 }
             }
-            let mut held = [LatticePos::ORIGIN; policy::MAX_CONTEXT];
-            let nodes = self.sequencer.context.iter().flatten().filter_map(|voice| voice.node);
-            let held_count = nodes.zip(&mut held).map(|(node, slot)| *slot = node).count();
-            let (rate, sequencer) = (self.rate, &mut self.sequencer);
-            sequencer.follower.attack(&struck[..count], &held[..held_count], sample, rate, set);
+            self.sequencer.follower.attack(&struck[..count], set);
         }
         self.sequencer.follower.flat(set)
     }

@@ -48,19 +48,17 @@ and the comma Adaptive's search used to guess chord by chord is fixed by where t
 Lattice Map's Position fifths place the strip, under Adaptive as under Lattice Map:
 at 0 its columns are F C G D, the default map's,
 and automating the lane is how a piece changes key.
-With **Follow spellings** on, the default, the strip also follows the music by moving its key, a fifth at a time.
+With **Follow spellings** on, the default, the strip also follows the music by moving its key.
 The key's seven spellings run from the strip's flat column (F to B at Position 0).
-A chord, two spellings or more struck together, holding a spelling just past either edge (F♯ or B♭ in C) moves the key a fifth toward it before any of its notes is tuned:
-D major from C sounds pure from its first stroke, as do B♭ major from C and A major from G.
-The key stays there until the old key's spellings bring it back: after a D major in C, a chord holding F moves it home at once, Fs struck alone do once they have replaced F♯ by the count rule below, and with no F the key steps home once F♯ has fallen out of use (about 16 s after a single D major).
-The Fs struck before the D major do not count toward that.
-A chord holding both moves nothing, and a spelling further out, such as A major's C♯ from C, moves nothing either.
-A single note goes through the count rule alone, so a passing tone moves nothing:
-the key moves once a spelling just past its seven has replaced the one at the other edge (three F♯s close together, or about four spread out, and at least twice as many as recent Fs),
-and back toward the Position once that spelling fades.
-A chord inside the key's seven never moves it, so a pentatonic or sus voicing keeps the key's wolf and every note of a vamp keeps its pitch,
+Whenever a note is struck outside them, the key moves the fewest fifths that bring it inside, before that note is tuned:
+F♯ in C moves it a fifth sharp, B♭ a fifth flat.
+Notes struck together move it once, as far as brings them all inside, so D major, B♭ major, E♭ major and A major from C sound pure from their first stroke.
+A triad moved up or down a fifth therefore moves the key at its first note past the edge, whatever order an arpeggio plays it in.
+A note already sounding keeps its pitch, so the first time an arpeggio plays such a triad, a note struck before the move keeps the old strip's pitch; every note after it, and the next time through, is in the new strip.
+The key stays where it is until a note outside it moves it again: after a D major in C, an F moves it home.
+Notes inside the key's seven never move it, so a pentatonic or sus voicing keeps the key's wolf and every note of a vamp keeps its pitch,
 and a diatonic ii keeps its D–A wolf.
-No move changes the column of a held note, so a chord rolled by hand, struck one note at a time, keeps its wolf.
+A passing tone outside the key moves it too.
 Every context reset returns the strip to the Position.
 Every fourth fifth along the chain, the one leaving the strip's sharp edge, is a comma narrow (D–A at Position 0).
 The search, with its Keyboard block, Pitch flexibility, radius, axes and register, applies only with Decode fifths off,

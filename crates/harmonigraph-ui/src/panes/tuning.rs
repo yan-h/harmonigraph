@@ -493,13 +493,12 @@ fn strip_controls(
     reset_controls(ui, p, fresh);
 }
 
-const FOLLOW_SPELLINGS_HINT: &str = "Move the strip's key a fifth toward a spelling just past \
-    its seven when a chord holds one, so D major from C sounds pure at once; it stays there until \
-    the old key's spellings bring it back. A single note moves it only once a spelling just past \
-    the key's seven has replaced the one at its other edge, as F♯ replacing F does, and back toward \
-    the Position once that spelling has fallen out of use. No move retunes a held note, and every \
-    context reset returns the strip to the Position. Off, the strip stays where the Position \
-    fifths put it, so a piece plays the same from any bar.";
+const FOLLOW_SPELLINGS_HINT: &str = "Move the strip's key the fewest fifths that bring a note \
+    struck outside its seven spellings inside them, before that note is tuned: F♯ over F C G D \
+    moves it a fifth sharp, so D major sounds pure. It stays there until another such note moves \
+    it, and every context reset returns it to the Position. Notes already sounding keep their \
+    pitch. Off, the strip stays where the Position fifths put it, so a piece plays the same from \
+    any bar.";
 
 /// The search's own rows: Adaptive with Decode fifths off.
 fn search_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfig) {
