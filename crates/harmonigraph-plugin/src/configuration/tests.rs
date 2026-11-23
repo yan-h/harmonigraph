@@ -195,9 +195,10 @@ fn an_edit_with_no_audio_shows_and_saves_in_the_tuning_it_is_drawn_in() {
 }
 
 /// A host may save from inside a call the editor makes into it
-/// (`editor/lock.rs`). No document door is held across one, so the save
-/// returns, for a map edit's parameter set and a camera set made beside a
-/// tuning edit.
+/// (`editor/lock.rs`). No document door is held across one, so the save,
+/// which reads both documents, returns: for a Duplicate, which writes the map
+/// document and then selects its copy, and a camera set made beside a tuning
+/// edit. The host is the plugin's checked one.
 #[test]
 fn a_save_from_inside_a_host_call_returns() {
     struct Saving(Arc<crate::HarmonigraphParams>, std::sync::atomic::AtomicUsize);
@@ -206,6 +207,7 @@ fn a_save_from_inside_a_host_call_returns() {
             let fields = Default::default();
             let mut state =
                 PluginState { version: String::new(), params: Default::default(), fields };
+            crate::saved_fields::save(&self.0, &mut state);
             self.0.settings.save(&mut state);
             self.1.fetch_add(1, Ordering::Relaxed);
         }
@@ -228,8 +230,10 @@ fn a_save_from_inside_a_host_call_returns() {
         }
     }
     let params = Arc::new(crate::HarmonigraphParams::default());
-    let host = Saving(params.clone(), Default::default());
-    crate::lattice_maps::edit(&params, &host, harmonigraph_ui::lattice_maps::MapEdit::Select(0));
+    let saving = Arc::new(Saving(params.clone(), Default::default()));
+    let host = crate::shared::Checked(saving.clone());
+    crate::lattice_maps::edit(&params, &host, harmonigraph_ui::lattice_maps::MapEdit::Duplicate);
+    assert_eq!(saving.1.load(Ordering::Relaxed), 3, "the copy was selected");
     let gestures = std::cell::Cell::default();
     let backend = crate::PluginParamBackend {
         params: &params,
@@ -240,7 +244,7 @@ fn a_save_from_inside_a_host_call_returns() {
     use harmonigraph_ui::params::ParamBackend;
     backend.submit_tuning(ConfigEdit::axis(TuningAxis::Three, microcents(696.0)));
     backend.set(ParamKey::CameraDistance, 6.0);
-    assert_eq!(host.1.load(Ordering::Relaxed), 6, "every host call saved, and returned");
+    assert_eq!(saving.1.load(Ordering::Relaxed), 6, "every host call saved, and returned");
 }
 
 /// The host may destroy the plugin while the input worker is inside a host
@@ -586,9 +590,9 @@ fn a_field_that_does_not_parse_is_skipped_with_a_console_line() {
     let _scope = crate::test_scope::enter();
     let device = hub().with_retune();
     let maps = |device: &Device| {
-        device.wrapper().test_inspect_plugin(|plugin| {
-            serde_json::to_string(&*plugin.params.maps.read()).unwrap()
-        })
+        device
+            .wrapper()
+            .test_inspect_plugin(|plugin| plugin.params.maps.read(serde_json::to_string).unwrap())
     };
     let before = maps(&device);
     let mut state = device.wrapper().get_state_object();
@@ -1089,33 +1093,40 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
 #[test]
 fn adaptive_settings_restore_readback_save_and_audio_adoption_agree() {
     let _scope = crate::test_scope::enter();
-    let mut device = hub().with_retune();
-    device.activate();
-    let policy = PolicyConfig {
-        pitch_flexibility: 37,
-        axes: 3,
-        silence_ms: 4500,
-        reset_loop: true,
-        reset_stop: true,
-        decode_fifths: true,
-        follow_spellings: false,
-        decoded_fifth: 694_786_840,
-        ..Default::default()
-    };
-    let mut state = restored(&device, 700.0);
-    state.fields.insert(
-        MUSICAL_SETTINGS.into(),
-        serde_json::to_string(&MusicalSettings { adaptive: policy.into(), ..Default::default() })
+    // Each of the two policy flags on with the other off, so a reader that
+    // drops either fails whichever way it was saved.
+    for (decode_fifths, follow_spellings) in [(true, false), (false, true)] {
+        let mut device = hub().with_retune();
+        device.activate();
+        let policy = PolicyConfig {
+            pitch_flexibility: 37,
+            axes: 3,
+            silence_ms: 4500,
+            reset_loop: true,
+            reset_stop: true,
+            decode_fifths,
+            follow_spellings,
+            decoded_fifth: 694_786_840,
+            ..Default::default()
+        };
+        let mut state = restored(&device, 700.0);
+        state.fields.insert(
+            MUSICAL_SETTINGS.into(),
+            serde_json::to_string(&MusicalSettings {
+                adaptive: policy.into(),
+                ..Default::default()
+            })
             .unwrap(),
-    );
-    device.load(state);
-    let settings = device.settings();
-    assert_eq!(shown(&settings).view.resolved.policy, policy);
-    let saved: MusicalSettings =
-        serde_json::from_str(&device.save().fields[MUSICAL_SETTINGS]).unwrap();
-    assert_eq!(PolicyConfig::from(saved.adaptive), policy);
-    device.run(0, vec![], None);
-    assert_eq!(shown(&settings).view.resolved.policy, policy);
+        );
+        device.load(state);
+        let settings = device.settings();
+        assert_eq!(shown(&settings).view.resolved.policy, policy);
+        let saved: MusicalSettings =
+            serde_json::from_str(&device.save().fields[MUSICAL_SETTINGS]).unwrap();
+        assert_eq!(PolicyConfig::from(saved.adaptive), policy);
+        device.run(0, vec![], None);
+        assert_eq!(shown(&settings).view.resolved.policy, policy);
+    }
     let defaults: MusicalSettings = serde_json::from_str("{\"adaptive\":{}}").unwrap();
     assert_eq!(PolicyConfig::from(defaults.adaptive), PolicyConfig::default());
     let old: MusicalSettings =
@@ -1257,7 +1268,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert!(preview.editing() && preview.can_undo);
         assert_eq!(preview.playback.map, Some(changed));
         assert_eq!(
-            plugin.params.maps.read().map(1),
+            plugin.params.maps.read(|d| d.map(1)),
             Some(LatticeMap { position: harmonigraph_core::LatticePos::ORIGIN, ..changed }),
             "an edit is saved to the selected map itself"
         );

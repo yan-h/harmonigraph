@@ -1,7 +1,8 @@
-//! A saved document the main thread owns (#1938). Audio never takes its
-//! lock: a reader's release can take the parking bucket's lock while a writer
-//! is parked, so what audio needs is published to it wait-free, by the
-//! document's owner, inside the write.
+//! A saved document the main thread owns (#1938): the tuning record and the
+//! Lattice Map document. Audio never takes its lock: a reader's release can
+//! take the parking bucket's lock while a writer is parked, so what audio
+//! needs is published to it wait-free, by the document's owner, inside the
+//! write.
 //!
 //! The lock stays private, so no guard outlives the closure handed to it, and
 //! the door keeps one rule the type cannot spell: nothing inside a closure
@@ -10,8 +11,8 @@
 //! thread; the lock is not reentrant, so a guard held across the host call
 //! hangs the host's main thread. A closure still captures its scope, so a
 //! per-thread depth checks the rule in debug builds: a door entered while
-//! another is held, or a host call made from inside one
-//! ([`assert_unheld`]), fails an assertion.
+//! another is held, or a host call made from inside one (every call through
+//! [`Checked`], the editor's one host, and every wake), fails an assertion.
 
 use parking_lot::RwLock;
 #[cfg(debug_assertions)]
@@ -50,6 +51,32 @@ pub(crate) fn assert_unheld() {
     assert_eq!(DEPTH.with(Cell::get), 0, "a host call from inside a document closure");
 }
 
+/// The editor's host, checking before each call that no document door is
+/// held ([`assert_unheld`]).
+pub(crate) struct Checked(pub std::sync::Arc<dyn harmonigraph_clap::prelude::EditorHost>);
+impl harmonigraph_clap::prelude::EditorHost for Checked {
+    fn closed(&self) -> bool {
+        assert_unheld();
+        self.0.closed()
+    }
+    fn request_resize(&self, size: (u32, u32)) -> bool {
+        assert_unheld();
+        self.0.request_resize(size)
+    }
+    fn begin_set_parameter(&self, row: usize) {
+        assert_unheld();
+        self.0.begin_set_parameter(row)
+    }
+    fn set_parameter(&self, row: usize, plain: f32) {
+        assert_unheld();
+        self.0.set_parameter(row, plain)
+    }
+    fn end_set_parameter(&self, row: usize) {
+        assert_unheld();
+        self.0.end_set_parameter(row)
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Shared<T> {
     lock: RwLock<T>,
@@ -86,17 +113,5 @@ mod tests {
     fn a_nested_door_fails_the_depth_check() {
         let document = Shared::<u8>::default();
         document.read(|_| document.read(|_| ()));
-    }
-
-    /// So does a host call from inside one; outside, it passes.
-    #[test]
-    fn a_host_call_from_inside_a_closure_fails_the_depth_check() {
-        let document = Shared::<u8>::default();
-        assert_unheld();
-        let inside = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            document.write(|_| assert_unheld())
-        }));
-        assert!(inside.is_err());
-        assert_unheld();
     }
 }

@@ -11,7 +11,10 @@ fn install(hub: &Device) -> (LatticeMap, LatticeMap) {
     let mut second = first;
     second.replace(LatticePos::new(4, 0, 0));
     hub_wrapper(hub).test_inspect_plugin(|plugin| {
-        assert_eq!(plugin.params.maps.write().capture(second, "Pythagorean E".into()), Some(1));
+        assert_eq!(
+            plugin.params.maps.write(|d| d.capture(second, "Pythagorean E".into())),
+            Some(1)
+        );
     });
     (first, second)
 }
@@ -222,7 +225,7 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
         (voice(&hub, crate::tuning::DIRECT, 79).frozen_offset_microcents + 1_000_000).abs() < 100
     );
     hub_wrapper(&hub)
-        .test_inspect_plugin(|plugin| assert!(plugin.params.maps.write().reshape(0, second)));
+        .test_inspect_plugin(|plugin| assert!(plugin.params.maps.write(|d| d.reshape(0, second))));
     hub.run(
         1024,
         vec![
@@ -239,7 +242,7 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
     let edited = voice(&hub, crate::tuning::DIRECT, 64);
     assert_eq!(edited.attack_node, Some(LatticeMap { position: offset, ..second }.node(64)));
     hub_wrapper(&hub)
-        .test_inspect_plugin(|plugin| assert!(plugin.params.maps.write().reshape(0, first)));
+        .test_inspect_plugin(|plugin| assert!(plugin.params.maps.write(|d| d.reshape(0, first))));
     hub.run(1536, vec![note(4, 0, 76, 0, true)], None);
     assert_eq!(
         voice(&hub, crate::tuning::DIRECT, 76).attack_node,
