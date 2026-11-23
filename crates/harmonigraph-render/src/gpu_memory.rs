@@ -513,10 +513,20 @@ mod tests {
 
         // Its contents reach a GPU-private buffer by a copy wgpu queues and
         // flushes at the next submit, and until then that copy holds it.
+        // Metal can release it a moment after the poll returns, as it once
+        // did on a shared CI runner (#1929), so the record gets a bounded
+        // time to drop it; one that never does still fails.
         drop(held);
         queue.submit([]);
-        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        let freed = snapshot_of(&device);
+        let mut freed = snapshot_of(&device);
+        for _ in 0..50 {
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            freed = snapshot_of(&device);
+            if freed.resources.iter().all(|r| r.label != "probe_buffer") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert!(freed.resources.iter().all(|r| r.label != "probe_buffer"), "{}", freed.table());
     }
 }

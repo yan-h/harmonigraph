@@ -666,26 +666,6 @@ fn a_restore_that_reports_a_loss_opens_the_console() {
     assert_eq!(device.service(), before, "the reveal is no edit");
 }
 
-/// A newer restore's look wins over the Console an older one's line owed: the
-/// line stays in the scrollback, and the layout is the newer restore's.
-#[test]
-fn a_newer_restore_keeps_an_older_ones_line_but_not_its_reveal() {
-    use harmonigraph_ui::testing;
-    let _scope = crate::test_scope::enter();
-    let device = hub();
-    let (settings, lock) = (device.settings(), device.editor_lock());
-    testing::fold_settings_on_tuning(&mut lock.lock().ui);
-    let clean = device.wrapper().get_state_object();
-    let mut lossy = clean.clone();
-    lossy.params.insert("a-retired-parameter".into(), ParamValue::F32(1.0));
-    device.load(lossy);
-    device.load(clean);
-    let mut shared = lock.lock();
-    settings.deliver_notices(&mut shared.ui);
-    assert!(testing::settings_folded(&shared.ui), "the newer restore's layout");
-    assert_eq!(shared.ui.picture.runtime.console.lines().count(), 1, "the older restore's line");
-}
-
 /// A project saved while the axes were host parameters (#1756) holds them
 /// there, beside musical settings without axes. It opens at fresh axes with
 /// one Console notice, keeps its links, and saves no tuning parameter back.
@@ -837,7 +817,7 @@ fn a_window_edit_marks_the_project_and_an_opening_resize_or_a_restore_does_not()
         if let Some(opened) = opened.get() {
             crate::editor::next_size(&state, opened, host.as_ref(), &lock);
         }
-        state.end_frame(own, None, false, || settings.changed());
+        state.end_frame(own, None, || settings.changed());
     };
     let resize = |grow: u32| {
         let (width, height) = state.size();
@@ -925,36 +905,6 @@ fn a_border_drag_stops_at_the_editors_limits_and_a_size_outside_them_is_refused(
     assert_eq!(state.size(), limits.min);
 }
 
-/// The window a Console reveal asks for, after a restore that reported a loss
-/// unfolded a folded Settings section, is the editor's own write: applying it
-/// marks the project modified no more than the reveal does (#1813). The same
-/// ask made as an edit, a fold click's, marks it once.
-#[test]
-fn a_reveals_window_marks_nothing_where_a_folds_marks_once() {
-    let _scope = crate::test_scope::enter();
-    let device = hub().with_retune();
-    device.host().grants_resize.store(true, Ordering::Relaxed);
-    let state = device.wrapper().test_inspect_plugin(|plugin| plugin.params.editor_state.clone());
-    let settings = device.settings();
-    let (host, lock) = (device.editor_host(), device.editor_lock());
-    state.set_docked(true);
-    let opened = state.open();
-    let frame = |ask: Option<(u32, u32)>, own: bool| {
-        crate::editor::next_size(&state, opened, host.as_ref(), &lock);
-        state.end_frame(None, ask, own, || settings.changed());
-    };
-    frame(None, false);
-    for own in [true, false] {
-        let marks = device.service();
-        let (width, height) = state.size();
-        frame(Some((width + 300, height)), own);
-        frame(None, false);
-        frame(None, false);
-        assert_eq!(state.size(), (width + 300, height), "the window took the ask");
-        assert_eq!(device.service(), marks + usize::from(!own), "own: {own}");
-    }
-}
-
 /// A restore while the editor is open (a preset, Bitwig's undo) resizes its
 /// window to the restored size at the next frame, through the host, and
 /// marks nothing (Yan, #1814); until then the editor keeps the size its
@@ -971,7 +921,7 @@ fn a_restore_while_the_editor_is_open_resizes_its_window_at_the_next_frame() {
     let opened = state.open();
     let frame = || {
         let laid_out = crate::editor::next_size(&state, opened, host.as_ref(), &lock);
-        state.end_frame(None, None, false, || settings.changed());
+        state.end_frame(None, None, || settings.changed());
         laid_out
     };
     frame();

@@ -107,12 +107,11 @@ pub(crate) struct Settings {
 /// A Console line the editor owes, by who left it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Notice {
-    /// A restore lost or refused something: the Console opens on it, as on
+    /// A restore lost something: the Console opens on it, as on
     /// the editor door's own losses (Yan, 2026-11-22, in
     /// `docs/intent/editor-shell.md`).
     Restore(String),
-    /// A line that only appends: one about the host, or a restore's that a
-    /// newer restore's look superseded ([`Settings::supersede_reveals`]).
+    /// A line about the host, which only appends.
     Host(String),
 }
 
@@ -223,17 +222,6 @@ impl Settings {
     /// Owe the editor a Console line.
     pub(crate) fn notify(&self, notice: Notice) {
         self.notice.lock().push_back(notice);
-    }
-
-    /// A restore's look is installing: the lines older restores still owe
-    /// keep their place in the log, but the Console they would open is the
-    /// older layout's to show, not this one's.
-    pub(crate) fn supersede_reveals(&self) {
-        for notice in self.notice.lock().iter_mut() {
-            if let Notice::Restore(line) = notice {
-                *notice = Notice::Host(std::mem::take(line));
-            }
-        }
     }
 
     /// Write every line owed into the editor's Console, the one place they

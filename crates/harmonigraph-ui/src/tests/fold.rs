@@ -1047,39 +1047,32 @@ fn a_region_fold_widens_the_open_region_up_to_the_rail() {
     }
 }
 
-/// A restore that reports a loss over a folded Settings section unfolds it as
-/// the rail's own click does, the window growing to hold it rather than the
-/// pictures being squeezed, and tells the host of no edit: what a save stores
-/// moved with the reveal, and the window it asks for is the editor's own.
+/// A restore that reports a loss over a folded Settings section unfolds it on
+/// the Console without asking for a window: the pictures squeeze into the
+/// folded layout's window until the next resize or fold click (Yan,
+/// 2026-11-23, #1949). The host is told of no edit, since what a save stores
+/// moved with the reveal.
 #[test]
-fn a_console_reveal_unfolds_the_settings_as_a_click_does() {
+fn a_console_reveal_unfolds_the_settings_in_the_window_it_has() {
     for position in [Position::Right, Position::Below] {
         let mut state = fresh();
         state.workspace.layout.position = position;
         let mut h = DockHarness::new();
         h.settle(&mut state);
-        let unfolded = h.screen.size();
         h.collapse_click(&mut state, panes::Tab::Tuning);
         assert!(collapsed(&state, panes::Tab::Tuning), "{position:?}: the fixture folds Settings");
-        assert!(!state.workspace.take_own_resize(), "{position:?}: a click's window is an edit");
         let edits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = edits.clone();
         state.on_edit(move || {
             counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         });
         h.settle(&mut state);
-        let pictures = state.workspace.layout_runtime.rects;
+        let folded = h.screen.size();
         state.report_loss("a restore lost something");
-        h.frame(&mut state, vec![]);
-        assert!(state.workspace.take_own_resize(), "{position:?}: a reveal's window is no edit");
         h.settle_folds(&mut state);
         assert_eq!(state.workspace.layout.settings_tab, panes::Tab::Console, "{position:?}");
         assert!(!collapsed(&state, panes::Tab::Console), "{position:?}");
-        near(h.screen.size(), unfolded);
-        for section in [Section::Lattice, Section::Analyzer] {
-            let index = section as usize;
-            near(state.workspace.layout_runtime.rects[index].size(), pictures[index].size());
-        }
+        near(h.screen.size(), folded);
         assert_eq!(edits.load(std::sync::atomic::Ordering::Relaxed), 0, "{position:?}: an edit");
     }
 }
