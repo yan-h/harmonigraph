@@ -529,6 +529,10 @@ pub struct Voice {
     /// tuning (PolyTuning/MPE). Equal to `note` until a tuning arrives.
     pub pitch: f32,
     pub pitch_class: PitchClass,
+    /// The correction its source's tuner froze at the attack, in semitones,
+    /// so `pitch - correction` is the pitch the player sent; zero for a note
+    /// no tuner corrected.
+    pub correction: f32,
     /// Where the note's expressions stand now; [`Expressions::NEUTRAL`] until
     /// the host sends one.
     pub expressions: Expressions,
@@ -685,6 +689,12 @@ impl NoteTracker {
                         self.roll.bend(key, delta.event.time, pitch);
                     }
                     self.roll.set_lifetime(key, (delta.lifetime != 0).then_some(delta.lifetime));
+                    let correction = delta.assignment.map_or(0, |a| a.correction_microcents);
+                    self.roll.set_correction(key, semitones(correction));
+                } else if let Some(assignment) = delta.assignment {
+                    // A later delta states the voice's correction as it
+                    // stands: a withdrawn one (#1799) is zero from here.
+                    self.roll.set_correction(key, semitones(assignment.correction_microcents));
                 }
             }
             CanonicalEvent::Baseline(frame) => return self.replace_source_mapped(frame, offset),
@@ -841,6 +851,11 @@ impl NoteTracker {
     }
 }
 
+/// Microcents as semitones, the unit the roll keeps pitch in.
+pub(crate) fn semitones(microcents: i64) -> f32 {
+    (microcents as f64 / 100_000_000.0) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -910,6 +925,7 @@ mod tests {
             velocity: 1.0,
             pitch: 60.0,
             pitch_class: PitchClass::from_midi_note(0),
+            correction: 0.0,
             expressions: Expressions::NEUTRAL,
             on_time: 0.0,
             lifetime: None,
@@ -1425,6 +1441,65 @@ mod tests {
         let held: Vec<_> = tracker.held_voices().map(|v| (v.note, v.on_time)).collect();
         assert_eq!(held, [(60, kept.actual_onset)], "the baseline ends the note it omits");
         assert_eq!(tracker.roll().notes().count(), 2, "and keeps the one it lists as one note");
+    }
+
+    /// A baseline states each voice's frozen correction, for a note it opens
+    /// and for one it restates: Learn takes it back off (#1938).
+    #[test]
+    fn a_baseline_states_each_voices_correction() {
+        let source = SourceId(1);
+        let mut row = published_voice(60, 61);
+        row.frozen_offset_microcents = 10_000_000;
+        let mut tracker = NoteTracker::new();
+        let baseline = |time, row| SourceBaseline::new(source, time, 0, true, &[row]);
+        tracker.replace_source(&baseline(2.0, row).unwrap()).unwrap();
+        let correction = |tracker: &NoteTracker| tracker.held_voices().next().unwrap().correction;
+        assert_eq!(correction(&tracker), 0.1, "a note the baseline opens");
+        row.frozen_offset_microcents = 0;
+        tracker.replace_source(&baseline(3.0, row).unwrap()).unwrap();
+        assert_eq!(correction(&tracker), 0.0, "a note it restates");
+    }
+
+    /// A delta that states a voice's assignment states its correction as it
+    /// stands: the onset's, and the zero a withdrawn correction leaves (#1799).
+    #[test]
+    fn a_tuning_delta_restates_a_voices_correction() {
+        use crate::canonical::{AssignmentMetadata, NoteDelta};
+        let source = SourceId(1);
+        let assignment = |correction_microcents| {
+            Some(AssignmentMetadata {
+                decision: 1,
+                node: None,
+                correction_microcents,
+                player_tuning: 0.0,
+            })
+        };
+        let mut tracker = NoteTracker::new();
+        let on = NoteDelta {
+            event: NoteEvent::on(1.0, source, 0, 60, 0.8),
+            sequence: 1,
+            lifetime: 7,
+            pitch_microcents: Some(6_010_000_000),
+            assignment: assignment(10_000_000),
+        };
+        tracker.handle_canonical(CanonicalEvent::Note(on)).unwrap();
+        let correction = |tracker: &NoteTracker| tracker.held_voices().next().unwrap().correction;
+        assert_eq!(correction(&tracker), 0.1);
+        let withdrawn = NoteDelta {
+            event: NoteEvent {
+                source,
+                time: 1.1,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Tuning { semitones: 0.0 },
+            },
+            sequence: 2,
+            pitch_microcents: Some(6_000_000_000),
+            assignment: assignment(0),
+            ..on
+        };
+        tracker.handle_canonical(CanonicalEvent::Note(withdrawn)).unwrap();
+        assert_eq!(correction(&tracker), 0.0, "the correction was withdrawn");
     }
 
     /// A baseline states a voice's expressions along with its pitch: a note it

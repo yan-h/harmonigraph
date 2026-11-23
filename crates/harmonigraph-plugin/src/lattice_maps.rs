@@ -123,7 +123,6 @@ fn translated(mut shape: LatticeMap, offset: LatticePos) -> LatticeMap {
 pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     let document = params.maps.read();
     let mut editor = params.map_editor.lock();
-    editor.restore(params.settings.restored());
     let adopted = *params.map_playback.lock();
     let offsets = offsets(params);
     let requested = MapSelection::requested(params);
@@ -154,6 +153,7 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
 
 pub fn edit(params: &crate::HarmonigraphParams, host: &dyn EditorHost, edit: MapEdit) {
     let set = |row: Row, value: i32| {
+        crate::shared::assert_unheld();
         host.begin_set_parameter(row.index());
         host.set_parameter(row.index(), value as f32);
         host.end_set_parameter(row.index());

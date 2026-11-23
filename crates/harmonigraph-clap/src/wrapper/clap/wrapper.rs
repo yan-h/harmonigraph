@@ -538,9 +538,10 @@ impl<P: Plugin> Wrapper<P> {
     unsafe extern "C" fn destroy(plugin: *const clap_plugin) {
         assert!(!plugin.is_null() && unsafe { !(*plugin).plugin_data.is_null() });
         let this = unsafe { Arc::from_raw((*plugin).plugin_data as *mut Self) };
-        crate::shell_debug_assert_eq!(Arc::strong_count(&this), 1);
-
+        // The plugin's destroy ends whatever thread could hold a wake's
+        // reference, so the last one is this.
         this.plugin.lock().destroy();
+        crate::shell_debug_assert_eq!(Arc::strong_count(&this), 1);
         drop(this);
     }
 

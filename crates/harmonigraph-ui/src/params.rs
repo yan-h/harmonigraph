@@ -71,16 +71,20 @@ pub trait ParamBackend {
     }
     fn edit_tuning_instance(&self, _id: u64, _edit: InstanceEdit) {}
 
-    /// Coherent audio-owned CLAP configuration as the editor draws it, when
-    /// the shell provides one.
+    /// The shell's tuning configuration as the editor draws it, when the
+    /// shell owns one (the plugin).
     fn configuration(&self) -> Option<ConfigurationView> {
         None
     }
-    /// Some(result) means the shell owns semantic transactions (the plugin,
-    /// which queues them to the audio thread); None selects the synchronous
-    /// path the standalone and offline shells use, where the UI's own reducer
-    /// takes the edit.
-    fn submit_tuning(&self, _edit: harmonigraph_core::configuration::ConfigEdit) -> Option<bool> {
+    /// Apply `edit` to the shell's configuration and return it as
+    /// [`configuration`](Self::configuration) now reads it, for the rest of
+    /// the frame to draw (the plugin). None selects the synchronous path the
+    /// standalone and offline shells use, where the UI's own reducer takes the
+    /// edit.
+    fn submit_tuning(
+        &self,
+        _edit: harmonigraph_core::configuration::ConfigEdit,
+    ) -> Option<ConfigurationView> {
         None
     }
 
@@ -156,8 +160,8 @@ pub enum InstanceEdit {
     Reset,
 }
 
-/// The tuning configuration as the plugin's audio owner last applied it, or as
-/// a queued restore will leave it.
+/// The plugin's tuning configuration, the document its main thread owns
+/// (#1938), with what its audio thread reports about it.
 #[derive(Clone, Copy, Debug)]
 pub struct ConfigurationView {
     /// The configuration as the editor draws it: the saved one, or with
@@ -169,17 +173,14 @@ pub struct ConfigurationView {
     pub board: bool,
     /// The bits below.
     pub status: u32,
-    /// The id of the latest edit the audio owner has not applied yet, or
-    /// `None` when it has applied every one: the request the pending label
-    /// waits on.
+    /// The configuration's revision while the audio thread has not adopted
+    /// it, or `None` once it has: the request the pending label waits on.
     pub unadopted: Option<u64>,
 }
 
 impl ConfigurationView {
     /// Host input was lost: a take refuses its configuration until a reset.
     pub const INPUT_LOST: u32 = 2;
-    /// The editor's last edit found the queue full.
-    pub const QUEUE_FULL: u32 = 8;
     /// Learn heard more distinct classes than it reads.
     pub const TOO_MANY_CLASSES: u32 = 16;
 }

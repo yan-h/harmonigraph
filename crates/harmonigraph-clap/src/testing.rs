@@ -57,6 +57,11 @@ pub struct Host {
 
     /// `request_callback` calls.
     pub callbacks: AtomicUsize,
+    /// A `request_callback` made on the thread so named waits while `hold`
+    /// is set, with `holding` set while it waits: a host wake in flight.
+    pub hold_thread: Mutex<Option<&'static str>>,
+    pub hold: std::sync::Arc<AtomicBool>,
+    pub holding: std::sync::Arc<AtomicBool>,
     /// `request_restart` calls.
     pub restarts: AtomicUsize,
     /// `state.mark_dirty` calls.
@@ -159,7 +164,26 @@ unsafe extern "C" fn extension(host: *const clap_host, id: *const c_char) -> *co
     }
 }
 unsafe extern "C" fn request_callback(host: *const clap_host) {
-    unsafe { stats(host) }.callbacks.fetch_add(1, Ordering::Relaxed);
+    let stats = unsafe { stats(host) };
+    stats.callbacks.fetch_add(1, Ordering::Relaxed);
+    // The thread is looked at only while a hold is set: `thread::current`
+    // can allocate, and so can a first lock of `hold_thread` on macOS, where
+    // a std mutex boxes its pthread one lazily, and this runs at the end of
+    // `process`, under the allocation guard. Whoever sets the hold has
+    // locked it already.
+    if !stats.hold.load(Ordering::Acquire) {
+        return;
+    }
+    let held = *stats.hold_thread.lock().unwrap();
+    if held.is_some() && std::thread::current().name() == held {
+        // Clones, so the wait reads nothing of a host freed meanwhile.
+        let (hold, holding) = (stats.hold.clone(), stats.holding.clone());
+        holding.store(true, Ordering::Release);
+        while hold.load(Ordering::Acquire) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        holding.store(false, Ordering::Release);
+    }
 }
 unsafe extern "C" fn request_restart(host: *const clap_host) {
     unsafe { stats(host) }.restarts.fetch_add(1, Ordering::Relaxed);

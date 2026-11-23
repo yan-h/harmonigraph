@@ -82,8 +82,17 @@ struct Shown {
     view: ConfigurationView,
 }
 fn shown(settings: &Settings) -> Shown {
-    let (raw, view) = settings.current();
-    Shown { raw, view }
+    Shown { raw: settings.read(ConfigReducer::raw), view: settings.view() }
+}
+/// The configuration a saved record restores.
+fn reduced(settings: MusicalSettings) -> ResolvedConfig {
+    let mut reducer = ConfigReducer::default();
+    reducer.apply(settings.mutation());
+    reducer.resolved()
+}
+/// The configuration the audio owner copied at its last callback.
+fn sounding(device: &Device) -> ResolvedConfig {
+    device.wrapper().test_inspect_plugin(|plugin| plugin.configuration.as_ref().unwrap().current())
 }
 pub(in crate::configuration) fn saved(state: &PluginState) -> MusicalSettings {
     serde_json::from_str(&state.fields[MUSICAL_SETTINGS]).unwrap()
@@ -95,14 +104,20 @@ pub(super) fn plain(state: &PluginState, key: ParamKey) -> f32 {
     }
 }
 
+/// An edit and a restore each show and save at once, the newest winning,
+/// and audio adopts the document at its next callback. An edit marks the
+/// project when it is made; a restore marks nothing.
 #[test]
-fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adoption() {
+fn edits_and_restores_show_and_save_at_once_and_audio_adopts_them() {
     let _scope = crate::test_scope::enter();
     let mut device = hub().with_retune();
     device.activate();
     let settings = device.settings();
+    let fresh = device.service();
     device.load(restored(&device, 690.0));
-    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
+    assert_eq!(device.service(), fresh, "a restore marks nothing");
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0)));
+    assert_eq!(shown(&settings).raw.three, microcents(695.0), "the edit shows at once");
     device.load(restored(&device, 705.0));
     let now = shown(&settings);
     assert!(now.view.unadopted.is_some());
@@ -110,30 +125,340 @@ fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adopt
     assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
     assert_eq!(saved(&device.wrapper().get_state_object()).axes[1], microcents(705.0));
     device.run(1000, vec![], None);
-    let adopted = shown(&settings);
-    assert!(!adopted.view.unadopted.is_some());
-    assert_eq!(adopted.raw.three, microcents(705.0), "the queued UI edit came before it");
-    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
+    assert!(shown(&settings).view.unadopted.is_none());
+    assert_eq!(sounding(&device).tuning.three, microcents(705.0), "audio adopted it");
     let marked = device.service();
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0)));
+    assert!(device.service() > marked, "an edit marks the project modified when it is made");
+    assert_eq!(saved(&device.save()).axes[1], microcents(700.0), "and saves before audio runs");
     device.run(1064, vec![], None);
-    assert_eq!(shown(&settings).raw.three, microcents(700.0));
-    assert!(device.service() > marked, "an applied UI edit marks the project modified");
+    assert_eq!(sounding(&device).tuning.three, microcents(700.0));
 }
 
-/// The tuning pending label waits on the latest edit queued, not on the
-/// configuration audio last applied: with audio stopped, a second edit
+/// Audio takes no lock: while a writer holds the document at a callback's
+/// start, the callback still reads the last configuration a write published.
+#[test]
+fn a_held_document_does_not_hold_audio() {
+    let _scope = crate::test_scope::enter();
+    let mut device = hub().with_retune();
+    device.activate();
+    let settings = device.settings();
+    device.run(0, vec![], None);
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0)));
+    let (held, release) = (std::sync::Barrier::new(2), std::sync::Barrier::new(2));
+    let read = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            settings.document.write(|_| {
+                held.wait();
+                release.wait();
+            })
+        });
+        held.wait();
+        device.run(64, vec![], None);
+        let read = sounding(&device).tuning.three;
+        release.wait();
+        read
+    });
+    assert_eq!(read, microcents(695.0), "read while the document was held");
+    assert!(shown(&settings).view.unadopted.is_none());
+}
+
+/// With no audio running, an edit shows and saves at once (Yan, #1938), and
+/// the view it returns is drawn as a frame draws it: under Pass through with
+/// Decode fifths on, in the board's tuning, so the rest of a drag's frame
+/// draws the Decoded fifth it set rather than the saved one.
+#[test]
+fn an_edit_with_no_audio_shows_and_saves_in_the_tuning_it_is_drawn_in() {
+    let _scope = crate::test_scope::enter();
+    let device = hub();
+    let settings = device.settings();
+    let host = device.editor_host();
+    let mut policy = settings.view().resolved.policy;
+    (policy.decode_fifths, policy.decoded_fifth) = (true, microcents(695.0));
+    let view = device.wrapper().test_inspect_plugin(|plugin| {
+        let gestures = std::cell::Cell::default();
+        let backend = crate::PluginParamBackend {
+            params: &plugin.params,
+            host: &*host,
+            configuration: plugin.params.configuration_view(),
+            gestures: &gestures,
+        };
+        let edit = ConfigEdit { policy: Some(policy), ..Default::default() };
+        harmonigraph_ui::params::ParamBackend::submit_tuning(&backend, edit).unwrap()
+    });
+    assert!(view.board);
+    assert_eq!(view.resolved.tuning.three, microcents(695.0), "drawn in the board's tuning");
+    assert!(view.unadopted.is_some(), "shown and saved, not yet sounding");
+    let saved = saved(&device.save());
+    assert_eq!(PolicyConfig::from(saved.adaptive).decoded_fifth, microcents(695.0));
+    assert_ne!(saved.axes[TuningAxis::Three.index()], microcents(695.0), "the saved fifth stays");
+}
+
+/// A host may save from inside a call the editor makes into it
+/// (`editor/lock.rs`). No document door is held across one, so the save
+/// returns, for a map edit's parameter set and a camera set made beside a
+/// tuning edit.
+#[test]
+fn a_save_from_inside_a_host_call_returns() {
+    struct Saving(Arc<crate::HarmonigraphParams>, std::sync::atomic::AtomicUsize);
+    impl Saving {
+        fn save(&self) {
+            let fields = Default::default();
+            let mut state =
+                PluginState { version: String::new(), params: Default::default(), fields };
+            self.0.settings.save(&mut state);
+            self.1.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    impl harmonigraph_clap::prelude::EditorHost for Saving {
+        fn closed(&self) -> bool {
+            false
+        }
+        fn request_resize(&self, _: (u32, u32)) -> bool {
+            false
+        }
+        fn begin_set_parameter(&self, _: usize) {
+            self.save();
+        }
+        fn set_parameter(&self, _: usize, _: f32) {
+            self.save();
+        }
+        fn end_set_parameter(&self, _: usize) {
+            self.save();
+        }
+    }
+    let params = Arc::new(crate::HarmonigraphParams::default());
+    let host = Saving(params.clone(), Default::default());
+    crate::lattice_maps::edit(&params, &host, harmonigraph_ui::lattice_maps::MapEdit::Select(0));
+    let gestures = std::cell::Cell::default();
+    let backend = crate::PluginParamBackend {
+        params: &params,
+        host: &host,
+        configuration: params.configuration_view(),
+        gestures: &gestures,
+    };
+    use harmonigraph_ui::params::ParamBackend;
+    backend.submit_tuning(ConfigEdit::axis(TuningAxis::Three, microcents(696.0)));
+    backend.set(ParamKey::CameraDistance, 6.0);
+    assert_eq!(host.1.load(Ordering::Relaxed), 6, "every host call saved, and returned");
+}
+
+/// The host may destroy the plugin while the input worker is inside a host
+/// wake, here Learn's, holding the wrapper's other reference: destruction
+/// stops and joins the worker first, so the plugin drops on the host's
+/// thread rather than on the worker, which would join itself (#1938).
+#[test]
+fn destruction_waits_out_a_worker_wake_and_drops_on_the_hosts_thread() {
+    let _scope = crate::test_scope::enter();
+    let mut device = hub();
+    device.activate();
+    let settings = device.settings();
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
+    settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
+    let (hold, holding) = (device.host().hold.clone(), device.host().holding.clone());
+    *device.host().hold_thread.lock().unwrap() = Some("harmonigraph-input-worker");
+    hold.store(true, Ordering::Release);
+    device.run(
+        0,
+        vec![note(60, 60, 0, CLAP_EVENT_NOTE_ON), note(67, 67, 0, CLAP_EVENT_NOTE_ON)],
+        None,
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut raw = 64;
+    while !holding.load(Ordering::Acquire) {
+        assert!(std::time::Instant::now() < deadline, "Learn never woke the host");
+        device.run(raw, vec![], None);
+        raw += 64;
+        std::thread::sleep(crate::background::POLL);
+    }
+    let dropped_on = device.wrapper().test_inspect_plugin(|plugin| plugin.dropped_on.clone());
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        hold.store(false, Ordering::Release);
+    });
+    drop(device);
+    let dropped = dropped_on.lock().unwrap().clone();
+    release.join().unwrap();
+    let host = Some(std::thread::current().name().map(str::to_owned));
+    assert_eq!(dropped, host, "the plugin dropped by the end of destroy, on its thread");
+}
+
+/// Learn's gate, inference and result are one write: it infers armed only
+/// where it acts under the engine read inside that write, so a restore that
+/// switched Pass through to Lattice Map since the last step leaves the axes
+/// alone.
+#[test]
+fn learn_applies_only_while_the_document_lets_it_act() {
+    let settings = Settings::default();
+    let learned =
+        harmonigraph_core::tuning::LearnedTuning { three: Some(696.0), ..Default::default() };
+    let learn = |engine: TuningEngine| {
+        let mut asked = None;
+        let changed = settings.learn(
+            || engine,
+            |armed| {
+                asked = Some(armed);
+                armed.then_some(learned)
+            },
+        );
+        (asked, changed)
+    };
+    assert_eq!(learn(TuningEngine::Off), (Some(false), false), "disarmed");
+    settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
+    assert_eq!(learn(TuningEngine::LatticeMap), (Some(false), false), "suspended in Lattice Map");
+    assert_eq!(learn(TuningEngine::Adaptive), (Some(false), false), "and under Adaptive");
+    assert_ne!(shown(&settings).raw.three, microcents(696.0), "the axes are left alone");
+    assert_eq!(learn(TuningEngine::Off), (Some(true), true), "it acts in Pass through");
+    assert_eq!(shown(&settings).raw.three, microcents(696.0));
+}
+
+/// A processing stop ends what was held, though no callback follows to say
+/// so (#1948): the chord leaves the lattice and the board's keys at once, and
+/// Learn, armed while stopped, learns nothing from it. A chord struck after a
+/// quick restart stays held and is learned. The whole path: `Plugin::stop`
+/// publishes the end, and the input worker drains it in order.
+#[test]
+fn a_processing_stop_ends_what_was_held_and_a_restart_plays_on() {
+    let _scope = crate::test_scope::enter();
+    let mut device = hub();
+    device.activate();
+    let settings = device.settings();
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
+    device.run(
+        0,
+        vec![note(60, 60, 0, CLAP_EVENT_NOTE_ON), note(67, 67, 0, CLAP_EVENT_NOTE_ON)],
+        None,
+    );
+    let lock = device.editor_lock();
+    let held = || lock.lock().ui.picture.runtime.tracker.held_count();
+    let lit = || crate::board::sounding(&lock.lock().ui.picture.runtime.tracker).len();
+    let rounds = |device: &Device| {
+        device.wrapper().test_inspect_plugin(|plugin| plugin.input_worker.completed_rounds())
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut raw = 64;
+    while held() < 2 {
+        assert!(std::time::Instant::now() < deadline, "the chord never reached the editor");
+        device.run(raw, vec![], None);
+        raw += 64;
+        std::thread::sleep(crate::background::POLL);
+    }
+    assert_eq!(lit(), 2, "the board lights the chord");
+    device.deactivate();
+    settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
+    while held() > 0 {
+        assert!(std::time::Instant::now() < deadline, "the stop never ended the chord");
+        std::thread::sleep(crate::background::POLL);
+    }
+    assert_eq!(lit(), 0, "the board's keys go out");
+    let from = rounds(&device);
+    while rounds(&device) < from + 4 {
+        assert!(std::time::Instant::now() < deadline, "the worker stopped stepping");
+        std::thread::sleep(crate::background::POLL);
+    }
+    assert_eq!(shown(&settings).raw.three, 690_000_000, "Learn did not hear it");
+    device.activate();
+    let mut raw = 0;
+    device.run(
+        raw,
+        vec![note(62, 62, 0, CLAP_EVENT_NOTE_ON), note(69, 69, 0, CLAP_EVENT_NOTE_ON)],
+        None,
+    );
+    raw += 64;
+    until(&mut device, &mut raw, |now| now.raw.three == 700_000_000);
+    assert_eq!(held(), 2, "the new chord stays held");
+}
+
+/// Activation reads the document again, so an edit made while the plugin
+/// was inactive is adopted before the first callback, and the pending label
+/// clears.
+#[test]
+fn activation_adopts_an_edit_made_while_inactive() {
+    let _scope = crate::test_scope::enter();
+    let mut device = hub();
+    let settings = device.settings();
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, 695_000_000));
+    assert!(shown(&settings).view.unadopted.is_some(), "not yet sounding");
+    device.activate();
+    assert!(shown(&settings).view.unadopted.is_none(), "adopted at activation");
+    assert_eq!(sounding(&device).tuning.three, 695_000_000);
+}
+
+/// Run callbacks until the input worker's Learn leaves the shown
+/// configuration as `learned` says, from callback time `raw` on.
+fn until(device: &mut Device, raw: &mut i64, learned: impl Fn(&Shown) -> bool) {
+    let settings = device.settings();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !learned(&shown(&settings)) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Learn never got there: {:?}",
+            shown(&settings).raw
+        );
+        device.run(*raw, vec![], None);
+        *raw += 64;
+        std::thread::sleep(crate::background::POLL);
+    }
+}
+
+/// Learn runs in the input worker (#1938 C), with no editor open: armed under
+/// Pass through, it hears the Hub's notes with the per-note tuning they were
+/// played with, as an MPE board plays them, and the document takes what it
+/// found, marked and saved.
+#[test]
+fn learn_hears_the_played_tuning_with_no_editor_open() {
+    let _scope = crate::test_scope::enter();
+    let mut device = hub();
+    device.activate();
+    let settings = device.settings();
+    settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
+    let marked = device.service();
+    let mut events = Vec::new();
+    for key in [60, 64, 67] {
+        events.push(note(i32::from(key), key, 0, CLAP_EVENT_NOTE_ON));
+        // A just triad, played 10¢ sharp throughout, so the C offset Learn
+        // finds is not 0 and the third is not 12-TET's.
+        let bend = 10.0
+            + match key {
+                64 => harmonigraph_core::tuning::FIVE_JUST - 400.0,
+                67 => harmonigraph_core::tuning::THREE_JUST - 700.0,
+                _ => 0.0,
+            };
+        events.push(id_tuning(i32::from(key), f64::from(bend) / 100.0));
+    }
+    device.run(0, events, None);
+    let mut raw = 64;
+    until(&mut device, &mut raw, |now| (now.raw.c_offset - 10_000_000).abs() < 1_000);
+    let now = shown(&settings);
+    let third = microcents(harmonigraph_core::tuning::FIVE_JUST);
+    assert!((now.raw.five - third).abs() < 1_000, "the played third: {}", now.raw.five);
+    assert!(!now.view.resolved.modes.tempered.syntonic);
+    let keyboard = now.view.resolved.policy.keyboard;
+    assert!((keyboard[0] - microcents(harmonigraph_core::tuning::THREE_JUST)).abs() < 1_000);
+    // The worker marks the project once its editor lock is let go.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while device.service() <= marked {
+        assert!(std::time::Instant::now() < deadline, "Learn never marked the project");
+        std::thread::sleep(crate::background::POLL);
+    }
+    assert_eq!(saved(&device.save()).axes, now.raw.axes(), "a save stores what Learn found");
+    device.finish_notes(raw, &[(60, 60), (64, 64), (67, 67)]);
+}
+
+/// The tuning pending label waits on the document's latest revision, not on
+/// the configuration audio last copied: with audio stopped, a second edit
 /// restarts the wait the first began (#1814 Q2).
 #[test]
-fn the_tuning_label_waits_on_the_latest_queued_edit() {
+fn the_tuning_label_waits_on_the_latest_revision() {
     use harmonigraph_ui::{PendingLabel, PENDING_AFTER};
     let settings = Settings::default();
     let start = std::time::Instant::now();
     let at = |ms: u64| start + std::time::Duration::from_millis(ms);
     let mut label = PendingLabel::default();
-    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0)));
     assert!(!label.shown(settings.view().unadopted, at(0)));
     let later = PENDING_AFTER.as_millis() as u64 / 2;
-    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(701.0))));
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(701.0)));
     assert!(!label.shown(settings.view().unadopted, at(later)));
     let first_wait = PENDING_AFTER.as_millis() as u64;
     assert!(!label.shown(settings.view().unadopted, at(first_wait)), "the wait restarted");
@@ -147,13 +472,13 @@ fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
         let mut device = hub().with_retune();
         device.activate();
         let settings = device.settings();
-        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(fifth))));
+        settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(fifth)));
         device.run(0, vec![], None);
         let linked = shown(&settings).view.resolved;
         assert!(linked.modes.tempered.syntonic && linked.modes.tempered.septimal_kleisma);
         assert!((linked.tuning.five_cents() - (4.0 * fifth - 2400.0)).abs() < 0.001);
         for comma in harmonigraph_core::Comma::ALL.into_iter().rev() {
-            assert!(settings.submit(ConfigEdit::temper(comma, false, linked.tuning)));
+            settings.submit(ConfigEdit::temper(comma, false, linked.tuning));
         }
         assert!(
             shown(&settings).view.unadopted.is_some(),
@@ -165,156 +490,19 @@ fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
         assert_eq!(released.raw.five, linked.tuning.five, "a released link keeps its value");
         assert_eq!(released.raw.seven, linked.tuning.seven);
         assert_eq!(saved(&device.save()).axes[2..4], [released.raw.five, released.raw.seven]);
-        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Five, released.raw.five)));
+        settings.submit(ConfigEdit::axis(TuningAxis::Five, released.raw.five));
         device.run(128, vec![], None);
         assert!(
             shown(&settings).view.resolved.modes.tempered.syntonic,
             "a typed same-value entry recognizes meantone"
         );
-        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Five, 390_000_000)));
+        settings.submit(ConfigEdit::axis(TuningAxis::Five, 390_000_000));
         device.run(192, vec![], None);
         let edited = shown(&settings).view.resolved;
         assert!(!edited.modes.tempered.syntonic);
         assert_eq!(edited.tuning.five_cents(), 390.0);
         assert!(edited.modes.tempered.septimal_kleisma);
     }
-}
-
-#[test]
-fn a_same_sample_initial_tuning_reaches_learning() {
-    learn_the_played_third(true, false);
-}
-
-/// Retune decides what the Hub corrects, not what Learn hears: a tuner in
-/// front of Harmonigraph states the tuning Learn is armed to find.
-#[test]
-fn learning_reads_the_hub_input_with_retune_off() {
-    learn_the_played_third(false, false);
-}
-
-#[test]
-fn pass_through_learns_axes_even_with_retune_enabled() {
-    learn_the_played_third(true, true);
-}
-
-fn learn_the_played_third(retune: bool, pass_through: bool) {
-    let _scope = crate::test_scope::enter();
-    let mut device = if retune { hub().with_retune() } else { hub() };
-    let mut state = device.wrapper().get_state_object();
-    let engine = if pass_through { 0 } else { 1 };
-    state.params.insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(engine));
-    device.load(state);
-    device.activate();
-    let settings = device.settings();
-    assert!(settings.submit(ConfigEdit { learning: Some(true), ..Default::default() }));
-    let mut events = Vec::new();
-    for key in [60, 64, 67] {
-        events.push(Input::Note(clap_event_note {
-            header: header::<clap_event_note>(CLAP_EVENT_NOTE_ON, 0),
-            note_id: i32::from(key),
-            port_index: 0,
-            channel: 0,
-            key,
-            velocity: 0.8,
-        }));
-        // A just triad, so the keyboard tuning Learn derives is not 12-TET's,
-        // played 10¢ sharp throughout, so the C offset it learns is not 0.
-        let bend = 10.0
-            + match key {
-                64 => harmonigraph_core::tuning::FIVE_JUST - 400.0,
-                67 => harmonigraph_core::tuning::THREE_JUST - 700.0,
-                _ => 0.0,
-            };
-        events.push(Input::Expression(clap_event_note_expression {
-            header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, 0),
-            expression_id: CLAP_NOTE_EXPRESSION_TUNING,
-            note_id: i32::from(key),
-            port_index: 0,
-            channel: 0,
-            key,
-            value: f64::from(bend) / 100.0,
-        }));
-    }
-    device.run(0, events, None);
-    // The Hub tunes its own notes, so its input reaches learning at the
-    // boundary after the one it arrived on rather than the same one.
-    let marked = device.service();
-    device.run(64, vec![], None);
-    let learned = shown(&settings);
-    let resolved = learned.view.resolved;
-    let keyboard = resolved.policy.keyboard;
-    assert_eq!(keyboard, harmonigraph_core::tuning::fifth_generated(keyboard[0]));
-    let fifth = microcents(harmonigraph_core::tuning::THREE_JUST);
-    assert!((keyboard[0] - fifth).abs() < 1_000);
-    // The C offset is learned either way; it is not part of the target.
-    let c = learned.raw.c_offset;
-    assert!((c - 10_000_000).abs() < 1_000, "C offset {c}");
-    // Only active retuning makes the lattice a fixed target.
-    if retune && !pass_through {
-        assert!(resolved.modes.tempered.syntonic);
-        let held = [learned.raw.three, learned.raw.five, learned.raw.seven];
-        assert_eq!(held, [700_000_000, 400_000_000, 1_000_000_000]);
-    } else {
-        assert!(!resolved.modes.tempered.syntonic);
-        let third = microcents(harmonigraph_core::tuning::FIVE_JUST);
-        assert!((learned.raw.five - third).abs() < 1_000);
-    }
-    assert!(device.service() > marked, "Learn marks the project");
-    assert_eq!(saved(&device.save()).axes, learned.raw.axes(), "a save stores what Learn found");
-    device.run(128, vec![], None);
-    assert_eq!(shown(&settings).view.resolved.revision, resolved.revision);
-    // A cut ends the chord with no delta on any row. Learn must stop hearing
-    // it on the next callback, not whenever that source next plays.
-    let heard = |device: &Device| {
-        device.wrapper().test_inspect_plugin(|plugin| {
-            let mut scratch = [harmonigraph_core::tuning::PitchClass::from_microcents(0);
-                crate::tuning::HELD_VOICES];
-            plugin.aggregation.as_ref().unwrap().held_classes(&mut scratch)
-        })
-    };
-    assert_eq!(heard(&device), 3);
-    crate::tuning::session::session().cut();
-    device.run(192, vec![], None);
-    assert_eq!(heard(&device), 0);
-    device.finish_notes(256, &[(60, 60), (64, 64), (67, 67)]);
-}
-
-#[test]
-fn a_full_command_queue_keeps_accepted_state() {
-    let _scope = crate::test_scope::enter();
-    let mut device = hub().with_retune();
-    let settings = device.settings();
-    device.load(restored(&device, 690.0));
-    device.load(restored(&device, 695.0));
-    for _ in 0..126 {
-        assert!(settings.submit(ConfigEdit::default()));
-    }
-    assert!(!settings.submit(ConfigEdit::default()));
-    let before = device.save();
-    let mut refused = restored(&device, 700.0);
-    refused.params.insert(ParamKey::CameraDistance.id().into(), ParamValue::F32(20.0));
-    assert!(!device.try_load(refused), "a restore needs a free slot");
-    assert_eq!(
-        settings.next_notice(),
-        Some(Notice::Restore(RESTORE_REFUSED.into())),
-        "and says so in the Console"
-    );
-    let after = device.save();
-    assert_eq!(saved(&after).axes[1], microcents(695.0));
-    assert_eq!(
-        plain(&after, ParamKey::CameraDistance),
-        plain(&before, ParamKey::CameraDistance),
-        "a refused restore installs none of its state"
-    );
-    device.activate();
-    device.run(0, vec![], None);
-    assert!(device.try_load(restored(&device, 705.0)), "an applied restore is repeatable");
-    assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
-    device.run(64, vec![], None);
-    let now = shown(&settings);
-    assert!(!now.view.unadopted.is_some());
-    assert_eq!(now.raw.three, microcents(705.0));
-    assert_eq!(now.view.status, 8, "the deliberately rejected submission remains visible");
 }
 
 #[test]
@@ -325,17 +513,10 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
         if commands {
             let settings = device.settings();
             device.load(restored(&device, 690.0));
-            device.load(restored(&device, 695.0));
-            for _ in 0..126 {
-                assert!(settings.submit(ConfigEdit::default()));
-            }
             device.activate();
             device.run(0, vec![], None);
             device.load(restored(&device, 705.0));
-            assert!(
-                shown(&settings).view.unadopted.is_some(),
-                "an accepted restore is still queued"
-            );
+            assert!(shown(&settings).view.unadopted.is_some(), "a restore audio has not adopted");
         } else {
             device.activate();
             device.run(0, vec![device.param(ParamKey::CameraDistance, 6.0, 0)], None);
@@ -388,19 +569,12 @@ fn a_restore_reads_back_and_saves_its_modes_before_and_after_adoption() {
             (saved_host.meantone, saved_host.marvel, saved_host.learning),
             (meantone, marvel, learning)
         );
-        assert_eq!(saved_host.reducer().resolved().modes, readback.modes);
-        assert_eq!(
-            saved(&device.wrapper().get_state_object()).reducer().resolved().modes,
-            readback.modes
-        );
+        assert_eq!(reduced(saved_host).modes, readback.modes);
+        assert_eq!(reduced(saved(&device.wrapper().get_state_object())).modes, readback.modes);
         device.run(0, vec![], None);
         assert_eq!(shown(&settings).view.resolved.modes, readback.modes);
-        // And the reducer the audio thread runs Learn and tempering under
-        // holds them too, not only the words that report it.
-        let adopted = device
-            .wrapper()
-            .test_inspect_plugin(|plugin| plugin.configuration.as_ref().unwrap().current().modes);
-        assert_eq!(adopted, restored_modes);
+        // And the configuration audio copied holds them too.
+        assert_eq!(sounding(&device).modes, restored_modes);
     }
 }
 
@@ -544,24 +718,6 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     assert_eq!(saved(&resaved).axes, MusicalSettings::default().axes);
 }
 
-#[test]
-fn a_pending_restore_keeps_fault_and_refusal_status_visible() {
-    let _scope = crate::test_scope::enter();
-    let device = hub().with_retune();
-    let settings = device.settings();
-    device.load(restored(&device, 690.0));
-    let mut applied = settings.published.load();
-    applied.status = 2;
-    settings.published.publish(applied);
-    for _ in 0..127 {
-        assert!(settings.submit(ConfigEdit::default()));
-    }
-    assert!(!settings.submit(ConfigEdit::default()));
-    let now = shown(&settings);
-    assert_eq!(now.view.status & 10, 10);
-    assert_eq!(now.raw.three, microcents(690.0));
-}
-
 /// A host that saves right after restoring, before it has run the plugin
 /// once, stores the restored record rather than the fresh one.
 #[test]
@@ -587,7 +743,7 @@ fn an_axis_edit_marks_the_project_without_a_rescan() {
     device.run(0, vec![], None);
     let marked = device.service();
     let rescans = device.host().rescans.load(Ordering::Relaxed);
-    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(696.0))));
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(696.0)));
     device.run(64, vec![], None);
     assert!(device.service() > marked, "the edit marks the project modified");
     assert_eq!(device.host().rescans.load(Ordering::Relaxed), rescans, "and rescans nothing");
@@ -831,59 +987,6 @@ fn a_restore_while_the_editor_is_open_resizes_its_window_at_the_next_frame() {
     assert_eq!(device.service(), marks, "a restore marked the project");
 }
 
-/// The queue keeps arrival order across kinds: an edit queued before a restore
-/// is overwritten by it, and one queued after it lands on the restored record.
-#[test]
-fn a_restore_queued_behind_an_edit_applies_after_it() {
-    let _scope = crate::test_scope::enter();
-    let mut device = hub().with_retune();
-    device.activate();
-    let settings = device.settings();
-    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
-    assert!(settings.submit(ConfigEdit::axis(TuningAxis::COffset, microcents(5.0))));
-    device.load(restored(&device, 690.0));
-    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Seven, microcents(980.0))));
-    device.run(0, vec![], None);
-    let raw = shown(&settings).raw;
-    assert_eq!(raw.three, microcents(690.0), "the restore came after the fifth");
-    assert_eq!(raw.c_offset, 0, "and replaced the origin the edit before it set");
-    assert_eq!(raw.seven, microcents(980.0), "the edit after it lands on the restore");
-}
-
-/// Every word the seqlock carries comes back as itself: distinct values in
-/// every one, negatives in the signed ones, and modes that differ bit by bit.
-#[test]
-fn the_published_record_round_trips_every_word() {
-    let record = Record {
-        applied: u64::MAX - 7,
-        raw: Tuning::from_axes([-1, -200_000_000, 3, 40_000_000, 5]),
-        resolved: ResolvedConfig {
-            revision: (1 << 40) + 9,
-            tuning: Tuning::from_axes([-600_000_000, 11, -12, 13, 14]),
-            modes: TuningModes {
-                tempered: Tempered { syntonic: false, septimal_kleisma: true },
-                learning: true,
-            },
-            policy: PolicyConfig {
-                radius: 2,
-                axes: 3,
-                pitch_flexibility: 37,
-                half_life_ms: 1234,
-                register: 850,
-                tolerance: 1_000_001,
-                silence_ms: 4500,
-                reset_stop: true,
-                reset_loop: false,
-                keyboard: [695_000_007, 380_000_008, 980_000_009],
-                decode_fifths: true,
-                decoded_fifth: 690_000_010,
-            },
-        },
-        status: 16 | 2,
-    };
-    assert_eq!(Published::new(record).load(), record);
-}
-
 pub(super) fn note(id: i32, key: i16, time: u32, kind: u16) -> Input {
     Input::Note(clap_event_note {
         header: header::<clap_event_note>(kind, time),
@@ -908,44 +1011,41 @@ fn id_tuning(id: i32, value: f64) -> Input {
 #[test]
 fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
     let _scope = crate::test_scope::enter();
-    // Retune at its shipped default, off: with a source retuning, Learn
-    // leaves the lattice axes alone, and the axes are what this reads.
     let mut device = hub();
     device.activate();
     let settings = device.settings();
-    assert!(settings.submit(ConfigEdit { learning: Some(true), ..Default::default() }));
+    // Seeded away from the 12-TET fifth, so the wait below is Learn's.
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
+    settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
     device.run(
         0,
         vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON), note(20, 67, 0, CLAP_EVENT_NOTE_ON)],
         None,
     );
-    // Move C, and let the move reach learning, before asking what learning
-    // does with the interval that is left.
-    device.run(64, vec![id_tuning(10, 1.0)], None);
-    device.run(128, vec![], None);
-    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000)));
-    device.run(192, vec![], None);
-    assert_eq!(
-        shown(&settings).raw.three,
-        690_000_000,
-        "only C moved: the remaining interval supplies no fifth evidence"
-    );
+    // C and G are learned as a fifth; then C moves, and what Learn does with
+    // the interval left is read at the end.
+    let mut raw = 64;
+    until(&mut device, &mut raw, |now| now.raw.three == 700_000_000);
+    device.run(raw, vec![id_tuning(10, 1.0)], None);
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
     let mut release = match note(10, -1, 0, CLAP_EVENT_NOTE_OFF) {
         Input::Note(event) => event,
         _ => unreachable!(),
     };
     release.channel = -1;
     release.port_index = -1;
-    device.run(256, vec![Input::Note(release)], None);
-    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Five, 390_000_000)));
-    device.run(320, vec![id_tuning(20, 5.0), note(30, 64, 0, CLAP_EVENT_NOTE_ON)], None);
-    device.run(384, vec![], None);
+    device.run(raw + 64, vec![Input::Note(release)], None);
+    settings.submit(ConfigEdit::axis(TuningAxis::Five, 390_000_000));
+    device.run(raw + 128, vec![id_tuning(20, 5.0), note(30, 64, 0, CLAP_EVENT_NOTE_ON)], None);
+    raw += 192;
+    // ID20 survived the ID10 release and now supplies C beside E.
+    until(&mut device, &mut raw, |now| now.raw.five == 400_000_000);
     assert_eq!(
-        shown(&settings).raw.five,
-        400_000_000,
-        "ID20 survived the ID10 release and now supplies C beside E"
+        shown(&settings).raw.three,
+        690_000_000,
+        "only C moved: the remaining interval supplied no fifth evidence"
     );
-    device.finish_notes(448, &[(20, 67), (30, 64)]);
+    device.finish_notes(raw, &[(20, 67), (30, 64)]);
 }
 
 #[test]
@@ -1325,11 +1425,11 @@ fn the_editor_draws_the_board_s_tuning_under_pass_through() {
     let policy =
         PolicyConfig { decode_fifths: true, decoded_fifth: 696_000_000, ..PolicyConfig::default() };
     let saved_fifth = harmonigraph_core::tuning::microcents(701.0);
-    assert!(device.settings().submit(ConfigEdit {
+    device.settings().submit(ConfigEdit {
         axes: [None, Some(saved_fifth), None, None, None],
         policy: Some(policy),
         ..Default::default()
-    }));
+    });
     device.run(0, vec![], None);
     let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
     let drawn = || {

@@ -3,8 +3,13 @@
 
 use crate::params::ParamBackend;
 use crate::{AudioSpectrum, Console};
-use harmonigraph_core::{NoteTracker, PitchClass, Tuning};
+use harmonigraph_core::tuning::{LearnedTuning, LearningState, PitchClass};
+use harmonigraph_core::{NoteTracker, Tuning};
 use std::time::{Duration, Instant};
+
+/// Held voices Learn reads at most: past the 64 per source and 256 per
+/// session the plugin's caps allow, so only a shell with no caps reaches it.
+pub const LEARN_VOICES: usize = 1024;
 
 /// How long one requested state may go unadopted by the audio thread before
 /// the editor says so (#1814 Q2). An edit reaches the plugin's state at once
@@ -15,7 +20,7 @@ use std::time::{Duration, Instant};
 pub const PENDING_AFTER: Duration = Duration::from_millis(100);
 
 /// Whether one request has gone unadopted for [`PENDING_AFTER`]. The timer is
-/// keyed on the request as its source names it (the latest queued edit's id,
+/// keyed on the request as its source names it (the configuration's revision,
 /// or the map state the parameters ask for before following moves it), so a
 /// drag, which requests anew every frame, never lights it, and following,
 /// which is no request, never restarts it.
@@ -72,12 +77,14 @@ pub struct VisualRuntime {
     /// saved one ([`ConfigurationView::board`](crate::params::ConfigurationView::board)):
     /// the Tuning pane's fifth then edits the Decoded fifth.
     pub board_drawn: bool,
-    /// While true, tuning params continuously re-learn from the held notes
-    /// (v1's learn mode). Runtime-only; never persisted.
+    /// Learn is armed: while it acts ([`learn_acts`](Self::learn_acts)), the
+    /// tuning re-learns from the held notes whenever their classes change.
+    /// Read from the configuration's owner each frame; the plugin saves it in
+    /// its musical settings.
     pub learn_active: bool,
     /// The commas being tempered out: the links every naming path spells
     /// against and the tuning panes show. Resolved each frame from whichever
-    /// owner holds the configuration (the plugin's audio owner, a take's
+    /// owner holds the configuration (the plugin's document, a take's
     /// recorded boundaries, or this runtime's own reducer), and never
     /// persisted by the editor: the plugin saves them in its musical settings,
     /// and a shell without a configuration owner starts from the reducer's
@@ -96,8 +103,11 @@ pub struct VisualRuntime {
     /// request has gone unadopted for [`PENDING_AFTER`].
     pub maps_pending: bool,
     maps_unadopted: PendingLabel<crate::lattice_maps::MapPlayback>,
-    /// Held pitch classes the last learn ran against (change detection).
-    pub(crate) last_learned_classes: Option<Vec<PitchClass>>,
+    /// Learn's scratch and the class set it last learned from, so a held
+    /// chord is learned once ([`learn`](Self::learn)).
+    learning: Box<LearningState<LEARN_VOICES>>,
+    /// Learn's last step heard more distinct classes than it reads.
+    learn_too_many: bool,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
     /// How far open the audio ring's Gate stands at each bucket of the
@@ -136,7 +146,8 @@ impl Default for VisualRuntime {
             configuration_unadopted: PendingLabel::default(),
             maps_pending: false,
             maps_unadopted: PendingLabel::default(),
-            last_learned_classes: None,
+            learning: Box::default(),
+            learn_too_many: false,
             spectrum: AudioSpectrum::default(),
             ring_fade: harmonigraph_scene::RingFade::default(),
             ring_levels: crate::panes::spectral_fold::RingLevels::default(),
@@ -176,19 +187,42 @@ impl VisualRuntime {
     pub fn observe_configuration(&mut self, params: &dyn ParamBackend) {
         let owned = params.configuration();
         if owned.is_none() && self.replayed_configuration.is_none() {
-            self.learn_step();
+            // No owner and so no engine: every armed step learns.
+            let armed = self.config_reducer.resolved().modes.learning;
+            if let Some(learned) = self.learn(armed) {
+                self.config_reducer.apply(
+                    harmonigraph_core::configuration::ConfigMutation::LearnResolved { learned },
+                );
+            }
         }
 
-        self.board_drawn = owned.is_some_and(|owned| owned.board);
         if let Some(owned) = owned {
-            self.apply_resolved(owned.resolved);
-            self.configuration_status = owned.status;
-            self.configuration_pending_shown =
-                self.configuration_unadopted.shown(owned.unadopted, Instant::now());
-        } else if let Some(recorded) = self.replayed_configuration {
-            self.apply_resolved(recorded);
+            self.apply_view(owned);
         } else {
-            self.apply_resolved(self.config_reducer.resolved());
+            self.board_drawn = false;
+            self.configuration_status = self.learn_status();
+            match self.replayed_configuration {
+                Some(recorded) => self.apply_resolved(recorded),
+                None => self.apply_resolved(self.config_reducer.resolved()),
+            }
+        }
+    }
+
+    /// Show the owner's configuration, as a frame reads it or an edit
+    /// returns it.
+    fn apply_view(&mut self, owned: crate::params::ConfigurationView) {
+        self.board_drawn = owned.board;
+        self.apply_resolved(owned.resolved);
+        self.configuration_status = owned.status | self.learn_status();
+        self.configuration_pending_shown =
+            self.configuration_unadopted.shown(owned.unadopted, Instant::now());
+    }
+
+    fn learn_status(&self) -> u32 {
+        if self.learn_too_many {
+            crate::params::ConfigurationView::TOO_MANY_CLASSES
+        } else {
+            0
         }
     }
 
@@ -237,56 +271,45 @@ impl VisualRuntime {
         self.apply_resolved(self.config_reducer.resolved());
     }
 
-    /// Apply one tuning action atomically. The synchronous shell uses the same
-    /// reducer as the audio owner.
+    /// Apply one tuning action atomically: through the owner, whose view the
+    /// rest of the frame then draws, or in this runtime's own reducer.
     pub fn edit_tuning(
         &mut self,
         params: &dyn ParamBackend,
         edit: harmonigraph_core::configuration::ConfigEdit,
     ) {
-        if let Some(accepted) = params.submit_tuning(edit) {
-            if !accepted {
-                self.console.log("Tuning command refused: configuration storage is full");
-            }
+        if let Some(view) = params.submit_tuning(edit) {
+            self.apply_view(view);
             return;
         }
         self.config_reducer.apply(harmonigraph_core::configuration::ConfigMutation::Edit(edit));
         self.apply_resolved(self.config_reducer.resolved());
     }
 
-    /// One tick of learn mode (v1 semantics): while armed, whenever the set of
-    /// held pitch classes changes, re-infer the tuning into the runtime's own
-    /// reducer. Change-detected so a held chord is learned once. No egui types.
-    pub(crate) fn learn_step(&mut self) {
-        if !self.learn_active {
-            self.last_learned_classes = None;
-            return;
-        }
-        let mut classes: Vec<PitchClass> = self
-            .tracker
-            .voices()
-            .filter(|v| v.state == harmonigraph_core::VoiceState::Held)
-            .map(|v| v.pitch_class)
-            .collect();
-        classes.sort_unstable();
-        classes.dedup();
-        if self.last_learned_classes.as_ref() == Some(&classes) {
-            return;
-        }
-        if !classes.is_empty() {
-            let learned = harmonigraph_core::learn_tuning(&classes);
-            // No audio owner and so no Tune source: the lattice axes are the
-            // only target, and every value is learned.
-            self.config_reducer.apply(
-                harmonigraph_core::configuration::ConfigMutation::LearnResolved {
-                    learned,
-                    retuning: false,
-                },
-            );
-            self.apply_resolved(self.config_reducer.resolved());
-            self.console.log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
-        }
-        self.last_learned_classes = Some(classes);
+    /// One step of Learn (#1938 C): while `armed`, what the held pitch
+    /// classes imply, whenever their set changes. It hears every held voice,
+    /// a hidden source's included, but none the tape plays, which no source
+    /// is playing now; a processing stop ends what was held in the tracker
+    /// itself (#1948). It hears each
+    /// at its incoming pitch, the correction a tuner froze on it taken back
+    /// off, as a note struck decoded is heard once decoding is off (Yan,
+    /// #1898, #1942). More classes than Learn reads set the Tuning pane's
+    /// notice instead, until a step reads few enough. No egui types.
+    pub fn learn(&mut self, armed: bool) -> Option<LearnedTuning> {
+        let tracker = &self.tracker;
+        let inferred = self.learning.infer(armed, |scratch| {
+            let held = tracker.held_voices().filter(|voice| !voice.source.is_tape());
+            let mut count = 0;
+            for (slot, voice) in scratch.iter_mut().zip(held) {
+                *slot = PitchClass::from_cents((voice.pitch - voice.correction) * 100.0);
+                count += 1;
+            }
+            // Past the plugin's caps, which no producer writes beyond.
+            debug_assert!(count < LEARN_VOICES, "more held voices than Learn reads");
+            count
+        });
+        self.learn_too_many = inferred.is_err();
+        inferred.ok().flatten()
     }
 }
 

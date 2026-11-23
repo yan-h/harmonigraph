@@ -220,7 +220,6 @@ impl MapDocument {
 
 #[derive(Clone, Debug, Default)]
 pub struct MapEditor {
-    pub restore_id: u64,
     pub edit_shape: bool,
     /// Each shape edit's slot and the shape it replaced, newest last. Undo
     /// takes only the selected slot's entries, so it never rewrites a map
@@ -253,12 +252,9 @@ impl MapEditor {
     }
     /// A restored project is a different document: undo entries name its
     /// slots by identity and would write old shapes into the new ones.
-    pub fn restore(&mut self, id: u64) {
-        if self.restore_id != id {
-            self.restore_id = id;
-            self.edit_shape = false;
-            self.undo.clear();
-        }
+    pub fn forget(&mut self) {
+        self.edit_shape = false;
+        self.undo.clear();
     }
     pub fn record(&mut self, id: usize, replaced: LatticeMap) {
         if self.undo.len() == 64 {

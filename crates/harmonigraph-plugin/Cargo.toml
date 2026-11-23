@@ -47,6 +47,7 @@ raw-window-handle = { workspace = true }
 plugin-own-window = { workspace = true }
 
 rtrb = { workspace = true }
+triple_buffer = { workspace = true }
 crossbeam = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }

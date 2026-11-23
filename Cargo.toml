@@ -83,6 +83,9 @@ pollster = "1"
 # nothing there and costs it every frame. Already in the graph via wgpu.
 foldhash = "0.2"
 rtrb = "0.3"
+# The tuning configuration audio reads at each callback (#1938): wait-free,
+# with no lock for a reader's release to take.
+triple_buffer = "8"
 crossbeam = "0.8"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
