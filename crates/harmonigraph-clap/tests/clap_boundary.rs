@@ -3,7 +3,7 @@
 use clap_sys::{events::*, ext::gui::*, plugin::clap_plugin, process::*};
 use harmonigraph_clap::prelude::*;
 use harmonigraph_clap::testing::{self, Audio, Call, Event, Host, Offer, Resize, Sink, header};
-use harmonigraph_clap::wrapper::clap::setup::{Prepared, Serviced, Setup};
+use harmonigraph_clap::wrapper::clap::setup::{Serviced, Setup};
 use std::{
     ffi::c_void,
     ptr,
@@ -79,17 +79,11 @@ impl Default for Fixture {
 static FIELD: Mutex<String> = Mutex::new(String::new());
 
 struct FixtureSetup;
-struct Field(Option<String>);
-impl Prepared for Field {
-    fn commit(self: Box<Self>) {
-        if let Some(field) = self.0 {
+impl Setup for FixtureSetup {
+    fn restore(&self, state: &PluginState) {
+        if let Some(field) = state.fields.get("field").cloned() {
             *FIELD.lock().unwrap_or_else(|e| e.into_inner()) = field;
         }
-    }
-}
-impl Setup for FixtureSetup {
-    fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
-        Ok(Box::new(Field(state.fields.get("field").cloned())))
     }
     fn save(&self, state: &mut PluginState) {
         let field = FIELD.lock().unwrap_or_else(|e| e.into_inner()).clone();

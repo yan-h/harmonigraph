@@ -1,22 +1,17 @@
 //! Optional plugin-owned saved settings, outside the host parameter list.
-//! The wrapper prepares before restoring any ordinary fields, commits only on
-//! success, and never calls these methods under its audio/plugin runtime lock.
+//! The wrapper restores them after the parameters, and never calls these
+//! methods under its audio/plugin runtime lock.
 use crate::params::Table;
 use crate::plugin::PluginState;
-
-pub trait Prepared: Send {
-    /// Off-audio commit of a prepared complete value, after the ordinary
-    /// fields restored. It needs no audio callback and reports nothing back:
-    /// whatever prepare could refuse, it refused. Drop before commit abandons
-    /// preparation.
-    fn commit(self: Box<Self>);
-}
 
 pub trait Setup: Send + Sync {
     /// Main-thread host metadata, refreshed at init and on track-info changes.
     /// None means the host does not supply a name. This is not saved state.
     fn track_name_changed(&self, _name: Option<&str>) {}
-    fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str>;
+    /// Install what `state` holds for this setup, after the parameters, off
+    /// audio. Nothing refuses: a field that does not parse costs that field
+    /// alone, which the setup reports itself.
+    fn restore(&self, state: &PluginState);
     fn save(&self, state: &mut PluginState);
     /// Called during construction. The callback asks the host for a
     /// main-thread call, deferred past any process callback it runs in.
@@ -40,18 +35,11 @@ pub struct Serviced {
     pub text: bool,
 }
 
-/// The one restore, the wrapper's and the plugin's state reader's: the setup
-/// prepares and may refuse the whole state, then the parameters are restored,
-/// then the setup commits. Nothing reinitializes the plugin.
-pub fn restore(
-    setup: Option<&dyn Setup>,
-    params: &Table,
-    state: &PluginState,
-) -> Result<(), &'static str> {
-    let prepared = setup.map(|setup| setup.prepare(state)).transpose()?;
+/// The one restore, the wrapper's and the plugin's state reader's: the
+/// parameters, then the setup. Nothing reinitializes the plugin.
+pub fn restore(setup: Option<&dyn Setup>, params: &Table, state: &PluginState) {
     params.restore(&state.params);
-    if let Some(prepared) = prepared {
-        prepared.commit();
+    if let Some(setup) = setup {
+        setup.restore(state);
     }
-    Ok(())
 }

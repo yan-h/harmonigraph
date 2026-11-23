@@ -1089,7 +1089,7 @@ fn the_delay_is_saved_and_reported_as_latency_before_any_hub_exists() {
     assert_eq!(tune.latency(), 4 * 256, "the new multiplier is adopted at the reactivation");
     let saved = tune.tune_wrapper().get_state_object();
     let mut reopened = Device::tune(host());
-    assert!(reopened.tune_wrapper().test_restore(&saved));
+    reopened.tune_wrapper().test_restore(&saved);
     reopened.activate_format(48000.0, 256);
     assert_eq!(reopened.latency(), 4 * 256, "a reopened project reports the saved delay");
 }

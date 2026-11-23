@@ -221,10 +221,7 @@ impl Device {
         panic!("missing parameter");
     }
     pub fn load(&self, state: harmonigraph_clap::plugin::PluginState) {
-        assert!(self.try_load(state));
-    }
-    pub fn try_load(&self, state: harmonigraph_clap::plugin::PluginState) -> bool {
-        self.device.load(&serde_json::to_vec(&state).unwrap())
+        assert!(self.device.load(&serde_json::to_vec(&state).unwrap()));
     }
     pub fn save(&self) -> harmonigraph_clap::plugin::PluginState {
         serde_json::from_slice(&self.device.save()).unwrap()

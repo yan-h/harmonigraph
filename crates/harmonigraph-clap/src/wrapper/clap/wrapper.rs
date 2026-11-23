@@ -440,11 +440,10 @@ impl<P: Plugin> Wrapper<P> {
         state
     }
 
-    /// Restore `state` as a load from the host does, without its framing:
-    /// whether the setup took it.
+    /// Restore `state` as a load from the host does, without its framing.
     #[cfg(feature = "clap-boundary-tests")]
     #[doc(hidden)]
-    pub fn test_restore(&self, state: &PluginState) -> bool {
+    pub fn test_restore(&self, state: &PluginState) {
         self.restore(state)
     }
 
@@ -467,10 +466,8 @@ impl<P: Plugin> Wrapper<P> {
 
     /// The one restore ([`setup::restore`](super::setup::restore)), from the
     /// main thread, even while audio runs.
-    fn restore(&self, state: &PluginState) -> bool {
+    fn restore(&self, state: &PluginState) {
         super::setup::restore(self.setup.as_deref(), &self.params, state)
-            .inspect_err(|reason| crate::shell_error!("Prepared setup restore refused: {reason}"))
-            .is_ok()
     }
 
     /// Move the number the host reads to the one the plugin asked for, and
@@ -1452,12 +1449,9 @@ impl<P: Plugin> Wrapper<P> {
 
         match state::deserialize_json(&read_buffer) {
             Some(state) => {
-                let success = wrapper.restore(&state);
-                if success {
-                    crate::shell_trace!("Loaded state ({} bytes)", read_buffer.len());
-                }
-
-                success
+                wrapper.restore(&state);
+                crate::shell_trace!("Loaded state ({} bytes)", read_buffer.len());
+                true
             }
             None => false,
         }
