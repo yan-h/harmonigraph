@@ -561,6 +561,7 @@ mod tests {
         assert_eq!(adopted(&mut maps)[1], Some(second), "the fixture never reached a second slot");
         params.maps.write(|d| d.rename(1, "Renamed".into()));
         params.maps.write(|d| d.move_by(1, MapMove::Earlier));
+        assert!(!maps.bank.updated(), "a rename and a move publish nothing to audio");
         let bank = adopted(&mut maps);
         assert_eq!((bank[0], bank[1]), (Some(LatticeMap::default()), Some(second)));
 

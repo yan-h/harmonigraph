@@ -1204,6 +1204,40 @@ mod tests {
         plugin.take.publish_clock(plugin.clock.end());
     }
 
+    /// The editor's host is the one the plugin installs, checked: a call
+    /// from inside a document closure fails the depth check before it
+    /// reaches the host, and one outside passes through (#1938).
+    #[cfg(debug_assertions)]
+    #[test]
+    fn the_installed_editor_host_refuses_a_call_from_inside_a_document_closure() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Counting(AtomicUsize);
+        impl EditorHost for Counting {
+            fn closed(&self) -> bool {
+                false
+            }
+            fn request_resize(&self, _: (u32, u32)) -> bool {
+                false
+            }
+            fn begin_set_parameter(&self, _: usize) {}
+            fn set_parameter(&self, _: usize, _: f32) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+            fn end_set_parameter(&self, _: usize) {}
+        }
+        let mut plugin = Harmonigraph::default();
+        let counting = Arc::new(Counting(AtomicUsize::new(0)));
+        plugin.editor_host(counting.clone());
+        let host = plugin.editor_host.clone().expect("installed");
+        let inside = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            plugin.params.maps.write(|_| host.set_parameter(0, 0.0))
+        }));
+        assert!(inside.is_err(), "refused");
+        assert_eq!(counting.0.load(Ordering::Relaxed), 0, "before it reached the host");
+        host.set_parameter(0, 0.0);
+        assert_eq!(counting.0.load(Ordering::Relaxed), 1, "outside, it passes");
+    }
+
     /// The input worker and the editor share one `EguiState`, and nothing but
     /// this says so: `Default` hands one to [`background::InputWorker::spawn`]
     /// and `editor` hands the same field to `editor::create`. A second one on

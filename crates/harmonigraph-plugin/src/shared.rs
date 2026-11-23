@@ -114,16 +114,4 @@ mod tests {
         let document = Shared::<u8>::default();
         document.read(|_| document.read(|_| ()));
     }
-
-    /// So does a host call from inside one; outside, it passes.
-    #[test]
-    fn a_host_call_from_inside_a_closure_fails_the_depth_check() {
-        let document = Shared::<u8>::default();
-        assert_unheld();
-        let inside = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            document.write(|_| assert_unheld())
-        }));
-        assert!(inside.is_err());
-        assert_unheld();
-    }
 }
