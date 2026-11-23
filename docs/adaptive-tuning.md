@@ -599,7 +599,7 @@ Shrinking a buffer does not make its overflow path unreachable.
 | Constant | Value | Resource |
 |---|---:|---|
 | `TUNERS` | 16 | Tune rows in the session; the Hub's own track is a seventeenth source with a reserved index |
-| `HELD_PER_SOURCE` | 64 | Held voices per source. Learn hears every voice every row holds |
+| `HELD_PER_SOURCE` | 64 | Held voices per source |
 | `PENDING_EVENTS` | 8,192 | Retained events in one Tune's delay line, including unrelated MIDI |
 | `CAPTURE_RING` / `REPLY_RING` | 1,024 / 1,024 | The two rings per row. A full capture ring costs that note its correction |
 | `BATCH_EVENTS` | 2,048 | Records one ordering pass holds across every source, and deltas one callback may publish |

@@ -321,19 +321,21 @@ impl VisualRuntime {
         inferred.ok().flatten()
     }
 
-    /// Forget the class set Learn last learned from, so the next step infers
-    /// from what is held again: for a result its owner refused.
-    pub fn relearn(&mut self) {
-        let _ = self.learning.infer(false, |_| 0);
+    /// Given how many times processing has stopped, ahead of the notes a
+    /// step drains: at a new stop every press held then ended there, though
+    /// no callback came to say so, and Learn no longer hears it.
+    pub fn cut_learn(&mut self, stops: u64) {
+        if self.learn_stops != stops {
+            self.restart_learn(stops);
+        }
     }
 
-    /// Given how many times processing has stopped, at each step: at a new
-    /// stop every press held then ended there, though no callback came to
-    /// say so, and Learn no longer hears it.
-    pub fn cut_learn(&mut self, stops: u64) {
-        if std::mem::replace(&mut self.learn_stops, stops) != stops {
-            self.learn_cut = self.tracker.held_voices().map(|voice| voice.id()).collect();
-        }
+    /// Processing started again, at this point of the notes drained, after
+    /// `stops` stops: every press held now ended at the last one, and the
+    /// notes after this are the new run's.
+    pub fn restart_learn(&mut self, stops: u64) {
+        self.learn_stops = stops;
+        self.learn_cut = self.tracker.held_voices().map(|voice| voice.id()).collect();
     }
 }
 

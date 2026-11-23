@@ -271,40 +271,100 @@ fn destruction_waits_out_a_worker_wake_and_drops_on_the_hosts_thread() {
         raw += 64;
         std::thread::sleep(crate::background::POLL);
     }
-    *crate::DROPPED_ON.lock().unwrap() = None;
+    let dropped_on = device.wrapper().test_inspect_plugin(|plugin| plugin.dropped_on.clone());
     let release = std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(200));
         hold.store(false, Ordering::Release);
     });
     drop(device);
-    let dropped = crate::DROPPED_ON.lock().unwrap().clone();
+    let dropped = dropped_on.lock().unwrap().clone();
     release.join().unwrap();
-    let host = std::thread::current().name().map(str::to_owned);
+    let host = Some(std::thread::current().name().map(str::to_owned));
     assert_eq!(dropped, host, "the plugin dropped by the end of destroy, on its thread");
 }
 
-/// Learn applies only while it acts, as the document stands when its result
-/// arrives: a restore or an edit that disarmed it since the inference wins.
+/// Learn's gate, inference and result are one write: it infers armed only
+/// where it acts under the engine read inside that write, so a restore that
+/// switched Pass through to Lattice Map since the last step leaves the axes
+/// alone.
 #[test]
 fn learn_applies_only_while_the_document_lets_it_act() {
     let settings = Settings::default();
     let learned =
         harmonigraph_core::tuning::LearnedTuning { three: Some(696.0), ..Default::default() };
-    assert_eq!(settings.learn(learned, || TuningEngine::Off), None, "disarmed");
+    let learn = |engine: TuningEngine| {
+        let mut asked = None;
+        let changed = settings.learn(
+            || engine,
+            |armed| {
+                asked = Some(armed);
+                armed.then_some(learned)
+            },
+        );
+        (asked, changed)
+    };
+    assert_eq!(learn(TuningEngine::Off), (Some(false), false), "disarmed");
     settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
-    // A restore switching Pass through to Lattice Map after the inference
-    // read Pass through: the engine is read again inside the write.
-    assert!(settings.learns(TuningEngine::Off));
-    let refused = settings.learn(learned, || TuningEngine::LatticeMap);
-    assert_eq!(refused, None, "suspended in Lattice Map");
-    assert_eq!(settings.learn(learned, || TuningEngine::Adaptive), None, "and under Adaptive");
+    assert_eq!(learn(TuningEngine::LatticeMap), (Some(false), false), "suspended in Lattice Map");
+    assert_eq!(learn(TuningEngine::Adaptive), (Some(false), false), "and under Adaptive");
     assert_ne!(shown(&settings).raw.three, microcents(696.0), "the axes are left alone");
-    assert_eq!(
-        settings.learn(learned, || TuningEngine::Off),
-        Some(true),
-        "it acts in Pass through"
-    );
+    assert_eq!(learn(TuningEngine::Off), (Some(true), true), "it acts in Pass through");
     assert_eq!(shown(&settings).raw.three, microcents(696.0));
+}
+
+/// A processing stop ends what was held, though no callback follows to say
+/// so: Learn, armed while processing is stopped, does not learn the chord
+/// held at the stop. The whole path: `Plugin::stop` counts the stop, and the
+/// input worker cuts what it holds.
+#[test]
+fn learn_armed_after_a_processing_stop_does_not_hear_what_it_ended() {
+    let _scope = crate::test_scope::enter();
+    let mut device = hub();
+    device.activate();
+    let settings = device.settings();
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
+    device.run(
+        0,
+        vec![note(60, 60, 0, CLAP_EVENT_NOTE_ON), note(67, 67, 0, CLAP_EVENT_NOTE_ON)],
+        None,
+    );
+    let lock = device.editor_lock();
+    let held = || lock.lock().ui.picture.runtime.tracker.held_count();
+    let rounds = |device: &Device| {
+        device.wrapper().test_inspect_plugin(|plugin| plugin.input_worker.completed_rounds())
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut raw = 64;
+    while held() < 2 {
+        assert!(std::time::Instant::now() < deadline, "the chord never reached the editor");
+        device.run(raw, vec![], None);
+        raw += 64;
+        std::thread::sleep(crate::background::POLL);
+    }
+    device.deactivate();
+    settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
+    let from = rounds(&device);
+    while rounds(&device) < from + 4 {
+        assert!(std::time::Instant::now() < deadline, "the worker stopped stepping");
+        std::thread::sleep(crate::background::POLL);
+    }
+    assert_eq!(held(), 2, "the editor still holds the chord");
+    assert_eq!(shown(&settings).raw.three, 690_000_000, "Learn did not hear it");
+}
+
+/// Activation reads the document again, so an edit made while the plugin
+/// was inactive is adopted before the first callback, and the pending label
+/// clears.
+#[test]
+fn activation_adopts_an_edit_made_while_inactive() {
+    let _scope = crate::test_scope::enter();
+    let mut device = hub();
+    let settings = device.settings();
+    settings.submit(ConfigEdit::axis(TuningAxis::Three, 695_000_000));
+    assert!(shown(&settings).view.unadopted.is_some(), "not yet sounding");
+    device.activate();
+    assert!(shown(&settings).view.unadopted.is_none(), "adopted at activation");
+    assert_eq!(sounding(&device).tuning.three, 695_000_000);
 }
 
 /// Run callbacks until the input worker's Learn leaves the shown

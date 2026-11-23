@@ -401,9 +401,9 @@ impl Hub {
         self.detect_loop(callback);
         // Adopt even on callbacks with no note input, so silence expiry below
         // uses the policy rather than the last onset's configuration. It is
-        // the policy the previous callback left: the configuration owner
-        // reduces this callback's queued editor edits after `begin`, so an
-        // edit governs expiry from the callback after it arrives.
+        // the policy the previous callback left: the configuration owner reads
+        // the document's latest configuration after `begin`, so an edit
+        // governs expiry from the callback after it arrives.
         self.sequencer.config = owner.current().into();
         // Silence expires released memory against the completed input
         // frontier, which is this callback's start: everything before it has

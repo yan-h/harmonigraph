@@ -110,8 +110,11 @@ pub(crate) const SHUT_POLL: Duration = Duration::from_millis(20);
 
 /// The input worker's thread, and the flag that ends it.
 ///
-/// Held by the plugin purely for its [`Drop`]: a plugin removed from a project
-/// must not leave a thread behind doing FFTs on a ring nobody fills again.
+/// Held by the plugin to stop it: `Plugin::destroy` stops and joins it, so no
+/// step or host wake of its outlives the plugin's destruction, and its
+/// [`Drop`] does the same for a plugin dropped without one. A plugin removed
+/// from a project must not leave a thread behind doing FFTs on a ring nobody
+/// fills again.
 pub(crate) struct InputWorker {
     stop: Arc<AtomicBool>,
     /// Completed loop rounds, exposed only to tests that need an observable
@@ -204,16 +207,16 @@ impl InputWorker {
         self.rounds.load(Ordering::Acquire)
     }
 
-    /// Stops the thread and waits for it, and what it handed back; `None`
-    /// when it was never spawned, already joined, or ended in a panic outside
-    /// a step. Joining can wait for the current step, one [`SHUT_POLL`]
-    /// sleep at most, and the final drain in [`run`].
     /// Stop the thread and wait for it, at the plugin's destruction: no step,
     /// nor a host wake one makes, outlives this.
     pub(crate) fn stop(&mut self) {
         self.stop_and_join();
     }
 
+    /// Stops the thread and waits for it, and what it handed back; `None`
+    /// when it was never spawned, already joined, or ended in a panic outside
+    /// a step. Joining can wait for the current step, one [`SHUT_POLL`]
+    /// sleep at most, and the final drain in [`run`].
     fn stop_and_join(&mut self) -> Option<Ended> {
         self.stop.store(true, Ordering::Relaxed);
         self.thread.take().and_then(|thread| thread.join().ok())
@@ -441,25 +444,17 @@ fn guarded_step(
 
 /// One step of Learn (#1938 C), from the notes the step just drained: here
 /// rather than in a frame, so it learns with the window covered or shut, as
-/// it did on audio. It applies through the document's door, which reads the
-/// engine and checks the gate again inside its write, so a restore or an
-/// edit that disarmed Learn or changed the engine since this read them wins,
-/// and a result refused there is inferred again at the next step. The
-/// editor's lock is held, then the document's: the order a frame takes them
-/// in. Whether what the project saves changed, for the caller to mark once
-/// the editor lock is let go.
+/// it did on audio. The gate, the inference and the result are one write of
+/// the document (`Settings::learn`). The editor's lock is held, then the
+/// document's: the order a frame takes them in. Whether what the project
+/// saves changed, for the caller to mark once the editor lock is let go.
 fn learn(params: &crate::HarmonigraphParams, runtime: &mut harmonigraph_ui::VisualRuntime) -> bool {
     let engine = || {
         harmonigraph_core::lattice_map::TuningEngine::from_index(
             params.int(crate::Row::TuningEngine),
         )
     };
-    runtime.cut_learn(params.settings.stops());
-    let Some(learned) = runtime.learn(params.settings.learns(engine())) else { return false };
-    params.settings.learn(learned, engine).unwrap_or_else(|| {
-        runtime.relearn();
-        false
-    })
+    params.settings.learn(engine, |armed| runtime.learn(armed))
 }
 
 /// How many consecutive steps may panic before the worker stops trying.
@@ -1070,5 +1065,44 @@ mod tests {
         h.push_audio(20_000);
         std::thread::sleep(SHUT_POLL * 10);
         assert_eq!(h.columns(), analyzed, "the thread outlived the plugin that owned it");
+    }
+
+    /// A restart publishes a reset of the direct source ahead of its notes:
+    /// Learn stops hearing what was held before it at that point of the
+    /// drain, a Tune's notes the reset itself does not end included, and
+    /// hears the notes after it, even in the poll that drains both, and even
+    /// with no stop counted (a host's reset).
+    #[test]
+    fn a_restart_cuts_only_what_was_held_before_it() {
+        use harmonigraph_core::canonical::NoteDelta;
+        use harmonigraph_core::configuration::{ConfigEdit, TuningAxis};
+        let params = Arc::new(crate::HarmonigraphParams::default());
+        params.settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
+        let mut h = harness();
+        h.input.learn_stops(params.settings.clone());
+        h.learn = Some(params.clone());
+        // A Tune's fifth, held across the restart.
+        let tune = SourceId(1);
+        h.notes.observe_clock(0.0);
+        for (sequence, note) in [(1, 60u8), (2, 67)] {
+            let on = CoreNoteEvent::on(0.0, tune, 0, note, 1.0);
+            let delta = NoteDelta {
+                event: on,
+                sequence,
+                lifetime: sequence,
+                pitch_microcents: Some(i64::from(note) * 100_000_000),
+                assignment: None,
+            };
+            h.notes.note(delta).expect("the ring is sized for this");
+        }
+        h.step();
+        params.settings.submit(ConfigEdit { learning: Some(true), ..Default::default() });
+        h.push_kind(0.1, 0, NoteEventKind::SourceReset);
+        h.push_note(0.1, 72);
+        h.push_note(0.1, 76);
+        h.step();
+        assert_eq!(h.shared.lock().ui.picture.runtime.tracker.held_count(), 4);
+        let three = params.settings.resolved().tuning.three;
+        assert_eq!(three, 690_000_000, "the fifth held before the restart is not heard");
     }
 }

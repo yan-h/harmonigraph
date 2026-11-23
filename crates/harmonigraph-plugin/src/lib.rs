@@ -138,6 +138,9 @@ pub struct Harmonigraph {
     /// appears to be sound, but PR #112 was a texture freed from the wrong point
     /// and it cost a crash; ordering the field is cheaper than being sure.
     input_worker: background::InputWorker,
+    /// The thread this plugin dropped on, once it has, for a teardown test.
+    #[cfg(test)]
+    dropped_on: Arc<std::sync::Mutex<Option<Option<String>>>>,
     params: Arc<HarmonigraphParams>,
     /// Coherent, bounded audio and source metadata for the live analyzer.
     audio_producer: audio_ingress::Producer,
@@ -167,16 +170,12 @@ pub struct Harmonigraph {
     offline: bool,
 }
 
-/// The thread the last plugin dropped on, for a teardown test.
-#[cfg(test)]
-pub(crate) static DROPPED_ON: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
 impl Drop for Harmonigraph {
     fn drop(&mut self) {
         #[cfg(test)]
         {
             let thread = std::thread::current().name().map(str::to_owned);
-            *DROPPED_ON.lock().unwrap() = thread;
+            *self.dropped_on.lock().unwrap() = Some(thread);
         }
         // Window state can retain its own Arc during native teardown. Join the
         // graphics worker at plugin destruction, not only at the last Arc drop.
@@ -518,6 +517,7 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn set(&self, key: ParamKey, value: f32) {
+        shared::assert_unheld();
         let row = Row::camera(key).index();
         if self.gestures.get().is_open(Gesture::Param(key)) {
             // Inside an explicit gesture (drag): just set.
@@ -536,6 +536,7 @@ impl ParamBackend for PluginParamBackend<'_> {
 
     fn set_analysis_input(&self, input: AnalysisInput) {
         let row = Row::AnalysisInput.index();
+        shared::assert_unheld();
         self.host.begin_set_parameter(row);
         self.host.set_parameter(row, input.index() as f32);
         self.host.end_set_parameter(row);
@@ -553,6 +554,7 @@ impl ParamBackend for PluginParamBackend<'_> {
 impl PluginParamBackend<'_> {
     /// Open `gesture` in the registry, and send its begin if it was closed.
     fn begin(&self, gesture: Gesture) {
+        shared::assert_unheld();
         let mut gestures = self.gestures.get();
         if gestures.begin(gesture) {
             self.gestures.set(gestures);
@@ -562,6 +564,7 @@ impl PluginParamBackend<'_> {
 
     /// Close `gesture` in the registry, and send its end if it was open.
     fn end(&self, gesture: Gesture) {
+        shared::assert_unheld();
         let mut gestures = self.gestures.get();
         if gestures.end(gesture) {
             self.gestures.set(gestures);
@@ -780,11 +783,13 @@ impl Default for Harmonigraph {
         // would go dark; the editor is the very thing being covered for. It
         // also installs a project's saved settings before any window is built,
         // through the lock both share (#324).
+        let mut input = editor::input::LiveInput::new(consumer, audio_consumer);
+        input.learn_stops(params.settings.clone());
         let input_worker = background::InputWorker::spawn(
             editor_shared.clone(),
             params.editor_state.clone(),
             tape_worker,
-            editor::input::LiveInput::new(consumer, audio_consumer),
+            input,
             board::Lights::live(params.settings.clone(), params.map_playback.clone()),
             Some(params.clone()),
         );
@@ -803,6 +808,8 @@ impl Default for Harmonigraph {
             tape,
             offline: false,
             input_worker,
+            #[cfg(test)]
+            dropped_on: Default::default(),
         }
     }
 }
@@ -1061,8 +1068,8 @@ impl Plugin for Harmonigraph {
     }
 
     /// The Hub first, which the configuration's `begin` relies on, then the
-    /// configuration's boundary: the edits queued before the callback, and
-    /// the map state the parameters held before its automation.
+    /// configuration's boundary: the configuration the document last
+    /// published, and the map state the parameters held before its automation.
     fn begin(&mut self, boundary: &Boundary) {
         let owner = self.configuration.as_mut().unwrap();
         self.clock.begin(boundary);
@@ -1174,7 +1181,7 @@ mod tests {
     /// Stop the plugin's input worker and take the input it owned, after
     /// its final drain: for a test that drains by hand at times it chooses,
     /// or reads what the worker's analysis ran at.
-    fn stopinput_worker(plugin: &mut Harmonigraph) -> editor::input::LiveInput {
+    fn stop_input_worker(plugin: &mut Harmonigraph) -> editor::input::LiveInput {
         plugin.input_worker.join().expect("the input worker ran and ended")
     }
 
@@ -1208,7 +1215,7 @@ mod tests {
     /// Driven through the REAL spawned thread rather than by calling `step`,
     /// because the wiring is precisely what a direct call would bypass.
     #[test]
-    fn theinput_worker_asks_the_editors_own_state_for_a_pass() {
+    fn the_input_worker_asks_the_editors_own_state_for_a_pass() {
         let mut plugin = Harmonigraph::default();
         let state = plugin.params.editor_state.clone();
         state.set_open(true);
@@ -1281,7 +1288,7 @@ mod tests {
 
         // The analysis is the worker's own, so read it once the worker has
         // stopped and handed it back.
-        let lag = stopinput_worker(&mut plugin).analysis_lag();
+        let lag = stop_input_worker(&mut plugin).analysis_lag();
         let shared = plugin.editor_shared.lock();
         assert_eq!(shared.ui.picture.appearance.camera.yaw, 1.23);
         assert_eq!(shared.ui.picture.appearance.view.max_sevens, 3);
@@ -1612,7 +1619,7 @@ mod tests {
     #[test]
     fn a_sidechain_process_block_feeds_analysis_and_leaves_main_untouched() {
         let mut plugin = Harmonigraph::default();
-        let mut input = stopinput_worker(&mut plugin);
+        let mut input = stop_input_worker(&mut plugin);
         plugin.params.set(Row::AnalysisInput, 1.0);
         assert_eq!(plugin.params.analysis_input(), AnalysisInput::Sidechain);
         let mut main_left = [1.0, 2.0, 3.0, 4.0];
@@ -1757,7 +1764,7 @@ mod tests {
     #[test]
     fn queued_history_keeps_its_clock_across_the_actual_plugin_reset() {
         let mut plugin = Harmonigraph::default();
-        let mut input = stopinput_worker(&mut plugin);
+        let mut input = stop_input_worker(&mut plugin);
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
         let shared = &mut *shared;
@@ -1791,7 +1798,7 @@ mod tests {
     #[test]
     fn analyzer_source_time_ignores_transport_loops_stops_and_missing_positions() {
         let mut plugin = Harmonigraph::default();
-        let mut input = stopinput_worker(&mut plugin);
+        let mut input = stop_input_worker(&mut plugin);
         plugin.sample_rate = 48_000.0;
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();

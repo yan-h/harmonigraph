@@ -234,18 +234,6 @@ fn learn_does_not_hear_what_a_processing_stop_ended() {
     assert!(state.picture.runtime.learn(true).is_some(), "a chord struck after it");
 }
 
-/// A result its owner refused is inferred again from the same chord.
-#[test]
-fn a_refused_learn_is_inferred_again() {
-    let mut state = fresh();
-    hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
-    let runtime = &mut state.picture.runtime;
-    assert!(runtime.learn(true).is_some());
-    assert!(runtime.learn(true).is_none(), "learned once");
-    runtime.relearn();
-    assert!(runtime.learn(true).is_some(), "and again once refused");
-}
-
 /// One frame's observation in a shell with no owner, which runs Learn.
 fn learn(state: &mut SharedState) {
     state.picture.runtime.observe_configuration(&RecordingBackend::default());

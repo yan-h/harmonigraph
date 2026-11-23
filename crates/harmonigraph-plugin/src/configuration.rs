@@ -151,27 +151,22 @@ impl Settings {
         }
     }
 
-    /// Apply what Learn inferred, if Learn still acts as the document stands,
-    /// under the engine `engine` reads inside the write: a restore or an edit
-    /// that disarmed it or changed the engine since the inference wins. `None`
-    /// when it refused, else whether what the project saves changed. The
-    /// caller marks the project, out of every lock it holds.
+    /// One step of Learn through the door, in one write: whether Learn acts
+    /// under the engine `engine` reads there, `infer`'s answer given that, and
+    /// what it found applied. Nothing can disarm Learn or change the engine
+    /// between the gate and the result. Whether what the project saves
+    /// changed, for the caller to mark once out of every lock it holds.
+    /// Inference costs at most about 0.10 ms at its class cap, under the lock.
     pub fn learn(
         &self,
-        learned: LearnedTuning,
         engine: impl FnOnce() -> TuningEngine,
-    ) -> Option<bool> {
-        self.apply(|reducer| {
-            reducer
-                .resolved()
-                .learn_acts(engine())
-                .then_some(ConfigMutation::LearnResolved { learned })
-        })
-    }
-
-    /// Whether Learn acts under `engine` as the document stands.
-    pub fn learns(&self, engine: TuningEngine) -> bool {
-        self.read(|reducer| reducer.resolved().learn_acts(engine))
+        infer: impl FnOnce(bool) -> Option<LearnedTuning>,
+    ) -> bool {
+        let decide = |reducer: &ConfigReducer| {
+            let learned = infer(reducer.resolved().learn_acts(engine()))?;
+            Some(ConfigMutation::LearnResolved { learned })
+        };
+        self.apply(decide) == Some(true)
     }
 
     /// Apply the mutation `decide` makes of the document, if any: `None`
@@ -190,11 +185,15 @@ impl Settings {
     }
 
     /// Write the document, then publish its configuration to audio before the
-    /// door closes.
+    /// door closes, when the write changed it.
     fn write<R>(&self, write: impl FnOnce(&mut ConfigReducer) -> R) -> R {
         self.document.write(|document| {
+            let before = document.reducer.resolved();
             let written = write(&mut document.reducer);
-            document.audio.write(document.reducer.resolved());
+            let after = document.reducer.resolved();
+            if after != before {
+                document.audio.write(after);
+            }
             written
         })
     }
