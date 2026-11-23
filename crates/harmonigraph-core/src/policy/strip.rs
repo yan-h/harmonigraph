@@ -87,10 +87,10 @@ impl Follower {
     /// An attack group's spellings `struck`, over the held notes' spellings
     /// `held`, before any of the group is tuned. Two steps:
     ///
-    /// - **Bring the struck notes inside.** The key moves the fewest fifths
-    ///   that put every struck spelling inside its seven: F♯ in C moves it a
-    ///   fifth sharp, B♭ a fifth flat. A group no seven spellings hold
-    ///   moves nothing.
+    /// - **Follow the spelling just past an edge.** A struck spelling just
+    ///   past the key's seven moves it a fifth toward it: F♯ in C moves it
+    ///   sharp, B♭ flat, and both together nothing. One further out, such as
+    ///   A♭ after F, moves nothing by itself.
     /// - **Clear a wolf.** If two sounding spellings a fifth apart straddle
     ///   the strip's sharp edge (D–A at Position 0), the key moves a fifth to
     ///   the side where no sounding fifth is a wolf and its seven still hold
@@ -100,18 +100,9 @@ impl Follower {
     ///
     /// Held notes keep the node they sound at.
     pub fn attack(&mut self, struck: &[i32], held: &[i32], position: i32) {
-        let (Some(&low), Some(&high)) = (struck.iter().min(), struck.iter().max()) else {
-            return;
-        };
         let flat = self.flat(position);
-        let step = if high - low > 6 {
-            0
-        } else if high > flat + 6 {
-            high - flat - 6
-        } else {
-            (low - flat).min(0)
-        };
-        self.step(step, position);
+        let past = |edge: i32| i32::from(struck.contains(&edge));
+        self.step(past(flat + 7) - past(flat - 1), position);
         let sounding = || struck.iter().chain(held);
         let wolf = |flat: i32| {
             sounding().any(|&k| sounding().any(|&j| j == k + 1) && (k - flat).rem_euclid(4) == 3)
@@ -228,8 +219,9 @@ mod tests {
 
     /// D struck over a held F major moves the key flat, so D–A is pure; D
     /// over a held A alone waits, as either side clears it, and F♯ then
-    /// moves it sharp. A pentatonic set, whose wolf no side clears, and C
-    /// major's notes never move it.
+    /// moves it sharp. F then A♭, a pure minor third where it stands, a
+    /// pentatonic set, whose wolf no side clears, and C major's notes never
+    /// move it.
     #[test]
     fn a_wolf_moves_the_key_to_the_one_side_that_clears_it() {
         let mut follower = Follower::default();
@@ -241,6 +233,9 @@ mod tests {
         follower.attack(&[6], &[3, 2], 0);
         assert_eq!(follower.key(), 1, "then F♯");
         let mut follower = Follower::default();
+        follower.attack(&[-1], &[], 0);
+        follower.attack(&[-4], &[-1], 0);
+        assert_eq!(follower.key(), 0, "F then A♭, a pure minor third already");
         for k in [0, 2, 4, 1, 3] {
             follower.attack(&[k], &[0, 2, 4, 1, 3], 0);
         }
