@@ -24,7 +24,7 @@ pub(crate) const UI_STATE: &str = "ui-state";
 /// Write the three fields into `state`. The maps' lock and the editor's lock
 /// are taken one after the other, never nested.
 pub(crate) fn save(params: &HarmonigraphParams, state: &mut PluginState) {
-    let maps = serde_json::to_string(&*params.maps.read());
+    let maps = params.maps.read(serde_json::to_string);
     let window = serde_json::to_string(&params.editor_state.saved());
     let look = serde_json::to_string(&*params.ui_state.save());
     for (key, json) in [(LATTICE_MAPS, maps), (EDITOR_STATE, window), (UI_STATE, look)] {
@@ -83,7 +83,7 @@ impl Fields {
     pub(crate) fn install(self, params: &HarmonigraphParams) {
         let Fields { maps, window, look, notes } = self;
         if let Some(maps) = maps {
-            *params.maps.write() = maps;
+            params.maps.write(|document| *document = maps);
         }
         // Every restore is another project, or another state of one: undo
         // entries name its slots by identity and would write old shapes into

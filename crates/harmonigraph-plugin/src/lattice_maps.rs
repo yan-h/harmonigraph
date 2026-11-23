@@ -6,7 +6,7 @@ use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine};
 use harmonigraph_core::LatticePos;
 use harmonigraph_ui::lattice_maps::*;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -111,7 +111,7 @@ pub(crate) fn recorded(
     params: &crate::HarmonigraphParams,
     selection: MapSelection,
 ) -> harmonigraph_ui::tape::RecordedMap {
-    let map = selection.placed(&params.maps.read());
+    let map = params.maps.read(|document| selection.placed(document));
     harmonigraph_ui::tape::RecordedMap { engine: selection.engine, map }
 }
 
@@ -121,7 +121,10 @@ fn translated(mut shape: LatticeMap, offset: LatticePos) -> LatticeMap {
 }
 
 pub fn view(params: &crate::HarmonigraphParams) -> MapView {
-    let document = params.maps.read();
+    params.maps.read(|document| view_of(params, document))
+}
+
+fn view_of(params: &crate::HarmonigraphParams, document: &MapDocument) -> MapView {
     let mut editor = params.map_editor.lock();
     let adopted = *params.map_playback.lock();
     let offsets = offsets(params);
@@ -131,20 +134,20 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
         engine: requested.engine,
         selected,
         offset: requested.position,
-        map: requested.placed(&document),
+        map: requested.placed(document),
         follow: Follow::from_index(params.int(Row::MapFollow)),
     };
     // Intent is compared before following is added: the Hub's own movement is
     // not host state waiting for audio to adopt it.
     let unadopted = (playback != adopted).then_some(playback);
     let followed = followed(params);
-    let shown = MapPlayback { map: requested.followed_by(followed).placed(&document), ..playback };
+    let shown = MapPlayback { map: requested.followed_by(followed).placed(document), ..playback };
     MapView {
         playback: shown,
         offsets,
         followed,
         unadopted,
-        names: editor.names(&document),
+        names: editor.names(document),
         edit_shape: editor.edit_shape,
         can_undo: playback.map.is_some() && editor.can_undo(selected),
         full: document.is_full(),
@@ -153,7 +156,6 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
 
 pub fn edit(params: &crate::HarmonigraphParams, host: &dyn EditorHost, edit: MapEdit) {
     let set = |row: Row, value: i32| {
-        crate::shared::assert_unheld();
         host.begin_set_parameter(row.index());
         host.set_parameter(row.index(), value as f32);
         host.end_set_parameter(row.index());
@@ -179,11 +181,10 @@ pub fn edit(params: &crate::HarmonigraphParams, host: &dyn EditorHost, edit: Map
         }
         // The document lock is taken before the editor's, in the order `view`
         // takes them.
-        MapEdit::Undo => {
-            let mut document = params.maps.write();
+        MapEdit::Undo => params.maps.write(|document| {
             let undone = params.map_editor.lock().undo(selected);
             undone.is_some_and(|map| document.reshape(selected, map))
-        }
+        }),
         // A lane's gesture is the editor's registry's (`editor::gestures`),
         // which the parameter backend opens and closes around this edit.
         MapEdit::BeginOffset(..) | MapEdit::EndOffset(..) => false,
@@ -210,8 +211,7 @@ pub fn edit(params: &crate::HarmonigraphParams, host: &dyn EditorHost, edit: Map
             set(Row::MapFollow, mode.index());
             false
         }
-        MapEdit::Replace(destination) => {
-            let mut document = params.maps.write();
+        MapEdit::Replace(destination) => params.maps.write(|document| {
             let mut editor = params.map_editor.lock();
             let old = document.map(selected).filter(|_| editor.edit_shape);
             let reshaped = old.is_some_and(|old| {
@@ -226,36 +226,37 @@ pub fn edit(params: &crate::HarmonigraphParams, host: &dyn EditorHost, edit: Map
                 editor.record(selected, old);
             }
             reshaped
-        }
+        }),
+        // The host is told of the selection out of the door, as of every set.
         MapEdit::Duplicate => {
-            let mut document = params.maps.write();
-            let copy =
-                document.map(selected).zip(document.name(selected).map(|n| format!("{n} copy")));
-            let id = copy.and_then(|(map, name)| document.capture(map, name));
-            drop(document);
+            let id = params.maps.write(|document| {
+                let copy = document
+                    .map(selected)
+                    .zip(document.name(selected).map(|n| format!("{n} copy")));
+                copy.and_then(|(map, name)| document.capture(map, name))
+            });
             if let Some(id) = id {
                 set(Row::LatticeMap, id as i32);
             }
             id.is_some()
         }
         // Every document mutation goes through a `MapDocument` method, because
-        // each one has to move the revision two derived values are keyed on:
-        // `MapEditor::names` here, and `AudioMaps::bank` on the audio thread.
-        MapEdit::Rename(id, name) => params.maps.write().rename(id, name),
+        // each one has to move the revision `MapEditor::names` is keyed on.
+        MapEdit::Rename(id, name) => params.maps.write(|document| document.rename(id, name)),
         // Deleting the selected map selects its neighbour, as Duplicate selects
         // its copy, rather than leaving new attacks on a map that is gone.
         MapEdit::Delete(id) => {
-            let mut document = params.maps.write();
-            // Only a live map has a neighbour, so a delete that found one went through.
-            let neighbour = document.neighbour(id).filter(|_| id == selected);
-            let deleted = document.delete(id);
-            drop(document);
+            let (neighbour, deleted) = params.maps.write(|document| {
+                // Only a live map has a neighbour, so a delete that found one
+                // went through.
+                (document.neighbour(id).filter(|_| id == selected), document.delete(id))
+            });
             if let Some(neighbour) = neighbour {
                 set(Row::LatticeMap, neighbour as i32);
             }
             deleted
         }
-        MapEdit::Move(id, step) => params.maps.write().move_by(id, step),
+        MapEdit::Move(id, step) => params.maps.write(|document| document.move_by(id, step)),
     };
     if document_changed {
         params.settings.maps_changed();
@@ -295,14 +296,60 @@ impl Seed {
     }
 }
 
+/// Each slot's geometry, as audio reads it: fixed and `Copy`, never names.
+pub(crate) type Bank = [Option<LatticeMap>; MAP_CAPACITY];
+
+fn bank(document: &MapDocument) -> Bank {
+    std::array::from_fn(|id| document.map(id))
+}
+
+/// The Lattice Map document behind its door (`crate::shared`), and the
+/// geometry each write publishes to audio as it ends, wait-free for the
+/// reader, as the tuning publishes its configuration (#1938).
+pub struct Maps {
+    document: crate::shared::Shared<Published>,
+    /// Taken once, by the audio owner.
+    audio: Mutex<Option<triple_buffer::Output<Bank>>>,
+}
+struct Published {
+    document: MapDocument,
+    audio: triple_buffer::Input<Bank>,
+}
+impl Default for Maps {
+    fn default() -> Self {
+        let document = MapDocument::default();
+        let (audio, output) = triple_buffer::triple_buffer(&bank(&document));
+        Self {
+            document: crate::shared::Shared::new(Published { document, audio }),
+            audio: Mutex::new(Some(output)),
+        }
+    }
+}
+impl Maps {
+    pub fn read<R>(&self, read: impl FnOnce(&MapDocument) -> R) -> R {
+        self.document.read(|published| read(&published.document))
+    }
+    /// Change the document, then publish its geometry before the door
+    /// closes, when the write changed it.
+    pub fn write<R>(&self, write: impl FnOnce(&mut MapDocument) -> R) -> R {
+        self.document.write(|published| {
+            let before = bank(&published.document);
+            let written = write(&mut published.document);
+            let after = bank(&published.document);
+            if after != before {
+                published.audio.write(after);
+            }
+            written
+        })
+    }
+}
+
 pub struct AudioMaps {
-    document: Arc<RwLock<MapDocument>>,
     published: Arc<Mutex<MapPlayback>>,
     followed: Arc<std::sync::atomic::AtomicU64>,
-    bank: [Option<LatticeMap>; MAP_CAPACITY],
-    /// Which document state `bank` was built from, or `None` before the first
-    /// read — see [`AudioMaps::adopt`] for what that key does and does not say.
-    bank_revision: Option<Revision>,
+    /// The geometry the document last published, brought up to date once a
+    /// callback, at [`adopt`](Self::adopt), so a callback reads one bank.
+    bank: triple_buffer::Output<Bank>,
     pub playback: MapPlayback,
     history: VecDeque<Entry>,
     /// The current callback's first sample and length.
@@ -316,11 +363,9 @@ pub struct AudioMaps {
 impl AudioMaps {
     pub fn new(params: &crate::HarmonigraphParams) -> Self {
         Self {
-            document: params.maps.clone(),
             published: params.map_playback.clone(),
             followed: params.map_followed.clone(),
-            bank: [None; MAP_CAPACITY],
-            bank_revision: None,
+            bank: params.maps.audio.lock().take().expect("one audio owner"),
             playback: MapPlayback::default(),
             history: VecDeque::with_capacity(HISTORY),
             start: 0,
@@ -339,27 +384,8 @@ impl AudioMaps {
         self.frames = boundary.frames;
     }
     pub fn adopt(&mut self, config: ResolvedConfig, seed: Seed) {
-        // Copies only fixed geometry, never names or heap storage, on audio —
-        // and only when the document is a state this bank was not built from.
-        //
-        // The key is [`MapDocument::revision`], the same ticket
-        // `MapEditor::names` memoizes against, rather than a second counter
-        // beside it. Nothing that decides a slot's geometry can move without
-        // moving it: geometry reaches a slot only through `capture` and
-        // `reshape`, a slot leaves only through `delete`, all bump it, and a
-        // document LOADED
-        // from saved state is a whole new value whose revision is minted at
-        // deserialization. What the key carries beyond this value is a rename
-        // and a reorder, neither of which decides any `map(id)`; each costs one
-        // extra rebuild at the next callback, which is bounded by the rate a
-        // hand types rather than by the rate the host calls this.
-        if let Some(doc) = self.document.try_read() {
-            let revision = doc.revision();
-            if self.bank_revision != Some(revision) {
-                self.bank = std::array::from_fn(|id| doc.map(id));
-                self.bank_revision = Some(revision);
-            }
-        }
+        // The geometry the last finished write published: wait-free, no lock.
+        self.bank.update();
         self.set_engine(TuningEngine::from_index(seed.engine));
         self.playback.selected = map_slot(seed.map);
         self.offsets = seed.offsets;
@@ -392,8 +418,8 @@ impl AudioMaps {
         self.engine_revision
     }
     fn resolve(&mut self) {
-        self.playback.map =
-            self.bank[self.playback.selected].map(|shape| translated(shape, self.playback.offset));
+        self.playback.map = self.bank.peek_output_buffer()[self.playback.selected]
+            .map(|shape| translated(shape, self.playback.offset));
         if let Some(mut published) = self.published.try_lock() {
             *published = self.playback;
         }
@@ -514,8 +540,9 @@ mod tests {
         assert_eq!(maps.changes(4000, 4001).count(), 0);
     }
 
-    /// Use document mutations to reach the bank, including a capture after the
-    /// initial adoption and a delete that must leave the other shape intact.
+    /// Every document mutation reaches the audio bank at the next adoption,
+    /// including a capture after the first and a delete that must leave the
+    /// other shape intact.
     #[test]
     fn document_mutations_reach_the_audio_bank_without_changing_slot_identity() {
         let params = crate::HarmonigraphParams::default();
@@ -523,36 +550,25 @@ mod tests {
         let mut second = LatticeMap::default();
         assert!(second.replace(LatticePos::new(4, 0, 0)), "slot 1 must differ from the default");
         let mut maps = AudioMaps::new(&params);
-        maps.adopt(config, Seed::read(&params));
-        assert_eq!(maps.bank[0], Some(LatticeMap::default()));
-        assert_eq!(maps.bank[1], None);
+        let adopted = |maps: &mut AudioMaps| {
+            maps.adopt(config, Seed::read(&params));
+            *maps.bank.peek_output_buffer()
+        };
+        let bank = adopted(&mut maps);
+        assert_eq!((bank[0], bank[1]), (Some(LatticeMap::default()), None));
 
-        assert_eq!(params.maps.write().capture(second, "Passage".into()), Some(1));
-        maps.adopt(config, Seed::read(&params));
-        assert_eq!(maps.bank[1], Some(second), "the fixture never reached a second slot");
-        assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));
+        assert_eq!(params.maps.write(|d| d.capture(second, "Passage".into())), Some(1));
+        assert_eq!(adopted(&mut maps)[1], Some(second), "the fixture never reached a second slot");
+        params.maps.write(|d| d.rename(1, "Renamed".into()));
+        params.maps.write(|d| d.move_by(1, MapMove::Earlier));
+        assert!(!maps.bank.updated(), "a rename and a move publish nothing to audio");
+        let bank = adopted(&mut maps);
+        assert_eq!((bank[0], bank[1]), (Some(LatticeMap::default()), Some(second)));
 
-        let revision = maps.bank_revision;
-        maps.adopt(config, Seed::read(&params));
-        assert_eq!(maps.bank_revision, revision);
-        assert_eq!(maps.bank[1], Some(second));
-
-        params.maps.write().rename(1, "Renamed".into());
-        maps.adopt(config, Seed::read(&params));
-        assert_ne!(maps.bank_revision, revision);
-        assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));
-        let revision = maps.bank_revision;
-        params.maps.write().move_by(1, MapMove::Earlier);
-        maps.adopt(config, Seed::read(&params));
-        assert_ne!(maps.bank_revision, revision);
-        assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));
-        assert_eq!(maps.bank[0], Some(LatticeMap::default()));
-        assert_eq!(maps.bank[1], Some(second));
-
-        params.maps.write().delete(0);
-        maps.adopt(config, Seed::read(&params));
-        assert_eq!(maps.bank[0], None, "a delete must reach the audio thread's bank");
-        assert_eq!(maps.bank[1], Some(second));
+        params.maps.write(|d| d.delete(0));
+        let bank = adopted(&mut maps);
+        assert_eq!(bank[0], None, "a delete must reach the audio thread's bank");
+        assert_eq!(bank[1], Some(second));
     }
 
     /// An automation value a hair below a half step selects the slot the
