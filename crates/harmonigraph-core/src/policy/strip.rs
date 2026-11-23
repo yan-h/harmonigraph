@@ -144,6 +144,7 @@ impl Follower {
         let chord = struck.iter().any(|&k| k != struck[0]);
         let sharp = struck.contains(&(flat + 7));
         let flat_side = struck.contains(&(flat - 1));
+        let by_chord = chord && sharp != flat_side;
         let step = if chord && (sharp || flat_side) {
             i32::from(sharp) - i32::from(flat_side)
         } else if replaced(flat + 7, flat) || flat < set && count(flat) < OUT_OF_USE {
@@ -155,6 +156,12 @@ impl Follower {
         };
         let moved = moved_column(position, self.key + step);
         let holds = held.iter().all(|node| (moved..=moved + 3).contains(&node.threes));
+        // The edge a chord's move leaves starts over, so the count rule needs
+        // fresh strikes of it to undo the move: F after D major from C.
+        let left = if sharp { flat } else { flat + 6 };
+        if let Some(i) = index(left).filter(|_| holds && by_chord) {
+            self.counts[i] = 0.0;
+        }
         // Only movement the clamp lets through is kept.
         self.key = if holds { moved } else { flat } - set;
     }
@@ -271,6 +278,12 @@ mod tests {
             }
             assert_eq!(flats[10..], [HOME; 2], "home again");
         }
+        // Fs in use before D major do not undo its move at a Dsus4 after it.
+        let mut follower = Follower::default();
+        (0..STRIKES).for_each(|_| _ = group(&mut follower, &[-1], &[], 0.0));
+        let flats =
+            [[2, F_SHARP, 3], [2, 1, 3]].map(|chord| group(&mut follower, &chord, &[], 0.0));
+        assert_eq!(flats, [HOME + 1; 2], "Dsus4 after D major stays in G");
         let flat = group(&mut in_g(), &[3, 7, 4], &[], 1.0);
         assert_eq!((flat, wolves(&[3, 7, 4], flat)), (HOME + 2, 0), "A–C♯–E from G");
         // A spelling further out moves nothing: A major and C♯ minor from C

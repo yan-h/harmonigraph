@@ -52,10 +52,11 @@ With **Follow spellings** on, the default, the strip also follows the music by m
 The key's seven spellings run from the strip's flat column (F to B at Position 0).
 A chord, two spellings or more struck together, holding a spelling just past either edge (F♯ or B♭ in C) moves the key a fifth toward it before any of its notes is tuned:
 D major from C sounds pure from its first stroke, as do B♭ major from C and A major from G.
-The key stays there until the old key's spellings bring it back: after a D major in C, an F, or a chord holding one, moves it home.
+The key stays there until the old key's spellings bring it back: after a D major in C, a chord holding F moves it home at once, Fs struck alone do once they have replaced F♯ by the count rule below, and with no F the key steps home once F♯ has fallen out of use (about 16 s after a single D major).
+The Fs struck before the D major do not count toward that.
 A chord holding both moves nothing, and a spelling further out, such as A major's C♯ from C, moves nothing either.
 A single note goes through the count rule alone, so a passing tone moves nothing:
-the key moves once a spelling just past its seven has replaced the one at the other edge (three F♯s close together, or about four spread out, with F out of use),
+the key moves once a spelling just past its seven has replaced the one at the other edge (three F♯s close together, or about four spread out, and at least twice as many as recent Fs),
 and back toward the Position once that spelling fades.
 A chord inside the key's seven never moves it, so a pentatonic or sus voicing keeps the key's wolf and every note of a vamp keeps its pitch,
 and a diatonic ii keeps its D–A wolf.
