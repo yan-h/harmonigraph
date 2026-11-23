@@ -515,3 +515,4 @@ pub fn assign_new_note(
 mod tests;
 
 pub mod channel;
+pub mod strip;

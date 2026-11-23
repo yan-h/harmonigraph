@@ -66,9 +66,7 @@ pub(super) fn frame(
     // Drained on the clock it arrived by, drawn at the refresh it is for.
     let wall = shared.clock.frame_wall(timing, now);
     let now = shared.clock.display_now(wall);
-    while let Some(line) = state.params.settings.take_notice() {
-        shared.ui.log(line);
-    }
+    state.params.settings.deliver_notices(&mut shared.ui);
     // Snapshot current host movement before arming or queuing a render.
     let configuration = state.params.configuration_view();
     shared.ui.picture.appearance.sync_camera(&PluginParamBackend {
@@ -148,7 +146,8 @@ pub(super) fn frame(
     if ask.is_some() {
         ui.ctx().request_repaint();
     }
-    egui_state.end_frame(shared.ui.workspace.interaction.own_window, ask, || {
+    let own = shared.ui.workspace.take_own_resize();
+    egui_state.end_frame(shared.ui.workspace.interaction.own_window, ask, own, || {
         state.params.settings.changed()
     });
 

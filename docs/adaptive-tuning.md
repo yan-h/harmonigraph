@@ -41,10 +41,16 @@ and the lattice that draws it,
 between that temperament and the lattice's own tuning,
 and a take records whichever was drawn.
 Lattice Map ignores the channel and gives the key its map's slot.
-Adaptive hears the declared pitch,
-from a keyboard tuned in the Decoded fifth,
-so the decoded C♯ and D♭ of one key can take different nodes;
-the Keyboard block's tuning applies only with Decode fifths off.
+Adaptive tunes a decoded note by its spelling alone (#1896):
+each spelling sounds its one just copy inside a strip of the lattice four fifths wide,
+so the decoded C♯ and D♭ of one key are 25/24 and 16/15,
+and the comma Adaptive's search used to guess chord by chord is fixed by where the strip lies.
+Lattice Map's Position fifths place the strip, under Adaptive as under Lattice Map:
+at 0 its columns are F C G D, the default map's,
+and automating the lane is how a piece changes key.
+Every fourth fifth along the chain, the one leaving the strip's sharp edge, is a comma narrow (D–A at Position 0).
+The search, with its Keyboard block, Pitch flexibility, radius, axes and register, applies only with Decode fifths off,
+and is greyed while it is on.
 Learn is suspended while Decode fifths is on, as under Lattice Map:
 the board declares its tuning,
 and what Learn would hear beside it is the 12-TET tracks that pass through undecoded.

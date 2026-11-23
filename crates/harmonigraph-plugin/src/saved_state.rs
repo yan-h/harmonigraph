@@ -21,7 +21,7 @@ use harmonigraph_ui::params::{ParamBackend, ParamKey};
 use harmonigraph_ui::SharedState;
 use serde_json::Value;
 
-use crate::configuration::{HubSetup, MUSICAL_SETTINGS};
+use crate::configuration::{HubSetup, Notice, MUSICAL_SETTINGS};
 use crate::saved_fields::{LATTICE_MAPS, UI_STATE};
 use crate::tuning::plugin::HarmonigraphTune;
 use crate::tuning::setup::{Adapter, Shared, INSTANCE_FIELD};
@@ -63,7 +63,9 @@ pub enum Look {
     /// opens at the fresh look of whichever build loads it.
     Unopened,
     /// The editor installed the settings, whole or in part (the notes say
-    /// which), with the host's camera laid over them.
+    /// which), as it opens them: the host's camera laid over them, and the
+    /// Console selected with Settings unfolded where a restore line reports a
+    /// loss. The raw dump (`--raw`) is the file as it holds them.
     Installed(Box<SharedState>),
     /// The editor refused the settings, or the field did not parse, and opens
     /// at the fresh look; the notes say why.
@@ -128,19 +130,23 @@ fn read_hub(state: &PluginState, reading: &mut Reading) {
     if !restore(Some(&setup), &params.table, state, reading) {
         return;
     }
-    while let Some(line) = params.settings.take_notice() {
-        reading.notes.push(line);
-    }
     // With no editor attached, the setup saves the document the restore
     // delivered rather than what the editor installs of it, which is the
     // look below.
     reading.fields.remove(UI_STATE);
     if !state.fields.contains_key(UI_STATE) {
+        while let Some(Notice::Restore(line) | Notice::Host(line)) = params.settings.next_notice() {
+            reading.notes.push(line);
+        }
         reading.look = Some(Look::Missing);
         return;
     }
+    // As an editor frame takes them: the lock installs the document, then
+    // the restore's lines arrive over it, so the look below shows the tab,
+    // fold and line order the editor would.
     let mut editor = SharedState::new(crate::editor::ASSUMED_SURFACE_FORMAT);
     let delivered = params.ui_state.inbox().install_pending(&mut editor);
+    params.settings.deliver_notices(&mut editor);
     reading.notes.extend(editor.picture.runtime.console.lines().map(str::to_owned));
     reading.look = Some(match delivered {
         Some((document, _)) if document.is_empty() => Look::Unopened,

@@ -151,6 +151,8 @@ This is the exponential fallback for [issue #864](https://github.com/yan-h/harmo
 
 An accepted consequence, not a bug:
 the syntonic comma pump still drifts on a meantone keyboard, because that keyboard cannot tell `(1,0)` from `(-3,1)`.
+This is the search's, with Decode fifths off;
+a decoded lattice-board note takes its spelling's copy in the strip instead (`policy::strip`, #1896), which does not drift.
 It is the same comma as the one between the fifths-chain A and the 5-limit A, which is why no pin strength could separate the two;
 see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 

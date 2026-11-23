@@ -76,7 +76,7 @@ Lines marked "Yan" are his answers in chat; lines marked "session" are the imple
 - The decoded chain sounds at its own saved Decoded fifth, apart from the lattice's Perfect fifth, so switching between meantone improvisation and composing in JI is the Note retuning selector alone and no tuning slider moves. Yan The selector alone stands; that no slider moves is superseded by the entry on switching below.
 - The Decoded fifth is a setting in the project, edited in the editor, with no host automation and no glide of held notes, in the Perfect fifth's own range. Yan
 - Lattice Map keeps its twelve slots: a decoded key takes its key's slot and its comma bank is ignored, so C♯ and D♭ on one key share a slot and Map Thirds keeps choosing between them. A map that shifts a slot by a diesis per bank was built and dropped: it sounded nodes the map does not hold. Yan
-- Adaptive hears a decoded Tune as a keyboard tuned in the Decoded fifth, through the keyboard check it already has, while other sources keep the Keyboard block; kept because it was cheap, and Adaptive stays outside the use. Yan (keep it in mind if cheap), session (the mechanism)
+- Adaptive hears a decoded Tune as a keyboard tuned in the Decoded fifth, through the keyboard check it already has, while other sources keep the Keyboard block; kept because it was cheap, and Adaptive stays outside the use. Yan (keep it in mind if cheap), session (the mechanism) Superseded by the 2026-11-22 strip entry below.
 - Learn does not hear a decoded Tune: its tuning is declared, and its keys arrive in 12-TET. Session Superseded by the 2026-11-20 entry suspending Learn while Decode fifths is on.
 - The Decoded fifth opens at quarter-comma meantone, 696.578¢. Session
 - Adaptive fell out of use because it guessed the syntonic comma wrong and drifted, with no obvious choice in pentatonic-like chords; spelled input removes the enharmonic guess and not that one. Yan is open to another try, which is not this PR. Yan
@@ -94,7 +94,7 @@ Lines marked "Yan" are his answers in chat; lines marked "session" are the imple
 ## 2026-11-20 (lighting the lattice-board)
 
 - Harmonigraph sends the board its lit keys itself, over CoreMIDI, rather than through a Bitwig hardware-out device or a controller script: Bitwig turns a Tune's per-note tuning into MPE channels, which scrambles the comma banks, and its controller API gives a playing note only a pitch and a velocity. Yan
-- A note lights the key nearest its sounding pitch in the board's own tuning (the Decoded fifth, the lattice's C offset), not the key played or drawn: a note a Lattice Map moved lights the key it sounds on, and a 12-TET track its nearest key. Yan
+- A note lights the key nearest its sounding pitch in the board's own tuning (the Decoded fifth, the lattice's C offset), not the key played or drawn: a note a Lattice Map moved lights the key it sounds on, and a 12-TET track its nearest key. Yan Superseded under Adaptive by the 2026-11-22 strip entry below, pending Yan's listening check.
 - Every note the lattice draws lights the board, from any source and from the Tape's cues. Yan
 - No setting of its own: the board lights while Decode fifths is on. Yan
 - Keys pressed and keys sounded share the board's one highlight for now; a separate tint, a firmware change, waits until it has been used. Yan
@@ -128,6 +128,17 @@ Yan: "I want to be able to easily go between improvising in meantone while visua
 ## 2026-11-22 (a tuning field that does not parse, #1927 A)
 
 - A saved `musical-settings` or `tuning-instance` that does not parse opens at its default on its own, with a line in the log and, in a Hub, a Console line naming it, and the rest of the project loads. This supersedes the `persistence-contract` skill's rule that such a field refuses the whole restore with a line in the log: the untouched editor then saved the fresh look over the project's at the next save. A full tuning edit queue still refuses the restore whole, as the issue's option said it would stay. Yan, 2026-11-22, #1927
+
+## 2026-11-22 (Adaptive's strip for the lattice-board, #1896)
+
+Yan, in chat: "Let's try the strip. It seems promising enough to demo." The design pass on #1896 put seven questions with recommendations; the build takes the recommendations for now, and none is decided until Yan has played it at the board. Each line below is the session's, pending his listening check.
+
+- With Decode fifths on, Adaptive tunes a decoded onset to its spelling's one just copy in a strip four fifths wide, `node(k, s) = (k − 4j, j)` with `j = floor((k − s) / 4)` (`policy::strip`); the search, its memory and the keyboard check are not consulted. Session, pending Yan
+- The strip's flat column is −1 plus Lattice Map's Position fifths (fine and coarse lanes together), read under Adaptive as under Lattice Map and clamped to flat columns −11..8, so every column lies within eleven fifths of C (no note more than about 59¢ from its key); the thirds and sevenths lanes are not read. A lane move applies from the next onset and moves no held note. Session, pending Yan
+- The wolf, a fifth a comma narrow at the strip's sharp edge (D–A at Position 0), is accepted at its fixed place, sus and pentatonic chords included; neither a split column nor a column moved by chord is built. Session, pending Yan
+- The search stays for Decode fifths off, with all its settings; with Decode fifths on, Keyboard, Pitch flexibility, Search radius, Search axes and Weight per octave are greyed under the strip's block, which shows its columns and the Position fifths lanes. Session, pending Yan
+- Under Adaptive, a held note lights the board key it was played on, when the board has that key, and otherwise the key nearest its pitch; under the other engines the 2026-11-20 rule stands. This supersedes, for Adaptive, the 2026-11-20 line "A note lights the key nearest its sounding pitch … not the key played or drawn": a strip note in the fourth column or beyond is 21.5¢ from its own key and 19.6¢ from its enharmonic neighbour's. Session, pending Yan
+- Stakes: Adaptive with Decode fifths on is within the use; Adaptive's search, with Decode fifths off, stays outside it. Session's proposal from the design, recorded in AGENTS.md pending Yan's listening check
 
 ## 2026-11-22 (the main thread owns the tuning configuration, #1938)
 

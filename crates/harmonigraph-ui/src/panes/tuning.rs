@@ -330,7 +330,7 @@ pub(super) fn tuning_pane(
     });
 
     match (retuning_controls(ui, state, params, maps.as_ref()), &maps) {
-        (TuningEngine::Adaptive, _) => adaptive_controls(ui, state, params),
+        (TuningEngine::Adaptive, view) => adaptive_controls(ui, state, params, view.as_ref()),
         (TuningEngine::LatticeMap, Some(view)) => map_controls(ui, state, params, view),
         _ => {}
     }
@@ -407,38 +407,29 @@ fn fifths(steps: i32) -> String {
 
 /// The policy's own rows first and its two blocks after them, so no row
 /// reads as the end of a block. Any change sends the whole policy shown.
-fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
+///
+/// With Decode fifths on, a decoded note takes its spelling's copy in the
+/// strip (`policy::strip`) and the search's rows decide nothing: they are
+/// greyed, as the board-drawn bars are, under the strip's own block.
+fn adaptive_controls(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    params: &dyn ParamBackend,
+    view: Option<&crate::lattice_maps::MapView>,
+) {
     section(ui, "Adaptive tuning", |ui| {
         let mut p = state.runtime.adaptive_policy;
         let before = p;
         let fresh = PolicyConfig::default();
-        p.pitch_flexibility = adaptive_value(
-            ui, (p.pitch_flexibility.into(), fresh.pitch_flexibility.into()), 1..=100, 1.0, "Pitch flexibility", "¢",
-            "Cents of displacement beyond accumulated drift that cost one point. The exponential penalty rises increasingly quickly; a note stays unsnapped when its harmonic benefit cannot cover that cost.",
-        ) as u16;
-        p.radius =
-            adaptive_value(ui, (p.radius.into(), fresh.radius.into()), 1..=5, 1.0, "Search radius", " steps", "Candidates may lie at most this many lattice steps away in total: |fifths| + |thirds| + |sevenths|, over the enabled axes. Larger radii consider more tuning alternatives and cost more processing.").max(1) as u8;
-        crate::widgets::label(ui, "Search axes").on_hover_text(
-            "Lattice axes the adaptive tuner may use when looking for a note's candidate pitches.",
-        );
-        theme::reserve_scroll_gutter(ui);
-        egui::ScrollArea::horizontal().id_salt("adaptive-axes-scroll").show(ui, |ui| {
-            crate::widgets::selected_combo(
-                ui,
-                egui::ComboBox::from_id_salt("adaptive-axes").selected_text(match p.axes {
-                    1 => "Fifths",
-                    2 => "Fifths + thirds",
-                    _ => "Fifths + thirds + sevenths",
-                }),
-                |ui| {
-                    ui.selectable_value(&mut p.axes, 1, "Fifths");
-                    ui.selectable_value(&mut p.axes, 2, "Fifths + thirds");
-                    ui.selectable_value(&mut p.axes, 3, "Fifths + thirds + sevenths");
-                },
-            );
-        });
-        keyboard_controls(ui, &mut p);
-        super::block(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, true))
+        let strip = p.decode_fifths;
+        if let Some(view) = view.filter(|_| strip) {
+            super::block(ui, "Strip", |ui| strip_controls(ui, view, params))
+                .response
+                .on_hover_text(STRIP_HINT);
+            crate::widgets::label(ui, SEARCH_OFF_NOTE);
+        }
+        ui.add_enabled_ui(!strip, |ui| search_controls(ui, &mut p, &fresh));
+        super::block(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, Some(!strip)))
             .response
             .on_hover_text(
                 "New notes follow the moving context; sounding notes keep their correction.",
@@ -447,6 +438,66 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             state.runtime.edit_tuning(params, ConfigEdit { policy: Some(p), ..Default::default() });
         }
     });
+}
+
+const STRIP_HINT: &str = "With Decode fifths on, each spelling the lattice-board plays sounds \
+    its one just copy inside a strip four fifths wide, so a chord's comma is never guessed. \
+    Lattice Map's Position fifths place the strip, under Adaptive as under Lattice Map: \
+    at 0 it is F C G D, and the fifth leaving its sharp edge (D–A there) is the wolf.";
+
+const SEARCH_OFF_NOTE: &str =
+    "The search below applies with Decode fifths off, and to no lattice-board note.";
+
+/// The strip's columns and the Position fifths lanes that place it.
+fn strip_controls(
+    ui: &mut egui::Ui,
+    view: &crate::lattice_maps::MapView,
+    params: &dyn ParamBackend,
+) {
+    use crate::lattice_maps::{MapAxis, MapOffsetLane};
+    let flat = harmonigraph_core::policy::strip::flat_column(view.offsets.total().threes);
+    let names: Vec<String> = (flat..flat + 4)
+        .map(|column| {
+            let name = harmonigraph_core::LatticePos::new(column, 0, 0).note_name();
+            format!("{}{}", name.letter, name.accidental_mark())
+        })
+        .collect();
+    crate::widgets::label(ui, format!("Strip {}", names.join(" ")));
+    ui.columns(2, |halves| {
+        let [fine, coarse] = halves else { unreachable!("asked for two columns") };
+        offset_lane(fine, view, params, MapAxis::Fifths, "Fifths", MapOffsetLane::Fine);
+        offset_lane(coarse, view, params, MapAxis::Fifths, "Fifths", MapOffsetLane::Extension);
+    });
+}
+
+/// The search's own rows: Adaptive with Decode fifths off.
+fn search_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfig) {
+    p.pitch_flexibility = adaptive_value(
+            ui, (p.pitch_flexibility.into(), fresh.pitch_flexibility.into()), 1..=100, 1.0, "Pitch flexibility", "¢",
+            "Cents of displacement beyond accumulated drift that cost one point. The exponential penalty rises increasingly quickly; a note stays unsnapped when its harmonic benefit cannot cover that cost.",
+        ) as u16;
+    p.radius =
+            adaptive_value(ui, (p.radius.into(), fresh.radius.into()), 1..=5, 1.0, "Search radius", " steps", "Candidates may lie at most this many lattice steps away in total: |fifths| + |thirds| + |sevenths|, over the enabled axes. Larger radii consider more tuning alternatives and cost more processing.").max(1) as u8;
+    crate::widgets::label(ui, "Search axes").on_hover_text(
+        "Lattice axes the adaptive tuner may use when looking for a note's candidate pitches.",
+    );
+    theme::reserve_scroll_gutter(ui);
+    egui::ScrollArea::horizontal().id_salt("adaptive-axes-scroll").show(ui, |ui| {
+        crate::widgets::selected_combo(
+            ui,
+            egui::ComboBox::from_id_salt("adaptive-axes").selected_text(match p.axes {
+                1 => "Fifths",
+                2 => "Fifths + thirds",
+                _ => "Fifths + thirds + sevenths",
+            }),
+            |ui| {
+                ui.selectable_value(&mut p.axes, 1, "Fifths");
+                ui.selectable_value(&mut p.axes, 2, "Fifths + thirds");
+                ui.selectable_value(&mut p.axes, 3, "Fifths + thirds + sevenths");
+            },
+        );
+    });
+    keyboard_controls(ui, p);
 }
 
 /// Follow harmony's rows: the mode, how far it has moved the map, and while it
@@ -497,7 +548,7 @@ fn follow_controls(
     .on_hover_text("How far following has moved the map beyond its Position offsets.");
     let mut p = state.runtime.adaptive_policy;
     let before = p;
-    context_controls(ui, &mut p, &PolicyConfig::default(), false);
+    context_controls(ui, &mut p, &PolicyConfig::default(), None);
     if p != before {
         state.runtime.edit_tuning(params, ConfigEdit { policy: Some(p), ..Default::default() });
     }
@@ -507,7 +558,14 @@ fn follow_controls(
 /// block, and under Lattice Map in the Follow harmony block, which reads it.
 /// Follow reads the decayed context alone, so only Adaptive's own scoring
 /// takes `register`, the weight per octave.
-fn context_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfig, register: bool) {
+/// `register` shows the weight per octave, enabled or greyed; `None` leaves
+/// it out.
+fn context_controls(
+    ui: &mut egui::Ui,
+    p: &mut PolicyConfig,
+    fresh: &PolicyConfig,
+    register: Option<bool>,
+) {
     p.half_life_ms = adaptive_value(
         ui,
         (p.half_life_ms.into(), fresh.half_life_ms.into()),
@@ -517,16 +575,18 @@ fn context_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfi
         "s",
         "A note struck this long before the newest counts half. 0: no decay.",
     ) as u16;
-    if register {
-        p.register = adaptive_value(
-            ui,
-            (p.register.into(), fresh.register.into()),
-            10..=1000,
-            1000.0,
-            "Weight per octave",
-            "",
-            "Each octave between two notes multiplies the vote by this. 1: ignore register.",
-        ) as u16;
+    if let Some(enabled) = register {
+        ui.add_enabled_ui(enabled, |ui| {
+            p.register = adaptive_value(
+                ui,
+                (p.register.into(), fresh.register.into()),
+                10..=1000,
+                1000.0,
+                "Weight per octave",
+                "",
+                "Each octave between two notes multiplies the vote by this. 1: ignore register.",
+            ) as u16;
+        });
     }
     p.tolerance = adaptive_value(
         ui,
@@ -1054,7 +1114,8 @@ const DECODE_FIFTHS_HINT: &str = "For the lattice-board, a custom chain-of-fifth
     Under Pass through the lattice is drawn in the board's tuning, and Learn is suspended while \
     it is on. While it is on, \
     a lattice-board plugged into this Mac lights the key nearest each note the lattice draws, \
-    in the Decoded fifth: the key a note sounds on, from any track or the Tape.";
+    in the Decoded fifth: the key a note sounds on, from any track or the Tape. Under Adaptive \
+    a note lights the key it was played on instead, when the board has that key.";
 
 const DECODED_FIFTH_HINT: &str = "The fifth the lattice-board's chain sounds at with Decode \
     fifths on, independent of the lattice's Perfect fifth. Under Pass through the lattice is drawn \

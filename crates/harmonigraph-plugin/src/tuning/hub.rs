@@ -15,7 +15,7 @@ use harmonigraph_clap::plugin::Boundary;
 use harmonigraph_core::canonical::{NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
-use harmonigraph_core::tuning::{fifth_generated, fifths_for_midi, fifths_offset};
+use harmonigraph_core::tuning::{fifths_for_midi, fifths_offset};
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
 
@@ -125,6 +125,9 @@ struct Sequencer {
     engine: TuningEngine,
     engine_revision: u64,
     map: Option<LatticeMap>,
+    /// Lattice Map's Position, every engine's: under Adaptive its fifths
+    /// place the strip a decoded onset is tuned in.
+    position: LatticePos,
     context: Box<[Option<Voice>]>,
     memory: policy::Memory,
     config: policy::MusicalConfig,
@@ -150,6 +153,7 @@ impl Default for Sequencer {
             engine: Default::default(),
             engine_revision: 0,
             map: None,
+            position: LatticePos::ORIGIN,
             context: vec![None; policy::MAX_CONTEXT].into_boxed_slice(),
             memory: policy::Memory::default(),
             config: harmonigraph_core::configuration::ConfigReducer::default().resolved().into(),
@@ -559,6 +563,7 @@ impl Hub {
                 self.sequencer.engine_revision = attack.engine_revision;
             }
             self.sequencer.map = attack.playback.map;
+            self.sequencer.position = attack.playback.offset;
             self.sequencer.follow = attack.playback.follow;
             self.sequencer.config = attack.config.into();
             for position in index..end {
@@ -816,16 +821,27 @@ impl Hub {
             let fifths = fifths_for_midi(channel, key);
             fifths_offset(fifths, config.tuning.c_offset, config.policy.decoded_fifth)
         });
-        if self.sequencer.engine != TuningEngine::Adaptive {
-            let mapped = (self.sequencer.engine == TuningEngine::LatticeMap)
-                .then_some(self.sequencer.map)
-                .flatten()
-                .map(|map| self.follow(position, map));
-            let assigned = mapped.map(|map| map.assignment(incoming, config.tuning));
-            // With no map to assign from, a decoded onset sounds as declared.
+        // Adaptive tunes a decoded onset by the strip, a node chosen by its
+        // spelling alone (`policy::strip`), and searches only the rest.
+        let adaptive = self.sequencer.engine == TuningEngine::Adaptive;
+        if !adaptive || stage.is_some() {
+            let assigned = if adaptive {
+                let flat = policy::strip::flat_column(self.sequencer.position.threes);
+                let fifths = fifths_for_midi(channel, key);
+                let stage = stage.unwrap_or(0);
+                let (node, correction) =
+                    policy::strip::assignment(fifths, flat, incoming + stage, config.tuning);
+                Some((node, stage + correction))
+            } else {
+                (self.sequencer.engine == TuningEngine::LatticeMap)
+                    .then_some(self.sequencer.map)
+                    .flatten()
+                    .map(|map| self.follow(position, map).assignment(incoming, config.tuning))
+            };
+            // With no node to assign, a decoded onset sounds as declared.
             let correction = assigned.map_or(stage.unwrap_or(0), |(_, correction)| correction);
             let node = assigned.map(|(node, _)| node);
-            let decision = if mapped.is_some() || stage.is_some() {
+            let decision = if assigned.is_some() || stage.is_some() {
                 self.sequencer.decision += 1;
                 self.decisions += 1;
                 self.sequencer.decision
@@ -833,8 +849,9 @@ impl Hub {
                 0
             };
             self.reply(record, correction);
-            // A mapped voice is context too: following weighs what is held, and
-            // what was released, through the same memory Adaptive keeps.
+            // A mapped or strip voice is context too: following weighs what is
+            // held, and what was released, through the same memory Adaptive
+            // keeps.
             if let Some(node) = node {
                 let voice = Voice {
                     source: record.source,
@@ -852,14 +869,8 @@ impl Hub {
         }
         self.sequencer.take_loop();
         self.sequencer.fill(self.rate);
-        // Adaptive spells a decoded onset from its declared pitch, as a key of a
-        // keyboard tuned in the decoded fifth.
-        let mut musical: policy::MusicalConfig = config.into();
-        if decoded {
-            musical.policy.keyboard = fifth_generated(config.policy.decoded_fifth);
-        }
-        let stage = stage.unwrap_or(0);
-        let onset = policy::OrderedOnset { pitch: incoming + stage };
+        let musical: policy::MusicalConfig = config.into();
+        let onset = policy::OrderedOnset { pitch: incoming };
         let count = self.sequencer.working.len();
         let selected = policy::assign_new_note(
             musical,
@@ -883,7 +894,7 @@ impl Hub {
             }
         };
         let (correction, node) = (assignment.correction_microcents(), assignment.node());
-        self.reply(record, stage + correction);
+        self.reply(record, correction);
         let mut struck = record.sample;
         if decision != 0 {
             struck = self.sequencer.memory.attack(
@@ -908,7 +919,7 @@ impl Hub {
         if !self.sequencer.hold(voice) {
             self.status |= session::POLICY;
         }
-        Some(Assigned { correction: stage + correction, node, decision, player, channel_pitch })
+        Some(Assigned { correction, node, decision, player, channel_pitch })
     }
 
     /// What actually arrived, key number and every tuning the source already

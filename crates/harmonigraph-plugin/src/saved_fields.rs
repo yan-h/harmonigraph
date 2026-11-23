@@ -4,8 +4,9 @@
 //! its musical settings and instance settings, so one owner writes every
 //! field a project stores (#1814).
 //!
-//! A field that does not parse is skipped with a line in the editor's Console
-//! and in the log, and the rest of the restore goes ahead, as the fields did
+//! A field that does not parse is skipped with a line in the log and one in
+//! the editor's Console, which opens on it as on every restore line that
+//! reports a loss, and the rest of the restore goes ahead, as the fields did
 //! when nice-plug's derive restored them, which skipped one in silence. A
 //! field the save lacks keeps what the instance holds. The parameter ids a
 //! save holds that no row has are named in the Console the same way, and so
@@ -120,10 +121,11 @@ impl Prepared for Fields {
             params.editor_state.restore(window);
         }
         if let Some(look) = look {
+            params.settings.supersede_reveals();
             params.ui_state.restore(look);
         }
         for note in notes {
-            params.settings.notify(note);
+            params.settings.notify(crate::configuration::Notice::Restore(note));
         }
     }
 }
