@@ -146,8 +146,7 @@ pub(super) fn frame(
     if ask.is_some() {
         ui.ctx().request_repaint();
     }
-    let own = shared.ui.workspace.take_own_resize();
-    egui_state.end_frame(shared.ui.workspace.interaction.own_window, ask, own, || {
+    egui_state.end_frame(shared.ui.workspace.interaction.own_window, ask, || {
         state.params.settings.changed()
     });
 

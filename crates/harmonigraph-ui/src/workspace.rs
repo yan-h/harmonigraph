@@ -371,10 +371,6 @@ fn fit_axis<const N: usize>(
 }
 
 pub(crate) struct Runtime {
-    /// A Console reveal unfolded the settings since the sections were last
-    /// laid out (`SharedState::reveal_console`): the next layout takes it as
-    /// a fold click's unfold, with its window resize.
-    pub revealed: bool,
     area: Option<Vec2>,
     requested: Option<u64>,
     pub rects: [Rect; 3],
@@ -393,7 +389,6 @@ struct Grip {
 impl Default for Runtime {
     fn default() -> Self {
         Self {
-            revealed: false,
             area: None,
             requested: None,
             rects: [Rect::NOTHING; 3],
@@ -422,12 +417,7 @@ impl Runtime {
 /// `told` is the layout the host was last told a save stores
 /// (`SharedState::reported`): fitting the layout to the
 /// window is no edit, so a fit of the layout it was told of settles there too,
-/// while one over an edit not yet told leaves that edit to be reported. A
-/// Console reveal's unfold (`Runtime::revealed`) already moved both, and asks
-/// for its window here as a fold click's does.
-///
-/// The window change the layout asks for, if any, and whether it is the
-/// editor's own write (a reveal's alone) rather than an edit.
+/// while one over an edit not yet told leaves that edit to be reported.
 pub(crate) fn show(
     ui: &mut egui::Ui,
     layout: &mut Layout,
@@ -435,7 +425,7 @@ pub(crate) fn show(
     runtime: &mut Runtime,
     viewer: &mut Viewer<'_>,
     frameless: bool,
-) -> Option<(Vec2, bool)> {
+) -> Option<Vec2> {
     let area = ui.available_rect_before_wrap();
     if !area.is_positive() || !area.is_finite() {
         return None;
@@ -467,15 +457,7 @@ pub(crate) fn show(
     drawn.fit(area.size(), rail, gap);
     runtime.rects = drawn.rects(area, rail, gap, floor);
     runtime.bodies = [None; 3];
-    let mut before = layout.clone();
-    let shown = (layout.position, layout.folded);
-    // A reveal is drawn as the unfold it was: its sizes are the folded
-    // layout's, which `settled` leaves alone while Settings is folded, so the
-    // reshape below moves nothing a save stores beyond what the reveal moved.
-    let revealed = std::mem::take(&mut runtime.revealed);
-    if revealed {
-        before.folded[Section::Settings as usize] = true;
-    }
+    let before = layout.clone();
     // The dock is set on the Analyzer settings page, which draws through the
     // viewer rather than the layout; it reads and writes this copy.
     viewer.interaction.dock = layout.position;
@@ -506,13 +488,10 @@ pub(crate) fn show(
         *layout = Layout { sized: true, ..Layout::default() };
     }
     if reset || edited {
-        // The window a reveal alone asks for is the editor's own write, as
-        // the reveal is: no edit to tell the host of (#1813).
-        let own = revealed && !reset && shown == (layout.position, layout.folded);
         runtime.grip = None;
         runtime.requested = Some(frame);
         ui.ctx().request_repaint();
-        return Some((layout.natural_size(rail, gap, floor) - area.size(), own));
+        return Some(layout.natural_size(rail, gap, floor) - area.size());
     }
     None
 }

@@ -143,10 +143,6 @@ impl EguiState {
     /// that moved the setting reaches an open editor), queue the size a fold
     /// asked for, `ask`, and report an edit ([`Self::report_edit`]).
     ///
-    /// An `ask` that is the editor's own write, `own` (a Console reveal's
-    /// unfold), is no edit: the frame that applies it takes the size as told,
-    /// as after a restore (#1813).
-    ///
     /// `ask` is queued rather than applied: `request_size` is the host's round
     /// trip, and the window's size source, which runs at the top of the next
     /// tick before the frame it will be laid out in, is where this window
@@ -155,7 +151,6 @@ impl EguiState {
         &self,
         own: Option<bool>,
         ask: Option<(u32, u32)>,
-        own_ask: bool,
         notice: impl FnOnce(),
     ) {
         if let Some(own) = own {
@@ -168,9 +163,6 @@ impl EguiState {
         // A resize or an Own window switch marks the project modified, as an
         // edit to what `ui-state` saves does (#1824).
         self.report_edit(notice);
-        if ask.is_some() && own_ask {
-            self.settle();
-        }
     }
 
     /// Call `notice` if the size or the Own window choice moved since the
