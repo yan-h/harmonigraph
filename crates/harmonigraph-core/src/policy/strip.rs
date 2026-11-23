@@ -242,6 +242,14 @@ mod tests {
         follower.attack(&[1], &[0, -3], 0);
         follower.attack(&[5], &[0, -3, 1], 0);
         assert_eq!(follower.key(), 0, "C E♭ G, then B");
+        // With C in the strip's flat column (C G D A), F would be the wolf
+        // under C: it moves the key down before F is tuned.
+        let mut follower = Follower { key: 1 };
+        for (k, held) in [(0, &[][..]), (-3, &[0][..]), (1, &[0, -3][..]), (-1, &[0, -3, 1][..])] {
+            follower.attack(&[k], held, 0);
+        }
+        let c_f = node(0, follower.flat(0)) - node(-1, follower.flat(0));
+        assert_eq!((follower.key(), c_f), (0, LatticePos::new(1, 0, 0)), "C E♭ G, then F");
         for k in [0, 2, 4, 1, 3] {
             follower.attack(&[k], &[0, 2, 4, 1, 3], 0);
         }
