@@ -106,7 +106,8 @@ impl Follower {
         else {
             return 0.0;
         };
-        count * 0.5f64.powf((at - then) as f64 / per_second / KEY_HALF_LIFE_S)
+        // A steady clock that went back across a reactivation ages nothing.
+        count * 0.5f64.powf((at - then).max(0) as f64 / per_second / KEY_HALF_LIFE_S)
     }
 
     /// Counts an attack of `fifths` at sample `at`, then slides the strip at
@@ -215,20 +216,31 @@ mod tests {
         (n * RATE) as i64
     }
 
-    /// A passing F♯ moves nothing, nor three while F is still in use; three
-    /// once F has faded slide the strip a fifth, from F C G D to C G D A.
+    /// Strikes on one sample that reach [`SLIDE_STRIKES`].
+    fn strikes() -> usize {
+        SLIDE_STRIKES.ceil() as usize
+    }
+
+    /// F♯ as often as F moves nothing; once both have faded, F♯ slides the
+    /// strip a fifth at the strike that reaches the count, from F C G D to
+    /// C G D A, and not before.
     #[test]
     fn the_strip_slides_once_a_spelling_past_the_key_has_replaced_the_one_opposite() {
         let free = |_| false;
         let mut follower = Follower::default();
-        for fifths in [F, F, F_SHARP, F_SHARP, F_SHARP] {
-            assert_eq!(follower.strike(fifths, 0, RATE, 0, free), HOME, "{fifths}: 3 against 2 F");
+        for fifths in [F, F_SHARP] {
+            for _ in 0..strikes() {
+                assert_eq!(
+                    follower.strike(fifths, 0, RATE, 0, free),
+                    HOME,
+                    "F♯ only as often as F"
+                );
+            }
         }
-        // Two half-lives on, F is at 0.5 and F♯ at 0.75: two strikes more
-        // make 2.75, the third 3.75.
-        let at = second(2.0 * KEY_HALF_LIFE_S);
-        assert_eq!(follower.strike(F_SHARP, at, RATE, 0, free), HOME);
-        assert_eq!(follower.strike(F_SHARP, at, RATE, 0, free), HOME);
+        let at = second(10.0 * KEY_HALF_LIFE_S);
+        for _ in 1..strikes() {
+            assert_eq!(follower.strike(F_SHARP, at, RATE, 0, free), HOME);
+        }
         assert_eq!(follower.strike(F_SHARP, at, RATE, 0, free), HOME + 1, "slid to C G D A");
         assert_eq!(follower.offset(), 1);
     }
@@ -239,15 +251,14 @@ mod tests {
     fn the_strip_returns_toward_the_set_key_once_its_reason_is_out_of_use() {
         let free = |_| false;
         let mut follower = Follower::default();
-        for _ in 0..3 {
+        for _ in 0..strikes() {
             follower.strike(F_SHARP, 0, RATE, 0, free);
         }
         assert_eq!(follower.offset(), 1);
-        // F♯'s count of 3 falls under a quarter in about 3.6 half-lives.
-        let mut at = second(3.5 * KEY_HALF_LIFE_S);
-        assert_eq!(follower.strike(C, at, RATE, 0, free), HOME + 1, "F♯ still in use");
-        at += second(0.2 * KEY_HALF_LIFE_S);
-        assert_eq!(follower.strike(C, at, RATE, 0, free), HOME, "back at the set key");
+        // The half-lives F♯'s count takes to fall to `OUT_OF_USE`.
+        let fade = (strikes() as f64 / OUT_OF_USE).log2() * KEY_HALF_LIFE_S;
+        assert_eq!(follower.strike(C, second(0.95 * fade), RATE, 0, free), HOME + 1, "in use");
+        assert_eq!(follower.strike(C, second(1.05 * fade), RATE, 0, free), HOME, "back home");
         assert_eq!(follower.offset(), 0);
     }
 
@@ -257,7 +268,7 @@ mod tests {
     fn a_slide_waits_while_a_note_in_its_column_is_held() {
         let mut follower = Follower::default();
         let held_f = |column| column == HOME;
-        for _ in 0..3 {
+        for _ in 0..strikes() {
             assert_eq!(follower.strike(F_SHARP, 0, RATE, 0, held_f), HOME);
         }
         let held_d = |column| column == HOME + 3;

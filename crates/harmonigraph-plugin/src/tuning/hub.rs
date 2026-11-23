@@ -945,12 +945,12 @@ impl Hub {
     /// column waits (`Follower::strike`).
     fn strip_place(&mut self, fifths: i32, sample: i64, config: ResolvedConfig) -> i32 {
         let sequencer = &mut self.sequencer;
+        sequencer.take_loop();
         let position = sequencer.position.threes;
         if !config.policy.follow_spellings {
             sequencer.follower.clear();
             return policy::strip::flat_column(position);
         }
-        sequencer.take_loop();
         let context = &sequencer.context;
         let holds = |column| {
             context.iter().flatten().any(|voice| voice.node.is_some_and(|n| n.threes == column))

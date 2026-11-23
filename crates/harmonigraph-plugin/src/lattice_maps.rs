@@ -26,21 +26,29 @@ pub fn unpack(word: u64) -> LatticePos {
     LatticePos::new((word >> 32) as u32 as i32, word as u32 as i32, 0)
 }
 
-/// Where following has moved the Position, as the Hub last published it: the
-/// map under Lattice Map, Adaptive's strip under Adaptive. The Hub publishes
-/// nothing moved while following is off or a mode change has yet to reach an
-/// attack; the parameters mask it as well, because with no process callbacks
-/// running the Hub publishes nothing at all.
+/// Where following has moved the map, as the Hub last published it. The Hub
+/// publishes nothing moved while following is off or a mode change has yet to
+/// reach an attack; the parameters mask it as well, because with no process
+/// callbacks running the Hub publishes nothing at all.
 fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
-    let following = match TuningEngine::from_index(params.int(Row::TuningEngine)) {
-        TuningEngine::LatticeMap => Follow::from_index(params.int(Row::MapFollow)) != Follow::Off,
-        TuningEngine::Adaptive => true,
-        TuningEngine::Off => false,
-    };
+    let following = TuningEngine::from_index(params.int(Row::TuningEngine))
+        == TuningEngine::LatticeMap
+        && Follow::from_index(params.int(Row::MapFollow)) != Follow::Off;
     if following {
         unpack(params.map_followed.load(std::sync::atomic::Ordering::Acquire))
     } else {
         LatticePos::ORIGIN
+    }
+}
+
+/// Fifths Adaptive's strip has slid, which the Hub publishes in the same word
+/// as the map's following under Adaptive (`Sequencer::following`). Read for
+/// the Strip block alone, so no map selection or take entry carries it.
+fn strip_moved(params: &crate::HarmonigraphParams) -> i32 {
+    if TuningEngine::from_index(params.int(Row::TuningEngine)) == TuningEngine::Adaptive {
+        unpack(params.map_followed.load(std::sync::atomic::Ordering::Acquire)).threes
+    } else {
+        0
     }
 }
 
@@ -147,6 +155,7 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
         playback: shown,
         offsets,
         followed,
+        strip_moved: strip_moved(params),
         unadopted,
         names: editor.names(&document),
         edit_shape: editor.edit_shape,

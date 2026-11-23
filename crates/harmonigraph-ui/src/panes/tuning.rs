@@ -461,7 +461,9 @@ fn strip_controls(
 ) {
     use crate::lattice_maps::{MapAxis, MapOffsetLane};
     let set = view.offsets.total().threes;
-    let flat = harmonigraph_core::policy::strip::flat_column(set + view.followed.threes);
+    // A slide the switch has just turned off is cleared at the next attack.
+    let slid = if p.follow_spellings { view.strip_moved } else { 0 };
+    let flat = harmonigraph_core::policy::strip::flat_column(set + slid);
     let names: Vec<String> = (flat..flat + 4)
         .map(|column| {
             let name = harmonigraph_core::LatticePos::new(column, 0, 0).note_name();

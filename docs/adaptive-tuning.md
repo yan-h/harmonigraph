@@ -49,7 +49,7 @@ Lattice Map's Position fifths place the strip, under Adaptive as under Lattice M
 at 0 its columns are F C G D, the default map's,
 and automating the lane is how a piece changes key.
 With **Follow spellings** on, the default, the strip also slides by itself a fifth at a time,
-once a spelling just past the key's seven has replaced the one at its other edge (three F♯s with F out of use),
+once a spelling just past the key's seven has replaced the one at its other edge (three F♯s close together, or about four spread out, with F out of use),
 and back toward the Position when that spelling fades;
 a slide waits while a note it would retune is held, and every context reset returns it to the Position.
 Every fourth fifth along the chain, the one leaving the strip's sharp edge, is a comma narrow (D–A at Position 0).

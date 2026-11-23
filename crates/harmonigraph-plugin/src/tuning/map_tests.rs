@@ -781,10 +781,12 @@ fn follow_spellings_slides_the_strip_until_the_context_resets() {
     let (five_three, pythagorean) = (LatticePos::new(-1, 1, 0), LatticePos::new(3, 0, 0));
     let mut id = 0;
     let mut a = |session: &mut Decoding| {
-        // F♯ in three octaves on one sample counts three strikes exactly.
+        // F♯ in as many octaves as a slide takes strikes, on one sample.
+        let strikes = harmonigraph_core::policy::strip::SLIDE_STRIKES.ceil() as i16;
         for on in [true, false] {
-            let chord = [54, 66, 78].map(|key| note(id + key as i32, 0, key, 0, on));
-            session.play(chord.into(), vec![]);
+            let chord =
+                (0..strikes).map(|i| 90 - 12 * i).map(|key| note(id + key as i32, 0, key, 0, on));
+            session.play(chord.collect(), vec![]);
         }
         session.play(vec![note(id + 1, 0, 69, 0, true)], vec![]);
         let node = session.voice(true, 0, 69).attack_node;

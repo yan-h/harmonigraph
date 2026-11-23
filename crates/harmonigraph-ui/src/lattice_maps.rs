@@ -408,10 +408,12 @@ pub struct MapView {
     /// whether audio has adopted it.
     pub playback: MapPlayback,
     pub offsets: MapOffsets,
-    /// Where following has moved the Position beyond `offsets`, as the Hub
-    /// last left it: the map's, already included in `playback.map`, which is
-    /// what sounds; under Adaptive, the strip's fifths.
+    /// Where following has moved the map beyond `offsets`, as the Hub last
+    /// left it. Already included in `playback.map`, which is what sounds.
     pub followed: LatticePos,
+    /// Fifths Adaptive's strip has slid from where the Position fifths set it
+    /// (`policy::strip::Follower`), as the Hub last left it.
+    pub strip_moved: i32,
     /// The map state the parameters request, before following moves it, when
     /// the audio thread has not adopted it yet: the request the pending label
     /// waits on. Following is the Hub's own movement, not a request.
