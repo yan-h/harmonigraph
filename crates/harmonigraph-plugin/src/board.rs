@@ -301,7 +301,7 @@ impl Lights {
     /// One poll: the pitches under the lock, the keys and messages without
     /// it. With decoding off and the board idle it does not take the lock.
     pub(crate) fn poll(&mut self, shared: &crate::editor::EditorLock) {
-        let config = self.settings.applied();
+        let config = self.settings.resolved();
         #[cfg(target_os = "macos")]
         {
             if !config.policy.decode_fifths && self.board.idle() {

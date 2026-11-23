@@ -111,19 +111,6 @@ impl State {
         }
     }
 
-    /// What learning may read from this source: the pitch the PLAYER supplied,
-    /// with the adaptive correction taken back off.
-    ///
-    /// Any row may be retuned, the Hub's own included once its Retune is on
-    /// (it defaults off), so publishing what was emitted would make Learn a
-    /// fixed point for that row — it would infer the axes it had
-    /// already chosen and never move. The old design got away with it only
-    /// because the Hub's own track was the one thing it did not retune.
-    pub fn learnable(&self) -> impl Iterator<Item = i64> + '_ {
-        self.voices()
-            .map(|voice| voice.pitch_microcents.saturating_sub(voice.frozen_offset_microcents))
-    }
-
     pub fn baseline(&self, source: SourceId, cut: u64, time: f64) -> Option<SourceBaseline> {
         let mut voices = [VoiceBaseline::default(); HELD_PER_SOURCE];
         let mut count = 0;

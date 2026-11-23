@@ -148,6 +148,7 @@ impl InputWorker {
         tape: crate::tape::Worker,
         input: LiveInput,
         lights: Option<crate::board::Lights>,
+        learn: Option<Arc<crate::HarmonigraphParams>>,
     ) -> InputWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -161,8 +162,9 @@ impl InputWorker {
             .spawn(move || {
                 raise_to_gui_priority();
                 let (mut tape, mut input, mut lights) = (tape, input, lights);
+                let learn = learn.as_deref();
                 #[cfg(not(test))]
-                run(&worker, &editor_state, &mut tape, &mut input, &mut lights, &flag);
+                run(&worker, &editor_state, &mut tape, &mut input, &mut lights, learn, &flag);
                 #[cfg(test)]
                 run(
                     &worker,
@@ -170,6 +172,7 @@ impl InputWorker {
                     &mut tape,
                     &mut input,
                     &mut lights,
+                    learn,
                     &flag,
                     &worker_rounds,
                 );
@@ -310,6 +313,7 @@ fn step(
     editor_state: &EguiState,
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
+    learn: Option<&crate::HarmonigraphParams>,
 ) {
     // What the exchange displaced from the view, freed at the end of the step:
     // declared before either hold's guard, so it outlives both, an early
@@ -333,6 +337,9 @@ fn step(
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
         let struck = newest_onset(&shared.ui.picture.runtime) > onset;
+        if let Some(params) = learn {
+            self::learn(params, &mut shared.ui.picture.runtime);
+        }
         // A frame's duties that must not wait for one: none runs while the
         // editor cannot be seen, open or not. Every trigger but OnDisarm is
         // decided in `poll_take_end`, so without it here an armed take would
@@ -401,10 +408,11 @@ fn guarded_step(
     editor_state: &EguiState,
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
+    learn: Option<&crate::HarmonigraphParams>,
     panicked: &mut bool,
 ) -> bool {
     let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        step(shared, editor_state, tape, input)
+        step(shared, editor_state, tape, input, learn)
     }));
     if stepped.is_err() {
         input.restart_analysis();
@@ -422,6 +430,21 @@ fn guarded_step(
     true
 }
 
+/// One step of Learn (#1938 C), from the notes the step just drained: here
+/// rather than in a frame, so it learns with the window covered or shut, as
+/// it did on audio. It applies through the document's door, which checks
+/// the gate again there, so a restore or an edit that disarmed Learn since
+/// this read it wins. The editor's lock is held, then the document's: the
+/// order a frame takes them in.
+fn learn(params: &crate::HarmonigraphParams, runtime: &mut harmonigraph_ui::VisualRuntime) {
+    let engine = harmonigraph_core::lattice_map::TuningEngine::from_index(
+        params.int(crate::Row::TuningEngine),
+    );
+    if let Some(learned) = runtime.learn(params.settings.learns(engine)) {
+        params.settings.learn(learned, engine);
+    }
+}
+
 /// How many consecutive steps may panic before the worker stops trying.
 const MAX_PANICS_IN_A_ROW: u32 = 8;
 
@@ -429,19 +452,22 @@ const MAX_PANICS_IN_A_ROW: u32 = 8;
 ///
 /// The stop flag is read once per step. Joining waits for any current step
 /// and sleep, followed by the final drain below.
+// The test build's round counter is the eighth.
+#[cfg_attr(test, allow(clippy::too_many_arguments))]
 fn run(
     shared: &EditorLock,
     editor_state: &EguiState,
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
     lights: &mut Option<crate::board::Lights>,
+    learn: Option<&crate::HarmonigraphParams>,
     stop: &AtomicBool,
     #[cfg(test)] rounds: &AtomicU64,
 ) {
     let mut panicked = false;
     let mut in_a_row = 0;
     while !stop.load(Ordering::Relaxed) {
-        if guarded_step(shared, editor_state, tape, input, &mut panicked) {
+        if guarded_step(shared, editor_state, tape, input, learn, &mut panicked) {
             in_a_row = 0;
         } else {
             in_a_row += 1;
@@ -503,6 +529,8 @@ mod tests {
         tape: crate::tape::Worker,
         /// The input the thread would own.
         input: LiveInput,
+        /// The plugin whose tuning Learn writes, when a test has it learn.
+        learn: Option<Arc<crate::HarmonigraphParams>>,
     }
 
     fn tape() -> crate::tape::Worker {
@@ -523,6 +551,7 @@ mod tests {
             editor_state: EguiState::from_size(800, 600),
             tape: tape(),
             input: LiveInput::new(note_consumer, audio_consumer),
+            learn: None,
         }
     }
 
@@ -538,7 +567,13 @@ mod tests {
     impl Harness {
         /// One round of the loop the thread runs.
         fn step(&mut self) {
-            super::step(&self.shared, &self.editor_state, &mut self.tape, &mut self.input);
+            super::step(
+                &self.shared,
+                &self.editor_state,
+                &mut self.tape,
+                &mut self.input,
+                self.learn.as_deref(),
+            );
         }
 
         /// Mono audio at 48 kHz, enough for the analyzer to fill a window and
@@ -895,6 +930,7 @@ mod tests {
                 &h.editor_state,
                 &mut h.tape,
                 &mut h.input,
+                None,
                 &mut panicked,
             );
             BETWEEN_HOLDS.set(None);
@@ -996,7 +1032,7 @@ mod tests {
         );
         let input = std::mem::replace(&mut h.input, unfed);
         let analyzer =
-            InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), tape(), input, None);
+            InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), tape(), input, None, None);
         // Polled to a deadline, so a loaded machine cannot fail this for being
         // slow — it is asserting that steps happen at all, not how fast.
         let started = Instant::now();

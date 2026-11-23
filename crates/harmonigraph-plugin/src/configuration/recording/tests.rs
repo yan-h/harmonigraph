@@ -63,10 +63,10 @@ fn a_take_carries_released_axes_in_its_configuration_records() {
         ],
         ..Default::default()
     };
-    assert!(settings.submit(edit));
+    settings.submit(edit);
     device.run(0, vec![], None);
     let linked = settings.view().resolved.tuning;
-    assert!(settings.submit(ConfigEdit::temper(harmonigraph_core::Comma::Syntonic, false, linked)));
+    settings.submit(ConfigEdit::temper(harmonigraph_core::Comma::Syntonic, false, linked));
     device.run(64, vec![], None);
     let expected = settings.view().resolved;
     assert!(!expected.modes.tempered.syntonic);
@@ -101,11 +101,11 @@ fn a_take_records_the_board_s_tuning_only_while_pass_through_decodes() {
     device.activate();
     let settings = device.settings();
     let just = Tuning::just();
-    assert!(settings.submit(ConfigEdit {
+    settings.submit(ConfigEdit {
         axes: [None, Some(just.three), Some(just.five), None, None],
         policy: Some(PolicyConfig { decode_fifths: true, ..PolicyConfig::default() }),
         ..Default::default()
-    }));
+    });
     device.run(0, vec![], None);
     assert_eq!(saved(&device.save()).axes[1], just.three, "a save stored the drawn fifth");
     capture.arm();
@@ -437,7 +437,7 @@ fn a_tuning_edit_before_a_host_reset_opens_the_run_after_it() {
     let block = 64.0 / 48000.0;
     device.run_transport(0, vec![], false, None, Some(transport(1.0, 0)));
     let edited = microcents(690.0);
-    assert!(device.settings().submit(ConfigEdit::axis(TuningAxis::Three, edited)));
+    device.settings().submit(ConfigEdit::axis(TuningAxis::Three, edited));
     device.run_transport(64, vec![], false, None, Some(transport(1.0 + block, 0)));
     device.run_transport(128, vec![], false, None, Some(transport(1.0 + 2.0 * block, 0)));
     unsafe { ((*device.plugin).reset.unwrap())(device.plugin) };
@@ -500,7 +500,7 @@ fn a_host_reset_that_restarts_the_steady_counter_records_as_one_that_does_not() 
         let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
         let struck = vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)];
         device.run_transport(0, struck, false, None, Some(transport(1.0, 0)));
-        assert!(device.settings().submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0))));
+        device.settings().submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0)));
         let released = vec![note(10, 60, 30, CLAP_EVENT_NOTE_OFF)];
         device.run_transport(64, released, false, None, Some(transport(1.0 + block, 0)));
         for i in 2..BEFORE {
@@ -1115,9 +1115,7 @@ fn a_configuration_applied_before_arming_records_once_as_the_takes_initial_value
     let (mut device, mut capture) = crate::test_device::recorded(|| hub().with_retune());
     device.activate();
     for i in 0..9 {
-        assert!(device
-            .settings()
-            .submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0 + i as f32))));
+        device.settings().submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0 + i as f32)));
     }
     device.run(0, vec![], None);
     capture.arm();
@@ -1235,7 +1233,7 @@ fn every_engine_records_a_tuning_edit_at_the_callback_that_applies_it() {
         device.run(0, vec![], None);
         capture.arm();
         device.run(64, vec![], None);
-        assert!(device.settings().submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0))));
+        device.settings().submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0)));
         device.run(128, vec![], None);
         let configs: Vec<_> = capture
             .drain_entries()

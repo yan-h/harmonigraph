@@ -112,6 +112,10 @@ impl Prepared for Fields {
         if let Some(maps) = maps {
             *params.maps.write() = maps;
         }
+        // Every restore is another project, or another state of one: undo
+        // entries name its slots by identity and would write old shapes into
+        // the new ones.
+        params.map_editor.lock().forget();
         if let Some(window) = window {
             params.editor_state.restore(window);
         }

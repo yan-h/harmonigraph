@@ -182,10 +182,12 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 - A project saved with an Analyzer region folded before region folds kept their space: it reopens with the Analyzer at its folded width, and unfolding gives the width back to nothing; a divider drag does.
 - A section fold clicked on a frame whose pass egui repeats: it draws the new fold in the old window for that one frame.
 
-**Cases the tuning settings go without** (PR #1795), each with its cost when it occurs:
+**Cases the tuning settings go without** (PR #1795, and #1938 when the main thread took the record), each with its cost when it occurs:
 
-- More than 128 editor edits queued while the Hub runs no audio: the rest are refused with the Tuning pane's notice and a Console line, and a restore then is refused whole with a line in the editor's Console and in the macOS log.
-- A save between an editor edit and the Hub's next callback stores the configuration before the edit: one host block of it while audio runs, and for as long as it does not; the slider and the file both hold the value before the edit until then.
+- An edit made while the record's lock is held at a callback's start: it sounds one block later.
+- A restore's maps, tuning and host parameters are three writes: a callback between them adopts one without the others for a block, recorded so in a take.
+- A learned change reaches the sound and a take a worker step (4 ms with the window open, 20 ms shut) plus a block after its chord, where it was one block; in a faster-than-real-time bounce with Learn armed that is up to the bounce speed times 20 ms of song, and two runs can differ.
+- A chord held across a switch from Lattice Map to Pass through with Learn armed: Learn hears it at its corrected pitch until the next press.
 - After lost input, editor edits and Learn keep applying until the host resets; the fault notice stays and a take recorded after the loss refuses its configuration (Yan's answer, #1795, recorded in `docs/intent/tuning.md`).
 
 **Cases the glow goes without** (PR #1791), each with its cost when it occurs:
@@ -202,8 +204,6 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 - A note a snapshot omitted and a later snapshot lists again, which no producer writes: it opens a second note rather than continuing the first.
 - Lowering a Tune's delay while a take records: the notes after it are recorded at the row's latest time, up to the old delay late; a row's note times never go back (Yan, #1885).
 - A miss from a full copy ring, read after a transport Stop: the Stop clears the ring's fault bit but keeps the count, so the Tune says "raise the delay", which is no remedy for a full ring.
-- A Tuning pane policy edit landing within one block of a keyboard Learn result (Adaptive with Learn armed): the learned keyboard reverts until Learn runs again.
-- Two policy edits to different fields queued before the Hub's next callback: only the second's fields stay, since each carries the whole policy the pane showed; about one block while audio runs, and while the Hub runs no audio the earlier setting snaps back when audio resumes.
 
 **Cases drawing a missed note raw goes without** (#1799), each with its cost when it occurs:
 

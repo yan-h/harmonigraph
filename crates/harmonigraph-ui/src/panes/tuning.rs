@@ -267,12 +267,12 @@ pub(super) fn tuning_pane(
                 );
             }
             // Learn: while engaged, the tuning re-learns whenever the set of
-            // held notes changes. The plugin's audio owner does it
-            // (`Owner::group_end`); without one, `VisualRuntime::learn_step`.
+            // held notes changes, in `VisualRuntime::learn`: the plugin's
+            // input worker steps it, and a frame does without one.
             let mut learn_active = state.runtime.learn_active;
             let learn = crate::widgets::toggle_switch(ui, &mut learn_active, "Learn")
                 .on_hover_text(
-                    "While active, set the tuning from the held notes whenever they change. With Adaptive retuning a source that has Retune on, only the C offset and the keyboard are learned: the lattice axes are what it is retuned to. Lattice Map and Decode fifths suspend Learn.",
+                    "While active, set the tuning from the held notes whenever they change. Learn runs under Pass through; Lattice Map, Adaptive and Decode fifths suspend it.",
                 );
             if learn.changed() {
                 state.runtime.edit_tuning(
@@ -320,9 +320,6 @@ pub(super) fn tuning_pane(
                 ui,
                 egui::RichText::new(too_many_pitches_notice()).color(theme::armed()),
             );
-            true
-        } else if state.runtime.configuration_status & ConfigurationView::QUEUE_FULL != 0 {
-            crate::widgets::label(ui, "Tuning change refused: pending command storage is full");
             true
         } else {
             false
@@ -651,10 +648,9 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], sta
 }
 
 /// What a source's Retune and Show boxes answer a hover with, the bulk
-/// boxes included: off, Retune passes notes through uncorrected and still
-/// heard by Learn (a Tune's still through its delay), and Show changes
-/// nothing heard.
-const RETUNE_HINT: &str = "Tune new notes with the selected engine. Off, notes pass through uncorrected and, with Decode fifths on, undecoded, without influencing adaptive tuning, and Learn hears them while it runs; a Tune's untuned notes still pass through its tuning delay.";
+/// boxes included: off, Retune passes notes through uncorrected (a Tune's
+/// still through its delay), and Show changes nothing heard.
+const RETUNE_HINT: &str = "Tune new notes with the selected engine. Off, notes pass through uncorrected and, with Decode fifths on, undecoded, without influencing adaptive tuning; a Tune's untuned notes still pass through its tuning delay.";
 const SHOW_HINT: &str = "Show this instance's output notes on the lattice, in takes and in exports. Changes nothing you hear.";
 
 fn instance_controls(
@@ -989,10 +985,10 @@ fn retuning_controls(
             params.edit_lattice_map(MapEdit::Engine(mode));
         }
         if state.runtime.learn_active && !state.runtime.learn_acts(Some(mode)) {
-            let why = if state.runtime.adaptive_policy.decode_fifths {
-                "Learn is suspended while Decode fifths is on."
-            } else {
-                "Learn is suspended in Lattice Map."
+            let why = match mode {
+                TuningEngine::LatticeMap => "Learn is suspended in Lattice Map.",
+                TuningEngine::Adaptive => "Learn is suspended under Adaptive.",
+                TuningEngine::Off => "Learn is suspended while Decode fifths is on.",
             };
             crate::widgets::label(ui, egui::RichText::new(why).color(theme::armed()));
         }

@@ -378,6 +378,26 @@ mod tests {
         installed(&reading);
     }
 
+    /// A project saved before the main thread owned the tuning (#1938), the
+    /// fixture's, opens with the tuning it saved and saves it back unchanged,
+    /// key for key: every value away from its default, Learn armed among them.
+    #[test]
+    fn a_saved_tuning_opens_and_saves_back_unchanged() {
+        let mut state: Value = serde_json::from_slice(&fixture("harmonigraph")).unwrap();
+        let field = &mut state["fields"][MUSICAL_SETTINGS];
+        let mut tuning: Value = serde_json::from_str(field.as_str().unwrap()).unwrap();
+        tuning["learning"] = true.into();
+        tuning["marvel"] = true.into();
+        let adaptive = &mut tuning["adaptive"];
+        (adaptive["reset_stop"], adaptive["silence_ms"]) = (true.into(), 1500.into());
+        (adaptive["decode_fifths"], adaptive["decoded_fifth"]) = (true.into(), 695_000_000.into());
+        *field = Value::String(tuning.to_string());
+        let reading = read(Plugin::Harmonigraph, &serde_json::to_vec(&state).unwrap());
+        assert_eq!(reading.refused, None);
+        let back: Value = serde_json::from_str(&reading.fields[MUSICAL_SETTINGS]).unwrap();
+        assert_eq!(back, tuning);
+    }
+
     /// A Tune's `tuning-instance` that does not parse opens at the settings a
     /// save without it opens at, rather than refusing its restore.
     #[test]

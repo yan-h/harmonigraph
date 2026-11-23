@@ -128,3 +128,13 @@ Yan: "I want to be able to easily go between improvising in meantone while visua
 ## 2026-11-22 (a tuning field that does not parse, #1927 A)
 
 - A saved `musical-settings` or `tuning-instance` that does not parse opens at its default on its own, with a line in the log and, in a Hub, a Console line naming it, and the rest of the project loads. This supersedes the `persistence-contract` skill's rule that such a field refuses the whole restore with a line in the log: the untouched editor then saved the fresh look over the project's at the next save. A full tuning edit queue still refuses the restore whole, as the issue's option said it would stay. Yan, 2026-11-22, #1927
+
+## 2026-11-22 (the main thread owns the tuning configuration, #1938)
+
+Yan took the rework, chose Learn shape C, "I want to keep it around in case I use MPE based boards", and chose that tuning edits show and save at once while the audio engine is off.
+
+- The main thread owns the tuning record, as it owns the Lattice Map document: the editor's edits, Learn and a restore write it through one door (`Shared`, `crates/harmonigraph-plugin/src/shared.rs`), and audio copies it under a lock it only tries at each callback's start. A held lock keeps the callback's last copy for that one block. Yan
+- An edit shows, saves and marks the project when it is made, with or without audio running; "Tuning change pending audio adoption" means shown and saved, not yet sounding. Yan
+- Learn runs in the input worker, from the notes the lattice holds, every held one but the tape's, a hidden source's included, so it learns with the window covered or closed. It runs under Pass through alone, with Decode fifths off, and its result applies only if the document still lets it act. Yan chose C; the worker rather than a frame, and the tape and hidden-source rules, are the red team's revision posted on #1938. Session
+- Superseded, since the audio owner they rest on is gone: #1934's line above that a full tuning edit queue still refuses the restore whole, and the `persistence-contract` skill's matching sentence; #1314 Q1's "Only active retuning reserves the axes as its target", since Learn no longer runs under Adaptive; #1751's "Learn reads the Hub's rows" and the Learn clauses of #1749 and #1795; #1798 F2's sentence that a pane edit within a block of a Learn result may revert it. Session, on Yan's answers
+- Not protected, each cheap: a chord held across a switch from Lattice Map to Pass through with Learn armed is learned at its corrected pitch until the next press; a faster-than-real-time bounce with Learn armed records each learned change up to the bounce speed times 20 ms late, and two runs can differ. Session, on #1938

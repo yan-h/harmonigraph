@@ -22,6 +22,7 @@ mod presentation;
 mod saved_fields;
 /// What a saved state loads as, for the `read-plugin-state` tool.
 pub mod saved_state;
+mod shared;
 mod tape;
 
 /// Identity of this plugin build, supplied to the shared performance overlay.
@@ -488,8 +489,15 @@ impl ParamBackend for PluginParamBackend<'_> {
     fn configuration(&self) -> Option<harmonigraph_ui::params::ConfigurationView> {
         Some(self.configuration)
     }
-    fn submit_tuning(&self, edit: harmonigraph_core::configuration::ConfigEdit) -> Option<bool> {
-        Some(self.params.settings.submit(edit))
+    /// The view after the edit, as `configuration_view` draws it, so the rest
+    /// of this frame draws the edit: under Pass through with Decode fifths on,
+    /// in the board's tuning rather than the saved one.
+    fn submit_tuning(
+        &self,
+        edit: harmonigraph_core::configuration::ConfigEdit,
+    ) -> Option<harmonigraph_ui::params::ConfigurationView> {
+        self.params.settings.submit(edit);
+        Some(self.params.configuration_view())
     }
 
     fn camera_value(&self, key: ParamKey) -> Option<f32> {
@@ -769,6 +777,7 @@ impl Default for Harmonigraph {
             tape_worker,
             editor::input::LiveInput::new(consumer, audio_consumer),
             board::Lights::live(params.settings.clone()),
+            Some(params.clone()),
         );
         params.ui_state.attach(&editor_shared);
         Harmonigraph {
@@ -956,6 +965,10 @@ impl Plugin for Harmonigraph {
     }
 
     fn activate(&mut self, config: &BufferConfig) -> bool {
+        // Audio is stopped: the first callback starts from the document.
+        if let Some(owner) = self.configuration.as_mut() {
+            owner.seed();
+        }
         self.aggregation
             .as_mut()
             .unwrap()
@@ -1056,7 +1069,6 @@ impl Plugin for Harmonigraph {
         for input in block.events() {
             owner.maps.observe(input, owner.current());
         }
-        owner.group_end(hub.retuning(), |scratch| hub.held_classes(scratch));
         for input in block.events() {
             hub.input(input);
         }

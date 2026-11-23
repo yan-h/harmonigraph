@@ -156,37 +156,38 @@ fn a_wheel_over_the_lattice_does_not_end_the_drag_it_is_zooming() {
 }
 
 #[test]
-fn learn_step_learns_only_when_the_chord_changes() {
+fn learn_learns_only_when_the_chord_changes() {
     let mut state = fresh();
-    let learns = |state: &SharedState| {
-        state.picture.runtime.console.lines().filter(|line| line.starts_with("learn:")).count()
-    };
     edit(&mut state, ConfigEdit { learning: Some(true), ..Default::default() });
     // Hold C and G (a 12-TET fifth: within learn range of just).
-    for note in [60u8, 67] {
-        state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
-            0.0,
-            harmonigraph_core::SourceId::DIRECT,
-            0,
-            note,
-            1.0,
-        ));
-    }
-
-    state.picture.runtime.learn_step();
+    hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
+    learn(&mut state);
     assert_eq!(state.picture.runtime.config_reducer.raw().three, 700_000_000, "C+G is a fifth");
-    assert_eq!(learns(&state), 1);
 
-    // Same chord again: change detection must suppress another learn.
-    state.picture.runtime.learn_step();
-    assert_eq!(learns(&state), 1);
-
+    let runtime = &mut state.picture.runtime;
+    assert!(runtime.learn(true).is_none(), "the same chord is learned once");
     // Disarming clears the memory so re-arming re-learns.
-    edit(&mut state, ConfigEdit { learning: Some(false), ..Default::default() });
-    state.picture.runtime.learn_step();
-    edit(&mut state, ConfigEdit { learning: Some(true), ..Default::default() });
-    state.picture.runtime.learn_step();
-    assert_eq!(learns(&state), 2);
+    assert!(runtime.learn(false).is_none());
+    assert!(runtime.learn(true).is_some(), "re-arming learns the held chord again");
+}
+
+/// What the tape plays is no source playing now, so Learn does not hear it.
+#[test]
+fn learn_does_not_hear_the_tape() {
+    let mut state = fresh();
+    let tape = harmonigraph_core::SourceId::DIRECT.on_tape();
+    for note in [60u8, 67] {
+        let on = harmonigraph_core::NoteEvent::on(0.0, tape, 0, note, 1.0);
+        state.picture.runtime.tracker.handle_event(on);
+    }
+    assert!(state.picture.runtime.learn(true).is_none(), "the tape's fifth");
+    hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
+    assert!(state.picture.runtime.learn(true).is_some(), "the same fifth played live");
+}
+
+/// One frame's observation in a shell with no owner, which runs Learn.
+fn learn(state: &mut SharedState) {
+    state.picture.runtime.observe_configuration(&RecordingBackend::default());
 }
 
 /// Hold `notes` as channel-0 voices, each optionally bent by a per-note
@@ -219,7 +220,7 @@ fn learn_enables_meantone_from_a_12tet_triad() {
     // Plain 12-TET C-E-G pins a 700¢ fifth and a 400¢ third; since
     // 400 = 4·700 − 2400 this triad IS a meantone.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0)]);
-    state.picture.runtime.learn_step();
+    learn(&mut state);
     assert!(state.picture.runtime.tempered.syntonic, "a 12-TET triad should engage meantone");
 }
 
@@ -233,7 +234,7 @@ fn learn_disables_meantone_from_a_just_triad() {
     // syntonic comma below four fifths, so this is not a meantone.
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
     hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
-    state.picture.runtime.learn_step();
+    learn(&mut state);
     assert!(!state.picture.runtime.tempered.syntonic, "a just third should release meantone");
 }
 
@@ -244,7 +245,7 @@ fn learn_leaves_meantone_unchanged_without_a_third() {
     temper(&mut state, Comma::Syntonic, true);
     // A bare fifth fixes no third, so the meantone flag is left alone.
     hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
-    state.picture.runtime.learn_step();
+    learn(&mut state);
     assert!(state.picture.runtime.tempered.syntonic, "a bare fifth shouldn't change the flag");
 }
 
@@ -307,7 +308,7 @@ fn learn_enables_marvel_from_a_12tet_seventh() {
     // C-E-G-B♭ in plain 12-TET: a 700¢ fifth, a 400¢ third and a 1000¢
     // seventh, which is 2·700 + 2·400 − 1200 exactly.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0), (70, 0.0)]);
-    state.picture.runtime.learn_step();
+    learn(&mut state);
     assert!(
         state.picture.runtime.tempered.septimal_kleisma,
         "a 12-TET seventh chord tempers out 225/224"
@@ -322,7 +323,7 @@ fn learn_leaves_marvel_unchanged_without_a_seventh() {
     temper(&mut state, Comma::SeptimalKleisma, true);
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
     hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
-    state.picture.runtime.learn_step();
+    learn(&mut state);
     assert!(
         state.picture.runtime.tempered.septimal_kleisma,
         "a triad shouldn't change the septimal flag"
@@ -338,7 +339,7 @@ fn learn_measures_the_septimal_comma_against_the_derived_third() {
     // inside the meantone tolerance, so the lattice's third becomes 400.0 and
     // the marvel seventh 1000.0 — which the played 1000.6 misses by 0.6¢.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.4), (67, 0.0), (70, 0.6)]);
-    state.picture.runtime.learn_step();
+    learn(&mut state);
     assert!(
         state.picture.runtime.tempered.syntonic,
         "a third 0.4¢ off four fifths is still a meantone"
