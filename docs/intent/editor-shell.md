@@ -56,6 +56,10 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 
 - Any edit to what `ui-state` saves marks the Bitwig project modified, as a musical setting's does: the layout and pane sizes, view settings, look slots, camera presets and editor preferences (option A). A restore, opening the editor, and what the editor writes by itself, such as the layout fitted to the window, mark nothing. #1813
 
+## 2026-11-22 (#1934, in chat)
+
+- Every restore line that reports a loss opens the Console, the host restore's (a field or parameter it could not read, the legacy axes, a full queue's refusal) as well as the editor door's; a line about the host only appends. Opening it is no edit, by the #1813 line above, and the next save stores Settings unfolded on the Console tab, by the #1757 rule that a save stores what the editor holds. Built in PR #1940
+
 ## 2026-11-18 (#1824, in chat)
 
 - An edit to what `editor-state` saves, the window's size and the System tab's Own window choice, marks the Bitwig project modified too, through the same notice as `ui-state` (option A). #1824
