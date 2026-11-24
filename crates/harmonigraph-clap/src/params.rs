@@ -9,8 +9,7 @@
 //!
 //! A row holds its unmodulated plain value and a mono modulation offset, in
 //! normalized units. Every read of the plain value the plugin acts on is
-//! modulated; a save and the host's `get_value` read the unmodulated value,
-//! and an editor write is taken as the value shown, modulation included.
+//! modulated; a save and the host's `get_value` read the unmodulated value.
 //!
 //! The editor writes a row at once, as the host's automation does, and the
 //! row remembers what the host has not yet been told of it: a gesture begun
@@ -309,6 +308,12 @@ impl Table {
         self.rows[row].modulated()
     }
 
+    /// A row's value before the host's modulation: what a save stores and an
+    /// editor write sets.
+    pub fn base(&self, row: usize) -> f32 {
+        self.rows[row].plain.load(Ordering::Relaxed)
+    }
+
     pub fn spec(&self, row: usize) -> &Spec {
         &self.rows[row].spec
     }
@@ -354,14 +359,10 @@ impl Table {
         self.rows[row].report.fetch_or(OPEN | BEGUN, Ordering::AcqRel);
     }
 
-    /// The editor sets `row` to `shown`, at once, and owes the host the
-    /// value that gives. The editor reads a row modulated, so it writes one as
-    /// it shows it: the value set is `shown` less the modulation's present
-    /// shift, and the modulation rides on top of it.
-    pub(crate) fn edit(&self, row: usize, shown: f32) {
-        let r = &self.rows[row];
-        let plain = shown - (r.modulated() - r.plain.load(Ordering::Relaxed));
-        let host = r.spec.to_host(plain);
+    /// The editor sets `row` to the plain value `plain`, at once, and owes
+    /// the host that value.
+    pub(crate) fn edit(&self, row: usize, plain: f32) {
+        let host = self.rows[row].spec.to_host(plain);
         self.set_host(row, host);
         self.rows[row].pending.store(host.to_bits(), Ordering::Release);
         // After the value, so a report that claims the bit reads it.
@@ -686,21 +687,5 @@ mod tests {
         table.set_host(0, 0.3);
         assert_eq!(table.float(0), 1.0);
         assert!(matches!(table.save()["float"], ParamValue::F32(value) if value == 0.3));
-    }
-
-    /// The editor writes a modulated row as it shows it: a drag that moves
-    /// the shown value by a step each frame moves it by that step, and the
-    /// value saved moves with it, the modulation riding on top.
-    #[test]
-    fn an_editor_drag_under_modulation_follows_the_pointer() {
-        let table = Table::new([Spec::float("float", "Float", 0.5, 0.0, 1.0)]);
-        assert!(table.modulate_host(0, 0.25));
-        for frame in 1..=3 {
-            let shown = table.float(0) - 0.05;
-            table.edit(0, shown);
-            assert!((table.float(0) - shown).abs() < 1e-6, "frame {frame}: {}", table.float(0));
-        }
-        let ParamValue::F32(saved) = table.save()["float"] else { panic!() };
-        assert!((saved - 0.35).abs() < 1e-6, "saved {saved}");
     }
 }

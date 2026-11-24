@@ -61,11 +61,9 @@ pub trait EditorHost: Send + Sync {
     /// values set until [`Self::end_set_parameter`] as one edit.
     fn begin_set_parameter(&self, row: usize);
 
-    /// Set the parameter table's `row` so it shows `shown` (an integer or a
-    /// variant's index as a float), and tell the host. A modulated row is
-    /// read with its modulation, so `shown` includes it and the value set is
-    /// `shown` less the modulation's present shift.
-    fn set_parameter(&self, row: usize, shown: f32);
+    /// Set the parameter table's `row` to the plain value `plain` (an integer
+    /// or a variant's index as a float), and tell the host.
+    fn set_parameter(&self, row: usize, plain: f32);
 
     /// End the gesture [`Self::begin_set_parameter`] began on `row`.
     fn end_set_parameter(&self, row: usize);

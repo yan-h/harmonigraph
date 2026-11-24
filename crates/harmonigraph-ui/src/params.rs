@@ -94,6 +94,12 @@ pub trait ParamBackend {
         None
     }
 
+    /// A movement channel's value before the host's modulation, which
+    /// [`Self::set`] writes: [`Self::camera_value`] where nothing modulates it.
+    fn camera_base(&self, key: ParamKey) -> Option<f32> {
+        self.camera_value(key)
+    }
+
     fn get(&self, key: ParamKey) -> f32;
     fn set(&self, key: ParamKey, value: f32);
     /// Which live audio input the shell is analyzing, or `None` when the shell

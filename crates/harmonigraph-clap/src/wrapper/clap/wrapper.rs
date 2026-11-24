@@ -1521,9 +1521,9 @@ impl<P: Plugin> EditorHost for HostGui<P> {
         wrapper.request_flush();
     }
 
-    fn set_parameter(&self, row: usize, shown: f32) {
+    fn set_parameter(&self, row: usize, plain: f32) {
         let Some(wrapper) = self.0.upgrade() else { return };
-        wrapper.params.edit(row, shown);
+        wrapper.params.edit(row, plain);
         wrapper.request_flush();
     }
 

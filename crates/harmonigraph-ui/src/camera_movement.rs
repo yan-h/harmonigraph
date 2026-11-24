@@ -78,6 +78,11 @@ fn bounded(key: ParamKey, value: f32) -> f32 {
 
 /// All interactive camera paths (pane navigation, preview and presets) edit
 /// the frame's snapshot. Submit only their changed channels to the host.
+///
+/// The snapshot is the camera as drawn, the host's modulation included, so a
+/// channel's edit is sent as the move it made, `after - before`, applied to
+/// the value before modulation as it stands now: a drag moves the saved value
+/// by the drag, and modulation that moves during the frame stays out of it.
 pub(crate) fn finish_edits(
     appearance: &mut AppearanceDocument,
     before: [f32; 5],
@@ -90,12 +95,17 @@ pub(crate) fn finish_edits(
     let mut after = appearance.camera_movement();
     let mut changed = false;
     for (index, key) in ParamKey::CAMERA.into_iter().enumerate() {
-        if params.camera_value(key).is_some() && after[index] != before[index] {
+        let Some(base) = params.camera_base(key) else { continue };
+        if after[index] != before[index] {
+            // The modulation's shift, from the drawn value and the base it
+            // was drawn from; zero exactly where nothing modulates, so an
+            // unmodulated edit sends `after` as it is.
+            let target = bounded(key, after[index] - (before[index] - base));
             after[index] = bounded(key, after[index]);
             if dragging {
                 params.begin_set(key);
             }
-            params.set(key, after[index]);
+            params.set(key, target);
             changed = true;
         }
     }
@@ -159,6 +169,47 @@ mod tests {
         );
         assert_eq!(*ParamKey::CameraPitch.range().end(), harmonigraph_scene::Camera::PITCH_LIMIT);
         assert_eq!(bounded(ParamKey::CameraYaw, std::f32::consts::PI), std::f32::consts::PI);
+    }
+
+    /// A host that modulates Camera Distance: it draws `base + offset` and a
+    /// `set` writes the base.
+    struct Modulated {
+        base: std::cell::Cell<f32>,
+        offset: std::cell::Cell<f32>,
+    }
+    impl ParamBackend for Modulated {
+        fn get(&self, key: ParamKey) -> f32 {
+            self.camera_value(key).unwrap()
+        }
+        fn set(&self, key: ParamKey, value: f32) {
+            assert_eq!(key, ParamKey::CameraDistance);
+            self.base.set(value);
+        }
+        fn camera_value(&self, key: ParamKey) -> Option<f32> {
+            self.camera_base(key).map(|base| base + self.offset.get())
+        }
+        fn camera_base(&self, key: ParamKey) -> Option<f32> {
+            (key == ParamKey::CameraDistance).then(|| self.base.get())
+        }
+    }
+
+    /// A drag under a modulator moves the saved value by the drag, though the
+    /// modulator moves within each frame: the camera follows the pointer and
+    /// the modulation rides on top.
+    #[test]
+    fn a_drag_under_a_moving_modulator_moves_the_saved_value_by_the_drag() {
+        let ctx = egui::Context::default();
+        let backend = Modulated { base: 10.0.into(), offset: 2.0.into() };
+        let mut appearance = AppearanceDocument::default();
+        for frame in 1..=3 {
+            appearance.sync_camera(&backend);
+            let before = appearance.camera_movement();
+            appearance.camera.distance -= 0.5;
+            backend.offset.set(backend.offset.get() + 1.0);
+            finish_edits(&mut appearance, before, &backend, &ctx);
+            let expected = 10.0 - 0.5 * frame as f32;
+            assert_eq!(backend.base.get(), expected, "frame {frame}");
+        }
     }
 
     /// Counts gestures as the plugin's backend makes them: a `set` outside a
