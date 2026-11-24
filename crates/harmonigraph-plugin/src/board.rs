@@ -15,9 +15,10 @@
 //! The input worker runs it once a poll, after its step. With decoding on, or
 //! the board still owing a reset, it takes the editor lock once more to copy
 //! the shown held pitches and write the Console lines owed; it reads the
-//! configuration from its lock-free published copy, and finds keys and sends
-//! with no lock held. Nothing runs on the audio thread, and the host's main
-//! thread only makes the two CoreMIDI clients, once, at plugin creation.
+//! configuration through the settings document's door, shared, and finds keys
+//! and sends with no editor lock held. Nothing runs on the audio thread, and
+//! the host's main thread only makes the two CoreMIDI clients, once, at plugin
+//! creation.
 //!
 //! **The clients are made on the main thread** because CoreMIDI tells a
 //! process about devices that come and go only through the run loop of the

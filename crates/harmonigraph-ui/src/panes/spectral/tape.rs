@@ -285,8 +285,8 @@ pub(super) fn draw(
     if state.appearance.spectrum.show_roll {
         // Through the live roll's own rule, which holds nothing for a song
         // axis: it stands still, and a live note played over the audition
-        // moves only while it sounds, which its voice holds.
-        // A song axis does not scroll, so whatever moves moves every frame.
+        // moves only while it sounds, which its voice holds. Both sources are
+        // built without a now line, which alone scrolls a roll or grows a lead.
         let motion = notes(painter, axes, scale, state, &axis, surface, frame);
         motion.hold(&mut state.surfaces.moving_this_frame, 0.0);
     }

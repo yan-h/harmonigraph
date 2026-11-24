@@ -17,9 +17,10 @@ pub trait Setup: Send + Sync {
     /// None means the host does not supply a name. This is not saved state.
     fn track_name_changed(&self, _name: Option<&str>) {}
     /// Read every field `state` holds for this setup, off audio, before the
-    /// parameters are restored, so no callback meets restored parameters
-    /// beside fields not yet read. Nothing refuses: a field that does not
-    /// parse costs that field alone, which the setup reports itself.
+    /// parameters are restored. The parameters are restored before the fields
+    /// install, so a callback between the two can meet either without the
+    /// other. Nothing refuses: a field that does not parse costs that field
+    /// alone, which the setup reports itself.
     fn parse(&self, state: &PluginState) -> Box<dyn Parsed>;
     fn save(&self, state: &mut PluginState);
     /// Called during construction. The callback asks the host for a
