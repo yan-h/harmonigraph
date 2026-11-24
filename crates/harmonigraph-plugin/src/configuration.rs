@@ -327,9 +327,9 @@ impl Setup for HubSetup {
     }
     /// Nothing refuses: a field that does not parse costs that field alone.
     /// Every field is read here, before the parameters are restored, so the
-    /// Console lines come in one order and no callback selects a Lattice Map
-    /// slot the incoming bank alone holds; the editor's fields install
-    /// first, then the instance's and the tuning.
+    /// Console lines come in one order; the editor's fields install first,
+    /// then the instance's and the tuning. The restore is still three writes,
+    /// so a callback between them can meet one without the others.
     fn parse(&self, state: &PluginState) -> Box<dyn Parsed> {
         let mut notes = Vec::new();
         let musical = self.params.settings.read_saved(state, &mut notes);

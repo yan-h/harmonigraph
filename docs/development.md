@@ -166,7 +166,7 @@ The split lets every parallel branch retain its own build while the person at th
 
 Every load also installs the build's `harmonigraph-offline` renderer, which the plugin package builds as its own binary,
 so a completed build's renderer is the plugin's commit (#1954).
-A build with no renderer, which only a build from before that change or a `--lib` build leaves, keeps the installed one, with a warning.
+A build with no renderer, which only a plugin-only build of a commit from before that change leaves, keeps the installed one, with a warning.
 
 After installing,
 deactivate and reactivate Bitwig's audio engine.

@@ -309,10 +309,10 @@ fn float_value(value: &serde_json::Value) -> String {
     }
 }
 
-/// The host value the editor sends for plain value `plain` of a stepped
-/// parameter with `steps` steps from `min`: nice-plug's `f32` normalization
-/// times the step count, so a whole value arrives just below itself
-/// (Lattice Map 3 as 2.999999988824129).
+/// A host value for step `index` of a stepped parameter with `steps` steps:
+/// nice-plug's `f32` normalization times the step count, so a whole value
+/// arrives just below itself (Lattice Map 3 as 2.999999988824129). The editor
+/// now sends exact steps, so this stands for a recorded automation value.
 fn editor_host_value(index: i32, steps: f64) -> f64 {
     f64::from((index as f32) / (steps as f32)) * steps
 }
