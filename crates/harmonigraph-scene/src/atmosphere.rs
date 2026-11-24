@@ -1,6 +1,7 @@
 //! Saved controls for the lattice atmosphere prototype and for the
 //! spectrogram's cloud texture, which is no longer one.
 
+use crate::{repair, UNIT};
 use harmonigraph_core::LatticePos;
 
 /// Which texture the atmosphere layer draws over the spectrogram.
@@ -340,33 +341,21 @@ impl MaterialSettings {
 
     pub fn sanitized(mut self) -> Self {
         let fresh = Self::default();
-        let clamp = |value: f32, fallback: f32, low, high| {
-            if value.is_finite() {
-                value.clamp(low, high)
-            } else {
-                fallback
-            }
-        };
         self.velvet_size =
-            clamp(self.velvet_size, fresh.velvet_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
-        self.velvet_variety = clamp(self.velvet_variety, fresh.velvet_variety, 0.0, 1.0);
-        self.velvet_edge = clamp(
-            self.velvet_edge,
-            fresh.velvet_edge,
-            *VELVET_EDGE_RANGE.start(),
-            *VELVET_EDGE_RANGE.end(),
-        );
+            repair(self.velvet_size, fresh.velvet_size, CLOUD_SIZE_MIN..=CLOUD_SIZE_MAX);
+        self.velvet_variety = repair(self.velvet_variety, fresh.velvet_variety, UNIT);
+        self.velvet_edge = repair(self.velvet_edge, fresh.velvet_edge, VELVET_EDGE_RANGE);
         self.velvet_irregularity =
-            clamp(self.velvet_irregularity, fresh.velvet_irregularity, 0.0, 1.0);
-        self.velvet_shape = clamp(self.velvet_shape, fresh.velvet_shape, 0.0, 1.0);
-        self.velvet_square = clamp(self.velvet_square, fresh.velvet_square, 0.0, 1.0);
-        self.velvet_tilt = clamp(self.velvet_tilt, fresh.velvet_tilt, 0.0, 1.0);
-        self.wash_size = clamp(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
-        self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
-        self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
-        self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
-        self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
-        self.wash_randomness = clamp(self.wash_randomness, fresh.wash_randomness, 0.0, 1.0);
+            repair(self.velvet_irregularity, fresh.velvet_irregularity, UNIT);
+        self.velvet_shape = repair(self.velvet_shape, fresh.velvet_shape, UNIT);
+        self.velvet_square = repair(self.velvet_square, fresh.velvet_square, UNIT);
+        self.velvet_tilt = repair(self.velvet_tilt, fresh.velvet_tilt, UNIT);
+        self.wash_size = repair(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN..=CLOUD_SIZE_MAX);
+        self.wash_fuzz = repair(self.wash_fuzz, fresh.wash_fuzz, UNIT);
+        self.wash_lobe = repair(self.wash_lobe, fresh.wash_lobe, UNIT);
+        self.wash_refract = repair(self.wash_refract, fresh.wash_refract, UNIT);
+        self.wash_layers = repair(self.wash_layers, fresh.wash_layers, UNIT);
+        self.wash_randomness = repair(self.wash_randomness, fresh.wash_randomness, UNIT);
         self
     }
 }
@@ -635,26 +624,19 @@ impl StarSettings {
     /// value that is no number taking the pane's fresh one.
     pub fn sanitized(mut self, pane: StarPane) -> Self {
         let fresh = pane.fresh();
-        let clamp = |value: f32, fallback: f32, low, high| {
-            if value.is_finite() {
-                value.clamp(low, high)
-            } else {
-                fallback
-            }
-        };
-        self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
+        self.star_randomness = repair(self.star_randomness, fresh.star_randomness, UNIT);
         self.star_size_variation =
-            clamp(self.star_size_variation, fresh.star_size_variation, 0.0, 1.0);
-        self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
-        self.star_layers =
-            self.star_layers.clamp(STAR_LAYERS_MIN, crate::star_plan::STAR_DEPTHS as u32);
+            repair(self.star_size_variation, fresh.star_size_variation, UNIT);
+        self.star_jitter = repair(self.star_jitter, fresh.star_jitter, UNIT);
+        let layers = STAR_LAYERS_MIN..=crate::star_plan::STAR_DEPTHS as u32;
+        self.star_layers = repair(self.star_layers, fresh.star_layers, layers);
         // Each per-depth array runs back to front and may run either way, so its
         // values are clamped one by one and never reordered.
         let depths = |values: &mut [f32; crate::star_plan::STAR_DEPTHS],
                       fresh: [f32; crate::star_plan::STAR_DEPTHS],
                       (low, high): (f32, f32)| {
             for (value, fresh) in values.iter_mut().zip(fresh) {
-                *value = clamp(*value, fresh, low, high);
+                *value = repair(*value, fresh, low..=high);
             }
         };
         depths(
@@ -665,16 +647,15 @@ impl StarSettings {
         depths(&mut self.star_size, fresh.star_size, (STAR_SIZE_MIN, STAR_SIZE_MAX));
         depths(&mut self.star_speed, fresh.star_speed, (STAR_SPEED_MIN, pane.speed_max()));
         self.star_lifetime =
-            clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
-        self.star_twinkle_dip = clamp(self.star_twinkle_dip, fresh.star_twinkle_dip, 0.0, 1.0);
+            repair(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN..=STAR_LIFETIME_MAX);
+        self.star_twinkle_dip = repair(self.star_twinkle_dip, fresh.star_twinkle_dip, UNIT);
         depths(&mut self.star_solid, fresh.star_solid, (0.0, STAR_SOLID_MAX));
-        self.star_glow_falloff = clamp(self.star_glow_falloff, fresh.star_glow_falloff, 0.0, 1.0);
-        self.star_cover = clamp(self.star_cover, fresh.star_cover, 0.0, 1.0);
-        self.star_resolution = (clamp(
+        self.star_glow_falloff = repair(self.star_glow_falloff, fresh.star_glow_falloff, UNIT);
+        self.star_cover = repair(self.star_cover, fresh.star_cover, UNIT);
+        self.star_resolution = (repair(
             self.star_resolution,
             fresh.star_resolution,
-            STAR_RESOLUTION_MIN,
-            STAR_RESOLUTION_MAX,
+            STAR_RESOLUTION_MIN..=STAR_RESOLUTION_MAX,
         ) / STAR_RESOLUTION_STEP)
             .round()
             * STAR_RESOLUTION_STEP;
@@ -768,46 +749,34 @@ impl Default for SpectralAtmosphere {
 impl SpectralAtmosphere {
     pub fn sanitized(mut self) -> Self {
         let fresh = Self::default();
-        let clamp = |value: f32, fallback: f32, low, high| {
-            if value.is_finite() {
-                value.clamp(low, high)
-            } else {
-                fallback
-            }
-        };
-        self.pitch_softness = clamp(
+        self.pitch_softness = repair(
             self.pitch_softness,
             fresh.pitch_softness,
-            PITCH_SOFTNESS_MIN,
-            PITCH_SOFTNESS_MAX,
+            PITCH_SOFTNESS_MIN..=PITCH_SOFTNESS_MAX,
         );
         self.time_softness =
-            clamp(self.time_softness, fresh.time_softness, TIME_SOFTNESS_MIN, TIME_SOFTNESS_MAX);
+            repair(self.time_softness, fresh.time_softness, TIME_SOFTNESS_MIN..=TIME_SOFTNESS_MAX);
         // Snapped to halves for the reason [`BLUR_TIME_STEP_MAX`] gives: five
         // resolutions to compare, not a continuum to hunt through.
         self.blur_time_step =
-            (clamp(self.blur_time_step, fresh.blur_time_step, 0.0, BLUR_TIME_STEP_MAX) * 2.0)
+            (repair(self.blur_time_step, fresh.blur_time_step, 0.0..=BLUR_TIME_STEP_MAX) * 2.0)
                 .round()
                 / 2.0;
-        self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
-        self.color_pickup = clamp(self.color_pickup, fresh.color_pickup, 0.0, COLOR_MEMORY_MAX);
-        self.color_release = clamp(self.color_release, fresh.color_release, 0.0, COLOR_MEMORY_MAX);
+        self.cloud_depth = repair(self.cloud_depth, fresh.cloud_depth, UNIT);
+        self.color_pickup = repair(self.color_pickup, fresh.color_pickup, 0.0..=COLOR_MEMORY_MAX);
+        self.color_release =
+            repair(self.color_release, fresh.color_release, 0.0..=COLOR_MEMORY_MAX);
         self.cloud_speed =
-            clamp(self.cloud_speed, fresh.cloud_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
-        self.cloud_direction = if self.cloud_direction.is_finite() {
-            crate::wrap_degrees(self.cloud_direction)
-        } else {
-            fresh.cloud_direction
-        };
-        self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, WASH_POOL_MIN, WASH_POOL_MAX);
-        self.wash_pool_width = clamp(
+            repair(self.cloud_speed, fresh.cloud_speed, CLOUD_SPEED_MIN..=CLOUD_SPEED_MAX);
+        self.cloud_direction =
+            crate::wrap_degrees(repair(self.cloud_direction, fresh.cloud_direction, ..));
+        self.wash_pool = repair(self.wash_pool, fresh.wash_pool, WASH_POOL_MIN..=WASH_POOL_MAX);
+        self.wash_pool_width = repair(
             self.wash_pool_width,
             fresh.wash_pool_width,
-            WASH_POOL_WIDTH_MIN,
-            WASH_POOL_WIDTH_MAX,
+            WASH_POOL_WIDTH_MIN..=WASH_POOL_WIDTH_MAX,
         );
-        self.wash_pool_softness =
-            clamp(self.wash_pool_softness, fresh.wash_pool_softness, 0.0, 1.0);
+        self.wash_pool_softness = repair(self.wash_pool_softness, fresh.wash_pool_softness, UNIT);
         self.material_settings = self.material_settings.sanitized();
         self.stars = self.stars.sanitized(StarPane::Spectrogram);
         self
@@ -967,31 +936,21 @@ impl Default for AtmosphereSettings {
 impl AtmosphereSettings {
     pub fn sanitized(mut self) -> Self {
         let fresh = Self::default();
-        let clamp = |value: f32, fallback: f32, low, high| {
-            if value.is_finite() {
-                value.clamp(low, high)
-            } else {
-                fallback
-            }
-        };
-        self.material_amount = clamp(self.material_amount, fresh.material_amount, 0.0, 1.0);
+        self.material_amount = repair(self.material_amount, fresh.material_amount, UNIT);
         self.material_settings = self.material_settings.sanitized();
         self.stars = self.stars.sanitized(StarPane::Lattice);
         self.material_speed =
-            clamp(self.material_speed, fresh.material_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
-        self.material_direction = if self.material_direction.is_finite() {
-            crate::wrap_degrees(self.material_direction)
-        } else {
-            fresh.material_direction
-        };
-        self.texture_depth = clamp(self.texture_depth, fresh.texture_depth, 0.0, 1.0);
+            repair(self.material_speed, fresh.material_speed, CLOUD_SPEED_MIN..=CLOUD_SPEED_MAX);
+        self.material_direction =
+            crate::wrap_degrees(repair(self.material_direction, fresh.material_direction, ..));
+        self.texture_depth = repair(self.texture_depth, fresh.texture_depth, UNIT);
         self.texture_scale =
-            clamp(self.texture_scale, fresh.texture_scale, NEBULA_SCALE_MIN, NEBULA_SCALE_MAX);
+            repair(self.texture_scale, fresh.texture_scale, NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX);
         self.texture_speed =
-            clamp(self.texture_speed, fresh.texture_speed, NEBULA_SPEED_MIN, NEBULA_SPEED_MAX);
-        self.breath_amount = clamp(self.breath_amount, fresh.breath_amount, 0.0, 1.0);
+            repair(self.texture_speed, fresh.texture_speed, NEBULA_SPEED_MIN..=NEBULA_SPEED_MAX);
+        self.breath_amount = repair(self.breath_amount, fresh.breath_amount, UNIT);
         self.breath_speed =
-            clamp(self.breath_speed, fresh.breath_speed, BREATH_SPEED_MIN, BREATH_SPEED_MAX);
+            repair(self.breath_speed, fresh.breath_speed, BREATH_SPEED_MIN..=BREATH_SPEED_MAX);
         self
     }
 

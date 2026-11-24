@@ -24,8 +24,9 @@ pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
         )
         .show(ui);
     view.octave_count = count as u32;
-    // Whole semitones, because that is the step the wheel can act on and what
-    // the readout can name.
+    // A drag or a typed value lands on whole semitones, which the readout can
+    // name. A load only clamps (`octaves::clamp_center`), so a saved fraction
+    // stays as saved and reads out rounded.
     ValueBar::new(&mut view.octave_center, PITCH_FLOOR..=PITCH_CEIL, "Center pitch")
             .default_value(super::fresh_view().octave_center)
             .integer()
@@ -203,8 +204,10 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
              0% joins both layers and sectors.",
         )
         .show(ui);
-    // L*, shared with the gradient brightness scale. Black is a colour here;
-    // layer width, rather than brightness, controls whether a ring exists.
+    // L*, shared with the gradient brightness scale, in whole points on a drag;
+    // a load only clamps, so a saved fraction reads out rounded. Black is a
+    // colour here; layer width, rather than brightness, controls whether a
+    // ring exists.
     ValueBar::new(&mut view.lattice_ground, LATTICE_GROUND_RANGE, "Silent slice brightness")
         .default_value(super::fresh_view().lattice_ground)
         .unit(1.0, "%")

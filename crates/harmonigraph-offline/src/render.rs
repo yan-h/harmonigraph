@@ -95,8 +95,9 @@ impl Stages {
 /// and the fresh defaults are a look nobody chose.
 ///
 /// With it, a `warning:` line for each key the selected look carries that
-/// this build does not read, for stderr, where the export's row keeps it
-/// (#1927 B).
+/// this build does not read, and for each setting whose value this build
+/// repairs on load, for stderr, where the export's row keeps it (#1927 B,
+/// #1956 Q2).
 pub fn appearance_for(
     take: &harmonigraph_take::Take,
     replacement: Option<&str>,
@@ -108,15 +109,10 @@ pub fn appearance_for(
     };
     let source =
         if replacement.is_some() { "replacement appearance" } else { "recorded appearance" };
-    let (appearance, unread) = AppearanceDocument::parse_noting(blob)
+    let (appearance, found) = AppearanceDocument::parse_noting(blob)
         .map_err(|err| format!("cannot render {source}: {err}"))?;
-    let warnings = unread.iter().map(|key| {
-        format!(
-            "{}{source}: {}",
-            harmonigraph_take::WARNING_PREFIX,
-            AppearanceDocument::unread_note(key)
-        )
-    });
+    let warnings =
+        found.lines().map(|note| format!("{}{source}: {note}", harmonigraph_take::WARNING_PREFIX));
     Ok((appearance, warnings.collect()))
 }
 
@@ -836,19 +832,38 @@ mod tests {
 
     #[test]
     fn recorded_and_replacement_appearances_normalize_before_rendering() {
+        // A scalar, an item of a list and a set (`Some`) weight, so the note's
+        // walk passes through each shape the look holds a number in.
         let mut appearance = AppearanceDocument::default();
         appearance.view.glow_reach = f32::NAN;
-        appearance.view.sevens_size = -1.0;
-        appearance.view.center_sevens = i32::MAX;
+        appearance.view.atmosphere.stars.star_size[1] = -1.0;
+        appearance.view.intensity.velocity.opacity = Some(f32::NAN);
         let serialized = appearance.serialize();
         let mut expected = appearance.view.clone();
         expected.sanitize();
         let mut take = take();
         take.header.appearance = Some(serialized.clone());
         for replacement in [None, Some(serialized.as_str())] {
-            let selected = appearance_for(&take, replacement).unwrap().0;
+            let (selected, warnings) = appearance_for(&take, replacement).unwrap();
             assert_eq!(selected.view, expected);
+            // And each repair is named on the export's row, as an unread key
+            // is, with the value as the look holds it.
+            let held = [
+                "view.glow_reach at NaN,",
+                "view.atmosphere.stars.star_size.1 at -1.0,",
+                "view.intensity.velocity.opacity at NaN,",
+            ];
+            assert_eq!(warnings.len(), held.len(), "{warnings:?}");
+            for held in held {
+                let named = warnings.iter().any(|warning| {
+                    warning.starts_with(harmonigraph_take::WARNING_PREFIX)
+                        && warning.contains(&format!(" {held} which this build loads as "))
+                });
+                assert!(named, "{held} was repaired unannounced: {warnings:?}");
+            }
         }
+        take.header.appearance = Some(AppearanceDocument::default().serialize());
+        assert_eq!(appearance_for(&take, None).unwrap().1, Vec::<String>::new(), "a fresh look");
     }
 
     fn settings() -> Settings {

@@ -866,6 +866,10 @@ fn export_queue(
 /// The export to queue, and a line for each key a recorded look carries that
 /// this build does not read (#1927 B): the queued look is serialized afresh,
 /// so the renderer never meets those keys to warn of them.
+///
+/// A recorded look is queued as written, unrepaired, so the renderer names
+/// each value its load repairs on the export's row, and a retry names them
+/// again (#1956 Q2).
 pub(crate) fn capture_export(
     appearance: &crate::AppearanceDocument,
     interaction: &crate::Interaction,
@@ -882,8 +886,12 @@ pub(crate) fn capture_export(
             let header =
                 harmonigraph_take::Header::read(path).map_err(|error| error.to_string())?;
             let look = header.appearance.as_deref().ok_or("the take recorded no appearance")?;
-            let (mut recorded, unread) = crate::AppearanceDocument::parse_noting(look)?;
-            notes.extend(unread.iter().map(|key| crate::AppearanceDocument::unread_note(key)));
+            let (mut recorded, unread) = crate::AppearanceDocument::read_noting(look)?;
+            // What the renderer would refuse is refused here, at the click.
+            recorded.clone().normalize()?;
+            notes.extend(crate::LoadNotes { unread, repaired: Vec::new() }.lines());
+            // The pane's own output settings are the live look's, already
+            // repaired, so they add no note of their own.
             recorded.render.take_output_from(&appearance.render);
             recorded
         }
@@ -1721,7 +1729,9 @@ mod export_tests {
     /// Encoder from the pane. Recorded as 9:16 with the lattice on top and the
     /// scrolling history, against a pane at the fresh 16:9 and Fit video.
     /// A key the recorded look holds that this build does not read is named
-    /// to the pane, since the queued look no longer carries it (#1927 B).
+    /// to the pane, since the queued look no longer carries it (#1927 B). A
+    /// value its load repairs is queued as held, for the renderer to name on
+    /// the export's row (#1956 Q2), and the pane's output settings add none.
     #[test]
     fn a_recorded_look_keeps_its_frame_and_takes_the_panes_output_settings() {
         use crate::{LatticeSide, SpectrogramRender, VideoEncoder};
@@ -1735,6 +1745,7 @@ mod export_tests {
         recorded.render.tail = 5.0;
         recorded.render.encoder = VideoEncoder::X264;
         recorded.render.archive = false;
+        recorded.view.sevens_size = -1.0;
         let path = std::env::temp_dir()
             .join(format!("harmonigraph-recorded-queue-{}.take", std::process::id()));
         let look = recorded.serialize().replacen("render:(", "render:(retired_key:1,", 1);
@@ -1757,7 +1768,9 @@ mod export_tests {
         let crate::ExportAction::Queue { appearance, size, .. } = queued else {
             panic!("queue action")
         };
-        let captured = crate::AppearanceDocument::parse(&appearance).unwrap();
+        let (captured, found) = crate::AppearanceDocument::parse_noting(&appearance).unwrap();
+        let repaired: Vec<_> = found.repaired.iter().map(|r| (&*r.path, &*r.held)).collect();
+        assert_eq!(repaired, [("view.sevens_size", "-1.0")], "the renderer's notes");
         let render = &captured.render;
         let frame = render.frame;
         assert_eq!((frame.aspect_w, frame.aspect_h, frame.split), (9, 16, 0.3));

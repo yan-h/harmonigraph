@@ -83,3 +83,7 @@ Yan took the recommendations made after the audit was checked against the code (
 ## 2026-11-23 (Tape used in Bitwig, #1925)
 
 - Tape has been used in Bitwig, the condition F3′'s Tape half and #1925 part 1 waited on, and both are left: Tape keeps its own note recorder, and the take and the Tape stay two recordings with their own placement rules. Yan's use showed no Tape notes sitting wrong, no wish to export what Tape holds without arming a take, and no need for Sidechain on Tape, its ~29-minute cap or a Tape that survives a reload, so either change would buy maintenance alone, and part 1 at a high risk of a silently wrong export. Yan, 2026-11-23 ("Leave both"), #1925 part 1, #1739 F3′
+
+## 2026-11-23 (rework proposal, #1956)
+
+- An export names each setting of the take's recorded look that this build repairs on load, as it names an unread key since #1932. #1956 Q2

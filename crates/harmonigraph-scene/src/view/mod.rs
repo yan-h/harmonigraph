@@ -19,7 +19,9 @@ use ring_stack::{slot_start, Stack};
 
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, SevensLabel};
-use crate::{AtmosphereSettings, Camera, ShadowSettings, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR};
+use crate::{
+    repair, AtmosphereSettings, Camera, ShadowSettings, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, UNIT,
+};
 use harmonigraph_core::{coords, Envelope, LatticePos};
 
 /// What every text-size bar offers, and so what a persisted scale is fit to.
@@ -1256,13 +1258,16 @@ impl ViewConfig {
     /// has already filled it from `impl Default`, which is the fresh view's
     /// value and the whole of that arrangement.
     ///
-    /// Most repairs fall back to the fresh view's own value, which is the only
-    /// other value in the file known to be drawable. `fade_shape` and
-    /// `mark_delay` are the exception and land on 0 — both have a 0 that MEANS
-    /// something (straight, no wait), so a blob carrying a nonsense number for
-    /// one gets the inert setting rather than a look nobody asked for. It
-    /// reads as a feature switched off, which is what a broken number should
-    /// look like. Fresh, neither is 0.
+    /// Every repair goes through [`repair`], and a non-finite
+    /// value falls back to the fresh view's own value, the only other value in
+    /// the file known to be drawable, except in four places. The ring gate
+    /// falls to its floor and the ring hysteresis to 0, each its off position
+    /// (see their lines below). A set intensity weight falls to 1.0
+    /// ([`IntensitySettings::sanitized`](crate::IntensitySettings::sanitized)).
+    /// And a field of the pitch gradient, or of an atmosphere's material,
+    /// falls to that type's own default ([`Gradient::sanitized`],
+    /// [`MaterialSettings::sanitized`](crate::MaterialSettings::sanitized)),
+    /// not to the composed look's.
     pub fn sanitize(&mut self) {
         let fresh = ViewConfig::default();
 
@@ -1288,10 +1293,14 @@ impl ViewConfig {
         // pair comes out closed rather than silently swapped: a blob holding
         // `max < min` is one nobody dragged, and the sheet it agrees to draw
         // is the one its low end names.
-        self.min_sevens = self.min_sevens.clamp(-SEVENS_LAYER_LIMIT, SEVENS_LAYER_LIMIT);
-        self.max_sevens = self.max_sevens.clamp(self.min_sevens, SEVENS_LAYER_LIMIT);
-        self.extent_threes = self.extent_threes.clamp(fresh.extent_threes, MAX_DRAWN_EXTENT);
-        self.extent_fives = self.extent_fives.clamp(fresh.extent_fives, MAX_DRAWN_EXTENT);
+        let sheets = -SEVENS_LAYER_LIMIT..=SEVENS_LAYER_LIMIT;
+        self.min_sevens = repair(self.min_sevens, fresh.min_sevens, sheets);
+        self.max_sevens =
+            repair(self.max_sevens, fresh.max_sevens, self.min_sevens..=SEVENS_LAYER_LIMIT);
+        self.extent_threes =
+            repair(self.extent_threes, fresh.extent_threes, fresh.extent_threes..=MAX_DRAWN_EXTENT);
+        self.extent_fives =
+            repair(self.extent_fives, fresh.extent_fives, fresh.extent_fives..=MAX_DRAWN_EXTENT);
         // The seventh center is the one center exposed as a setting, and it
         // names a sheet the picture DRAWS — so it is held inside the pair
         // above rather than merely on the same axis. A home sheet outside the
@@ -1300,20 +1309,18 @@ impl ViewConfig {
         // music is heard against would be off screen.
         //
         // The camera-owned fifths/thirds centers retain the arithmetic guard.
-        self.center_sevens = self.center_sevens.clamp(self.min_sevens, self.max_sevens);
-        self.center_threes = self.center_threes.clamp(-MAX_CENTER, MAX_CENTER);
-        self.center_fives = self.center_fives.clamp(-MAX_CENTER, MAX_CENTER);
+        self.center_sevens =
+            repair(self.center_sevens, fresh.center_sevens, self.min_sevens..=self.max_sevens);
+        self.center_threes =
+            repair(self.center_threes, fresh.center_threes, -MAX_CENTER..=MAX_CENTER);
+        self.center_fives = repair(self.center_fives, fresh.center_fives, -MAX_CENTER..=MAX_CENTER);
 
         // Fit the label scale to what its bar offers. It multiplies a FONT
         // SIZE, and the bar cannot produce a nonsense value where a
         // hand-edited blob can: a non-finite one reaches egui as a glyph with
         // no image, so every label silently vanishes, and a huge one asks the
         // rasterizer for a glyph wider than the texture atlas can hold.
-        self.label_scale = if self.label_scale.is_finite() {
-            self.label_scale.clamp(*SCALE_BAR_RANGE.start(), *SCALE_BAR_RANGE.end())
-        } else {
-            fresh.label_scale
-        };
+        self.label_scale = repair(self.label_scale, fresh.label_scale, SCALE_BAR_RANGE);
 
         // The pitch gradient's six knobs, for the same reason as the label
         // scale above and one more: they are the memo key of the color table
@@ -1325,8 +1332,8 @@ impl ViewConfig {
         // `COLOR_RANGE_MIN_SPAN` above the low, so the readout's two ends are
         // the two the ramp reads.
         (self.darkest_pitch, self.brightest_pitch) = crate::clamp_span(
-            finite_or(self.darkest_pitch, fresh.darkest_pitch),
-            finite_or(self.brightest_pitch, fresh.brightest_pitch),
+            repair(self.darkest_pitch, fresh.darkest_pitch, ..),
+            repair(self.brightest_pitch, fresh.brightest_pitch, ..),
             (0.0, PITCH_COLOR_MAX),
             COLOR_RANGE_MIN_SPAN,
         );
@@ -1335,8 +1342,7 @@ impl ViewConfig {
         self.octave_center = crate::octaves::clamp_center(self.octave_center);
 
         // Each off-sheet step multiplies geometry by this value.
-        self.sevens_size = finite_or(self.sevens_size, fresh.sevens_size)
-            .clamp(*SEVENS_SIZE_RANGE.start(), *SEVENS_SIZE_RANGE.end());
+        self.sevens_size = repair(self.sevens_size, fresh.sevens_size, SEVENS_SIZE_RANGE);
 
         // The mark delay, against that same hole: it is added to a timestamp
         // and the sum divided by the attack, so a non-finite one poisons the
@@ -1346,7 +1352,7 @@ impl ViewConfig {
         // still set, and the shader multiplies the ring's coverage away to
         // nothing. Silent, and it takes the whole layer wherever the marks
         // are on.
-        self.mark_delay = finite_or(self.mark_delay, 0.0).clamp(0.0, crate::MARK_DELAY_MAX);
+        self.mark_delay = repair(self.mark_delay, fresh.mark_delay, 0.0..=crate::MARK_DELAY_MAX);
 
         // The envelope's shape, against the same hole. `Envelope::approach`
         // guards its own arithmetic against a non-finite duration or shape —
@@ -1358,27 +1364,30 @@ impl ViewConfig {
         // duration beside it, for the same reason, onto its bar's second.
         self.note_animation = self.note_animation.sanitized();
         self.intensity = self.intensity.sanitized();
-        self.fade_shape = finite_or(self.fade_shape, 0.0).clamp(0.0, 1.0);
-        self.fade_time = finite_or(self.fade_time, fresh.fade_time).clamp(0.0, FADE_TIME_MAX);
+        self.fade_shape = repair(self.fade_shape, fresh.fade_shape, UNIT);
+        self.fade_time = repair(self.fade_time, fresh.fade_time, 0.0..=FADE_TIME_MAX);
 
         // The spectral kernel's width, against that same hole and one more: it
         // is a DIVISOR in the fold's Gaussian, so a 0 from a hand-edited blob
         // makes every weight a NaN and the whole lattice reads as silent —
         // dark, with nothing to say why. The clamp is what keeps that
         // impossible; the finite check is what a clamp cannot be.
-        self.spectral_width = finite_or(self.spectral_width, fresh.spectral_width)
-            .clamp(crate::SPECTRAL_WIDTH_MIN, crate::SPECTRAL_WIDTH_MAX);
+        self.spectral_width = repair(
+            self.spectral_width,
+            fresh.spectral_width,
+            crate::SPECTRAL_WIDTH_MIN..=crate::SPECTRAL_WIDTH_MAX,
+        );
 
         // All radial widths share the load repair. Nonfinite sizes use the
         // fresh setting; rings() only places the normalized widths in a stack.
-        self.spectral_ring_width = finite_or(self.spectral_ring_width, fresh.spectral_ring_width)
-            .clamp(0.0, RING_WIDTH_MAX);
-        self.ring_inner = finite_or(self.ring_inner, fresh.ring_inner).clamp(0.0, RING_INNER_MAX);
-        self.band_width = finite_or(self.band_width, fresh.band_width).clamp(0.0, RING_WIDTH_MAX);
+        self.spectral_ring_width =
+            repair(self.spectral_ring_width, fresh.spectral_ring_width, 0.0..=RING_WIDTH_MAX);
+        self.ring_inner = repair(self.ring_inner, fresh.ring_inner, 0.0..=RING_INNER_MAX);
+        self.band_width = repair(self.band_width, fresh.band_width, 0.0..=RING_WIDTH_MAX);
         self.mark_thickness =
-            finite_or(self.mark_thickness, fresh.mark_thickness).clamp(0.0, MARK_THICKNESS_MAX);
+            repair(self.mark_thickness, fresh.mark_thickness, 0.0..=MARK_THICKNESS_MAX);
         // The same padding is used radially and between octave sectors.
-        self.ring_gap = finite_or(self.ring_gap, fresh.ring_gap).clamp(0.0, GAP_MAX);
+        self.ring_gap = repair(self.ring_gap, fresh.ring_gap, 0.0..=GAP_MAX);
         // How wide a window each wedge shows. A MULTIPLIER in the shader — a
         // fragment's across-the-wedge fraction scales by it into a cents
         // offset — so a zero from a hand-edited blob is finite but degenerate:
@@ -1386,30 +1395,40 @@ impl ViewConfig {
         // collapses to one flat reading per wedge. The floor forbids that
         // zoom; [`SPECTRAL_RANGE_MIN`](crate::SPECTRAL_RANGE_MIN) says where
         // it sits and why.
-        self.spectral_ring_range = finite_or(self.spectral_ring_range, fresh.spectral_ring_range)
-            .clamp(crate::SPECTRAL_RANGE_MIN, crate::SPECTRAL_RANGE_MAX);
+        self.spectral_ring_range = repair(
+            self.spectral_ring_range,
+            fresh.spectral_ring_range,
+            crate::SPECTRAL_RANGE_MIN..=crate::SPECTRAL_RANGE_MAX,
+        );
         // The gate, repaired to its OFF position rather than to the fresh value
         // the two above take: a level nobody can read is a reason to draw every
         // ring, never to hide one, and a blob holding a NaN here would
         // otherwise open on a lattice with no rings and no way to tell that
         // from an analyzer with nothing to say.
-        self.spectral_ring_gate = finite_or(self.spectral_ring_gate, crate::SPECTRAL_GATE_MIN)
-            .clamp(crate::SPECTRAL_GATE_MIN, crate::SPECTRAL_GATE_MAX);
+        self.spectral_ring_gate = repair(
+            self.spectral_ring_gate,
+            crate::SPECTRAL_GATE_MIN,
+            crate::SPECTRAL_GATE_MIN..=crate::SPECTRAL_GATE_MAX,
+        );
         // The hysteresis repairs to 0 — one threshold — on the same argument
         // the gate repairs to its floor: a band nobody can read is a reason to
         // fall back to the simpler rule, never to hold rings open on a number
         // that came out of a corrupt blob.
-        self.spectral_ring_hysteresis = finite_or(self.spectral_ring_hysteresis, 0.0)
-            .clamp(0.0, crate::SPECTRAL_HYSTERESIS_MAX);
+        self.spectral_ring_hysteresis =
+            repair(self.spectral_ring_hysteresis, 0.0, 0.0..=crate::SPECTRAL_HYSTERESIS_MAX);
         // Times repair to the fresh pair rather than to zero: zero is a legal
         // setting (no smoothing) but it is not the safe reading of a broken
         // one, since it puts the flicker back with nothing on screen saying so.
-        self.spectral_ring_attack =
-            finite_or(self.spectral_ring_attack, fresh.spectral_ring_attack)
-                .clamp(0.0, crate::SPECTRAL_BALLISTICS_MAX);
-        self.spectral_ring_release =
-            finite_or(self.spectral_ring_release, fresh.spectral_ring_release)
-                .clamp(0.0, crate::SPECTRAL_BALLISTICS_MAX);
+        self.spectral_ring_attack = repair(
+            self.spectral_ring_attack,
+            fresh.spectral_ring_attack,
+            0.0..=crate::SPECTRAL_BALLISTICS_MAX,
+        );
+        self.spectral_ring_release = repair(
+            self.spectral_ring_release,
+            fresh.spectral_ring_release,
+            0.0..=crate::SPECTRAL_BALLISTICS_MAX,
+        );
 
         // The ground both rings stand on, against that same hole. It is an
         // `L*`, so the clamp is the axis itself: off either end the Newton
@@ -1419,51 +1438,44 @@ impl ViewConfig {
         // NaN gradient and the whole ring goes to whatever the clamp in
         // `oklab_srgb` lands on. Both rings read the repaired number, which is
         // what keeps the bar's readout and the grey on screen the same value.
-        self.lattice_ground = finite_or(self.lattice_ground, fresh.lattice_ground)
-            .clamp(*LATTICE_GROUND_RANGE.start(), *LATTICE_GROUND_RANGE.end());
+        self.lattice_ground =
+            repair(self.lattice_ground, fresh.lattice_ground, LATTICE_GROUND_RANGE);
         // The markers' own grey, on the same axis and repaired for the same
         // reason: it is solved for a neutral by the same Newton solve, and it
         // reaches no gradient, so a broken one costs the resting field and
         // nothing else.
-        self.marker_ink = finite_or(self.marker_ink, fresh.marker_ink)
-            .clamp(*MARKER_INK_RANGE.start(), *MARKER_INK_RANGE.end());
+        self.marker_ink = repair(self.marker_ink, fresh.marker_ink, MARKER_INK_RANGE);
         // The node glow's pair, each repaired to its fresh value and clamped
         // to its bar. Deliberately fresh rather than 0 for the Reach (#1327):
         // a corrupt Reach opens with the fresh glow like every other repaired
         // value, rather than with the light switched off.
-        self.glow_reach = finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
+        self.glow_reach = repair(self.glow_reach, fresh.glow_reach, 0.0..=GLOW_REACH_MAX);
         self.glow_strength =
-            finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
+            repair(self.glow_strength, fresh.glow_strength, 0.0..=GLOW_STRENGTH_MAX);
         self.glow_curve = self.glow_curve.sanitized();
         self.atmosphere = self.atmosphere.sanitized();
         self.shadow = self.shadow.sanitized();
-        self.hide_behind = finite_or(self.hide_behind, fresh.hide_behind)
-            .clamp(*HIDE_BEHIND_RANGE.start(), *HIDE_BEHIND_RANGE.end());
+        self.hide_behind = repair(self.hide_behind, fresh.hide_behind, HIDE_BEHIND_RANGE);
         // The SHARES — of the light a lit slice stands in, of the light's own
         // peak, of a whole turn — so their range is the unit interval.
-        self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash)
-            .clamp(*GLOW_WASH_RANGE.start(), *GLOW_WASH_RANGE.end());
-        self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend)
-            .clamp(*GLOW_BLEND_RANGE.start(), *GLOW_BLEND_RANGE.end());
-        self.glow_accumulation = finite_or(self.glow_accumulation, fresh.glow_accumulation)
-            .clamp(*GLOW_ACCUMULATION_RANGE.start(), *GLOW_ACCUMULATION_RANGE.end());
+        self.glow_wash = repair(self.glow_wash, fresh.glow_wash, GLOW_WASH_RANGE);
+        self.glow_blend = repair(self.glow_blend, fresh.glow_blend, GLOW_BLEND_RANGE);
+        self.glow_accumulation =
+            repair(self.glow_accumulation, fresh.glow_accumulation, GLOW_ACCUMULATION_RANGE);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
         // to make a coefficient nothing can carry.
-        self.glow_attack =
-            finite_or(self.glow_attack, fresh.glow_attack).clamp(0.0, GLOW_BALLISTICS_MAX);
+        self.glow_attack = repair(self.glow_attack, fresh.glow_attack, 0.0..=GLOW_BALLISTICS_MAX);
         self.glow_release =
-            finite_or(self.glow_release, fresh.glow_release).clamp(0.0, GLOW_BALLISTICS_MAX);
+            repair(self.glow_release, fresh.glow_release, 0.0..=GLOW_BALLISTICS_MAX);
 
         // These post-process controls are stored beside the view. Renderer
         // clamps remain wider defensive boundaries for a scene built without
         // `derive_scene`, which runs this sanitizer on every view it carries.
-        self.render_scale = finite_or(self.render_scale, fresh.render_scale)
-            .clamp(*LATTICE_RENDER_SCALE_RANGE.start(), *LATTICE_RENDER_SCALE_RANGE.end());
-        self.note_bloom = finite_or(self.note_bloom, fresh.note_bloom)
-            .clamp(*NOTE_BLOOM_RANGE.start(), *NOTE_BLOOM_RANGE.end());
-        self.spiral_bloom = finite_or(self.spiral_bloom, fresh.spiral_bloom)
-            .clamp(*SPIRAL_BLOOM_RANGE.start(), *SPIRAL_BLOOM_RANGE.end());
+        self.render_scale =
+            repair(self.render_scale, fresh.render_scale, LATTICE_RENDER_SCALE_RANGE);
+        self.note_bloom = repair(self.note_bloom, fresh.note_bloom, NOTE_BLOOM_RANGE);
+        self.spiral_bloom = repair(self.spiral_bloom, fresh.spiral_bloom, SPIRAL_BLOOM_RANGE);
 
         // The resting marker's three lengths. The arm and its taper are a
         // reach-and-fade PAIR, held the way every such pair here is — the fade
@@ -1475,23 +1487,8 @@ impl ViewConfig {
         // arm it draws a filled square, which is a picture rather than an
         // error, and holding it to the arm here would drag a dialled width down
         // whenever the arm bar was pulled in.
-        self.plus_arm = finite_or(self.plus_arm, fresh.plus_arm).clamp(0.0, PLUS_SIZE_MAX);
-        self.plus_taper = finite_or(self.plus_taper, fresh.plus_taper).clamp(0.0, self.plus_arm);
-    }
-}
-
-/// `value` if it is a real number, and `fallback` if it is a NaN or an
-/// infinity — the guard `clamp` cannot be, NaN being its own answer to every
-/// comparison a clamp makes.
-///
-/// No range: the caller's own clamp is the range, and this only has to hand
-/// it something a clamp can act on.
-///
-pub(crate) fn finite_or(value: f32, fallback: f32) -> f32 {
-    if value.is_finite() {
-        value
-    } else {
-        fallback
+        self.plus_arm = repair(self.plus_arm, fresh.plus_arm, 0.0..=PLUS_SIZE_MAX);
+        self.plus_taper = repair(self.plus_taper, fresh.plus_taper, 0.0..=self.plus_arm);
     }
 }
 

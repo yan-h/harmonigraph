@@ -406,8 +406,8 @@ fn export(args: Args) -> Result<(), String> {
     // render defaults its size and layout to this, so a plain `harmonigraph-offline
     // take.take` reproduces exactly what was previewed; --appearance and --size
     // explicitly override it.
-    let (appearance, unread) = render::appearance_for(&take, replacement.as_deref())?;
-    for warning in unread {
+    let (appearance, warnings) = render::appearance_for(&take, replacement.as_deref())?;
+    for warning in warnings {
         eprintln!("{warning}");
     }
     let render_config = &appearance.render;

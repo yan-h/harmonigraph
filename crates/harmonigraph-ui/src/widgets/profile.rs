@@ -5,6 +5,7 @@ use crate::theme;
 use egui::Ui;
 use harmonigraph_scene::star_plan::STAR_DEPTHS;
 use harmonigraph_scene::StarPane;
+use harmonigraph_scene::UNIT;
 
 /// Which star property a [`depth`] control sets, one value per drawn layer.
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -221,7 +222,7 @@ pub(crate) fn star_profile(ui: &mut Ui, solid: [f32; 2], falloff: &mut f32, fres
     use harmonigraph_scene::star_plan::{star_falloff_bend, star_profile};
     let plot = Plot::with_fields(ui, "Star shape · back, front", 1);
     plot.fields(ui, |ui| {
-        value_bar(ui, (falloff, fresh), 0.0..=1.0, ["Glow falloff", "Glow falloff"], 100.0, "%");
+        value_bar(ui, (falloff, fresh), UNIT, ["Glow falloff", "Glow falloff"], 100.0, "%");
     });
     plot.response.clone().on_hover_text(
         "One star from the back layer (left) and the front one (right), enlarged to the same size: Star size sets how big they really are, and Solid how much of each is at full strength, from its centre out; the rest is glow, fading to the star's edge. Glow falloff is the shape of that glow, not its amount: at 0% it stays bright almost to the edge, at 50% it fades evenly, and at 100% it drops at once into a faint haze.",
@@ -289,7 +290,7 @@ pub(crate) fn shadow(
         value_bar(
             ui,
             (&mut style.depth, fresh.depth),
-            0.0..=1.0,
+            UNIT,
             ["Shadow darkness", "Darkness"],
             100.0,
             "%",
@@ -297,7 +298,7 @@ pub(crate) fn shadow(
         value_bar(
             ui,
             (&mut style.spread, fresh.spread),
-            0.0..=1.0,
+            UNIT,
             ["Shadow spread", "Spread"],
             100.0,
             "%",

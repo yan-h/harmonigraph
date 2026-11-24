@@ -7,6 +7,7 @@ use crate::panes::{block, edge_bar, hinted_section, section, switched_section};
 use crate::params::{AnalysisInput, ParamBackend};
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::{NameAnchor, PictureState};
+use harmonigraph_scene::UNIT;
 
 /// The Texture block's Style options, which the settings sweeps also iterate,
 /// so a texture added here is drawn by them without a list of their own.
@@ -97,7 +98,7 @@ pub(crate) fn spectrogram_section(
             use harmonigraph_scene::CloudStyle;
             block(ui, "Texture", |ui| {
                 choice_row(ui, "Style", &mut atmosphere.cloud_style, &TEXTURE_CHOICES);
-                ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
+                ValueBar::new(&mut atmosphere.cloud_depth, UNIT, "Texture mix")
                     .default_value(crate::panes::fresh_spectrum().atmosphere.cloud_depth)
                     .percent()
                     .hint(
@@ -365,7 +366,7 @@ pub(crate) fn view_section(
             }
         });
         block(ui, "Spectrum", |ui| {
-            ValueBar::new(&mut cfg.keyline_lift, 0.0..=1.0, "Spectrum outline intensity").default_value(crate::panes::fresh_spectrum().keyline_lift).percent()
+            ValueBar::new(&mut cfg.keyline_lift, UNIT, "Spectrum outline intensity").default_value(crate::panes::fresh_spectrum().keyline_lift).percent()
                 .hint(
                     "How bright the line along the top of the spectrum is kept. The line takes the color of the spectrum under it, \
                      and dark colors are brightened toward white until they reach this level; brighter ones keep their own color. \

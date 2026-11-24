@@ -3,6 +3,7 @@ use super::plot::{curve, value_bar, Plot};
 use crate::theme;
 use egui::{Response, Ui};
 use harmonigraph_scene::FADE_TIME_MAX;
+use harmonigraph_scene::UNIT;
 
 /// `fresh` is where a double-click puts the time and the curve back.
 ///
@@ -43,7 +44,7 @@ pub(crate) fn fade(ui: &mut Ui, seconds: &mut f32, shape: &mut f32, fresh: (f32,
             1000.0,
             " ms",
         );
-        value_bar(ui, (shape, fresh.1), 0.0..=1.0, ["Fade curve", "Curve"], 100.0, "%");
+        value_bar(ui, (shape, fresh.1), UNIT, ["Fade curve", "Curve"], 100.0, "%");
         numeric
     });
     let at = *seconds / FADE_TIME_MAX;

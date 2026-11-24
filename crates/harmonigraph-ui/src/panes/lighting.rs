@@ -6,6 +6,7 @@
 use super::section;
 use crate::widgets::ValueBar;
 use crate::AppearanceDocument;
+use harmonigraph_scene::UNIT;
 use harmonigraph_scene::{
     AtmosphereSettings, GlowCurve, ShadowStyle, ViewConfig, BREATH_SPEED_MAX, BREATH_SPEED_MIN,
     GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX,
@@ -75,7 +76,7 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
 /// next to a note, how far and along what curve it fades, and what fills it.
 fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
     super::block(ui, "Note surround", |ui| {
-        ValueBar::new(&mut cfg.note_cut, 0.0..=1.0, "Backdrop cut")
+        ValueBar::new(&mut cfg.note_cut, UNIT, "Backdrop cut")
             .default_value(super::fresh_spectrum().note_cut)
             .percent()
             .hint(
@@ -261,7 +262,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
         });
     });
     ui.add_enabled_ui(view.glow_draws(), |ui| {
-        ValueBar::new(&mut view.atmosphere.breath_amount, 0.0..=1.0, "Breathing depth")
+        ValueBar::new(&mut view.atmosphere.breath_amount, UNIT, "Breathing depth")
             .default_value(super::fresh_view().atmosphere.breath_amount)
             .percent()
             .hint(

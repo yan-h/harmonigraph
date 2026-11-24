@@ -5,8 +5,8 @@
 //!
 //! The video render settings persist alongside these, in `video`.
 
-use harmonigraph_scene::Gradient;
 pub use harmonigraph_scene::SCALE_BAR_RANGE;
+use harmonigraph_scene::{repair, Gradient, UNIT};
 
 /// The Spectral pane's analysis window length, picked in the Analyzer
 /// settings section: longer windows resolve bass pitch more sharply but
@@ -670,12 +670,11 @@ impl SpectrumConfig {
         // A NaN at the other end does not panic — it is the `self` of its
         // clamp rather than the bound — and is worse for it: the range stays
         // NaN into `PitchScale` and the analyzer draws nothing, silently.
-        // The design range is the pair certain to be drawable, which is the
-        // answer `sane_scale` gives the text scales below against the same
-        // threat, from the same place: a hand-edited blob, or a float that
-        // came back corrupt.
-        self.low_midi = if self.low_midi.is_finite() { self.low_midi } else { floor };
-        self.high_midi = if self.high_midi.is_finite() { self.high_midi } else { ceil };
+        // A non-finite end repairs to its own end of the axis, so a NaN pair
+        // opens on the whole axis, which is certainly drawable, rather than on
+        // the fresh pair the level colors below repair to.
+        self.low_midi = repair(self.low_midi, floor, ..);
+        self.high_midi = repair(self.high_midi, ceil, ..);
         (self.low_midi, self.high_midi) = harmonigraph_scene::clamp_span(
             self.low_midi,
             self.high_midi,
@@ -694,73 +693,47 @@ impl SpectrumConfig {
         let fresh = SpectrumConfig::default();
         // Loading owns normalization; drawing a settings page must not change
         // the stored value or make live and offline pictures disagree.
-        let bounded = |value: f32, default: f32, min: f32, max: f32| {
-            if value.is_finite() { value } else { default }.clamp(min, max)
-        };
-        self.tilt = if self.tilt.is_finite() {
-            TILT_STEPS
-                .into_iter()
-                .min_by(|a, b| (a - self.tilt).abs().total_cmp(&(b - self.tilt).abs()))
-                .unwrap_or(fresh.tilt)
-        } else {
-            fresh.tilt
-        };
-        self.keyline_lift = bounded(self.keyline_lift, fresh.keyline_lift, 0.0, 1.0);
+        let tilt = repair(self.tilt, fresh.tilt, ..);
+        self.tilt = TILT_STEPS
+            .into_iter()
+            .min_by(|a, b| (a - tilt).abs().total_cmp(&(b - tilt).abs()))
+            .unwrap_or(fresh.tilt);
+        self.keyline_lift = repair(self.keyline_lift, fresh.keyline_lift, UNIT);
         self.atmosphere = self.atmosphere.sanitized();
-        self.roll_fraction = bounded(self.roll_fraction, fresh.roll_fraction, 0.0, 1.0);
+        self.roll_fraction = repair(self.roll_fraction, fresh.roll_fraction, UNIT);
         self.roll_seconds =
-            bounded(self.roll_seconds, fresh.roll_seconds, ROLL_SECONDS_MIN, ROLL_SECONDS_MAX);
-        self.roll_thickness = bounded(
-            self.roll_thickness,
-            fresh.roll_thickness,
-            *ROLL_THICKNESS_RANGE.start(),
-            *ROLL_THICKNESS_RANGE.end(),
-        );
-        self.note_fill_lightness = bounded(
-            self.note_fill_lightness,
-            fresh.note_fill_lightness,
-            *NOTE_FILL_LIGHTNESS_RANGE.start(),
-            *NOTE_FILL_LIGHTNESS_RANGE.end(),
-        );
-        self.note_tint_fade = bounded(
+            repair(self.roll_seconds, fresh.roll_seconds, ROLL_SECONDS_MIN..=ROLL_SECONDS_MAX);
+        self.roll_thickness =
+            repair(self.roll_thickness, fresh.roll_thickness, ROLL_THICKNESS_RANGE);
+        self.note_fill_lightness =
+            repair(self.note_fill_lightness, fresh.note_fill_lightness, NOTE_FILL_LIGHTNESS_RANGE);
+        self.note_tint_fade = repair(
             self.note_tint_fade,
             fresh.note_tint_fade,
-            *harmonigraph_render::SURROUND_TINT_FADE_RANGE.start(),
-            *harmonigraph_render::SURROUND_TINT_FADE_RANGE.end(),
+            harmonigraph_render::SURROUND_TINT_FADE_RANGE,
         );
-        self.note_cut = bounded(self.note_cut, fresh.note_cut, 0.0, 1.0);
-        self.note_cut_reach = bounded(
+        self.note_cut = repair(self.note_cut, fresh.note_cut, UNIT);
+        self.note_cut_reach = repair(
             self.note_cut_reach,
             fresh.note_cut_reach,
-            *harmonigraph_render::SURROUND_REACH_RANGE.start(),
-            *harmonigraph_render::SURROUND_REACH_RANGE.end(),
+            harmonigraph_render::SURROUND_REACH_RANGE,
         );
-        self.note_cut_shape = bounded(
+        self.note_cut_shape = repair(
             self.note_cut_shape,
             fresh.note_cut_shape,
-            *harmonigraph_render::SURROUND_SHAPE_RANGE.start(),
-            *harmonigraph_render::SURROUND_SHAPE_RANGE.end(),
+            harmonigraph_render::SURROUND_SHAPE_RANGE,
         );
         // The lead and its fade, which are the same shape of pair on the same
         // shape of bar (the Held-note extension bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
         // `min <= max`.
-        self.roll_lead = if self.roll_lead.is_finite() { self.roll_lead } else { fresh.roll_lead }
-            .clamp(0.0, ROLL_LEAD_MAX);
-        self.roll_lead_fade = if self.roll_lead_fade.is_finite() {
-            self.roll_lead_fade
-        } else {
-            fresh.roll_lead_fade
-        }
-        .clamp(0.0, self.roll_lead);
+        self.roll_lead = repair(self.roll_lead, fresh.roll_lead, 0.0..=ROLL_LEAD_MAX);
+        self.roll_lead_fade =
+            repair(self.roll_lead_fade, fresh.roll_lead_fade, 0.0..=self.roll_lead);
         // Its release, which is a duration rather than a distance and so has no
         // pair to keep ordered — only its own bar's ends, and the same NaN.
-        self.roll_lead_release = if self.roll_lead_release.is_finite() {
-            self.roll_lead_release
-        } else {
-            fresh.roll_lead_release
-        }
-        .clamp(0.0, ROLL_LEAD_RELEASE_MAX);
+        self.roll_lead_release =
+            repair(self.roll_lead_release, fresh.roll_lead_release, 0.0..=ROLL_LEAD_RELEASE_MAX);
         // The curve's own two times, which are durations of the same kind and
         // fit the same way — and to the same bound their bars offer, since a
         // time past it is a filter no gesture can produce.
@@ -771,10 +744,8 @@ impl SpectrumConfig {
         // the spectrogram beside it (which reads the raw columns) keeps
         // drawing. The ring's own pair is fit at the same point for the same
         // reason ([`ViewConfig::sanitize`](harmonigraph_scene::ViewConfig::sanitize)).
-        self.attack = if self.attack.is_finite() { self.attack } else { fresh.attack }
-            .clamp(0.0, BALLISTICS_MAX);
-        self.release = if self.release.is_finite() { self.release } else { fresh.release }
-            .clamp(0.0, BALLISTICS_MAX);
+        self.attack = repair(self.attack, fresh.attack, 0.0..=BALLISTICS_MAX);
+        self.release = repair(self.release, fresh.release, 0.0..=BALLISTICS_MAX);
         // The level pair, against the same threat and for the same reason.
         // `loudness_raw` already refuses a collapsed or inverted window, which
         // is what a `max` can answer; a NaN end it cannot, because NaN loses
@@ -783,24 +754,16 @@ impl SpectrumConfig {
         // one number in the blob and one on the bar, and there are now two
         // controls writing this pair — the bar and the drag across the
         // spectrum — neither of which can produce either shape itself.
-        self.floor_db = if self.floor_db.is_finite() { self.floor_db } else { LEVEL_MIN_DB };
-        self.ceiling_db = if self.ceiling_db.is_finite() { self.ceiling_db } else { LEVEL_MAX_DB };
+        self.floor_db = repair(self.floor_db, LEVEL_MIN_DB, ..);
+        self.ceiling_db = repair(self.ceiling_db, LEVEL_MAX_DB, ..);
         (self.floor_db, self.ceiling_db) = harmonigraph_scene::clamp_span(
             self.floor_db,
             self.ceiling_db,
             (LEVEL_MIN_DB, LEVEL_MAX_DB),
             LEVEL_RANGE_MIN_SPAN,
         );
-        self.volume_floor_db = if self.volume_floor_db.is_finite() {
-            self.volume_floor_db
-        } else {
-            fresh.volume_floor_db
-        };
-        self.volume_ceiling_db = if self.volume_ceiling_db.is_finite() {
-            self.volume_ceiling_db
-        } else {
-            fresh.volume_ceiling_db
-        };
+        self.volume_floor_db = repair(self.volume_floor_db, fresh.volume_floor_db, ..);
+        self.volume_ceiling_db = repair(self.volume_ceiling_db, fresh.volume_ceiling_db, ..);
         (self.volume_floor_db, self.volume_ceiling_db) = harmonigraph_scene::clamp_span(
             self.volume_floor_db,
             self.volume_ceiling_db,
@@ -851,11 +814,7 @@ pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 24.0;
 /// becomes the size a fresh install draws at, which is the one value that is
 /// certainly meant to be legible. See [`SCALE_BAR_RANGE`].
 pub(crate) fn sane_scale(scale: f32) -> f32 {
-    if scale.is_finite() {
-        scale.clamp(*SCALE_BAR_RANGE.start(), *SCALE_BAR_RANGE.end())
-    } else {
-        1.0
-    }
+    repair(scale, 1.0, SCALE_BAR_RANGE)
 }
 
 /// How far the roll's time span may be taken, in seconds. Named because two

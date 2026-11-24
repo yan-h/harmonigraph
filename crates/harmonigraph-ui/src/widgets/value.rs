@@ -218,9 +218,12 @@ impl<'a> ValueBar<'a> {
         self.step(1.0)
     }
 
-    /// Land the value on multiples of `step`, for a setting its owner snaps
-    /// on load: the bar then reads out only values the owner will keep, where
-    /// a free drag would show one number over a picture drawn from another.
+    /// Land a drag or a typed value on multiples of `step`. Where the owner
+    /// snaps on load too (Star resolution, Spectrogram time step), the bar
+    /// reads out only values the owner keeps. Where it only clamps, as for the
+    /// [`integer`](Self::integer) bars Center pitch, Silent slice brightness
+    /// and Idle label/cross brightness, a loaded value off the grid stays as
+    /// loaded and reads out rounded until it is dragged.
     pub fn step(mut self, step: f32) -> Self {
         self.step = step;
         self

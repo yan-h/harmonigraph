@@ -745,4 +745,4 @@ const FRAMELESS_SHORTCUT: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Tab);
 mod camera_movement;
 pub mod framing;
-pub use appearance::AppearanceDocument;
+pub use appearance::{AppearanceDocument, LoadNotes, Repair};

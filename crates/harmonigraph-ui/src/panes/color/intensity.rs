@@ -3,6 +3,7 @@
 //! as the picture, and are painted after this frame's controls have edited it.
 
 use egui::{Color32, Pos2, Rect, Stroke, Ui, Vec2};
+use harmonigraph_scene::UNIT;
 use harmonigraph_scene::{
     IntensityReach, IntensitySettings, IntensitySource, IntensityTarget, INTENSITY_WEIGHT_MAX,
     THICKNESS_MAX_RANGE,
@@ -136,7 +137,7 @@ fn group(
         .collect();
     let mut overlay = None;
     let base = match target {
-        IntensityTarget::Opacity => ValueBar::new(&mut settings.opacity_rest, 0.0..=1.0, "Opacity base")
+        IntensityTarget::Opacity => ValueBar::new(&mut settings.opacity_rest, UNIT, "Opacity base")
             .overlay_slot(&mut overlay).default_value(fresh.opacity_rest)
             .hint(
                 "Starting opacity, even with no mappings. Each mapping adds its weighted contribution, and the sum is limited to 1; only timbre can reduce it, and a base of 1 leaves no room for the others to add. The bands show each mapping's possible reach: stripes mark clipping, dashes a gain boost.",
