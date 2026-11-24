@@ -4,9 +4,7 @@
     "build",
     "--release",
     "-p",
-    "harmonigraph-plugin",
-    "-p",
-    "harmonigraph-offline"
+    "harmonigraph-plugin"
   ],
   "artifacts": [
     "target/release/libharmonigraph_plugin.dylib",

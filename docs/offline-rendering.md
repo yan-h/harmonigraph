@@ -31,7 +31,7 @@ Nothing is captured from a screen, so nothing is limited by your monitor, your r
 #    the take ends when the transport stops.
 #    The take captures the selected Main or Sidechain audio as its soundtrack.
 # 2. Render:
-cargo build --release -p harmonigraph-offline
+cargo build --release -p harmonigraph-plugin   # builds the renderer too
 ./target/release/harmonigraph-offline ~/Music/"Harmonigraph Takes"/take-2026-08-25_14-32-08.take \
     --out piece.mp4 \
     --size 3840x2160
@@ -265,7 +265,7 @@ Each export gets a row under Render, named for its video, with a progress bar wh
 A failed row shows the renderer's own error, and a finished one each distinct warning it printed, one per line —
 the only place you'll see them, since a plugin has no terminal.
 
-`./load-plugin.sh` with no argument builds the renderer alongside the plugin and installs it to `~/Library/Application Support/Harmonigraph/harmonigraph-offline`, so the two always match —
+Every build of the plugin package builds the renderer as well, and `./load-plugin.sh` installs it alongside the plugin to `~/Library/Application Support/Harmonigraph/harmonigraph-offline`, so the two always match —
 they share the take format, so a mismatched pair would fail at the version check.
 
 Note the ordering:
@@ -437,6 +437,7 @@ Sits beside the format crate rather than inside it because recording is a differ
 audio-thread rings, transport handling and a subprocess driver, none of which reading a take should have to link.
 - `harmonigraph-offline` — the renderer. Headless wgpu device, egui driven by
 synthesized input, frames read back and piped to ffmpeg.
+A library: its binary is a thin `main` in `harmonigraph-plugin`, so a plugin build always builds the renderer of its commit (#1954).
 
 Determinism is tested, but the test is narrower than the property:
 `render.rs` renders the same take twice and asserts the frames are byte-identical, at 320x200 with an explicit test composition, ten frames of one second.

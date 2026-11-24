@@ -8,7 +8,7 @@
 //! integration test over `CARGO_BIN_EXE_` is for.
 //!
 //! Two things worth pinning, and neither is `take_warnings`' own formatting
-//! (`a_take_missing_note_history_is_exported_with_a_warning` in the binary
+//! (`a_take_missing_note_history_is_exported_with_a_warning` in the library
 //! covers that): that the loop RUNS at all, and that it runs **before** the
 //! command line is judged, so the export job's row, which lists every warning in
 //! the order printed, leads with the recording rather than the flags.
@@ -135,16 +135,4 @@ fn a_renderer_of_another_build_says_so_before_anything_fails() {
     let first = stderr.lines().next().unwrap_or_default();
     assert!(first.starts_with(harmonigraph_take::WARNING_PREFIX), "{stderr}");
     assert!(first.contains("other @0000000"), "the plugin's build is unnamed: {stderr}");
-}
-
-/// `--build-tag` prints the tag alone, the line `load-plugin.sh` compares
-/// with the plugin's before it installs this renderer (#1937).
-#[test]
-fn the_renderer_prints_its_build_tag() {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
-        .arg("--build-tag")
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(String::from_utf8_lossy(&out.stdout), concat!(env!("LATTICE_BUILD_TAG"), "\n"));
 }

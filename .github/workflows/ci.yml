@@ -109,7 +109,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The runner image has no ffmpeg, and only `workspace` runs the
-      # harmonigraph-offline tests that need it; the golden ones `isolated`
+      # renderer's tests that need it (harmonigraph-offline's, and
+      # harmonigraph-plugin's that run its binary); the golden ones `isolated`
       # draws do not.
       - name: Install ffmpeg
         if: matrix.group == 'workspace'

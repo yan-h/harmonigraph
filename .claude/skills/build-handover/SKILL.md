@@ -51,39 +51,25 @@ the checkout it runs FROM and swaps that immediately) —
 use it when you explicitly want a session to make its own build live, e.g. a single-session flow.
 Run it from the main checkout and it rebuilds main, not your branch.
 
-## The renderer is a SECOND slot, and it goes stale on its own
+## The renderer is a second slot, built with the plugin
 
 Video export does not run in the plugin.
-The Video pane spawns `~/Library/Application Support/Harmonigraph/harmonigraph-offline` (`harmonigraph-record`'s default path), and `load-plugin.sh` installs that binary from the same worktree it takes the dylib from —
-so a load is really two swaps, and only the first one is guaranteed to be current.
+The Video pane spawns `~/Library/Application Support/Harmonigraph/harmonigraph-offline` (`harmonigraph-record`'s default path), and `load-plugin.sh` installs that binary, by rename as it does the dylib, from the same worktree it takes the dylib from.
 
-Nothing rebuilds the renderer unless a session names `-p harmonigraph-offline`, so a plugin-only build leaves a renderer from some earlier commit in `target/release` (`CLAUDE.md` has the rule and PR #340).
-Naming both is not a second full build either:
-the two share every dependency and the whole UI, so the renderer costs a link on top of a plugin build that is already done.
-`load-plugin.sh` asks the worktree's renderer and the installed one for their build tags (`--build-tag`) and compares each with the plugin's by commit (#1937).
-It installs the worktree's renderer, by rename as it does the dylib, unless that one is of another commit and the installed one matches, which then stays.
-It warns when the renderer left in place names another commit, prints no tag because it predates the flag, or fails to run.
-That warning is a backstop for a build that should have happened, and comes before a render is spent.
-The renderer checks the pair itself at every export (#1928 B):
+The renderer is the plugin package's own `harmonigraph-offline` binary, a thin `main` over the `harmonigraph-offline` library (#1954),
+so every `cargo build -p harmonigraph-plugin` builds both from one commit and stamps both with one tag.
+What can still differ is the plugin a host is RUNNING:
+after a load, a Bitwig host that has not restarted its engine keeps the previous plugin, and that plugin queues its exports to the new renderer.
+The renderer checks the pair at every export (#1928 B):
 the plugin passes its build tag as `--plugin-build`, and a renderer built at another commit writes a `warning:` naming both tags first, which the export's row shows whether the render then succeeds or fails, and renders all the same.
 The tag names a commit, so two builds of one commit from different uncommitted source still pass as one.
-A renderer from before this check refuses the flag as an unknown option, so that export fails loudly once, until the renderer is reinstalled.
-
-To check the live pair directly, without a render, compare the installed renderer's tag with the `tag=` line the last load recorded:
-
-```
-~/Library/Application\ Support/Harmonigraph/harmonigraph-offline --build-tag
-grep '^tag=' "$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')/target/bundled/.loaded"
-```
-
-The two match when their `@<sha>` does; the branch may differ.
 
 ## Every build says which build it is
 
 The performance overlay's bottom line reads `build  <branch> @<sha>` —
 the branch as git names it, less the `worktree-` prefix of a Claude worktree's branch: `<name>`, or `codex/<slug>`.
 The result is exactly the argument `./load-plugin.sh <branch>` takes.
-It is stamped at compile time by `build/build_tag.rs`, which each leaf binary's own `build.rs` includes (plugin, offline, standalone).
+It is stamped at compile time by `build/build_tag.rs`, which each leaf package's own `build.rs` includes (the plugin package, for the plugin and its renderer, and the standalone).
 The overlay carrying it ships OFF, so reading the tag takes one tick first:
 **System tab → Performance → Performance overlay**.
 System is a tab of the Settings column, and may sit in that strip's overflow menu when the column is narrow.
@@ -145,7 +131,7 @@ reading them needs agent-config's `session-lifecycle` skill installed.
 Match the dylib's mtime to the branch's last commit time to identify it, then swap it back with `./load-plugin.sh <branch>` —
 which is the whole recovery, and the only recipe here that gets the swap's ORDER right.
 To rebuild one without cd'ing into the branch's own worktree:
-`cargo build --release -p harmonigraph-plugin -p harmonigraph-offline --manifest-path <that-worktree>/Cargo.toml`, then load it the same way and verify via a distinctive string from that branch's diff.
+`cargo build --release -p harmonigraph-plugin --manifest-path <that-worktree>/Cargo.toml`, then load it the same way and verify via a distinctive string from that branch's diff.
 
 Use the loader rather than overwriting an installed executable by hand.
 Two consecutive ordinary installs produced macOS `CODESIGNING Invalid Page` scanner kills while the on-disk signature still verified ([#705](https://github.com/yan-h/harmonigraph/issues/705)).

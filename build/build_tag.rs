@@ -1,7 +1,7 @@
 // Stamp the git branch and commit in the leaf binaries as `LATTICE_BUILD_TAG`.
-// Interactive shells show it in the performance overlay; the offline renderer
-// compares it with the tag of the plugin that queued a render, and
-// load-plugin.sh compares the two when it installs them as a pair.
+// Interactive shells show it in the performance overlay. The plugin package's
+// copy stamps the plugin and its `harmonigraph-offline` renderer alike, and the
+// renderer compares it with the tag of the plugin that queued a render.
 // The tag names the last commit, not uncommitted source edits: a dirty marker
 // would require relinking on every edit to stay honest.
 

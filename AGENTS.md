@@ -45,14 +45,13 @@ task done, blocked on a question, partial progress —
 leave a fresh release build and a preserved handoff from YOUR worktree, and do NOT swap the shared DAW slot:
 
 ```
-cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
+cargo build --release -p harmonigraph-plugin
 ```
 
-**Both packages.** The offline renderer draws through `harmonigraph-ui` and `harmonigraph-render`, so any picture change is a video-export change even when nothing under `crates/harmonigraph-offline/` moved;
-skipping it leaves exports drawn by an old binary (PR #340), which only the loader's warning and each export's row then point out (#1936, #1937).
+The package builds the offline renderer too, as its `harmonigraph-offline` binary, so the video export is always the same commit as the plugin (#1954).
 Skip the build only when nothing plugin-visible changed (docs, backlog, pure-test edits).
 
-Push and open the draft PR first, then run `./session-lifecycle.sh handoff`, which builds both packages while CI runs.
+Push and open the draft PR first, then run `./session-lifecycle.sh handoff`, which runs that build while CI runs.
 A plain `handoff` records the work as complete and trims `target/`,
 so a pause mid-iteration runs `handoff --keep-cache` instead, or the build above while source is still uncommitted.
 End by telling Yan it's loadable via `./load-plugin.sh <branch>` and naming the overlay tag it will show, read with `./load-plugin.sh --tag`.

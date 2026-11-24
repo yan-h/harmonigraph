@@ -48,8 +48,7 @@ with tempfile.TemporaryDirectory(prefix='preserved-build-') as tmp:
     files = {f'target/release/{lib}': hashlib.sha256((release / lib).read_bytes()).hexdigest()}
     if product == 'harmonigraph':
         offline = release / 'harmonigraph-offline'
-        # Answers --build-tag as the real renderer does, with the plugin's commit.
-        offline.write_text(f'#!/bin/sh\n[ "$1" = --build-tag ] && echo "{branch} @{sha[:7]}"\nexit 0\n')
+        offline.write_text(f'#!/bin/sh\n# {branch} @{sha[:7]}\nexit 0\n')
         offline.chmod(0o755)
         files['target/release/harmonigraph-offline'] = hashlib.sha256(offline.read_bytes()).hexdigest()
     (publication / 'handoff.json').write_text(json.dumps(dict(branch=branch, commit=sha, commit_time=0, files=files)))
@@ -82,6 +81,5 @@ if action=='catalog':
     assert 'worktree=' + str(publication) in (repo / 'target/bundled/.loaded').read_text()
     if product == 'harmonigraph':
         installed = Path(env['HOME']) / 'Library/Application Support/Harmonigraph/harmonigraph-offline'
-        assert installed.read_bytes() == (release / 'harmonigraph-offline').read_bytes()
-        assert f"It is build {branch} @{sha[:7]}, the plugin's commit." in output, output
+        assert installed.read_bytes() == (release / 'harmonigraph-offline').read_bytes(), output
     print(f'{product}: preserved build loads after source removal; installed signature verifies')
