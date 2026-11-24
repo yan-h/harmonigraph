@@ -8,7 +8,7 @@
 //! integration test over `CARGO_BIN_EXE_` is for.
 //!
 //! Two things worth pinning, and neither is `take_warnings`' own formatting
-//! (`a_take_missing_note_history_is_exported_with_a_warning` in the binary
+//! (`a_take_missing_note_history_is_exported_with_a_warning` in the library
 //! covers that): that the loop RUNS at all, and that it runs **before** the
 //! command line is judged, so the export job's row, which lists every warning in
 //! the order printed, leads with the recording rather than the flags.
@@ -137,14 +137,17 @@ fn a_renderer_of_another_build_says_so_before_anything_fails() {
     assert!(first.contains("other @0000000"), "the plugin's build is unnamed: {stderr}");
 }
 
-/// `--build-tag` prints the tag alone, the line `load-plugin.sh` compares
-/// with the plugin's before it installs this renderer (#1937).
+/// The renderer carries the tag the plugin package stamps, so the plugin of
+/// its own build queues an export with no warning (#1954).
 #[test]
-fn the_renderer_prints_its_build_tag() {
+fn a_renderer_of_its_own_build_does_not_warn() {
+    let missing = std::env::temp_dir()
+        .join(format!("harmonigraph-offline-own-build-{}.take", std::process::id()));
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
-        .arg("--build-tag")
+        .args(["--plugin-build", env!("LATTICE_BUILD_TAG")])
+        .arg(&missing)
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(String::from_utf8_lossy(&out.stdout), concat!(env!("LATTICE_BUILD_TAG"), "\n"));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("the plugin that queued"), "{stderr}");
 }

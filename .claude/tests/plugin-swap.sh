@@ -79,10 +79,10 @@ int fixture_value(void) { return 0; }
 C
 cc -dynamiclib -o "$repo/target/release/libharmonigraph_plugin.dylib" "$TMP/new.c" 2>/dev/null || {
   echo "✗ could not build the fixture's Mach-O" >&2; exit 1; }
-# Renderers answer `--build-tag` as the real one does. Main's was built at
-# another commit than its plugin; the Codex worktree's matches its own.
+# Each worktree's renderer has its own bytes, so a check can tell which one a
+# load installed.
 renderer_stub() {
-  printf '#!/bin/sh\n[ "$1" = --build-tag ] && echo "%s"\nexit 0\n' "$2" > "$1"
+  printf '#!/bin/sh\n# %s\nexit 0\n' "$2" > "$1"
   chmod +x "$1"
 }
 renderer_stub "$repo/target/release/harmonigraph-offline" "main @0000000"
@@ -281,12 +281,10 @@ if [ "$status" -ne 0 ]; then
 fi
 check_discovery_metadata "no-argument load-plugin.sh"
 
-# 0. The renderer is checked against the plugin it was loaded with, by commit,
-#    and installed anyway when nothing installed matches.
+# 0. The renderer built with the plugin is installed with it.
 installed_renderer="$TMP/home/Library/Application Support/$NAME/harmonigraph-offline"
-if ! grep -Fq "WARNING: that renderer is build main @0000000, but the plugin is build main @$sha." "$out" \
-  || ! cmp -s "$installed_renderer" "$repo/target/release/harmonigraph-offline"; then
-  echo "✗ a renderer of another commit was not installed with a warning naming both builds" >&2
+if ! cmp -s "$installed_renderer" "$repo/target/release/harmonigraph-offline"; then
+  echo "✗ the build's renderer was not installed with its plugin" >&2
   sed 's/^/    /' "$out" >&2
   failures=$((failures + 1))
 fi
@@ -392,14 +390,14 @@ elif ! grep -Fq "branch=$codex_branch" "$loaded" \
 fi
 check_discovery_metadata load-plugin.sh
 # The renderer is replaced by rename, like the dylib: copying over one an
-# export still maps gets the next run of that file killed (#705), and it
-# matches this plugin.
+# export still maps gets the next run of that file killed (#705), and it is
+# this build's own.
 if [ "$before_renderer" = "$(stat -f %i "$installed_renderer")" ]; then
   echo "✗ load-plugin.sh copied the renderer over the installed one's inode" >&2
   failures=$((failures + 1))
 fi
-if ! grep -Fq "It is build $codex_branch @$sha, the plugin's commit." "$codex_out"; then
-  echo "✗ a matching renderer was not reported as the plugin's commit" >&2
+if ! cmp -s "$installed_renderer" "$codex_wt/target/release/harmonigraph-offline"; then
+  echo "✗ the Codex build's renderer was not installed with its plugin" >&2
   sed 's/^/    /' "$codex_out" >&2
   failures=$((failures + 1))
 fi
@@ -425,18 +423,6 @@ if ! cmp -s "$TMP/old-open-bin" "$TMP/old-open-after"; then
   failures=$((failures + 1))
 fi
 check_loads load-plugin.sh "$codex_branch @$sha"
-
-# 5b. A worktree renderer of another commit is not installed over one that
-# matches the plugin: main's stale renderer leaves the Codex one, which names
-# the same commit as main's plugin from another branch.
-stale_out="$TMP/stale-renderer.log"
-(cd "$repo" && PATH="$TMP/bin:$PATH" HOME="$TMP/home" ./load-plugin.sh main) >"$stale_out" 2>&1
-if ! grep -Fq "build $codex_branch @$sha, the plugin's commit, stays." "$stale_out" \
-  || ! cmp -s "$installed_renderer" "$codex_wt/target/release/harmonigraph-offline"; then
-  echo "✗ a stale worktree renderer replaced an installed one that matched the plugin" >&2
-  sed 's/^/    /' "$stale_out" >&2
-  failures=$((failures + 1))
-fi
 
 # 6. Diagnostics use executable identity, tolerate incomplete OS queries, and
 # never turn a successful swap into failure. The first two swaps above model

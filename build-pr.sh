@@ -98,7 +98,7 @@ build_one() {
   fi
   echo "    at $(git -C "$wt" log -1 --format='%h %s')"
 
-  ( cd "$wt" && cargo build --release -p harmonigraph-plugin -p harmonigraph-offline )
+  ( cd "$wt" && cargo build --release -p harmonigraph-plugin )
   # This checkout's loader, not the branch's: a branch cut before the loader
   # learned to build reads no argument as its old menu, but every version
   # loads a named branch the same way.

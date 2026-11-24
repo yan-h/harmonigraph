@@ -25,10 +25,9 @@
 # still loadable. The test is the commit STAMPED IN THE BINARY against HEAD,
 # so "fresh" means "matches the last commit" and never "matches the working
 # tree" — a build carrying uncommitted edits reads as fresh, because the tag
-# names the commit underneath them. The renderer it installs alongside is
-# judged against the plugin's tag instead, by commit, and it is the half that
-# actually goes stale: nothing rebuilds it unless a session names
-# `-p harmonigraph-offline`.
+# names the commit underneath them. The renderer it installs alongside is the
+# plugin package's own `harmonigraph-offline` binary, which every build of the
+# package links at the same commit (#1954).
 set -euo pipefail
 
 HERE_SCRIPT="$(cd "$(dirname "$0")" && pwd)"
@@ -37,12 +36,6 @@ HERE_SCRIPT="$(cd "$(dirname "$0")" && pwd)"
 # Built before the lifecycle wrapper below takes its catalog lock: that lock
 # is taken without waiting, so a minutes-long compile inside it would make
 # every concurrent handoff, sweep and load refuse as busy.
-#
-# Both packages, and the second is the easy half to skip. The offline renderer
-# draws through harmonigraph-ui and harmonigraph-render — the same crates the
-# editor does — so a change to what any pane looks like is a change to what an
-# mp4 looks like, and a worktree that built only the plugin hands the loader
-# whatever renderer it happens to be holding.
 if [[ -z "${1:-}" ]]; then
   HERE="$(git rev-parse --show-toplevel)"
   # A detached HEAD has no branch to load by, so say so before the build
@@ -54,8 +47,8 @@ if [[ -z "${1:-}" ]]; then
     echo "       build instead: $0 --list, then $0 <branch>" >&2
     exit 1
   fi
-  echo "Building harmonigraph-plugin + harmonigraph-offline (release) from $HERE ..."
-  ( cd "$HERE" && cargo build --release -p harmonigraph-plugin -p harmonigraph-offline )
+  echo "Building harmonigraph-plugin, plugin and renderer (release), from $HERE ..."
+  ( cd "$HERE" && cargo build --release -p harmonigraph-plugin )
   set -- "$BRANCH"
 fi
 
@@ -164,66 +157,6 @@ same_commit() {
   local a b
   a="$(tag_sha "$1")" b="$(tag_sha "$2")"
   [[ -n "$a" && -n "$b" ]] && [[ "$a" == "$b"* || "$b" == "$a"* ]]
-}
-
-# Echo the build tag renderer $1 prints and return 0. Otherwise return 2 for a
-# renderer from before `--build-tag` (#1937), which refuses it as an unknown
-# option, or 1 for one that failed to run, echoing its exit status and first line.
-#
-# Asked of the binary rather than read with `strings` as the dylib's is: that
-# read anchors on the branch name, and the renderer a load keeps installed can
-# be any branch's.
-renderer_tag() {
-  local out status=0
-  out="$("$1" --build-tag 2>&1)" || status=$?
-  if (( status == 0 )) && [[ -n "$out" ]]; then
-    echo "$out"
-  elif [[ "$out" == *'unknown option "--build-tag"'* ]]; then
-    return 2
-  else
-    echo "exit $status${out:+: ${out%%$'\n'*}}"
-    return 1
-  fi
-}
-
-# Whether renderer $1 prints a tag naming the commit of plugin tag $2.
-renderer_matches() {
-  local tag
-  tag="$(renderer_tag "$1")" && same_commit "$tag" "$2"
-}
-
-# Say whether installed renderer $1 is the build of the plugin tagged $2, on
-# stdout when it is and as a warning when it is not, or cannot tell.
-# Two builds of one commit from different uncommitted source pass as one.
-# $3 and $4 are the loaded build's directory and branch, for the advice.
-check_renderer() {
-  local renderer="$1" plugin_tag="$2" path="$3" branch="$4" tag status=0
-  tag="$(renderer_tag "$renderer")" || status=$?
-  if (( status == 1 )); then
-    echo "WARNING: that renderer failed to run ($tag), so it cannot be checked against" >&2
-    echo "         the plugin, and video export may fail with it." >&2
-    return 0
-  elif (( status == 2 )); then
-    echo "WARNING: that renderer prints no build tag, so it was built before #1937 and cannot" >&2
-    echo "         be checked against the plugin; video exports may not draw what the editor shows." >&2
-  elif [[ -z "$plugin_tag" ]]; then
-    echo "WARNING: that renderer is build $tag, but no build tag is readable in the plugin" >&2
-    echo "         (a detached or renamed branch), so the pair is unchecked." >&2
-    return 0
-  elif same_commit "$tag" "$plugin_tag"; then
-    echo "      It is build $tag, the plugin's commit."
-    return 0
-  else
-    echo "WARNING: that renderer is build $tag, but the plugin is build $plugin_tag." >&2
-    echo "         Video exports are drawn by the renderer's build, not the one the editor shows." >&2
-  fi
-  echo "         To match them, build both packages at one commit and load that:" >&2
-  if [[ -f "$path/Cargo.toml" ]]; then
-    echo "         (cd \"$path\" && cargo build --release -p harmonigraph-plugin -p harmonigraph-offline) && ./load-plugin.sh $branch" >&2
-  else
-    # A preserved handoff holds artifacts and no source to build from.
-    echo "         ./build-pr.sh --load $branch" >&2
-  fi
 }
 
 # Echo the display fields for worktree index $1 as:
@@ -391,7 +324,7 @@ load_build() {  # $1 = worktree index
   # session committed after building, so both are recorded and only `tag`
   # answers "which build am I looking at?". Read from the signed copy that is
   # installed rather than from target/release, which a build finishing during
-  # the load can replace; the renderer is checked against it below.
+  # the load can replace.
   local loaded_tag=""
   for ext in clap; do
     bundle="$BUNDLED/$NAME.$ext"
@@ -452,31 +385,15 @@ load_build() {  # $1 = worktree index
   (( updated > 0 )) || { echo "No bundles updated — see warnings above." >&2; exit 1; }
   link_clap_slot
 
-  # Keep the renderer matched to the build being loaded (they share the take
-  # format). Only if this worktree built one; otherwise leave the installed one.
-  #
-  # Matched is the INTENT and not something the copy can guarantee, which is
-  # what the tag check below is for. The renderer draws the picture through
-  # harmonigraph-ui and harmonigraph-render, exactly as the plugin does, so
-  # every change to what the panes look like changes an export too — but a
-  # session builds `-p harmonigraph-plugin` and nothing rebuilds the renderer
-  # unless it asked for `-p harmonigraph-offline` by name. A worktree that
-  # built only the plugin therefore hands over whatever renderer was last left
-  # in its target/release, which can be from any commit at all. The check
-  # below warns of that here, before a render is spent, and the renderer warns
-  # again on each export's row when the plugin that queued it is another
-  # build (#1936).
-  #
-  # Chosen before anything is replaced: a renderer of another commit is not
-  # installed over one that matches the plugin.
+  # Install the renderer built with this plugin (they share the take format and
+  # draw through the same crates). The plugin package builds both, so they are
+  # one commit; the renderer still warns on each export's row when the plugin
+  # that queued it is another build, as a host running the previous plugin
+  # after a load is (#1936).
   local offline="$path/target/release/harmonigraph-offline"
   local support="$HOME/Library/Application Support/$NAME"
   local installed="$support/harmonigraph-offline"
-  if [[ -f "$offline" ]] && ! renderer_matches "$offline" "$loaded_tag" \
-     && [[ -f "$installed" ]] && renderer_matches "$installed" "$loaded_tag"; then
-    echo "NOTE: this build's renderer is another commit than its plugin, so the installed" >&2
-    echo "      renderer, build $(renderer_tag "$installed"), the plugin's commit, stays." >&2
-  elif [[ -f "$offline" ]]; then
+  if [[ -f "$offline" ]]; then
     # Replaced by rename, as the dylib is (#705): copying over a renderer an
     # export still maps gets the next run of that file killed at launch.
     mkdir -p "$support"
@@ -485,13 +402,14 @@ load_build() {  # $1 = worktree index
     mv -f "$PENDING_RENDERER" "$installed"
     PENDING_RENDERER=""
     echo "Loaded renderer: $installed"
-    check_renderer "$installed" "$loaded_tag" "$path" "$branch"
   elif [[ -f "$installed" ]]; then
-    echo "This build has no harmonigraph-offline; offline render keeps the installed renderer."
-    check_renderer "$installed" "$loaded_tag" "$path" "$branch"
+    # Only a build from before the plugin package built the renderer (#1954),
+    # or a `--lib` build, gets here, and both make a mismatch likely.
+    echo "WARNING: this build has no harmonigraph-offline, so video export keeps the installed" >&2
+    echo "         renderer, which may be another build's." >&2
   else
     # The plugin resolves one fixed path under the product name, and nothing
-    # puts a binary there until some worktree builds -p harmonigraph-offline
+    # puts a binary there until some worktree builds harmonigraph-plugin
     # and a load copies it across.
     echo "WARNING: no harmonigraph-offline in this build and none installed, so video export" >&2
     echo "         fails until a build with one is loaded." >&2

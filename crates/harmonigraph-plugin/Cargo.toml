@@ -21,6 +21,20 @@ doctest = false
 frame-log = ["egui-baseview/frame-log"]
 startup-probe =["objc2-app-kit/NSApplication", "objc2-app-kit/NSEvent", "objc2-app-kit/NSGraphicsContext"]
 
+# The offline renderer, here rather than in its own package so that any build of
+# the plugin builds the renderer of the same commit (#1954). A thin `main` over
+# the `harmonigraph-offline` library; it never names this package's library, so
+# none of it, its global allocator included, is linked into the renderer.
+[[bin]]
+name = "harmonigraph-offline"
+path = "src/bin/harmonigraph-offline.rs"
+# Nothing to test in the `main` itself: the library's tests and this
+# package's `tests/` (which run the binary) cover it.
+test = false
+# Nor to document, and its docs would land on the library's own page
+# (`target/doc/harmonigraph_offline`), a collision cargo warns of.
+doc = false
+
 [[example]]
 name = "editor-startup"
 required-features = ["startup-probe"]
@@ -34,6 +48,8 @@ harmonigraph-ui = { workspace = true }
 harmonigraph-perf = { workspace = true }
 harmonigraph-record = { workspace = true }
 harmonigraph-render = { workspace = true }
+# The renderer's whole body, for the `harmonigraph-offline` binary alone.
+harmonigraph-offline = { workspace = true }
 
 harmonigraph-clap = { workspace = true }
 egui = { workspace = true }
@@ -76,3 +92,6 @@ harmonigraph-record = { workspace = true, features = ["test-support"] }
 harmonigraph-ui = { workspace = true, features = ["testing"] }
 # Which device the startup job compiles on, for the activation test.
 harmonigraph-render = { workspace = true, features = ["test-support"] }
+# A take written line by line, holes and all, for the renderer's process tests
+# (`tests/take_warning.rs`).
+ron = { workspace = true }

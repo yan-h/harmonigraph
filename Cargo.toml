@@ -38,6 +38,8 @@ harmonigraph-perf = { path = "crates/harmonigraph-perf" }
 harmonigraph-ui = { path = "crates/harmonigraph-ui" }
 harmonigraph-take = { path = "crates/harmonigraph-take" }
 harmonigraph-record = { path = "crates/harmonigraph-record" }
+# The renderer, a library whose one binary the plugin package builds (#1954).
+harmonigraph-offline = { path = "crates/harmonigraph-offline" }
 # The CLAP shell: nice-plug and nice-plug-core, owned (its README.md).
 harmonigraph-clap = { path = "crates/harmonigraph-clap" }
 

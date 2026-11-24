@@ -113,7 +113,7 @@ Local GPU tests may skip without an adapter;
 set the same variable to require one locally.
 GPU setup honors `WGPU_BACKEND`,
 and an empty value disables all backends for testing the unavailable-adapter path.
-CI also sets `HARMONIGRAPH_REQUIRE_FFMPEG=1` and installs ffmpeg for the group that runs `harmonigraph-offline`'s tests,
+CI also sets `HARMONIGRAPH_REQUIRE_FFMPEG=1` and installs ffmpeg for the group that runs the renderer's tests (`harmonigraph-offline`'s, and `harmonigraph-plugin`'s that run its binary),
 so the real encoder and export-length tests fail rather than skip without `ffmpeg` and `ffprobe`.
 
 ## Loading a worktree build in Bitwig
@@ -164,13 +164,9 @@ Only the no-argument form builds;
 loading a named branch only copies.
 The split lets every parallel branch retain its own build while the person at the DAW decides which one occupies the shared slot.
 
-The no-argument form builds and installs a matching `harmonigraph-offline` renderer.
-Loading a named branch installs that worktree's renderer when it exists;
-otherwise it leaves the installed renderer alone.
-The offline renderer draws through the same UI and render crates,
-so a change to a pane can change an exported video even when no file under `crates/harmonigraph-offline/` moved.
-Building only `harmonigraph-plugin` can therefore leave export on an old picture.
-`load-plugin.sh` warns when the renderer it installs or keeps was built at another commit than the plugin.
+Every load also installs the build's `harmonigraph-offline` renderer, which the plugin package builds as its own binary,
+so a completed build's renderer is the plugin's commit (#1954).
+A build with no renderer, which only a build from before that change or a `--lib` build leaves, keeps the installed one, with a warning.
 
 After installing,
 deactivate and reactivate Bitwig's audio engine.
@@ -192,7 +188,7 @@ writing to `~/harmonigraph-hangs/`;
 A build with the plugin's `frame-log` feature writes every editor frame's timing to `~/Library/Logs/Harmonigraph/frames-<unix seconds>-<pid>.csv`, one file per host process (macOS only; [`frame_log.rs`](https://github.com/yan-h/egui-plugin-window/blob/main/egui-baseview/src/frame_log.rs) documents the columns):
 
 ```sh
-cargo build --release -p harmonigraph-plugin -p harmonigraph-offline --features harmonigraph-plugin/frame-log
+cargo build --release -p harmonigraph-plugin --features frame-log
 ```
 
 Load it with `./load-plugin.sh <branch>` as usual, and keep the editor in one setup for at least a minute of steady state;
@@ -242,8 +238,9 @@ harmonigraph-scene       Per-frame scene derivation, camera, styles, envelopes
 harmonigraph-render      wgpu lattice renderer used as an egui paint callback.
 
 harmonigraph-perf        Performance instrumentation; the UI crate draws its
-                         overlay, and each leaf binary stamps its own build tag
-                         (build/build_tag.rs).
+                         overlay, and each leaf package's build script stamps its
+                         binaries' build tag, one for the plugin and its
+                         renderer (build/build_tag.rs).
 
 harmonigraph-ui          Shared pane shell and controls for Lattice, Tuning,
                          Analyzer, Mappings, Spectral, Spiral, System, Console
@@ -256,7 +253,8 @@ harmonigraph-take        Recorded note events and parameter automation, with
 harmonigraph-record      Realtime-safe take writing and offline-renderer launch.
 
 harmonigraph-offline     Headless take replay, WAV input and frames piped to
-                         ffmpeg.
+                         ffmpeg: a library, whose binary harmonigraph-plugin
+                         builds beside the plugin.
 
 harmonigraph-golden      The golden-frame gate shared by the renderer's and
                          the offline renderer's own picture tests.
@@ -371,7 +369,7 @@ but must be installed before Yan invokes a merge audit.
 ## Preserved build handoffs
 
 `session-lifecycle` comes from agent-config's install script ([shared agent skills](#shared-agent-skills)).
-After checks and the draft PR, `./session-lifecycle.sh handoff` builds both packages,
+After checks and the draft PR, `./session-lifecycle.sh handoff` builds the plugin package, plugin and renderer,
 publishes their binaries with checksums in the common Git directory,
 and removes disposable compilation output.
 The source remains available for PR review.

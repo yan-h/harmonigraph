@@ -85,16 +85,17 @@ OPTIONS:
         --plugin-build <TAG>  The build tag of the plugin queueing this render,
                            which the plugin passes; a renderer of another
                            build warns, and renders all the same.
-        --build-tag        Print this renderer's build tag and exit, which
-                           load-plugin.sh compares with the plugin's.
     -h, --help             Show this.
 
 ENVIRONMENT:
     LATTICE_FFMPEG         ffmpeg to run, if --ffmpeg is not given.
 ";
 
-fn main() -> std::process::ExitCode {
-    match run() {
+/// The renderer's whole command line, for the `harmonigraph-offline` binary
+/// in `harmonigraph-plugin`, which passes the tag its build script stamped on
+/// both of that package's artifacts.
+pub fn main(build_tag: &str) -> std::process::ExitCode {
+    match run(build_tag) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("harmonigraph-offline: {message}");
@@ -186,14 +187,6 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
         match arg.as_str() {
             "-h" | "--help" => {
                 print!("{USAGE}");
-                return Ok(None);
-            }
-            // Asked of the binary rather than read out of it with `strings`,
-            // as the plugin's tag must be: that read anchors on the branch
-            // name, and the renderer a load keeps installed can be any
-            // branch's.
-            "--build-tag" => {
-                println!("{BUILD_TAG}");
                 return Ok(None);
             }
             "-o" | "--out" => args.out = Some(value("--out")?),
@@ -331,10 +324,6 @@ fn size_matches_frame(size: [u32; 2], frame: &harmonigraph_ui::RenderFrame) -> b
     (asked - framed).abs() <= framed * 0.005
 }
 
-/// This renderer's build, stamped like the plugin's from the commit it was
-/// built at.
-const BUILD_TAG: &str = env!("LATTICE_BUILD_TAG");
-
 /// The warning for a render the plugin of another build queued: the video is
 /// drawn by this binary's code, so it may not be the picture the editor
 /// shows (PR #340). The render goes ahead. The tag names a commit, so two
@@ -346,7 +335,8 @@ fn build_mismatch(own: &str, plugin: Option<&str>) -> Option<String> {
     Some(format!(
         "{WARNING_PREFIX}this renderer is build {own}, but the plugin that queued \
          the export is build {plugin}, so the video may not draw what the editor \
-         shows; load the plugin and renderer of one build (./load-plugin.sh)"
+         shows; a host still running the plugin from before a load needs its audio \
+         engine deactivated and reactivated"
     ))
 }
 
@@ -384,8 +374,13 @@ fn take_warnings(take_path: &str, take: &harmonigraph_take::Take) -> Vec<String>
     warnings
 }
 
-fn run() -> Result<(), String> {
+fn run(build_tag: &str) -> Result<(), String> {
     let Some(args) = parse_args()? else { return Ok(()) };
+    // First, so a take or look that this build cannot read, which another
+    // build's plugin may have written, still says which builds met.
+    if let Some(warning) = build_mismatch(build_tag, args.plugin_build.as_deref()) {
+        eprintln!("{warning}");
+    }
     export(args)
 }
 
@@ -394,11 +389,6 @@ fn export(args: Args) -> Result<(), String> {
     // the audio and the encoder's backlog as well as
     // the loop — everything between typing the command and having the file.
     let began = std::time::Instant::now();
-    // First, so a take or look that this build cannot read, which another
-    // build's plugin may have written, still says which builds met.
-    if let Some(warning) = build_mismatch(BUILD_TAG, args.plugin_build.as_deref()) {
-        eprintln!("{warning}");
-    }
     let take_path = args.take.ok_or("no take file given (--help for usage)")?;
     let take = harmonigraph_take::Take::read(&take_path).map_err(|e| e.to_string())?;
     let replacement = args
@@ -885,7 +875,8 @@ mod tests {
     /// A renderer told the plugin's build checks it against its own (#1928 B):
     /// another commit is a warning naming both tags, which the export's row
     /// keeps; the same commit on any branch, or a render nobody queued, says
-    /// nothing. `tests/take_warning.rs` runs the flag through the binary.
+    /// nothing. `harmonigraph-plugin`'s `tests/take_warning.rs` runs the flag
+    /// through the binary.
     #[test]
     fn a_renderer_of_another_build_than_the_plugin_says_so() {
         let warning = build_mismatch("tape @89abcde", Some("main @1234567"))
