@@ -39,13 +39,11 @@ impl NoteAnimationConfig {
     /// pose: the signed offset's low bound would be an extreme, not neutral.
     pub fn sanitized(mut self) -> Self {
         let fresh = NoteAnimationConfig::default();
-        self.stagger_spread = finite_or(self.stagger_spread, fresh.stagger_spread)
-            .clamp(*STAGGER_SPREAD_RANGE.start(), *STAGGER_SPREAD_RANGE.end());
-        self.radial_start = finite_or(self.radial_start, fresh.radial_start)
-            .clamp(*RADIAL_START_RANGE.start(), *RADIAL_START_RANGE.end());
-        // 0 rather than the fresh value: no wait is the inert setting.
-        self.fade_out_delay = finite_or(self.fade_out_delay, 0.0)
-            .clamp(*FADE_OUT_DELAY_RANGE.start(), *FADE_OUT_DELAY_RANGE.end());
+        self.stagger_spread =
+            repair(self.stagger_spread, fresh.stagger_spread, STAGGER_SPREAD_RANGE);
+        self.radial_start = repair(self.radial_start, fresh.radial_start, RADIAL_START_RANGE);
+        self.fade_out_delay =
+            repair(self.fade_out_delay, fresh.fade_out_delay, FADE_OUT_DELAY_RANGE);
         self
     }
     /// Fixed delays of complete displayed sectors; shared by live/export and

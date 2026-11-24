@@ -45,8 +45,7 @@ impl GlowCurve {
     /// Repair the value into the finite range the editor can produce.
     pub fn sanitized(mut self) -> Self {
         let fresh = GlowCurve::default();
-        self.shape =
-            finite_or(self.shape, fresh.shape).clamp(GLOW_CURVE_SHAPE_MIN, GLOW_CURVE_SHAPE_MAX);
+        self.shape = repair(self.shape, fresh.shape, GLOW_CURVE_SHAPE_MIN..=GLOW_CURVE_SHAPE_MAX);
         self
     }
 }

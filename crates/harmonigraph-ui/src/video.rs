@@ -16,6 +16,8 @@
 //! so `harmonigraph-record` links no editor. The export queue's vocabulary
 //! (`RenderProgress`, `ExportJob`) stays in `harmonigraph-take` for that reason.
 
+use harmonigraph_scene::repair;
+
 /// What counts as "the take is done", and so when a video gets rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RenderTrigger {
@@ -265,16 +267,11 @@ impl RenderConfig {
         // A NaN read out of a hand-edited blob would compare false against
         // every bar and quietly disable the trigger; clamping to the range the
         // field can produce keeps the number on screen the number that fires.
-        if !self.stop_bar.is_finite() {
-            self.stop_bar = RenderConfig::default().stop_bar;
-        }
-        self.stop_bar = self.stop_bar.clamp(STOP_BAR_RANGE.0, STOP_BAR_RANGE.1);
+        let fresh = RenderConfig::default();
+        self.stop_bar = repair(self.stop_bar, fresh.stop_bar, STOP_BAR_RANGE.0..=STOP_BAR_RANGE.1);
         // The same for the tail: a NaN would reach the render's end and make
         // its frame count meaningless.
-        if !self.tail.is_finite() {
-            self.tail = RenderConfig::default().tail;
-        }
-        self.tail = self.tail.clamp(TAIL_RANGE.0, TAIL_RANGE.1);
+        self.tail = repair(self.tail, fresh.tail, TAIL_RANGE.0..=TAIL_RANGE.1);
     }
 
     /// Take from `pane` the fields that say how big the video is, how long it
@@ -459,11 +456,8 @@ impl RenderFrame {
     /// as a rect with no finite side — not a crash, but a frame with a torn
     /// composition and nothing in the picture to say why.
     pub fn sanitize(&mut self) {
-        self.split = if self.split.is_finite() {
-            self.split.clamp(Self::SPLIT_MIN, Self::SPLIT_MAX)
-        } else {
-            RenderFrame::default().split
-        };
+        self.split =
+            repair(self.split, RenderFrame::default().split, Self::SPLIT_MIN..=Self::SPLIT_MAX);
     }
 }
 

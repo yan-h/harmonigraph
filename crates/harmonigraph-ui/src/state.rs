@@ -617,9 +617,9 @@ impl CameraPreset {
         // Periodic, so any finite yaw draws; a NaN one NaNs `eye()` and with it
         // the whole view matrix, and `orbit`'s `yaw -= delta` cannot walk back
         // out of NaN.
-        self.yaw = if self.yaw.is_finite() { self.yaw } else { fresh.yaw };
-        self.pitch = if self.pitch.is_finite() { self.pitch } else { fresh.pitch }
-            .clamp(-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT);
+        self.yaw = harmonigraph_scene::repair(self.yaw, fresh.yaw, ..);
+        let limit = Camera::PITCH_LIMIT;
+        self.pitch = harmonigraph_scene::repair(self.pitch, fresh.pitch, -limit..=limit);
     }
 }
 

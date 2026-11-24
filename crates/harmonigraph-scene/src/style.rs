@@ -4,7 +4,8 @@
 //! `lattice.wgsl`; the gradient reaches the shader as a color table instead,
 //! and needs no branch there at all.
 
-use crate::view::finite_or;
+use crate::{repair, UNIT};
+use std::ops::RangeInclusive;
 
 /// A low-to-high color gradient, as six things a reader of the picture can
 /// name: WHICH colors it walks through (an arc of the OKLAB hue circle), how
@@ -237,10 +238,10 @@ impl Bend {
     /// Held to what the curve is defined for, and finite: the bend is part of
     /// the LUT memo's key through [`Gradient::sanitized`].
     pub fn sanitized(self) -> Bend {
-        let finite = |v: f32| if v.is_finite() { v } else { 0.5 };
+        let fresh = Bend::default();
         Bend {
-            at: finite(self.at).clamp(Self::AT_LIMITS.0, Self::AT_LIMITS.1),
-            share: finite(self.share).clamp(0.0, 1.0),
+            at: repair(self.at, fresh.at, Self::AT_LIMITS.0..=Self::AT_LIMITS.1),
+            share: repair(self.share, fresh.share, UNIT),
             ..self
         }
     }
@@ -395,6 +396,11 @@ impl Gradient {
     /// arc there is. Past it the gradient would revisit hues it already used.
     pub const MAX_HUE_SPAN: f32 = 360.0;
 
+    /// The `L*` axis the lightness and both ends of its ramp stand on: 0 is
+    /// black and 100 white, and a gradient may sit at either, flat, since a
+    /// ramp there has nowhere to open. The brightness bar's axis too.
+    pub const LIGHTNESS_AXIS: RangeInclusive<f32> = 0.0..=100.0;
+
     /// Fit the knobs to what their controls can produce. A bar cannot make a
     /// nonsense value but a hand-edited RON can, and these feed a color
     /// conversion whose output goes straight into the instance buffer: a
@@ -406,22 +412,21 @@ impl Gradient {
     /// well as on the way in from a blob, so the guarantee holds for a
     /// gradient assembled in code too.
     pub fn sanitized(self) -> Gradient {
-        let finite = |v: f32, fallback: f32| if v.is_finite() { v } else { fallback };
-        let hue_span = finite(self.hue_span, default_hue_span())
-            .clamp(-Self::MAX_HUE_SPAN, Self::MAX_HUE_SPAN);
-        let lightness = finite(self.lightness, default_lightness()).clamp(0.0, 100.0);
+        let hue_span =
+            repair(self.hue_span, default_hue_span(), -Self::MAX_HUE_SPAN..=Self::MAX_HUE_SPAN);
+        let lightness = repair(self.lightness, default_lightness(), Self::LIGHTNESS_AXIS);
         // The widest ramp that keeps BOTH ends of the gradient on the axis,
         // the ends being `lightness ± ramp/2`: the whole axis at its middle,
         // and nothing at all at either end.
-        let widest_ramp = 2.0 * lightness.min(100.0 - lightness);
+        let widest_ramp = 2.0 * lightness.min(Self::LIGHTNESS_AXIS.end() - lightness);
         // The same statement about the chroma pair, on the 0..1 axis a fraction
         // of the gamut lives on. One rule with two axes rather than two rules:
         // what the middle leaves is all the ramp there is room for.
-        let chroma = finite(self.chroma, default_chroma()).clamp(0.0, 1.0);
-        let widest_chroma_ramp = 2.0 * chroma.min(1.0 - chroma);
+        let chroma = repair(self.chroma, default_chroma(), UNIT);
+        let widest_chroma_ramp = 2.0 * chroma.min(UNIT.end() - chroma);
         Gradient {
             // Wrapped rather than clamped: it names a point on a circle.
-            hue_start: crate::wrap_degrees(finite(self.hue_start, default_hue_start())),
+            hue_start: crate::wrap_degrees(repair(self.hue_start, default_hue_start(), ..)),
             // A span of zero has no direction, so it is written with the one
             // sign that reads as none. `-0.0` is the sign that lies: it is not
             // `< 0.0`, so everything that asks which way the arc runs takes it
@@ -438,16 +443,22 @@ impl Gradient {
             // saying different things — and the control that sets the pair, a
             // middle with a handle either side of it, has nowhere to put a
             // handle that has left the bar.
-            lightness_ramp: finite(self.lightness_ramp, default_lightness_ramp())
-                .clamp(-widest_ramp, widest_ramp),
+            lightness_ramp: repair(
+                self.lightness_ramp,
+                default_lightness_ramp(),
+                -widest_ramp..=widest_ramp,
+            ),
             chroma,
             // Against what the middle leaves for the same reasons, one axis
             // over: a fraction past 1 is a color the gamut cannot hold — which
             // is the one thing the whole design promises it never asks for —
             // and a fraction under 0 is a chroma with a sign, which draws the
             // hue on the far side of the circle from the one the arc names.
-            chroma_ramp: finite(self.chroma_ramp, default_chroma_ramp())
-                .clamp(-widest_chroma_ramp, widest_chroma_ramp),
+            chroma_ramp: repair(
+                self.chroma_ramp,
+                default_chroma_ramp(),
+                -widest_chroma_ramp..=widest_chroma_ramp,
+            ),
             bend: self.bend.sanitized(),
         }
     }
@@ -726,7 +737,7 @@ impl ShadowStyle {
     /// Gaussian caster growth in screen points at the resolved blur sigma.
     /// A full spread is one Shadow width, or twice sigma.
     pub fn gaussian_spread_points(self, sigma_points: f32) -> f32 {
-        2.0 * finite_or(sigma_points, 0.0).max(0.0) * finite_or(self.spread, 0.0).clamp(0.0, 1.0)
+        2.0 * repair(sigma_points, 0.0, 0.0..) * repair(self.spread, 0.0, UNIT)
     }
 
     /// A TEXT group's Spread, as the stops its blurred shadow is lifted by
@@ -739,7 +750,7 @@ impl ShadowStyle {
     /// ink wide against σ stays saturated about 2σ out, close to the distance a
     /// full Spread grows geometry by, with a harder edge.
     pub fn text_spread_stops(self) -> f32 {
-        TEXT_SPREAD_STOPS * finite_or(self.spread, 0.0).clamp(0.0, 1.0)
+        TEXT_SPREAD_STOPS * repair(self.spread, 0.0, UNIT)
     }
 
     /// This style held to the ranges its bars name — the PICTURE's door, where
@@ -749,9 +760,9 @@ impl ShadowStyle {
     /// depth disable the group.
     pub fn clamped(self, width_max: f32) -> ShadowStyle {
         ShadowStyle {
-            width: finite_or(self.width, 0.0).clamp(0.0, width_max),
-            spread: finite_or(self.spread, 0.0).clamp(0.0, 1.0),
-            depth: finite_or(self.depth, 0.0).clamp(0.0, 1.0),
+            width: repair(self.width, 0.0, 0.0..=width_max),
+            spread: repair(self.spread, 0.0, UNIT),
+            depth: repair(self.depth, 0.0, UNIT),
         }
     }
 }
@@ -833,9 +844,9 @@ impl ShadowSettings {
         for (style, fresh) in self.groups_mut().into_iter().zip(ShadowSettings::default().groups())
         {
             let ShadowStyle { width, spread, depth } = style;
-            *width = finite_or(*width, fresh.width);
-            *spread = finite_or(*spread, fresh.spread);
-            *depth = finite_or(*depth, fresh.depth);
+            *width = repair(*width, fresh.width, ..);
+            *spread = repair(*spread, fresh.spread, ..);
+            *depth = repair(*depth, fresh.depth, ..);
         }
         ShadowSettings {
             lattice_geometry: self.lattice_geometry.clamped(crate::GLOW_SHADOW_MAX),

@@ -12,7 +12,7 @@
 //! one reference width. The trail never reads any of this; it records pitch
 //! classes only.
 
-use crate::view::finite_or;
+use crate::{repair, UNIT};
 use harmonigraph_core::Expressions;
 
 /// The top of every weight's bar, which runs up from 0. Only timbre can
@@ -139,23 +139,21 @@ impl Default for IntensityReading {
 }
 
 impl IntensitySettings {
-    /// Every value finite and on its bar, falling back to the fresh value.
+    /// Every value finite and on its bar, falling back to the fresh value, and
+    /// a set weight to 1.0: a weight's fresh value is no weight at all.
     pub fn sanitized(mut self) -> Self {
         let fresh = Self::default();
-        let bar =
-            |value: f32, fallback: f32| finite_or(value, fallback).clamp(0.0, INTENSITY_WEIGHT_MAX);
         for source in [&mut self.velocity, &mut self.gain, &mut self.pressure, &mut self.timbre] {
             for target in IntensityTarget::ALL {
                 if let Some(weight) = source.weight_mut(target) {
-                    *weight = bar(*weight, 1.0);
+                    *weight = repair(*weight, 1.0, 0.0..=INTENSITY_WEIGHT_MAX);
                 }
             }
         }
-        self.opacity_rest = finite_or(self.opacity_rest, fresh.opacity_rest).clamp(0.0, 1.0);
-        self.thickness_max = finite_or(self.thickness_max, fresh.thickness_max)
-            .clamp(*THICKNESS_MAX_RANGE.start(), *THICKNESS_MAX_RANGE.end());
+        self.opacity_rest = repair(self.opacity_rest, fresh.opacity_rest, UNIT);
+        self.thickness_max = repair(self.thickness_max, fresh.thickness_max, THICKNESS_MAX_RANGE);
         self.thickness_base =
-            finite_or(self.thickness_base, fresh.thickness_base).clamp(0.0, self.thickness_max);
+            repair(self.thickness_base, fresh.thickness_base, 0.0..=self.thickness_max);
         self
     }
 
@@ -192,10 +190,10 @@ impl IntensitySettings {
 
     fn unclamped(&self, velocity: f32, expressions: Expressions) -> IntensityReading {
         let sources = [
-            (self.velocity, finite_or(velocity, 0.0).clamp(0.0, 1.0)),
-            (self.gain, finite_or(expressions.gain, 0.0).max(0.0)),
-            (self.pressure, finite_or(expressions.pressure, 0.0).clamp(0.0, 1.0)),
-            (self.timbre, 2.0 * finite_or(expressions.timbre, 0.5).clamp(0.0, 1.0) - 1.0),
+            (self.velocity, repair(velocity, 0.0, 0.0..=1.0)),
+            (self.gain, repair(expressions.gain, 0.0, 0.0..)),
+            (self.pressure, repair(expressions.pressure, 0.0, 0.0..=1.0)),
+            (self.timbre, 2.0 * repair(expressions.timbre, 0.5, 0.0..=1.0) - 1.0),
         ];
         // Invalid inputs contribute nothing without erasing other sources.
         // Saturate overflow from extreme finite gain before returning a

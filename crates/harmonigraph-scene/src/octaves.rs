@@ -65,18 +65,14 @@ const UP: f32 = -FRAC_PI_2 - PI;
 
 /// Clamp the octave count to the renderer's drawable range.
 pub fn clamp_count(count: u32) -> u32 {
-    count.clamp(MIN_SPAN, MAX_SPAN)
+    crate::repair(count, DEFAULT_COUNT, MIN_SPAN..=MAX_SPAN)
 }
 
 /// The same for the center pitch, non-finite included — a NaN center poisons
 /// every angle on the wheel, and `clamp` alone does not catch it since NaN is
 /// its own answer.
 pub fn clamp_center(center: f32) -> f32 {
-    if center.is_finite() {
-        center.clamp(PITCH_FLOOR, PITCH_CEIL)
-    } else {
-        DEFAULT_CENTER
-    }
+    crate::repair(center, DEFAULT_CENTER, PITCH_FLOOR..=PITCH_CEIL)
 }
 
 /// The pitch axis the octave indicators are drawn on, ready for the shader.

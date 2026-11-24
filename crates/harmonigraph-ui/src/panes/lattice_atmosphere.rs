@@ -1,5 +1,6 @@
 //! Independent texture and material stages in the lattice's background glow.
 
+use harmonigraph_scene::UNIT;
 use harmonigraph_scene::{
     AtmosphereSettings, LatticeMaterial, NEBULA_SCALE_MAX, NEBULA_SCALE_MIN, NEBULA_SPEED_MAX,
     NEBULA_SPEED_MIN,
@@ -35,7 +36,7 @@ pub(super) fn settings(
             );
         }
         ui.add_enabled_ui(glow_enabled, |ui| {
-            ValueBar::new(&mut settings.texture_depth, 0.0..=1.0, "Pattern contrast")
+            ValueBar::new(&mut settings.texture_depth, UNIT, "Pattern contrast")
                 .default_value(super::fresh_view().atmosphere.texture_depth)
                 .percent()
                 .hint(
@@ -71,7 +72,7 @@ pub(super) fn settings(
         ui.add_enabled_ui(glow_enabled, |ui| {
         choice_row(ui, "Material", &mut settings.material_style, &MATERIAL_CHOICES);
         if settings.material_style != LatticeMaterial::None {
-            ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
+            ValueBar::new(&mut settings.material_amount, UNIT, "Material amount")
                 .default_value(super::fresh_view().atmosphere.material_amount)
                 .percent()
                 .hint(

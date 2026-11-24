@@ -1,7 +1,7 @@
 //! Camera, projection, and the cached [`Projector`] used for on-screen
 //! label placement and node picking.
 
-use crate::Scene;
+use crate::{repair, Scene};
 // `directx` is glam's name for the NDC convention wgpu targets: Z in 0..1,
 // Y-up. Its `opengl` and `vulkan` siblings are the wrong depth range and the
 // wrong Y direction respectively, so the module path is load-bearing.
@@ -191,8 +191,8 @@ impl Camera {
     /// a bad number. The field of view was the other half of this guard until
     /// #964 made it a constant, which is a value no blob can reach.
     fn focus_half_height(&self) -> f32 {
-        let distance = finite_or(self.distance, Self::DEFAULT_DISTANCE)
-            .clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
+        let distance =
+            repair(self.distance, Self::DEFAULT_DISTANCE, Self::MIN_DISTANCE..=Self::MAX_DISTANCE);
         Self::half_height(distance, Self::DEFAULT_FOV_Y)
     }
 
@@ -404,36 +404,22 @@ impl Camera {
         // Periodic (every use is a `sin`/`cos`), so any finite value draws
         // correctly — only a non-finite one, which `sin`/`cos` turn into
         // NaN, needs a fallback.
-        self.yaw = finite_or(self.yaw, fresh.yaw);
+        self.yaw = repair(self.yaw, fresh.yaw, ..);
 
         // `orbit` holds this to `PITCH_LIMIT` on every interactive drag; a
         // hand-edited blob is not `orbit`.
-        self.pitch =
-            finite_or(self.pitch, fresh.pitch).clamp(-Self::PITCH_LIMIT, Self::PITCH_LIMIT);
+        self.pitch = repair(self.pitch, fresh.pitch, -Self::PITCH_LIMIT..=Self::PITCH_LIMIT);
 
         // The range `zoom`/`zoom_by` already hold interactive input to; load
         // is the one door those two don't cover.
         self.distance =
-            finite_or(self.distance, fresh.distance).clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
+            repair(self.distance, fresh.distance, Self::MIN_DISTANCE..=Self::MAX_DISTANCE);
 
         // The two cabinet knobs, ranged to what their own bars offer
         // ("Depth angle" 0..=90°, "Depth step scale" 0.1..=1.0).
         let (angle, scale) = (Self::CABINET_ANGLE_RANGE, Self::CABINET_SCALE_RANGE);
-        self.cabinet_angle =
-            finite_or(self.cabinet_angle, fresh.cabinet_angle).clamp(*angle.start(), *angle.end());
-        self.cabinet_scale =
-            finite_or(self.cabinet_scale, fresh.cabinet_scale).clamp(*scale.start(), *scale.end());
-    }
-}
-
-/// `value` if it is a real number, `fallback` if it is a NaN or an infinity
-/// — the guard `clamp` cannot be, NaN being its own answer to every
-/// comparison a clamp makes.
-fn finite_or(value: f32, fallback: f32) -> f32 {
-    if value.is_finite() {
-        value
-    } else {
-        fallback
+        self.cabinet_angle = repair(self.cabinet_angle, fresh.cabinet_angle, angle);
+        self.cabinet_scale = repair(self.cabinet_scale, fresh.cabinet_scale, scale);
     }
 }
 

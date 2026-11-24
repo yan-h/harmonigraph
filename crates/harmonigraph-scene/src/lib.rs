@@ -62,6 +62,7 @@ pub use view::*;
 
 use glam::{Vec3, Vec4};
 use harmonigraph_core::LatticePos;
+use std::ops::{Bound, RangeBounds, RangeInclusive};
 
 /// A stored angle in `[0, 360)`. `rem_euclid` alone rounds an angle a hair
 /// below zero up to exactly 360, which a second wrap turns into 0: a saved
@@ -75,6 +76,68 @@ pub fn wrap_degrees(degrees: f32) -> f32 {
         0.0
     }
 }
+
+/// A loaded setting repaired: `value` held to `range`, and `fallback` in its
+/// place when it is no number, a NaN or an infinity, which no clamp catches
+/// since NaN answers no to every comparison a clamp makes.
+///
+/// The one spelling of the load repair every look setting's `sanitize` uses
+/// (#1956). The fallback is the caller's, because what a broken number should
+/// become varies: the fresh value almost everywhere, the pane's own fresh value
+/// for Stars, 1.0 for an intensity weight, the type's own default inside a
+/// gradient, the off position for the ring gate and hysteresis. It is held to
+/// `range` as well, so what comes back is always inside it.
+///
+/// `range` is inclusive at each end it bounds. `..` asks for a number alone,
+/// for a value with no bound, such as a periodic angle.
+pub fn repair<T: Setting>(value: T, fallback: T, range: impl RangeBounds<T>) -> T {
+    let value = if value.is_number() { value } else { fallback };
+    let value = match range.start_bound() {
+        Bound::Included(&low) if value < low => low,
+        Bound::Excluded(_) => unreachable!("a setting's range includes its ends"),
+        _ => value,
+    };
+    match range.end_bound() {
+        Bound::Included(&high) if value > high => high,
+        Bound::Excluded(_) => unreachable!("a setting's range includes its ends"),
+        _ => value,
+    }
+}
+
+/// What [`repair`] holds to a range: a float, which can be no number, and the
+/// integers, which are always one.
+pub trait Setting: Copy + PartialOrd {
+    /// Whether this is a number a range can hold.
+    fn is_number(self) -> bool;
+}
+
+impl Setting for f32 {
+    fn is_number(self) -> bool {
+        self.is_finite()
+    }
+}
+
+impl Setting for f64 {
+    fn is_number(self) -> bool {
+        self.is_finite()
+    }
+}
+
+impl Setting for u32 {
+    fn is_number(self) -> bool {
+        true
+    }
+}
+
+impl Setting for i32 {
+    fn is_number(self) -> bool {
+        true
+    }
+}
+
+/// The unit fraction: the range of every setting that is a share, a mix or a
+/// depth, at its `sanitize` and at its bar alike.
+pub const UNIT: RangeInclusive<f32> = 0.0..=1.0;
 
 /// Axis mapping, matching v1's orientation: major thirds run horizontally
 /// (x), fifths vertically (y), and harmonic sevenths in depth (z).

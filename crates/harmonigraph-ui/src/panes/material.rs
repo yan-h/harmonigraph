@@ -1,5 +1,6 @@
 //! Shared material controls; each pane supplies its own saved settings.
 use crate::widgets::ValueBar;
+use harmonigraph_scene::UNIT;
 
 fn cloud_size_range() -> std::ops::RangeInclusive<f32> {
     harmonigraph_scene::CLOUD_SIZE_MIN..=harmonigraph_scene::CLOUD_SIZE_MAX
@@ -20,33 +21,33 @@ pub(super) fn watercolor(
             "Size of watercolor patches relative to the pane. 1× is about one twentieth of the pane's height; smaller values make finer grain and larger values make broader patches. The size follows the pane height.",
         )
         .show(ui);
-    ValueBar::new(&mut atmosphere.wash_fuzz, 0.0..=1.0, "Edge feathering").default_value(fresh.wash_fuzz).percent()
+    ValueBar::new(&mut atmosphere.wash_fuzz, UNIT, "Edge feathering").default_value(fresh.wash_fuzz).percent()
         .hint(
             "Blend between neighboring watercolor patches. 0% makes hard-edged patches; 100% dissolves their edges. Does not change where each patch samples the picture.",
         )
         .show(ui);
-    ValueBar::new(&mut atmosphere.wash_lobe, 0.0..=1.0, "Shape warp")
+    ValueBar::new(&mut atmosphere.wash_lobe, UNIT, "Shape warp")
         .default_value(fresh.wash_lobe)
         .percent()
         .hint(
             "Distort round watercolor patches into lobes and streaks. 0% keeps them round; higher values stretch and bend their shapes.",
         )
         .show(ui);
-    ValueBar::new(&mut atmosphere.wash_refract, 0.0..=1.0, "Refraction")
+    ValueBar::new(&mut atmosphere.wash_refract, UNIT, "Refraction")
         .default_value(fresh.wash_refract)
         .percent()
         .hint(
             "Pull the sampled picture toward each patch's center. 0% keeps the original picture; 100% gives each patch the level at its center.",
         )
         .show(ui);
-    ValueBar::new(&mut atmosphere.wash_randomness, 0.0..=1.0, "Random brightness")
+    ValueBar::new(&mut atmosphere.wash_randomness, UNIT, "Random brightness")
         .default_value(fresh.wash_randomness)
         .percent()
         .hint(
             "Vary brightness between watercolor patches with balanced brightening and dimming, preserving the average color. Highlights vary less to avoid clipping. 0% keeps the original brightness.",
         )
         .show(ui);
-    ValueBar::new(&mut atmosphere.wash_layers, 0.0..=1.0, "Fine layer mix")
+    ValueBar::new(&mut atmosphere.wash_layers, UNIT, "Fine layer mix")
         .default_value(fresh.wash_layers)
         .percent()
         .hint(
@@ -77,7 +78,7 @@ pub(super) fn edge_pooling(
             "How far the edge shading reaches out from the edge, as a share of a patch's radius. Low values draw a thin line; high values a broad shadow. Does nothing while Edge pooling is 0%.",
         )
         .show(ui);
-    ValueBar::new(&mut atmosphere.wash_pool_softness, 0.0..=1.0, "Pooling softness")
+    ValueBar::new(&mut atmosphere.wash_pool_softness, UNIT, "Pooling softness")
         .default_value(fresh.wash_pool_softness)
         .percent()
         .hint(
@@ -127,28 +128,28 @@ pub(super) fn stars(
         &mut atmosphere.star_glow_falloff,
         fresh.star_glow_falloff,
     );
-    ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Brightness variation")
+    ValueBar::new(&mut atmosphere.star_randomness, UNIT, "Brightness variation")
         .default_value(fresh.star_randomness)
         .percent()
         .hint(
             "How much stars vary in brightness, keeping their average. Low values follow the underlying light evenly; high values make a few bright stars among many faint ones.",
         )
         .show(ui);
-    ValueBar::new(&mut atmosphere.star_cover, 0.0..=1.0, "Cover")
+    ValueBar::new(&mut atmosphere.star_cover, UNIT, "Cover")
         .default_value(fresh.star_cover)
         .percent()
         .hint(
             "How far a star hides the stars behind it. At 0% it hides them only where it is brighter, so a dim star never blacks out a bright one behind it, but overlaps favour the brighter star and the stars read a little brighter than the colour under them, more so with more Brightness variation. At 100% a star hides what is behind it by its own shape, dim or not, which keeps their average colour.",
         )
         .show(ui);
-    ValueBar::new(&mut atmosphere.star_size_variation, 0.0..=1.0, "Size variation")
+    ValueBar::new(&mut atmosphere.star_size_variation, UNIT, "Size variation")
         .default_value(fresh.star_size_variation)
         .percent()
         .hint(
             "How much stars shrink below their depth's Star size, each at random. 0% makes every star at a depth the same size; 100% ranges down to about a tenth. Stars never grow past Star size.",
         )
         .show(ui);
-    ValueBar::new(&mut atmosphere.star_jitter, 0.0..=1.0, "Position variation")
+    ValueBar::new(&mut atmosphere.star_jitter, UNIT, "Position variation")
         .default_value(fresh.star_jitter)
         .percent()
         .hint(
@@ -224,7 +225,7 @@ pub(super) fn stars_motion(
         "How long each star lives before a new one takes its place, alike at every layer. Twinkle says how it gives way.",
     )
     .show(ui);
-    ValueBar::new(&mut atmosphere.star_twinkle_dip, 0.0..=1.0, "Twinkle")
+    ValueBar::new(&mut atmosphere.star_twinkle_dip, UNIT, "Twinkle")
         .default_value(fresh.star_twinkle_dip)
         .percent()
         .hint(
@@ -245,7 +246,7 @@ pub(super) fn velvet(
         .unit(1.0, "×")
         .hint("Size of each velvet scale. 1× is about six percent of the pane height.")
         .show(ui);
-    ValueBar::new(&mut s.velvet_variety, 0.0..=1.0, "Size variation")
+    ValueBar::new(&mut s.velvet_variety, UNIT, "Size variation")
         .default_value(fresh.velvet_variety)
         .percent()
         .hint("Variation in scale radius. 0% makes equal sizes; 50% is the Scales reference.")
@@ -255,24 +256,24 @@ pub(super) fn velvet(
         .percent()
         .hint("Width of the transitions between overlapping scales.")
         .show(ui);
-    ValueBar::new(&mut s.velvet_irregularity, 0.0..=1.0, "Irregularity").default_value(fresh.velvet_irregularity).percent()
+    ValueBar::new(&mut s.velvet_irregularity, UNIT, "Irregularity").default_value(fresh.velvet_irregularity).percent()
         .hint(
             "Move scale centers off their grid and smoothly warp their placement. Drift moves this fixed field in one direction.",
         )
         .show(ui);
-    ValueBar::new(&mut s.velvet_shape, 0.0..=1.0, "Scale shape")
+    ValueBar::new(&mut s.velvet_shape, UNIT, "Scale shape")
         .default_value(fresh.velvet_shape)
         .percent()
         .hint("Round bodies at 0%; tapered overlapping scallops at 100%.")
         .show(ui);
-    ValueBar::new(&mut s.velvet_square, 0.0..=1.0, "Squareness")
+    ValueBar::new(&mut s.velvet_square, UNIT, "Squareness")
         .default_value(fresh.velvet_square)
         .percent()
         .hint(
             "Round scales at 0%; squares at 100%. For a tiled grid, also set Tilt, Irregularity and Scale shape to 0%.",
         )
         .show(ui);
-    ValueBar::new(&mut s.velvet_tilt, 0.0..=1.0, "Tilt")
+    ValueBar::new(&mut s.velvet_tilt, UNIT, "Tilt")
         .default_value(fresh.velvet_tilt)
         .percent()
         .hint(

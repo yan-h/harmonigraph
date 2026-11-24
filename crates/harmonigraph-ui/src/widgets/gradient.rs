@@ -8,7 +8,7 @@
 //! all.
 
 use egui::{Color32, CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
-use harmonigraph_scene::{gradient_color, hue_circle, Gradient, HUE_CIRCLE_N, PITCH_LUT_N};
+use harmonigraph_scene::{gradient_color, hue_circle, Gradient, HUE_CIRCLE_N, PITCH_LUT_N, UNIT};
 
 use super::bar::{
     allocate_row, bar_radius, bar_width, drag, elided_name, grip_radius, paint_thumbs, poised,
@@ -715,10 +715,10 @@ fn flip_mark(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32, sc
     }
 }
 
-/// The `L*` axis a brightness pair stands on, both ends included: 0 is black
-/// and 100 is white, and a gradient is allowed to sit on either — flat, since a
-/// ramp there has nowhere to open.
-const L_STAR_AXIS: (f32, f32) = (0.0, 100.0);
+/// The `L*` axis a brightness pair stands on, both ends included: the one
+/// [`Gradient::sanitized`] holds a loaded gradient to.
+const L_STAR_AXIS: (f32, f32) =
+    (*Gradient::LIGHTNESS_AXIS.start(), *Gradient::LIGHTNESS_AXIS.end());
 
 /// The axis a chroma pair stands on: a FRACTION rather than a chroma, 0 grey
 /// and 1 as vivid as the screen goes there. Not a share of this hue's own
@@ -731,7 +731,7 @@ const L_STAR_AXIS: (f32, f32) = (0.0, 100.0);
 /// Both ends are settings and a pair on either is flat, exactly as a brightness
 /// pair parked on black is — see [`Gradient::chroma`] for why the axis is
 /// a fraction of what is available rather than a chroma.
-const CHROMA_AXIS: (f32, f32) = (0.0, 1.0);
+const CHROMA_AXIS: (f32, f32) = (*UNIT.start(), *UNIT.end());
 
 /// Which of the gradient's two stretches a [`SpreadBar`] is a bar of.
 ///

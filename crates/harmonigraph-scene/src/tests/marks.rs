@@ -651,33 +651,38 @@ fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
 /// `clamp` passing a NaN straight through because every comparison against
 /// one is false. What it costs is not a mark drawn wrong but every mark drawn
 /// ARRIVED: `since + NaN` is NaN, and `Envelope::approach` answers a
-/// non-finite elapsed with 1.0 — so the wait itself is gone, and with it the
-/// whole of what the bar is for, while the picture still looks like a
-/// picture. Finite-but-wrong rather than unfinishable, which is exactly why
-/// the crate's whole-scene finite sweep passes over this one: there is no NaN
-/// left in the scene for it to find.
+/// non-finite elapsed with 1.0 — so the wait itself is gone, while the picture
+/// still looks like a picture. Finite-but-wrong rather than unfinishable,
+/// which is exactly why the crate's whole-scene finite sweep passes over this
+/// one: there is no NaN left in the scene for it to find.
+///
+/// The door repairs it, and the curve beside it, to the fresh value, as it
+/// does nearly every other setting (#1956), so the mark still waits.
 ///
 /// The scene fixture normalizes the post-pass input, as production load does.
 #[test]
-fn a_non_finite_delay_draws_as_no_delay_at_all() {
+fn a_non_finite_delay_or_curve_loads_at_its_fresh_value() {
     let tracker = held(60);
-    let poisoned = delayed_view(f32::NAN);
+    let fresh = ViewConfig::default();
+    let poisoned = ViewConfig { fade_shape: f32::NAN, ..delayed_view(f32::NAN) };
     let mut sane = poisoned.clone();
     sane.sanitize();
-    assert_eq!(sane.mark_delay, 0.0, "the blob's door is where a NaN is repaired");
+    assert_eq!(sane.mark_delay, fresh.mark_delay, "a NaN delay did not load at the fresh one");
+    assert_eq!(sane.fade_shape, fresh.fade_shape, "a NaN curve did not load at the fresh one");
 
     let level = |view: &ViewConfig, now: f64| {
         let mut motion = NodeMotion::default();
         origin_node(&motion_scene(&mut motion, &tracker, &Tuning::default(), view, now))
             .melody_level
     };
-    // Sampled at the ramp's START, which is the one instant that tells a
-    // repaired delay from an unrepaired one: with no delay the mark has not
-    // eased in yet, and through a NaN it is already full.
-    assert_eq!(level(&poisoned, 0.0), 0.0, "a NaN delay shipped its marks already arrived");
-    assert_eq!(level(&poisoned, 0.0), level(&sane, 0.0), "the two doors must answer alike");
-    // And it is the undelayed ramp rather than a mark layer that never comes.
-    assert_eq!(level(&poisoned, ATTACK), 1.0, "the marks draw as they always did");
+    // Sampled inside the fresh delay, which tells a repaired delay from one
+    // repaired to none: the mark is still waiting there, and with no delay it
+    // has begun to ease in.
+    let delay = f64::from(fresh.mark_delay);
+    assert!(delay > 0.0, "a fresh delay of 0 cannot tell the two repairs apart");
+    assert_eq!(level(&poisoned, delay * 0.5), 0.0, "a NaN delay lost its wait");
+    assert_eq!(level(&poisoned, delay * 0.5), level(&sane, delay * 0.5), "the doors disagree");
+    assert_eq!(level(&poisoned, delay + ATTACK), 1.0, "the marks never arrived");
 }
 
 /// The Delay holds a mark back at a Fade of 0 as at any other: the mark steps
