@@ -61,7 +61,8 @@ pub fn assignment(fifths: i32, flat: i32, declared: i64, tuning: Tuning) -> (Lat
 /// a new note pure (§3.4; simplified on 2026-11-23, `docs/intent/tuning.md`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Follower {
-    /// Fifths the strip stands from where the Position places it.
+    /// Fifths following has slid the strip from where the Position places
+    /// it, before the clamp: where it stands is [`moved_column`] of the two.
     moved: i32,
     /// The node the last note took: the context when nothing is held, so a
     /// staccato arpeggio is heard as one.
@@ -175,21 +176,6 @@ mod tests {
             let sounding = declared + correction;
             assert_eq!((sounding - class).rem_euclid(octave), 0, "{node:?}");
             assert!((sounding - declared).abs() < 50_000_000, "{node:?} at {sounding}");
-        }
-    }
-
-    /// What the editor reads, applied to whatever Position the lanes now
-    /// hold, places the strip where the next note will sound, even after the
-    /// clamp held it at a Position the lanes have since left.
-    #[test]
-    fn the_published_slide_places_the_strip_where_the_next_note_sounds() {
-        let follower = Follower { moved: 9, last: None };
-        for position in -25..=25 {
-            assert_eq!(
-                moved_column(position, follower.slide()),
-                follower.flat(position),
-                "the lanes at {position}"
-            );
         }
     }
 

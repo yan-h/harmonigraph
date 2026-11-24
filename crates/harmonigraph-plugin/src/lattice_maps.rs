@@ -41,8 +41,8 @@ fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
     }
 }
 
-/// Fifths Adaptive's strip stands from its Position, as the Hub last
-/// published it in a word of its own: nothing moved when the strip is not
+/// Fifths Adaptive's strip has slid from its Position before the clamp, as
+/// the Hub last published it in a word of its own: nothing moved when the strip is not
 /// following, or a mode change has yet to reach an attack.
 fn strip_slide(params: &crate::HarmonigraphParams) -> i32 {
     params.strip_slide.load(std::sync::atomic::Ordering::Acquire)
