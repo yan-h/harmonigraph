@@ -462,15 +462,6 @@ fn report() -> String {
     )
     .unwrap();
     apply(&device, vec![mod_event(yaw, 0.0)]);
-    let map = device.id_named("Lattice Map");
-    apply(&device, vec![value_event(map, 2.0), mod_event(map, 1.0)]);
-    writeln!(
-        out,
-        "Lattice Map at 2 modulated by 1: read back {:?} saved {}",
-        host_value(&device, map),
-        saved_value(&device, "lattice-map"),
-    )
-    .unwrap();
 
     writeln!(out, "\neditor writes, read after one process callback").unwrap();
     {

@@ -42,7 +42,7 @@
 
 Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
 
-- Takes are recorded on the display's clock and the offline reader chooses passes and song time (take v7; earlier passes come out through `--pass N` rather than separate files): the reason takes were stamped in song time, lining up with a separate audio bounce, is gone (#903, #972, #1196, #1342). To `propose-rework` as F3′'s take half; the Tape half waits until Tape has been used in Bitwig. First declined on delegation as quiet; reopened after a Fable review and answered by Yan. #1739 F3′
+- Takes are recorded on the display's clock and the offline reader chooses passes and song time (take v7; earlier passes come out through `--pass N` rather than separate files): the reason takes were stamped in song time, lining up with a separate audio bounce, is gone (#903, #972, #1196, #1342). To `propose-rework` as F3′'s take half; the Tape half waits until Tape has been used in Bitwig. First declined on delegation as quiet; reopened after a Fable review and answered by Yan. #1739 F3′ (Tape half left 2026-11-23, below.)
 
 ## 2026-11-14 (F3′ take half, #1760)
 
@@ -79,6 +79,10 @@ Yan took the recommendations made after the audit was checked against the code (
 ## 2026-11-22 (take sample rate, #1928)
 
 - The sample rate travels with the audio: a take's WAV takes its rate from the first audio it records, and a rate change after that fails the take on the status line, with no render; a take whose audio all follows a change is recorded at the new rate. The take header no longer carries a rate. Yan ("build the general fix for A"), #1928 A
+
+## 2026-11-23 (Tape used in Bitwig, #1925)
+
+- Tape has been used in Bitwig, the condition F3′'s Tape half and #1925 part 1 waited on, and both are left: Tape keeps its own note recorder, and the take and the Tape stay two recordings with their own placement rules. Yan's use showed no Tape notes sitting wrong, no wish to export what Tape holds without arming a take, and no need for Sidechain on Tape, its ~29-minute cap or a Tape that survives a reload, so either change would buy maintenance alone, and part 1 at a high risk of a silently wrong export. Yan, 2026-11-23 ("Leave both"), #1925 part 1, #1739 F3′
 
 ## 2026-11-23 (rework proposal, #1956)
 
