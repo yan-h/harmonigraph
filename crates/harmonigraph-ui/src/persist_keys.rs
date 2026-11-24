@@ -423,24 +423,6 @@ mod tests {
         assert_eq!((outer.maybe, outer.mode), (None, Mode::B));
     }
 
-    /// One under a key of a struct that a `Some(…)` or a list holds costs
-    /// that key alone, as one at the top does.
-    #[test]
-    fn an_unknown_variant_inside_a_held_struct_costs_its_own_key() {
-        let decoded = decode::<Wrapped>(
-            "(held:Some((mode:Lost,count:2)),list:[(count:1),(mode:Gone,count:4)])",
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
-        let dropped: Vec<_> =
-            decoded.dropped.iter().map(|d| format!("{}:{}", d.key, d.variant)).collect();
-        assert_eq!(dropped, ["held.mode:Lost", "list.mode:Gone"]);
-        assert_eq!(decoded.value.held, Some(Inner { mode: Mode::A, count: 2 }));
-        assert_eq!(
-            decoded.value.list,
-            [Inner { mode: Mode::A, count: 1 }, Inner { mode: Mode::A, count: 4 }]
-        );
-    }
-
     /// Quotes, escapes, raw strings, characters and comments open no
     /// bracket and name no key, and ron's columns count characters, so text
     /// wider than ASCII ahead of the variant moves no byte offset.

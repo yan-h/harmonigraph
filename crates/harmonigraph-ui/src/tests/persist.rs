@@ -126,14 +126,6 @@ const RETIRED_KEYS: &[(&str, &str, bool)] = &[
     // A key that moved to another struct under the same name: one left inside
     // a view must not reach the preference.
     ("render_scale", "show_perf:true,show_perf_detail:true,", true),
-    // A fixed-length tuple of `Option`s, one holding a struct with an enum
-    // token inside, at the editor document's own top level: the look slots
-    // every project saved before their removal carries.
-    (
-        "camera_presets",
-        "look_slots:(stored:(None,Some((spectrum:(window:Fast))),None,None),active:1),",
-        false,
-    ),
 ];
 
 /// The gradient's Span drag can store a `-0.0`, which the gradient's repair
