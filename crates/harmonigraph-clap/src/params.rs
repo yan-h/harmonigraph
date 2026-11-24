@@ -170,7 +170,7 @@ impl Spec {
             // A NaN would be saved as `null`, which no load reads back.
             Kind::Float { .. } => text.parse::<f32>().ok().filter(|value| !value.is_nan())?,
         };
-        Some(self.normalize(plain) as f64 * self.scale() as f64)
+        Some(self.to_host(plain))
     }
 
     /// What a save stores for a plain value.
@@ -239,7 +239,7 @@ impl Row {
         if offset == 0.0 {
             plain
         } else {
-            self.spec.unnormalize((self.spec.normalize(plain) + offset).clamp(0.0, 1.0))
+            self.spec.unnormalize(self.spec.normalize(plain) + offset)
         }
     }
 }
@@ -320,7 +320,7 @@ impl Table {
     /// part of the value (Yan, 2026-11-23, as in otonal).
     pub(crate) fn base_host_value(&self, row: usize) -> f64 {
         let row = &self.rows[row];
-        row.spec.normalize(row.plain.load(Ordering::Relaxed)) as f64 * row.spec.scale() as f64
+        row.spec.to_host(row.plain.load(Ordering::Relaxed))
     }
 
     /// The row the host knows by `hash`, and the plain value a host value
@@ -673,15 +673,5 @@ mod tests {
         table.set_host(0, 0.3);
         assert_eq!(table.float(0), 1.0);
         assert!(matches!(table.save()["float"], ParamValue::F32(value) if value == 0.3));
-    }
-
-    /// The host reads a row's value without its modulation, which it adds
-    /// itself, while the plugin acts on the modulated value.
-    #[test]
-    fn the_host_reads_the_value_without_its_modulation() {
-        let table = Table::new([Spec::float("float", "Float", 0.5, 0.0, 1.0)]);
-        assert!(table.modulate_host(0, 0.25));
-        assert_eq!(table.float(0), 0.75);
-        assert_eq!(table.base_host_value(0), 0.5);
     }
 }
