@@ -1255,7 +1255,7 @@ impl<P: Plugin> Wrapper<P> {
         match wrapper.params.row(param_id) {
             Some(row) => {
                 unsafe {
-                    *value = wrapper.params.host_value(row);
+                    *value = wrapper.params.base_host_value(row);
                 }
                 true
             }

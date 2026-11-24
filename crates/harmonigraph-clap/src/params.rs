@@ -9,7 +9,7 @@
 //!
 //! A row holds its unmodulated plain value and a mono modulation offset, in
 //! normalized units. Every read of the plain value the plugin acts on is
-//! modulated; a save stores the unmodulated value.
+//! modulated; a save and the host's `get_value` read the unmodulated value.
 //!
 //! The editor writes a row at once, as the host's automation does, and the
 //! row remembers what the host has not yet been told of it: a gesture begun
@@ -135,9 +135,17 @@ impl Spec {
         ((normalized * (max - min) as f32).round() as i32 + min) as f32
     }
 
-    /// A plain value as the host reads it.
+    /// A plain value as the host reads it. An integer's is its exact step from
+    /// the minimum: CLAP reads a stepped value by truncating it (`params.h`),
+    /// so a step computed through the normalized value, a hair below the
+    /// integer, would read as the step below.
     pub fn to_host(&self, plain: f32) -> f64 {
-        self.normalize(plain) as f64 * self.scale() as f64
+        match &self.kind {
+            Kind::Int { min, max, .. } => {
+                ((plain as i64).clamp(i64::from(*min), i64::from(*max)) - i64::from(*min)) as f64
+            }
+            Kind::Float { .. } => self.normalize(plain) as f64,
+        }
     }
 
     /// A host value as normalized: divided in `f32`, as nice-plug did.
@@ -170,7 +178,7 @@ impl Spec {
             // A NaN would be saved as `null`, which no load reads back.
             Kind::Float { .. } => text.parse::<f32>().ok().filter(|value| !value.is_nan())?,
         };
-        Some(self.normalize(plain) as f64 * self.scale() as f64)
+        Some(self.to_host(plain))
     }
 
     /// What a save stores for a plain value.
@@ -233,17 +241,13 @@ pub(crate) enum Report {
 }
 
 impl Row {
-    fn normalized(&self) -> f32 {
-        let normalized = self.spec.normalize(self.plain.load(Ordering::Relaxed));
-        let offset = self.offset.load(Ordering::Relaxed);
-        if offset == 0.0 { normalized } else { (normalized + offset).clamp(0.0, 1.0) }
-    }
-
     fn modulated(&self) -> f32 {
-        if self.offset.load(Ordering::Relaxed) == 0.0 {
-            self.plain.load(Ordering::Relaxed)
+        let plain = self.plain.load(Ordering::Relaxed);
+        let offset = self.offset.load(Ordering::Relaxed);
+        if offset == 0.0 {
+            plain
         } else {
-            self.spec.unnormalize(self.normalized())
+            self.spec.unnormalize(self.spec.normalize(plain) + offset)
         }
     }
 }
@@ -318,10 +322,13 @@ impl Table {
         self.rows.iter().position(|row| row.hash == hash)
     }
 
-    /// What the host reads: the modulated value, scaled by the step count.
-    pub(crate) fn host_value(&self, row: usize) -> f64 {
+    /// What the host reads through `params.get_value`: the unmodulated value,
+    /// scaled by the step count. CLAP hears a parameter as its value plus its
+    /// modulation (`events.h`), so the modulation is the host's to add, not
+    /// part of the value (Yan, 2026-11-23, as in otonal).
+    pub(crate) fn base_host_value(&self, row: usize) -> f64 {
         let row = &self.rows[row];
-        row.normalized() as f64 * row.spec.scale() as f64
+        row.spec.to_host(row.plain.load(Ordering::Relaxed))
     }
 
     /// The row the host knows by `hash`, and the plain value a host value
@@ -614,7 +621,7 @@ mod tests {
                         for step in 0..(1 + gesture % 3) {
                             let plain = ((round * 31 + gesture * 7 + step) % 1000) as f32 / 1000.0;
                             table.edit(0, plain);
-                            last = table.host_value(0);
+                            last = table.base_host_value(0);
                             if step % 2 == 0 {
                                 std::thread::yield_now();
                             }
