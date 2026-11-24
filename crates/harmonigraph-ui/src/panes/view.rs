@@ -24,12 +24,17 @@
 //! that whole block — a name of its own would stand over nothing.
 
 use super::normalize_deg;
+use crate::params::ParamKey;
 use crate::widgets::{button_row, choice_row, LayerStrip, ValueBar};
 use crate::{AppearanceDocument, CameraPreset};
+
 use harmonigraph_scene::Camera;
 use harmonigraph_scene::Projection;
 use harmonigraph_scene::SevensLabel;
 use harmonigraph_scene::SEVENS_SIZE_RANGE;
+
+/// The two channels an Angle preset sets outright.
+const ANGLES: [ParamKey; 2] = [ParamKey::CameraYaw, ParamKey::CameraPitch];
 
 /// Room for a short camera-preset name. Asked for flat, with no clamp against
 /// the pane: `TextEdit` already takes `desired_width.at_most(available_width)`,
@@ -97,6 +102,7 @@ fn camera_rows(
             .changed()
         {
             appearance.camera.yaw = yaw_deg.to_radians();
+            crate::camera_movement::set_outright(ui.ctx(), &[ParamKey::CameraYaw]);
         }
         let pitch_limit_deg = Camera::PITCH_LIMIT.to_degrees();
         let mut pitch_deg = appearance.camera.pitch.to_degrees();
@@ -109,6 +115,7 @@ fn camera_rows(
             .changed()
         {
             appearance.camera.pitch = pitch_deg.to_radians();
+            crate::camera_movement::set_outright(ui.ctx(), &[ParamKey::CameraPitch]);
         }
         // Under orthographic, the readable meaning of an angle pair: how
         // long a unit step along each lattice axis draws on screen.
@@ -138,6 +145,7 @@ fn camera_rows(
             {
                 appearance.camera.yaw = 0.0;
                 appearance.camera.pitch = 0.0;
+                crate::camera_movement::set_outright(ui.ctx(), &ANGLES);
                 if menu {
                     ui.close();
                 }
@@ -149,6 +157,7 @@ fn camera_rows(
             {
                 appearance.camera.yaw = std::f32::consts::FRAC_PI_4;
                 appearance.camera.pitch = (1.0 / 2f32.sqrt()).atan();
+                crate::camera_movement::set_outright(ui.ctx(), &ANGLES);
                 if menu {
                     ui.close();
                 }
@@ -161,6 +170,7 @@ fn camera_rows(
                 if response.clicked() {
                     appearance.camera.yaw = preset.yaw;
                     appearance.camera.pitch = preset.pitch;
+                    crate::camera_movement::set_outright(ui.ctx(), &ANGLES);
                     if menu {
                         ui.close();
                     }

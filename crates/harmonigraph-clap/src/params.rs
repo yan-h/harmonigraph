@@ -308,6 +308,12 @@ impl Table {
         self.rows[row].modulated()
     }
 
+    /// A row's value before the host's modulation: what a save stores and an
+    /// editor write sets.
+    pub fn base(&self, row: usize) -> f32 {
+        self.rows[row].plain.load(Ordering::Relaxed)
+    }
+
     pub fn spec(&self, row: usize) -> &Spec {
         &self.rows[row].spec
     }

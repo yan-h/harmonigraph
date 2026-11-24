@@ -436,6 +436,12 @@ impl HarmonigraphParams {
         self.table.float(Row::camera(key).index())
     }
 
+    /// A camera row's value before the host's modulation, which a save
+    /// stores and an editor write sets.
+    pub fn camera_base(&self, key: ParamKey) -> f32 {
+        self.table.base(Row::camera(key).index())
+    }
+
     /// Which input feeds the analyzer.
     pub fn analysis_input(&self) -> AnalysisInput {
         AnalysisInput::from_index(self.int(Row::AnalysisInput))
@@ -513,6 +519,10 @@ impl ParamBackend for PluginParamBackend<'_> {
 
     fn camera_value(&self, key: ParamKey) -> Option<f32> {
         Some(self.get(key))
+    }
+
+    fn camera_base(&self, key: ParamKey) -> Option<f32> {
+        Some(self.params.camera_base(key))
     }
 
     fn get(&self, key: ParamKey) -> f32 {
