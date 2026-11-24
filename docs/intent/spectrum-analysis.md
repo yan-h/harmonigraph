@@ -47,7 +47,7 @@ Yan’s decisions recorded for future drift audits.
 
 Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
 
-- Tape keeps its own note recorder joined by presentation time until Tape has been used in Bitwig; feeding it from the take lane is F3′'s Tape half, deferred while the take half goes to `propose-rework` (see `video-export.md`). #1739
+- Tape keeps its own note recorder joined by presentation time until Tape has been used in Bitwig; feeding it from the take lane is F3′'s Tape half, deferred while the take half goes to `propose-rework` (see `video-export.md`). #1739 (Left 2026-11-23: Tape has been used and its own recorder stays; see `video-export.md`, #1925.)
 - The analyzer reads a frame on request; drawing at once after a longer-frame switch holds its first column until it dates after the newest (or relies on the guard above). Part of F2′. #1739 (Not done: #1770 found the guard never drops or resets a column on a resolution switch, so this would remove nothing. #1758)
 
 ## 2026-11-14 (F2′ rework, #1758 PR A)
