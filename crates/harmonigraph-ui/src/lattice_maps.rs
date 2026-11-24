@@ -98,12 +98,11 @@ impl Default for MapDocument {
     }
 }
 impl MapDocument {
-    /// Which state this is, for [`MapEditor::names`]'s memo: a slot's
-    /// existence, its name, its deleted flag and `order` move this, and so
-    /// does geometry, through [`capture`](Self::capture) and
-    /// [`reshape`](Self::reshape), which the names do not read. The audio
-    /// thread's map bank does not key on this: the plugin's `Maps::write`
-    /// compares the bank itself before and after each write (#1938).
+    /// Which state this is, for [`MapEditor::names`]'s memo. Every mutation
+    /// moves it, geometry included, so the key never asks which fields a
+    /// reader reads. The audio thread's map bank does not key on it: the
+    /// plugin's `Maps::write` compares the bank itself before and after each
+    /// write (#1938).
     pub fn revision(&self) -> Revision {
         self.revision
     }
@@ -542,8 +541,8 @@ mod tests {
         assert_eq!(doc.neighbour(3), None, "the only map left has no neighbour");
     }
 
-    /// An edit that changes nothing keeps the revision, which is what keeps
-    /// the plugin from marking the host project modified for it.
+    /// An edit that changes nothing keeps the revision, so the names memo
+    /// survives it.
     #[test]
     fn an_edit_that_changes_nothing_keeps_the_revision() {
         let mut doc = MapDocument::default();
