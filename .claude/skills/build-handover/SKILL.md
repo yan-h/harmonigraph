@@ -35,7 +35,7 @@ substring is fine).
 
 Loading a branch copies only, never builds;
 a build must already exist in a registered worktree or a verified lifecycle handoff, which holds both the plugin and the offline renderer and stays loadable after source cleanup.
-Stale builds (dylib older than the branch's HEAD) are flagged but still loadable.
+Stale builds (a dylib stamped with another commit than the branch's HEAD, or older than it where the stamp names none) are flagged but still loadable.
 After installing, the loader reports which Bitwig plug-in hosts and audio engine still map the old or the new executable;
 that is one process snapshot, not a check of the running build tag.
 A failed diagnostic never fails an otherwise successful install.
@@ -128,10 +128,12 @@ The loader intentionally preserves that process's old file instead of changing m
 Release builds land in `<that-worktree>/target/release/libharmonigraph_plugin.dylib`.
 Completed `session-lifecycle` handoffs are preserved under the common Git directory's `agent-lifecycle/builds/`, and `./load-plugin.sh <branch>` finds the latest one when no local binary remains;
 reading them needs agent-config's `session-lifecycle` skill installed.
-Match the dylib's mtime to the branch's last commit time to identify it, then swap it back with `./load-plugin.sh <branch>` —
+Identify it by the commit its build tag names, which `./load-plugin.sh --list` shows, then swap it back with `./load-plugin.sh <branch>` —
 which is the whole recovery, and the only recipe here that gets the swap's ORDER right.
 To rebuild one without cd'ing into the branch's own worktree:
-`cargo build --release -p harmonigraph-plugin --manifest-path <that-worktree>/Cargo.toml`, then load it the same way and verify via a distinctive string from that branch's diff.
+`rm -f <that-worktree>/target/release/{libharmonigraph_plugin.dylib,harmonigraph-offline}`, then `cargo build --release -p harmonigraph-plugin --manifest-path <that-worktree>/Cargo.toml`, then load it the same way and verify via a distinctive string from that branch's diff.
+The removal is what `build-pr.sh` does too:
+a worktree cut before #1957 builds its renderer in another package, so without it an older renderer would load beside the new plugin in silence, where now the loader warns that the build has none.
 
 Use the loader rather than overwriting an installed executable by hand.
 Two consecutive ordinary installs produced macOS `CODESIGNING Invalid Page` scanner kills while the on-disk signature still verified ([#705](https://github.com/yan-h/harmonigraph/issues/705)).

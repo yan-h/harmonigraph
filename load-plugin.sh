@@ -404,7 +404,9 @@ load_build() {  # $1 = worktree index
     echo "Loaded renderer: $installed"
   elif [[ -f "$installed" ]]; then
     # Only a build from before the plugin package built the renderer (#1954),
-    # or a `--lib` build, gets here, and both make a mismatch likely.
+    # or a `--lib` build in a target directory no full build has used, gets
+    # here, and both make a mismatch likely. A `--lib` build after a full one
+    # leaves that build's renderer, which loads above as this one's.
     echo "WARNING: this build has no harmonigraph-offline, so video export keeps the installed" >&2
     echo "         renderer, which may be another build's." >&2
   else
