@@ -97,7 +97,9 @@ impl Stages {
 /// With it, a `warning:` line for each key the selected look carries that
 /// this build does not read, and for each setting whose value this build
 /// repairs on load, for stderr, where the export's row keeps it (#1927 B,
-/// #1956 Q2).
+/// #1956 Q2). The lines name no source: the Video pane passes every look as a
+/// replacement, its Recorded one included, and a hand-run `--appearance`
+/// knows which it passed (#1964).
 pub fn appearance_for(
     take: &harmonigraph_take::Take,
     replacement: Option<&str>,
@@ -111,8 +113,7 @@ pub fn appearance_for(
         if replacement.is_some() { "replacement appearance" } else { "recorded appearance" };
     let (appearance, found) = AppearanceDocument::parse_noting(blob)
         .map_err(|err| format!("cannot render {source}: {err}"))?;
-    let warnings =
-        found.lines().map(|note| format!("{}{source}: {note}", harmonigraph_take::WARNING_PREFIX));
+    let warnings = found.lines().map(|note| format!("{}{note}", harmonigraph_take::WARNING_PREFIX));
     Ok((appearance, warnings.collect()))
 }
 
@@ -855,10 +856,9 @@ mod tests {
             ];
             assert_eq!(warnings.len(), held.len(), "{warnings:?}");
             for held in held {
-                let named = warnings.iter().any(|warning| {
-                    warning.starts_with(harmonigraph_take::WARNING_PREFIX)
-                        && warning.contains(&format!(" {held} which this build loads as "))
-                });
+                let line =
+                    format!("{}the look holds {held} which", harmonigraph_take::WARNING_PREFIX);
+                let named = warnings.iter().any(|warning| warning.starts_with(&line));
                 assert!(named, "{held} was repaired unannounced: {warnings:?}");
             }
         }

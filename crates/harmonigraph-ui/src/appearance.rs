@@ -45,18 +45,26 @@ impl AppearanceDocument {
     /// not read, such as one a rename retired, and each setting whose value
     /// [`normalize`](Self::normalize) repaired, such as one past a range this
     /// build narrowed.
+    pub fn parse_noting(serialized: &str) -> Result<(Self, LoadNotes), String> {
+        let (document, unread) = Self::read_noting(serialized)?;
+        let (document, repaired) = document.normalize_noting()?;
+        Ok((document, LoadNotes { unread, repaired }))
+    }
+
+    /// [`normalize`](Self::normalize), also naming each setting it repaired:
+    /// what an export warns of and an editor restore puts on the Console
+    /// (#1962).
     ///
     /// A repair is found by comparing the document as read with the document
     /// as normalized, value by value, so a setting needs nothing here to be
     /// named. An enum variant serializes as a bare name the comparison cannot
     /// tell apart, but no `sanitize` repairs one.
-    pub fn parse_noting(serialized: &str) -> Result<(Self, LoadNotes), String> {
-        let (document, unread) = Self::read_noting(serialized)?;
-        let held = document.values()?;
-        let document = document.normalize()?;
+    pub fn normalize_noting(self) -> Result<(Self, Vec<Repair>), String> {
+        let held = self.values()?;
+        let document = self.normalize()?;
         let mut repaired = Vec::new();
         repairs("", &held, &document.values()?, &mut repaired);
-        Ok((document, LoadNotes { unread, repaired }))
+        Ok((document, repaired))
     }
 
     /// The document as it is written, with no repair, and the path of each key

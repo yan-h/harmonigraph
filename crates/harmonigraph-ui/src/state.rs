@@ -726,7 +726,9 @@ impl SharedState {
     /// the fresh settings (#1757 Q3); a save then stores `""` only if the
     /// editor has held nothing else and no window has opened. A value naming a variant this build does not have costs its
     /// own key, which opens at its default (#1757 Q4), and a key it does not
-    /// read, such as one a rename retired, is skipped (#1927 B); refused input
+    /// read, such as one a rename retired, is skipped (#1927 B); a look value
+    /// the load repairs, such as one past a range this build narrowed, loads
+    /// repaired (#1962); refused input
     /// leaves the current content intact. Each loss opens the Console and says
     /// there what was lost; a save then stores the settings as they stand, like any
     /// other. Appearance normalization is shared with recording/export;
@@ -775,15 +777,15 @@ impl SharedState {
                 persist.version,
             ));
         }
-        let appearance = match persist.appearance.normalize() {
-            Ok(appearance) => appearance,
+        let (appearance, repaired) = match persist.appearance.normalize_noting() {
+            Ok(normalized) => normalized,
             Err(err) => {
                 return self.refuse_persist(err);
             }
         };
         self.apply_persist(UiPersist { appearance, ..persist });
         self.untouched = false;
-        if dropped.is_empty() && unread.is_empty() {
+        if dropped.is_empty() && unread.is_empty() && repaired.is_empty() {
             return true;
         }
         for lost in dropped {
@@ -796,6 +798,12 @@ impl SharedState {
             self.report_loss(format!(
                 "persist dropped {key} — this build does not read that key; if it was renamed, \
                  its setting opens at its default",
+            ));
+        }
+        for crate::appearance::Repair { path, held, loaded } in repaired {
+            self.report_loss(format!(
+                "persist repaired appearance.{path} — the project holds {held}, \
+                 which this build loads as {loaded}",
             ));
         }
         true
