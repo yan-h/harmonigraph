@@ -791,7 +791,7 @@ fn export_queue(
             interaction.take.export_said.clear();
         }
         for path in paths {
-            let said = match capture_export(appearance, interaction, &path) {
+            let said = match capture_export(appearance, interaction.take.export_look, &path) {
                 Ok((action, notes)) => {
                     interaction.take.export_actions.push(action);
                     notes
@@ -867,13 +867,13 @@ fn export_queue(
 /// A recorded look is queued as written, unrepaired, so the renderer names
 /// each value its load repairs on the export's row, and a retry names them
 /// again (#1956 Q2).
-pub(crate) fn capture_export(
+fn capture_export(
     appearance: &crate::AppearanceDocument,
-    interaction: &crate::Interaction,
+    look: crate::ExportLook,
     path: &std::path::Path,
 ) -> Result<(crate::ExportAction, Vec<String>), String> {
     let mut notes = Vec::new();
-    let captured = match interaction.take.export_look {
+    let captured = match look {
         // A recorded look keeps its own frame and Video history, so queueing it
         // does not recompose the take to the pane's aspect and split; only the
         // pane's Output size, Tail, Encoder and Archive copy apply. Every take
@@ -1746,9 +1746,7 @@ mod export_tests {
         pane.render.tail = 2.0;
         pane.render.encoder = VideoEncoder::Hardware;
         pane.render.archive = true;
-        let mut interaction = crate::Interaction::default();
-        interaction.take.export_look = crate::ExportLook::Recorded;
-        let (queued, notes) = capture_export(&pane, &interaction, &path).unwrap();
+        let (queued, notes) = capture_export(&pane, crate::ExportLook::Recorded, &path).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(notes.len(), 1, "{notes:?}");
         assert!(notes[0].contains("render.retired_key"), "{notes:?}");
@@ -1779,9 +1777,11 @@ mod export_tests {
             .join(format!("harmonigraph-unrecorded-queue-{}.take", std::process::id()));
         let header = harmonigraph_take::Header { appearance: None, ..Default::default() };
         drop(harmonigraph_take::Writer::create(&path, &header).unwrap());
-        let mut interaction = crate::Interaction::default();
-        interaction.take.export_look = crate::ExportLook::Recorded;
-        let queued = capture_export(&crate::AppearanceDocument::default(), &interaction, &path);
+        let queued = capture_export(
+            &crate::AppearanceDocument::default(),
+            crate::ExportLook::Recorded,
+            &path,
+        );
         std::fs::remove_file(&path).unwrap();
         let error = queued.err().expect("a take with no recorded look was queued");
         assert!(error.contains("recorded no appearance"), "refused for another reason: {error}");

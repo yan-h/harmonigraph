@@ -876,7 +876,7 @@ impl SharedState {
     /// close calls this before it refreshes a save's fallback, so the fallback
     /// holds the session. A gesture the close cut off is reported here.
     pub fn finish_open_edit(&mut self) {
-        self.workspace.interaction.appearance_editor.end_window_session(&self.picture.appearance);
+        self.workspace.interaction.appearance_editor.finish(&self.picture.appearance);
         self.report_edit();
     }
 }

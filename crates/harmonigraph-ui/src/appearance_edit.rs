@@ -58,14 +58,16 @@ impl Look {
 
 const HISTORY_LIMIT: usize = 64;
 
+/// The look's undo history: what undo and redo go back and forth through,
+/// and the edit still open while a gesture is.
 #[derive(Default)]
-pub(crate) struct History {
+pub(crate) struct AppearanceEditor {
     undo: Vec<Look>,
     redo: Vec<Look>,
     pending: Option<Look>,
 }
 
-impl History {
+impl AppearanceEditor {
     fn push(&mut self, before: Look, after: &Look) {
         if before == *after {
             return;
@@ -77,6 +79,8 @@ impl History {
         self.redo.clear();
     }
 
+    /// Closes the edit still open as one undo entry: a drag that has ended,
+    /// or one the window's close cut off.
     pub(crate) fn finish(&mut self, appearance: &AppearanceDocument) {
         if let Some(before) = self.pending.take() {
             self.push(before, &Look::capture(appearance));
@@ -113,33 +117,10 @@ impl History {
             after.apply(appearance);
         }
     }
-}
-
-#[derive(Default)]
-pub(crate) struct AppearanceEditor {
-    history: History,
-}
-
-impl AppearanceEditor {
-    /// An edit still open as the window closes, a drag the close cut off, is
-    /// one undo entry.
-    pub(crate) fn end_window_session(&mut self, appearance: &AppearanceDocument) {
-        self.history.finish(appearance);
-    }
-
-    #[cfg(feature = "testing")]
-    pub(crate) fn observe(
-        &mut self,
-        before: Look,
-        appearance: &AppearanceDocument,
-        dragging: bool,
-    ) {
-        self.history.observe(before, appearance, dragging);
-    }
 
     #[cfg(feature = "testing")]
     pub(crate) fn undo_depth(&self) -> usize {
-        self.history.undo.len()
+        self.undo.len()
     }
 
     pub(crate) fn end_frame(
@@ -152,7 +133,7 @@ impl AppearanceEditor {
         // A drag, wheel or pinch closes as one entry on the first frame after
         // it ends. A frame that scrolls a settings pane changes no look, so it
         // holds nothing open on its own.
-        self.history.observe(before, appearance, crate::gesture_open(ctx));
+        self.observe(before, appearance, crate::gesture_open(ctx));
         // TextEdit leaves key events in the input even after handling them.
         // Keep its ownership for the whole frame: Undo followed by Enter can
         // undo text and release focus in one pass, but must not also undo a look.
@@ -164,9 +145,9 @@ impl AppearanceEditor {
             let taken = crate::keys::take_each(ctx, APPEARANCE_SHORTCUTS);
             for shortcut in &taken {
                 if *shortcut == APPEARANCE_SHORTCUTS[0] {
-                    self.history.undo(appearance);
+                    self.undo(appearance);
                 } else {
-                    self.history.redo(appearance);
+                    self.redo(appearance);
                 }
             }
             if !taken.is_empty() {
@@ -202,7 +183,7 @@ mod tests {
         let mut editor = AppearanceEditor::default();
         let original = Look::capture(&appearance);
         appearance.spectrum.attack = 0.2;
-        editor.history.observe(original.clone(), &appearance, false);
+        editor.observe(original.clone(), &appearance, false);
         let changed = Look::capture(&appearance);
         for redo in &APPEARANCE_SHORTCUTS[1..] {
             for (shortcut, expected) in [(APPEARANCE_SHORTCUTS[0], &original), (*redo, &changed)] {
@@ -251,7 +232,7 @@ mod tests {
         let mut editor = AppearanceEditor::default();
         let original = Look::capture(&appearance);
         appearance.spectrum.attack = 0.2;
-        editor.history.observe(original, &appearance, false);
+        editor.observe(original, &appearance, false);
         let mut text = String::new();
         let mut time = 0.0;
         let mut frame = |events| {
@@ -272,7 +253,7 @@ mod tests {
                         text_edit_was_focused,
                     );
                     assert_eq!(appearance.spectrum.attack, 0.2);
-                    assert_eq!(editor.history.undo.len(), 1);
+                    assert_eq!(editor.undo.len(), 1);
                 },
             );
             text.clone()
@@ -339,16 +320,16 @@ mod tests {
         frame(vec![crate::tests::probe::press(start + egui::vec2(60.0, 0.0), false)]);
         assert_ne!(appearance.spectrum.attack, original, "fixture must actually drag the slider");
         let changed = appearance.spectrum.attack;
-        assert_eq!(editor.history.undo.len(), 1);
-        editor.history.undo(&mut appearance);
+        assert_eq!(editor.undo.len(), 1);
+        editor.undo(&mut appearance);
         assert_eq!(appearance.spectrum.attack, original);
-        editor.history.redo(&mut appearance);
+        editor.redo(&mut appearance);
         assert_eq!(appearance.spectrum.attack, changed);
-        editor.history.undo(&mut appearance);
+        editor.undo(&mut appearance);
         let before = Look::capture(&appearance);
         appearance.spectrum.attack = 0.2;
-        editor.history.observe(before, &appearance, false);
-        assert!(editor.history.redo.is_empty());
+        editor.observe(before, &appearance, false);
+        assert!(editor.redo.is_empty());
     }
 
     /// Zoom the Analyzer with `wheel(frame)` events over 40 frames and assert
@@ -403,8 +384,8 @@ mod tests {
         }
         assert!(zooming_frames >= 3, "the wheel must zoom over several frames: {zooming_frames}");
         assert_ne!(Look::capture(&state.appearance), original);
-        assert_eq!(editor.history.undo.len(), 1);
-        editor.history.undo(&mut state.appearance);
+        assert_eq!(editor.undo.len(), 1);
+        editor.undo(&mut state.appearance);
         assert_eq!(Look::capture(&state.appearance), original);
     }
 
@@ -496,8 +477,8 @@ mod tests {
             );
         }
         assert!(moving_frames >= 3, "the drag must pan over several frames: {moving_frames}");
-        assert_eq!(editor.history.undo.len(), 1);
-        editor.history.undo(&mut state.appearance);
+        assert_eq!(editor.undo.len(), 1);
+        editor.undo(&mut state.appearance);
         assert_eq!(Look::capture(&state.appearance), original);
     }
 
@@ -511,7 +492,7 @@ mod tests {
             let mut editor = AppearanceEditor::default();
             let before = Look::capture(&appearance);
             appearance.spectrum.attack = 0.2;
-            editor.history.observe(before, &appearance, true);
+            editor.observe(before, &appearance, true);
             let mut events = vec![egui::Event::Zoom(1.1)];
             if lost {
                 events.push(egui::Event::WindowFocused(false));
@@ -523,8 +504,8 @@ mod tests {
                     editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx(), false);
                 },
             );
-            assert_eq!(editor.history.pending.is_none(), finished, "focus lost: {lost}");
-            assert_eq!(editor.history.undo.len(), usize::from(finished));
+            assert_eq!(editor.pending.is_none(), finished, "focus lost: {lost}");
+            assert_eq!(editor.undo.len(), usize::from(finished));
         }
     }
 
@@ -534,11 +515,11 @@ mod tests {
         let original = Look::capture(&state.picture.appearance);
         state.picture.appearance.spectrum.attack = 0.2;
         let editor = &mut state.workspace.interaction.appearance_editor;
-        editor.history.observe(original, &state.picture.appearance, false);
-        assert_eq!(editor.history.undo.len(), 1, "the fixture holds an edit to discard");
+        editor.observe(original, &state.picture.appearance, false);
+        assert_eq!(editor.undo.len(), 1, "the fixture holds an edit to discard");
         let blob = state.save_persist();
         assert!(state.install_document(&blob));
-        assert!(state.workspace.interaction.appearance_editor.history.undo.is_empty());
+        assert!(state.workspace.interaction.appearance_editor.undo.is_empty());
         assert_eq!(state.picture.appearance.spectrum.attack, 0.2);
     }
 
@@ -562,14 +543,14 @@ mod tests {
             },
         );
         assert_eq!(appearance.spectrum.attack, original);
-        editor.history.redo(&mut appearance);
+        editor.redo(&mut appearance);
         assert_eq!(appearance.spectrum.attack, 0.2);
     }
 
     #[test]
     fn undo_preserves_incoming_camera_and_output() {
         let mut appearance = AppearanceDocument::default();
-        let mut history = History::default();
+        let mut history = AppearanceEditor::default();
         let before = Look::capture(&appearance);
         let original = appearance.spectrum.attack;
         appearance.spectrum.attack = 0.2;

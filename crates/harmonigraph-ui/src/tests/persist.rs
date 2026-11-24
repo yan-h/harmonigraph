@@ -336,17 +336,7 @@ fn a_document_naming_any_one_unknown_variant_costs_that_key_alone() {
             format!("{}{UNKNOWN}{}", &blob[..at.start], &blob[at.end..])
         };
         let swapped = swap(&saved, at.clone());
-        // The pair whose value holds the token: a tuple's item is its pair's.
-        let mut owner = path.as_str();
-        while let Some(item) = owner.strip_suffix(']') {
-            owner = &item[..item.rfind('[').expect("an index opens")];
-        }
-        let (_, pair) = pairs.iter().find(|(p, _)| p == owner).expect("a pair holds every token");
-        let named: String = owner
-            .split('.')
-            .map(|key| &key[..key.find('[').unwrap_or(key.len())])
-            .collect::<Vec<_>>()
-            .join(".");
+        let (_, pair) = pairs.iter().find(|(p, _)| p == path).expect("a pair holds every token");
 
         let mut restored = fresh();
         assert!(
@@ -361,8 +351,8 @@ fn a_document_naming_any_one_unknown_variant_costs_that_key_alone() {
         assert!(!collapsed(&restored, panes::Tab::Console), "{path}: the loss is hidden");
         let said = restored.picture.runtime.console.lines().find(|line| line.contains(UNKNOWN));
         assert!(
-            said.is_some_and(|line| line.contains(&format!("dropped {named} "))),
-            "{path}: the Console does not name {named}: {said:?}",
+            said.is_some_and(|line| line.contains(&format!("dropped {path} "))),
+            "{path}: the Console does not name {path}: {said:?}",
         );
 
         let cut = if saved[pair.end..].starts_with(',') {
@@ -801,15 +791,14 @@ fn nested_defaults() -> [(&'static str, String, &'static str); 11] {
 
 /// The layer under the missing-key tests above and below: every key of every
 /// struct the editor save holds, at any depth, dropped in turn — through
-/// `Some`, tuples, lists and enum payloads as well — and the rest parsed with
+/// `Some` and lists as well — and the rest parsed with
 /// the parse `install_document` runs.
 ///
 /// Those tests each sweep one level through the real doors, `install_document` or
 /// `AppearanceDocument::parse`, and compare what loads: the persist sections
 /// (`a_persist_blob_missing_any_one_section_keeps_the_rest`) and the
 /// appearance's groups (`an_appearance_missing_any_one_group_keeps_the_rest`).
-/// This one reaches every struct nested further in, a preset and a stored look
-/// included, asked at the parse alone, which is the parse `install_document`'s
+/// This one reaches every struct nested further in, a preset included, asked at the parse alone, which is the parse `install_document`'s
 /// per-key decode runs, since normalization may rightly move a sibling of the
 /// dropped key.
 ///
@@ -1526,7 +1515,7 @@ fn item_ranges(blob: &str) -> Vec<std::ops::Range<usize>> {
 
 /// Every `key:value` pair of every struct a serialized blob holds, at any
 /// depth, as its path and its byte range in `blob`: through nested structs,
-/// tuples and lists, whose items are numbered (`stored[1]`), and through a
+/// tuples and lists, whose items are numbered (`star_size[1]`), and through a
 /// `Some` or an enum variant's payload at the path of the value it is.
 pub(super) fn nested_pairs(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
     let mut out = Vec::new();
