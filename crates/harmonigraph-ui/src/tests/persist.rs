@@ -140,6 +140,27 @@ fn a_negative_zero_is_no_repair() {
     assert_eq!(found.lines().collect::<Vec<_>>(), Vec::<String>::new());
 }
 
+/// A look value this build repairs on load, such as one past a range it
+/// narrowed, is named on the Console by an editor restore, as an export names
+/// it on its row (#1962), and the Console opens; the value loads repaired.
+#[test]
+fn a_restore_names_each_look_value_it_repairs() {
+    let mut state = dialled();
+    state.picture.appearance.view.atmosphere.stars.star_size[1] = -1.0;
+    let saved = state.save_persist();
+    assert!(saved.contains("star_size:("), "the fixture lost its star sizes: {saved}");
+    let mut restored = fresh();
+    set_console_collapsed(&mut restored, true);
+    assert!(restored.install_document(&saved));
+    assert!(!collapsed(&restored, panes::Tab::Console), "the repair is hidden");
+    let lines: Vec<&str> = restored.picture.runtime.console.lines().collect();
+    let named = "persist repaired appearance.view.atmosphere.stars.star_size.1 — \
+                 the project holds -1.0, which this build loads as ";
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with(named), "{lines:?}");
+    assert!(restored.picture.appearance.view.atmosphere.stars.star_size[1] >= 0.0);
+}
+
 /// A retired key costs nothing but its own setting: through both doors — the
 /// editor's `install_document`, and, for a key inside the appearance, the
 /// `AppearanceDocument::parse` that take replay and explicit export share —

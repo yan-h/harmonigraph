@@ -110,3 +110,8 @@ Yan asked for an audit of checkboxes against switches and a rule, and took the r
 
 - Bitwig reads a parameter's value without its modulation: `get_value` answers the saved value and the host adds its modulation, as CLAP's `events.h` says, the same choice as otonal's (otonal #1846), made without waiting for a Bitwig check. Yan, 2026-11-23, PR #1959
 - With a Bitwig modulator on a camera axis, a preset, Reset, Frame notes or an angle bar sets the saved value itself and the modulation swings around it ("Set the saved value"); a drag, zoom, orbit or pan moves the saved value by the move. Under a modulator, an angle bar grabbed at its fill jumps the saved value by the modulation, and Frame notes under a yaw or pitch modulator fits at the drawn angle; both are left as they are. Yan, 2026-11-23, PR #1961
+
+## 2026-11-24 (issue sweep, #1962)
+
+- An editor restore names each setting of the live look it repairs on load with a Console line, and the Console opens, as an export names it on its row. Yan, 2026-11-24, #1962
+- Look slots and camera presets stay repaired silently at a restore, though a stored slot or preset past a narrowed range opens changed and is saved so: the live look only. Yan, 2026-11-24, on PR #1970's review

@@ -87,3 +87,7 @@ Yan took the recommendations made after the audit was checked against the code (
 ## 2026-11-23 (rework proposal, #1956)
 
 - An export names each setting of the take's recorded look that this build repairs on load, as it names an unread key since #1932. #1956 Q2
+
+## 2026-11-24 (issue sweep, #1964)
+
+- An export's warning lines name no source: `warning: the look holds view.sevens_size at -1.0, which this build loads as 0.15`, since the Video pane passes its Recorded look as a replacement too; a refusal still names its source. Yan, 2026-11-24, option A, #1964 item 1
