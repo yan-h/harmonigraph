@@ -33,8 +33,8 @@ impl AppearanceDocument {
     /// the view's lattice center.
     ///
     /// The one list of them. A look (`appearance_edit::Look`) resets these on
-    /// capture and keeps the live document's on apply, so undo and the slots
-    /// never carry the host's camera.
+    /// capture and keeps the live document's on apply, so undo never carries
+    /// the host's camera.
     ///
     /// [`set_camera_movement`]: Self::set_camera_movement
     pub(crate) fn copy_host_owned(

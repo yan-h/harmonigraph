@@ -10,7 +10,7 @@ The display link and frame pacing decisions (#1551) are in `host-window-and-paci
 
 ## 2026-11-02 (drift audit, #1635)
 
-- One wheel or trackpad zoom of the Analyzer is one undoable look edit, as a drag is: the gesture closes as one entry when it stops. Navigation stays in the look, so slots keep carrying the Analyzer's pitch range. #1635 Editor Q1, #1633
+- One wheel or trackpad zoom of the Analyzer is one undoable look edit, as a drag is: the gesture closes as one entry when it stops. Navigation stays in the look, so slots keep carrying the Analyzer's pitch range. #1635 Editor Q1, #1633 (Slot half superseded by the 2026-11-24 removal of look slots.)
 
 ## 2026-11-10 (maintainability audit, #1677)
 
@@ -28,20 +28,20 @@ The display link and frame pacing decisions (#1551) are in `host-window-and-paci
 Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
 
 - The editor's live state becomes the only copy of its saved settings: a host restore arrives through a mailbox the next lock holder applies, a save serializes the live state, and opening or closing the window stops reloading the blob, which removes both causes of #1740. Taken to `propose-rework` as F1′. Delegated: it is the one standing rework with a live defect behind it, and the smaller fix for #1740 leaves the drift class (#324, #1301, #1329, #1740) in place. #1739 D1
-- Note fade and the pitch colour range move from host parameters into the look, so they undo, follow slots and export with it; their automation goes. Delegated: #1395 already keeps colours and note styling out of automation, and no take or project read shows them automated. #1739 D4, #1744
+- Note fade and the pitch colour range move from host parameters into the look, so they undo, follow slots and export with it; their automation goes. Delegated: #1395 already keeps colours and note styling out of automation, and no take or project read shows them automated. #1739 D4, #1744 (Slot half superseded by the 2026-11-24 removal of look slots.)
 - Folding the Analyzer's Spectrum or history region keeps its space inside the Analyzer instead of resizing the window, retiring `region_widths`, the Spiral's width lend and the fold handshake; section folds still resize the window. This meets #1124's need (the Spiral gets its width) by removing its cause, replacing #1149's lend. First declined on delegation because the fold fixes had gone quiet; Yan reopened it, judging by what the code costs to own rather than how recently it broke. #1739 D8, #1755
 - Completeness guards observe every input path (bars found by perturbing saved values, view floats NaN-poisoned in turn) instead of hand inventories; prototyped and timed first. #1739, #1752
 - The standalone harness publishes egui's font texture through eframe, so its labels take the production text path and the CPU atlas mirror goes. #1739, #1754
 
 ## 2026-11-14 (premises audit #1739, rework #1757)
 
-- The editor's live settings are the only copy: a host restore installs into them, a host save serializes them, and opening or closing the editor window reads nothing saved, so the look slots' undo histories survive a close (#1740). A restore still starts them afresh. #1757
+- The editor's live settings are the only copy: a host restore installs into them, a host save serializes them, and opening or closing the editor window reads nothing saved, so the look slots' undo histories survive a close (#1740). A restore still starts them afresh. #1757 (Slot half superseded by the 2026-11-24 removal of look slots.)
 - A project saved with the editor shut is rewritten in this build's shape: keys this build does not know are dropped, missing keys are saved at today's defaults, and repaired values are saved repaired. #1757 Q1
 - An editor never opened keeps saving an empty settings blob, so its project follows later default captures. #1757 Q2
 - Restoring an empty settings blob means the fresh look, not "keep what the editor shows". #1757 Q3
 - A save the host makes from inside a callback the editor makes under its lock (a parameter gesture's flush, a camera move) cannot take the lock, and stores the newest of the last restore, close, successful save or first frame to draw the editor rather than the live settings: the stated limit of #1301. From the frame after the first one to draw the editor, it never stores the empty blob, since restoring that is the fresh look; a save re-entered during that first frame itself still can. #1757 (first-frame half superseded below)
 - A document this build could not fully read is saved verbatim until a frame draws the editor past its loading screen, whatever that frame draws; a frame with no area counts, an occluded window's frames count. Accepted without a fourth red-team round. #1757 QD (superseded below)
-- At the editor's door, a saved value naming an enum variant this build does not have costs only the key that holds it, which opens at its default with a Console line, rather than the whole layout, look, slots and presets. This supersedes the whole-parse rule `AGENTS.md` carried. #1757 Q4
+- At the editor's door, a saved value naming an enum variant this build does not have costs only the key that holds it, which opens at its default with a Console line, rather than the whole layout, look, slots and presets. This supersedes the whole-parse rule `AGENTS.md` carried. #1757 Q4 (Slot half superseded by the 2026-11-24 removal of look slots.)
 - At the take and export door the parse stays strict: a take whose recorded look names a dropped variant keeps refusing to export, loudly. #1757 Q5
 - The protocol and the per-key decode landed as one PR, so the per-key half cannot be reverted on its own. #1757 QA
 
@@ -54,7 +54,7 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 
 ## 2026-11-17 (#1813, in chat)
 
-- Any edit to what `ui-state` saves marks the Bitwig project modified, as a musical setting's does: the layout and pane sizes, view settings, look slots, camera presets and editor preferences (option A). A restore, opening the editor, and what the editor writes by itself, such as the layout fitted to the window, mark nothing. #1813
+- Any edit to what `ui-state` saves marks the Bitwig project modified, as a musical setting's does: the layout and pane sizes, view settings, look slots, camera presets and editor preferences (option A). A restore, opening the editor, and what the editor writes by itself, such as the layout fitted to the window, mark nothing. #1813 (Slot half superseded by the 2026-11-24 removal of look slots.)
 
 ## 2026-11-22 (#1934, in chat)
 
@@ -114,4 +114,8 @@ Yan asked for an audit of checkboxes against switches and a rule, and took the r
 ## 2026-11-24 (issue sweep, #1962)
 
 - An editor restore names each setting of the live look it repairs on load with a Console line, and the Console opens, as an export names it on its row. Yan, 2026-11-24, #1962
-- Look slots and camera presets stay repaired silently at a restore, though a stored slot or preset past a narrowed range opens changed and is saved so: the live look only. Yan, 2026-11-24, on PR #1970's review
+- Look slots and camera presets stay repaired silently at a restore, though a stored slot or preset past a narrowed range opens changed and is saved so: the live look only. Yan, 2026-11-24, on PR #1970's review (Slot half superseded by the 2026-11-24 removal of look slots; presets still hold.)
+
+## 2026-11-24 (look slots removed)
+
+- The look slots are removed: Yan never used them. Undo keeps one history, and the Video pane exports the current or the recorded look. Yan, 2026-11-24

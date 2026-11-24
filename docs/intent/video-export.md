@@ -74,7 +74,7 @@ Yan took the recommendations made after the audit was checked against the code (
 
 ## 2026-11-20 (one Appearance row, PR #1902)
 
-- "Use each take's recorded appearance" (above) is the Appearance row's Recorded option, beside Current and the slots; what it keeps from the take is unchanged. Yan ("Go with your recommendations")
+- "Use each take's recorded appearance" (above) is the Appearance row's Recorded option, beside Current and the slots; what it keeps from the take is unchanged. Yan ("Go with your recommendations") (Slot half superseded by the 2026-11-24 removal of look slots.)
 
 ## 2026-11-22 (take sample rate, #1928)
 

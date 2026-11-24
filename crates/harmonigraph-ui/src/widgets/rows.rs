@@ -397,7 +397,7 @@ pub(crate) fn choice_buttons<T: Copy + PartialEq>(
 
 /// One option of a choice group: a selectable button standing on its own fill.
 /// A click selects `choice`.
-pub(crate) fn option_button<T: PartialEq>(
+fn option_button<T: PartialEq>(
     ui: &mut Ui,
     value: &mut T,
     choice: T,

@@ -744,7 +744,6 @@ fn export_queue(
     appearance: &crate::AppearanceDocument,
     interaction: &mut crate::Interaction,
 ) {
-    use crate::appearance_edit::{slot_name, SLOT_COUNT};
     use crate::{ExportAction, ExportLook};
     use harmonigraph_take::render::ExportStatus;
     if ui
@@ -759,19 +758,10 @@ fn export_queue(
     subsection(ui, "Exports", |ui| {
         ui.add(egui::TextEdit::multiline(&mut interaction.take.export_paths).desired_width(ui.available_width()).desired_rows(2).hint_text("/path/to/music.take"))
             .on_hover_text("One take path per line. Each video is saved beside its take; an existing video gets a numbered variant.");
-        let slots: Vec<String> = (0..SLOT_COUNT).map(slot_name).collect();
-        let options: Vec<(ExportLook, &str, &str)> = [
+        let options = [
             (ExportLook::Recorded, "Recorded", RECORDED_HINT),
             (ExportLook::Current, "Current", "The editor's appearance when you queue."),
-        ]
-        .into_iter()
-        .chain(
-            slots
-                .iter()
-                .enumerate()
-                .map(|(slot, name)| (ExportLook::Slot(slot), name.as_str(), "")),
-        )
-        .collect();
+        ];
         crate::widgets::choice_row(ui, "Appearance", &mut interaction.take.export_look, &options);
         let mut paths = Vec::new();
         button_row(ui, |ui| {
@@ -903,15 +893,6 @@ pub(crate) fn capture_export(
             recorded
         }
         crate::ExportLook::Current => appearance.clone(),
-        crate::ExportLook::Slot(slot) => {
-            let mut captured = appearance.clone();
-            // The active slot is the live look, and a slot never visited
-            // starts as a copy of it, so either is the current appearance.
-            if let Some(look) = interaction.appearance_editor.slots.stored(slot) {
-                look.apply(&mut captured);
-            }
-            captured
-        }
     };
     // The size the Exports list shows is read back out of the blob, as the
     // renderer reads it, so whatever parsing repairs, the two agree.
@@ -1827,10 +1808,7 @@ mod export_tests {
                     events,
                     ..Default::default()
                 },
-                |ui| {
-                    interaction.appearance_editor.toolbar(ui);
-                    export_queue(ui, &appearance, &mut interaction);
-                },
+                |ui| export_queue(ui, &appearance, &mut interaction),
             )
         };
         let text = |output: &egui::FullOutput, label: &str| {

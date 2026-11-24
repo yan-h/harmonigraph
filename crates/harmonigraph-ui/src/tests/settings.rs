@@ -280,21 +280,13 @@ fn text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
 /// The Video pane's first heading has no rule above it — there is nothing
 /// above it to be separated from, and a rule there reads as the pane hanging
 /// off a line.
-///
-/// Appearance actions lead the Video pane in either shell. A section rule may
-/// separate those actions from Record/Frame, but must not precede all content.
 #[test]
-fn the_video_pane_starts_with_appearance_actions_before_any_rule() {
+fn the_video_pane_starts_with_its_first_heading_before_any_rule() {
     // Which section leads, per shell: a host can record takes, so Record
     // leads; the standalone cannot, so `record_controls` returns early.
     for (supported, leads) in [(true, "RECORD"), (false, "FRAME")] {
         let (shapes, rule) = video_pane_shapes(supported);
-        let heading = text_y(&shapes, "1").expect("appearance slots lead the pane");
-        assert_eq!(text_y(&shapes, "4"), Some(heading));
-        assert_eq!(text_y(&shapes, "Save to"), Some(heading));
-        assert!(text_y(&shapes, "Undo").is_none());
-        assert!(text_y(&shapes, "Redo").is_none());
-        assert!(text_y(&shapes, leads).unwrap() > heading);
+        let heading = text_y(&shapes, leads).expect("the leading section is drawn");
         // Only rules BELOW the tab bar are the pane's own. The dock's chrome
         // draws lines of its own above the body, in its own colors, and those
         // are not this test's business — hence matching on the separator

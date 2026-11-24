@@ -216,11 +216,11 @@ mod tests {
         let _ = frame(&ctx, &mut state, grown);
         assert_eq!(told.load(Relaxed), 0, "nothing a save stores was edited");
 
-        // A look saved to a slot is an edit.
-        let editor = &mut state.workspace.interaction.appearance_editor;
-        editor.save_to(1, &state.picture.appearance);
+        // A camera preset saved is an edit.
+        let preset = crate::CameraPreset { name: "reading".into(), yaw: 0.7, pitch: 0.2 };
+        state.workspace.interaction.camera_presets.push(preset);
         let _ = frame(&ctx, &mut state, grown);
-        assert_eq!(told.load(Relaxed), 1, "a look saved to a slot");
+        assert_eq!(told.load(Relaxed), 1, "a camera preset saved");
 
         // The divider dragged away and back after the pane grew, within one
         // pinch: nothing until it ends, then once.

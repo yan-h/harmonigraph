@@ -126,6 +126,14 @@ const RETIRED_KEYS: &[(&str, &str, bool)] = &[
     // A key that moved to another struct under the same name: one left inside
     // a view must not reach the preference.
     ("render_scale", "show_perf:true,show_perf_detail:true,", true),
+    // A fixed-length tuple of `Option`s, one holding a struct with an enum
+    // token inside, at the editor document's own top level: the look slots
+    // every project saved before their removal carries.
+    (
+        "camera_presets",
+        "look_slots:(stored:(None,Some((spectrum:(window:Fast))),None,None),active:1),",
+        false,
+    ),
 ];
 
 /// The gradient's Span drag can store a `-0.0`, which the gradient's repair
@@ -235,38 +243,27 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
     }
 }
 
-/// [`dialled`], plus a camera preset, a look stored in slot 2 and the
+/// [`dialled`], plus a camera preset, every intensity weight and the
 /// geometry an unfolded Analyzer frame leaves: a document whose sweeps reach
-/// the structs inside a list, a tuple and a `Some`.
+/// the structs inside a list and a `Some`, and the numbers inside a `Some`.
 fn filled() -> SharedState {
-    use crate::appearance_edit::{AppearanceEditor, Look, Slots};
-
     let mut state = dialled();
     state.workspace.interaction.camera_presets.push(CameraPreset {
         name: "reading".into(),
         yaw: 0.7,
         pitch: 0.2,
     });
-    let mut stored = AppearanceDocument::default();
-    stored.spectrum.attack = 0.2;
-    // Every intensity weight filled, here and in the stored look: an empty
-    // one holds no number for a sweep to reach.
-    for view in [&mut state.picture.appearance.view, &mut stored.view] {
-        let intensity = &mut view.intensity;
-        for source in [
-            &mut intensity.velocity,
-            &mut intensity.gain,
-            &mut intensity.pressure,
-            &mut intensity.timbre,
-        ] {
-            *source =
-                harmonigraph_scene::IntensitySource { opacity: Some(0.4), thickness: Some(0.6) };
-        }
+    // Every intensity weight filled: an empty one holds no number for a sweep
+    // to reach.
+    let intensity = &mut state.picture.appearance.view.intensity;
+    for source in [
+        &mut intensity.velocity,
+        &mut intensity.gain,
+        &mut intensity.pressure,
+        &mut intensity.timbre,
+    ] {
+        *source = harmonigraph_scene::IntensitySource { opacity: Some(0.4), thickness: Some(0.6) };
     }
-    let look = ron::to_string(&Look::capture(&stored)).expect("a look serializes");
-    let slots: Slots = ron::from_str(&format!("(stored:(None,Some({look}),None,None),active:0)"))
-        .expect("a slot holding a look parses");
-    state.workspace.interaction.appearance_editor = AppearanceEditor::restore(slots);
     // What a drawn, unfolded Analyzer records, written as its save has it:
     // the geometry is private to the pane that draws it.
     state.workspace.interaction.analyzer_regions =
@@ -328,7 +325,7 @@ fn a_document_naming_any_one_unknown_variant_costs_that_key_alone() {
         "appearance.camera.projection",
         "appearance.view.atmosphere.material_style",
         "appearance.spectrum.orientation",
-        "look_slots.stored[1].spectrum.window",
+        "appearance.render.frame.lattice",
         "prefs.frame_rate",
     ] {
         assert!(variants.iter().any(|(path, _)| path == deep), "the sweep never reaches {deep}");
@@ -828,9 +825,9 @@ fn nested_defaults() -> [(&'static str, String, &'static str); 11] {
 /// one is not skipped by default.
 ///
 /// The fixture is `dialled`, which moves a few values in the camera, view,
-/// spectrum, render and workspace off fresh, plus a camera preset, a stored
-/// look and the Analyzer's region geometry, so the walk reaches the structs
-/// inside a list, a tuple and a `Some`.
+/// spectrum, render and workspace off fresh, plus a camera preset and the
+/// Analyzer's region geometry, so the walk reaches the structs inside a list
+/// and a `Some`.
 #[test]
 fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
     let saved = filled().save_persist();
@@ -852,7 +849,7 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
         "prefs.skin_dials.tint",
         "prefs.spiral.zoom",
         "camera_presets[0].yaw",
-        "look_slots.stored[1].view.shadow.lattice_text.width",
+        "appearance.view.shadow.lattice_text.width",
         "analyzer_regions.geometry.depths",
     ] {
         assert!(pairs.iter().any(|(path, _)| path == deep), "the sweep never reaches {deep}");
@@ -893,17 +890,11 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
             .unwrap_or_else(|| panic!("dropping {path} lost the key from the next save"));
         // The dropped key's own value.
         let came_back = &again[back.clone()];
-        // A stored look is the appearance's camera, view and spectrum under
-        // another name, and a fresh save holds none: its keys come back where
-        // the appearance's do.
-        let like =
-            path.strip_prefix("look_slots.stored[1].").map(|rest| format!("appearance.{rest}"));
-        let like = like.as_deref().unwrap_or(path);
         let group = nested.iter().find_map(|(owner, keys)| {
-            let inner = like.strip_prefix(owner)?.strip_prefix('.')?;
+            let inner = path.strip_prefix(owner)?.strip_prefix('.')?;
             Some((owner, &keys[inner]))
         });
-        let want = match (group, fresh_pairs.get(like)) {
+        let want = match (group, fresh_pairs.get(path)) {
             (Some((owner, bare)), fresh) => {
                 if fresh != Some(bare) {
                     needed.insert(*owner);
@@ -980,10 +971,9 @@ fn a_document_naming_any_non_finite_float_opens_on_real_numbers() {
         "appearance.spectrum.atmosphere.",
         "appearance.render.",
         "camera_presets[0].",
-        "look_slots.stored[1].",
         "prefs.perf_pos.",
         "appearance.view.intensity.timbre.thickness",
-        "look_slots.stored[1].view.intensity.velocity.opacity",
+        "appearance.view.intensity.velocity.opacity",
     ] {
         assert!(floats.iter().any(|(path, _)| path.starts_with(owner)), "no float under {owner}");
     }
@@ -1045,15 +1035,8 @@ fn a_document_naming_any_non_finite_float_opens_on_real_numbers() {
 #[test]
 fn the_persist_blob_carries_exactly_these_top_level_keys() {
     // UiPersist's fields, in declaration order.
-    const KEYS: &[&str] = &[
-        "version",
-        "layout",
-        "analyzer_regions",
-        "appearance",
-        "camera_presets",
-        "look_slots",
-        "prefs",
-    ];
+    const KEYS: &[&str] =
+        &["version", "layout", "analyzer_regions", "appearance", "camera_presets", "prefs"];
 
     let saved = fresh().save_persist();
     let keys: Vec<String> = top_level_pairs(&saved).into_iter().map(|(key, _)| key).collect();
