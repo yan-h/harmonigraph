@@ -79,10 +79,12 @@ impl Follower {
         moved_column(position, self.moved)
     }
 
-    /// Fifths the strip stands from where the Position fifths `position`
-    /// place it.
-    pub fn moved(&self, position: i32) -> i32 {
-        self.flat(position) - flat_column(position)
+    /// Fifths following has slid the strip from where the Position places
+    /// it, before the clamp: [`moved_column`] of any Position and this is
+    /// where the next note sounds, so the editor can read a lane the Hub has
+    /// not yet struck a note under.
+    pub fn slide(&self) -> i32 {
+        self.moved
     }
 
     /// An attack group's spellings `struck`, over the nodes the held notes
@@ -173,6 +175,21 @@ mod tests {
             let sounding = declared + correction;
             assert_eq!((sounding - class).rem_euclid(octave), 0, "{node:?}");
             assert!((sounding - declared).abs() < 50_000_000, "{node:?} at {sounding}");
+        }
+    }
+
+    /// What the editor reads, applied to whatever Position the lanes now
+    /// hold, places the strip where the next note will sound, even after the
+    /// clamp held it at a Position the lanes have since left.
+    #[test]
+    fn the_published_slide_places_the_strip_where_the_next_note_sounds() {
+        let follower = Follower { moved: 9, last: None };
+        for position in -25..=25 {
+            assert_eq!(
+                moved_column(position, follower.slide()),
+                follower.flat(position),
+                "the lanes at {position}"
+            );
         }
     }
 

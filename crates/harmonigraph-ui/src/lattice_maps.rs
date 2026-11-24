@@ -407,9 +407,10 @@ pub struct MapView {
     /// Where following has moved the map beyond `offsets`, as the Hub last
     /// left it. Already included in `playback.map`, which is what sounds.
     pub followed: LatticePos,
-    /// Fifths Adaptive's strip has slid from where the Position fifths set it
-    /// (`policy::strip::Follower`), as the Hub last left it.
-    pub strip_moved: i32,
+    /// Fifths Adaptive's strip has slid from where the Position fifths set it,
+    /// before the clamp (`policy::strip::Follower::slide`), as the Hub last
+    /// left it.
+    pub strip_slide: i32,
     /// The map state the parameters request, before following moves it, when
     /// the audio thread has not adopted it yet: the request the pending label
     /// waits on. Following is the Hub's own movement, not a request.
@@ -429,7 +430,7 @@ impl MapView {
         &self,
         policy: harmonigraph_core::configuration::PolicyConfig,
     ) -> Option<i32> {
-        let slid = if policy.follow_spellings { self.strip_moved } else { 0 };
+        let slid = if policy.follow_spellings { self.strip_slide } else { 0 };
         (self.playback.engine == TuningEngine::Adaptive && policy.decode_fifths).then(|| {
             harmonigraph_core::policy::strip::moved_column(self.offsets.total().threes, slid)
         })

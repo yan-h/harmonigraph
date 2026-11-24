@@ -890,7 +890,7 @@ mod tests {
                 playback: MapPlayback { engine, ..Default::default() },
                 offsets: Default::default(),
                 followed: harmonigraph_core::LatticePos::ORIGIN,
-                strip_moved: 0,
+                strip_slide: 0,
                 unadopted: None,
                 names: Default::default(),
                 edit_shape: false,
@@ -930,7 +930,7 @@ mod tests {
             playback: MapPlayback { engine: TuningEngine::Adaptive, ..Default::default() },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            strip_moved: 0,
+            strip_slide: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: false,
@@ -954,7 +954,7 @@ mod tests {
         let (home, count) = columns(&mut state);
         assert_eq!(home, [-1, 0, 1, 2], "F C G D");
         assert_eq!(count, 4 * 5, "every row of the four columns");
-        state.runtime.lattice_maps.as_mut().unwrap().strip_moved = 1;
+        state.runtime.lattice_maps.as_mut().unwrap().strip_slide = 1;
         assert_eq!(columns(&mut state).0, [0, 1, 2, 3], "slid to C G D A");
         state.runtime.adaptive_policy.decode_fifths = false;
         assert_eq!(columns(&mut state).1, 0, "the search marks nothing");
@@ -979,7 +979,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            strip_moved: 0,
+            strip_slide: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: false,
@@ -1019,7 +1019,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            strip_moved: 0,
+            strip_slide: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: true,
@@ -1088,7 +1088,7 @@ mod tests {
             playback: MapPlayback { engine: TuningEngine::LatticeMap, ..Default::default() },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            strip_moved: 0,
+            strip_slide: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: false,
@@ -1167,7 +1167,7 @@ mod tests {
             playback: MapPlayback { engine: TuningEngine::LatticeMap, ..Default::default() },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            strip_moved: 0,
+            strip_slide: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: false,
@@ -1268,7 +1268,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            strip_moved: 0,
+            strip_slide: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: true,
@@ -1336,7 +1336,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: LatticePos::ORIGIN,
-            strip_moved: 0,
+            strip_slide: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: true,
@@ -1378,7 +1378,7 @@ mod tests {
             },
             offsets: Default::default(),
             followed: LatticePos::ORIGIN,
-            strip_moved: 0,
+            strip_slide: 0,
             unadopted: None,
             names: Default::default(),
             edit_shape: false,

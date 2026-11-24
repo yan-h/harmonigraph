@@ -44,8 +44,8 @@ fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
 /// Fifths Adaptive's strip stands from its Position, as the Hub last
 /// published it in a word of its own: nothing moved when the strip is not
 /// following, or a mode change has yet to reach an attack.
-fn strip_moved(params: &crate::HarmonigraphParams) -> i32 {
-    params.strip_moved.load(std::sync::atomic::Ordering::Acquire)
+fn strip_slide(params: &crate::HarmonigraphParams) -> i32 {
+    params.strip_slide.load(std::sync::atomic::Ordering::Acquire)
 }
 
 /// The host parameter behind one lane: the plugin's one place an axis and a
@@ -153,7 +153,7 @@ fn view_of(params: &crate::HarmonigraphParams, document: &MapDocument) -> MapVie
         playback: shown,
         offsets,
         followed,
-        strip_moved: strip_moved(params),
+        strip_slide: strip_slide(params),
         unadopted,
         names: editor.names(document),
         edit_shape: editor.edit_shape,
@@ -374,7 +374,7 @@ impl AudioMaps {
         Self {
             published: params.map_playback.clone(),
             followed: params.map_followed.clone(),
-            strip: params.strip_moved.clone(),
+            strip: params.strip_slide.clone(),
             bank: params.maps.audio.lock().take().expect("one audio owner"),
             playback: MapPlayback::default(),
             history: VecDeque::with_capacity(HISTORY),
@@ -389,10 +389,10 @@ impl AudioMaps {
     pub fn publish_followed(&self, offset: LatticePos) {
         self.followed.store(pack(offset), std::sync::atomic::Ordering::Release);
     }
-    /// Where the Hub's strip stands from its Position, for the Strip block and
-    /// the strip's marks.
-    pub fn publish_strip(&self, offset: i32) {
-        self.strip.store(offset, std::sync::atomic::Ordering::Release);
+    /// Fifths the Hub's strip has slid from its Position before the clamp,
+    /// for the Strip block and the strip's marks.
+    pub fn publish_strip(&self, slide: i32) {
+        self.strip.store(slide, std::sync::atomic::Ordering::Release);
     }
     pub fn begin(&mut self, boundary: &Boundary) {
         self.start = boundary.steady_time;
