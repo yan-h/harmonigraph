@@ -95,8 +95,9 @@ impl Stages {
 /// and the fresh defaults are a look nobody chose.
 ///
 /// With it, a `warning:` line for each key the selected look carries that
-/// this build does not read, for stderr, where the export's row keeps it
-/// (#1927 B).
+/// this build does not read, and for each setting whose value this build
+/// repairs on load, for stderr, where the export's row keeps it (#1927 B,
+/// #1956 Q2).
 pub fn appearance_for(
     take: &harmonigraph_take::Take,
     replacement: Option<&str>,
@@ -108,15 +109,10 @@ pub fn appearance_for(
     };
     let source =
         if replacement.is_some() { "replacement appearance" } else { "recorded appearance" };
-    let (appearance, unread) = AppearanceDocument::parse_noting(blob)
+    let (appearance, found) = AppearanceDocument::parse_noting(blob)
         .map_err(|err| format!("cannot render {source}: {err}"))?;
-    let warnings = unread.iter().map(|key| {
-        format!(
-            "{}{source}: {}",
-            harmonigraph_take::WARNING_PREFIX,
-            AppearanceDocument::unread_note(key)
-        )
-    });
+    let warnings =
+        found.lines().map(|note| format!("{}{source}: {note}", harmonigraph_take::WARNING_PREFIX));
     Ok((appearance, warnings.collect()))
 }
 
@@ -846,9 +842,21 @@ mod tests {
         let mut take = take();
         take.header.appearance = Some(serialized.clone());
         for replacement in [None, Some(serialized.as_str())] {
-            let selected = appearance_for(&take, replacement).unwrap().0;
+            let (selected, warnings) = appearance_for(&take, replacement).unwrap();
             assert_eq!(selected.view, expected);
+            // And each repair is named on the export's row, as an unread key is.
+            let paths = ["view.glow_reach", "view.sevens_size", "view.center_sevens"];
+            assert_eq!(warnings.len(), paths.len(), "{warnings:?}");
+            for path in paths {
+                let named = warnings.iter().any(|warning| {
+                    warning.starts_with(harmonigraph_take::WARNING_PREFIX)
+                        && warning.contains(&format!(" {path} at "))
+                });
+                assert!(named, "{path} was repaired unannounced: {warnings:?}");
+            }
         }
+        take.header.appearance = Some(AppearanceDocument::default().serialize());
+        assert_eq!(appearance_for(&take, None).unwrap().1, Vec::<String>::new(), "a fresh look");
     }
 
     fn settings() -> Settings {

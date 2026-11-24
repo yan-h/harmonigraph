@@ -148,7 +148,8 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
     let mut whole = fresh();
     assert!(whole.install_document(&saved));
     assert_eq!(whole.picture.runtime.console.lines().count(), 0, "a whole document is not news");
-    assert_eq!(AppearanceDocument::parse_noting(&appearance).unwrap().1, Vec::<String>::new());
+    let found = AppearanceDocument::parse_noting(&appearance).unwrap().1;
+    assert_eq!(found.lines().collect::<Vec<_>>(), Vec::<String>::new(), "a whole look is not news");
     for &(anchor, retired, in_appearance) in RETIRED_KEYS {
         let splice = |blob: &str| {
             let at = pair_starts(blob, anchor);
@@ -186,8 +187,9 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
 
         assert_eq!(!pair_starts(&appearance, anchor).is_empty(), in_appearance, "{anchor}: doors");
         if in_appearance {
-            let (parsed, unread) = AppearanceDocument::parse_noting(&splice(&appearance))
+            let (parsed, found) = AppearanceDocument::parse_noting(&splice(&appearance))
                 .unwrap_or_else(|e| panic!("{retired} sank the appearance: {e}"));
+            let unread = found.unread;
             assert_eq!(
                 parsed.serialize(),
                 appearance,
