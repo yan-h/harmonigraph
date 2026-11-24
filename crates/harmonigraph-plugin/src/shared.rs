@@ -67,9 +67,9 @@ impl harmonigraph_clap::prelude::EditorHost for Checked {
         assert_unheld();
         self.0.begin_set_parameter(row)
     }
-    fn set_parameter(&self, row: usize, plain: f32) {
+    fn set_parameter(&self, row: usize, shown: f32) {
         assert_unheld();
-        self.0.set_parameter(row, plain)
+        self.0.set_parameter(row, shown)
     }
     fn end_set_parameter(&self, row: usize) {
         assert_unheld();
