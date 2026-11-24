@@ -28,12 +28,13 @@ use crate::params::ParamKey;
 use crate::widgets::{button_row, choice_row, LayerStrip, ValueBar};
 use crate::{AppearanceDocument, CameraPreset};
 
-/// The two channels an Angle preset sets outright.
-const ANGLES: [ParamKey; 2] = [ParamKey::CameraYaw, ParamKey::CameraPitch];
 use harmonigraph_scene::Camera;
 use harmonigraph_scene::Projection;
 use harmonigraph_scene::SevensLabel;
 use harmonigraph_scene::SEVENS_SIZE_RANGE;
+
+/// The two channels an Angle preset sets outright.
+const ANGLES: [ParamKey; 2] = [ParamKey::CameraYaw, ParamKey::CameraPitch];
 
 /// Room for a short camera-preset name. Asked for flat, with no clamp against
 /// the pane: `TextEdit` already takes `desired_width.at_most(available_width)`,
