@@ -55,7 +55,7 @@ impl ParamBackend for Edits {
             names: document.names(),
             offsets: self.offsets,
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            strip_moved: 0,
+            strip_slide: 0,
             unadopted: self.pending.then_some(playback),
             edit_shape: false,
             can_undo: false,

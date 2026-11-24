@@ -900,3 +900,37 @@ fn a_note_over_held_notes_moves_the_strip_off_their_wolf() {
     let [d, a] = [62, 69].map(|key| session.voice(true, 0, key).attack_node.unwrap());
     assert_eq!((d, a - d), (LatticePos::new(-2, 1, 0), LatticePos::new(1, 0, 0)), "D–A pure");
 }
+
+/// The Strip block reads the column the next note sounds in, even after the
+/// clamp held the strip at a Position the lanes have since left: following
+/// slides the strip to the top column from a lane of +8, a note struck at +9
+/// leaves it there, and back at +8 with no note struck the editor names the
+/// top column, where the next A sounds.
+#[test]
+fn the_strip_block_names_where_the_next_note_sounds_after_the_clamp() {
+    let _scope = crate::test_scope::enter();
+    let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+    let lane = |session: &mut Decoding, fifths: f64| {
+        // A lane's host value is its step plus `OFFSET_LIMIT`.
+        session.everywhere(|| vec![parameter("map-fifths", 9.0 + fifths, 0)]);
+    };
+    lane(&mut session, 8.0);
+    for on in [true, false] {
+        session.play(f_sharps(on), vec![]);
+    }
+    let top = harmonigraph_core::policy::strip::moved_column(9, 0);
+    let a_at = |flat| harmonigraph_core::policy::strip::node(3, flat);
+    assert_eq!(session.a(), Some(a_at(top)), "slid a fifth sharp, to the top column");
+    lane(&mut session, 9.0);
+    assert_eq!(session.a(), Some(a_at(top)), "still at the top");
+    lane(&mut session, 8.0);
+    let policy = harmonigraph_core::configuration::PolicyConfig {
+        decode_fifths: true,
+        decoded_fifth: 696_578_428,
+        ..Default::default()
+    };
+    let shown = hub_wrapper(&session.hub)
+        .test_inspect_plugin(|plugin| crate::lattice_maps::view(&plugin.params).strip_flat(policy));
+    assert_eq!(shown, Some(top), "the Strip block");
+    assert_eq!(session.a(), Some(a_at(top)), "where the next A sounds");
+}

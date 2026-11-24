@@ -98,7 +98,18 @@ build_one() {
   fi
   echo "    at $(git -C "$wt" log -1 --format='%h %s')"
 
-  ( cd "$wt" && cargo build --release -p harmonigraph-plugin )
+  # The checked-out commit's own build recipe, the one its handoff runs: a
+  # branch cut before #1957 builds the renderer in a package of its own, which
+  # a plugin-only build would leave as an earlier build's, and the loader
+  # would install that renderer as this build's.
+  local -a build=()
+  local arg
+  while IFS= read -r arg; do build+=("$arg"); done < <(
+    python3 -c 'import json, sys; print("\n".join(json.load(open(sys.argv[1]))["build"]))' \
+      "$wt/.agent-lifecycle.json"
+  )
+  (( ${#build[@]} )) || { echo "ERROR: $wt has no build recipe in .agent-lifecycle.json" >&2; return 1; }
+  ( cd "$wt" && "${build[@]}" )
   # This checkout's loader, not the branch's: a branch cut before the loader
   # learned to build reads no argument as its old menu, but every version
   # loads a named branch the same way.

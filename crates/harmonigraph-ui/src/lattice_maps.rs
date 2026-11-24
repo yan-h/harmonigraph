@@ -81,11 +81,10 @@ impl Default for Revision {
 pub struct MapDocument {
     /// Slot index is the host identity. Slots are never removed or recycled.
     ///
-    /// Every mutation goes through a method below, because two
-    /// derived values are keyed on [`revision`](Self::revision) and a write that
-    /// skips the bump is invisible to both: [`names`](Self::names) serves a
-    /// stale name in the UI forever, and the audio thread's map bank serves a
-    /// stale shape — a capture or a delete that never reaches playback at all.
+    /// Every mutation goes through a method below, because the names memo is
+    /// keyed on [`revision`](Self::revision) and a write that skips the bump
+    /// is invisible to it: [`names`](Self::names) serves a stale name in the
+    /// UI forever.
     slots: Vec<NamedMap>,
     order: Vec<usize>,
     /// Skipped rather than persisted: a loaded document is a new state, and
@@ -99,16 +98,11 @@ impl Default for MapDocument {
     }
 }
 impl MapDocument {
-    /// Which state this is, for both values derived from a document:
-    /// [`MapEditor::names`]'s memo, and the audio thread's map bank in the
-    /// plugin's `AudioMaps::adopt`. Everything either one reads — a slot's
-    /// existence, its name, its deleted flag, its GEOMETRY, and `order` —
-    /// moves this.
-    ///
-    /// Geometry reaches a slot only through [`capture`](Self::capture) and
-    /// [`reshape`](Self::reshape), and both move this: a write that skipped it
-    /// would leave the bank stale where the names would not — the one
-    /// direction this key can be wrong in.
+    /// Which state this is, for [`MapEditor::names`]'s memo. Every mutation
+    /// moves it, geometry included, so the key never asks which fields a
+    /// reader reads. The audio thread's map bank does not key on it: the
+    /// plugin's `Maps::write` compares the bank itself before and after each
+    /// write (#1938).
     pub fn revision(&self) -> Revision {
         self.revision
     }
@@ -228,10 +222,10 @@ pub struct MapEditor {
     /// Memo of [`MapDocument::names`] and the document state it was read from.
     ///
     /// It lives here rather than in the document because the document is
-    /// behind an `RwLock` the AUDIO thread `try_read`s: filling a cache on the
-    /// draw path would mean taking the WRITE lock every frame and losing that
-    /// read. The editor's own `Mutex` is already held by the one caller that
-    /// builds a [`MapView`], and the audio thread never reads this field.
+    /// behind the plugin's door, which a reader enters shared: filling a
+    /// cache on the draw path would mean entering it to write every frame.
+    /// The editor's own `Mutex` is already held by the one caller that
+    /// builds a [`MapView`].
     names: Option<(Revision, MapNames)>,
 }
 impl MapEditor {
@@ -407,9 +401,10 @@ pub struct MapView {
     /// Where following has moved the map beyond `offsets`, as the Hub last
     /// left it. Already included in `playback.map`, which is what sounds.
     pub followed: LatticePos,
-    /// Fifths Adaptive's strip has slid from where the Position fifths set it
-    /// (`policy::strip::Follower`), as the Hub last left it.
-    pub strip_moved: i32,
+    /// Fifths Adaptive's strip has slid from where the Position fifths set it,
+    /// before the clamp (`policy::strip::Follower::slide`), as the Hub last
+    /// left it.
+    pub strip_slide: i32,
     /// The map state the parameters request, before following moves it, when
     /// the audio thread has not adopted it yet: the request the pending label
     /// waits on. Following is the Hub's own movement, not a request.
@@ -429,7 +424,7 @@ impl MapView {
         &self,
         policy: harmonigraph_core::configuration::PolicyConfig,
     ) -> Option<i32> {
-        let slid = if policy.follow_spellings { self.strip_moved } else { 0 };
+        let slid = if policy.follow_spellings { self.strip_slide } else { 0 };
         (self.playback.engine == TuningEngine::Adaptive && policy.decode_fifths).then(|| {
             harmonigraph_core::policy::strip::moved_column(self.offsets.total().threes, slid)
         })
@@ -546,8 +541,8 @@ mod tests {
         assert_eq!(doc.neighbour(3), None, "the only map left has no neighbour");
     }
 
-    /// An edit that changes nothing keeps the revision, which is what keeps
-    /// the plugin from marking the host project modified for it.
+    /// An edit that changes nothing keeps the revision, so the names memo
+    /// survives it.
     #[test]
     fn an_edit_that_changes_nothing_keeps_the_revision() {
         let mut doc = MapDocument::default();

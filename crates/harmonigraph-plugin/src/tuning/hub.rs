@@ -546,8 +546,7 @@ impl Hub {
         } else {
             LatticePos::ORIGIN
         });
-        let moved = self.sequencer.follower.moved(self.sequencer.position.threes);
-        owner.maps.publish_strip(if current { moved } else { 0 });
+        owner.maps.publish_strip(if current { self.sequencer.follower.slide() } else { 0 });
         self.collect();
         self.batch.sort_unstable_by_key(|record| (record.sample, record.order()));
         let mut index = 0;

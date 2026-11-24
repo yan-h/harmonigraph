@@ -214,8 +214,9 @@ pub struct HarmonigraphParams {
     /// Where following has moved the map, packed by [`lattice_maps::pack`]:
     /// written by the Hub on audio, read by the editor.
     pub map_followed: Arc<std::sync::atomic::AtomicU64>,
-    /// Where Adaptive's strip stands from its Position, as the Hub published.
-    pub strip_moved: Arc<std::sync::atomic::AtomicI32>,
+    /// Fifths Adaptive's strip has slid from its Position before the clamp, as
+    /// the Hub published.
+    pub strip_slide: Arc<std::sync::atomic::AtomicI32>,
     /// The tuning axes, links, Learn and adaptive policy: plugin-owned
     /// settings rather than host parameters, saved in `musical-settings`.
     settings: Arc<configuration::Settings>,
@@ -403,7 +404,7 @@ impl Default for HarmonigraphParams {
             map_editor: Default::default(),
             map_playback: Default::default(),
             map_followed: Default::default(),
-            strip_moved: Default::default(),
+            strip_slide: Default::default(),
             settings: Default::default(),
             editor_state: editor::EguiState::from_size(
                 editor::DEFAULT_SIZE.0,

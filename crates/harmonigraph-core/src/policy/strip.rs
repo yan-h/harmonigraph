@@ -61,7 +61,8 @@ pub fn assignment(fifths: i32, flat: i32, declared: i64, tuning: Tuning) -> (Lat
 /// a new note pure (§3.4; simplified on 2026-11-23, `docs/intent/tuning.md`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Follower {
-    /// Fifths the strip stands from where the Position places it.
+    /// Fifths following has slid the strip from where the Position places
+    /// it, before the clamp: where it stands is [`moved_column`] of the two.
     moved: i32,
     /// The node the last note took: the context when nothing is held, so a
     /// staccato arpeggio is heard as one.
@@ -79,10 +80,12 @@ impl Follower {
         moved_column(position, self.moved)
     }
 
-    /// Fifths the strip stands from where the Position fifths `position`
-    /// place it.
-    pub fn moved(&self, position: i32) -> i32 {
-        self.flat(position) - flat_column(position)
+    /// Fifths following has slid the strip from where the Position places
+    /// it, before the clamp: [`moved_column`] of any Position and this is
+    /// where the next note sounds, so the editor can read a lane the Hub has
+    /// not yet struck a note under.
+    pub fn slide(&self) -> i32 {
+        self.moved
     }
 
     /// An attack group's spellings `struck`, over the nodes the held notes
