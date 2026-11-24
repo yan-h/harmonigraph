@@ -791,8 +791,9 @@ mod tests {
         assert_eq!(selected.serialize(), recorded.serialize());
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         let warning = &warnings[0];
-        assert!(warning.starts_with(harmonigraph_take::WARNING_PREFIX), "{warning}");
-        assert!(warning.contains("recorded appearance") && warning.contains("view.retired_key"));
+        let named =
+            format!("{}the look holds view.retired_key,", harmonigraph_take::WARNING_PREFIX);
+        assert!(warning.starts_with(&named), "{warning}");
         take.header.appearance = Some(recorded.serialize());
         let mut replacement = AppearanceDocument::default();
         replacement.camera.yaw = -0.5;
