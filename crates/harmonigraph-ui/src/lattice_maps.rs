@@ -99,16 +99,12 @@ impl Default for MapDocument {
     }
 }
 impl MapDocument {
-    /// Which state this is, for both values derived from a document:
-    /// [`MapEditor::names`]'s memo, and the audio thread's map bank in the
-    /// plugin's `AudioMaps::adopt`. Everything either one reads — a slot's
-    /// existence, its name, its deleted flag, its GEOMETRY, and `order` —
-    /// moves this.
-    ///
-    /// Geometry reaches a slot only through [`capture`](Self::capture) and
-    /// [`reshape`](Self::reshape), and both move this: a write that skipped it
-    /// would leave the bank stale where the names would not — the one
-    /// direction this key can be wrong in.
+    /// Which state this is, for [`MapEditor::names`]'s memo: a slot's
+    /// existence, its name, its deleted flag and `order` move this, and so
+    /// does geometry, through [`capture`](Self::capture) and
+    /// [`reshape`](Self::reshape), which the names do not read. The audio
+    /// thread's map bank does not key on this: the plugin's `Maps::write`
+    /// compares the bank itself before and after each write (#1938).
     pub fn revision(&self) -> Revision {
         self.revision
     }
@@ -228,10 +224,10 @@ pub struct MapEditor {
     /// Memo of [`MapDocument::names`] and the document state it was read from.
     ///
     /// It lives here rather than in the document because the document is
-    /// behind an `RwLock` the AUDIO thread `try_read`s: filling a cache on the
-    /// draw path would mean taking the WRITE lock every frame and losing that
-    /// read. The editor's own `Mutex` is already held by the one caller that
-    /// builds a [`MapView`], and the audio thread never reads this field.
+    /// behind the plugin's door, which a reader enters shared: filling a
+    /// cache on the draw path would mean entering it to write every frame.
+    /// The editor's own `Mutex` is already held by the one caller that
+    /// builds a [`MapView`].
     names: Option<(Revision, MapNames)>,
 }
 impl MapEditor {
