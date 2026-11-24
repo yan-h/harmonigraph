@@ -48,14 +48,14 @@ Each change's reason is a comment at the code it explains; this is the map.
 
   [The adaptive tuning design](../../docs/adaptive-tuning.md#the-framework-boundary) says what the plugin asks of this boundary.
 - **The parameter table** (`src/params.rs`, #1814 step 5).
-  Each row is an integer or a linear float; the host sees it from 0 to its step count, and the conversions repeat nice-plug's `f32` arithmetic step for step, so saves and automation read as before.
+  Each row is an integer or a linear float; the host sees it from 0 to its step count, and the conversions repeat nice-plug's `f32` arithmetic step for step, so saves and automation read as before, except that an integer row tells the host its exact step (#1959), and `get_value` answers the value without its modulation.
   A save stores each row's unmodulated value under its id; a restore sets every row by one rule (missing or wrong-typed takes the default, out of range is clamped) and logs once the ids no row has and once those it set to the default for a wrong-typed value (`Table::defaulted`).
   A saved value that does not decode, such as one under a `ParamValue` variant this build no longer has, is `ParamValue::Unread`, wrong-typed for every row, so it costs that value alone (#1886).
   The editor sets a row through its `EditorHost` by its index.
 - **Activation notification ordering** (`Wrapper::activate`, #615): a latency is published only during an activation, and a change while active asks for a restart.
 - **The audio** (`src/audio_setup.rs`, #1814 step 6).
   A plugin declares one fixed `Ports`: main input and output channels, and named auxiliary inputs.
-  A callback's `Audio` is the main output's channels, holding the main input (copied unless the host processes in place), and each auxiliary input's channels, copied into storage sized at activation, or silence for a port or channel the host left out.
+  A callback's `Audio` is the main output's channels, holding the main input (copied unless the host processes in place), and each auxiliary input's channels, borrowed read-only from the host's buffers (#1910), or one silent plane for a port or channel the host left out.
   nice-plug's `Buffer`, `AuxiliaryBuffers`, buffer manager and `AudioIOLayout` went, and auxiliary outputs with them, which no plugin declared.
 - **Auxiliary descriptor bounds and storage sizing** (`audio_setup::audio`, #638), reached by `tests/clap_auxiliary.rs`.
 - **The tail**: none before a processed callback, infinite after (`Wrapper::ext_tail_get`), checked by `tests/clap_boundary.rs`.

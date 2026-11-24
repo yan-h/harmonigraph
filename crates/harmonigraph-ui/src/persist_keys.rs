@@ -12,7 +12,9 @@
 //!
 //! A variant that is a bare element of a list or map has no key of its own,
 //! and still refuses the document whole; none is persisted today. The take and
-//! export door (`AppearanceDocument::parse`) keeps the strict parse (Q5).
+//! export door (`AppearanceDocument::parse`) keeps the strict parse (Q5), and
+//! also reports the keys it did not read (#1932) and the repairs it made
+//! (#1960).
 
 use std::borrow::Cow;
 use std::ops::Range;

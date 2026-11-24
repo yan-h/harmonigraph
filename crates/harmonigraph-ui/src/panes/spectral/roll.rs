@@ -3246,6 +3246,8 @@ mod tests {
         state
     }
 
+    /// Bounds the instance count `note_instances` returns for dense microtonal
+    /// runs: about two per note, so growth is linear in the notes drawn.
     #[test]
     fn zoomed_out_microtonal_dense_runs_stay_linear_in_segments() {
         let intensity = IntensitySettings {
@@ -3271,6 +3273,9 @@ mod tests {
         );
     }
 
+    /// Bounds the same count with velocity and pressure routed to intensity,
+    /// through `intensity_points` and `push_pieces`: linear in the notes, with
+    /// pressure ramps adding pieces.
     #[test]
     fn zoomed_out_microtonal_dense_runs_with_routed_intensity_stay_linear() {
         let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0));

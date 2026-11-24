@@ -397,7 +397,8 @@ pub struct ViewConfig {
     // to, and the thirteen trimmed before them that its serde aliases went on
     // loading (Breathe, Sparks, Wire, Corona, Plasma, Aurora, Marble, Lava,
     // Filament, Stripes, Rings, Tiles, Pinwheel). Serde ignores unknown keys,
-    // so such a blob loads intact and drops the key on the next save. This is
+    // so such a blob loads intact; the editor names the key on the Console, an
+    // export warns of it, and the next save drops it. This is
     // the only surviving record of that set, which is why it names it in full.
     /// The curve the low-to-high pitch gradient follows, as its six knobs
     /// (see [`Gradient`]). Every pitch-colored shape in the scene reads
@@ -436,8 +437,9 @@ pub struct ViewConfig {
     // number under this layer and the audio ring together. Saved blobs may
     // still carry the keys the pair rode on (`outer_backdrop`, first a bool
     // and then an opacity under `outer_backdrop_alpha`, and `outer_solidity`);
-    // serde ignores unknown keys, so such a blob loads intact and simply
-    // drops them on the next save.
+    // serde ignores unknown keys, so such a blob loads intact; the editor names
+    // each key on the Console, an export warns of it, and the next save drops
+    // them.
     /// Where the stack BEGINS, in quad UV units: the radius the innermost layer
     /// left on puts its inner edge on (see [`rings`](Self::rings)), and so the
     /// size of the empty middle a node carries.

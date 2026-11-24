@@ -127,7 +127,7 @@ Yan: "I want to be able to easily go between improvising in meantone while visua
 
 ## 2026-11-22 (a tuning field that does not parse, #1927 A)
 
-- A saved `musical-settings` or `tuning-instance` that does not parse opens at its default on its own, with a line in the log and, in a Hub, a Console line naming it, and the rest of the project loads. This supersedes the `persistence-contract` skill's rule that such a field refuses the whole restore with a line in the log: the untouched editor then saved the fresh look over the project's at the next save. A full tuning edit queue still refuses the restore whole, as the issue's option said it would stay. Yan, 2026-11-22, #1927
+- A saved `musical-settings` or `tuning-instance` that does not parse opens at its default on its own, with a line in the log and, in a Hub, a Console line naming it, and the rest of the project loads. This supersedes the `persistence-contract` skill's rule that such a field refuses the whole restore with a line in the log: the untouched editor then saved the fresh look over the project's at the next save. A full tuning edit queue still refuses the restore whole, as the issue's option said it would stay. Yan, 2026-11-22, #1927 Superseded by the 2026-11-22 entry on the main thread owning the tuning configuration: #1938 removed the edit queue, and no setup refuses a restore.
 
 ## 2026-11-22 (Adaptive's strip for the lattice-board, #1896)
 

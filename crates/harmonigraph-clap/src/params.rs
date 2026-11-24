@@ -5,7 +5,8 @@
 //! and writes the row's *plain* value, its integer or its float. The conversions repeat nice-plug's
 //! `IntRange` and `FloatRange::Linear` arithmetic in `f32`, step for step, so
 //! a project saves and automates as it did before the table replaced them
-//! (#1814).
+//! (#1814). The one exception is the plain value an integer row tells the
+//! host, which is its exact step (#1959).
 //!
 //! A row holds its unmodulated plain value and a mono modulation offset, in
 //! normalized units. Every read of the plain value the plugin acts on is
