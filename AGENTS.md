@@ -223,6 +223,11 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 - A press Clear took while held, once its voice's fade ends: it leaves the replay, so a reset or a surface opened then (a Video preview) cuts the rest of its lattice departure.
 - At the 4,096-note cap with no older pulse in `past`, `enforce_cap` evicts a pulse as it is filed, so a reset or a surface opened then loses the rest of its lattice departure; it takes about 4.5 notes a second sustained for 15 minutes to reach the cap.
 
+**Cases the Console reveal goes without** (PR #1951; Yan, #1953), each with its cost when it occurs:
+
+- A restore that reports a loss over a folded Settings section: Settings unfolds on the Console and the pictures squeeze until the next resize or fold click; the window does not grow.
+- Two restores before an editor frame, which includes every restore while the editor is shut (a lossy project load, then a clean preset load or undo before opening it): the newer state opens with Settings unfolded on the Console, showing the older restore's line, and its next save stores that layout without marking the project.
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
