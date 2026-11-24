@@ -77,20 +77,28 @@ pub fn wrap_degrees(degrees: f32) -> f32 {
     }
 }
 
-/// A loaded setting repaired: `value` held to `range`, and `fallback` in its
-/// place when it is no number, a NaN or an infinity, which no clamp catches
-/// since NaN answers no to every comparison a clamp makes.
+/// A number held to a range, with a fallback for a non-finite one: `value`
+/// held to `range`, and `fallback` in its place when it is no number, a NaN or
+/// an infinity, which no clamp catches since NaN answers no to every
+/// comparison a clamp makes.
 ///
 /// The one spelling of the load repair every look setting's `sanitize` uses
-/// (#1956). The fallback is the caller's, because what a broken number should
+/// (#1956), and of a few guards on what the picture reads at run time (a
+/// shadow's spread, a note's expressions, the camera distance a font size is
+/// scaled by). The fallback is the caller's, because what a broken number should
 /// become varies: the fresh value almost everywhere, the pane's own fresh value
 /// for Stars, 1.0 for an intensity weight, the type's own default inside a
 /// gradient, the off position for the ring gate and hysteresis. It is held to
 /// `range` as well, so what comes back is always inside it.
 ///
 /// `range` is inclusive at each end it bounds. `..` asks for a number alone,
-/// for a value with no bound, such as a periodic angle.
+/// for a value with no bound, such as a periodic angle. An inverted range,
+/// which no caller hands it, is a `debug_assert`, where `f32::clamp` panicked.
 pub fn repair<T: Setting>(value: T, fallback: T, range: impl RangeBounds<T>) -> T {
+    if let (Bound::Included(low), Bound::Included(high)) = (range.start_bound(), range.end_bound())
+    {
+        debug_assert!(low <= high, "an inverted range");
+    }
     let value = if value.is_number() { value } else { fallback };
     let value = match range.start_bound() {
         Bound::Included(&low) if value < low => low,
@@ -135,8 +143,9 @@ impl Setting for i32 {
     }
 }
 
-/// The unit fraction: the range of every setting that is a share, a mix or a
-/// depth, at its `sanitize` and at its bar alike.
+/// The unit fraction: the range of the unit-fraction settings that have no
+/// range of their own, a share, a mix or a depth, at its `sanitize` and at its
+/// bar alike.
 pub const UNIT: RangeInclusive<f32> = 0.0..=1.0;
 
 /// Axis mapping, matching v1's orientation: major thirds run horizontally

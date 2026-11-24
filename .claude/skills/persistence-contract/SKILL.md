@@ -63,7 +63,8 @@ the captured lattice placement and split persist in `RenderFrame`.
 What survives an old blob otherwise:
 an unknown KEY is skipped by serde, so retiring a field costs that field's setting alone,
 and each door names it (#1927 B): `install_document` writes its path to the Console and opens it,
-and an export says it as a `warning:` from the renderer or a line under the Video pane's Export button for a Recorded look;
+and an export says it as a `warning:` from the renderer or a line under the Video pane's Export button for a Recorded look,
+as the renderer also names each value the look's load repaired, such as one past a range a later build narrowed, which the pane's Recorded export reaches by queueing the look unrepaired (#1956 Q2);
 an unknown VARIANT is cut with the key that names it by the editor's per-key decode (`crates/harmonigraph-ui/src/persist_keys.rs`), so that key opens at its default and the rest of the document loads (#1757).
 A variant no key holds of its own, a bare element of a list or map, still refuses the document whole;
 none is persisted today.

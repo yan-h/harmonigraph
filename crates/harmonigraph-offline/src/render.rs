@@ -832,10 +832,12 @@ mod tests {
 
     #[test]
     fn recorded_and_replacement_appearances_normalize_before_rendering() {
+        // A scalar, an item of a list and a set (`Some`) weight, so the note's
+        // walk passes through each shape the look holds a number in.
         let mut appearance = AppearanceDocument::default();
         appearance.view.glow_reach = f32::NAN;
-        appearance.view.sevens_size = -1.0;
-        appearance.view.center_sevens = i32::MAX;
+        appearance.view.atmosphere.stars.star_size[1] = -1.0;
+        appearance.view.intensity.velocity.opacity = Some(f32::NAN);
         let serialized = appearance.serialize();
         let mut expected = appearance.view.clone();
         expected.sanitize();
@@ -844,15 +846,20 @@ mod tests {
         for replacement in [None, Some(serialized.as_str())] {
             let (selected, warnings) = appearance_for(&take, replacement).unwrap();
             assert_eq!(selected.view, expected);
-            // And each repair is named on the export's row, as an unread key is.
-            let paths = ["view.glow_reach", "view.sevens_size", "view.center_sevens"];
-            assert_eq!(warnings.len(), paths.len(), "{warnings:?}");
-            for path in paths {
+            // And each repair is named on the export's row, as an unread key
+            // is, with the value as the look holds it.
+            let held = [
+                "view.glow_reach at NaN,",
+                "view.atmosphere.stars.star_size.1 at -1.0,",
+                "view.intensity.velocity.opacity at NaN,",
+            ];
+            assert_eq!(warnings.len(), held.len(), "{warnings:?}");
+            for held in held {
                 let named = warnings.iter().any(|warning| {
                     warning.starts_with(harmonigraph_take::WARNING_PREFIX)
-                        && warning.contains(&format!(" {path} at "))
+                        && warning.contains(&format!(" {held} which this build loads as "))
                 });
-                assert!(named, "{path} was repaired unannounced: {warnings:?}");
+                assert!(named, "{held} was repaired unannounced: {warnings:?}");
             }
         }
         take.header.appearance = Some(AppearanceDocument::default().serialize());

@@ -51,13 +51,21 @@ impl AppearanceDocument {
     /// named. An enum variant serializes as a bare name the comparison cannot
     /// tell apart, but no `sanitize` repairs one.
     pub fn parse_noting(serialized: &str) -> Result<(Self, LoadNotes), String> {
-        let (document, unread) = crate::persist_keys::from_str_noting::<Self>(serialized)
-            .map_err(|err| format!("appearance did not parse ({err})"))?;
+        let (document, unread) = Self::read_noting(serialized)?;
         let held = document.values()?;
         let document = document.normalize()?;
         let mut repaired = Vec::new();
         repairs("", &held, &document.values()?, &mut repaired);
         Ok((document, LoadNotes { unread, repaired }))
+    }
+
+    /// The document as it is written, with no repair, and the path of each key
+    /// it carries that this build does not read. What the Video pane queues
+    /// for a recorded look, so the renderer meets its values as they were and
+    /// names its repairs on the export's row.
+    pub(crate) fn read_noting(serialized: &str) -> Result<(Self, Vec<String>), String> {
+        crate::persist_keys::from_str_noting::<Self>(serialized)
+            .map_err(|err| format!("appearance did not parse ({err})"))
     }
 
     /// The document as a tree of plain values, for [`repairs`].
@@ -93,12 +101,12 @@ pub struct LoadNotes {
 }
 
 /// One setting a load repaired: its path, as [`LoadNotes::unread`] spells
-/// one, and its value as held and as drawn, in RON.
+/// one, and its value as held and as loaded, in RON.
 #[derive(Debug)]
 pub struct Repair {
     pub path: String,
     pub held: String,
-    pub drawn: String,
+    pub loaded: String,
 }
 
 impl LoadNotes {
@@ -110,41 +118,46 @@ impl LoadNotes {
                  its setting draws at its default"
             )
         });
-        let repaired = self.repaired.iter().map(|Repair { path, held, drawn }| {
-            format!("the look holds {path} at {held}, which this build does not draw; it draws at {drawn}")
+        let repaired = self.repaired.iter().map(|Repair { path, held, loaded }| {
+            format!("the look holds {path} at {held}, which this build loads as {loaded}")
         });
         unread.chain(repaired)
     }
 }
 
-/// Each path under `path` whose value differs between `held` and `drawn`, two
+/// Each path under `path` whose value differs between `held` and `loaded`, two
 /// readings of one document and so of one shape: a struct is walked by its
 /// keys, a list by its items, and a `Some` passed through as
-/// `persist_keys::dotted` passes it. The comparison is exact, so a NaN made a
-/// number is a difference and a NaN left one is not.
-fn repairs(path: &str, held: &ron::Value, drawn: &ron::Value, out: &mut Vec<Repair>) {
+/// `persist_keys::dotted` passes it. Two numbers are the same when they are
+/// equal as numbers, so a `-0.0` written as `0.0` is no repair, and when both
+/// are NaN; a NaN made a number is a repair.
+fn repairs(path: &str, held: &ron::Value, loaded: &ron::Value, out: &mut Vec<Repair>) {
     use ron::Value;
     let at = |segment: &dyn std::fmt::Display| match path {
         "" => segment.to_string(),
         _ => format!("{path}.{segment}"),
     };
-    match (held, drawn) {
-        (Value::Map(held), Value::Map(drawn)) => {
+    match (held, loaded) {
+        (Value::Map(held), Value::Map(loaded)) => {
             for (key, held) in held.iter() {
-                if let (Value::String(name), Some(drawn)) = (key, drawn.get(key)) {
-                    repairs(&at(name), held, drawn, out);
+                if let (Value::String(name), Some(loaded)) = (key, loaded.get(key)) {
+                    repairs(&at(name), held, loaded, out);
                 }
             }
         }
-        (Value::Seq(held), Value::Seq(drawn)) => {
-            for (index, (held, drawn)) in held.iter().zip(drawn).enumerate() {
-                repairs(&at(&index), held, drawn, out);
+        (Value::Seq(held), Value::Seq(loaded)) => {
+            for (index, (held, loaded)) in held.iter().zip(loaded).enumerate() {
+                repairs(&at(&index), held, loaded, out);
             }
         }
-        (Value::Option(Some(held)), Value::Option(Some(drawn))) => repairs(path, held, drawn, out),
-        _ if held != drawn => {
+        (Value::Option(Some(held)), Value::Option(Some(loaded))) => {
+            repairs(path, held, loaded, out)
+        }
+        (Value::Number(a), Value::Number(b))
+            if a.into_f64() == b.into_f64() || a.into_f64().is_nan() && b.into_f64().is_nan() => {}
+        _ if held != loaded => {
             let show = |value: &Value| ron::to_string(value).unwrap_or_default();
-            out.push(Repair { path: path.to_owned(), held: show(held), drawn: show(drawn) });
+            out.push(Repair { path: path.to_owned(), held: show(held), loaded: show(loaded) });
         }
         _ => {}
     }

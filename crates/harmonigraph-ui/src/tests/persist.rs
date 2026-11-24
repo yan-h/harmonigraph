@@ -128,6 +128,18 @@ const RETIRED_KEYS: &[(&str, &str, bool)] = &[
     ("render_scale", "show_perf:true,show_perf_detail:true,", true),
 ];
 
+/// The gradient's Span drag can store a `-0.0`, which the gradient's repair
+/// writes back as `0.0`: the same number, so an export names no repair.
+#[test]
+fn a_negative_zero_is_no_repair() {
+    let mut look = AppearanceDocument::default();
+    look.view.pitch_gradient.hue_span = -0.0;
+    let serialized = look.serialize();
+    assert!(serialized.contains("hue_span:-0.0"), "the fixture lost its sign: {serialized}");
+    let found = AppearanceDocument::parse_noting(&serialized).unwrap().1;
+    assert_eq!(found.lines().collect::<Vec<_>>(), Vec::<String>::new());
+}
+
 /// A retired key costs nothing but its own setting: through both doors — the
 /// editor's `install_document`, and, for a key inside the appearance, the
 /// `AppearanceDocument::parse` that take replay and explicit export share —
