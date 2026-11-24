@@ -1457,6 +1457,7 @@ impl<P: Plugin> Wrapper<P> {
         }
     }
 
+    /// None before a processed callback, infinite after.
     unsafe extern "C" fn ext_tail_get(plugin: *const clap_plugin) -> u32 {
         check_null_ptr!(0, plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };

@@ -1,7 +1,7 @@
 # nice-plug 0.1.10's normalized manifest, edited in place since the fork was
 # pruned to what harmonigraph compiles on macOS, with nice-plug-core 0.1.5's
 # dependencies and features merged in now that its sources live here too
-# (README.md). The library takes the package's name, `harmonigraph_clap`.
+# (PATCHES.md). The library takes the package's name, `harmonigraph_clap`.
 
 [package]
 edition = "2024"
@@ -20,7 +20,6 @@ autotests = false
 autobenches = false
 description = "Harmonigraph's CLAP shell: nice-plug and nice-plug-core, owned"
 publish = false
-readme = "README.md"
 keywords = [
     "audio",
     "plugin",

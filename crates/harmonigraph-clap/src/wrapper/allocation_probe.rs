@@ -1,5 +1,7 @@
 //! Off-audio fixture accounting. The underlying allocation guard still checks
 //! every allocation/deallocation; production builds do not include this probe.
+//! It instruments the calling thread, deallocation included, for the
+//! exported-factory fixtures; it measures neither RSS nor other threads.
 use nice_assert_no_alloc::AllocDisabler as BaseAllocator;
 use std::alloc::{GlobalAlloc, Layout};
 use std::cell::Cell;

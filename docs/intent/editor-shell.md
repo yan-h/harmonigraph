@@ -105,3 +105,8 @@ Yan asked for an audit of checkboxes against switches and a rule, and took the r
 
 - A look dial's range stays written at its bar and in its `sanitize`, not in the field's type: the range guard checks the pair since #1794, a dial costs one range and its reset target, and the repair targets (the fresh value, a pane's fresh value, 0, 1.0, a type default) vary too much for a type to state. The verdict of #1677 area 5 stands on these reasons. #1956
 - Every look setting's load repair goes through one helper; a non-finite Mark delay or Note fade curve now loads at its default rather than 0. #1956 Q1
+
+## 2026-11-23 (CLAP shell modulation, #1959, #1961)
+
+- Bitwig reads a parameter's value without its modulation: `get_value` answers the saved value and the host adds its modulation, as CLAP's `events.h` says, the same choice as otonal's (otonal #1846), made without waiting for a Bitwig check. Yan, 2026-11-23, PR #1959
+- With a Bitwig modulator on a camera axis, a preset, Reset, Frame notes or an angle bar sets the saved value itself and the modulation swings around it ("Set the saved value"); a drag, zoom, orbit or pan moves the saved value by the move. Under a modulator, an angle bar grabbed at its fill jumps the saved value by the modulation, and Frame notes under a yaw or pitch modulator fits at the drawn angle; both are left as they are. Yan, 2026-11-23, PR #1961
