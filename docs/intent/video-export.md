@@ -79,3 +79,7 @@ Yan took the recommendations made after the audit was checked against the code (
 ## 2026-11-22 (take sample rate, #1928)
 
 - The sample rate travels with the audio: a take's WAV takes its rate from the first audio it records, and a rate change after that fails the take on the status line, with no render; a take whose audio all follows a change is recorded at the new rate. The take header no longer carries a rate. Yan ("build the general fix for A"), #1928 A
+
+## 2026-11-23 (rework proposal, #1956)
+
+- An export names each setting of the take's recorded look that this build repairs on load, as it names an unread key since #1932. #1956 Q2

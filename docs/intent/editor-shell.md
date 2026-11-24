@@ -100,3 +100,8 @@ Yan asked for an audit of checkboxes against switches and a rule, and took the r
   In Bitwig nothing changes, since egui overshoots only for a wheel it knows is a trackpad and the plug-in's window reports no wheel source; the setting reaches the standalone, which reports one, and holds the choice for a window that comes to report it. PR #1916
 - egui 0.37's own behaviour is accepted as it comes: a press that slides off a widget is a drag, submenu arrows are drawn triangles, a menu opens on hover while another is open, and a popup no longer closes on the release that opened it. PR #1916
 - Menus keep the plug-in's key routing of egui 0.35: while a menu is open, bare arrows, Space and Enter go to Bitwig, so egui 0.37's keyboard navigation of menus is not available in the plug-in (Yan, 2026-11-21; egui-plugin-window #31 closed unmerged). egui moves through a menu's items by the arrows when it receives them, as the standalone's window hands them over, so there it may still work. PR #1916
+
+## 2026-11-23 (rework proposal, #1956)
+
+- A look dial's range stays written at its bar and in its `sanitize`, not in the field's type: the range guard checks the pair since #1794, a dial costs one range and its reset target, and the repair targets (the fresh value, a pane's fresh value, 0, 1.0, a type default) vary too much for a type to state. The verdict of #1677 area 5 stands on these reasons. #1956
+- Every look setting's load repair goes through one helper; a non-finite Mark delay or Note fade curve now loads at its default rather than 0. #1956 Q1
