@@ -119,3 +119,5 @@ Yan asked for an audit of checkboxes against switches and a rule, and took the r
 ## 2026-11-24 (look slots removed)
 
 - The look slots are removed: Yan never used them. Undo keeps one history, and the Video pane exports the current or the recorded look. Yan, 2026-11-24
+- A project saved before the removal opens the Console on its `look_slots` line at every open until an edit leads to a save; no special case quiets an empty one. Yan, 2026-11-24, on PR #1971's design pass
+- The undo shortcuts are named in `docs/settings.md` only, with no hint in the editor since the slot row's hover went. Yan, 2026-11-24, on PR #1971's design pass
