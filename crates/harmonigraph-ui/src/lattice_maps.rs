@@ -81,11 +81,10 @@ impl Default for Revision {
 pub struct MapDocument {
     /// Slot index is the host identity. Slots are never removed or recycled.
     ///
-    /// Every mutation goes through a method below, because two
-    /// derived values are keyed on [`revision`](Self::revision) and a write that
-    /// skips the bump is invisible to both: [`names`](Self::names) serves a
-    /// stale name in the UI forever, and the audio thread's map bank serves a
-    /// stale shape — a capture or a delete that never reaches playback at all.
+    /// Every mutation goes through a method below, because the names memo is
+    /// keyed on [`revision`](Self::revision) and a write that skips the bump
+    /// is invisible to it: [`names`](Self::names) serves a stale name in the
+    /// UI forever.
     slots: Vec<NamedMap>,
     order: Vec<usize>,
     /// Skipped rather than persisted: a loaded document is a new state, and

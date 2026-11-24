@@ -130,10 +130,9 @@ Completed `session-lifecycle` handoffs are preserved under the common Git direct
 reading them needs agent-config's `session-lifecycle` skill installed.
 Identify it by the commit its build tag names, which `./load-plugin.sh --list` shows, then swap it back with `./load-plugin.sh <branch>` —
 which is the whole recovery, and the only recipe here that gets the swap's ORDER right.
-To rebuild one without cd'ing into the branch's own worktree:
-`rm -f <that-worktree>/target/release/{libharmonigraph_plugin.dylib,harmonigraph-offline}`, then `cargo build --release -p harmonigraph-plugin --manifest-path <that-worktree>/Cargo.toml`, then load it the same way and verify via a distinctive string from that branch's diff.
-The removal is what `build-pr.sh` does too:
-a worktree cut before #1957 builds its renderer in another package, so without it an older renderer would load beside the new plugin in silence, where now the loader warns that the build has none.
+To rebuild one without cd'ing into the branch's own worktree, run the `build` command in that worktree's `.agent-lifecycle.json` with `--manifest-path <that-worktree>/Cargo.toml`, then load it the same way and verify via a distinctive string from that branch's diff.
+The command is `cargo build --release -p harmonigraph-plugin`, with `-p harmonigraph-offline` as well on a branch cut before #1957, whose renderer is a package of its own;
+without it an earlier build's renderer would load beside the new plugin, as `build-pr.sh` avoids by running the same recipe.
 
 Use the loader rather than overwriting an installed executable by hand.
 Two consecutive ordinary installs produced macOS `CODESIGNING Invalid Page` scanner kills while the on-disk signature still verified ([#705](https://github.com/yan-h/harmonigraph/issues/705)).
