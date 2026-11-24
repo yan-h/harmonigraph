@@ -136,3 +136,18 @@ fn a_renderer_of_another_build_says_so_before_anything_fails() {
     assert!(first.starts_with(harmonigraph_take::WARNING_PREFIX), "{stderr}");
     assert!(first.contains("other @0000000"), "the plugin's build is unnamed: {stderr}");
 }
+
+/// The renderer carries the tag the plugin package stamps, so the plugin of
+/// its own build queues an export with no warning (#1954).
+#[test]
+fn a_renderer_of_its_own_build_does_not_warn() {
+    let missing = std::env::temp_dir()
+        .join(format!("harmonigraph-offline-own-build-{}.take", std::process::id()));
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
+        .args(["--plugin-build", env!("LATTICE_BUILD_TAG")])
+        .arg(&missing)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("the plugin that queued"), "{stderr}");
+}

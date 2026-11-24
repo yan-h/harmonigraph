@@ -335,7 +335,8 @@ fn build_mismatch(own: &str, plugin: Option<&str>) -> Option<String> {
     Some(format!(
         "{WARNING_PREFIX}this renderer is build {own}, but the plugin that queued \
          the export is build {plugin}, so the video may not draw what the editor \
-         shows; load the plugin and renderer of one build (./load-plugin.sh)"
+         shows; a host still running the plugin from before a load needs its audio \
+         engine deactivated and reactivated"
     ))
 }
 

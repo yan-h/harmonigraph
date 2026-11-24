@@ -165,8 +165,8 @@ loading a named branch only copies.
 The split lets every parallel branch retain its own build while the person at the DAW decides which one occupies the shared slot.
 
 Every load also installs the build's `harmonigraph-offline` renderer, which the plugin package builds as its own binary,
-so the renderer is always the plugin's commit (#1954).
-A build with no renderer leaves the installed one alone.
+so a completed build's renderer is the plugin's commit (#1954).
+A build with no renderer, which only a build from before that change or a `--lib` build leaves, keeps the installed one, with a warning.
 
 After installing,
 deactivate and reactivate Bitwig's audio engine.
@@ -238,8 +238,9 @@ harmonigraph-scene       Per-frame scene derivation, camera, styles, envelopes
 harmonigraph-render      wgpu lattice renderer used as an egui paint callback.
 
 harmonigraph-perf        Performance instrumentation; the UI crate draws its
-                         overlay, and each leaf binary stamps its own build tag
-                         (build/build_tag.rs).
+                         overlay, and each leaf package's build script stamps its
+                         binaries' build tag, one for the plugin and its
+                         renderer (build/build_tag.rs).
 
 harmonigraph-ui          Shared pane shell and controls for Lattice, Tuning,
                          Analyzer, Mappings, Spectral, Spiral, System, Console

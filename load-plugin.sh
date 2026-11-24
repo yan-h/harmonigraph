@@ -324,7 +324,7 @@ load_build() {  # $1 = worktree index
   # session committed after building, so both are recorded and only `tag`
   # answers "which build am I looking at?". Read from the signed copy that is
   # installed rather than from target/release, which a build finishing during
-  # the load can replace; the renderer is checked against it below.
+  # the load can replace.
   local loaded_tag=""
   for ext in clap; do
     bundle="$BUNDLED/$NAME.$ext"
@@ -403,7 +403,10 @@ load_build() {  # $1 = worktree index
     PENDING_RENDERER=""
     echo "Loaded renderer: $installed"
   elif [[ -f "$installed" ]]; then
-    echo "This build has no harmonigraph-offline; offline render keeps the installed renderer."
+    # Only a build from before the plugin package built the renderer (#1954),
+    # or a `--lib` build, gets here, and both make a mismatch likely.
+    echo "WARNING: this build has no harmonigraph-offline, so video export keeps the installed" >&2
+    echo "         renderer, which may be another build's." >&2
   else
     # The plugin resolves one fixed path under the product name, and nothing
     # puts a binary there until some worktree builds harmonigraph-plugin

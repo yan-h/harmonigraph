@@ -265,8 +265,8 @@ Each export gets a row under Render, named for its video, with a progress bar wh
 A failed row shows the renderer's own error, and a finished one each distinct warning it printed, one per line —
 the only place you'll see them, since a plugin has no terminal.
 
-Every build of the plugin package builds the renderer as well, and `./load-plugin.sh` installs it alongside the plugin to `~/Library/Application Support/Harmonigraph/harmonigraph-offline`, so the two always match —
-they share the take format, so a mismatched pair would fail at the version check.
+Every build of the plugin package builds the renderer as well, and `./load-plugin.sh` installs it alongside the plugin to `~/Library/Application Support/Harmonigraph/harmonigraph-offline`, so a completed build installs a matching pair.
+A host still running the plugin from before a load can still queue an export to the new renderer, so the renderer warns on that export's row when the plugin that queued it is another build (#1936).
 
 Note the ordering:
 the render is launched by the *writer thread*, right after it closes the file.
