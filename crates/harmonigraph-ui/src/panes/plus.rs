@@ -55,7 +55,8 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
         )
         .default_value(super::fresh_view().marker_ink)
         .unit(1.0, "%")
-        // Whole L* points, matching the gradients' brightness scale.
+        // Whole L* points on a drag, matching the gradients' brightness scale;
+        // a load only clamps, so a saved fraction reads out rounded.
         .integer()
         .hint(
             "Brightness of idle note labels and crosses: 0% is black, 100% is white. \

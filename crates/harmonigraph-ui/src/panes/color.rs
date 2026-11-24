@@ -57,7 +57,8 @@ const BEND_HINT: &str = "Where along the range the selected color components spe
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // The gradient a fresh view opens on, which is where a double-click on any
     // of the bars below goes home to — the COMPOSED one, not the type's own
-    // `Gradient::default()` (see [`SpectrumBar::new`]).
+    // `Gradient::default()` (see [`SpectrumBar::new`]). A loaded field that is
+    // no number goes to the type's own instead (`Gradient::sanitized`).
     let home = ViewConfig::default().pitch_gradient;
     // One preset, the same gradient, so the shipped look is a click away after
     // the bars below have wandered off it. Named for its colors like the audio

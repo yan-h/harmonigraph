@@ -379,7 +379,13 @@ impl Camera {
         (right, up)
     }
 
-    /// Fit a deserialized camera to what its own controls can produce.
+    /// Fit a deserialized camera's pitch, distance and cabinet knobs to what
+    /// their controls produce, and its yaw and target to finite numbers.
+    ///
+    /// The yaw is left unwrapped and the target unbounded, though the host's
+    /// camera parameters wrap the yaw to ±π and clamp the pan to ±128 cells:
+    /// in the plugin those parameters replace the saved camera every frame
+    /// (`sync_camera`), so the saved values are not what is drawn.
     ///
     /// A bar cannot produce a nonsense value but a hand-edited blob can, and
     /// this feeds `view_proj` every frame the camera is drawn with —
