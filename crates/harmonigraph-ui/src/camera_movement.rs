@@ -76,13 +76,33 @@ fn bounded(key: ParamKey, value: f32) -> f32 {
     value.clamp(*key.range().start(), *key.range().end())
 }
 
+fn outright_id() -> egui::Id {
+    egui::Id::unique("harmonigraph_ui::camera_movement::outright")
+}
+
+/// Mark `keys` as set outright this frame: a preset, Reset, Fit or an angle
+/// bar chose the value itself, so [`finish_edits`] saves that value and the
+/// host's modulation rides on top of it (Yan, 2026-11-23, #1961).
+pub(crate) fn set_outright(ctx: &egui::Context, keys: &[ParamKey]) {
+    ctx.data_mut(|data| {
+        let marked = data.get_temp_mut_or_default::<[bool; 5]>(outright_id());
+        for key in keys {
+            if let Some(index) = ParamKey::CAMERA.iter().position(|k| k == key) {
+                marked[index] = true;
+            }
+        }
+    });
+}
+
 /// All interactive camera paths (pane navigation, preview and presets) edit
-/// the frame's snapshot. Submit only their changed channels to the host.
+/// the frame's snapshot. Submit to the host each channel whose saved value
+/// the edit changes.
 ///
-/// The snapshot is the camera as drawn, the host's modulation included, so a
-/// channel's edit is sent as the move it made, `after - before`, applied to
-/// the value before modulation as it stands now: a drag moves the saved value
-/// by the drag, and modulation that moves during the frame stays out of it.
+/// The snapshot is the camera as drawn, the host's modulation included. A
+/// channel [`set_outright`] saves the value it was set to. Any other edit is
+/// a move, `after - before`, applied to the value before modulation as it
+/// stands now: a drag moves the saved value by the drag, and modulation that
+/// moves during the frame stays out of it.
 pub(crate) fn finish_edits(
     appearance: &mut AppearanceDocument,
     before: [f32; 5],
@@ -92,21 +112,28 @@ pub(crate) fn finish_edits(
     // Without a gesture held open, the host gets a whole begin/set/end for
     // every frame the camera moves.
     let dragging = crate::gesture_open(ctx);
+    let outright = ctx.data_mut(|data| data.remove_temp::<[bool; 5]>(outright_id()));
+    let outright = outright.unwrap_or_default();
     let mut after = appearance.camera_movement();
     let mut changed = false;
     for (index, key) in ParamKey::CAMERA.into_iter().enumerate() {
         let Some(base) = params.camera_base(key) else { continue };
+        // A move takes off the modulation's shift, from the drawn value and
+        // the base it was drawn from: zero exactly where nothing modulates,
+        // so an unmodulated edit sends `after` as it is.
+        let target = match outright[index] {
+            true => bounded(key, after[index]),
+            false => bounded(key, after[index] - (before[index] - base)),
+        };
         if after[index] != before[index] {
-            // The modulation's shift, from the drawn value and the base it
-            // was drawn from; zero exactly where nothing modulates, so an
-            // unmodulated edit sends `after` as it is.
-            let target = bounded(key, after[index] - (before[index] - base));
             after[index] = bounded(key, after[index]);
+            changed = true;
+        }
+        if target != base {
             if dragging {
                 params.begin_set(key);
             }
             params.set(key, target);
-            changed = true;
         }
     }
     if changed {
@@ -209,6 +236,23 @@ mod tests {
             finish_edits(&mut appearance, before, &backend, &ctx);
             let expected = 10.0 - 0.5 * frame as f32;
             assert_eq!(backend.base.get(), expected, "frame {frame}");
+        }
+    }
+
+    /// A value set outright under a modulator is the value saved, the
+    /// modulation riding on top, even one equal to the camera as drawn.
+    #[test]
+    fn a_value_set_outright_under_a_modulator_is_the_value_saved() {
+        let ctx = egui::Context::default();
+        let backend = Modulated { base: 10.0.into(), offset: 2.0.into() };
+        let mut appearance = AppearanceDocument::default();
+        for target in [12.0, 8.0] {
+            appearance.sync_camera(&backend);
+            let before = appearance.camera_movement();
+            appearance.camera.distance = target;
+            set_outright(&ctx, &[ParamKey::CameraDistance]);
+            finish_edits(&mut appearance, before, &backend, &ctx);
+            assert_eq!(backend.base.get(), target);
         }
     }
 

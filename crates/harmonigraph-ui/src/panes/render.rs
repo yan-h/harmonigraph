@@ -16,6 +16,7 @@
 use egui::Sense;
 
 use super::{section, subsection};
+use crate::params::ParamKey;
 use crate::widgets::{button_row, choice_row, record_button, ValueBar};
 use crate::{theme, LatticeSide, Layout, Pane, PictureState, RenderFrame};
 
@@ -348,6 +349,9 @@ fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
                 &state.runtime.tuning,
                 &state.appearance,
             );
+            // Frame notes sets the zoom and pan outright; the orbit it keeps.
+            let framing = [ParamKey::CameraDistance, ParamKey::CameraPanX, ParamKey::CameraPanY];
+            crate::camera_movement::set_outright(ui.ctx(), &framing);
             let outcome = match state.appearance.frame_lattice(&positions) {
                 Some(true) => None,
                 Some(false) => Some(
