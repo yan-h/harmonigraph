@@ -160,7 +160,7 @@ parameters of com.yan-h.harmonigraph
   typed: "0" -> Some(0.5), "0" -> Some(0.5), "1" -> Some(0.50390625), "3" -> Some(0.51171875), "10" -> Some(0.5390625), "-1" -> Some(0.49609375), "200" -> Some(1.0), "0.5" -> Some(0.501953125), " 2 " -> Some(0.5078125), "Off" -> None, "Main" -> None, "Sidechain" -> None
 
 modulation
-Camera Yaw at 0.5 modulated by 0.1: read back 0.6000000238418579 saved 0 (0x00000000)
+Camera Yaw at 0.5 modulated by 0.1: read back 0.5 saved 0 (0x00000000)
 Lattice Map at 2 modulated by 1: read back 1.9999999925494194 saved {"i32":2}
 
 editor writes, read after one process callback

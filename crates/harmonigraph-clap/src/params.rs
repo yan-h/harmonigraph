@@ -9,7 +9,7 @@
 //!
 //! A row holds its unmodulated plain value and a mono modulation offset, in
 //! normalized units. Every read of the plain value the plugin acts on is
-//! modulated; a save stores the unmodulated value.
+//! modulated; a save and the host's `get_value` read the unmodulated value.
 //!
 //! The editor writes a row at once, as the host's automation does, and the
 //! row remembers what the host has not yet been told of it: a gesture begun
@@ -233,17 +233,13 @@ pub(crate) enum Report {
 }
 
 impl Row {
-    fn normalized(&self) -> f32 {
-        let normalized = self.spec.normalize(self.plain.load(Ordering::Relaxed));
-        let offset = self.offset.load(Ordering::Relaxed);
-        if offset == 0.0 { normalized } else { (normalized + offset).clamp(0.0, 1.0) }
-    }
-
     fn modulated(&self) -> f32 {
-        if self.offset.load(Ordering::Relaxed) == 0.0 {
-            self.plain.load(Ordering::Relaxed)
+        let plain = self.plain.load(Ordering::Relaxed);
+        let offset = self.offset.load(Ordering::Relaxed);
+        if offset == 0.0 {
+            plain
         } else {
-            self.spec.unnormalize(self.normalized())
+            self.spec.unnormalize((self.spec.normalize(plain) + offset).clamp(0.0, 1.0))
         }
     }
 }
@@ -318,10 +314,13 @@ impl Table {
         self.rows.iter().position(|row| row.hash == hash)
     }
 
-    /// What the host reads: the modulated value, scaled by the step count.
-    pub(crate) fn host_value(&self, row: usize) -> f64 {
+    /// What the host reads through `params.get_value`: the unmodulated value,
+    /// scaled by the step count. CLAP hears a parameter as its value plus its
+    /// modulation (`events.h`), so the modulation is the host's to add, not
+    /// part of the value (Yan, 2026-11-23, as in otonal).
+    pub(crate) fn base_host_value(&self, row: usize) -> f64 {
         let row = &self.rows[row];
-        row.normalized() as f64 * row.spec.scale() as f64
+        row.spec.normalize(row.plain.load(Ordering::Relaxed)) as f64 * row.spec.scale() as f64
     }
 
     /// The row the host knows by `hash`, and the plain value a host value
@@ -614,7 +613,7 @@ mod tests {
                         for step in 0..(1 + gesture % 3) {
                             let plain = ((round * 31 + gesture * 7 + step) % 1000) as f32 / 1000.0;
                             table.edit(0, plain);
-                            last = table.host_value(0);
+                            last = table.base_host_value(0);
                             if step % 2 == 0 {
                                 std::thread::yield_now();
                             }
@@ -674,5 +673,15 @@ mod tests {
         table.set_host(0, 0.3);
         assert_eq!(table.float(0), 1.0);
         assert!(matches!(table.save()["float"], ParamValue::F32(value) if value == 0.3));
+    }
+
+    /// The host reads a row's value without its modulation, which it adds
+    /// itself, while the plugin acts on the modulated value.
+    #[test]
+    fn the_host_reads_the_value_without_its_modulation() {
+        let table = Table::new([Spec::float("float", "Float", 0.5, 0.0, 1.0)]);
+        assert!(table.modulate_host(0, 0.25));
+        assert_eq!(table.float(0), 0.75);
+        assert_eq!(table.base_host_value(0), 0.5);
     }
 }
