@@ -1535,8 +1535,8 @@ mod tests {
         assert_eq!(plugin.params.ui_state.inbox().fallback(), fallback, "a save answer was made");
     }
 
-    /// Issue #1740: closing and reopening the editor window keeps the look
-    /// slot's undo history, and an edit the close cut off mid-drag becomes one
+    /// Issue #1740: closing and reopening the editor window keeps the look's
+    /// undo history, and an edit the close cut off mid-drag becomes one
     /// entry of it. Through the plugin's own close, a round of the input
     /// worker and the window build's state half: the last two each reloaded
     /// the close's blob, and with it a fresh, empty history.

@@ -94,8 +94,6 @@ pub enum ExportLook {
     /// The editor's appearance at the press.
     #[default]
     Current,
-    /// A saved appearance slot.
-    Slot(usize),
 }
 
 /// Settings are captured at the button press, before the shell's next frame.
@@ -255,10 +253,10 @@ pub struct SurfaceState {
     pub(crate) spectrum_hold: panes::spectral::SpectrumHold,
     /// Which Stars depths each picture solos, from the Stars `Solo` toggles: a
     /// viewing aid for one editor window rather than part of the look (#1828).
-    /// No save, slot, undo or export holds it, so it stays through a slot
-    /// switch, an undo or a restore until it is switched off or the window
-    /// closes ([`SharedState::start_window_session`]). Only the working
-    /// lattice and spectrogram panes are handed it, so the Video preview draws
+    /// No save, undo or export holds it, so it stays through an undo or a
+    /// restore until it is switched off or the window closes
+    /// ([`SharedState::start_window_session`]). Only the working lattice and
+    /// spectrogram panes are handed it, so the Video preview draws
     /// what the render will (Yan, #1862); crate-private as well, so the
     /// offline renderer cannot set it.
     pub(crate) star_solo: StarSolo,
@@ -275,8 +273,8 @@ pub(crate) struct StarSolo {
 /// The editor's preferences: how this editor, on this screen, is set up to
 /// work. The line between these and what [`UiPersist`] keeps beside them is
 /// what a reset costs: each of these is a moment's redo (a scale, a switch, a
-/// fold, a framing), where the look, its slots, the camera presets and the
-/// layout with its folded regions are the user's work.
+/// fold, a framing), where the look, the camera presets and the layout with
+/// its folded regions are the user's work.
 ///
 /// Saved whole under one key, so a preference is a field here, its line in
 /// `Default`, and a repair in [`Self::sanitize`] if it needs one; saving and
@@ -734,7 +732,7 @@ impl SharedState {
     /// other. Appearance normalization is shared with recording/export;
     /// workspace restoration remains editor-only.
     ///
-    /// A restore discards the look slots' undo histories; a window closing and
+    /// A restore discards the look's undo history; a window closing and
     /// reopening does not (#1740).
     ///
     /// Whether the document's settings were installed, whole or in part.
@@ -826,10 +824,8 @@ impl SharedState {
         // The regions' geometry and the dial are new: the spectrum hold is
         // taken from them.
         self.workspace.interaction.analyzer_regions.relayout(&mut self.picture);
-        let mut look_slots = persist.look_slots;
-        look_slots.sanitize();
-        self.workspace.interaction.appearance_editor =
-            crate::appearance_edit::AppearanceEditor::restore(look_slots);
+        // The history undoes edits to the look this restore replaced.
+        self.workspace.interaction.appearance_editor = Default::default();
         self.workspace.interaction.camera_presets = persist.camera_presets;
         for preset in &mut self.workspace.interaction.camera_presets {
             preset.sanitize();
@@ -862,14 +858,13 @@ impl SharedState {
     }
 
     /// Start drawing in a newly built window. The state outlives every window,
-    /// so what a session carries is the settings, the look slots and their
-    /// undo histories; what belongs to the window that closed is reset here.
+    /// so what a session carries is the settings and the look's undo history;
+    /// what belongs to the window that closed is reset here.
     /// From the first window on, a save stores the settings it shows.
     pub(crate) fn start_window_session(&mut self) {
         self.untouched = false;
         self.workspace.layout_runtime = workspace::Runtime::default();
         self.workspace.window_size_change = egui::Vec2::ZERO;
-        self.workspace.interaction.appearance_editor.start_window_session();
         // The new window lays the Analyzer out afresh.
         self.workspace.interaction.analyzer_regions.relayout(&mut self.picture);
         // A viewing aid for one window (`SurfaceState::star_solo`).
@@ -881,7 +876,7 @@ impl SharedState {
     /// close calls this before it refreshes a save's fallback, so the fallback
     /// holds the session. A gesture the close cut off is reported here.
     pub fn finish_open_edit(&mut self) {
-        self.workspace.interaction.appearance_editor.end_window_session(&self.picture.appearance);
+        self.workspace.interaction.appearance_editor.finish(&self.picture.appearance);
         self.report_edit();
     }
 }
@@ -914,7 +909,7 @@ impl SharedState {
 /// so that framing opens on the whole disc once.
 /// The editor's preferences have since moved under one `prefs` key (#1677),
 /// also without a bump: serde skips an older save's top-level copies, so they
-/// open at their defaults once and its layout, look, slots and presets load.
+/// open at their defaults once and its layout, look and presets load.
 pub(crate) const UI_PERSIST_VERSION: u32 = 7;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
@@ -932,7 +927,6 @@ pub(crate) struct UiPersist {
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,
-    pub(crate) look_slots: crate::appearance_edit::Slots,
     /// See [`EditorPrefs`]; a blob without them opens at their defaults.
     pub(crate) prefs: EditorPrefs,
 }
@@ -946,7 +940,6 @@ impl UiPersist {
             analyzer_regions: workspace.interaction.analyzer_regions.clone(),
             appearance: appearance.clone(),
             camera_presets: workspace.interaction.camera_presets.clone(),
-            look_slots: workspace.interaction.appearance_editor.slots.clone(),
             prefs: workspace.interaction.prefs.clone(),
         }
     }
@@ -980,7 +973,6 @@ impl UiPersist {
             analyzer_regions,
             appearance: own,
             camera_presets,
-            look_slots,
             prefs,
         } = self;
         let interaction = &workspace.interaction;
@@ -993,7 +985,6 @@ impl UiPersist {
             && *layout == workspace.layout
             && *analyzer_regions == interaction.analyzer_regions
             && *camera_presets == interaction.camera_presets
-            && *look_slots == interaction.appearance_editor.slots
             && *prefs == interaction.prefs
     }
 }

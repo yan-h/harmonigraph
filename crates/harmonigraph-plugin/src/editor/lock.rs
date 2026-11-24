@@ -4,7 +4,7 @@
 //! input and one output (#1757): a host restore is installed into it, and a
 //! host save serializes out of it ([`UiState`](super::UiState)). Nothing reads
 //! a saved document back, so closing and reopening the window leaves the
-//! state, its look slots' undo histories included, where it was (#1740).
+//! state, its look's undo history included, where it was (#1740).
 //!
 //! A restore is not installed where it arrives. The host calls it on its
 //! main thread, where taking the editor lock would wait out the input

@@ -140,7 +140,7 @@ A figure that appears only in a test or a review finding is not load:
 
 **Severe failures, and the parts they live in.**
 
-- Saved editor state (the look, slots, presets and undo) lost or changed with nothing saying so (#1740, PR #1764).
+- Saved editor state (the look, presets and undo) lost or changed with nothing saying so (#1740, PR #1764).
 - A video export, or the take behind it, that is wrong with nothing saying so (PR #340).
 - Time taken from Bitwig's main thread or from the audio thread:
   a still picture once cost the main thread 280-320 ms a second (#1673).

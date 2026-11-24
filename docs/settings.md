@@ -224,23 +224,18 @@ press Tab to show them again.
 Hide tab bars is saved with the editor workspace and never in an appearance or take.
 Tab takes priority over focus traversal except while editing text.
 
-## Slots and undo
+## Undo
 
-The numbered slots above the panes compare appearances:
-each holds a look, edits land in the active slot,
-and an unused slot starts as a copy of the current look.
-**Save to** copies the current look into another slot.
-Camera movement, tuning and output stay as they are when a slot is chosen.
+Cmd-Z undoes the last edit to the look and Cmd-Shift-Z redoes it (Ctrl on other systems).
+Camera movement, tuning and output are not part of the look, so undo leaves them as they are.
 Note fade and the Pitch color range are part of the look:
-a slot carries them, an edit to either undoes like any other, and an export from a chosen look uses that look's values.
-Each slot keeps its own undo history:
-Cmd-Z undoes the last edit and Cmd-Shift-Z redoes it (Ctrl on other systems).
+an edit to either undoes like any other, and an export of the current look uses their values.
 A drag, or one wheel or trackpad zoom of the Analyzer, is one edit.
-The histories last while the plugin is loaded, so closing and reopening the editor window keeps them,
+The history lasts while the plugin is loaded, so closing and reopening the editor window keeps it,
 and a drag the close cuts off is one edit.
-Loading a project or preset, or undoing one in the host, replaces the settings and starts every history afresh,
+Loading a project or preset, or undoing one in the host, replaces the settings and starts the history afresh,
 unless this build refuses the saved settings whole (below its version floor, or a document or look it cannot read),
-which leaves the settings and histories as they were and opens the Console to say why.
+which leaves the settings and history as they were and opens the Console to say why.
 A scroll or pinch anywhere in the window keeps a pending appearance edit open until the gesture settles,
 so appearance changes made during the same scroll join that edit.
 Scrolling a settings pane without changing an appearance creates no edit.
@@ -307,7 +302,7 @@ The third and seventh ranges include every interval their links can derive,
 so switching off a link does not clamp the pitch to an older slider limit.
 There is no separate Auto setting.
 The links are tuning, not part of the look:
-slots and undo leave them alone.
+undo leaves them alone.
 The axes and links are plugin settings, not host parameters (#1756): nothing automates or maps them, and Bitwig's own undo does not cover them.
 The plugin saves them with the project's tuning,
 and saved links and recorded configurations are restored as saved,
@@ -360,7 +355,7 @@ Host map-offset parameters explicitly name whole generator steps rather than tun
 Video keeps **Finish recording** and **Stop at bar** with Record take.
 Finishing a take starts rendering;
 **Queue last take** in **Exports** renders the last take again with the selected look and the current video settings.
-The **Appearance** row picks that look: **Recorded** (each take's own), **Current**, or a saved slot.
+The **Appearance** row picks that look: **Recorded** (each take's own) or **Current**.
 Under **Recorded** only Output size, Tail, Encoder and Archive copy are the current ones:
 the take keeps the frame and Video history it was recorded with.
 A take recorded without a look is refused, with the reason in the export list.

@@ -744,7 +744,6 @@ fn export_queue(
     appearance: &crate::AppearanceDocument,
     interaction: &mut crate::Interaction,
 ) {
-    use crate::appearance_edit::{slot_name, SLOT_COUNT};
     use crate::{ExportAction, ExportLook};
     use harmonigraph_take::render::ExportStatus;
     if ui
@@ -759,19 +758,10 @@ fn export_queue(
     subsection(ui, "Exports", |ui| {
         ui.add(egui::TextEdit::multiline(&mut interaction.take.export_paths).desired_width(ui.available_width()).desired_rows(2).hint_text("/path/to/music.take"))
             .on_hover_text("One take path per line. Each video is saved beside its take; an existing video gets a numbered variant.");
-        let slots: Vec<String> = (0..SLOT_COUNT).map(slot_name).collect();
-        let options: Vec<(ExportLook, &str, &str)> = [
+        let options = [
             (ExportLook::Recorded, "Recorded", RECORDED_HINT),
             (ExportLook::Current, "Current", "The editor's appearance when you queue."),
-        ]
-        .into_iter()
-        .chain(
-            slots
-                .iter()
-                .enumerate()
-                .map(|(slot, name)| (ExportLook::Slot(slot), name.as_str(), "")),
-        )
-        .collect();
+        ];
         crate::widgets::choice_row(ui, "Appearance", &mut interaction.take.export_look, &options);
         let mut paths = Vec::new();
         button_row(ui, |ui| {
@@ -801,7 +791,7 @@ fn export_queue(
             interaction.take.export_said.clear();
         }
         for path in paths {
-            let said = match capture_export(appearance, interaction, &path) {
+            let said = match capture_export(appearance, interaction.take.export_look, &path) {
                 Ok((action, notes)) => {
                     interaction.take.export_actions.push(action);
                     notes
@@ -877,13 +867,13 @@ fn export_queue(
 /// A recorded look is queued as written, unrepaired, so the renderer names
 /// each value its load repairs on the export's row, and a retry names them
 /// again (#1956 Q2).
-pub(crate) fn capture_export(
+fn capture_export(
     appearance: &crate::AppearanceDocument,
-    interaction: &crate::Interaction,
+    look: crate::ExportLook,
     path: &std::path::Path,
 ) -> Result<(crate::ExportAction, Vec<String>), String> {
     let mut notes = Vec::new();
-    let captured = match interaction.take.export_look {
+    let captured = match look {
         // A recorded look keeps its own frame and Video history, so queueing it
         // does not recompose the take to the pane's aspect and split; only the
         // pane's Output size, Tail, Encoder and Archive copy apply. Every take
@@ -903,15 +893,6 @@ pub(crate) fn capture_export(
             recorded
         }
         crate::ExportLook::Current => appearance.clone(),
-        crate::ExportLook::Slot(slot) => {
-            let mut captured = appearance.clone();
-            // The active slot is the live look, and a slot never visited
-            // starts as a copy of it, so either is the current appearance.
-            if let Some(look) = interaction.appearance_editor.slots.stored(slot) {
-                look.apply(&mut captured);
-            }
-            captured
-        }
     };
     // The size the Exports list shows is read back out of the blob, as the
     // renderer reads it, so whatever parsing repairs, the two agree.
@@ -1765,9 +1746,7 @@ mod export_tests {
         pane.render.tail = 2.0;
         pane.render.encoder = VideoEncoder::Hardware;
         pane.render.archive = true;
-        let mut interaction = crate::Interaction::default();
-        interaction.take.export_look = crate::ExportLook::Recorded;
-        let (queued, notes) = capture_export(&pane, &interaction, &path).unwrap();
+        let (queued, notes) = capture_export(&pane, crate::ExportLook::Recorded, &path).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(notes.len(), 1, "{notes:?}");
         assert!(notes[0].contains("render.retired_key"), "{notes:?}");
@@ -1798,9 +1777,11 @@ mod export_tests {
             .join(format!("harmonigraph-unrecorded-queue-{}.take", std::process::id()));
         let header = harmonigraph_take::Header { appearance: None, ..Default::default() };
         drop(harmonigraph_take::Writer::create(&path, &header).unwrap());
-        let mut interaction = crate::Interaction::default();
-        interaction.take.export_look = crate::ExportLook::Recorded;
-        let queued = capture_export(&crate::AppearanceDocument::default(), &interaction, &path);
+        let queued = capture_export(
+            &crate::AppearanceDocument::default(),
+            crate::ExportLook::Recorded,
+            &path,
+        );
         std::fs::remove_file(&path).unwrap();
         let error = queued.err().expect("a take with no recorded look was queued");
         assert!(error.contains("recorded no appearance"), "refused for another reason: {error}");
@@ -1827,10 +1808,7 @@ mod export_tests {
                     events,
                     ..Default::default()
                 },
-                |ui| {
-                    interaction.appearance_editor.toolbar(ui);
-                    export_queue(ui, &appearance, &mut interaction);
-                },
+                |ui| export_queue(ui, &appearance, &mut interaction),
             )
         };
         let text = |output: &egui::FullOutput, label: &str| {

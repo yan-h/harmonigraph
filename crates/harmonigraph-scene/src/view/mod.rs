@@ -409,8 +409,8 @@ pub struct ViewConfig {
     /// whatever channel carried it, and a note outside the range keeps the
     /// nearest end color rather than wrapping.
     ///
-    /// Part of the look beside the gradient it spreads, so a slot, an undo and
-    /// an export from a chosen look carry the two together (#1744).
+    /// Part of the look beside the gradient it spreads, so an undo and an
+    /// export carry the two together (#1744).
     pub darkest_pitch: f32,
     /// Pitch mapped to the brightest gradient color: the range's high end.
     /// See [`darkest_pitch`](Self::darkest_pitch).
@@ -764,8 +764,8 @@ pub struct ViewConfig {
     /// in all.
     ///
     /// At most [`FADE_TIME_MAX`]. A look setting beside the curve it pairs
-    /// with, so one drag of the diagram is one undo entry and a slot carries
-    /// both; it was a host parameter until #1744.
+    /// with, so one drag of the diagram is one undo entry; it was a host
+    /// parameter until #1744.
     pub fade_time: f32,
     /// How curved both ends of the note envelope are, 0..=1: 0 the straight
     /// line every layer has always faded on, 1 the sharpest curve on offer.
@@ -1141,9 +1141,9 @@ impl ViewConfig {
     ///
     /// One assembly point for every envelope a NOTE runs on, so no caller can
     /// pair a duration with the wrong shape. Both have passed through
-    /// `sanitize` on every door a look arrives by — the editor's load, which
-    /// also repairs the stored slots, and `AppearanceDocument::parse` for a
-    /// take's or a file's look — and a bar cannot set either past its range.
+    /// `sanitize` on every door a look arrives by — the editor's load and
+    /// `AppearanceDocument::parse` for a take's or a file's look — and a bar
+    /// cannot set either past its range.
     /// A view built in code skips those doors, and `derive_scene` sanitizes
     /// its own copy.
     ///

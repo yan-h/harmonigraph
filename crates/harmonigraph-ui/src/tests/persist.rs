@@ -235,38 +235,27 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
     }
 }
 
-/// [`dialled`], plus a camera preset, a look stored in slot 2 and the
+/// [`dialled`], plus a camera preset, every intensity weight and the
 /// geometry an unfolded Analyzer frame leaves: a document whose sweeps reach
-/// the structs inside a list, a tuple and a `Some`.
+/// the structs inside a list and a `Some`, and the numbers inside a `Some`.
 fn filled() -> SharedState {
-    use crate::appearance_edit::{AppearanceEditor, Look, Slots};
-
     let mut state = dialled();
     state.workspace.interaction.camera_presets.push(CameraPreset {
         name: "reading".into(),
         yaw: 0.7,
         pitch: 0.2,
     });
-    let mut stored = AppearanceDocument::default();
-    stored.spectrum.attack = 0.2;
-    // Every intensity weight filled, here and in the stored look: an empty
-    // one holds no number for a sweep to reach.
-    for view in [&mut state.picture.appearance.view, &mut stored.view] {
-        let intensity = &mut view.intensity;
-        for source in [
-            &mut intensity.velocity,
-            &mut intensity.gain,
-            &mut intensity.pressure,
-            &mut intensity.timbre,
-        ] {
-            *source =
-                harmonigraph_scene::IntensitySource { opacity: Some(0.4), thickness: Some(0.6) };
-        }
+    // Every intensity weight filled: an empty one holds no number for a sweep
+    // to reach.
+    let intensity = &mut state.picture.appearance.view.intensity;
+    for source in [
+        &mut intensity.velocity,
+        &mut intensity.gain,
+        &mut intensity.pressure,
+        &mut intensity.timbre,
+    ] {
+        *source = harmonigraph_scene::IntensitySource { opacity: Some(0.4), thickness: Some(0.6) };
     }
-    let look = ron::to_string(&Look::capture(&stored)).expect("a look serializes");
-    let slots: Slots = ron::from_str(&format!("(stored:(None,Some({look}),None,None),active:0)"))
-        .expect("a slot holding a look parses");
-    state.workspace.interaction.appearance_editor = AppearanceEditor::restore(slots);
     // What a drawn, unfolded Analyzer records, written as its save has it:
     // the geometry is private to the pane that draws it.
     state.workspace.interaction.analyzer_regions =
@@ -328,7 +317,7 @@ fn a_document_naming_any_one_unknown_variant_costs_that_key_alone() {
         "appearance.camera.projection",
         "appearance.view.atmosphere.material_style",
         "appearance.spectrum.orientation",
-        "look_slots.stored[1].spectrum.window",
+        "appearance.render.frame.lattice",
         "prefs.frame_rate",
     ] {
         assert!(variants.iter().any(|(path, _)| path == deep), "the sweep never reaches {deep}");
@@ -339,17 +328,7 @@ fn a_document_naming_any_one_unknown_variant_costs_that_key_alone() {
             format!("{}{UNKNOWN}{}", &blob[..at.start], &blob[at.end..])
         };
         let swapped = swap(&saved, at.clone());
-        // The pair whose value holds the token: a tuple's item is its pair's.
-        let mut owner = path.as_str();
-        while let Some(item) = owner.strip_suffix(']') {
-            owner = &item[..item.rfind('[').expect("an index opens")];
-        }
-        let (_, pair) = pairs.iter().find(|(p, _)| p == owner).expect("a pair holds every token");
-        let named: String = owner
-            .split('.')
-            .map(|key| &key[..key.find('[').unwrap_or(key.len())])
-            .collect::<Vec<_>>()
-            .join(".");
+        let (_, pair) = pairs.iter().find(|(p, _)| p == path).expect("a pair holds every token");
 
         let mut restored = fresh();
         assert!(
@@ -364,8 +343,8 @@ fn a_document_naming_any_one_unknown_variant_costs_that_key_alone() {
         assert!(!collapsed(&restored, panes::Tab::Console), "{path}: the loss is hidden");
         let said = restored.picture.runtime.console.lines().find(|line| line.contains(UNKNOWN));
         assert!(
-            said.is_some_and(|line| line.contains(&format!("dropped {named} "))),
-            "{path}: the Console does not name {named}: {said:?}",
+            said.is_some_and(|line| line.contains(&format!("dropped {path} "))),
+            "{path}: the Console does not name {path}: {said:?}",
         );
 
         let cut = if saved[pair.end..].starts_with(',') {
@@ -804,15 +783,14 @@ fn nested_defaults() -> [(&'static str, String, &'static str); 11] {
 
 /// The layer under the missing-key tests above and below: every key of every
 /// struct the editor save holds, at any depth, dropped in turn — through
-/// `Some`, tuples, lists and enum payloads as well — and the rest parsed with
+/// `Some` and lists as well — and the rest parsed with
 /// the parse `install_document` runs.
 ///
 /// Those tests each sweep one level through the real doors, `install_document` or
 /// `AppearanceDocument::parse`, and compare what loads: the persist sections
 /// (`a_persist_blob_missing_any_one_section_keeps_the_rest`) and the
 /// appearance's groups (`an_appearance_missing_any_one_group_keeps_the_rest`).
-/// This one reaches every struct nested further in, a preset and a stored look
-/// included, asked at the parse alone, which is the parse `install_document`'s
+/// This one reaches every struct nested further in, a preset included, asked at the parse alone, which is the parse `install_document`'s
 /// per-key decode runs, since normalization may rightly move a sibling of the
 /// dropped key.
 ///
@@ -828,9 +806,9 @@ fn nested_defaults() -> [(&'static str, String, &'static str); 11] {
 /// one is not skipped by default.
 ///
 /// The fixture is `dialled`, which moves a few values in the camera, view,
-/// spectrum, render and workspace off fresh, plus a camera preset, a stored
-/// look and the Analyzer's region geometry, so the walk reaches the structs
-/// inside a list, a tuple and a `Some`.
+/// spectrum, render and workspace off fresh, plus a camera preset and the
+/// Analyzer's region geometry, so the walk reaches the structs inside a list
+/// and a `Some`.
 #[test]
 fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
     let saved = filled().save_persist();
@@ -852,7 +830,7 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
         "prefs.skin_dials.tint",
         "prefs.spiral.zoom",
         "camera_presets[0].yaw",
-        "look_slots.stored[1].view.shadow.lattice_text.width",
+        "appearance.view.shadow.lattice_text.width",
         "analyzer_regions.geometry.depths",
     ] {
         assert!(pairs.iter().any(|(path, _)| path == deep), "the sweep never reaches {deep}");
@@ -893,17 +871,11 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
             .unwrap_or_else(|| panic!("dropping {path} lost the key from the next save"));
         // The dropped key's own value.
         let came_back = &again[back.clone()];
-        // A stored look is the appearance's camera, view and spectrum under
-        // another name, and a fresh save holds none: its keys come back where
-        // the appearance's do.
-        let like =
-            path.strip_prefix("look_slots.stored[1].").map(|rest| format!("appearance.{rest}"));
-        let like = like.as_deref().unwrap_or(path);
         let group = nested.iter().find_map(|(owner, keys)| {
-            let inner = like.strip_prefix(owner)?.strip_prefix('.')?;
+            let inner = path.strip_prefix(owner)?.strip_prefix('.')?;
             Some((owner, &keys[inner]))
         });
-        let want = match (group, fresh_pairs.get(like)) {
+        let want = match (group, fresh_pairs.get(path)) {
             (Some((owner, bare)), fresh) => {
                 if fresh != Some(bare) {
                     needed.insert(*owner);
@@ -980,10 +952,9 @@ fn a_document_naming_any_non_finite_float_opens_on_real_numbers() {
         "appearance.spectrum.atmosphere.",
         "appearance.render.",
         "camera_presets[0].",
-        "look_slots.stored[1].",
         "prefs.perf_pos.",
         "appearance.view.intensity.timbre.thickness",
-        "look_slots.stored[1].view.intensity.velocity.opacity",
+        "appearance.view.intensity.velocity.opacity",
     ] {
         assert!(floats.iter().any(|(path, _)| path.starts_with(owner)), "no float under {owner}");
     }
@@ -1045,15 +1016,8 @@ fn a_document_naming_any_non_finite_float_opens_on_real_numbers() {
 #[test]
 fn the_persist_blob_carries_exactly_these_top_level_keys() {
     // UiPersist's fields, in declaration order.
-    const KEYS: &[&str] = &[
-        "version",
-        "layout",
-        "analyzer_regions",
-        "appearance",
-        "camera_presets",
-        "look_slots",
-        "prefs",
-    ];
+    const KEYS: &[&str] =
+        &["version", "layout", "analyzer_regions", "appearance", "camera_presets", "prefs"];
 
     let saved = fresh().save_persist();
     let keys: Vec<String> = top_level_pairs(&saved).into_iter().map(|(key, _)| key).collect();
@@ -1543,7 +1507,7 @@ fn item_ranges(blob: &str) -> Vec<std::ops::Range<usize>> {
 
 /// Every `key:value` pair of every struct a serialized blob holds, at any
 /// depth, as its path and its byte range in `blob`: through nested structs,
-/// tuples and lists, whose items are numbered (`stored[1]`), and through a
+/// tuples and lists, whose items are numbered (`star_size[1]`), and through a
 /// `Some` or an enum variant's payload at the path of the value it is.
 pub(super) fn nested_pairs(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
     let mut out = Vec::new();

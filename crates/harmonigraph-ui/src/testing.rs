@@ -9,8 +9,8 @@
 use crate::appearance_edit::Look;
 use crate::SharedState;
 
-/// One look edit, recorded in the active slot's undo history as a frame
-/// records a widget's: closed at once, or left open as a drag in progress is.
+/// One look edit, recorded in the undo history as a frame records a
+/// widget's: closed at once, or left open as a drag in progress is.
 pub fn edit_look(state: &mut SharedState, dragging: bool) {
     let before = Look::capture(&state.picture.appearance);
     state.picture.appearance.spectrum.attack += 0.01;
@@ -21,7 +21,7 @@ pub fn edit_look(state: &mut SharedState, dragging: bool) {
     );
 }
 
-/// How many edits the active slot can undo.
+/// How many edits the history can undo.
 pub fn undo_depth(state: &SharedState) -> usize {
     state.workspace.interaction.appearance_editor.undo_depth()
 }

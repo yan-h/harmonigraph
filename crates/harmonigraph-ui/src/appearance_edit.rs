@@ -1,7 +1,7 @@
 //! Editor appearance history. The live document remains PictureState's;
 //! snapshots deliberately exclude host state and output settings. The
 //! Analyzer's navigation (pitch range, History, Level) is part of the look, so
-//! undo and the slots carry it (#1635).
+//! undo carries it (#1635).
 
 use crate::{AppearanceDocument, SpectrumConfig};
 use harmonigraph_scene::{Camera, ViewConfig};
@@ -19,12 +19,11 @@ pub(crate) const APPEARANCE_SHORTCUTS: &[egui::KeyboardShortcut] = &[
     egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Y),
 ];
 
-/// The appearance as undo and the slots hold it: the document's camera, view
-/// and spectrum, with the fields the host owns
-/// ([`AppearanceDocument::copy_host_owned`]) reset on capture and the live
-/// document's kept on apply. Output settings are not part of a look.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+/// The appearance as undo holds it: the document's camera, view and spectrum,
+/// with the fields the host owns ([`AppearanceDocument::copy_host_owned`])
+/// reset on capture and the live document's kept on apply. Output settings are
+/// not part of a look.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Look {
     camera: Camera,
     view: ViewConfig,
@@ -57,51 +56,18 @@ impl Look {
     }
 }
 
-/// Persisted as a fixed-length array, so changing this refuses older blobs whole.
-pub(crate) const SLOT_COUNT: usize = 4;
-
-/// The comparison slots. The active slot is always the live document, so its
-/// entry is empty; there is no second writable copy. A slot never visited is
-/// empty too, and starts as a copy of the current look when switched to.
-#[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub(crate) struct Slots {
-    stored: [Option<Look>; SLOT_COUNT],
-    active: usize,
-}
-
-impl Slots {
-    pub(crate) fn sanitize(&mut self) {
-        self.active = self.active.min(SLOT_COUNT - 1);
-        self.stored[self.active] = None;
-        for look in self.stored.iter_mut().flatten() {
-            look.camera.sanitize();
-            look.view.sanitize();
-            look.spectrum.sanitize();
-        }
-    }
-
-    /// The look `slot` holds apart from the live document; `None` means the
-    /// slot shows the current look.
-    pub(crate) fn stored(&self, slot: usize) -> Option<&Look> {
-        self.stored[slot].as_ref()
-    }
-}
-
-pub(crate) fn slot_name(slot: usize) -> String {
-    format!("Slot {}", slot + 1)
-}
-
 const HISTORY_LIMIT: usize = 64;
 
+/// The look's undo history: what undo and redo go back and forth through,
+/// and the edit still open while a gesture is.
 #[derive(Default)]
-pub(crate) struct History {
+pub(crate) struct AppearanceEditor {
     undo: Vec<Look>,
     redo: Vec<Look>,
     pending: Option<Look>,
 }
 
-impl History {
+impl AppearanceEditor {
     fn push(&mut self, before: Look, after: &Look) {
         if before == *after {
             return;
@@ -113,6 +79,8 @@ impl History {
         self.redo.clear();
     }
 
+    /// Closes the edit still open as one undo entry: a drag that has ended,
+    /// or one the window's close cut off.
     pub(crate) fn finish(&mut self, appearance: &AppearanceDocument) {
         if let Some(before) = self.pending.take() {
             self.push(before, &Look::capture(appearance));
@@ -149,80 +117,10 @@ impl History {
             after.apply(appearance);
         }
     }
-}
-
-enum Command {
-    Switch(usize),
-    SaveTo(usize),
-}
-
-#[derive(Default)]
-pub(crate) struct AppearanceEditor {
-    history: History,
-    /// The inactive slots' histories; the active slot's entry is empty.
-    parked: [History; SLOT_COUNT],
-    pub(crate) slots: Slots,
-    // Execute after the body commits any text field losing focus this frame.
-    command: Option<Command>,
-}
-
-impl AppearanceEditor {
-    fn switch(&mut self, slot: usize, appearance: &mut AppearanceDocument) {
-        let active = self.slots.active;
-        if slot == active {
-            return;
-        }
-        self.history.finish(appearance);
-        self.slots.stored[active] = Some(Look::capture(appearance));
-        if let Some(look) = self.slots.stored[slot].take() {
-            look.apply(appearance);
-        }
-        self.parked[active] = std::mem::take(&mut self.history);
-        self.history = std::mem::take(&mut self.parked[slot]);
-        self.slots.active = slot;
-    }
-
-    /// Copies the current look into another slot. Overwriting a stored look is
-    /// undoable from that slot; an empty slot had no look to go back to.
-    pub(crate) fn save_to(&mut self, slot: usize, appearance: &AppearanceDocument) {
-        if slot == self.slots.active {
-            return;
-        }
-        let look = Look::capture(appearance);
-        if let Some(before) = self.slots.stored[slot].replace(look.clone()) {
-            self.parked[slot].push(before, &look);
-        }
-    }
-
-    pub(crate) fn restore(slots: Slots) -> Self {
-        Self { slots, ..Default::default() }
-    }
-
-    /// A slot switch or save-to is spent by the frame that queues it, so one
-    /// left at a close is never carried into the next window.
-    pub(crate) fn start_window_session(&mut self) {
-        self.command = None;
-    }
-
-    /// An edit still open as the window closes, a drag the close cut off, is
-    /// one undo entry.
-    pub(crate) fn end_window_session(&mut self, appearance: &AppearanceDocument) {
-        self.history.finish(appearance);
-    }
-
-    #[cfg(feature = "testing")]
-    pub(crate) fn observe(
-        &mut self,
-        before: Look,
-        appearance: &AppearanceDocument,
-        dragging: bool,
-    ) {
-        self.history.observe(before, appearance, dragging);
-    }
 
     #[cfg(feature = "testing")]
     pub(crate) fn undo_depth(&self) -> usize {
-        self.history.undo.len()
+        self.undo.len()
     }
 
     pub(crate) fn end_frame(
@@ -235,7 +133,7 @@ impl AppearanceEditor {
         // A drag, wheel or pinch closes as one entry on the first frame after
         // it ends. A frame that scrolls a settings pane changes no look, so it
         // holds nothing open on its own.
-        self.history.observe(before, appearance, crate::gesture_open(ctx));
+        self.observe(before, appearance, crate::gesture_open(ctx));
         // TextEdit leaves key events in the input even after handling them.
         // Keep its ownership for the whole frame: Undo followed by Enter can
         // undo text and release focus in one pass, but must not also undo a look.
@@ -247,9 +145,9 @@ impl AppearanceEditor {
             let taken = crate::keys::take_each(ctx, APPEARANCE_SHORTCUTS);
             for shortcut in &taken {
                 if *shortcut == APPEARANCE_SHORTCUTS[0] {
-                    self.history.undo(appearance);
+                    self.undo(appearance);
                 } else {
-                    self.history.redo(appearance);
+                    self.redo(appearance);
                 }
             }
             if !taken.is_empty() {
@@ -261,44 +159,6 @@ impl AppearanceEditor {
             // undoes on.
             crate::keys::claim(ctx, APPEARANCE_SHORTCUTS);
         }
-        if let Some(command) = self.command.take() {
-            self.history.finish(appearance);
-            match command {
-                Command::Switch(slot) => self.switch(slot, appearance),
-                Command::SaveTo(slot) => self.save_to(slot, appearance),
-            }
-            ctx.request_repaint();
-        }
-    }
-
-    pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            // Each slot stands on its own fill, as every choice option does.
-            let mut chosen = self.slots.active;
-            for slot in 0..SLOT_COUNT {
-                crate::widgets::option_button(ui, &mut chosen, slot, &(slot + 1).to_string(), "");
-            }
-            if chosen != self.slots.active {
-                self.command = Some(Command::Switch(chosen));
-            }
-            ui.menu_button("Save to", |ui| {
-                for slot in (0..SLOT_COUNT).filter(|&slot| slot != self.slots.active) {
-                    if ui.button(slot_name(slot)).clicked() {
-                        self.command = Some(Command::SaveTo(slot));
-                        ui.close();
-                    }
-                }
-            });
-        })
-        .response
-        .on_hover_text(format!(
-            "Slots compare appearances; camera movement, tuning and output stay as they are. \
-                 Edits land in the active slot, each slot keeps its own undo history, and an \
-                 unused slot starts as a copy of the current look. {} undoes an edit and {} \
-                 redoes it.",
-            ui.ctx().format_shortcut(&APPEARANCE_SHORTCUTS[0]),
-            ui.ctx().format_shortcut(&APPEARANCE_SHORTCUTS[1]),
-        ));
     }
 }
 
@@ -323,7 +183,7 @@ mod tests {
         let mut editor = AppearanceEditor::default();
         let original = Look::capture(&appearance);
         appearance.spectrum.attack = 0.2;
-        editor.history.observe(original.clone(), &appearance, false);
+        editor.observe(original.clone(), &appearance, false);
         let changed = Look::capture(&appearance);
         for redo in &APPEARANCE_SHORTCUTS[1..] {
             for (shortcut, expected) in [(APPEARANCE_SHORTCUTS[0], &original), (*redo, &changed)] {
@@ -372,7 +232,7 @@ mod tests {
         let mut editor = AppearanceEditor::default();
         let original = Look::capture(&appearance);
         appearance.spectrum.attack = 0.2;
-        editor.history.observe(original, &appearance, false);
+        editor.observe(original, &appearance, false);
         let mut text = String::new();
         let mut time = 0.0;
         let mut frame = |events| {
@@ -393,7 +253,7 @@ mod tests {
                         text_edit_was_focused,
                     );
                     assert_eq!(appearance.spectrum.attack, 0.2);
-                    assert_eq!(editor.history.undo.len(), 1);
+                    assert_eq!(editor.undo.len(), 1);
                 },
             );
             text.clone()
@@ -460,16 +320,16 @@ mod tests {
         frame(vec![crate::tests::probe::press(start + egui::vec2(60.0, 0.0), false)]);
         assert_ne!(appearance.spectrum.attack, original, "fixture must actually drag the slider");
         let changed = appearance.spectrum.attack;
-        assert_eq!(editor.history.undo.len(), 1);
-        editor.history.undo(&mut appearance);
+        assert_eq!(editor.undo.len(), 1);
+        editor.undo(&mut appearance);
         assert_eq!(appearance.spectrum.attack, original);
-        editor.history.redo(&mut appearance);
+        editor.redo(&mut appearance);
         assert_eq!(appearance.spectrum.attack, changed);
-        editor.history.undo(&mut appearance);
+        editor.undo(&mut appearance);
         let before = Look::capture(&appearance);
         appearance.spectrum.attack = 0.2;
-        editor.history.observe(before, &appearance, false);
-        assert!(editor.history.redo.is_empty());
+        editor.observe(before, &appearance, false);
+        assert!(editor.redo.is_empty());
     }
 
     /// Zoom the Analyzer with `wheel(frame)` events over 40 frames and assert
@@ -524,8 +384,8 @@ mod tests {
         }
         assert!(zooming_frames >= 3, "the wheel must zoom over several frames: {zooming_frames}");
         assert_ne!(Look::capture(&state.appearance), original);
-        assert_eq!(editor.history.undo.len(), 1);
-        editor.history.undo(&mut state.appearance);
+        assert_eq!(editor.undo.len(), 1);
+        editor.undo(&mut state.appearance);
         assert_eq!(Look::capture(&state.appearance), original);
     }
 
@@ -617,44 +477,9 @@ mod tests {
             );
         }
         assert!(moving_frames >= 3, "the drag must pan over several frames: {moving_frames}");
-        assert_eq!(editor.history.undo.len(), 1);
-        editor.history.undo(&mut state.appearance);
+        assert_eq!(editor.undo.len(), 1);
+        editor.undo(&mut state.appearance);
         assert_eq!(Look::capture(&state.appearance), original);
-    }
-
-    #[test]
-    fn every_slot_stands_on_its_own_fill() {
-        let ctx = crate::tests::probe::themed();
-        let mut editor = AppearanceEditor::default();
-        let size = egui::vec2(400.0, 100.0);
-        let out = crate::tests::probe::run(
-            &ctx,
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                ..Default::default()
-            },
-            |ui| editor.toolbar(ui),
-        );
-        let fills: Vec<_> = out
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Rect(rect) if rect.fill == crate::theme::widget() => Some(rect.rect),
-                _ => None,
-            })
-            .collect();
-        for slot in 0..SLOT_COUNT {
-            let label = (slot + 1).to_string();
-            let at = out
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos),
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("slot {label} is drawn"));
-            assert!(fills.iter().any(|fill| fill.contains(at)), "slot {label} has no fill");
-        }
     }
 
     /// A pinch in flight holds a look edit open, and the editor losing the
@@ -667,7 +492,7 @@ mod tests {
             let mut editor = AppearanceEditor::default();
             let before = Look::capture(&appearance);
             appearance.spectrum.attack = 0.2;
-            editor.history.observe(before, &appearance, true);
+            editor.observe(before, &appearance, true);
             let mut events = vec![egui::Event::Zoom(1.1)];
             if lost {
                 events.push(egui::Event::WindowFocused(false));
@@ -679,58 +504,23 @@ mod tests {
                     editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx(), false);
                 },
             );
-            assert_eq!(editor.history.pending.is_none(), finished, "focus lost: {lost}");
-            assert_eq!(editor.history.undo.len(), usize::from(finished));
+            assert_eq!(editor.pending.is_none(), finished, "focus lost: {lost}");
+            assert_eq!(editor.undo.len(), usize::from(finished));
         }
     }
 
     #[test]
-    fn slots_keep_their_own_histories_and_save_to_is_undoable_in_its_target() {
-        let mut appearance = AppearanceDocument::default();
-        let mut editor = AppearanceEditor::default();
-        let original = Look::capture(&appearance);
-        editor.switch(1, &mut appearance); // An unused slot starts as the current look.
-        assert_eq!(Look::capture(&appearance), original);
-        let before = Look::capture(&appearance);
-        appearance.spectrum.attack = 0.2;
-        editor.history.observe(before, &appearance, false);
-        let bright = Look::capture(&appearance);
-        editor.switch(0, &mut appearance);
-        assert_eq!(Look::capture(&appearance), original);
-        assert!(editor.history.undo.is_empty());
-        editor.save_to(1, &appearance);
-        editor.switch(1, &mut appearance);
-        assert_eq!(Look::capture(&appearance), original);
-        editor.history.undo(&mut appearance);
-        assert_eq!(Look::capture(&appearance), bright, "the overwrite undoes first");
-        editor.history.undo(&mut appearance);
-        assert_eq!(Look::capture(&appearance), original);
-        editor.history.redo(&mut appearance);
-        assert_eq!(Look::capture(&appearance), bright);
-        editor.switch(3, &mut appearance);
-        assert_eq!(Look::capture(&appearance), bright);
-        editor.switch(0, &mut appearance);
-        assert_eq!(Look::capture(&appearance), original);
-    }
-
-    #[test]
-    fn project_restore_retains_slots_but_discards_history() {
+    fn project_restore_discards_history() {
         let mut state = crate::tests::probe::fresh();
         let original = Look::capture(&state.picture.appearance);
-        let editor = &mut state.workspace.interaction.appearance_editor;
-        editor.switch(1, &mut state.picture.appearance);
         state.picture.appearance.spectrum.attack = 0.2;
-        editor.history.observe(original.clone(), &state.picture.appearance, false);
-        editor.save_to(2, &state.picture.appearance);
+        let editor = &mut state.workspace.interaction.appearance_editor;
+        editor.observe(original, &state.picture.appearance, false);
+        assert_eq!(editor.undo.len(), 1, "the fixture holds an edit to discard");
         let blob = state.save_persist();
         assert!(state.install_document(&blob));
-        let editor = &mut state.workspace.interaction.appearance_editor;
-        assert_eq!(editor.slots.active, 1);
-        assert!(editor.slots.stored(1).is_none(), "the active slot is the live document");
-        assert_eq!(editor.slots.stored(2).unwrap().spectrum.attack, 0.2);
-        assert!(editor.history.undo.is_empty());
-        editor.switch(0, &mut state.picture.appearance);
-        assert_eq!(Look::capture(&state.picture.appearance), original);
+        assert!(state.workspace.interaction.appearance_editor.undo.is_empty());
+        assert_eq!(state.picture.appearance.spectrum.attack, 0.2);
     }
 
     #[test]
@@ -747,20 +537,20 @@ mod tests {
             },
             |ui| {
                 let before = Look::capture(&appearance);
-                // ValueBar commits a typed value on losing focus, after toolbar drawing.
+                // ValueBar commits a typed value on losing focus, late in the frame.
                 appearance.spectrum.attack = 0.2;
                 editor.end_frame(before, &mut appearance, ui.ctx(), false);
             },
         );
         assert_eq!(appearance.spectrum.attack, original);
-        editor.history.redo(&mut appearance);
+        editor.redo(&mut appearance);
         assert_eq!(appearance.spectrum.attack, 0.2);
     }
 
     #[test]
     fn undo_preserves_incoming_camera_and_output() {
         let mut appearance = AppearanceDocument::default();
-        let mut history = History::default();
+        let mut history = AppearanceEditor::default();
         let before = Look::capture(&appearance);
         let original = appearance.spectrum.attack;
         appearance.spectrum.attack = 0.2;
@@ -802,54 +592,5 @@ mod tests {
         assert_eq!(moved.camera.target, target);
         assert_eq!((moved.view.center_fives, moved.view.center_threes), centers);
         assert_eq!(Look::capture(&moved), Look::capture(&other));
-    }
-
-    #[test]
-    fn queued_slot_survives_undo_slot_edits_and_incoming_camera() {
-        use crate::params::{ParamBackend, ParamKey};
-        struct Camera;
-        impl ParamBackend for Camera {
-            fn get(&self, key: ParamKey) -> f32 {
-                key.default_value()
-            }
-            fn set(&self, _: ParamKey, _: f32) {}
-            fn camera_value(&self, key: ParamKey) -> Option<f32> {
-                Some(if key == ParamKey::CameraDistance { 7.0 } else { key.default_value() })
-            }
-        }
-        let mut state = crate::tests::probe::fresh();
-        let appearance = &mut state.picture.appearance;
-        let editor = &mut state.workspace.interaction.appearance_editor;
-        let original = Look::capture(appearance);
-        appearance.spectrum.attack = 0.2;
-        editor.history.observe(original.clone(), appearance, false);
-        editor.save_to(1, appearance);
-        editor.history.undo(appearance); // The export must take slot 1, not the current look.
-        appearance.sync_camera(&Camera);
-        appearance.render.short_edge = 1080;
-        state.workspace.interaction.take.export_look = crate::ExportLook::Slot(1);
-        let (queued, _) = crate::panes::render::capture_export(
-            appearance,
-            &state.workspace.interaction,
-            std::path::Path::new("music.take"),
-        )
-        .unwrap();
-        let editor = &mut state.workspace.interaction.appearance_editor;
-        editor.switch(1, appearance);
-        appearance.spectrum.attack = 0.8;
-        editor.switch(0, appearance);
-        editor.save_to(1, appearance);
-        appearance.spectrum.attack = 0.8;
-        appearance.camera.distance = 5.0;
-        appearance.render.short_edge = 720;
-        let crate::ExportAction::Queue { appearance: blob, size, .. } = queued else {
-            panic!("queue request")
-        };
-        let captured = AppearanceDocument::parse(&blob).unwrap();
-        assert_eq!(captured.spectrum.attack, 0.2);
-        assert_eq!(captured.camera.distance, 7.0);
-        assert_eq!(captured.render.short_edge, 1080);
-        assert_eq!(size, captured.render.frame.pixels(1080));
-        assert_eq!(appearance.spectrum.attack, 0.8);
     }
 }
