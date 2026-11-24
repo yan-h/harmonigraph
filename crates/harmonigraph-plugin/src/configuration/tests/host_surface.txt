@@ -30,74 +30,74 @@ com.yan-h.harmonigraph-tune
 parameters of com.yan-h.harmonigraph
 "Lattice Map": id 39672517 module "" range 0..127 default 0 flags stepped,automatable
   host 0.0: text Some("1 · C · 3×4") applied {"i32":0} read back 0.0
-  host 0.9999999962747097: text Some("2 · unavailable") applied {"i32":1} read back 0.9999999962747097
-  host 1.9999999925494194: text Some("3 · unavailable") applied {"i32":2} read back 1.9999999925494194
-  host 2.999999988824129: text Some("4 · unavailable") applied {"i32":3} read back 2.999999988824129
+  host 0.9999999962747097: text Some("2 · unavailable") applied {"i32":1} read back 1.0
+  host 1.9999999925494194: text Some("3 · unavailable") applied {"i32":2} read back 2.0
+  host 2.999999988824129: text Some("4 · unavailable") applied {"i32":3} read back 3.0
   host 127.0: text Some("128 · unavailable") applied {"i32":127} read back 127.0
-  host 1.4: text Some("2 · unavailable") applied {"i32":1} read back 0.9999999962747097
-  host 1.6: text Some("3 · unavailable") applied {"i32":2} read back 1.9999999925494194
+  host 1.4: text Some("2 · unavailable") applied {"i32":1} read back 1.0
+  host 1.6: text Some("3 · unavailable") applied {"i32":2} read back 2.0
   host 127.0: text Some("128 · unavailable") applied {"i32":127} read back 127.0
-  typed: "1 · C · 3×4" -> None, "0" -> Some(0.0), "1" -> Some(0.9999999962747097), "3" -> Some(2.999999988824129), "10" -> Some(9.999999962747097), "-1" -> Some(0.0), "200" -> Some(127.0), "0.5" -> None, " 2 " -> Some(1.9999999925494194), "Off" -> None, "Main" -> None, "Sidechain" -> None
+  typed: "1 · C · 3×4" -> None, "0" -> Some(0.0), "1" -> Some(1.0), "3" -> Some(3.0), "10" -> Some(10.0), "-1" -> Some(0.0), "200" -> Some(127.0), "0.5" -> None, " 2 " -> Some(2.0), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Fifths": id 607475501 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-9") applied {"i32":-9} read back 0.0
-  host 1.0000000074505806: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
-  host 2.000000014901161: text Some("-7") applied {"i32":-7} read back 2.000000014901161
-  host 3.000000089406967: text Some("-6") applied {"i32":-6} read back 3.000000089406967
+  host 1.0000000074505806: text Some("-8") applied {"i32":-8} read back 1.0
+  host 2.000000014901161: text Some("-7") applied {"i32":-7} read back 2.0
+  host 3.000000089406967: text Some("-6") applied {"i32":-6} read back 3.0
   host 18.0: text Some("9") applied {"i32":9} read back 18.0
-  host 1.4: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
-  host 1.6: text Some("-7") applied {"i32":-7} read back 2.000000014901161
+  host 1.4: text Some("-8") applied {"i32":-8} read back 1.0
+  host 1.6: text Some("-7") applied {"i32":-7} read back 2.0
   host 18.0: text Some("9") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.000000476837158), "3" -> Some(12.000000357627869), "10" -> Some(18.0), "-1" -> Some(8.000000059604645), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(10.99999988079071), "Off" -> None, "Main" -> None, "Sidechain" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.0), "3" -> Some(12.0), "10" -> Some(18.0), "-1" -> Some(8.0), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(11.0), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Thirds": id 1007447421 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-9") applied {"i32":-9} read back 0.0
-  host 1.0000000074505806: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
-  host 2.000000014901161: text Some("-7") applied {"i32":-7} read back 2.000000014901161
-  host 3.000000089406967: text Some("-6") applied {"i32":-6} read back 3.000000089406967
+  host 1.0000000074505806: text Some("-8") applied {"i32":-8} read back 1.0
+  host 2.000000014901161: text Some("-7") applied {"i32":-7} read back 2.0
+  host 3.000000089406967: text Some("-6") applied {"i32":-6} read back 3.0
   host 18.0: text Some("9") applied {"i32":9} read back 18.0
-  host 1.4: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
-  host 1.6: text Some("-7") applied {"i32":-7} read back 2.000000014901161
+  host 1.4: text Some("-8") applied {"i32":-8} read back 1.0
+  host 1.6: text Some("-7") applied {"i32":-7} read back 2.0
   host 18.0: text Some("9") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.000000476837158), "3" -> Some(12.000000357627869), "10" -> Some(18.0), "-1" -> Some(8.000000059604645), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(10.99999988079071), "Off" -> None, "Main" -> None, "Sidechain" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.0), "3" -> Some(12.0), "10" -> Some(18.0), "-1" -> Some(8.0), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(11.0), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Sevenths": id 2039451299 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-9") applied {"i32":-9} read back 0.0
-  host 1.0000000074505806: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
-  host 2.000000014901161: text Some("-7") applied {"i32":-7} read back 2.000000014901161
-  host 3.000000089406967: text Some("-6") applied {"i32":-6} read back 3.000000089406967
+  host 1.0000000074505806: text Some("-8") applied {"i32":-8} read back 1.0
+  host 2.000000014901161: text Some("-7") applied {"i32":-7} read back 2.0
+  host 3.000000089406967: text Some("-6") applied {"i32":-6} read back 3.0
   host 18.0: text Some("9") applied {"i32":9} read back 18.0
-  host 1.4: text Some("-8") applied {"i32":-8} read back 1.0000000074505806
-  host 1.6: text Some("-7") applied {"i32":-7} read back 2.000000014901161
+  host 1.4: text Some("-8") applied {"i32":-8} read back 1.0
+  host 1.6: text Some("-7") applied {"i32":-7} read back 2.0
   host 18.0: text Some("9") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.000000476837158), "3" -> Some(12.000000357627869), "10" -> Some(18.0), "-1" -> Some(8.000000059604645), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(10.99999988079071), "Off" -> None, "Main" -> None, "Sidechain" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> Some(10.0), "3" -> Some(12.0), "10" -> Some(18.0), "-1" -> Some(8.0), "200" -> Some(18.0), "0.5" -> None, " 2 " -> Some(11.0), "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Fifths x10": id 1464730015 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-90") applied {"i32":-9} read back 0.0
-  host 1.0000000074505806: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
-  host 2.000000014901161: text Some("-70") applied {"i32":-7} read back 2.000000014901161
-  host 3.000000089406967: text Some("-60") applied {"i32":-6} read back 3.000000089406967
+  host 1.0000000074505806: text Some("-80") applied {"i32":-8} read back 1.0
+  host 2.000000014901161: text Some("-70") applied {"i32":-7} read back 2.0
+  host 3.000000089406967: text Some("-60") applied {"i32":-6} read back 3.0
   host 18.0: text Some("90") applied {"i32":9} read back 18.0
-  host 1.4: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
-  host 1.6: text Some("-70") applied {"i32":-7} read back 2.000000014901161
+  host 1.4: text Some("-80") applied {"i32":-8} read back 1.0
+  host 1.6: text Some("-70") applied {"i32":-7} read back 2.0
   host 18.0: text Some("90") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.000000476837158), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None, "Sidechain" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.0), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Thirds x10": id 2100917231 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-90") applied {"i32":-9} read back 0.0
-  host 1.0000000074505806: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
-  host 2.000000014901161: text Some("-70") applied {"i32":-7} read back 2.000000014901161
-  host 3.000000089406967: text Some("-60") applied {"i32":-6} read back 3.000000089406967
+  host 1.0000000074505806: text Some("-80") applied {"i32":-8} read back 1.0
+  host 2.000000014901161: text Some("-70") applied {"i32":-7} read back 2.0
+  host 3.000000089406967: text Some("-60") applied {"i32":-6} read back 3.0
   host 18.0: text Some("90") applied {"i32":9} read back 18.0
-  host 1.4: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
-  host 1.6: text Some("-70") applied {"i32":-7} read back 2.000000014901161
+  host 1.4: text Some("-80") applied {"i32":-8} read back 1.0
+  host 1.6: text Some("-70") applied {"i32":-7} read back 2.0
   host 18.0: text Some("90") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.000000476837158), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None, "Sidechain" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.0), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Map Sevenths x10": id 133815701 module "" range 0..18 default 9 flags stepped,automatable
   host 0.0: text Some("-90") applied {"i32":-9} read back 0.0
-  host 1.0000000074505806: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
-  host 2.000000014901161: text Some("-70") applied {"i32":-7} read back 2.000000014901161
-  host 3.000000089406967: text Some("-60") applied {"i32":-6} read back 3.000000089406967
+  host 1.0000000074505806: text Some("-80") applied {"i32":-8} read back 1.0
+  host 2.000000014901161: text Some("-70") applied {"i32":-7} read back 2.0
+  host 3.000000089406967: text Some("-60") applied {"i32":-6} read back 3.0
   host 18.0: text Some("90") applied {"i32":9} read back 18.0
-  host 1.4: text Some("-80") applied {"i32":-8} read back 1.0000000074505806
-  host 1.6: text Some("-70") applied {"i32":-7} read back 2.000000014901161
+  host 1.4: text Some("-80") applied {"i32":-8} read back 1.0
+  host 1.6: text Some("-70") applied {"i32":-7} read back 2.0
   host 18.0: text Some("90") applied {"i32":9} read back 18.0
-  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.000000476837158), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None, "Sidechain" -> None
+  typed: "0" -> Some(9.0), "0" -> Some(9.0), "1" -> None, "3" -> None, "10" -> Some(10.0), "-1" -> None, "200" -> Some(18.0), "0.5" -> None, " 2 " -> None, "Off" -> None, "Main" -> None, "Sidechain" -> None
 "Note Retuning": id 1141170266 module "" range 0..2 default 0 flags stepped
   host 0.0: text Some("Pass through") applied {"i32":0} read back 0.0
   host 1.0: text Some("Adaptive") applied {"i32":1} read back 1.0

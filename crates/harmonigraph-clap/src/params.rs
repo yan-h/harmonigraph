@@ -135,9 +135,17 @@ impl Spec {
         ((normalized * (max - min) as f32).round() as i32 + min) as f32
     }
 
-    /// A plain value as the host reads it.
+    /// A plain value as the host reads it. An integer's is its exact step from
+    /// the minimum: CLAP reads a stepped value by truncating it (`params.h`),
+    /// so a step computed through the normalized value, a hair below the
+    /// integer, would read as the step below.
     pub fn to_host(&self, plain: f32) -> f64 {
-        self.normalize(plain) as f64 * self.scale() as f64
+        match &self.kind {
+            Kind::Int { min, max, .. } => {
+                ((plain as i64).clamp(i64::from(*min), i64::from(*max)) - i64::from(*min)) as f64
+            }
+            Kind::Float { .. } => self.normalize(plain) as f64,
+        }
     }
 
     /// A host value as normalized: divided in `f32`, as nice-plug did.
