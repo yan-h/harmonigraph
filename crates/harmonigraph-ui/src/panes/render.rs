@@ -349,10 +349,13 @@ fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
                 &state.runtime.tuning,
                 &state.appearance,
             );
-            // Frame notes sets the zoom and pan outright; the orbit it keeps.
-            let framing = [ParamKey::CameraDistance, ParamKey::CameraPanX, ParamKey::CameraPanY];
-            crate::camera_movement::set_outright(ui.ctx(), &framing);
-            let outcome = match state.appearance.frame_lattice(&positions) {
+            let framed = state.appearance.frame_lattice(&positions);
+            if framed.is_some() {
+                // It sets the zoom and pan outright; the orbit it keeps.
+                let set = [ParamKey::CameraDistance, ParamKey::CameraPanX, ParamKey::CameraPanY];
+                crate::camera_movement::set_outright(ui.ctx(), &set);
+            }
+            let outcome = match framed {
                 Some(true) => None,
                 Some(false) => Some(
                     "The notes span more than the camera can show zoomed out; the outermost are cut off.",

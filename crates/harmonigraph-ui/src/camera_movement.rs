@@ -117,7 +117,10 @@ pub(crate) fn finish_edits(
     let mut after = appearance.camera_movement();
     let mut changed = false;
     for (index, key) in ParamKey::CAMERA.into_iter().enumerate() {
-        let Some(base) = params.camera_base(key) else { continue };
+        let edited = after[index] != before[index];
+        let Some(base) = params.camera_base(key).filter(|_| edited || outright[index]) else {
+            continue;
+        };
         // A move takes off the modulation's shift, from the drawn value and
         // the base it was drawn from: zero exactly where nothing modulates,
         // so an unmodulated edit sends `after` as it is.
@@ -125,7 +128,7 @@ pub(crate) fn finish_edits(
             true => bounded(key, after[index]),
             false => bounded(key, after[index] - (before[index] - base)),
         };
-        if after[index] != before[index] {
+        if edited {
             after[index] = bounded(key, after[index]);
             changed = true;
         }
