@@ -54,6 +54,37 @@ pub(crate) const LEAD_SECONDS: f64 = 0.25;
 /// A pass's chunks are cut at about this length.
 const CHUNK_SECONDS: f64 = 1.0;
 
+/// A block whose every sample is quieter than this, −90 dBFS, is silence:
+/// held aside until sound follows it in the same pass, and dropped if the
+/// pass ends first ([`Quiet`]).
+pub(super) const SILENCE: f32 = 3.162_277_7e-5;
+
+/// The longest silence held for sound that may follow it. Past this the
+/// silence is dropped, and sound after it continues the pass past a gap, as
+/// after a dropped stretch.
+pub(super) const QUIET_SECONDS: f64 = 30.0;
+
+/// The silent blocks at the pass's end, held rather than recorded, so a
+/// transport left rolling past the music records nothing: a pass stores its
+/// silence only where sound follows it.
+#[derive(Default)]
+struct Quiet {
+    /// Each block's song frame, the host's meter there and its end in
+    /// `samples`.
+    blocks: Vec<(i64, Option<Meter>, usize)>,
+    samples: Vec<f32>,
+    /// Held past [`QUIET_SECONDS`]: dropped, and holding no more.
+    overflowed: bool,
+}
+
+impl Quiet {
+    fn clear(&mut self) {
+        self.blocks.clear();
+        self.samples.clear();
+        self.overflowed = false;
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Pass {
     id: u64,
@@ -108,14 +139,18 @@ pub(crate) struct Worker {
     building: Option<Chunk>,
     /// The host's meter where the chunk being recorded starts.
     building_meter: Option<Meter>,
+    quiet: Quiet,
     /// The host's meter at each chunk's start, by song frame, for the Tape
     /// tab's ruler. Kept apart from the chunks because it describes the song,
-    /// not a recording: a pass replaces the anchors where it plays, whether or
-    /// not its audio wins there, and its last rules on to the next anchor.
+    /// not a recording: a pass replaces the anchors where it records, whether
+    /// or not its audio wins there, and its last rules on to the next anchor,
+    /// over any silence the pass dropped.
     meters: BTreeMap<i64, Meter>,
     /// Bumped whenever the store or the meters change, so Tape mode's spans
     /// are rebuilt only then; and the value they were last built at. While
-    /// the transport rolls it moves once a chunk, about a second.
+    /// the transport rolls it moves once a chunk, about a second, at the
+    /// start of each held silence, and each block a silence past the hold
+    /// clears something.
     generation: u64,
     shown: Option<u64>,
     /// Bumped when a mark lands where Tape mode's roll draws it; with
@@ -184,6 +219,7 @@ impl Worker {
             next_pass: 0,
             building: None,
             building_meter: None,
+            quiet: Quiet::default(),
             meters: BTreeMap::new(),
             generation: 0,
             shown: None,
@@ -253,6 +289,9 @@ impl Worker {
         // A rolling block this close to where the previous one left off
         // continues its pass: the jitter the shared rolling test allows.
         let tolerance = (transport::JITTER_SECONDS * f64::from(rate)) as i64;
+        let frames = samples.len() / channels;
+        let samples = &samples[..frames * channels];
+        let loud = samples.iter().any(|s| s.abs() >= SILENCE);
         let continued = self.pass.and_then(|pass| {
             if pass.epoch != block.epoch || block.first_frame < pass.next_source {
                 return None;
@@ -277,6 +316,54 @@ impl Worker {
             }
         };
         self.store.get_or_insert_with(|| Store::new(rate, channels));
+        if loud {
+            let mut quiet = std::mem::take(&mut self.quiet);
+            let mut from = 0;
+            for &(song_frame, meter, to) in &quiet.blocks {
+                self.record(song_frame, meter, &quiet.samples[from..to], rate);
+                from = to;
+            }
+            quiet.clear();
+            self.quiet = quiet;
+            self.record(song_frame, meter, samples, rate);
+        } else {
+            // What the pass recorded shows while its silence is held: a
+            // chunk of the same pass that touches it still joins its span.
+            if self.quiet.blocks.is_empty() {
+                self.close_chunk();
+            }
+            let quiet = &mut self.quiet;
+            let fits = (quiet.samples.len() + samples.len()) / channels
+                <= (QUIET_SECONDS * f64::from(rate)) as usize;
+            if fits && !quiet.overflowed {
+                quiet.samples.extend_from_slice(samples);
+                quiet.blocks.push((song_frame, meter, quiet.samples.len()));
+            } else {
+                self.drop_quiet();
+                self.quiet.overflowed = true;
+                self.clear(&[(song_frame, song_frame + frames as i64)]);
+            }
+        }
+        let pass = self.pass.as_mut().expect("a pass");
+        pass.next_source = block.first_frame + frames as u64;
+        pass.next_song = song_frame + frames as i64;
+        if self.recent.len() == RECENT {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(Placed {
+            presentation,
+            seconds: frames as f64 / f64::from(rate),
+            rate: f64::from(rate),
+            song: song_frame,
+            pass: pass.id,
+        });
+        self.last_song = Some(song_frame + frames as i64 - 1);
+    }
+
+    /// Record `samples`, a block of the pass from `song_frame` on, with the
+    /// host's `meter` there.
+    fn record(&mut self, song_frame: i64, meter: Option<Meter>, samples: &[f32], rate: f32) {
+        let channels = self.store.as_ref().expect("a store").channels;
         let full =
             |chunk: &Chunk| chunk.end - chunk.start >= (CHUNK_SECONDS * f64::from(rate)) as i64;
         // A chunk is wholly cold or wholly warm, to the block, because the
@@ -296,7 +383,7 @@ impl Worker {
         if self.building.is_none() {
             self.building_meter = meter;
         }
-        let pass = self.pass.as_mut().expect("a pass");
+        let pass = self.pass.as_ref().expect("a pass");
         let chunk = self.building.get_or_insert_with(|| Chunk {
             start: song_frame,
             end: song_frame,
@@ -304,28 +391,44 @@ impl Worker {
             data_start: song_frame,
             samples: Vec::with_capacity((CHUNK_SECONDS * f64::from(rate)) as usize * channels),
         });
-        let frames = samples.len() / channels;
-        chunk.samples.extend_from_slice(&samples[..frames * channels]);
-        chunk.end += frames as i64;
-        pass.next_source = block.first_frame + frames as u64;
-        pass.next_song = song_frame + frames as i64;
-        if self.recent.len() == RECENT {
-            self.recent.pop_front();
-        }
-        self.recent.push_back(Placed {
-            presentation,
-            seconds: frames as f64 / f64::from(rate),
-            rate: f64::from(rate),
-            song: song_frame,
-            pass: pass.id,
-        });
-        self.last_song = Some(song_frame + frames as i64 - 1);
+        chunk.samples.extend_from_slice(samples);
+        chunk.end += (samples.len() / channels) as i64;
     }
 
+    /// The pass is over: its silence since the last sound is dropped.
     fn end_pass(&mut self) {
+        self.drop_quiet();
         self.pass = None;
         self.last_song = None;
         self.close_chunk();
+    }
+
+    /// Drop the silence held, clearing what it would have replaced.
+    fn drop_quiet(&mut self) {
+        let channels = self.store.as_ref().map_or(1, |store| store.channels);
+        let mut runs: Vec<(i64, i64)> = Vec::new();
+        let mut from = 0;
+        for &(start, _, to) in &self.quiet.blocks {
+            let end = start + ((to - from) / channels) as i64;
+            match runs.last_mut() {
+                Some(run) if run.1 == start => run.1 = end,
+                _ => runs.push((start, end)),
+            }
+            from = to;
+        }
+        self.quiet.clear();
+        self.clear(&runs);
+    }
+
+    /// Clear `runs` of the song of whatever older passes recorded there that
+    /// the current pass's silence beats.
+    fn clear(&mut self, runs: &[(i64, i64)]) {
+        let (Some(pass), Some(store)) = (self.pass, &mut self.store) else { return };
+        let stamp = Stamp { pass: pass.id, when: Instant::now(), pass_start: pass.start };
+        for &(from, to) in runs {
+            store.clear(stamp, from, to);
+        }
+        self.store_changed();
     }
 
     /// Open pass `pass` with the voices held now, and keep it a while for a
@@ -459,13 +562,25 @@ impl Worker {
         }
         if let Some(store) = &mut self.store {
             commit(store, chunk);
-            let changed = store.take_changed();
-            self.spectrum.invalidate(store, &changed);
-            // A pass none of whose audio survives has no notes to show.
-            let live: BTreeSet<u64> = store.chunks().map(|c| c.stamp.pass).collect();
-            let current = self.pass.map(|p| p.id);
-            self.book.passes.retain(|id, _| live.contains(id) || Some(*id) == current);
         }
+        self.store_changed();
+        // The meters may have moved where no audio did.
+        self.generation += 1;
+    }
+
+    /// Bring the spectrogram, the notes kept and Tape mode's spans up to
+    /// whatever the store changed.
+    fn store_changed(&mut self) {
+        let Some(store) = &mut self.store else { return };
+        let changed = store.take_changed();
+        if changed.is_empty() {
+            return;
+        }
+        self.spectrum.invalidate(store, &changed);
+        // A pass none of whose audio survives has no notes to show.
+        let live: BTreeSet<u64> = store.chunks().map(|c| c.stamp.pass).collect();
+        let current = self.pass.map(|p| p.id);
+        self.book.passes.retain(|id, _| live.contains(id) || Some(*id) == current);
         self.generation += 1;
     }
 

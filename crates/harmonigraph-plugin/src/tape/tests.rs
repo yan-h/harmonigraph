@@ -348,6 +348,76 @@ fn passes_split_at_jumps_and_stops_and_a_dropped_stretch_leaves_a_gap() {
     assert_eq!(chunks, [(0, 300, 1, 0), (500, 700, 1, 0), (2000, 2200, 2, 2000)]);
 }
 
+/// A transport left rolling past the music records nothing: a pass keeps its
+/// silence only where sound follows it, and sound after a silence too long to
+/// hold continues the pass, warm, past a gap. The music before a silence is
+/// committed while the silence is held, and a dropped silence still clears
+/// what it beats.
+#[test]
+fn a_pass_records_its_silence_only_where_sound_follows_it() {
+    use super::worker::{QUIET_SECONDS, SILENCE};
+    /// Song frames `from..to` played, loud or just under silence, then a
+    /// block with no song position when `to` is `None`: a stop.
+    fn play(worker: &mut Worker, source: &mut u64, from: i64, to: Option<i64>, loud: bool) {
+        for song in (from..to.unwrap_or(from)).step_by(FRAMES) {
+            let (block, mut samples) = ring_block(*source, Some(song), STEREO);
+            if !loud {
+                samples.fill(SILENCE * 0.9);
+            }
+            worker.capture(block, &samples);
+            *source += FRAMES as u64;
+        }
+        if to.is_none() {
+            let (block, samples) = ring_block(*source, None, STEREO);
+            worker.capture(block, &samples);
+            *source += FRAMES as u64;
+        }
+    }
+    let (_, mut worker) = pair();
+    let source = &mut 0;
+    // A rest inside the music, and silence after it until the transport stops.
+    play(&mut worker, source, 0, Some(500), true);
+    play(&mut worker, source, 500, Some(800), false);
+    play(&mut worker, source, 800, Some(1000), true);
+    play(&mut worker, source, 1000, Some(1500), false);
+    play(&mut worker, source, 0, None, false);
+    // A jump to a second pass, whose silence outlasts the hold before sound
+    // comes back.
+    let resumed = 5200 + (QUIET_SECONDS * RATE) as i64;
+    play(&mut worker, source, 5000, Some(5100), true);
+    play(&mut worker, source, 5100, Some(5200), false);
+    let held = worker.store().unwrap().chunks().last().map(|c| (c.start, c.end));
+    assert_eq!(held, Some((5000, 5100)), "the music before a held silence is committed");
+    play(&mut worker, source, 5200, Some(resumed), false);
+    play(&mut worker, source, resumed, Some(resumed + 100), true);
+    play(&mut worker, source, 0, None, false);
+
+    let store = worker.store().unwrap();
+    let chunks: Vec<_> =
+        store.chunks().map(|c| (c.start, c.end, c.stamp.pass, c.stamp.pass_start)).collect();
+    assert_eq!(
+        chunks,
+        [
+            (0, 500, 1, 0),
+            (500, 1000, 1, 0),
+            (5000, 5100, 2, 5000),
+            (resumed, resumed + 100, 2, 5000)
+        ]
+    );
+    let mut rest = [0.0; 2];
+    store.read(600, &mut rest);
+    assert_eq!(rest, [SILENCE * 0.9; 2], "the rest is recorded as played");
+
+    // Played again from the start with its ending gone: the silence that
+    // replaced the ending clears the old one rather than storing itself.
+    play(&mut worker, source, 0, Some(500), true);
+    play(&mut worker, source, 500, Some(1500), false);
+    play(&mut worker, source, 0, None, false);
+    let starts: Vec<_> =
+        worker.store().unwrap().chunks().map(|c| (c.start, c.end, c.stamp.pass)).collect();
+    assert_eq!(starts, [(0, 500, 3), (5000, 5100, 2), (resumed, resumed + 100, 2)]);
+}
+
 /// A pass is cold until it has settled and warm after, and the chunk being
 /// recorded closes where it turns warm, so each chunk is judged where it is
 /// one or the other (#1742). In 300- and 400-frame blocks chunks are 1200
