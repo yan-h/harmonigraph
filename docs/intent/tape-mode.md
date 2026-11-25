@@ -20,4 +20,5 @@ Yan took the recommendations made after the audit was checked against the code (
 - A pass stores no silence at its end, so a transport left rolling past the music neither stretches Tape mode's fit nor evicts the recording; silence is a block whose every sample is below −90 dBFS.
 - While the transport is stopped, Tape mode's fit leaves out the reported position; a stopped mark past the recording is not drawn, and the readout still gives it.
 - Silence a pass drops still clears the older recordings it beats, so a shortened or muted ending leaves no old one behind.
+  A stop during a rest clears the older take there too, leaving a hole where an audition ends.
 - A rest longer than 30 s while rolling is a gap where an audition stops, rather than covered silence.

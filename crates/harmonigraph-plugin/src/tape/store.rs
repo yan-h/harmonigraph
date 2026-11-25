@@ -240,9 +240,12 @@ impl Store {
     }
 
     /// Clear song frames `a..b` of every recording a silence recorded with
-    /// `stamp` there would beat, as [`insert`](Self::insert) would, storing
+    /// `stamp` there would beat, by [`insert`](Self::insert)'s rule, storing
     /// nothing in their place: a pass's dropped silence still replaces what
-    /// older passes played there.
+    /// older passes played there. Each older chunk is judged once, at its
+    /// first frame in `a..b`, and a held silence is not split where its pass
+    /// turns warm, so an older warm chunk astride that point is kept whole:
+    /// up to a second of it survives where the silence had turned warm.
     pub(crate) fn clear(&mut self, stamp: Stamp, a: i64, b: i64) {
         let (_, beaten) = self.overlay(stamp, a, b);
         self.changed.extend(beaten);

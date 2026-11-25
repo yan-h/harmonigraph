@@ -148,7 +148,9 @@ pub(crate) struct Worker {
     meters: BTreeMap<i64, Meter>,
     /// Bumped whenever the store or the meters change, so Tape mode's spans
     /// are rebuilt only then; and the value they were last built at. While
-    /// the transport rolls it moves once a chunk, about a second.
+    /// the transport rolls it moves once a chunk, about a second, at the
+    /// start of each held silence, and each block a silence past the hold
+    /// clears something.
     generation: u64,
     shown: Option<u64>,
     /// Bumped when a mark lands where Tape mode's roll draws it; with
