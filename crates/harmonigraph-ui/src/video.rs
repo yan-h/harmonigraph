@@ -141,6 +141,19 @@ pub enum SpectrogramRender {
     WholeVideo,
 }
 
+/// Which pitch range a render draws the Spectral pane at: the Video pane's
+/// Frequency range row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PitchRangeRender {
+    /// The Analyzer's Frequency range, exactly as previewed.
+    Dialled,
+    /// The Analyzer's Frequency range narrowed to what the piece fills: the pitches
+    /// its soundtrack lights for half a second or more, and every note it
+    /// plays (see `pitch_fit`). Only a render has heard the whole piece, so the
+    /// preview keeps the dialled range, and the offline renderer applies this.
+    Fit,
+}
+
 /// Which H.264 encoder a video export runs through ffmpeg.
 ///
 /// The picture is the same either way; what differs is how long the export
@@ -188,6 +201,9 @@ pub struct RenderConfig {
     /// Which spectrogram the render bakes; see [`SpectrogramRender`]. Read by
     /// the offline renderer from the take.
     pub spectrogram: SpectrogramRender,
+    /// Which pitch range the render draws; see [`PitchRangeRender`]. A
+    /// composition choice like Video history: a recorded look keeps its own.
+    pub pitch_range: PitchRangeRender,
     /// The composed video frame — aspect ratio and the lattice/spectral split.
     /// Edited and previewed in the Video pane; the offline renderer reads it
     /// to compose the same picture.
@@ -240,6 +256,10 @@ impl Default for RenderConfig {
             // end and the trigger would look broken on first use.
             stop_bar: 65.0,
             spectrogram: SpectrogramRender::WholeVideo,
+            // Fit: it only ever narrows the dialled range, past bands the
+            // piece leaves empty, so a look dialled to the whole axis exports
+            // at what the piece fills and a range dialled in keeps its ends.
+            pitch_range: PitchRangeRender::Fit,
             frame: RenderFrame::default(),
             // 1440 on the short edge — 2560x1440 at the default 16:9 frame,
             // as captured from the DAW on 2026-10-07.
@@ -287,6 +307,7 @@ impl RenderConfig {
             trigger: _,
             stop_bar: _,
             spectrogram: _,
+            pitch_range: _,
             frame: _,
             short_edge,
             tail,

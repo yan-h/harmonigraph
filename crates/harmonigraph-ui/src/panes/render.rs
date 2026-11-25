@@ -450,6 +450,33 @@ fn render_controls(
                 ),
             ],
         );
+        // Dialled names its range, as Scrolling names its span.
+        let spectrum = &state.appearance.spectrum;
+        let dialled = format!(
+            "Dialled ({}–{})",
+            super::spectral::settings::hz_readout(spectrum.low_midi),
+            super::spectral::settings::hz_readout(spectrum.high_midi)
+        );
+        choice_row(
+            ui,
+            "Frequency range",
+            &mut state.appearance.render.pitch_range,
+            &[
+                (
+                    crate::PitchRangeRender::Dialled,
+                    &dialled,
+                    "Draw the Frequency range set on the Analyzer page, exactly as previewed here.",
+                ),
+                (
+                    crate::PitchRangeRender::Fit,
+                    "Fit piece",
+                    "Narrow the Frequency range set on the Analyzer page to what the piece fills: \
+                     it drops a band at either end that the spectrogram leaves dark, keeping every pitch \
+                     lit a fifth of the way up its colours for half a second in all, and every recorded note. \
+                     It never widens the range. The preview here keeps showing the range as set.",
+                ),
+            ],
+        );
         // Here rather than beside Finish recording: a render choice like Output
         // size, which a queued export takes from the current look.
         //

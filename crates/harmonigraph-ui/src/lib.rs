@@ -23,6 +23,8 @@ mod workspace;
 mod config;
 /// The editor door's per-key decode of a saved document.
 mod persist_keys;
+/// Frequency range: Fit piece, which only a render can answer.
+mod pitch_fit;
 mod runtime;
 /// The spectrogram heatmap's texture-ring/cache machinery. The pane that
 /// draws it, `panes::spectral::spectrogram`, holds only the mesh and the
@@ -64,14 +66,15 @@ pub(crate) use config::{
 // where the panes, both shells and the offline renderer name them. They are
 // declared in `video` beside the appearance document that carries them, so a
 // new one is one declaration and one name here, in this crate alone.
+pub use pitch_fit::PitchFit;
 pub use spectrum::{AnalyzedColumn, AudioSpectrum, Delivery, SpectrumAnalysis};
 pub use state::{
     CameraPreset, Console, EditorPrefs, ExportAction, ExportLook, FrameRate, Interaction,
     PictureState, SharedState, SurfaceState, TakeState,
 };
 pub use video::{
-    LatticeSide, RenderConfig, RenderFrame, RenderTrigger, SpectrogramRender, VideoEncoder,
-    STOP_BAR_RANGE, TAIL_RANGE,
+    LatticeSide, PitchRangeRender, RenderConfig, RenderFrame, RenderTrigger, SpectrogramRender,
+    VideoEncoder, STOP_BAR_RANGE, TAIL_RANGE,
 };
 
 // The overlay's model. `ShellTimings` — the one piece of it a windowed shell

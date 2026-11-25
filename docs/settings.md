@@ -357,7 +357,7 @@ Finishing a take starts rendering;
 **Queue last take** in **Exports** renders the last take again with the selected look and the current video settings.
 The **Appearance** row picks that look: **Recorded** (each take's own) or **Current**.
 Under **Recorded** only Output size, Tail, Encoder and Archive copy are the current ones:
-the take keeps the frame and Video history it was recorded with.
+the take keeps the frame, Video history and Frequency range it was recorded with.
 A take recorded without a look is refused, with the reason in the export list.
 **Output size (px)** shows the actual width and height for the chosen aspect ratio.
 **Archive copy** also saves a small AV1 copy beside each video, to keep once the video is uploaded;
@@ -369,6 +369,11 @@ Drag either picture without Shift to navigate,
 and scroll or pinch to zoom.
 **Fit video (max 10 min)** changes exported history;
 the preview continues to use live **History duration**.
+**Frequency range** → **Fit piece**, the fresh choice, narrows the Analyzer's **Frequency range** to what the piece fills:
+a band at either end that the spectrogram leaves dark is dropped,
+keeping every pitch the soundtrack lights a fifth of the way up its colours for half a second in all, and every recorded note, with a semitone to spare.
+It never widens the dialled range, and the preview keeps showing the range as dialled.
+**Dialled** draws the Analyzer's range as set.
 
 ## Specialist controls to reconsider
 
