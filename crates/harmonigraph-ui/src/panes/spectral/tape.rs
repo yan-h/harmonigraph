@@ -728,20 +728,82 @@ fn plan(pos: harmonigraph_core::LatticePos) -> egui::Vec2 {
     egui::vec2(pos.fives as f32 + seventh, -(pos.threes as f32 + seventh))
 }
 
-/// The pitch a thumbnail tells apart from its neighbours, octave included:
-/// the bins [`harmony`](crate::tape::harmony) merges entries by.
-fn pitch_bin(pitch: f32) -> i32 {
-    (pitch * 20.0).round() as i32
+/// Which node each pitch class of a recording lights, and the frame that holds
+/// them all: kept from frame to frame, since finding them walks the naming
+/// reach once per class, 1,025 nodes in the fresh look, which measured about
+/// 0.1 ms a frame for a short piece (PR #1975).
+///
+/// Kept for exactly what it is worked out from: this analysis (the `Arc`
+/// itself, which a new analysis replaces), the tuning and its tempered commas,
+/// and the reach.
+#[derive(Clone)]
+struct Placed {
+    harmony: std::sync::Arc<crate::tape::harmony::Harmony>,
+    tuning: harmonigraph_core::Tuning,
+    tempered: harmonigraph_core::Tempered,
+    reach: harmonigraph_scene::DrawnWindow,
+    /// By pitch class in microcents: two tunings of one note, a recorded
+    /// 12-TET part beside one in the lattice's tuning, are two classes, and
+    /// each lights its own node or none.
+    lit: std::sync::Arc<std::collections::BTreeMap<u32, Option<harmonigraph_core::LatticePos>>>,
+    /// The lit nodes' bounds, in [`plan`]'s node spacings.
+    frame: Option<Rect>,
+}
+
+impl Placed {
+    fn of(
+        ctx: &egui::Context,
+        id: egui::Id,
+        harmony: &std::sync::Arc<crate::tape::harmony::Harmony>,
+        state: &PictureState,
+    ) -> Placed {
+        use harmonigraph_core::tuning::PitchClass;
+        let (tuning, tempered) = (state.runtime.tuning, state.runtime.tempered);
+        let reach = state.appearance.view.reach();
+        let kept = ctx.data(|d| d.get_temp::<Placed>(id)).filter(|kept| {
+            std::sync::Arc::ptr_eq(&kept.harmony, harmony)
+                && (kept.tuning, kept.tempered, kept.reach) == (tuning, tempered, reach)
+        });
+        if let Some(kept) = kept {
+            return kept;
+        }
+        let nodes: Vec<(harmonigraph_core::LatticePos, PitchClass)> =
+            reach.positions().map(|p| (p, tuning.pitch_class(p))).collect();
+        let mut lit = std::collections::BTreeMap::new();
+        for entry in harmony.sections.iter().flat_map(|s| &s.entries) {
+            let class = PitchClass::from_cents(entry.pitch * 100.0);
+            lit.entry(class.microcents()).or_insert_with(|| {
+                super::names::naming_node_from(nodes.iter().copied(), tempered, &tuning, class)
+            });
+        }
+        let mut frame = None::<Rect>;
+        for at in lit.values().flatten().map(|&p| plan(p).to_pos2()) {
+            let at = Rect::from_min_max(at, at);
+            frame = Some(frame.map_or(at, |frame| frame.union(at)));
+        }
+        let placed = Placed {
+            harmony: std::sync::Arc::clone(harmony),
+            tuning,
+            tempered,
+            reach,
+            lit: std::sync::Arc::new(lit),
+            frame,
+        };
+        ctx.data_mut(|d| d.insert_temp(id, placed.clone()));
+        placed
+    }
 }
 
 /// The recording's harmony along a row over the overview (Tape mode, with the
 /// far region open; #1974): one small lattice per section, on the overview's
 /// own song axis, lighting the nodes that sound in it. A node is a set of
 /// rings, one per pitch sounding on it, lowest in the middle, each in its
-/// note's colour. Which nodes a pitch lights is the lattice's own rule: every
-/// position of the naming reach whose pitch class matches under the live
-/// tuning, so a tempered tuning lights several, and a pitch the reach does not
-/// hold lights none.
+/// note's colour. A pitch lights the node the roll names it by
+/// ([`naming_node_from`](super::names::naming_node_from)): the one position of
+/// the naming reach that matches it under the live tuning, and in a
+/// temperament, where a dozen do, the one that spells most plainly. Every
+/// match, as the lattice lights them, would make each thumbnail a wallpaper of
+/// its chord. A pitch the reach does not hold lights none.
 ///
 /// One frame holds every thumbnail, the nodes the whole recording lights, so a
 /// harmony that moves across the lattice is a lit shape that moves in its
@@ -766,30 +828,18 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
 
     let harmony = std::sync::Arc::clone(&state.runtime.tape.harmony);
     let tuning = state.runtime.tuning;
-    let reach: Vec<(harmonigraph_core::LatticePos, PitchClass)> =
-        state.appearance.view.reach().positions().map(|p| (p, tuning.pitch_class(p))).collect();
-    // Each distinct pitch class the recording holds, with the nodes it lights:
-    // a few dozen at most, so the reach is walked that many times a frame and
-    // not once per note.
-    let mut lit: std::collections::BTreeMap<i32, Vec<harmonigraph_core::LatticePos>> =
-        Default::default();
-    for entry in harmony.sections.iter().flat_map(|s| &s.entries) {
-        lit.entry(pitch_bin(entry.pitch).rem_euclid(240)).or_insert_with(|| {
-            let class = PitchClass::from_cents(entry.pitch * 100.0);
-            reach.iter().filter(|(_, node)| tuning.matches(class, *node)).map(|(p, _)| *p).collect()
-        });
-    }
-    let mut frame = None::<Rect>;
-    for at in lit.values().flatten().map(|&p| plan(p).to_pos2()) {
-        frame =
-            Some(frame.map_or(Rect::from_min_max(at, at), |f| f.union(Rect::from_min_max(at, at))));
-    }
+    let class_of = |pitch: f32| PitchClass::from_cents(pitch * 100.0);
+    let placed = Placed::of(ui.ctx(), id.with("placed"), &harmony, state);
+    let (lit, frame) = (&placed.lit, placed.frame);
     let view = &state.runtime.tape;
     let (position_rate, heard_rate) = rates(view);
-    if let Some(pixel) = marks(&painter, &axes, view, &axis, id.with("marks")) {
-        state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, pixel);
-    }
-    let Some(frame) = frame else { return };
+    // The playheads, over whatever the row drew.
+    let playheads = |state: &mut PictureState| {
+        if let Some(pixel) = marks(&painter, &axes, &state.runtime.tape, &axis, id.with("marks")) {
+            state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, pixel);
+        }
+    };
+    let Some(frame) = frame else { return playheads(state) };
 
     let pad = 3.0 * theme::ui_scale(ui.ctx());
     let (columns, rows) = (frame.width() + 1.0, frame.height() + 1.0);
@@ -845,7 +895,8 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
         }
         // Under an advancing playhead, only what has been struck by now.
         let now = under.filter(|&(at, _)| advancing && (cell.start..next).contains(&at));
-        let mut nodes: Vec<(harmonigraph_core::LatticePos, Vec<egui::Color32>)> = Vec::new();
+        // A node's rings, each the octave it sounds in and its colour.
+        let mut nodes: Vec<(harmonigraph_core::LatticePos, Vec<(i32, egui::Color32)>)> = Vec::new();
         for entry in &cell.entries {
             let mut flash = 0.0;
             if let (Some((at, rate)), Some(struck)) = (now, entry.struck) {
@@ -863,16 +914,25 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
             }
             let colour = roll::note_color(state, entry.pitch, 1.0);
             let colour = white.lerp_to_gamma(colour, 1.0 - flash);
-            for &pos in lit.get(&pitch_bin(entry.pitch).rem_euclid(240)).into_iter().flatten() {
+            for &pos in lit.get(&class_of(entry.pitch).microcents()).into_iter().flatten() {
+                // Octaves counted from the node's own pitch, which a pitch
+                // that lights it is within the tolerance of.
+                let above = entry.pitch * 100.0 - tuning.pitch_class(pos).to_cents();
+                let octave = (above / 1200.0).round() as i32;
                 match nodes.iter_mut().find(|(at, _)| *at == pos) {
-                    Some((_, rings)) => rings.push(colour),
-                    None => nodes.push((pos, vec![colour])),
+                    Some((_, rings)) => match rings.iter_mut().find(|(o, _)| *o == octave) {
+                        // Two notes on one ring: the one struck last shows.
+                        Some(ring) if flash > 0.0 => ring.1 = colour,
+                        Some(_) => {}
+                        None => rings.push((octave, colour)),
+                    },
+                    None => nodes.push((pos, vec![(octave, colour)])),
                 }
             }
         }
         for (pos, rings) in &nodes {
             // Outermost first, so each lower pitch is drawn over the one above.
-            for (ring, &colour) in rings.iter().enumerate().rev() {
+            for (ring, &(_, colour)) in rings.iter().enumerate().rev() {
                 let radius = 0.44 * node * (ring + 1) as f32 / rings.len() as f32;
                 painter.circle_filled(centre(*pos), radius, colour);
                 if ring + 1 < rings.len() {
@@ -894,6 +954,7 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
         Some(wait) => state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, wait),
         None => {}
     }
+    playheads(state);
     let view = &mut state.runtime.tape;
     if let Some(start) = cue {
         if view.enabled && !view.rolling {

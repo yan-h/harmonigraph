@@ -38,9 +38,10 @@ const STRUCK_SLACK: f64 = TOGETHER;
 const SILENT: f32 = 0.05;
 /// A beat's length with no tempo from the host.
 const DEFAULT_BEAT_SECONDS: f64 = 0.5;
-/// Pitches within a twentieth of a semitone are one pitch: a node's octave,
-/// however many notes play it.
-const PITCH_BINS_PER_SEMITONE: f32 = 20.0;
+/// Pitches within a thousandth of a semitone are one pitch: the same note
+/// from two sources. Not two tunings of it, which may light different nodes,
+/// or one a node and the other none; the pane tells those apart.
+const PITCH_BINS_PER_SEMITONE: f32 = 1000.0;
 /// Pitch classes within a fiftieth of a semitone are one class to the rule.
 const CLASS_BINS_PER_SEMITONE: f32 = 50.0;
 
@@ -539,7 +540,7 @@ mod tests {
         assert_eq!(wide.len(), 2);
         assert_eq!((wide[0].start, wide[1].end), (0.0, 24.0));
         let pitches = |cells: &[Cell]| {
-            // By the twentieth of a semitone the cells themselves tell pitches
+            // By the bins the cells themselves tell pitches
             // apart by.
             let mut all: Vec<i32> = cells
                 .iter()

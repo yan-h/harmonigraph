@@ -3972,3 +3972,83 @@ fn under_an_advancing_playhead_a_struck_note_arrives_at_its_attack_and_asks_for_
     assert_eq!(stalled, settled);
     assert_eq!(pacing(&state), None);
 }
+
+/// A recorded 12-TET track beside a part in the lattice's own tuning: the
+/// 12-TET G is 2 cents from the just one, lights no node, and must not take
+/// the just G's node away with it, whichever the row meets first.
+#[test]
+fn a_pitch_off_the_lattice_does_not_blank_its_neighbour_on_it() {
+    use crate::tape::harmony::{Entry, Harmony};
+    let tempered = Entry { pitch: 67.0, held: false, struck: Some(0.0) };
+    for first in [vec![tempered], vec![]] {
+        let mut state = on_tape_in_two_sections(20.0);
+        let mut sections = state.runtime.tape.harmony.sections.clone();
+        // The first section holds the 12-TET G alone, or nothing but its C;
+        // the second holds both Gs.
+        sections[0].entries.extend(first);
+        sections[1].entries.insert(1, tempered);
+        // And a G four tenths of a cent sharp of the just one, within the
+        // lattice's tolerance of its node: the same ring, not a second.
+        sections[1].entries.push(Entry { pitch: 67.023_55, ..tempered });
+        state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
+        let rings = harmony_frame(&themed(), &mut state, vec![]);
+        assert_eq!(rings.len(), 3, "the two Cs and the just G: {rings:?}");
+    }
+}
+
+/// In an equal temperament a dozen nodes of the reach answer to one pitch.
+/// The row lights the one the roll names the note by, so a thumbnail is the
+/// chord and not a wallpaper of it.
+#[test]
+fn under_a_temperament_a_pitch_lights_the_one_node_it_is_named_by() {
+    use crate::tape::harmony::{Entry, Harmony, Section};
+    let mut state = on_tape();
+    state.runtime.tuning = harmonigraph_core::Tuning::default();
+    let view = &mut state.appearance.view;
+    (view.center_threes, view.center_fives, view.extent_threes, view.extent_fives) = (0, 0, 12, 6);
+    let entries =
+        [60.0, 65.0, 67.0].map(|pitch| Entry { pitch, held: false, struck: Some(0.0) }).to_vec();
+    let sections = vec![Section { start: 0.0, end: 40.0, strength: 1.0, entries }];
+    state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
+    let mut rings = harmony_frame(&themed(), &mut state, vec![]);
+    // F, C and G by their plain spellings: one column of fifths, a node apart.
+    // The first node the reach meets for F is three fifths and two thirds
+    // from the first it meets for C.
+    assert_eq!(rings.len(), 3, "{rings:?}");
+    rings.sort_by(|a, b| b.0.y.total_cmp(&a.0.y));
+    let (f, c, g) = (rings[0].0, rings[1].0, rings[2].0);
+    assert!((c.x - g.x).abs() < 0.01 && (c.x - f.x).abs() < 0.01, "{rings:?}");
+    assert!(((f.y - c.y) - (c.y - g.y)).abs() < 0.01 && c.y - g.y > 4.0, "{rings:?}");
+}
+
+/// The row keeps which node each pitch lights from frame to frame, for what
+/// it is worked out from: the tuning, the reach and the analysis each move it.
+#[test]
+fn the_rows_node_placement_follows_the_tuning_the_reach_and_the_analysis() {
+    let mut state = on_tape_in_two_sections(20.0);
+    let ctx = themed();
+    let rings = |state: &mut PictureState| harmony_frame(&ctx, state, vec![]).len();
+    assert_eq!(rings(&mut state), 3);
+    // In 12-TET the just G is two cents from any node.
+    state.runtime.tuning = harmonigraph_core::Tuning::default();
+    assert_eq!(rings(&mut state), 2);
+    state.runtime.tuning = harmonigraph_core::Tuning::just();
+    assert_eq!(rings(&mut state), 3);
+    // A reach one fifth tall holds no node a fifth up.
+    state.appearance.view.extent_threes = 0;
+    assert_eq!(rings(&mut state), 2);
+    state.appearance.view.extent_threes = 2;
+    assert_eq!(rings(&mut state), 3);
+    // A new analysis: of a recording without the G, and on a context that has
+    // only ever drawn that one, of the recording with it.
+    let with_g = std::sync::Arc::clone(&state.runtime.tape.harmony);
+    let mut sections = with_g.sections.clone();
+    sections[1].entries.truncate(1);
+    let without_g = std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
+    state.runtime.tape.harmony = std::sync::Arc::clone(&without_g);
+    assert_eq!(rings(&mut state), 2);
+    let ctx = themed();
+    assert_eq!(harmony_frame(&ctx, &mut state, vec![]).len(), 2);
+    state.runtime.tape.harmony = with_g;
+    assert_eq!(harmony_frame(&ctx, &mut state, vec![]).len(), 3);
+}

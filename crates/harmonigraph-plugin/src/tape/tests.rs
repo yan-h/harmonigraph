@@ -887,6 +887,13 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     assert!(step(&mut worker, &mut view).harmony.is_some_and(|old| Arc::ptr_eq(&old, &first)));
     view.harmony_wanted = Some((0.75, 2.0));
     assert!(step(&mut worker, &mut view).harmony.is_some());
+    // The recording changed under it (a new format clears the tape): the
+    // sections follow the roll.
+    let new_format = Format { channels: 2, sample_rate: 2000.0, sidechain: false };
+    let (block, samples) = ring_block(source, None, new_format);
+    worker.capture(block, &samples);
+    let _ = step(&mut worker, &mut view);
+    assert!(view.harmony.sections.is_empty());
 }
 
 #[test]
