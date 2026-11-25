@@ -72,8 +72,10 @@ pub(crate) struct Window {
 }
 
 impl Window {
-    /// The whole recording, the reported position and what sounds, with a
-    /// little room past the end.
+    /// The whole recording, the reported position while it rolls and what
+    /// sounds, with a little room past the end. A stopped position is left
+    /// out: Bitwig keeps reporting where the transport stopped, which after a
+    /// transport left rolling past the music is far past anything recorded.
     fn fit(view: &TapeView) -> Window {
         Window::fitted(Window::reach(view, 0.0))
     }
@@ -83,7 +85,7 @@ impl Window {
     /// ([`rates`]).
     fn reach(view: &TapeView, ahead: f64) -> f64 {
         let (position_rate, heard_rate) = rates(view);
-        let position = view.position.map(|at| at + position_rate.unwrap_or(0.0) * ahead);
+        let position = view.position.zip(position_rate).map(|(at, rate)| at + rate * ahead);
         let heard = view.heard.map(|at| at + heard_rate * ahead);
         [view.end(), position, heard].into_iter().flatten().fold(0.0, f64::max)
     }
@@ -921,6 +923,20 @@ mod tests {
         assert!(slowed.starts_with("Playing 0:12.5 at 0.5× · cold"), "{slowed}");
         view.rolling = true;
         assert!(readout(&view).starts_with("Recording."), "{}", readout(&view));
+    }
+
+    #[test]
+    fn the_fit_follows_the_position_only_while_it_rolls() {
+        let span = crate::tape::TapeSpan {
+            start: 0.0,
+            end: 40.0,
+            warm: true,
+            recorded: std::time::Instant::now(),
+        };
+        let mut view = TapeView { spans: vec![span], position: Some(600.0), ..Default::default() };
+        assert_eq!(Window::reach(&view, 0.0), 40.0, "stopped far past the recording");
+        view.rolling = true;
+        assert_eq!(Window::reach(&view, 0.0), 600.0, "rolling there");
     }
 
     #[test]

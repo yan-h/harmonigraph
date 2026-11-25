@@ -6,7 +6,9 @@
 //!   block's descriptor carries its song position, and the input worker
 //!   appends those blocks to the [`store`] ([`worker`]), and places the notes
 //!   the display showed and the lattice map selected as they played beside
-//!   them, by pass ([`notes`]).
+//!   them, by pass ([`notes`]). A pass keeps its silence only where sound
+//!   follows it, so a transport left rolling past the music records nothing
+//!   there and evicts nothing.
 //! - **Audition** starts from a click in the Analyzer's Tape mode. Bitwig's own playhead
 //!   cannot start it: a click in the arranger while stopped does not change
 //!   the song position Bitwig sends a plugin (measured in #1721). The input
