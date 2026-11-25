@@ -60,7 +60,8 @@ const CHUNK_SECONDS: f64 = 1.0;
 pub(super) const SILENCE: f32 = 3.162_277_7e-5;
 
 /// The longest silence held for sound that may follow it. Past this the
-/// silence is dropped, and sound after it starts a pass of its own.
+/// silence is dropped, and sound after it continues the pass past a gap, as
+/// after a dropped stretch.
 pub(super) const QUIET_SECONDS: f64 = 30.0;
 
 /// The silent blocks at the pass's end, held rather than recorded, so a
@@ -288,8 +289,7 @@ impl Worker {
         let frames = samples.len() / channels;
         let samples = &samples[..frames * channels];
         let loud = samples.iter().any(|s| s.abs() >= SILENCE);
-        // Sound after a silence too long to hold starts a pass of its own.
-        let continued = self.pass.filter(|_| !(loud && self.quiet.overflowed)).and_then(|pass| {
+        let continued = self.pass.and_then(|pass| {
             if pass.epoch != block.epoch || block.first_frame < pass.next_source {
                 return None;
             }
@@ -324,6 +324,11 @@ impl Worker {
             self.quiet = quiet;
             self.record(song_frame, meter, samples, rate);
         } else if !self.quiet.overflowed {
+            // What the pass recorded shows while its silence is held: a
+            // chunk of the same pass that touches it still joins its span.
+            if self.quiet.blocks.is_empty() {
+                self.close_chunk();
+            }
             let quiet = &mut self.quiet;
             if (quiet.samples.len() + samples.len()) / channels
                 <= (QUIET_SECONDS * f64::from(rate)) as usize
@@ -331,10 +336,8 @@ impl Worker {
                 quiet.samples.extend_from_slice(samples);
                 quiet.blocks.push((song_frame, meter, quiet.samples.len()));
             } else {
-                // No sound will join it now: what the pass recorded shows.
                 quiet.clear();
                 quiet.overflowed = true;
-                self.close_chunk();
             }
         }
         let pass = self.pass.as_mut().expect("a pass");

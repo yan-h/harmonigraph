@@ -350,7 +350,8 @@ fn passes_split_at_jumps_and_stops_and_a_dropped_stretch_leaves_a_gap() {
 
 /// A transport left rolling past the music records nothing: a pass keeps its
 /// silence only where sound follows it, and sound after a silence too long to
-/// hold starts a pass of its own.
+/// hold continues the pass, warm, past a gap. The music before a silence is
+/// committed while the silence is held.
 #[test]
 fn a_pass_records_its_silence_only_where_sound_follows_it() {
     use super::worker::{QUIET_SECONDS, SILENCE};
@@ -383,7 +384,10 @@ fn a_pass_records_its_silence_only_where_sound_follows_it() {
     // comes back.
     let resumed = 5200 + (QUIET_SECONDS * RATE) as i64;
     play(&mut worker, source, 5000, Some(5100), true);
-    play(&mut worker, source, 5100, Some(resumed), false);
+    play(&mut worker, source, 5100, Some(5200), false);
+    let held = worker.store().unwrap().chunks().last().map(|c| (c.start, c.end));
+    assert_eq!(held, Some((5000, 5100)), "the music before a held silence is committed");
+    play(&mut worker, source, 5200, Some(resumed), false);
     play(&mut worker, source, resumed, Some(resumed + 100), true);
     play(&mut worker, source, 0, None, false);
 
@@ -392,7 +396,12 @@ fn a_pass_records_its_silence_only_where_sound_follows_it() {
         store.chunks().map(|c| (c.start, c.end, c.stamp.pass, c.stamp.pass_start)).collect();
     assert_eq!(
         chunks,
-        [(0, 1000, 1, 0), (5000, 5100, 2, 5000), (resumed, resumed + 100, 3, resumed)]
+        [
+            (0, 500, 1, 0),
+            (500, 1000, 1, 0),
+            (5000, 5100, 2, 5000),
+            (resumed, resumed + 100, 2, 5000)
+        ]
     );
     let mut rest = [0.0; 2];
     store.read(600, &mut rest);
