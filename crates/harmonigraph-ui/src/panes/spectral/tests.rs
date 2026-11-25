@@ -3834,3 +3834,141 @@ fn tape_mode_needs_a_far_region_to_draw_in() {
     state.appearance.spectrum.show_spectrogram = false;
     assert!(!tape::active(&state, Navigation::Docked), "nowhere to draw the tape");
 }
+
+/// Tape mode's harmony row under [`WIDE`], as the docked pane lays it.
+const HARMONY_ROW: egui::Rect =
+    egui::Rect { min: egui::pos2(10.0, 120.0), max: egui::pos2(310.0, 192.0) };
+
+/// [`on_tape`]'s recording heard as two harmonies, on a just lattice five
+/// nodes square: a C alone from the start, and from 20 s that C held with the
+/// G a just fifth over it struck at `g_struck`.
+fn on_tape_in_two_sections(g_struck: f64) -> PictureState {
+    use crate::tape::harmony::{Entry, Harmony, Section};
+    let mut state = on_tape();
+    state.runtime.tuning = harmonigraph_core::Tuning::just();
+    let view = &mut state.appearance.view;
+    (view.center_threes, view.center_fives, view.extent_threes, view.extent_fives) = (0, 0, 2, 2);
+    let c = Entry { pitch: 60.0, held: false, struck: Some(0.0) };
+    let g = Entry { pitch: 67.019_55, held: false, struck: Some(g_struck) };
+    let sections = vec![
+        Section { start: 0.0, end: 20.0, strength: 1.0, entries: vec![c] },
+        Section {
+            start: 20.0,
+            end: 40.0,
+            strength: 0.5,
+            entries: vec![Entry { held: true, struck: None, ..c }, g],
+        },
+    ];
+    state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
+    state
+}
+
+/// One frame of the harmony row, a sixtieth of a second on: the rings it
+/// drew, as each one's centre and colour. A ring is a filled circle bigger
+/// than the lattice's idle dots.
+fn harmony_frame(
+    ctx: &egui::Context,
+    state: &mut PictureState,
+    events: Vec<egui::Event>,
+) -> Vec<(egui::Pos2, egui::Color32)> {
+    state.surfaces.moving_this_frame = Default::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+        time: Some(ctx.input(|i| i.time) + 1.0 / 60.0),
+        events,
+        ..Default::default()
+    };
+    let output =
+        crate::tests::probe::run(ctx, input, |ui| tape::harmony(ui, HARMONY_ROW, state, 0));
+    output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Circle(circle) if circle.radius > 2.0 && circle.fill.a() > 0 => {
+                Some((circle.center, circle.fill))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Where song seconds `seconds` sit on [`HARMONY_ROW`].
+fn on_harmony_row(seconds: f64) -> egui::Pos2 {
+    tape::overview_axes(HARMONY_ROW, &pinned()).at(0.5, ((42.0 - seconds) / 42.0) as f32)
+}
+
+#[test]
+fn the_harmony_row_lights_each_sections_nodes_and_a_click_cues_its_start() {
+    let mut state = on_tape_in_two_sections(20.0);
+    let ctx = themed();
+    let rings = harmony_frame(&ctx, &mut state, vec![]);
+    // The first section's C, then the second's C with its G: one node each,
+    // the G a fifth up, straight over its C.
+    assert_eq!(rings.len(), 3, "{rings:?}");
+    let (c, g) = (rings[1].0, rings[2].0);
+    let (c, g) = if c.y > g.y { (c, g) } else { (g, c) };
+    assert!((c.x - g.x).abs() < 0.01 && g.y < c.y - 4.0, "{rings:?}");
+    assert_ne!(rings[1].1, rings[2].1, "a pitch's colour is its height");
+    // Both thumbnails stand in one frame: the first section's C is where the
+    // second's is, a section's width along.
+    assert!((rings[0].0.y - c.y).abs() < 0.01, "{rings:?}");
+
+    let at = on_harmony_row(30.0);
+    for events in
+        [vec![egui::Event::PointerMoved(at)], vec![press(at, true)], vec![press(at, false)]]
+    {
+        harmony_frame(&ctx, &mut state, events);
+    }
+    assert_eq!(state.runtime.tape.request, Some(crate::tape::TapeRequest::Cue(20.0)));
+
+    // Rolling, a cue would be cut at once, so a click asks for none.
+    state.runtime.tape.request = None;
+    state.runtime.tape.rolling = true;
+    for events in [vec![press(at, true)], vec![press(at, false)]] {
+        harmony_frame(&ctx, &mut state, events);
+    }
+    assert_eq!(state.runtime.tape.request, None);
+}
+
+#[test]
+fn under_an_advancing_playhead_a_struck_note_arrives_at_its_attack_and_asks_for_its_frames() {
+    let mut state = on_tape_in_two_sections(22.03);
+    let ctx = themed();
+    let settled = harmony_frame(&ctx, &mut state, vec![]);
+    assert_eq!(settled.len(), 3);
+    let pacing =
+        |state: &PictureState| state.surfaces.moving_this_frame.after(crate::Reason::Playhead);
+    assert_eq!(pacing(&state), None, "a still row asks for no frame");
+
+    // The audition reaches the second section before its G is struck: the
+    // held C is there, the G is not, and the row asks for the frame it
+    // arrives on.
+    state.runtime.tape.heard = Some(22.0);
+    let before = harmony_frame(&ctx, &mut state, vec![]);
+    assert_eq!(before.len(), 2, "{before:?}");
+    let wait = pacing(&state).expect("a frame for the attack");
+    assert!((wait - 0.03).abs() < 1e-6, "{wait}");
+
+    // Struck: there, nearer white than its own colour, and settling at the
+    // chrome's rate.
+    state.runtime.tape.heard = Some(22.1);
+    let struck = harmony_frame(&ctx, &mut state, vec![]);
+    assert_eq!(struck.len(), 3, "{struck:?}");
+    let light = |colour: egui::Color32| {
+        u32::from(colour.r()) + u32::from(colour.g()) + u32::from(colour.b())
+    };
+    let g = |rings: &[(egui::Pos2, egui::Color32)]| {
+        rings.iter().map(|ring| ring.1).max_by_key(|&c| light(c)).unwrap()
+    };
+    assert!(light(g(&struck)) > light(g(&settled)), "{struck:?} against {settled:?}");
+    assert_eq!(pacing(&state), Some(crate::CHROME_CUE));
+
+    // The playhead stands on the same value past the stall allowance: the
+    // section draws whole and settled again, and nothing is asked for.
+    for _ in 0..20 {
+        harmony_frame(&ctx, &mut state, vec![]);
+    }
+    let stalled = harmony_frame(&ctx, &mut state, vec![]);
+    assert_eq!(stalled, settled);
+    assert_eq!(pacing(&state), None);
+}

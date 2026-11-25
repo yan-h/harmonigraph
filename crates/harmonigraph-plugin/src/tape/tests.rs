@@ -829,6 +829,66 @@ fn a_late_mark_from_before_a_pass_reaches_the_pass_that_opened_without_it() {
     assert_eq!(worker.passes()[&1].events, [(0, held), (0, off)]);
 }
 
+/// The harmony row's sections (#1974) are analyzed from the roll while the
+/// row draws, with the roll itself off, and again when Detail or Span moves.
+#[test]
+fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_come_back() {
+    use super::notes::{key, Mark, Sounding};
+    let (_, mut worker) = pair();
+    let held = |note: u8| Mark::On {
+        key: key(1, note),
+        sounding: Sounding {
+            velocity: 1.0,
+            pitch: f32::from(note),
+            expressions: harmonigraph_core::Expressions::NEUTRAL,
+        },
+    };
+    let mut source = 0;
+    for (i, song) in (0..500).step_by(FRAMES).enumerate() {
+        if i == 1 {
+            worker.inbox.push((0.25, held(60)));
+        }
+        let (block, samples) = ring_block(source, Some(song), STEREO);
+        worker.capture(block, &samples);
+        source += FRAMES as u64;
+        worker.settle();
+    }
+    let (block, samples) = ring_block(source, None, STEREO);
+    worker.capture(block, &samples);
+
+    let unrolled = SpectrumConfig { show_roll: false, ..Default::default() };
+    let step = |worker: &mut Worker, view: &mut TapeView| {
+        let _ = worker.exchange(view, &unrolled, true);
+        worker.roll();
+        worker.exchange(view, &unrolled, true)
+    };
+    // Not asked for: nothing is analyzed.
+    let mut view = TapeView { showing: true, ..Default::default() };
+    let _ = step(&mut worker, &mut view);
+    assert!(view.harmony.sections.is_empty());
+
+    view.harmony_wanted = Some((0.5, 4.0));
+    let displaced = step(&mut worker, &mut view);
+    assert!(displaced.harmony.is_some(), "the empty one it replaced");
+    let pitches: Vec<Vec<f32>> = view
+        .harmony
+        .sections
+        .iter()
+        .map(|section| section.entries.iter().map(|entry| entry.pitch).collect())
+        .collect();
+    assert_eq!(pitches, [[60.0]]);
+
+    // Nothing moved: the same analysis stands.
+    let first = Arc::clone(&view.harmony);
+    assert!(step(&mut worker, &mut view).harmony.is_none());
+    assert!(Arc::ptr_eq(&first, &view.harmony));
+    // Span moved: analyzed again, the old one handed back to drop off-lock.
+    view.harmony_wanted = Some((0.5, 2.0));
+    assert!(step(&mut worker, &mut view).harmony.is_some_and(|old| Arc::ptr_eq(&old, &first)));
+    view.harmony_wanted = Some((0.75, 2.0));
+    assert!(step(&mut worker, &mut view).harmony.is_some());
+}
+
 #[test]
 fn exchange_returns_displaced_roll_and_spectrogram_for_off_lock_drop() {
     let (_, mut worker) = pair();
@@ -847,7 +907,10 @@ fn exchange_returns_displaced_roll_and_spectrogram_for_off_lock_drop() {
 
     let roll_probe = view.notes.clone();
     let slab_probe = view.spectrogram.slab(0, 0).expect("column 0 populated").clone();
-    assert_eq!(Arc::strong_count(&roll_probe), 2);
+    // The view's, this probe, and the worker's own, which the harmony row's
+    // sections are analyzed from; the worker lets go of its own as it builds
+    // the next, with no lock held.
+    assert_eq!(Arc::strong_count(&roll_probe), 3);
     assert_eq!(Arc::strong_count(&slab_probe), 2);
 
     // Format change clears the spectrum and bumps generation so roll rebuilds.

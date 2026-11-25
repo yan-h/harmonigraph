@@ -63,11 +63,19 @@ impl Regions {
     /// The docked Analyzer: in Tape mode, the audition's controls along the
     /// bottom, and with the far region open the tape's overview under them,
     /// and the picture over the rest.
-    pub fn draw(&mut self, ui: &mut egui::Ui, state: &mut PictureState, now: f64, frameless: bool) {
+    pub fn draw(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut PictureState,
+        now: f64,
+        frameless: bool,
+        harmony: super::tape::HarmonyRow,
+    ) {
         let full = ui.available_rect_before_wrap();
         let (row, strip) = super::tape::rows(theme::ui_scale(ui.ctx()));
         let view = &state.runtime.tape;
         if !(view.present && view.showing) || full.height() <= 3.0 * row {
+            state.runtime.tape.harmony_wanted = None;
             return self.draw_picture(ui, state, now, frameless);
         }
         // Only under a far region the picture draws, and the first to go on
@@ -75,12 +83,23 @@ impl Regions {
         let overview = super::tape::active(state, Navigation::Docked)
             && self.far_drawn(state)
             && full.height() > 3.0 * (row + strip);
-        let below = row + if overview { strip } else { 0.0 };
+        // The harmony row stands on the overview, whose song axis it shares,
+        // and goes before it on a short pane.
+        let thumbnails = super::tape::harmony_height(theme::ui_scale(ui.ctx()));
+        let settings = harmony;
+        let harmony = overview && settings.show && full.height() > 3.0 * (row + strip) + thumbnails;
+        let thumbnails = if harmony { thumbnails } else { 0.0 };
+        let below = row + thumbnails + if overview { strip } else { 0.0 };
         let (picture, bottom) = full.split_top_bottom_at_y(full.bottom() - below);
-        let (controls, strip) = bottom.split_top_bottom_at_y(bottom.top() + row);
+        let (controls, rest) = bottom.split_top_bottom_at_y(bottom.top() + row);
+        let (thumbnails, strip) = rest.split_top_bottom_at_y(rest.top() + thumbnails);
+        state.runtime.tape.harmony_wanted = harmony.then_some((settings.detail, settings.span));
         // First, so a stretch moved on it is the one the picture draws.
         if overview {
             super::tape::overview(ui, strip, state, DOCKED_SURFACE);
+        }
+        if harmony {
+            super::tape::harmony(ui, thumbnails, state, DOCKED_SURFACE);
         }
         super::tape::controls(ui, controls, state);
         ui.scope_builder(egui::UiBuilder::new().max_rect(picture), |ui| {

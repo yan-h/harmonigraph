@@ -21,7 +21,7 @@ mod profile;
 pub(crate) mod roll;
 pub(super) mod settings;
 pub(crate) mod spectrogram;
-mod tape;
+pub(crate) mod tape;
 
 /// The Span drag's gain, reached by `spectrogram`'s
 /// `a_span_drag_changes_level_once_per_rung_crossed` so that its fixture drags at the

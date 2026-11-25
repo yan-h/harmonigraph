@@ -58,6 +58,7 @@ pub(super) fn analyzer_settings_pane(
         &mut state.surfaces.star_solo.spectrogram,
     );
     ribbons_section(ui, &mut state.appearance.spectrum, &mut state.appearance.view.note_bloom);
+    super::spectral::settings::harmony_section(ui, &mut interaction.prefs.harmony);
     view_section(ui, state, &mut interaction.dock);
     analysis_section(ui, &mut state.appearance.spectrum, params);
     analyzer_lighting(ui, &mut state.appearance);
