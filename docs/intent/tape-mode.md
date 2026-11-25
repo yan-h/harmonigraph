@@ -14,3 +14,10 @@ Yan’s decisions recorded for future drift audits.
 Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
 
 - The Tape heatmap shares the spectrogram's folded grid, keyed on a Tape revision count bumped when slabs settle; folding `SongAxis` into `TimeAxis` is optional; #1837 and #1842 are fixed in their own PRs. #1861 R4 (Built in #1892, with #1842's fix: the revision advances on every write to a copy, `put` and `clear`, since the copy the pane draws is written only by the sync and never settled. `SongAxis` was not folded into `TimeAxis`: it carries the stretch shown, `Window`, which the coverage band, the ruler, the playhead's speed and the heatmap read and `TimeAxis` has no place for.)
+
+## 2026-11-24 (PR #1972)
+
+- A pass stores no silence at its end, so a transport left rolling past the music neither stretches Tape mode's fit nor evicts the recording; silence is a block whose every sample is below −90 dBFS.
+- While the transport is stopped, Tape mode's fit leaves out the reported position; a stopped mark past the recording is not drawn, and the readout still gives it.
+- Silence a pass drops still clears the older recordings it beats, so a shortened or muted ending leaves no old one behind.
+- A rest longer than 30 s while rolling is a gap where an audition stops, rather than covered silence.

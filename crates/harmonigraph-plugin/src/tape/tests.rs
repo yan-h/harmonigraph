@@ -351,7 +351,8 @@ fn passes_split_at_jumps_and_stops_and_a_dropped_stretch_leaves_a_gap() {
 /// A transport left rolling past the music records nothing: a pass keeps its
 /// silence only where sound follows it, and sound after a silence too long to
 /// hold continues the pass, warm, past a gap. The music before a silence is
-/// committed while the silence is held.
+/// committed while the silence is held, and a dropped silence still clears
+/// what it beats.
 #[test]
 fn a_pass_records_its_silence_only_where_sound_follows_it() {
     use super::worker::{QUIET_SECONDS, SILENCE};
@@ -406,6 +407,15 @@ fn a_pass_records_its_silence_only_where_sound_follows_it() {
     let mut rest = [0.0; 2];
     store.read(600, &mut rest);
     assert_eq!(rest, [SILENCE * 0.9; 2], "the rest is recorded as played");
+
+    // Played again from the start with its ending gone: the silence that
+    // replaced the ending clears the old one rather than storing itself.
+    play(&mut worker, source, 0, Some(500), true);
+    play(&mut worker, source, 500, Some(1500), false);
+    play(&mut worker, source, 0, None, false);
+    let starts: Vec<_> =
+        worker.store().unwrap().chunks().map(|c| (c.start, c.end, c.stamp.pass)).collect();
+    assert_eq!(starts, [(0, 500, 3), (5000, 5100, 2), (resumed, resumed + 100, 2)]);
 }
 
 /// A pass is cold until it has settled and warm after, and the chunk being

@@ -143,6 +143,9 @@ pub(crate) struct Rendered {
     pub ended: bool,
 }
 
+/// Stretches of song frames, `start..end`, in song order.
+type Stretches = Vec<(i64, i64)>;
+
 pub(crate) struct Store {
     pub rate: f32,
     pub channels: usize,
@@ -216,46 +219,15 @@ impl Store {
         let (a, b) = (chunk.start, chunk.end);
         let margin = self.margin();
         let channels = self.channels;
-        let overlapping: Vec<i64> = self
-            .chunks
-            .range(..b)
-            .rev()
-            .take_while(|(_, old)| old.end > a)
-            .map(|(&start, _)| start)
-            .collect();
-        let mut lost = Vec::new();
-        for start in overlapping {
-            let old = self.take(start);
-            if beats(chunk.stamp, old.stamp, old.start.max(a), self.rate) {
-                if old.start < a {
-                    self.put(old.keep(old.start, a, margin, channels));
-                }
-                if old.end > b {
-                    self.put(old.keep(b, old.end, margin, channels));
-                }
-            } else {
-                lost.push((old.start.max(a), old.end.min(b)));
-                self.put(old);
-            }
-        }
-        if lost.is_empty() {
-            self.changed.push((a, b));
+        let (won, _) = self.overlay(chunk.stamp, a, b);
+        if won == [(a, b)] {
             self.put(chunk);
         } else {
-            lost.sort_unstable();
-            let mut cursor = a;
-            for (from, to) in lost {
-                if from > cursor {
-                    self.changed.push((cursor, from));
-                    self.put(chunk.keep(cursor, from, margin, channels));
-                }
-                cursor = cursor.max(to);
-            }
-            if cursor < b {
-                self.changed.push((cursor, b));
-                self.put(chunk.keep(cursor, b, margin, channels));
+            for &(from, to) in &won {
+                self.put(chunk.keep(from, to, margin, channels));
             }
         }
+        self.changed.extend(won);
         while self.bytes > self.cap {
             let Some(oldest) = self.chunks.values().min_by_key(|c| c.stamp.when).map(|c| c.start)
             else {
@@ -265,6 +237,61 @@ impl Store {
             self.changed.push((dropped.start, dropped.end));
             self.evicted += 1;
         }
+    }
+
+    /// Clear song frames `a..b` of every recording a silence recorded with
+    /// `stamp` there would beat, as [`insert`](Self::insert) would, storing
+    /// nothing in their place: a pass's dropped silence still replaces what
+    /// older passes played there.
+    pub(crate) fn clear(&mut self, stamp: Stamp, a: i64, b: i64) {
+        let (_, beaten) = self.overlay(stamp, a, b);
+        self.changed.extend(beaten);
+    }
+
+    /// Trim from `a..b` every chunk a recording with `stamp` there beats,
+    /// keeping their margin past the cut. Returns the stretches of `a..b`
+    /// the recording wins, and those it took from older chunks, in song
+    /// order.
+    fn overlay(&mut self, stamp: Stamp, a: i64, b: i64) -> (Stretches, Stretches) {
+        let margin = self.margin();
+        let channels = self.channels;
+        let overlapping: Vec<i64> = self
+            .chunks
+            .range(..b)
+            .rev()
+            .take_while(|(_, old)| old.end > a)
+            .map(|(&start, _)| start)
+            .collect();
+        let mut lost = Vec::new();
+        let mut beaten = Vec::new();
+        for start in overlapping.into_iter().rev() {
+            let old = self.take(start);
+            let shared = (old.start.max(a), old.end.min(b));
+            if beats(stamp, old.stamp, shared.0, self.rate) {
+                if old.start < a {
+                    self.put(old.keep(old.start, a, margin, channels));
+                }
+                if old.end > b {
+                    self.put(old.keep(b, old.end, margin, channels));
+                }
+                beaten.push(shared);
+            } else {
+                lost.push(shared);
+                self.put(old);
+            }
+        }
+        let mut won = Vec::new();
+        let mut cursor = a;
+        for (from, to) in lost {
+            if from > cursor {
+                won.push((cursor, from));
+            }
+            cursor = cursor.max(to);
+        }
+        if cursor < b {
+            won.push((cursor, b));
+        }
+        (won, beaten)
     }
 
     /// The song frames whose audio changed since the last call. A trimmed

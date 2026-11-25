@@ -142,8 +142,9 @@ pub(crate) struct Worker {
     quiet: Quiet,
     /// The host's meter at each chunk's start, by song frame, for the Tape
     /// tab's ruler. Kept apart from the chunks because it describes the song,
-    /// not a recording: a pass replaces the anchors where it plays, whether or
-    /// not its audio wins there, and its last rules on to the next anchor.
+    /// not a recording: a pass replaces the anchors where it records, whether
+    /// or not its audio wins there, and its last rules on to the next anchor,
+    /// over any silence the pass dropped.
     meters: BTreeMap<i64, Meter>,
     /// Bumped whenever the store or the meters change, so Tape mode's spans
     /// are rebuilt only then; and the value they were last built at. While
@@ -323,21 +324,22 @@ impl Worker {
             quiet.clear();
             self.quiet = quiet;
             self.record(song_frame, meter, samples, rate);
-        } else if !self.quiet.overflowed {
+        } else {
             // What the pass recorded shows while its silence is held: a
             // chunk of the same pass that touches it still joins its span.
             if self.quiet.blocks.is_empty() {
                 self.close_chunk();
             }
             let quiet = &mut self.quiet;
-            if (quiet.samples.len() + samples.len()) / channels
-                <= (QUIET_SECONDS * f64::from(rate)) as usize
-            {
+            let fits = (quiet.samples.len() + samples.len()) / channels
+                <= (QUIET_SECONDS * f64::from(rate)) as usize;
+            if fits && !quiet.overflowed {
                 quiet.samples.extend_from_slice(samples);
                 quiet.blocks.push((song_frame, meter, quiet.samples.len()));
             } else {
-                quiet.clear();
-                quiet.overflowed = true;
+                self.drop_quiet();
+                self.quiet.overflowed = true;
+                self.clear(&[(song_frame, song_frame + frames as i64)]);
             }
         }
         let pass = self.pass.as_mut().expect("a pass");
@@ -393,10 +395,38 @@ impl Worker {
 
     /// The pass is over: its silence since the last sound is dropped.
     fn end_pass(&mut self) {
+        self.drop_quiet();
         self.pass = None;
         self.last_song = None;
-        self.quiet.clear();
         self.close_chunk();
+    }
+
+    /// Drop the silence held, clearing what it would have replaced.
+    fn drop_quiet(&mut self) {
+        let channels = self.store.as_ref().map_or(1, |store| store.channels);
+        let mut runs: Vec<(i64, i64)> = Vec::new();
+        let mut from = 0;
+        for &(start, _, to) in &self.quiet.blocks {
+            let end = start + ((to - from) / channels) as i64;
+            match runs.last_mut() {
+                Some(run) if run.1 == start => run.1 = end,
+                _ => runs.push((start, end)),
+            }
+            from = to;
+        }
+        self.quiet.clear();
+        self.clear(&runs);
+    }
+
+    /// Clear `runs` of the song of whatever older passes recorded there that
+    /// the current pass's silence beats.
+    fn clear(&mut self, runs: &[(i64, i64)]) {
+        let (Some(pass), Some(store)) = (self.pass, &mut self.store) else { return };
+        let stamp = Stamp { pass: pass.id, when: Instant::now(), pass_start: pass.start };
+        for &(from, to) in runs {
+            store.clear(stamp, from, to);
+        }
+        self.store_changed();
     }
 
     /// Open pass `pass` with the voices held now, and keep it a while for a
@@ -530,13 +560,25 @@ impl Worker {
         }
         if let Some(store) = &mut self.store {
             commit(store, chunk);
-            let changed = store.take_changed();
-            self.spectrum.invalidate(store, &changed);
-            // A pass none of whose audio survives has no notes to show.
-            let live: BTreeSet<u64> = store.chunks().map(|c| c.stamp.pass).collect();
-            let current = self.pass.map(|p| p.id);
-            self.book.passes.retain(|id, _| live.contains(id) || Some(*id) == current);
         }
+        self.store_changed();
+        // The meters may have moved where no audio did.
+        self.generation += 1;
+    }
+
+    /// Bring the spectrogram, the notes kept and Tape mode's spans up to
+    /// whatever the store changed.
+    fn store_changed(&mut self) {
+        let Some(store) = &mut self.store else { return };
+        let changed = store.take_changed();
+        if changed.is_empty() {
+            return;
+        }
+        self.spectrum.invalidate(store, &changed);
+        // A pass none of whose audio survives has no notes to show.
+        let live: BTreeSet<u64> = store.chunks().map(|c| c.stamp.pass).collect();
+        let current = self.pass.map(|p| p.id);
+        self.book.passes.retain(|id, _| live.contains(id) || Some(*id) == current);
         self.generation += 1;
     }
 
