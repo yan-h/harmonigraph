@@ -531,6 +531,42 @@ mod tests {
         }
     }
 
+    /// A take armed partway into a song counts its frames from its own start,
+    /// and the soundtrack its frames analyze runs from a reach before the first
+    /// frame to a reach past the last.
+    #[test]
+    fn a_take_armed_partway_in_counts_its_frames_and_soundtrack_from_its_start() {
+        let settings = Settings {
+            layout: harmonigraph_ui::Layout::split(harmonigraph_ui::LatticeSide::Left, 0.5),
+            size: [64, 36],
+            pixels_per_point: 1.0,
+            fps: 10.0,
+            start: 5.0,
+            end: 7.0,
+            audio_start: 0.0,
+        };
+        assert_eq!(settings.frame_count(), 20);
+        let config = harmonigraph_ui::SpectrumConfig {
+            window: harmonigraph_ui::SpectrumWindow::Precise,
+            ..Default::default()
+        };
+        let (before, after) = soundtrack_reach(&config, 48_000.0);
+        assert!(before > 0.0 && after > 0.0, "{before}, {after}");
+        let (from, to) = settings.soundtrack_window(&config, 48_000.0);
+        // The last of 20 frames at 10 fps from 5 s is drawn at 6.9 s.
+        assert!((from - (5.0 - before)).abs() < 1e-9, "{from}");
+        assert!((to - (6.9 + after)).abs() < 1e-9, "{to}");
+    }
+
+    /// Every frame tells egui the adapter's texture ceiling: left at egui's
+    /// own 2048, the font atlas is sized against it and a dense frame loses
+    /// labels with nothing saying so (#368).
+    #[test]
+    fn every_frame_carries_the_adapters_texture_ceiling() {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 36.0));
+        assert_eq!(frame_input(screen, 1.5, 8192).max_texture_side, Some(8192));
+    }
+
     /// Stage shares describe the measured render loop.
     #[test]
     fn the_timing_summary_accounts_for_the_render_loop() {
