@@ -151,9 +151,9 @@ pub struct InvalidCanonical;
 /// (`harmonigraph_record::publication`), so the live display, which applies
 /// records in publication order, checks it in debug builds alone (#1798). A
 /// take is read in time order, which a Tune whose delay was lowered while it
-/// recorded does break (its snapshot after the cut is timed at the old delay,
-/// its next deltas at the new), so the take reader refuses such a take. It
-/// owns no musical state.
+/// recorded broke before #1885 made a row's times never go back (its snapshot
+/// after the cut was timed at the old delay, its next deltas at the new), so
+/// the take reader refuses such a take. It owns no musical state.
 #[derive(Default)]
 pub struct CanonicalOrder {
     sources: std::collections::BTreeMap<SourceId, CanonicalCursor>,
