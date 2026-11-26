@@ -450,6 +450,33 @@ fn render_controls(
                 ),
             ],
         );
+        // Dialled names its range, as Scrolling names its span.
+        let spectrum = &state.appearance.spectrum;
+        let dialled = format!(
+            "Dialled ({}–{})",
+            super::spectral::settings::hz_readout(spectrum.low_midi),
+            super::spectral::settings::hz_readout(spectrum.high_midi)
+        );
+        choice_row(
+            ui,
+            "Frequency range",
+            &mut state.appearance.render.pitch_range,
+            &[
+                (
+                    crate::PitchRangeRender::Dialled,
+                    &dialled,
+                    "Draw the Frequency range set on the Analyzer page, exactly as previewed here.",
+                ),
+                (
+                    crate::PitchRangeRender::Fit,
+                    "Fit piece",
+                    "Frame what the piece fills, anywhere from 20 Hz to 20 kHz, whatever the Frequency range set on the Analyzer page: \
+                     every pitch the spectrogram lights a fifth of the way up its colours for half a second in all, \
+                     and every recorded note, with a semitone to spare. Bands it leaves dark at either end are dropped. \
+                     Choose Dialled to crop by hand. The preview here keeps showing the range as set.",
+                ),
+            ],
+        );
         // Here rather than beside Finish recording: a render choice like Output
         // size, which a queued export takes from the current look.
         //
@@ -733,7 +760,7 @@ const RECORDED_HINT: &str = "Each take's own appearance, saved when it was recor
 /// What both Queue buttons answer a hover with: what a queued job carries,
 /// and what the queue survives.
 const QUEUE_HINT: &str = "Every job captures the selected look and the current Video settings. \
-     Under Recorded, only Output size, Tail, Encoder and Archive copy are the current ones: the take keeps the frame and Video history it was recorded with. \
+     Under Recorded, only Output size, Tail, Encoder and Archive copy are the current ones: the take keeps the rest of the look it was recorded with. \
      Recorded camera movement wins during replay. \
      The queue survives closing this editor, but removing the plugin or closing the project cancels unfinished jobs, and there is no resume after a crash.";
 
@@ -874,9 +901,9 @@ fn capture_export(
 ) -> Result<(crate::ExportAction, Vec<String>), String> {
     let mut notes = Vec::new();
     let captured = match look {
-        // A recorded look keeps its own frame and Video history, so queueing it
-        // does not recompose the take to the pane's aspect and split; only the
-        // pane's Output size, Tail, Encoder and Archive copy apply. Every take
+        // A recorded look keeps its own composition, so queueing it does not
+        // recompose the take to the pane's aspect and split; only the pane's
+        // output settings apply (`RenderConfig::take_output_from`). Every take
         // writer records a look, so a take without one is refused rather than
         // drawn in some other look.
         crate::ExportLook::Recorded => {
@@ -1712,10 +1739,10 @@ mod tests {
 mod export_tests {
     use super::*;
 
-    /// A take queued under its recorded appearance keeps the frame and Video
-    /// history it was composed with, and takes only Output size, Tail and
-    /// Encoder from the pane. Recorded as 9:16 with the lattice on top and the
-    /// scrolling history, against a pane at the fresh 16:9 and Fit video.
+    /// A take queued under its recorded appearance keeps the composition it
+    /// was recorded with, and takes only the output settings from the pane.
+    /// Recorded as 9:16 with the lattice on top, the scrolling history and the
+    /// dialled range, against a pane at the fresh 16:9, Fit video and Fit piece.
     /// A key the recorded look holds that this build does not read is named
     /// to the pane, since the queued look no longer carries it (#1927 B). A
     /// value its load repairs is queued as held, for the renderer to name on
@@ -1729,6 +1756,7 @@ mod export_tests {
         recorded.render.frame.lattice = LatticeSide::Top;
         recorded.render.frame.split = 0.3;
         recorded.render.spectrogram = SpectrogramRender::Scrolling;
+        recorded.render.pitch_range = crate::PitchRangeRender::Dialled;
         recorded.render.short_edge = 720;
         recorded.render.tail = 5.0;
         recorded.render.encoder = VideoEncoder::X264;
@@ -1762,6 +1790,7 @@ mod export_tests {
         assert_eq!((frame.aspect_w, frame.aspect_h, frame.split), (9, 16, 0.3));
         assert_eq!(frame.lattice, LatticeSide::Top);
         assert_eq!(render.spectrogram, SpectrogramRender::Scrolling);
+        assert_eq!(render.pitch_range, crate::PitchRangeRender::Dialled);
         assert_eq!(render.short_edge, 1080);
         assert_eq!(render.tail, 2.0);
         assert_eq!(render.encoder, VideoEncoder::Hardware);

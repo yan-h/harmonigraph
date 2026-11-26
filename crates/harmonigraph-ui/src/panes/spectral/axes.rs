@@ -266,7 +266,14 @@ fn tilt_db(cfg: &crate::SpectrumConfig, midi: f32) -> f32 {
 /// at. The heatmap, the Spiral, and the colours of the curve and the lattice
 /// ring draw a power at or under it as they draw silence.
 pub(crate) fn faintest_coloured_db(cfg: &crate::SpectrumConfig, midi: f32) -> f32 {
-    spectrogram_window(cfg).0 + tilt_db(cfg, midi)
+    coloured_db(cfg, 0.0, midi)
+}
+
+/// The dB at which the volume colours draw pitch `midi` at `level` of the way
+/// up their window: 0 is [`faintest_coloured_db`], 1 the window's ceiling.
+pub(crate) fn coloured_db(cfg: &crate::SpectrumConfig, level: f32, midi: f32) -> f32 {
+    let (floor, ceiling) = spectrogram_window(cfg);
+    floor + level * (ceiling - floor) + tilt_db(cfg, midi)
 }
 
 /// The faintest dB that draws at pitch `midi` at all: the lower of

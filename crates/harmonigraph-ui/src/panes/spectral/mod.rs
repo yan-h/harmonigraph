@@ -20,6 +20,7 @@ pub(crate) mod names;
 mod profile;
 pub(crate) mod roll;
 pub(super) mod settings;
+pub use settings::hz_readout;
 pub(crate) mod spectrogram;
 pub(crate) mod tape;
 
