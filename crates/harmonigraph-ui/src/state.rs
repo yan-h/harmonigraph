@@ -467,11 +467,6 @@ impl Workspace {
         let change = std::mem::take(&mut self.window_size_change);
         (change.abs().max_elem() >= 0.5).then_some(change)
     }
-
-    /// Return to the default arrangement after this frame's panes finish.
-    pub fn reset_layout(&mut self) {
-        self.interaction.reset_layout = true;
-    }
 }
 
 /// What the frame publishes about ITSELF: the measurements the performance
@@ -1034,20 +1029,6 @@ impl PictureState {
         self.surfaces.lattice_pipelines.clone()
     }
 
-    /// Put the audio ring back to a standing start — nothing carried, in
-    /// either half.
-    ///
-    /// The two halves are ONE state and are cleared together. Both step
-    /// against the clock and both hold at a step of zero, so anything drawing
-    /// a SETTING rather than a frame of an animation — a probe taking every
-    /// shot at one moment — has to clear both or the shot before is handed
-    /// straight back. Clearing [`VisualRuntime::ring_fade`] alone leaves the
-    /// new shot's gate reading the previous shot's grid, which is a picture of
-    /// neither.
-    pub fn reset_ring(&mut self) {
-        self.runtime.ring_fade = harmonigraph_scene::RingFade::default();
-        self.runtime.ring_levels = crate::panes::spectral_fold::RingLevels::default();
-    }
     /// Install an already normalized appearance at a load boundary.
     pub fn install_appearance(&mut self, appearance: crate::AppearanceDocument) {
         self.appearance = appearance;
