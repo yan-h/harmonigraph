@@ -1630,6 +1630,34 @@ fn a_channel_bend_on_a_held_note_reaches_the_display_and_the_take() {
     }
 }
 
+/// A channel bend over two held voices gives each its own delta, sequenced in
+/// turn after the bend, so the take keeps its source's order and loads.
+#[test]
+fn a_channel_bend_over_two_voices_keeps_the_takes_order() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
+    hub.activate();
+    let mut raw = 0;
+    let mut step = |input: Vec<Input>| {
+        hub.run_format(raw, input, None, None, 512);
+        raw += 512;
+    };
+    step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 0, true)]);
+    step(vec![raw_midi([0xE0, 0, 0x60], 0)]);
+    step(vec![]);
+    let mut order = harmonigraph_core::canonical::CanonicalOrder::default();
+    let mut deltas = 0;
+    for record in capture.drain_canonical() {
+        if let CanonicalRecord::Delta(delta) = record {
+            let source = harmonigraph_core::SourceId(delta.event.source);
+            assert!(order.note(source, delta.sequence), "delta {} out of order", delta.sequence);
+            deltas += 1;
+        }
+    }
+    assert!(deltas >= 4, "two onsets and a bend delta for each: {deltas}");
+}
+
 /// Only a controller ends a channel's voices: a bend or channel pressure whose
 /// second byte reads 120 or 123, the two termination controllers' numbers,
 /// leaves the held note held by the Tune and the Hub alike.
