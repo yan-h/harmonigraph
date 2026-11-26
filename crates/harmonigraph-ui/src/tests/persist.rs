@@ -445,9 +445,12 @@ fn persist_round_trips_camera_and_view() {
         NoteNames::All,
         "a non-default note-name mode round-trips",
     );
+    // Whole, so a field the restore's repair moves (the pitch, say) is caught.
+    assert_eq!(
+        restored.workspace.interaction.camera_presets, state.workspace.interaction.camera_presets,
+        "a camera preset round-trips whole",
+    );
     assert_eq!(restored.workspace.interaction.camera_presets.len(), 1);
-    assert_eq!(restored.workspace.interaction.camera_presets[0].name, "reading");
-    assert_eq!(restored.workspace.interaction.camera_presets[0].yaw, 0.7);
 }
 
 /// A hand-edited level range comes back drawable, which the pitch pair has
