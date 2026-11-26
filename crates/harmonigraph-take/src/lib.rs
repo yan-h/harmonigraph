@@ -372,7 +372,7 @@ impl std::fmt::Display for ReadError {
             ReadError::OutOfOrder(line) => write!(
                 f,
                 "line {line}: a note record sounds out of order with its source's others, \
-                 as a Tune's delay lowered while recording leaves it"
+                 as a take recorded before #1885 with a Tune's delay lowered can"
             ),
             ReadError::Version(v) => {
                 write!(f, "take is format version {v}, this build understands {FORMAT_VERSION}")

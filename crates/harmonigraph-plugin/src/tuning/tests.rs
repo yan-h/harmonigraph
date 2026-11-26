@@ -1344,10 +1344,7 @@ fn pending_retriggers_and_endings_reuse_held_capacity_in_wire_order() {
     assert!(output.iter().any(|(time, e)| *time == 4 && e.release()));
     assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), HELD_PER_SOURCE);
     assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), HELD_PER_SOURCE);
-    assert_eq!(
-        inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, 64).unwrap().host_note_id),
-        201
-    );
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, 64).unwrap().host_note_id), 201);
     pair.tune.host_reset();
     let cut = pair.idle();
     assert_eq!(cut.iter().filter(|(_, e)| e.release()).count(), HELD_PER_SOURCE);
@@ -1623,7 +1620,7 @@ fn a_channel_bend_on_a_held_note_reaches_the_display_and_the_take() {
 }
 
 /// A channel bend over two held voices gives each its own delta, sequenced in
-/// turn after the bend, so the take keeps its source's order and loads.
+/// turn, so the take's deltas keep their source's order.
 #[test]
 fn a_channel_bend_over_two_voices_keeps_the_takes_order() {
     use harmonigraph_take::CanonicalRecord;
@@ -1639,15 +1636,17 @@ fn a_channel_bend_over_two_voices_keeps_the_takes_order() {
     step(vec![raw_midi([0xE0, 0, 0x60], 0)]);
     step(vec![]);
     let mut order = harmonigraph_core::canonical::CanonicalOrder::default();
-    let mut deltas = 0;
+    let mut bent = Vec::new();
     for record in capture.drain_canonical() {
         if let CanonicalRecord::Delta(delta) = record {
             let source = harmonigraph_core::SourceId(delta.event.source);
             assert!(order.note(source, delta.sequence), "delta {} out of order", delta.sequence);
-            deltas += 1;
+            if matches!(delta.event.kind, harmonigraph_take::NoteKind::Tuning { .. }) {
+                bent.push(delta.event.note);
+            }
         }
     }
-    assert_eq!(deltas, 5, "two onsets, the bend, and a delta for each voice it moved");
+    assert_eq!(bent, [60, 64], "the bend moves each held voice once, and has no delta of its own");
 }
 
 #[test]

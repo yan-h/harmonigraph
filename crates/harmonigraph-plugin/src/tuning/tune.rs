@@ -380,9 +380,9 @@ impl Tune {
     }
 
     /// Refuse an onset before either path sees it if its eventual wire
-    /// position has no identity cell. Pending releases and channel endings
-    /// free cells; retriggers replace them. This is scratch, not a second
-    /// authority: it replays the actual held reducer in FIFO emission order.
+    /// position has no identity cell. Pending releases free cells; retriggers
+    /// replace them. This is scratch, not a second authority: it replays the
+    /// actual held reducer in FIFO emission order.
     fn can_hold(&self, event: Event) -> bool {
         // Even if every pending event adds a voice, this cannot fill the set.
         // Ordinary phrases therefore do not need to replay their delay line.

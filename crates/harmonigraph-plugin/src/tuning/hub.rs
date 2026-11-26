@@ -696,11 +696,13 @@ impl Hub {
     /// expressions ahead of onsets. The derived value follows its onset serial.
     fn retain(batch: &mut Vec<Record>, record: Record) {
         if let Some(mut tuning) = record.event.initial_tuning() {
-            for other in batch.iter_mut().rev().take_while(|other| {
-                other.source == record.source
-                    && other.sample == record.sample
-                    && other.epoch == record.epoch
-            }) {
+            // A pass holds one epoch per source: `collect` drops a stale
+            // epoch's copies, and a new epoch clears the batch.
+            for other in batch
+                .iter_mut()
+                .rev()
+                .take_while(|other| other.source == record.source && other.sample == record.sample)
+            {
                 if let Some(value) = tuning.bind(other.event) {
                     other.player = value;
                 }

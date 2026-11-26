@@ -175,20 +175,29 @@ fn lattice_map_corrects_from_the_tuning_on_the_onsets_own_sample() {
     hub.activate();
     let (first, _) = install(&hub);
     hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
+    // The tuning the instrument is sent at the onset's sample.
+    let sent = |values: &[(u32, Event)]| {
+        values.iter().find_map(|(time, event)| match event {
+            Event::Expression { kind: 2, value, .. } if *time == 0 => Some(*value),
+            _ => None,
+        })
+    };
     let at_onset = vec![note(1, 0, 64, 0, true), expression(1, 0.1, 0)];
-    hub.run(512, at_onset, None);
+    let alone_sent = sent(&hub.run(512, at_onset, None).values);
     let alone = voice(&hub, crate::tuning::DIRECT, 64);
     hub.run(1024, vec![note(1, 0, 64, 0, false)], None);
     let with_later = vec![note(2, 0, 64, 0, true), expression(2, 0.1, 0), expression(2, 0.3, 30)];
-    hub.run(1536, with_later, None);
+    let later_sent = sent(&hub.run(1536, with_later, None).values);
     let later = inspect_hub(&hub, |hub| hub.test_voice(crate::tuning::DIRECT, 0, 64)).unwrap();
     assert_eq!(later.frozen_offset_microcents, alone.frozen_offset_microcents);
     assert_eq!(later.attack_node, Some(first.node(64)));
+    assert!(alone_sent.is_some(), "the onset's own tuning goes on the wire at its sample");
+    assert_eq!(later_sent, alone_sent, "and the later one does not replace it there");
 }
 
 /// A per-note tuning expression after the onset draws the pitch that goes on
 /// the wire: the player's value, the channel's bend and the map's frozen
-/// correction together, which the display and the take both record.
+/// correction together, in the Hub's voice that the display and the take read.
 #[test]
 fn lattice_map_draws_a_later_tuning_expression_with_its_bend_and_correction() {
     let _scope = crate::test_scope::enter();
@@ -196,12 +205,14 @@ fn lattice_map_draws_a_later_tuning_expression_with_its_bend_and_correction() {
     hub.activate();
     let (first, _) = install(&hub);
     hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
-    hub.run(512, vec![note(1, 0, 64, 0, true)], None);
+    let Input::Note(mut struck) = note(1, 0, 64, 0, true) else { unreachable!() };
+    struck.velocity = 0.375;
+    hub.run(512, vec![Input::Note(struck)], None);
     let held = voice(&hub, crate::tuning::DIRECT, 64);
     let correction = first.correction(64, Tuning::just());
     assert!(correction != 0, "the map moves E, so the correction is in the pitch");
     assert_eq!(held.frozen_offset_microcents, correction);
-    assert_eq!(held.velocity, 0.625, "the attack's velocity is the voice's");
+    assert_eq!(held.velocity, 0.375, "the attack's velocity is the voice's");
     hub.run(1024, vec![raw_midi([0xE0, 0x00, 0x60], 0)], None);
     let bent = voice(&hub, crate::tuning::DIRECT, 64);
     assert!(bent.pitch_microcents != held.pitch_microcents, "the bend moves the held voice");
@@ -983,4 +994,20 @@ fn the_strip_block_names_where_the_next_note_sounds_after_the_clamp() {
     lane(&mut session, 8.0);
     assert_eq!(shown(&session), Some(top), "the Strip block");
     assert_eq!(session.a(), Some(a_at(top)), "where the next A sounds");
+}
+
+/// A note from a Tune with Retune off is no spelling: struck on the decoded
+/// D's sample, a plain A leaves the strip to the D alone, so the D sounds
+/// where it does struck by itself, not moved off the A's wolf.
+#[test]
+fn a_retune_off_note_on_a_decoded_notes_sample_does_not_move_the_strip() {
+    let _scope = crate::test_scope::enter();
+    let d = |plain: Vec<Input>| {
+        let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+        session.play(vec![note(1, 0, 62, 0, true)], plain);
+        session.voice(true, 0, 62).attack_node
+    };
+    let alone = d(vec![]);
+    assert_eq!(d(vec![note(2, 0, 69, 0, true)]), alone);
+    assert_eq!(alone, Some(LatticePos::new(2, 0, 0)), "the fixture's D is 9/8");
 }

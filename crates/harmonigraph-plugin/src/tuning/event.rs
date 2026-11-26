@@ -103,11 +103,12 @@ impl Event {
                 if data[0] & 0xf0 == 0x80 || data[0] & 0xf0 == 0x90 && data[2] == 0)
     }
 
-    /// Start a reverse scan of one source's same-sample prefix. Only finite
-    /// tuning expressions initialize onsets; addressing is shared with output.
+    /// Start a reverse scan of one source's same-sample prefix; addressing is
+    /// shared with output. Both callers see only [`Self::emittable`] events.
     pub fn initial_tuning(self) -> Option<InitialTuning> {
         let Self::Expression { kind: 2, value, .. } = self else { return None };
-        value.is_finite().then_some(InitialTuning { expression: self, value, seen: [0; 16] })
+        debug_assert!(value.is_finite(), "emittable refuses a non-finite expression");
+        Some(InitialTuning { expression: self, value, seen: [0; 16] })
     }
 
     /// The pressure, gain or timbre this carries, by CLAP's volume (0),

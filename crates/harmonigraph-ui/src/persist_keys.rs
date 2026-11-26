@@ -366,10 +366,12 @@ mod tests {
     #[test]
     fn a_string_does_not_mislead_the_cut() {
         // Read as tokens, the name would open two structs and key the
-        // variant's pair under them.
-        let (outer, dropped) = cut("(name:\"é \\\" (inner:(\",list:[A,B],mode:Gone,count:7)");
+        // variant's pair under them. The second escape sits far enough in
+        // that a cursor doubled there, not stepped past it, overshoots.
+        let (outer, dropped) =
+            cut("(name:\"é \\\" (inner:( \\\" x\",list:[A,B],mode:Gone,count:7)");
         assert_eq!(dropped, ["mode:Gone"]);
-        assert_eq!(outer.name, "é \" (inner:(");
+        assert_eq!(outer.name, "é \" (inner:( \" x");
         assert_eq!(outer.list, [Mode::A, Mode::B]);
         assert_eq!((outer.mode, outer.count), (Mode::A, 7));
     }
