@@ -1,11 +1,11 @@
 //! The pass ahead of the frames that Frequency range: Fit piece needs: the
-//! soundtrack analyzed once over the render window, and the take's notes, into
+//! soundtrack the frames analyze, analyzed once, and the notes they draw, into
 //! a [`PitchFit`].
 
 use crate::render::Settings;
 use crate::wav::Audio;
-use harmonigraph_core::notes::semitones;
-use harmonigraph_take::{CanonicalRecord, NoteKind, Take};
+use harmonigraph_core::NoteTracker;
+use harmonigraph_take::Take;
 use harmonigraph_ui::{PitchFit, SpectrumAnalysis, SpectrumConfig};
 
 /// The range Fit piece draws `take` at over `settings`' window, or `None` to
@@ -36,23 +36,33 @@ pub fn pitch_range(
             })
         })?;
     }
-    for record in &take.events {
-        match record {
-            CanonicalRecord::Note(note) if matches!(note.kind, NoteKind::On { .. }) => {
-                fit.note(f32::from(note.note));
-            }
-            CanonicalRecord::Delta(delta) => {
-                if let Some(pitch) = delta.pitch_microcents {
-                    fit.note(semitones(pitch));
-                }
-            }
-            CanonicalRecord::Baseline(baseline) => {
-                for voice in &baseline.voices {
-                    fit.note(semitones(voice.pitch_microcents));
-                }
-            }
-            CanonicalRecord::Note(_) | CanonicalRecord::Gap(_) => {}
+    // The notes the frames draw: each shown voice's pitch, bends included,
+    // through the tracker the replay draws with, sampled at every record that
+    // sounds within the window and at its start for the voices held into it.
+    // A released voice was counted while it was held.
+    let mut tracker = NoteTracker::new();
+    let count = |tracker: &NoteTracker, fit: &mut PitchFit| {
+        for voice in tracker.held_voices().filter(|voice| !tracker.hides(voice.source)) {
+            fit.note(voice.pitch);
         }
+    };
+    let mut entered = false;
+    for record in &take.events {
+        let time = record.time();
+        if time > settings.end {
+            break;
+        }
+        if time >= settings.start && !entered {
+            entered = true;
+            count(&tracker, &mut fit);
+        }
+        record.apply(&mut tracker).expect("validated canonical take");
+        if entered {
+            count(&tracker, &mut fit);
+        }
+    }
+    if !entered {
+        count(&tracker, &mut fit);
     }
     Ok(fit.range())
 }
@@ -60,16 +70,17 @@ pub fn pitch_range(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harmonigraph_take::canonical::DeltaRecord;
-    use harmonigraph_take::NoteRecord;
+    use harmonigraph_take::canonical::{BaselineRecord, DeltaRecord};
+    use harmonigraph_take::{CanonicalRecord, NoteKind, NoteRecord};
 
-    /// The soundtrack the frames analyze and the take's notes set the range:
-    /// a note's recorded pitch rather than its key; a 3 kHz tone that ends
-    /// 0.15 s into the render, which its first frames draw from the audio
-    /// read before them; and not a 7 kHz tone a second before the render, past
-    /// that read.
+    /// The soundtrack the frames analyze and the notes they draw set the
+    /// range: a 3 kHz tone that ends 0.15 s into the render, which its first
+    /// frames draw from the audio read before them, but not a 7 kHz tone a
+    /// second before the render, past that read; and a note's recorded pitch
+    /// rather than its key, but not a note before the render, one after it, or
+    /// one while its source is hidden.
     #[test]
-    fn the_fit_reads_what_the_frames_analyze_and_the_notes() {
+    fn the_fit_reads_what_the_frames_analyze_and_draw() {
         let rate = 48_000.0;
         let tone = |hz: f64, from: f64, to: f64| {
             move |t: f64| (from..to).contains(&t).then(|| (std::f64::consts::TAU * hz * t).sin())
@@ -83,17 +94,28 @@ mod tests {
             })
             .collect();
         let mut audio = Audio::from_samples(rate as f32, samples, 2);
+        let note = |t: f64, note: u8, on: bool| {
+            let kind = if on { NoteKind::On { velocity: 0.8 } } else { NoteKind::Off };
+            NoteRecord { t, note, kind, ..Default::default() }
+        };
+        let shown = |t: f64, shown: bool| {
+            CanonicalRecord::Baseline(Box::new(BaselineRecord { t, shown, ..Default::default() }))
+        };
         let take = Take {
-            events: vec![CanonicalRecord::Delta(DeltaRecord {
-                event: NoteRecord {
-                    t: 2.5,
-                    note: 50,
-                    kind: NoteKind::On { velocity: 0.8 },
+            events: vec![
+                CanonicalRecord::Note(note(0.2, 25, true)),
+                CanonicalRecord::Note(note(0.3, 25, false)),
+                shown(2.1, false),
+                CanonicalRecord::Note(note(2.2, 27, true)),
+                CanonicalRecord::Note(note(2.3, 27, false)),
+                shown(2.4, true),
+                CanonicalRecord::Delta(DeltaRecord {
+                    event: note(2.5, 50, true),
+                    pitch_microcents: Some(3_000_000_000),
                     ..Default::default()
-                },
-                pitch_microcents: Some(3_000_000_000),
-                ..Default::default()
-            })],
+                }),
+                CanonicalRecord::Note(note(4.5, 22, true)),
+            ],
             ..Default::default()
         };
         let settings = Settings {

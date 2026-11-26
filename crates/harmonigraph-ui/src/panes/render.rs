@@ -1739,10 +1739,10 @@ mod tests {
 mod export_tests {
     use super::*;
 
-    /// A take queued under its recorded appearance keeps the frame and Video
-    /// history it was composed with, and takes only Output size, Tail and
-    /// Encoder from the pane. Recorded as 9:16 with the lattice on top and the
-    /// scrolling history, against a pane at the fresh 16:9 and Fit video.
+    /// A take queued under its recorded appearance keeps the composition it
+    /// was recorded with, and takes only the output settings from the pane.
+    /// Recorded as 9:16 with the lattice on top, the scrolling history and the
+    /// dialled range, against a pane at the fresh 16:9, Fit video and Fit piece.
     /// A key the recorded look holds that this build does not read is named
     /// to the pane, since the queued look no longer carries it (#1927 B). A
     /// value its load repairs is queued as held, for the renderer to name on

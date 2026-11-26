@@ -219,8 +219,9 @@ pub fn render(
     state.install_appearance(appearance);
     // "Spectrogram: Fit video", a setting only a render can answer, since the
     // render window is its length. Frequency range: Fit piece is the other,
-    // applied by `export` before this is called, since it needs the take. Set once before the first frame,
-    // so no cache keyed on the analyzer config sees it move.
+    // applied by `export` before this is called, since it needs the take. Set
+    // once before the first frame, so no cache keyed on the analyzer config
+    // sees it move.
     let spectrogram = state.appearance.render.spectrogram;
     if spectrogram == SpectrogramRender::WholeVideo {
         state.appearance.spectrum.span_history(settings.end - settings.start);

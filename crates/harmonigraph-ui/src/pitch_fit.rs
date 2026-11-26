@@ -167,6 +167,13 @@ mod tests {
         let bucket = 1.0 / BINS_PER_SEMITONE as f32;
         assert!((low - (43.0 - MARGIN)).abs() < 1e-4, "low end {low}");
         assert!((high - (96.0 + MARGIN)).abs() <= bucket, "high end {high}");
+        // The lit band alone ends a margin past its low edge too.
+        let mut fit = PitchFit::new(&config);
+        for _ in 0..100 {
+            fit.column(&column(48.0, 96.0, loud, 0.01));
+        }
+        let (low, _) = fit.range().unwrap();
+        assert!((low - (48.0 - MARGIN)).abs() <= bucket, "lit low end {low}");
     }
 
     /// A piece narrower than the range bar's least span opens at that span,
