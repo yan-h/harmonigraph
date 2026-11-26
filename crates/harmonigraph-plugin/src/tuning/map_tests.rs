@@ -165,6 +165,27 @@ fn an_engine_or_follow_event_past_the_top_step_selects_the_top_step() {
     assert_eq!(playback.follow, harmonigraph_core::lattice_map::Follow::ThirdsAndFifths);
 }
 
+/// The tuning a note arrives with is the expression on its own sample: one
+/// later in the same callback moves it from there, and does not become the
+/// pitch the map's correction was decided from.
+#[test]
+fn lattice_map_corrects_from_the_tuning_on_the_onsets_own_sample() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = hub().with_adaptive();
+    hub.activate();
+    let (first, _) = install(&hub);
+    hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
+    let at_onset = vec![note(1, 0, 64, 0, true), expression(1, 0.1, 0)];
+    hub.run(512, at_onset, None);
+    let alone = voice(&hub, crate::tuning::DIRECT, 64);
+    hub.run(1024, vec![note(1, 0, 64, 0, false)], None);
+    let with_later = vec![note(2, 0, 64, 0, true), expression(2, 0.1, 0), expression(2, 0.3, 30)];
+    hub.run(1536, with_later, None);
+    let later = inspect_hub(&hub, |hub| hub.test_voice(crate::tuning::DIRECT, 0, 64)).unwrap();
+    assert_eq!(later.frozen_offset_microcents, alone.frozen_offset_microcents);
+    assert_eq!(later.attack_node, Some(first.node(64)));
+}
+
 /// A per-note tuning expression after the onset draws the pitch that goes on
 /// the wire: the player's value, the channel's bend and the map's frozen
 /// correction together, which the display and the take both record.
