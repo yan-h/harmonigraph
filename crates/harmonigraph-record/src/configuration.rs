@@ -17,9 +17,6 @@ impl RecordIntent {
     pub const fn armed(epoch: u64) -> Self {
         Self(epoch << 1 | Self::ARMED)
     }
-    pub const fn disarmed(epoch: u64) -> Self {
-        Self(epoch << 1)
-    }
     pub const fn epoch(self) -> u64 {
         self.0 >> 1
     }
