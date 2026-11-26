@@ -627,3 +627,21 @@ fn audio_with_no_room_for_its_entry_stays_out_of_the_ring() {
     assert!(b.ctrl.fence.failed.load(Ordering::Acquire), "the full record ring fails the take");
     assert_eq!(b.ends.audio.slots(), 2, "the second block's samples went in uncounted");
 }
+
+/// A take counts as captured only the notes played once its first run opened,
+/// and never a reset. One counted before the run would let a stopped transport
+/// end a take armed ahead of the downbeat after a single note, before anything
+/// recorded.
+#[test]
+fn a_take_counts_only_the_notes_played_into_its_runs() {
+    let mut b = Bench::new();
+    b.arm();
+    let on = |t| harmonigraph_core::NoteEvent::on(t, SourceId::DIRECT, 0, 60, 0.8).into();
+    b.rec.publish_note(on(0.5)).expect_both();
+    assert_eq!(b.ctrl.captured(), 0, "played before the first run");
+    b.rec.record(1.0, Some(0.0));
+    b.rec.publish_note(harmonigraph_core::NoteEvent::session_reset(1.0).into()).expect_both();
+    assert_eq!(b.ctrl.captured(), 0, "a reset is no note of the take's");
+    b.rec.publish_note(on(1.1)).expect_both();
+    assert_eq!(b.ctrl.captured(), 1);
+}
