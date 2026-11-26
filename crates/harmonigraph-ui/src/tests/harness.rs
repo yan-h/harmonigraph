@@ -363,6 +363,7 @@ pub(super) fn set_optional_sections(state: &mut SharedState, on: bool) {
     }
     let interaction = &mut state.workspace.interaction;
     interaction.prefs.show_perf = on;
+    interaction.prefs.harmony.show = on;
     interaction.take.supported = on;
     interaction.take.last_take = on.then(|| "music.take".into());
 }

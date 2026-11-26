@@ -733,12 +733,17 @@ fn plan(pos: harmonigraph_core::LatticePos) -> egui::Vec2 {
 /// reach once per class, 1,025 nodes in the fresh look, which measured about
 /// 0.1 ms a frame for a short piece (PR #1975).
 ///
-/// Kept for exactly what it is worked out from: this analysis (the `Arc`
-/// itself, which a new analysis replaces), the tuning and its tempered commas,
-/// and the reach.
+/// Kept for exactly what it is worked out from: the analysis's pitch classes,
+/// the tuning and its tempered commas, and the reach. A Detail or Span drag
+/// cuts the song afresh over the same classes, so it is no new placement.
 #[derive(Clone)]
 struct Placed {
-    harmony: std::sync::Arc<crate::tape::harmony::Harmony>,
+    /// The analysis last placed, by identity, so a frame that shows the same
+    /// one need not read its classes again. Weak: the editor holds no
+    /// analysis the worker has displaced, whose free stays off the lock.
+    harmony: std::sync::Weak<crate::tape::harmony::Harmony>,
+    /// Its pitch classes in microcents, ascending.
+    classes: Vec<u32>,
     tuning: harmonigraph_core::Tuning,
     tempered: harmonigraph_core::Tempered,
     reach: harmonigraph_scene::DrawnWindow,
@@ -760,29 +765,48 @@ impl Placed {
         use harmonigraph_core::tuning::PitchClass;
         let (tuning, tempered) = (state.runtime.tuning, state.runtime.tempered);
         let reach = state.appearance.view.reach();
-        let kept = ctx.data(|d| d.get_temp::<Placed>(id)).filter(|kept| {
-            std::sync::Arc::ptr_eq(&kept.harmony, harmony)
-                && (kept.tuning, kept.tempered, kept.reach) == (tuning, tempered, reach)
-        });
-        if let Some(kept) = kept {
+        let kept = ctx
+            .data(|d| d.get_temp::<Placed>(id))
+            .filter(|kept| (kept.tuning, kept.tempered, kept.reach) == (tuning, tempered, reach));
+        if let Some(kept) = &kept {
+            if std::sync::Weak::as_ptr(&kept.harmony) == std::sync::Arc::as_ptr(harmony) {
+                return kept.clone();
+            }
+        }
+        let mut classes: Vec<u32> = harmony
+            .sections
+            .iter()
+            .flat_map(|s| &s.entries)
+            .map(|entry| PitchClass::from_cents(entry.pitch * 100.0).microcents())
+            .collect();
+        classes.sort_unstable();
+        classes.dedup();
+        let weak = std::sync::Arc::downgrade(harmony);
+        if let Some(mut kept) = kept.filter(|kept| kept.classes == classes) {
+            kept.harmony = weak;
+            ctx.data_mut(|d| d.insert_temp(id, kept.clone()));
             return kept;
         }
         let nodes: Vec<(harmonigraph_core::LatticePos, PitchClass)> =
             reach.positions().map(|p| (p, tuning.pitch_class(p))).collect();
-        let mut lit = std::collections::BTreeMap::new();
-        for entry in harmony.sections.iter().flat_map(|s| &s.entries) {
-            let class = PitchClass::from_cents(entry.pitch * 100.0);
-            lit.entry(class.microcents()).or_insert_with(|| {
-                super::names::naming_node_from(nodes.iter().copied(), tempered, &tuning, class)
-            });
-        }
+        let lit: std::collections::BTreeMap<u32, Option<harmonigraph_core::LatticePos>> = classes
+            .iter()
+            .map(|&class| {
+                let pc = PitchClass::from_microcents(i64::from(class));
+                (
+                    class,
+                    super::names::naming_node_from(nodes.iter().copied(), tempered, &tuning, pc),
+                )
+            })
+            .collect();
         let mut frame = None::<Rect>;
         for at in lit.values().flatten().map(|&p| plan(p).to_pos2()) {
             let at = Rect::from_min_max(at, at);
             frame = Some(frame.map_or(at, |frame| frame.union(at)));
         }
         let placed = Placed {
-            harmony: std::sync::Arc::clone(harmony),
+            harmony: weak,
+            classes,
             tuning,
             tempered,
             reach,
@@ -819,7 +843,8 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
 
     let cfg = state.appearance.spectrum;
     let axes = overview_axes(rect, &cfg);
-    let axis = SongAxis::new(&axes, 0.0, Window::fit(&state.runtime.tape));
+    let window = Window::fit(&state.runtime.tape);
+    let axis = SongAxis::new(&axes, 0.0, window);
     let id = egui::Id::unique(("tape-harmony", surface));
     let response = ui.interact(rect, id, egui::Sense::click());
     let painter = ui.painter_at(rect);
@@ -839,28 +864,42 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
             state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, pixel);
         }
     };
-    let Some(frame) = frame else { return playheads(state) };
+    // With nothing lit, a frame one node across: the sections still show,
+    // and still cue.
+    let frame = frame.unwrap_or(Rect::ZERO);
 
     let pad = 3.0 * theme::ui_scale(ui.ctx());
     let (columns, rows) = (frame.width() + 1.0, frame.height() + 1.0);
-    let node = ((rect.height() - 2.0 * pad) / rows).min(NODE_SHARE * rect.height());
+    let node = ((rect.height() - 2.0 * pad) / rows)
+        .min((rect.width() - 2.0 * pad) / columns)
+        .min(NODE_SHARE * rect.height());
     let thumbnail = egui::vec2(columns, rows) * node;
     let narrowest = f64::from(thumbnail.x + 2.0 * pad) * axis.seconds_per_point();
-    let cells = harmony.cells(narrowest);
+    let cells = harmony.cells(narrowest, window.to);
 
     // The playhead a thumbnail fills in under: the audition's, or the song's
     // while the transport rolls. Still advancing is the playheads' own test
     // (`marks`): its value changed within the stall allowance.
     let under = view.heard.map(|at| (at, heard_rate)).or(view.position.zip(position_rate));
     let clock = ui.input(|i| i.time);
-    let seen = ui.data(|d| d.get_temp::<(f64, f64)>(id)).filter(|_| under.is_some());
+    let seen = ui.data(|d| d.get_temp::<(f64, f64)>(id));
     let changed = match (seen, under) {
         (Some((value, since)), Some((at, _))) if value == at => since,
+        // First seen counts as moving, unlike `marks`, which waits to see it
+        // move before asking for frames: a cue's first frame must already
+        // hide what the section has not yet struck.
         (_, Some(_)) => clock,
         (_, None) => f64::NEG_INFINITY,
     };
-    if let Some((at, _)) = under {
-        ui.data_mut(|d| d.insert_temp(id, (at, changed)));
+    // Forgotten with the playhead, so one that comes back on the value it
+    // left on is seen afresh.
+    match under {
+        Some((at, _)) => ui.data_mut(|d| {
+            d.insert_temp(id, (at, changed));
+        }),
+        None => ui.data_mut(|d| {
+            d.remove_temp::<(f64, f64)>(id);
+        }),
     }
     let advancing = clock - changed <= PLAYHEAD_STALL_SECONDS;
     let mut next_change = None::<f64>;
@@ -871,7 +910,8 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
     let pointer = response.hover_pos();
     for (k, cell) in cells.iter().enumerate() {
         let next = cells.get(k + 1).map_or(f64::INFINITY, |next| next.start);
-        // At least a thumbnail wide, which the next start leaves room for.
+        // At least a thumbnail wide, which the next start, or the row's end,
+        // leaves room for.
         let (a, b) = (x_of(cell.start), x_of(cell.end.max(cell.start + narrowest)));
         let span = Rect::from_x_y_ranges(a.min(b)..=a.max(b), rect.y_range());
         if k % 2 == 1 {
@@ -895,21 +935,27 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
         }
         // Under an advancing playhead, only what has been struck by now.
         let now = under.filter(|&(at, _)| advancing && (cell.start..next).contains(&at));
-        // A node's rings, each the octave it sounds in and its colour.
-        let mut nodes: Vec<(harmonigraph_core::LatticePos, Vec<(i32, egui::Color32)>)> = Vec::new();
+        // A node's rings: each the octave it sounds in, how far its flash has
+        // to settle, and its colour.
+        type Ring = (i32, f32, egui::Color32);
+        let mut nodes: Vec<(harmonigraph_core::LatticePos, Vec<Ring>)> = Vec::new();
+        let mut soonest = |wait: f64| next_change = Some(next_change.map_or(wait, |s| s.min(wait)));
         for entry in &cell.entries {
             let mut flash = 0.0;
-            if let (Some((at, rate)), Some(struck)) = (now, entry.struck) {
-                let age = at - struck;
-                if age < 0.0 {
-                    next_change =
-                        Some(next_change.map_or(-age / rate, |sooner| sooner.min(-age / rate)));
-                    if !entry.held {
-                        continue;
-                    }
-                } else if age < FLASH_SETTLED * FLASH_SECONDS {
+            if let Some((at, rate)) = now {
+                // Each strike is a frame at the time it sounds.
+                if let Some(&next) = entry.strikes.iter().find(|&&struck| struck > at) {
+                    soonest((next - at) / rate);
+                }
+                if !entry.held && entry.strikes.first().is_none_or(|&first| first > at) {
+                    continue;
+                }
+                // The last strike by now flashes, settling at the chrome's
+                // rate.
+                let age = entry.strikes.iter().rev().find(|&&struck| struck <= at).map(|s| at - s);
+                if let Some(age) = age.filter(|&age| age < FLASH_SETTLED * FLASH_SECONDS) {
                     flash = (-age / FLASH_SECONDS).exp() as f32;
-                    next_change = Some(0.0);
+                    soonest(crate::CHROME_CUE);
                 }
             }
             let colour = roll::note_color(state, entry.pitch, 1.0);
@@ -920,19 +966,19 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
                 let above = entry.pitch * 100.0 - tuning.pitch_class(pos).to_cents();
                 let octave = (above / 1200.0).round() as i32;
                 match nodes.iter_mut().find(|(at, _)| *at == pos) {
-                    Some((_, rings)) => match rings.iter_mut().find(|(o, _)| *o == octave) {
+                    Some((_, rings)) => match rings.iter_mut().find(|ring| ring.0 == octave) {
                         // Two notes on one ring: the one struck last shows.
-                        Some(ring) if flash > 0.0 => ring.1 = colour,
+                        Some(ring) if flash > ring.1 => *ring = (octave, flash, colour),
                         Some(_) => {}
-                        None => rings.push((octave, colour)),
+                        None => rings.push((octave, flash, colour)),
                     },
-                    None => nodes.push((pos, vec![(octave, colour)])),
+                    None => nodes.push((pos, vec![(octave, flash, colour)])),
                 }
             }
         }
         for (pos, rings) in &nodes {
             // Outermost first, so each lower pitch is drawn over the one above.
-            for (ring, &(_, colour)) in rings.iter().enumerate().rev() {
+            for (ring, &(_, _, colour)) in rings.iter().enumerate().rev() {
                 let radius = 0.44 * node * (ring + 1) as f32 / rings.len() as f32;
                 painter.circle_filled(centre(*pos), radius, colour);
                 if ring + 1 < rings.len() {
@@ -945,14 +991,8 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
             }
         }
     }
-    // A flash settling is a cue of the chrome's kind; the next attack under
-    // the playhead is a frame at the time it sounds.
-    match next_change {
-        Some(wait) if wait <= 0.0 => {
-            state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, crate::CHROME_CUE);
-        }
-        Some(wait) => state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, wait),
-        None => {}
+    if let Some(wait) = next_change {
+        state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, wait);
     }
     playheads(state);
     let view = &mut state.runtime.tape;

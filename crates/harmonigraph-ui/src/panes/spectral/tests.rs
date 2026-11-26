@@ -3848,15 +3848,15 @@ fn on_tape_in_two_sections(g_struck: f64) -> PictureState {
     state.runtime.tuning = harmonigraph_core::Tuning::just();
     let view = &mut state.appearance.view;
     (view.center_threes, view.center_fives, view.extent_threes, view.extent_fives) = (0, 0, 2, 2);
-    let c = Entry { pitch: 60.0, held: false, struck: Some(0.0) };
-    let g = Entry { pitch: 67.019_55, held: false, struck: Some(g_struck) };
+    let c = Entry { pitch: 60.0, held: false, strikes: vec![0.0] };
+    let g = Entry { pitch: 67.019_55, held: false, strikes: vec![g_struck] };
     let sections = vec![
-        Section { start: 0.0, end: 20.0, strength: 1.0, entries: vec![c] },
+        Section { start: 0.0, end: 20.0, strength: 1.0, entries: vec![c.clone()] },
         Section {
             start: 20.0,
             end: 40.0,
             strength: 0.5,
-            entries: vec![Entry { held: true, struck: None, ..c }, g],
+            entries: vec![Entry { held: true, strikes: vec![], ..c }, g],
         },
     ];
     state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
@@ -3971,6 +3971,61 @@ fn under_an_advancing_playhead_a_struck_note_arrives_at_its_attack_and_asks_for_
     let stalled = harmony_frame(&ctx, &mut state, vec![]);
     assert_eq!(stalled, settled);
     assert_eq!(pacing(&state), None);
+
+    // Stopped, then played again from where it stopped: seen afresh, so the
+    // G still settling is drawn so, and asks for its frames.
+    state.runtime.tape.heard = None;
+    harmony_frame(&ctx, &mut state, vec![]);
+    state.runtime.tape.heard = Some(22.1);
+    let resumed = harmony_frame(&ctx, &mut state, vec![]);
+    assert!(light(g(&resumed)) > light(g(&settled)), "{resumed:?}");
+    assert_eq!(pacing(&state), Some(crate::CHROME_CUE));
+}
+
+#[test]
+fn a_note_struck_again_in_its_section_arrives_again() {
+    let mut state = on_tape_in_two_sections(22.03);
+    let mut sections = state.runtime.tape.harmony.sections.clone();
+    sections[1].entries[1].strikes.push(26.0);
+    state.runtime.tape.harmony = std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
+    let ctx = themed();
+    let settled = harmony_frame(&ctx, &mut state, vec![]);
+    let pacing =
+        |state: &PictureState| state.surfaces.moving_this_frame.after(crate::Reason::Playhead);
+    let light = |rings: &[(egui::Pos2, egui::Color32)]| {
+        rings.iter().map(|(_, c)| u32::from(c.r()) + u32::from(c.g()) + u32::from(c.b())).max()
+    };
+    // Long after its first strike, the G has settled and the row waits for
+    // the second.
+    state.runtime.tape.heard = Some(25.97);
+    assert_eq!(light(&harmony_frame(&ctx, &mut state, vec![])), light(&settled));
+    let wait = pacing(&state).expect("a frame for the second strike");
+    assert!((wait - 0.03).abs() < 1e-6, "{wait}");
+    // Struck again: white again.
+    state.runtime.tape.heard = Some(26.05);
+    assert!(light(&harmony_frame(&ctx, &mut state, vec![])) > light(&settled));
+    assert_eq!(pacing(&state), Some(crate::CHROME_CUE));
+}
+
+/// A recording no pitch of which the lattice holds: nothing lights, and the
+/// row still shows its sections and cues them.
+#[test]
+fn with_nothing_lit_the_sections_still_cue() {
+    let mut state = on_tape_in_two_sections(20.0);
+    let mut sections = state.runtime.tape.harmony.sections.clone();
+    for entry in sections.iter_mut().flat_map(|s| &mut s.entries) {
+        entry.pitch += 0.3;
+    }
+    state.runtime.tape.harmony = std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
+    let ctx = themed();
+    assert_eq!(harmony_frame(&ctx, &mut state, vec![]), []);
+    let at = on_harmony_row(30.0);
+    for events in
+        [vec![egui::Event::PointerMoved(at)], vec![press(at, true)], vec![press(at, false)]]
+    {
+        harmony_frame(&ctx, &mut state, events);
+    }
+    assert_eq!(state.runtime.tape.request, Some(crate::tape::TapeRequest::Cue(20.0)));
 }
 
 /// A recorded 12-TET track beside a part in the lattice's own tuning: the
@@ -3979,17 +4034,17 @@ fn under_an_advancing_playhead_a_struck_note_arrives_at_its_attack_and_asks_for_
 #[test]
 fn a_pitch_off_the_lattice_does_not_blank_its_neighbour_on_it() {
     use crate::tape::harmony::{Entry, Harmony};
-    let tempered = Entry { pitch: 67.0, held: false, struck: Some(0.0) };
-    for first in [vec![tempered], vec![]] {
+    let tempered = Entry { pitch: 67.0, held: false, strikes: vec![0.0] };
+    for first in [vec![tempered.clone()], vec![]] {
         let mut state = on_tape_in_two_sections(20.0);
         let mut sections = state.runtime.tape.harmony.sections.clone();
         // The first section holds the 12-TET G alone, or nothing but its C;
         // the second holds both Gs.
         sections[0].entries.extend(first);
-        sections[1].entries.insert(1, tempered);
+        sections[1].entries.insert(1, tempered.clone());
         // And a G four tenths of a cent sharp of the just one, within the
         // lattice's tolerance of its node: the same ring, not a second.
-        sections[1].entries.push(Entry { pitch: 67.023_55, ..tempered });
+        sections[1].entries.push(Entry { pitch: 67.023_55, ..tempered.clone() });
         state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
         let rings = harmony_frame(&themed(), &mut state, vec![]);
         assert_eq!(rings.len(), 3, "the two Cs and the just G: {rings:?}");
@@ -4007,7 +4062,7 @@ fn under_a_temperament_a_pitch_lights_the_one_node_it_is_named_by() {
     let view = &mut state.appearance.view;
     (view.center_threes, view.center_fives, view.extent_threes, view.extent_fives) = (0, 0, 12, 6);
     let entries =
-        [60.0, 65.0, 67.0].map(|pitch| Entry { pitch, held: false, struck: Some(0.0) }).to_vec();
+        [60.0, 65.0, 67.0].map(|pitch| Entry { pitch, held: false, strikes: vec![0.0] }).to_vec();
     let sections = vec![Section { start: 0.0, end: 40.0, strength: 1.0, entries }];
     state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
     let mut rings = harmony_frame(&themed(), &mut state, vec![]);
@@ -4029,6 +4084,9 @@ fn the_rows_node_placement_follows_the_tuning_the_reach_and_the_analysis() {
     let ctx = themed();
     let rings = |state: &mut PictureState| harmony_frame(&ctx, state, vec![]).len();
     assert_eq!(rings(&mut state), 3);
+    // Kept without the analysis itself, which the worker frees off the lock
+    // once it displaces it.
+    assert_eq!(std::sync::Arc::strong_count(&state.runtime.tape.harmony), 1);
     // In 12-TET the just G is two cents from any node.
     state.runtime.tuning = harmonigraph_core::Tuning::default();
     assert_eq!(rings(&mut state), 2);

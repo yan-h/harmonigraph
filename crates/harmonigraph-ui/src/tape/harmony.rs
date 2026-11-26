@@ -30,8 +30,9 @@ const STEP_FLOOR: f64 = 0.05;
 /// sources a doubled part arrives on.
 const TOGETHER: f64 = 0.08;
 /// A note struck this long before a section's start still counts as struck in
-/// it: the same slack, so a chord whose first note opened the section is new
-/// whole.
+/// it, and one let go this long after it is not held into it: the same slack,
+/// so a chord whose first note opened the section is new whole, and the one
+/// before it, let go as the next is struck, stays in its own section.
 const STRUCK_SLACK: f64 = TOGETHER;
 /// Below this much presence, summed in quadrature over the pitch classes, a
 /// window is silence.
@@ -46,14 +47,15 @@ const PITCH_BINS_PER_SEMITONE: f32 = 1000.0;
 const CLASS_BINS_PER_SEMITONE: f32 = 50.0;
 
 /// One pitch sounding in a section.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
     /// MIDI note units, per-note tuning included.
     pub pitch: f32,
     /// Sounding as the section starts, from an attack before it.
     pub held: bool,
-    /// Its first attack inside the section, in song seconds.
-    pub struck: Option<f64>,
+    /// Every attack of it inside the section, in song seconds, earliest
+    /// first: a note struck again counts as new again (#1974).
+    pub strikes: Vec<f64>,
 }
 
 /// A stretch of the song heard as one harmony.
@@ -279,7 +281,11 @@ pub fn analyze(roll: &NoteRoll, meters: &[(f64, Meter)], detail: f32, span: f32)
     for note in &notes {
         let from = sections.partition_point(|s| s.end <= note.start);
         for section in sections[from..].iter_mut().take_while(|s| s.start < note.end) {
-            if note.start < section.end {
+            // Let go within the slack after a section starts, as a legato or
+            // rolled chord's old notes are, it is not held into it.
+            let held = note.end > section.start + STRUCK_SLACK;
+            let struck = note.start >= section.start - STRUCK_SLACK;
+            if note.start < section.end && (held || struck) {
                 add(&mut section.entries, note, section.start);
             }
         }
@@ -294,17 +300,20 @@ fn same_pitch(a: f32, b: f32) -> bool {
     (a * PITCH_BINS_PER_SEMITONE).round() == (b * PITCH_BINS_PER_SEMITONE).round()
 }
 
+/// Adds `note` to a section's entries; notes come in start order, which keeps
+/// each entry's strikes in order.
 fn add(entries: &mut Vec<Entry>, note: &Note, section_start: f64) {
     let struck = (note.start >= section_start - STRUCK_SLACK).then_some(note.start);
     match entries.iter_mut().find(|e| same_pitch(e.pitch, note.pitch)) {
         Some(entry) => {
             entry.held |= struck.is_none();
-            entry.struck = match (entry.struck, struck) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            };
+            entry.strikes.extend(struck);
         }
-        None => entries.push(Entry { pitch: note.pitch, held: struck.is_none(), struck }),
+        None => entries.push(Entry {
+            pitch: note.pitch,
+            held: struck.is_none(),
+            strikes: struck.into_iter().collect(),
+        }),
     }
 }
 
@@ -320,21 +329,26 @@ pub struct Cell {
 
 impl Harmony {
     /// The sections as cells at least `narrowest` song seconds from start to
-    /// start: where two starts are nearer than that, the one the harmony
-    /// changed less across gives way, and its section joins the one before.
-    pub fn cells(&self, narrowest: f64) -> Vec<Cell> {
+    /// start, and to `until`, where the row ends: where two starts are nearer
+    /// than that, the one the harmony changed less across gives way, and its
+    /// section joins the one before, as a start too near the row's end does.
+    pub fn cells(&self, narrowest: f64, until: f64) -> Vec<Cell> {
         let sections = &self.sections;
-        let mut order: Vec<usize> = (0..sections.len()).collect();
+        if sections.is_empty() {
+            return Vec::new();
+        }
+        let mut order: Vec<usize> = (1..sections.len()).collect();
         order.sort_by(|&a, &b| {
             sections[b].strength.total_cmp(&sections[a].strength).then(a.cmp(&b))
         });
-        let mut kept = BTreeSet::new();
+        // The song's first start always stands: every section has a cell.
+        let mut kept = BTreeSet::from([0]);
         for i in order {
             let clear = |j: Option<&usize>| {
                 j.is_none_or(|&j| (sections[j].start - sections[i].start).abs() >= narrowest)
             };
-            // The song's first start always stands: every section has a cell.
-            if i == 0 || (clear(kept.range(..i).next_back()) && clear(kept.range(i..).next())) {
+            let room = until - sections[i].start >= narrowest;
+            if room && clear(kept.range(..i).next_back()) && clear(kept.range(i..).next()) {
                 kept.insert(i);
             }
         }
@@ -349,10 +363,10 @@ impl Harmony {
                     for entry in &section.entries {
                         match entries.iter_mut().find(|e| same_pitch(e.pitch, entry.pitch)) {
                             // Seen in an earlier section of this cell: all a
-                            // later one can add is the attack that struck it
-                            // again.
-                            Some(seen) => seen.struck = seen.struck.or(entry.struck),
-                            None => entries.push(*entry),
+                            // later one can add is the attacks that struck it
+                            // again, which come after the earlier ones.
+                            Some(seen) => seen.strikes.extend_from_slice(&entry.strikes),
+                            None => entries.push(entry.clone()),
                         }
                     }
                 }
@@ -502,9 +516,36 @@ mod tests {
         let sections = analyze(&plain().roll, &[], DETAIL, SPAN);
         let second = &sections[1];
         // The bass was struck with the first chord and still sounds.
-        assert_eq!(second.entries[0], Entry { pitch: 36.0, held: true, struck: None });
-        assert!(second.entries[1..].iter().all(|e| !e.held && e.struck == Some(6.0)));
+        assert_eq!(second.entries[0], Entry { pitch: 36.0, held: true, strikes: vec![] });
+        assert!(second.entries[1..].iter().all(|e| !e.held && e.strikes == [6.0]));
         assert_eq!(second.entries.len(), 4);
+
+        // Played legato, each chord let go just after the next is struck: the
+        // old chord is not held into the new section, the bass still is.
+        let legato = progression(|song, chord, from| {
+            for &pitch in chord {
+                song.note(pitch, from, from + CHORD_SECONDS + 0.03);
+            }
+        });
+        let sections = analyze(&legato.roll, &[], DETAIL, SPAN);
+        let held: Vec<f32> =
+            sections[1].entries.iter().filter(|e| e.held).map(|e| e.pitch).collect();
+        assert_eq!((held, sections[1].entries.len()), (vec![36.0], 4));
+
+        // A note shorter than the slack, struck as its section starts, is in it.
+        let mut song = Song::new();
+        song.note(60.0, 0.0, 0.05);
+        assert_eq!(analyze(&song.roll, &[], DETAIL, SPAN)[0].entries.len(), 1);
+
+        // A note struck again in its section keeps both attacks.
+        let mut song = Song::new();
+        song.note(60.0, 0.0, 1.0);
+        song.note(60.0, 1.5, 3.0);
+        let sections = analyze(&song.roll, &[], DETAIL, SPAN);
+        assert_eq!(
+            sections[0].entries,
+            [Entry { pitch: 60.0, held: false, strikes: vec![0.0, 1.5] }]
+        );
     }
 
     #[test]
@@ -560,11 +601,11 @@ mod tests {
     #[test]
     fn cells_too_narrow_to_draw_join_the_one_before_and_keep_every_note() {
         let harmony = Harmony { sections: analyze(&plain().roll, &[], DETAIL, SPAN) };
-        let all = harmony.cells(0.0);
+        let all = harmony.cells(0.0, 24.0);
         assert_eq!(all.len(), 4);
         // Twelve seconds apart at the nearest: the song's start, and whichever
         // later start changed most, with every section's notes in a cell.
-        let wide = harmony.cells(12.0);
+        let wide = harmony.cells(12.0, 24.0);
         assert_eq!(wide.len(), 2);
         assert_eq!((wide[0].start, wide[1].end), (0.0, 24.0));
         let pitches = |cells: &[Cell]| {
@@ -583,19 +624,25 @@ mod tests {
         // The bass is held into the second cell; a chord struck inside a
         // joined section is struck in the cell.
         assert!(wide[1].entries[0].held);
-        assert!(wide[1].entries[1..].iter().all(|e| e.struck.is_some()));
+        assert!(wide[1].entries[1..].iter().all(|e| !e.strikes.is_empty()));
+        // A start with no room for its thumbnail before the row ends joins
+        // the one before, however strongly the harmony changed across it.
+        let near_end = harmony.cells(4.0, 21.0);
+        let starts: Vec<f64> = near_end.iter().map(|c| c.start).collect();
+        assert_eq!((starts, near_end[2].end), (vec![0.0, 6.0, 12.0], 24.0));
 
         // A note held into a cell and struck again in a section joined to it
         // is both: there from the start, and struck when it was.
-        let held = Entry { pitch: 60.0, held: true, struck: None };
-        let again = Entry { pitch: 60.0, held: false, struck: Some(8.0) };
-        let section = |start: f64, strength, entry| Section {
+        let held = Entry { pitch: 60.0, held: true, strikes: vec![] };
+        let again = Entry { pitch: 60.0, held: false, strikes: vec![8.0] };
+        let section = |start: f64, strength, entry: &Entry| Section {
             start,
             end: start + 6.0,
             strength,
-            entries: vec![entry],
+            entries: vec![entry.clone()],
         };
-        let joined = Harmony { sections: vec![section(0.0, 1.0, held), section(6.0, 0.5, again)] };
-        assert_eq!(joined.cells(12.0)[0].entries, [Entry { struck: Some(8.0), ..held }]);
+        let joined =
+            Harmony { sections: vec![section(0.0, 1.0, &held), section(6.0, 0.5, &again)] };
+        assert_eq!(joined.cells(12.0, 24.0)[0].entries, [Entry { strikes: vec![8.0], ..held }]);
     }
 }

@@ -75,7 +75,6 @@ impl Regions {
         let (row, strip) = super::tape::rows(theme::ui_scale(ui.ctx()));
         let view = &state.runtime.tape;
         if !(view.present && view.showing) || full.height() <= 3.0 * row {
-            state.runtime.tape.harmony_wanted = None;
             return self.draw_picture(ui, state, now, frameless);
         }
         // Only under a far region the picture draws, and the first to go on

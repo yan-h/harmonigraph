@@ -189,8 +189,6 @@ pub(crate) fn spectrogram_section(
     );
 }
 
-/// Played MIDI notes as ribbons over the history, and their names. Their
-/// switch is in the heading.
 /// Tape mode's harmony row (#1974): its switch, and the two bars that fit
 /// where its sections start to the piece.
 pub(crate) fn harmony_section(ui: &mut egui::Ui, row: &mut super::tape::HarmonyRow) {
@@ -225,6 +223,8 @@ pub(crate) fn harmony_section(ui: &mut egui::Ui, row: &mut super::tape::HarmonyR
     );
 }
 
+/// Played MIDI notes as ribbons over the history, and their names. Their
+/// switch is in the heading.
 pub(crate) fn ribbons_section(
     ui: &mut egui::Ui,
     cfg: &mut crate::SpectrumConfig,
