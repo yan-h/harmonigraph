@@ -303,17 +303,10 @@ fn start_of_render(explicit: Option<f64>, capture_start: Option<f64>, lead: f64)
 /// Beside [`start_of_render`] rather than inline in `export`, and for the same
 /// reason: it is a policy with four ways through it, and a policy that only
 /// exists inside a function nothing can call is a policy nothing can test.
-/// `soundtrack` is where the take's audio starts in song time and how long it
-/// runs.
-fn end_of_render(
-    explicit: Option<f64>,
-    events_end: f64,
-    tail: f64,
-    soundtrack: Option<(f64, f64)>,
-) -> f64 {
+fn end_of_render(explicit: Option<f64>, events_end: f64, tail: f64, audio_end: Option<f64>) -> f64 {
     explicit.unwrap_or_else(|| {
         let visual = events_end + tail;
-        soundtrack.map_or(visual, |(start, seconds)| visual.max(start + seconds))
+        audio_end.map_or(visual, |audio| visual.max(audio))
     })
 }
 
@@ -467,7 +460,7 @@ fn export(args: Args) -> Result<(), String> {
         args.end,
         events_end,
         args.tail.unwrap_or(render_config.tail),
-        audio.as_ref().map(|a| (audio_start, a.seconds())),
+        audio.as_ref().map(|a| audio_start + a.seconds()),
     );
     let scale = args.scale.unwrap_or_else(|| default_scale(size));
     let lead = args.lead.unwrap_or(0.0);
@@ -844,14 +837,11 @@ mod tests {
         // No audio at all: the last event plus the tail.
         assert_eq!(end_of_render(None, 30.0, 2.0, None), 32.0);
         // A soundtrack that outlasts the picture holds the render open...
-        assert_eq!(end_of_render(None, 30.0, 2.0, Some((0.0, 40.0))), 40.0);
-        // ...counted from where it starts in the song, for a take armed
-        // partway in...
-        assert_eq!(end_of_render(None, 30.0, 2.0, Some((5.0, 35.0))), 40.0);
+        assert_eq!(end_of_render(None, 30.0, 2.0, Some(40.0)), 40.0);
         // ...and one that stops first does not cut the fade short.
-        assert_eq!(end_of_render(None, 30.0, 2.0, Some((0.0, 31.0))), 32.0);
+        assert_eq!(end_of_render(None, 30.0, 2.0, Some(31.0)), 32.0);
         // --end outranks both, including cutting a take short on purpose...
-        assert_eq!(end_of_render(Some(10.0), 30.0, 2.0, Some((0.0, 40.0))), 10.0);
+        assert_eq!(end_of_render(Some(10.0), 30.0, 2.0, Some(40.0)), 10.0);
         // ...and including 0, which `frame_count() == 0` then refuses by name
         // rather than quietly falling back to the whole take.
         assert_eq!(end_of_render(Some(0.0), 30.0, 2.0, None), 0.0);
