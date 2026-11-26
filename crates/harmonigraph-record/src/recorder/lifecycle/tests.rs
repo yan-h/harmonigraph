@@ -146,6 +146,10 @@ fn pre_roll_scrubs_and_first_playing_snapback_do_not_complete() {
         next = transport(next, 0.0, true, policy);
         assert_eq!(next.action, Action::Record);
         assert_eq!(next.state, recording(Motion::Initial));
+        // A playhead parked for a block is no progress either: counted as one,
+        // the snapback below would end a Loop end take before it recorded.
+        next = transport(next, 0.0, true, policy);
+        assert_eq!(next.state, recording(Motion::Initial), "parked");
         // Another snapback before positive progress distinguishes accepted
         // audio from forward-motion evidence. One-file takes retain its origin.
         next = transport(next, -1.0, true, policy);
