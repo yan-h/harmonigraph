@@ -914,7 +914,19 @@ fn the_strip_block_names_where_the_next_note_sounds_after_the_clamp() {
         // A lane's host value is its step plus `OFFSET_LIMIT`.
         session.everywhere(|| vec![parameter("map-fifths", 9.0 + fifths, 0)]);
     };
+    let policy = harmonigraph_core::configuration::PolicyConfig {
+        decode_fifths: true,
+        decoded_fifth: 696_578_428,
+        ..Default::default()
+    };
+    let shown = |session: &Decoding| {
+        hub_wrapper(&session.hub).test_inspect_plugin(|plugin| {
+            crate::lattice_maps::view(&plugin.params).strip_flat(policy)
+        })
+    };
     lane(&mut session, 8.0);
+    let lane_column = harmonigraph_core::policy::strip::moved_column(8, 0);
+    assert_eq!(shown(&session), Some(lane_column), "the lane's own column before any slide");
     for on in [true, false] {
         session.play(f_sharps(on), vec![]);
     }
@@ -924,13 +936,6 @@ fn the_strip_block_names_where_the_next_note_sounds_after_the_clamp() {
     lane(&mut session, 9.0);
     assert_eq!(session.a(), Some(a_at(top)), "still at the top");
     lane(&mut session, 8.0);
-    let policy = harmonigraph_core::configuration::PolicyConfig {
-        decode_fifths: true,
-        decoded_fifth: 696_578_428,
-        ..Default::default()
-    };
-    let shown = hub_wrapper(&session.hub)
-        .test_inspect_plugin(|plugin| crate::lattice_maps::view(&plugin.params).strip_flat(policy));
-    assert_eq!(shown, Some(top), "the Strip block");
+    assert_eq!(shown(&session), Some(top), "the Strip block");
     assert_eq!(session.a(), Some(a_at(top)), "where the next A sounds");
 }
