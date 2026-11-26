@@ -9,7 +9,9 @@
 
 use crate::panes::spectral::axes;
 use crate::{AnalyzedColumn, SpectrumConfig};
-use harmonigraph_core::spectrum::{bucket_pitch, SPECTRUM_BINS};
+use harmonigraph_core::spectrum::{
+    bucket_pitch, SPECTRUM_BINS, SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI,
+};
 
 /// How far up the volume colours' window a bucket has to draw to count as
 /// lit: a fifth of the way from its floor to its ceiling. The colours rather
@@ -34,17 +36,19 @@ const MARGIN: f32 = 1.0;
 /// Seconds each bucket was lit, and the pitches the notes reached, over a
 /// render; see the module doc.
 pub struct PitchFit {
-    /// The look whose dialled range the fit narrows.
-    config: SpectrumConfig,
     /// Per bucket, the power at and over which it counts as lit: [`LIT_LEVEL`]
     /// of the way up the volume colours at its pitch.
     threshold: Vec<f32>,
     lit: Vec<f64>,
-    /// The lowest and highest pitch a note reached, as MIDI.
+    /// The lowest and highest pitch a note on the axis reached, as MIDI.
     notes: Option<(f32, f32)>,
 }
 
 impl PitchFit {
+    /// A fit read through `config`'s volume colours and tilt. Its Frequency
+    /// range plays no part: Fit piece frames the whole axis, as Fit video
+    /// spans the whole render whatever History duration says, and Dialled is
+    /// the way to crop by hand (Yan, #1976).
     pub fn new(config: &SpectrumConfig) -> Self {
         let threshold = (0..SPECTRUM_BINS)
             .map(|bucket| {
@@ -53,7 +57,7 @@ impl PitchFit {
                 10f32.powf(db / 10.0)
             })
             .collect();
-        PitchFit { config: *config, threshold, lit: vec![0.0; SPECTRUM_BINS], notes: None }
+        PitchFit { threshold, lit: vec![0.0; SPECTRUM_BINS], notes: None }
     }
 
     /// Count one analyzed column of the soundtrack.
@@ -68,37 +72,32 @@ impl PitchFit {
     }
 
     /// Count a pitch a note sounded at, as MIDI, so the roll's ribbons stay in
-    /// the range however quietly they sounded.
+    /// the range however quietly they sounded. One off the axis draws nowhere,
+    /// so it counts for nothing.
     pub fn note(&mut self, midi: f32) {
+        if !(SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI).contains(&midi) {
+            return;
+        }
         let (low, high) = self.notes.get_or_insert((midi, midi));
         (*low, *high) = (low.min(midi), high.max(midi));
     }
 
-    /// The range to draw: the dialled one narrowed to [`MARGIN`] past the
-    /// outermost lit bucket and note within it, widened about its centre to the
-    /// least span the range bar allows. `None` when nothing within the dialled
-    /// range was lit or played, which keeps the dialled range.
+    /// The range to draw: [`MARGIN`] past the outermost lit bucket and note,
+    /// widened about its centre to the least span the range bar allows, all on
+    /// the axis. `None` when nothing was lit or played, which keeps the dialled
+    /// range.
     pub fn range(&self) -> Option<(f32, f32)> {
-        let (dial_low, dial_high) = (self.config.low_midi, self.config.high_midi);
-        let lit = (0..SPECTRUM_BINS)
-            .filter(|&bucket| self.lit[bucket] >= LIT_SECONDS)
-            .map(bucket_pitch)
-            .filter(|midi| (dial_low..=dial_high).contains(midi));
+        let lit =
+            (0..SPECTRUM_BINS).filter(|&bucket| self.lit[bucket] >= LIT_SECONDS).map(bucket_pitch);
         let notes = self.notes.into_iter().flat_map(|(low, high)| [low, high]);
-        let (low, high) = lit.chain(notes.map(|midi| midi.clamp(dial_low, dial_high))).fold(
-            None,
-            |range: Option<(f32, f32)>, midi| {
-                Some(range.map_or((midi, midi), |(low, high)| (low.min(midi), high.max(midi))))
-            },
-        )?;
-        let (low, high) = ((low - MARGIN).max(dial_low), (high + MARGIN).min(dial_high));
-        // Widened about its centre, then held inside the dialled range, which
-        // `sanitize` has already made at least the least span wide.
-        let short = (crate::PITCH_RANGE_MIN_SPAN - (high - low)).max(0.0) / 2.0;
+        let (low, high) = lit.chain(notes).fold(None, |range: Option<(f32, f32)>, midi| {
+            Some(range.map_or((midi, midi), |(low, high)| (low.min(midi), high.max(midi))))
+        })?;
+        let short = (crate::PITCH_RANGE_MIN_SPAN - (high - low) - 2.0 * MARGIN).max(0.0) / 2.0;
         Some(harmonigraph_scene::clamp_span(
-            low - short,
-            high + short,
-            (dial_low, dial_high),
+            low - MARGIN - short,
+            high + MARGIN + short,
+            (SPECTRUM_MIN_MIDI, SPECTRUM_MAX_MIDI),
             crate::PITCH_RANGE_MIN_SPAN,
         ))
     }
@@ -121,14 +120,27 @@ mod tests {
         AnalyzedColumn { time: 0.0, power: buckets, step }
     }
 
-    /// Both ends move in to what the piece fills, a note below the audio
-    /// included; a sound brighter than the lit level but shorter than half a
-    /// second does not hold its pitch open, and nothing reaches past the
-    /// dialled range.
+    /// A look whose reading the tests set, rather than the fresh one's, with a
+    /// Frequency range narrower than what it plays, which the fit ignores.
+    fn look() -> SpectrumConfig {
+        SpectrumConfig {
+            volume_floor_db: -68.0,
+            volume_ceiling_db: -35.0,
+            tilt: -4.5,
+            low_midi: 60.0,
+            high_midi: 84.0,
+            ..Default::default()
+        }
+    }
+
+    /// Both ends go to what the piece fills, past the dialled range and a note
+    /// under the audio included; a sound over the lit level for less than half
+    /// a second in all, one too faint at its pitch, and a note off the axis
+    /// hold nothing open.
     #[test]
-    fn the_fit_narrows_the_dialled_range_to_what_is_lit_and_played() {
-        let config = SpectrumConfig { low_midi: 20.0, high_midi: 120.0, ..Default::default() };
-        let loud = 1.0; // 0 dB, at the top of either window.
+    fn the_fit_frames_what_is_lit_and_played_on_the_whole_axis() {
+        let config = look();
+        let loud = 1.0; // 0 dB, over the window's ceiling at every pitch.
         let mut fit = PitchFit::new(&config);
         for _ in 0..100 {
             fit.column(&column(48.0, 96.0, loud, 0.01));
@@ -147,35 +159,29 @@ mod tests {
             fit.column(&faint);
         }
         fit.note(43.0);
-        // Past the dialled top: it holds the range to its end and no further.
-        fit.note(125.0);
+        fit.note(SPECTRUM_MAX_MIDI + 5.0);
 
         let (low, high) = fit.range().unwrap();
         // Bucket centres sit off the whole semitones, so the outermost lit one
         // is up to a bucket inside the band's edge.
         let bucket = 1.0 / BINS_PER_SEMITONE as f32;
         assert!((low - (43.0 - MARGIN)).abs() < 1e-4, "low end {low}");
-        assert_eq!(high, 120.0);
-        // The lit band alone, with no notes, ends a margin past its own edges.
-        let mut fit = PitchFit::new(&config);
-        for _ in 0..100 {
-            fit.column(&column(48.0, 96.0, loud, 0.01));
-        }
-        let (low, high) = fit.range().unwrap();
-        assert!((low - (48.0 - MARGIN)).abs() <= bucket, "low end {low}");
         assert!((high - (96.0 + MARGIN)).abs() <= bucket, "high end {high}");
     }
 
     /// A piece narrower than the range bar's least span opens at that span,
-    /// centred on it; one that fills nothing keeps the dialled range.
+    /// centred on it, and one at an end of the axis is held on it; one that
+    /// fills nothing keeps the dialled range.
     #[test]
     fn a_narrow_piece_opens_at_the_least_span_and_an_empty_one_at_the_dial() {
-        let config = SpectrumConfig { low_midi: 20.0, high_midi: 120.0, ..Default::default() };
-        let mut fit = PitchFit::new(&config);
+        let mut fit = PitchFit::new(&look());
         assert_eq!(fit.range(), None);
         fit.note(60.0);
         let (low, high) = fit.range().unwrap();
         assert!((high - low - crate::PITCH_RANGE_MIN_SPAN).abs() < 1e-4, "{low}..{high}");
         assert!(((low + high) / 2.0 - 60.0).abs() < 1e-4, "{low}..{high}");
+        let mut fit = PitchFit::new(&look());
+        fit.note(SPECTRUM_MIN_MIDI);
+        assert_eq!(fit.range().unwrap().0, SPECTRUM_MIN_MIDI);
     }
 }

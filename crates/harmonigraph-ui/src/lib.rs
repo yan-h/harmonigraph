@@ -66,6 +66,7 @@ pub(crate) use config::{
 // where the panes, both shells and the offline renderer name them. They are
 // declared in `video` beside the appearance document that carries them, so a
 // new one is one declaration and one name here, in this crate alone.
+pub use panes::spectral::hz_readout;
 pub use pitch_fit::PitchFit;
 pub use spectrum::{AnalyzedColumn, AudioSpectrum, Delivery, SpectrumAnalysis};
 pub use state::{

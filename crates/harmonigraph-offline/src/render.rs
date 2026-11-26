@@ -140,6 +140,29 @@ impl Settings {
     pub fn frame_count(&self) -> u64 {
         ((self.end - self.start).max(0.0) * self.fps).round() as u64
     }
+
+    /// The song-time stretch of the soundtrack the frames analyze, under
+    /// `config` at `sample_rate`: [`soundtrack_reach`] before the first frame
+    /// and past the last. What [`prepare_frame`] reads frame by frame, and
+    /// what Frequency range: Fit piece reads ahead of them.
+    pub(crate) fn soundtrack_window(
+        &self,
+        config: &harmonigraph_ui::SpectrumConfig,
+        sample_rate: f32,
+    ) -> (f64, f64) {
+        let (before, after) = soundtrack_reach(config, sample_rate);
+        let last = self.start + self.frame_count().saturating_sub(1) as f64 / self.fps;
+        (self.start - before, last + after)
+    }
+}
+
+/// How far around a frame the export's analysis reads the soundtrack: a whole
+/// analysis frame before the first, which the hop grid needs for its first
+/// column, and the column lag past each, which centres the newest column on it
+/// (see [`prepare_frame`]).
+fn soundtrack_reach(config: &harmonigraph_ui::SpectrumConfig, sample_rate: f32) -> (f64, f64) {
+    let frame = config.window.frame(sample_rate) as f64 / f64::from(sample_rate);
+    (frame, config.column_lag(sample_rate))
 }
 
 /// The input every offline frame is drawn with.
@@ -194,8 +217,9 @@ pub fn render(
 
     let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     state.install_appearance(appearance);
-    // "Spectrogram: Fit video" — the one setting only a render can answer,
-    // since the render window is its length. Set once before the first frame,
+    // "Spectrogram: Fit video", a setting only a render can answer, since the
+    // render window is its length. Frequency range: Fit piece is the other,
+    // applied by `export` before this is called, since it needs the take. Set once before the first frame,
     // so no cache keyed on the analyzer config sees it move.
     let spectrogram = state.appearance.render.spectrogram;
     if spectrogram == SpectrogramRender::WholeVideo {
@@ -385,11 +409,9 @@ fn prepare_frame(
         let config = state.appearance.spectrum;
         // The appearance is installed once per render, so this is the same
         // every frame and consecutive slices meet exactly.
-        let lead = config.column_lag(audio.sample_rate);
-        let frame_seconds =
-            config.window.frame(audio.sample_rate) as f64 / f64::from(audio.sample_rate);
+        let (before, lead) = soundtrack_reach(&config, audio.sample_rate);
         let from = match frame {
-            0 => now - frame_seconds,
+            0 => now - before,
             _ => settings.start + (frame - 1) as f64 * step + lead,
         };
         let range =

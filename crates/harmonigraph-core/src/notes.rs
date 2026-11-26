@@ -852,7 +852,7 @@ impl NoteTracker {
 }
 
 /// Microcents as semitones, the unit the roll keeps pitch in.
-pub(crate) fn semitones(microcents: i64) -> f32 {
+pub fn semitones(microcents: i64) -> f32 {
     (microcents as f64 / 100_000_000.0) as f32
 }
 

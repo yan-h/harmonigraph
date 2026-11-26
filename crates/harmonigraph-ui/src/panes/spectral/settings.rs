@@ -37,7 +37,7 @@ pub(crate) const TEXTURE_CHOICES: [(harmonigraph_scene::CloudStyle, &str, &str);
 /// says what it is. Three or four significant figures is all a range readout
 /// can use — "16744 Hz" is noise where "16.7 kHz" is a number you can read at
 /// a glance while dragging.
-pub(crate) fn hz_readout(midi: f32) -> String {
+pub fn hz_readout(midi: f32) -> String {
     let hz = harmonigraph_core::spectrum::midi_to_hz(midi);
     if hz >= 1000.0 {
         format!("{:.1} kHz", hz / 1000.0)

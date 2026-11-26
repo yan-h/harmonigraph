@@ -2,7 +2,7 @@
 //!
 //! They ride in a take only inside the [`AppearanceDocument`]
 //! this crate serializes into its header, so they live beside it rather than in
-//! the take format. The offline renderer reads `RenderFrame` and `spectrogram`
+//! the take format. The offline renderer reads the composition fields
 //! back out of that document, so a re-render reproduces the framing a take was
 //! dialed in at rather than whatever the editor is set to now. They are
 //! serde-facing: each round-trips through a saved project's UI blob and through
@@ -147,10 +147,11 @@ pub enum SpectrogramRender {
 pub enum PitchRangeRender {
     /// The Analyzer's Frequency range, exactly as previewed.
     Dialled,
-    /// The Analyzer's Frequency range narrowed to what the piece fills: the pitches
-    /// its soundtrack lights for half a second or more, and every note it
-    /// plays (see `pitch_fit`). Only a render has heard the whole piece, so the
-    /// preview keeps the dialled range, and the offline renderer applies this.
+    /// What the piece fills, anywhere on the axis and whatever the Analyzer's
+    /// Frequency range: the pitches its soundtrack lights for half a second or
+    /// more, and every note it plays (see `pitch_fit`). Only a render has heard
+    /// the whole piece, so the preview keeps the dialled range, and the offline
+    /// renderer applies this.
     Fit,
 }
 
@@ -256,9 +257,8 @@ impl Default for RenderConfig {
             // end and the trigger would look broken on first use.
             stop_bar: 65.0,
             spectrogram: SpectrogramRender::WholeVideo,
-            // Fit: it only ever narrows the dialled range, past bands the
-            // piece leaves empty, so a look dialled to the whole axis exports
-            // at what the piece fills and a range dialled in keeps its ends.
+            // Fit, so an export drops the bands a piece leaves dark without a
+            // range dialled for it (Yan, #1976).
             pitch_range: PitchRangeRender::Fit,
             frame: RenderFrame::default(),
             // 1440 on the short edge — 2560x1440 at the default 16:9 frame,
@@ -296,9 +296,8 @@ impl RenderConfig {
 
     /// Take from `pane` the fields that say how big the video is, how long it
     /// runs on and what encodes it: Output size, Tail, Encoder and Archive copy. These are
-    /// the Video pane's whichever look is drawn, where [`frame`](Self::frame),
-    /// Video history, the trigger and the stop bar say how a take was composed
-    /// and recorded, and a recorded look keeps its own.
+    /// the Video pane's whichever look is drawn, where every other field says
+    /// how a take was composed and recorded, and a recorded look keeps its own.
     ///
     /// `pane` is destructured exhaustively, so a new field has to be classified
     /// here as one or the other before this compiles.

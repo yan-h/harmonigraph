@@ -483,14 +483,14 @@ fn export(args: Args) -> Result<(), String> {
 
     // Frequency range: Fit piece, set once before the first frame as Video
     // history's Fit video is, and named here, since the preview showed the
-    // range as dialled.
+    // range as dialled. Here rather than in `render` because it reads the take.
     if appearance.render.pitch_range == PitchRangeRender::Fit {
         let spectrum = &mut appearance.spectrum;
-        let readout = |midi| harmonigraph_core::spectrum::midi_to_hz(midi).round();
+        let readout = harmonigraph_ui::hz_readout;
         match fit::pitch_range(&take, audio.as_mut(), &settings, spectrum)? {
             Some((low, high)) => {
                 eprintln!(
-                    "frequency range fitted to the piece: {:.0}-{:.0} Hz (dialled {:.0}-{:.0} Hz)",
+                    "frequency range fitted to the piece: {}-{} (dialled {}-{})",
                     readout(low),
                     readout(high),
                     readout(spectrum.low_midi),

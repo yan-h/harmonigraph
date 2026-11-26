@@ -4,11 +4,9 @@
 
 use crate::render::Settings;
 use crate::wav::Audio;
+use harmonigraph_core::notes::semitones;
 use harmonigraph_take::{CanonicalRecord, NoteKind, Take};
 use harmonigraph_ui::{PitchFit, SpectrumAnalysis, SpectrumConfig};
-
-/// MIDI per microcent, the unit a take records pitches in.
-const MIDI_PER_MICROCENT: f64 = 1e-8;
 
 /// The range Fit piece draws `take` at over `settings`' window, or `None` to
 /// keep the dialled one (see [`PitchFit::range`]).
@@ -24,10 +22,11 @@ pub fn pitch_range(
     let mut fit = PitchFit::new(config);
     if let Some(audio) = audio {
         let (channels, rate) = (audio.channels, audio.sample_rate);
-        let range = audio.range_seconds(
-            settings.start - settings.audio_start,
-            settings.end - settings.audio_start,
-        );
+        // The stretch the frames analyze, the pre-roll before the first and the
+        // read-ahead past the last included, so a band they draw near a
+        // `--start` or `--end` is counted as they draw it.
+        let (from, to) = settings.soundtrack_window(config, rate);
+        let range = audio.range_seconds(from - settings.audio_start, to - settings.audio_start);
         let mut analysis = SpectrumAnalysis::default();
         audio.for_frames(range, |chunk| {
             analysis.feed_source(chunk, channels, rate, 0.0, config, |delivery| {
@@ -37,7 +36,6 @@ pub fn pitch_range(
             })
         })?;
     }
-    let microcents = |pitch: i64| (pitch as f64 * MIDI_PER_MICROCENT) as f32;
     for record in &take.events {
         match record {
             CanonicalRecord::Note(note) if matches!(note.kind, NoteKind::On { .. }) => {
@@ -45,12 +43,12 @@ pub fn pitch_range(
             }
             CanonicalRecord::Delta(delta) => {
                 if let Some(pitch) = delta.pitch_microcents {
-                    fit.note(microcents(pitch));
+                    fit.note(semitones(pitch));
                 }
             }
             CanonicalRecord::Baseline(baseline) => {
                 for voice in &baseline.voices {
-                    fit.note(microcents(voice.pitch_microcents));
+                    fit.note(semitones(voice.pitch_microcents));
                 }
             }
             CanonicalRecord::Note(_) | CanonicalRecord::Gap(_) => {}
@@ -65,27 +63,31 @@ mod tests {
     use harmonigraph_take::canonical::DeltaRecord;
     use harmonigraph_take::NoteRecord;
 
-    /// The window's soundtrack and the take's notes set the range, and sound
-    /// outside the window does not: an 880 Hz tone in the window and a note at
-    /// MIDI 30 fit it, and a 7 kHz tone in the second before it starts is left
-    /// out.
+    /// The soundtrack the frames analyze and the take's notes set the range:
+    /// a note's recorded pitch rather than its key; a 3 kHz tone that ends
+    /// 0.15 s into the render, which its first frames draw from the audio
+    /// read before them; and not a 7 kHz tone a second before the render, past
+    /// that read.
     #[test]
-    fn the_fit_reads_the_render_window_and_the_notes() {
+    fn the_fit_reads_what_the_frames_analyze_and_the_notes() {
         let rate = 48_000.0;
-        let tone = |hz: f64, seconds: f64| {
-            (0..(seconds * rate) as usize).flat_map(move |frame| {
-                let sample =
-                    (0.5 * (std::f64::consts::TAU * hz * frame as f64 / rate).sin()) as f32;
-                [sample, sample]
-            })
+        let tone = |hz: f64, from: f64, to: f64| {
+            move |t: f64| (from..to).contains(&t).then(|| (std::f64::consts::TAU * hz * t).sin())
         };
-        let samples = tone(7_040.0, 1.0).chain(tone(880.0, 2.0)).collect();
+        let tones = [tone(7_040.0, 0.0, 1.0), tone(3_000.0, 1.5, 2.15), tone(880.0, 2.2, 4.0)];
+        let samples = (0..(4.0 * rate) as usize)
+            .flat_map(|frame| {
+                let t = frame as f64 / rate;
+                let sample = 0.5 * tones.iter().filter_map(|tone| tone(t)).sum::<f64>();
+                [sample as f32; 2]
+            })
+            .collect();
         let mut audio = Audio::from_samples(rate as f32, samples, 2);
         let take = Take {
             events: vec![CanonicalRecord::Delta(DeltaRecord {
                 event: NoteRecord {
-                    t: 1.5,
-                    note: 30,
+                    t: 2.5,
+                    note: 50,
                     kind: NoteKind::On { velocity: 0.8 },
                     ..Default::default()
                 },
@@ -99,24 +101,24 @@ mod tests {
             size: [64, 36],
             pixels_per_point: 1.0,
             fps: 10.0,
-            start: 1.0,
-            end: 3.0,
+            start: 2.0,
+            end: 4.0,
             audio_start: 0.0,
         };
-        use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
+        // Precise, whose half-second analysis frame is the read before the
+        // first frame.
         let config = SpectrumConfig {
-            low_midi: SPECTRUM_MIN_MIDI,
-            high_midi: SPECTRUM_MAX_MIDI,
+            window: harmonigraph_ui::SpectrumWindow::Precise,
+            volume_floor_db: -68.0,
+            volume_ceiling_db: -35.0,
+            tilt: -4.5,
             ..Default::default()
         };
 
         let (low, high) =
             pitch_range(&take, Some(&mut audio), &settings, &config).unwrap().unwrap();
-        assert!(
-            (low - 29.0).abs() < 1e-3,
-            "the note at 30 holds the low end a semitone under it: {low}"
-        );
-        // 880 Hz is MIDI 81; its lobe lights a few semitones past it at Fast.
-        assert!((82.0..88.0).contains(&high), "the tone holds the high end: {high}");
+        assert!((low - 29.0).abs() < 1e-3, "the pitch 30 holds the low end under it: {low}");
+        // 3 kHz is MIDI 102.4, and 7 kHz 117.3.
+        assert!((103.0..110.0).contains(&high), "the 3 kHz tone holds the high end: {high}");
     }
 }

@@ -46,7 +46,7 @@ Automatic export uses that recorded appearance, including the captured Aspect an
 In **Exports**, **Queue last take** and **Queue paths** capture the appearance the **Appearance** row selects (**Recorded** or **Current**),
 with the current Video output settings and dimensions.
 Under **Recorded** only Output size, Tail, Encoder and Archive copy are the current ones:
-each take keeps the frame (aspect, lattice side and split), Video history and Frequency range it was recorded with.
+each take keeps the rest of the look it was recorded with, its frame (aspect, lattice side and split) included.
 The Video pane refuses a take recorded without a look, with the reason in the export list.
 Camera movement is recorded through host parameters;
 see [What is and isn't captured](#what-is-and-isnt-captured).
@@ -205,9 +205,9 @@ The Video preview scales spectral shadows with the output frame and follows audi
 so shadow width stays representative of the export.
 So does spectrogram duration under **Scrolling**;
 under **Fit video**, the fresh choice, the export spans the render's own length while the preview keeps the Analyzer's history span.
-Under **Frequency range** → **Fit piece**, also the fresh choice, the renderer analyzes the render window's soundtrack once before the first frame,
+Under **Frequency range** → **Fit piece**, also the fresh choice, the renderer analyzes the soundtrack the frames will analyze once before the first frame,
 about 0.9 s at Fast and 2.9 s at Precise for a 98 s take,
-and draws the whole video at the Analyzer's range narrowed to the pitches it lit and the notes the take played,
+and draws the whole video at the range the pitches it lit and the notes the take played fill, whatever the Analyzer's range,
 while the preview keeps the range as dialled.
 A render run by hand prints the range it drew, and the dialled one, before the progress line;
 the Video pane's export row keeps only warnings, and the video's frequency markings show the range.
