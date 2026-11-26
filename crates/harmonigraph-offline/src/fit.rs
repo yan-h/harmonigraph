@@ -198,7 +198,7 @@ mod tests {
             (PitchRangeRender::Dialled, (dialled.low_midi, dialled.high_midi)),
             (PitchRangeRender::Fit, fitted),
         ] {
-            let mut config = dialled.clone();
+            let mut config = dialled;
             apply(mode, &take, None, &settings, &mut config).unwrap();
             assert_eq!((config.low_midi, config.high_midi), range, "{mode:?}");
         }
