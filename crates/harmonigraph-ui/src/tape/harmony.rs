@@ -139,6 +139,11 @@ impl Presence {
         }
     }
 
+    /// Whether nothing sounds anywhere in `from..to`.
+    fn silent(&self, from: f64, to: f64) -> bool {
+        self.sounding[self.index(from)] == self.sounding[self.index(to)]
+    }
+
     /// Where sound last stops in `from..to`, if it stops more than `gap`
     /// before `to`.
     fn falls_silent(&self, from: f64, to: f64, gap: f64) -> Option<f64> {
@@ -179,8 +184,11 @@ fn presence(notes: &[Note], meters: &[(f64, Meter)], span: f32, end: f64) -> Pre
     let mut grid = vec![0.0f32; (steps + 1) * classes];
     for note in notes {
         let class = index[&class_of(note.pitch)];
-        let first = (note.start / step) as usize;
-        let last = ((note.end / step).ceil() as usize).max(first + 1).min(steps);
+        // Rounded as [`Presence::index`] rounds the windows read from it, so an
+        // attack's first step is in the window after it and never the one
+        // before.
+        let first = ((note.start / step).round() as usize).min(steps - 1);
+        let last = ((note.end / step).round() as usize).max(first + 1).min(steps);
         for t in first..last {
             grid[(t + 1) * classes + class] = 1.0;
         }
@@ -230,6 +238,11 @@ pub fn analyze(roll: &NoteRoll, meters: &[(f64, Meter)], detail: f32, span: f32)
         .iter()
         .map(|&at| {
             let span = span_seconds(meters, at, span);
+            // Nothing sounding over the Span before is a whole change, however
+            // much of the last harmony's fade is left.
+            if presence.silent(at - span, at) {
+                return 1.0;
+            }
             presence.mean(at - span, at, &mut before);
             presence.mean(at, at + span, &mut after);
             change(&before, &after)
@@ -467,6 +480,21 @@ mod tests {
         let sections = analyze(&song.roll, &[], DETAIL, SPAN);
         let spans: Vec<(f64, f64)> = sections.iter().map(|s| (s.start, s.end)).collect();
         assert_eq!(spans, [(0.0, 25.0), (37.0, 55.0)]);
+    }
+
+    #[test]
+    fn a_rest_longer_than_a_span_ends_a_section_wherever_its_attacks_fall() {
+        // The same chord either side of a three-second rest, the second
+        // entry off the presence grid's steps: the fade of the first is still
+        // above silence as the second arrives, and the two look alike.
+        let mut song = Song::new();
+        for pitch in CHORDS[0] {
+            song.note(pitch, 0.0, 6.0);
+            song.note(pitch, 9.15, 15.0);
+        }
+        let sections = analyze(&song.roll, &[], DETAIL, SPAN);
+        let spans: Vec<(f64, f64)> = sections.iter().map(|s| (s.start, s.end)).collect();
+        assert_eq!(spans, [(0.0, 6.0), (9.15, 15.0)]);
     }
 
     #[test]
