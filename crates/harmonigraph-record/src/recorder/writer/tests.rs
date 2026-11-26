@@ -36,6 +36,9 @@ fn a_take_stamp_reads_as_the_calendar_date_and_time_it_names() {
     // has to fall through the extra day rather than assume 28.
     assert_eq!(stamp_for(1_709_229_909), "2024-02-29_18-05-09");
     assert_eq!(stamp_for(0), "1970-01-01_00-00-00", "the Unix epoch itself");
+    // A month from March on, which the two above, both in January or
+    // February of the shifted year, never reach.
+    assert_eq!(stamp_for(1_784_107_801), "2026-07-15_09-30-01");
 }
 
 /// Independent workers receive the same candidate before either creates it.
