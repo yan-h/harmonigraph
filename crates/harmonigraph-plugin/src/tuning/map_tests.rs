@@ -238,25 +238,19 @@ fn lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice()
     assert_eq!(landed.player_tuning, semitones, "the incoming tuning is still the player's");
     assert_eq!(landed.frozen_offset_microcents, 0, "already on the map, nothing left to add");
     assert_eq!(landed.attack_node, Some(first.node(64)));
-    assert_eq!(landed.onset_pitch_microcents, 64 * 100_000_000 + e);
+    assert_eq!(landed.pitch_microcents, 64 * 100_000_000 + e);
     // Sixty cents sharp of E sounds nearer F, so it takes F's assignment and
     // is pulled onto it rather than left between two slots.
     hub.run(1024, vec![note(2, 0, 76, 0, true), expression(2, 0.6, 0)], None);
     let rounded = voice(&hub, crate::tuning::DIRECT, 76);
     assert_eq!(rounded.attack_node, Some(first.node(77)));
-    assert_eq!(
-        rounded.onset_pitch_microcents,
-        77 * 100_000_000 + first.correction(77, Tuning::just())
-    );
+    assert_eq!(rounded.pitch_microcents, 77 * 100_000_000 + first.correction(77, Tuning::just()));
     // A channel bend standing at the attack is part of the pitch that arrived,
     // exactly as the adaptive engine reads it.
     hub.run(1536, vec![raw_midi([0xE0, 0x00, 0x60], 0), note(3, 0, 67, 1, true)], None);
     let bent = voice(&hub, crate::tuning::DIRECT, 67);
     assert!(bent.frozen_offset_microcents != first.correction(67, Tuning::just()));
-    assert_eq!(
-        bent.onset_pitch_microcents,
-        68 * 100_000_000 + first.correction(68, Tuning::just())
-    );
+    assert_eq!(bent.pitch_microcents, 68 * 100_000_000 + first.correction(68, Tuning::just()));
 }
 
 #[test]
@@ -826,7 +820,7 @@ fn the_strip_sounds_each_spelling_at_one_pitch_through_a_progression() {
         let play = |on| (0..3).map(|i| note(id + i, 0, chord[i as usize], 0, on)).collect();
         session.play(play(true), vec![]);
         for key in chord {
-            let pitch = session.voice(true, 0, key as u8).onset_pitch_microcents;
+            let pitch = session.voice(true, 0, key as u8).pitch_microcents;
             sounded.entry(key).or_default().push(pitch);
         }
         session.play(play(false), vec![]);

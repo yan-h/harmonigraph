@@ -201,7 +201,6 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         lifetime: LIFETIME,
         actual_onset: ORIGIN + 0.125,
         pitch_microcents: 6_037_500_000,
-        onset_pitch_microcents: 6_000_000_000,
         velocity: 0.8,
         ..Default::default()
     };

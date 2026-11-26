@@ -90,11 +90,10 @@ impl State {
         };
         voice.player_tuning = player;
         voice.frozen_offset_microcents = correction;
-        voice.onset_pitch_microcents = i64::from(voice.note) * 100_000_000
+        voice.pitch_microcents = i64::from(voice.note) * 100_000_000
             + correction
             + channel_pitch
             + (player * 100_000_000.0).round() as i64;
-        voice.pitch_microcents = voice.onset_pitch_microcents;
         if decision != 0 {
             voice.decision = decision;
             voice.attack_node = node;
@@ -147,7 +146,6 @@ impl State {
             return None;
         }
         voice.pitch_microcents -= correction;
-        voice.onset_pitch_microcents -= correction;
         self.retuned(lifetime, stamp)
     }
 
@@ -174,7 +172,6 @@ impl State {
                 actual_onset: stamp.time,
                 velocity,
                 pitch_microcents: pitch,
-                onset_pitch_microcents: pitch,
                 ..VoiceBaseline::default()
             });
             result =

@@ -423,7 +423,6 @@ fn initial_expression_order_and_identity_match_in_both_production_routes() {
                 inspect_hub(&hub, |hub| hub.test_voice(if direct { DIRECT } else { 0 }, 0, 57))
                     .unwrap();
             assert_eq!(voice.player_tuning, *players.last().unwrap());
-            assert_eq!(voice.pitch_microcents, voice.onset_pitch_microcents);
         }
     }
 }
@@ -478,7 +477,6 @@ fn a_same_sample_wildcard_initializes_each_addressed_onset() {
             let voice = inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, key)).unwrap();
             assert_eq!(voice.player_tuning, player, "addressed key {key}");
             let expected = i64::from(key) * 100_000_000 + (player * 100_000_000.0).round() as i64;
-            assert_eq!(voice.onset_pitch_microcents, expected);
             assert_eq!(voice.pitch_microcents, expected);
             assert_eq!(
                 published.iter().find(|delta| delta.event.note == key).unwrap().pitch_microcents,

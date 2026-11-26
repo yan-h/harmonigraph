@@ -80,8 +80,6 @@ pub struct VoiceBaseline {
     pub lifetime: u64,
     pub actual_onset: Time,
     pub pitch_microcents: i64,
-    /// Absolute pitch at attack, retained independently of later player bends.
-    pub onset_pitch_microcents: i64,
     pub player_tuning: f64,
     pub frozen_offset_microcents: i64,
     pub velocity: f32,
@@ -105,7 +103,6 @@ impl Default for VoiceBaseline {
             lifetime: 0,
             actual_onset: 0.0,
             pitch_microcents: 0,
-            onset_pitch_microcents: 0,
             player_tuning: 0.0,
             frozen_offset_microcents: 0,
             velocity: 0.0,
