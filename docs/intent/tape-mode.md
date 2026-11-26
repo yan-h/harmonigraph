@@ -34,3 +34,7 @@ Yan's picks over six rounds of prototype sheets, with his words where they decid
 - Colour is pitch height alone, and brightness means nothing: "either have brightness or new note distinguish … not both", "brightness … overlaps a bit with color for pitch height".
 - A note struck again in a section counts as new there ("Red truck should count", dictated for re-struck), and new notes are told apart by animation, with no still mark: "I'm ok with prototyping with a simple animation for now". Yan chose this on a phone without seeing the animation clip.
 - Note length is not shown, and the whole song drawn on one lattice (a ring on each node, the song running round it) waits until the row is in use. Yan ("Go with recommendations")
+- Yan confirmed the four picks made while building ("Picks stand", 2026-11-25): the row sits in Tape mode above the overview, the whole song across it;
+  new notes arrive in the thumbnail under the playhead as they are struck, and stopped, nothing marks them;
+  a click on a thumbnail cues the audition from its section's first attack;
+  Span is in beats at the tape's recorded tempo, 4 beats fresh.
