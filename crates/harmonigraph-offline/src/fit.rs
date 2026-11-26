@@ -6,7 +6,7 @@ use crate::render::Settings;
 use crate::wav::Audio;
 use harmonigraph_core::NoteTracker;
 use harmonigraph_take::Take;
-use harmonigraph_ui::{PitchFit, SpectrumAnalysis, SpectrumConfig};
+use harmonigraph_ui::{PitchFit, PitchRangeRender, SpectrumAnalysis, SpectrumConfig};
 
 /// The range Fit piece draws `take` at over `settings`' window, or `None` to
 /// keep the dialled one (see [`PitchFit::range`]).
@@ -49,6 +49,36 @@ pub fn pitch_range(
         }
     }
     Ok(fit.range())
+}
+
+/// Frequency range: Fit piece, set on `config` once before the first frame as
+/// Video history's Fit video is, and named, since the preview showed the range
+/// as dialled. Dialled leaves `config` as it is.
+pub fn apply(
+    mode: PitchRangeRender,
+    take: &Take,
+    audio: Option<&mut Audio>,
+    settings: &Settings,
+    config: &mut SpectrumConfig,
+) -> Result<(), String> {
+    if mode != PitchRangeRender::Fit {
+        return Ok(());
+    }
+    let readout = harmonigraph_ui::hz_readout;
+    match pitch_range(take, audio, settings, config)? {
+        Some((low, high)) => {
+            eprintln!(
+                "frequency range fitted to the piece: {}-{} (dialled {}-{})",
+                readout(low),
+                readout(high),
+                readout(config.low_midi),
+                readout(config.high_midi),
+            );
+            (config.low_midi, config.high_midi) = (low, high);
+        }
+        None => eprintln!("frequency range: nothing lit or played to fit, so drawn as dialled"),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -138,5 +168,39 @@ mod tests {
         let (low, _) =
             pitch_range(&earlier, Some(&mut audio), &settings, &config).unwrap().unwrap();
         assert!((low - 24.0).abs() < 1e-3, "the note at 25 holds the low end under it: {low}");
+    }
+
+    /// Fit piece sets the range it fits; Dialled draws the range as dialled.
+    #[test]
+    fn only_fit_piece_replaces_the_dialled_range() {
+        let take = Take {
+            events: vec![CanonicalRecord::Note(NoteRecord {
+                t: 2.5,
+                note: 60,
+                kind: NoteKind::On { velocity: 0.8 },
+                ..Default::default()
+            })],
+            ..Default::default()
+        };
+        let settings = Settings {
+            layout: harmonigraph_ui::Layout::split(harmonigraph_ui::LatticeSide::Left, 0.5),
+            size: [64, 36],
+            pixels_per_point: 1.0,
+            fps: 10.0,
+            start: 2.0,
+            end: 4.0,
+            audio_start: 0.0,
+        };
+        let dialled = SpectrumConfig { low_midi: 12.0, high_midi: 120.0, ..Default::default() };
+        let fitted = pitch_range(&take, None, &settings, &dialled).unwrap().unwrap();
+        assert_ne!(fitted, (dialled.low_midi, dialled.high_midi), "a fit that moves the range");
+        for (mode, range) in [
+            (PitchRangeRender::Dialled, (dialled.low_midi, dialled.high_midi)),
+            (PitchRangeRender::Fit, fitted),
+        ] {
+            let mut config = dialled.clone();
+            apply(mode, &take, None, &settings, &mut config).unwrap();
+            assert_eq!((config.low_midi, config.high_midi), range, "{mode:?}");
+        }
     }
 }
