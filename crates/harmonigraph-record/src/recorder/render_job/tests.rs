@@ -249,7 +249,7 @@ echo 'progress: 10/10 frames (100%)' >&2
     }
     /// A queue that launches this fixture's renderer.
     fn queue(dir: &std::path::Path) -> Arc<RenderControl> {
-        let control = RenderControl { plugin_build: "fixture @0000000", ..Default::default() };
+        let control = RenderControl::for_plugin("fixture @0000000");
         *control.test_program.lock() = Some(dir.join("renderer"));
         Arc::new(control)
     }
