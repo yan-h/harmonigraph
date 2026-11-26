@@ -62,31 +62,25 @@ impl Event {
         }
     }
 
-    /// true=All Sound Off (choke), false=All Notes Off (logical note-off).
-    pub fn channel_termination(self) -> Option<bool> {
+    /// The channel an All Sound Off (CC 120) or All Notes Off (CC 123) ends
+    /// every voice on.
+    pub fn channel_termination(self) -> Option<u8> {
         match self {
-            Self::Midi { port: 0, data: [status, 120, _], .. } if status & 0xf0 == 0xb0 => {
-                Some(true)
-            }
-            Self::Midi { port: 0, data: [status, 123, _], .. } if status & 0xf0 == 0xb0 => {
-                Some(false)
+            Self::Midi { port: 0, data: [status, 120 | 123, _], .. } if status & 0xf0 == 0xb0 => {
+                Some(status & 15)
             }
             _ => None,
         }
     }
-    pub fn note_off(id: i32, channel: u8, key: u8, midi: bool) -> Self {
-        if midi {
-            Self::Midi { port: 0, data: [0x80 | channel, key, 0], flags: 0 }
-        } else {
-            Self::Note {
-                kind: 1,
-                id,
-                port: 0,
-                channel: i16::from(channel),
-                key: i16::from(key),
-                velocity: 0.0,
-                flags: 0,
-            }
+    pub fn note_off(id: i32, channel: u8, key: u8) -> Self {
+        Self::Note {
+            kind: 1,
+            id,
+            port: 0,
+            channel: i16::from(channel),
+            key: i16::from(key),
+            velocity: 0.0,
+            flags: 0,
         }
     }
 
@@ -114,15 +108,6 @@ impl Event {
         matches!(self, Self::Note { kind: 1 | 2, .. })
             || matches!(self, Self::Midi { data, .. }
                 if data[0] & 0xf0 == 0x80 || data[0] & 0xf0 == 0x90 && data[2] == 0)
-    }
-
-    pub fn channel(self) -> Option<u8> {
-        match self {
-            Self::Note { channel: c @ 0..=15, .. }
-            | Self::Expression { channel: c @ 0..=15, .. } => Some(c as u8),
-            Self::Midi { data, .. } if data[0] < 0xf0 => Some(data[0] & 15),
-            _ => None,
-        }
     }
 
     /// Start a reverse scan of one source's same-sample prefix. Only finite

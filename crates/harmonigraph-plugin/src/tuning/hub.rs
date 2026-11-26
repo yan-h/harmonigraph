@@ -729,13 +729,12 @@ impl Hub {
         // A channel termination is one controller that ends every voice on its
         // channel. The instrument performs those endings, so the schedule owes
         // them as note-offs rather than as one opaque controller.
-        if record.event.channel_termination().is_some() {
-            let channel = record.event.channel().unwrap_or(0);
+        if let Some(channel) = record.event.channel_termination() {
             let mut ended = [(0i32, 0u8, 0u8); HELD_PER_SOURCE];
             let count = self.rows[source].state.on_channel(channel, &mut ended);
             for (id, channel, key) in ended.into_iter().take(count) {
                 self.release_addressed(record, channel, key);
-                let off = Event::note_off(id, channel, key, false);
+                let off = Event::note_off(id, channel, key);
                 self.schedule_delta(off, record, scheduled, None);
             }
         } else if !record.onset() && record.event.release() {

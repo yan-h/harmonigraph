@@ -250,7 +250,7 @@ impl Tune {
         // dropped.
         for cell in self.held.iter_mut() {
             if let Some(voice) = cell.take() {
-                let _ = self.cut.push(Event::note_off(voice.id, voice.channel, voice.key, false));
+                let _ = self.cut.push(Event::note_off(voice.id, voice.channel, voice.key));
             }
         }
         for channel in 0..16u8 {
@@ -667,13 +667,10 @@ impl Tune {
                 *cell = None;
             }
         }
-        if let Event::Midi { port: 0, data, .. } = event {
-            let channel = data[0] & 15;
-            if event.channel_termination().is_some() {
-                for cell in held.iter_mut() {
-                    if cell.is_some_and(|voice| voice.channel == channel) {
-                        *cell = None;
-                    }
+        if let Some(channel) = event.channel_termination() {
+            for cell in held.iter_mut() {
+                if cell.is_some_and(|voice| voice.channel == channel) {
+                    *cell = None;
                 }
             }
         }
