@@ -1347,7 +1347,7 @@ fn pending_retriggers_and_endings_reuse_held_capacity_in_wire_order() {
         assert_eq!(ids, (0..HELD_PER_SOURCE as i32).chain([100, 201]).collect::<Vec<_>>());
         assert!(output
             .iter()
-            .any(|(time, e)| *time == 4 && (e.release() || e.channel_termination().is_some())));
+            .any(|(time, e)| *time == 4 && (e.release() || e.terminated_channel().is_some())));
         let held = if controller.is_some() { 1 } else { HELD_PER_SOURCE };
         assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), held);
         assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), held);
@@ -1655,7 +1655,7 @@ fn a_channel_bend_over_two_voices_keeps_the_takes_order() {
             deltas += 1;
         }
     }
-    assert!(deltas >= 4, "two onsets and a bend delta for each: {deltas}");
+    assert_eq!(deltas, 5, "two onsets, the bend, and a delta for each voice it moved");
 }
 
 /// Only a controller ends a channel's voices: a bend or channel pressure whose

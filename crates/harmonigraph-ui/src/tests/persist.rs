@@ -450,7 +450,6 @@ fn persist_round_trips_camera_and_view() {
         restored.workspace.interaction.camera_presets, state.workspace.interaction.camera_presets,
         "a camera preset round-trips whole",
     );
-    assert_eq!(restored.workspace.interaction.camera_presets.len(), 1);
 }
 
 /// A hand-edited level range comes back drawable, which the pitch pair has

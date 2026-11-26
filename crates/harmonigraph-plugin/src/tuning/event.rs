@@ -64,7 +64,7 @@ impl Event {
 
     /// The channel an All Sound Off (CC 120) or All Notes Off (CC 123) ends
     /// every voice on.
-    pub fn channel_termination(self) -> Option<u8> {
+    pub fn terminated_channel(self) -> Option<u8> {
         match self {
             Self::Midi { port: 0, data: [status, 120 | 123, _], .. } if status & 0xf0 == 0xb0 => {
                 Some(status & 15)
@@ -95,8 +95,8 @@ impl Event {
                 velocity,
                 ..
             } => {
-                // `emittable` refuses a velocity that is not finite, and a
-                // host sends none outside 0..=1.
+                // `emittable` refuses a velocity that is not finite, and CLAP
+                // bounds a note's velocity to 0..=1.
                 debug_assert!((0.0..=1.0).contains(&velocity), "velocity {velocity}");
                 Some((id, channel as u8, key as u8, velocity as f32))
             }
