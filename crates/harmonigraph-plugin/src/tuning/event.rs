@@ -94,7 +94,10 @@ impl Event {
                 key: key @ 0..=127,
                 velocity,
                 ..
-            } if velocity.is_finite() && (0.0..=1.0).contains(&velocity) => {
+            } => {
+                // `emittable` refuses a velocity that is not finite, and a
+                // host sends none outside 0..=1.
+                debug_assert!((0.0..=1.0).contains(&velocity), "velocity {velocity}");
                 Some((id, channel as u8, key as u8, velocity as f32))
             }
             Self::Midi { port: 0, data, .. } if data[0] & 0xf0 == 0x90 && data[2] != 0 => {
