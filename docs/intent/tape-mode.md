@@ -22,3 +22,24 @@ Yan took the recommendations made after the audit was checked against the code (
 - Silence a pass drops still clears the older recordings it beats, so a shortened or muted ending leaves no old one behind.
   A stop during a rest clears the older take there too, leaving a hole where an audition ends.
 - A rest longer than 30 s while rolling is a gap where an audition stops, rather than covered silence.
+
+## 2026-11-25 (harmony row, #1974)
+
+Yan's picks over six rounds of prototype sheets, with his words where they decide something.
+
+- Tape mode shows the recording's harmony as a row of small lattices, one per section of the song, each in one frame for the whole song and lighting the nodes that sound in it. "1 with 5 sounds good"
+- A section starts where the sounding notes change enough, not on a bar grid or at a Lattice Map change, and a run of short notes is one harmony: "note clouds or rapid arpeggios … read as a single harmonic area".
+- One rule finds the sections, the change across each attack, with two bars to fit it to a piece: Detail and Span. "A but with more splitting", "an intuitive slider or two", "Drop a+".
+- A node is drawn as concentric rings, one per pitch sounding on it, lowest in the middle. "I think g3 makes sense given the size of the thumbnail"
+- Colour is pitch height alone, and brightness means nothing: "either have brightness or new note distinguish … not both", "brightness … overlaps a bit with color for pitch height".
+- A note struck again in a section counts as new there ("Red truck should count", dictated for re-struck), and new notes are told apart by animation, with no still mark: "I'm ok with prototyping with a simple animation for now". Yan chose this on a phone without seeing the animation clip.
+- Note length is not shown, and the whole song drawn on one lattice (a ring on each node, the song running round it) waits until the row is in use. Yan ("Go with recommendations")
+- Yan confirmed the four picks made while building ("Picks stand", 2026-11-25): the row sits in Tape mode above the overview, the whole song across it;
+  new notes arrive in the thumbnail under the playhead as they are struck, and stopped, nothing marks them;
+  a click on a thumbnail cues the audition from its section's first attack;
+  Span is in beats at the tape's recorded tempo, 4 beats fresh.
+- A pitch off the live tuning lights nothing in the row, as on the lattice, so a recorded 12-TET track under just or meantone axes is mostly unlit; this is a documented limit, with no snapping of tempered pitches to a node (Yan, "Document it", 2026-11-25).
+- From PR #1975's review questions (Yan, "Go with recommendations", 2026-11-25):
+  a struck note's flash settles over half a second of song, so it keeps step with the music at any audition speed;
+  a note held across a recording seam is struck there, as the roll draws it, so it flashes and a section can start there;
+  a pitch lights the one node it is named by, even where 12-TET axes without meantone draw a thumbnail as one column of fifths.

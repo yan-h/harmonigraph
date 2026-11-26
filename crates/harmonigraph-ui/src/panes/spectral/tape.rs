@@ -667,6 +667,346 @@ pub(super) fn rows(ui_scale: f32) -> (f32, f32) {
     (row, 1.5 * row)
 }
 
+/// Span's bar, in beats.
+pub(crate) const HARMONY_SPAN_RANGE: std::ops::RangeInclusive<f32> = 0.5..=16.0;
+
+/// How the harmony row (#1974) cuts the song into sections; see
+/// [`crate::tape::harmony`]. An editor preference
+/// ([`EditorPrefs`](crate::EditorPrefs)) rather than part of the look: the row
+/// is the editor's alone and never in a video, so a take has no use for it.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct HarmonyRow {
+    pub show: bool,
+    /// 0..=1: how small a change of harmony starts a section.
+    pub detail: f32,
+    /// Beats: how long a run of notes is heard as one harmony.
+    pub span: f32,
+}
+
+impl Default for HarmonyRow {
+    /// The settings the prototype's two test pieces read best at (#1974): a
+    /// threshold of 0.06 and, at 120 beats a minute, a two-second Span.
+    fn default() -> Self {
+        HarmonyRow { show: true, detail: 0.5, span: 4.0 }
+    }
+}
+
+impl HarmonyRow {
+    /// Each bar reads out what the sections are cut by.
+    pub(crate) fn sanitize(&mut self) {
+        let fresh = HarmonyRow::default();
+        self.detail = harmonigraph_scene::repair(self.detail, fresh.detail, 0.0..=1.0);
+        self.span = harmonigraph_scene::repair(self.span, fresh.span, HARMONY_SPAN_RANGE);
+    }
+}
+
+/// The harmony row's height, in points: twice the overview's, room for a
+/// lattice six nodes tall at a size its rings still read at.
+pub(super) fn harmony_height(ui_scale: f32) -> f32 {
+    3.0 * theme::tab_bar_height(ui_scale)
+}
+
+/// How long a note struck under the playhead takes to settle from white to
+/// its own colour, in song seconds.
+const FLASH_SECONDS: f64 = 0.5;
+/// A flash this many times [`FLASH_SECONDS`] old has settled: under a
+/// hundredth of it is left.
+const FLASH_SETTLED: f64 = 5.0;
+/// How far a sevenths step is drawn from its fifths-and-thirds node, in node
+/// spacings along each axis: the lattice's cabinet view, flattened.
+const SEVENTH_OFFSET: f32 = 0.35;
+/// A thumbnail's node spacing at most, as a share of the row's height, so a
+/// song on one line of fifths does not draw three giant discs.
+const NODE_SHARE: f32 = 0.28;
+
+/// Where a lattice position sits in a thumbnail, in node spacings: thirds
+/// (steps of five) run right and fifths (steps of three) run up, as the
+/// lattice's fresh view has them.
+fn plan(pos: harmonigraph_core::LatticePos) -> egui::Vec2 {
+    let seventh = SEVENTH_OFFSET * pos.sevens as f32;
+    egui::vec2(pos.fives as f32 + seventh, -(pos.threes as f32 + seventh))
+}
+
+/// Which node each pitch class of a recording lights, and the frame that holds
+/// them all: kept from frame to frame, since finding them walks the naming
+/// reach once per class, 1,025 nodes in the fresh look, which measured about
+/// 0.1 ms a frame for a short piece (PR #1975).
+///
+/// Kept for exactly what it is worked out from: the analysis's pitch classes,
+/// the tuning and its tempered commas, and the reach. A Detail or Span drag
+/// cuts the song afresh over the same classes, so it is no new placement.
+#[derive(Clone)]
+struct Placed {
+    /// The analysis last placed, by identity, so a frame that shows the same
+    /// one need not read its classes again. Weak: the editor holds no
+    /// analysis the worker has displaced, whose free stays off the lock.
+    harmony: std::sync::Weak<crate::tape::harmony::Harmony>,
+    /// Its pitch classes in microcents, ascending.
+    classes: Vec<u32>,
+    tuning: harmonigraph_core::Tuning,
+    tempered: harmonigraph_core::Tempered,
+    reach: harmonigraph_scene::DrawnWindow,
+    /// By pitch class in microcents: two tunings of one note, a recorded
+    /// 12-TET part beside one in the lattice's tuning, are two classes, and
+    /// each lights its own node or none.
+    lit: std::sync::Arc<std::collections::BTreeMap<u32, Option<harmonigraph_core::LatticePos>>>,
+    /// The lit nodes' bounds, in [`plan`]'s node spacings.
+    frame: Option<Rect>,
+}
+
+impl Placed {
+    fn of(
+        ctx: &egui::Context,
+        id: egui::Id,
+        harmony: &std::sync::Arc<crate::tape::harmony::Harmony>,
+        state: &PictureState,
+    ) -> Placed {
+        use harmonigraph_core::tuning::PitchClass;
+        let (tuning, tempered) = (state.runtime.tuning, state.runtime.tempered);
+        let reach = state.appearance.view.reach();
+        let kept = ctx
+            .data(|d| d.get_temp::<Placed>(id))
+            .filter(|kept| (kept.tuning, kept.tempered, kept.reach) == (tuning, tempered, reach));
+        if let Some(kept) = &kept {
+            if std::sync::Weak::as_ptr(&kept.harmony) == std::sync::Arc::as_ptr(harmony) {
+                return kept.clone();
+            }
+        }
+        let mut classes: Vec<u32> = harmony
+            .sections
+            .iter()
+            .flat_map(|s| &s.entries)
+            .map(|entry| PitchClass::from_cents(entry.pitch * 100.0).microcents())
+            .collect();
+        classes.sort_unstable();
+        classes.dedup();
+        let weak = std::sync::Arc::downgrade(harmony);
+        if let Some(mut kept) = kept.filter(|kept| kept.classes == classes) {
+            kept.harmony = weak;
+            ctx.data_mut(|d| d.insert_temp(id, kept.clone()));
+            return kept;
+        }
+        let nodes: Vec<(harmonigraph_core::LatticePos, PitchClass)> =
+            reach.positions().map(|p| (p, tuning.pitch_class(p))).collect();
+        let lit: std::collections::BTreeMap<u32, Option<harmonigraph_core::LatticePos>> = classes
+            .iter()
+            .map(|&class| {
+                let pc = PitchClass::from_microcents(i64::from(class));
+                (
+                    class,
+                    super::names::naming_node_from(nodes.iter().copied(), tempered, &tuning, pc),
+                )
+            })
+            .collect();
+        let mut frame = None::<Rect>;
+        for at in lit.values().flatten().map(|&p| plan(p).to_pos2()) {
+            let at = Rect::from_min_max(at, at);
+            frame = Some(frame.map_or(at, |frame| frame.union(at)));
+        }
+        let placed = Placed {
+            harmony: weak,
+            classes,
+            tuning,
+            tempered,
+            reach,
+            lit: std::sync::Arc::new(lit),
+            frame,
+        };
+        ctx.data_mut(|d| d.insert_temp(id, placed.clone()));
+        placed
+    }
+}
+
+/// The recording's harmony along a row over the overview (Tape mode, with the
+/// far region open; #1974): one small lattice per section, on the overview's
+/// own song axis, lighting the nodes that sound in it. A node is a set of
+/// rings, one per pitch sounding on it, lowest in the middle, each in its
+/// note's colour. A pitch lights the node the roll names it by
+/// ([`naming_node_from`](super::names::naming_node_from)): the one position of
+/// the naming reach that matches it under the live tuning, and in a
+/// temperament, where a dozen do, the one that spells most plainly. Every
+/// match, as the lattice lights them, would make each thumbnail a wallpaper of
+/// its chord. A pitch the reach does not hold lights none.
+///
+/// One frame holds every thumbnail, the nodes the whole recording lights, so a
+/// harmony that moves across the lattice is a lit shape that moves in its
+/// frame. Sections too narrow to hold that frame join the one before
+/// ([`Harmony::cells`](crate::tape::harmony::Harmony::cells)).
+///
+/// Under a playhead that advances, its thumbnail fills in as the song does: a
+/// note struck in the section appears at its attack and settles from white.
+/// Nothing else tells a struck note from one held over, so a still row shows
+/// each section whole. A click cues the audition from the section's start.
+pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, surface: usize) {
+    use harmonigraph_core::tuning::PitchClass;
+
+    let cfg = state.appearance.spectrum;
+    let axes = overview_axes(rect, &cfg);
+    let window = Window::fit(&state.runtime.tape);
+    let axis = SongAxis::new(&axes, 0.0, window);
+    let id = egui::Id::unique(("tape-harmony", surface));
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, theme::picture());
+    let x_of = |seconds: f64| axes.across_pitch(axis.depth_of(seconds))[0].x;
+
+    let harmony = std::sync::Arc::clone(&state.runtime.tape.harmony);
+    let tuning = state.runtime.tuning;
+    let class_of = |pitch: f32| PitchClass::from_cents(pitch * 100.0);
+    let placed = Placed::of(ui.ctx(), id.with("placed"), &harmony, state);
+    let (lit, frame) = (&placed.lit, placed.frame);
+    let view = &state.runtime.tape;
+    let (position_rate, heard_rate) = rates(view);
+    // The playheads, over whatever the row drew.
+    let playheads = |state: &mut PictureState| {
+        if let Some(pixel) = marks(&painter, &axes, &state.runtime.tape, &axis, id.with("marks")) {
+            state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, pixel);
+        }
+    };
+    // With nothing lit, a frame one node across: the sections still show,
+    // and still cue.
+    let frame = frame.unwrap_or(Rect::ZERO);
+
+    let pad = 3.0 * theme::ui_scale(ui.ctx());
+    let (columns, rows) = (frame.width() + 1.0, frame.height() + 1.0);
+    let node = ((rect.height() - 2.0 * pad) / rows)
+        .min((rect.width() - 2.0 * pad) / columns)
+        .min(NODE_SHARE * rect.height());
+    let thumbnail = egui::vec2(columns, rows) * node;
+    let narrowest = f64::from(thumbnail.x + 2.0 * pad) * axis.seconds_per_point();
+    let cells = harmony.cells(narrowest, window.to);
+
+    // The playhead a thumbnail fills in under: the audition's, or the song's
+    // while the transport rolls. Still advancing is the playheads' own test
+    // (`marks`): its value changed within the stall allowance.
+    let under = view.heard.map(|at| (at, heard_rate)).or(view.position.zip(position_rate));
+    let clock = ui.input(|i| i.time);
+    let seen = ui.data(|d| d.get_temp::<(f64, f64)>(id));
+    let changed = match (seen, under) {
+        (Some((value, since)), Some((at, _))) if value == at => since,
+        // First seen counts as moving, unlike `marks`, which waits to see it
+        // move before asking for frames: a cue's first frame must already
+        // hide what the section has not yet struck.
+        (_, Some(_)) => clock,
+        (_, None) => f64::NEG_INFINITY,
+    };
+    // Forgotten with the playhead, so one that comes back on the value it
+    // left on is seen afresh.
+    match under {
+        Some((at, _)) => ui.data_mut(|d| {
+            d.insert_temp(id, (at, changed));
+        }),
+        None => ui.data_mut(|d| {
+            d.remove_temp::<(f64, f64)>(id);
+        }),
+    }
+    let advancing = clock - changed <= PLAYHEAD_STALL_SECONDS;
+    let mut next_change = None::<f64>;
+
+    let white = egui::Color32::WHITE;
+    let ruling = theme::picture_ruling();
+    let mut cue = None;
+    let pointer = response.hover_pos();
+    for (k, cell) in cells.iter().enumerate() {
+        let next = cells.get(k + 1).map_or(f64::INFINITY, |next| next.start);
+        // At least a thumbnail wide, which the next start, or the row's end,
+        // leaves room for.
+        let (a, b) = (x_of(cell.start), x_of(cell.end.max(cell.start + narrowest)));
+        let span = Rect::from_x_y_ranges(a.min(b)..=a.max(b), rect.y_range());
+        if k % 2 == 1 {
+            painter.rect_filled(span.intersect(rect), 0.0, theme::header().gamma_multiply(0.35));
+        }
+        painter.line_segment(
+            [egui::pos2(a, rect.top()), egui::pos2(a, rect.bottom())],
+            Stroke::new(theme::GRID_WIDTH, theme::picture_divider()),
+        );
+        if pointer.is_some_and(|p| span.contains(p)) {
+            cue = Some(cell.start);
+        }
+        let origin = span.center() - 0.5 * thumbnail - frame.min.to_vec2() * node
+            + egui::vec2(0.5 * node, 0.5 * node);
+        let centre = |pos: harmonigraph_core::LatticePos| origin + plan(pos) * node;
+        for fives in frame.min.x.ceil() as i32..=frame.max.x.floor() as i32 {
+            for threes in (-frame.max.y).ceil() as i32..=(-frame.min.y).floor() as i32 {
+                let at = centre(harmonigraph_core::LatticePos::new(threes, fives, 0));
+                painter.circle_filled(at, (0.06 * node).max(0.5), ruling);
+            }
+        }
+        // Under an advancing playhead, only what has been struck by now.
+        let now = under.filter(|&(at, _)| advancing && (cell.start..next).contains(&at));
+        // A node's rings: each the octave it sounds in, how far its flash has
+        // to settle, and its colour.
+        type Ring = (i32, f32, egui::Color32);
+        let mut nodes: Vec<(harmonigraph_core::LatticePos, Vec<Ring>)> = Vec::new();
+        let mut soonest = |wait: f64| next_change = Some(next_change.map_or(wait, |s| s.min(wait)));
+        for entry in &cell.entries {
+            let mut flash = 0.0;
+            if let Some((at, rate)) = now {
+                // Each strike is a frame at the time it sounds.
+                if let Some(&next) = entry.strikes.iter().find(|&&struck| struck > at) {
+                    soonest((next - at) / rate);
+                }
+                if !entry.held && entry.strikes.first().is_none_or(|&first| first > at) {
+                    continue;
+                }
+                // The last strike by now flashes, settling at the chrome's
+                // rate.
+                let age = entry.strikes.iter().rev().find(|&&struck| struck <= at).map(|s| at - s);
+                if let Some(age) = age.filter(|&age| age < FLASH_SETTLED * FLASH_SECONDS) {
+                    flash = (-age / FLASH_SECONDS).exp() as f32;
+                    soonest(crate::CHROME_CUE);
+                }
+            }
+            let colour = roll::note_color(state, entry.pitch, 1.0);
+            let colour = white.lerp_to_gamma(colour, 1.0 - flash);
+            for &pos in lit.get(&class_of(entry.pitch).microcents()).into_iter().flatten() {
+                // Octaves counted from the node's own pitch, which a pitch
+                // that lights it is within the tolerance of.
+                let above = entry.pitch * 100.0 - tuning.pitch_class(pos).to_cents();
+                let octave = (above / 1200.0).round() as i32;
+                match nodes.iter_mut().find(|(at, _)| *at == pos) {
+                    Some((_, rings)) => match rings.iter_mut().find(|ring| ring.0 == octave) {
+                        // Two notes on one ring: the one struck last shows.
+                        Some(ring) if flash > ring.1 => *ring = (octave, flash, colour),
+                        Some(_) => {}
+                        None => rings.push((octave, flash, colour)),
+                    },
+                    None => nodes.push((pos, vec![(octave, flash, colour)])),
+                }
+            }
+        }
+        for (pos, rings) in &nodes {
+            // Outermost first, so each lower pitch is drawn over the one above.
+            for (ring, &(_, _, colour)) in rings.iter().enumerate().rev() {
+                let radius = 0.44 * node * (ring + 1) as f32 / rings.len() as f32;
+                painter.circle_filled(centre(*pos), radius, colour);
+                if ring + 1 < rings.len() {
+                    painter.circle_stroke(
+                        centre(*pos),
+                        radius,
+                        Stroke::new(theme::GRID_WIDTH, theme::picture()),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(wait) = next_change {
+        state.surfaces.moving_this_frame.hold_for(crate::Reason::Playhead, wait);
+    }
+    playheads(state);
+    let view = &mut state.runtime.tape;
+    if let Some(start) = cue {
+        if view.enabled && !view.rolling {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            if response.clicked() {
+                view.request = Some(TapeRequest::Cue(start));
+            }
+        }
+        response.on_hover_text_at_pointer(place(view, start));
+    }
+}
+
 /// How near an end of the shown stretch, in points, a press takes hold of
 /// that end rather than of the whole stretch.
 const GRIP_PT: f32 = 5.0;

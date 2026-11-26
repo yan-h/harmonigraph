@@ -355,6 +355,9 @@ pub struct EditorPrefs {
     /// Spiral is an editor tab and never exported (#974), so its framing is
     /// how this editor is looking at the picture, and rides in no take.
     pub(crate) spiral: panes::spiral::SpiralView,
+    /// Tape mode's harmony row (persisted; see
+    /// [`panes::spectral::tape::HarmonyRow`]), here for the Spiral's reason.
+    pub(crate) harmony: panes::spectral::tape::HarmonyRow,
 }
 
 impl Default for EditorPrefs {
@@ -372,6 +375,7 @@ impl Default for EditorPrefs {
             show_perf: false,
             show_perf_detail: false,
             spiral: Default::default(),
+            harmony: Default::default(),
         }
     }
 }
@@ -388,6 +392,7 @@ impl EditorPrefs {
         // chrome is drawn in.
         self.skin_dials.sanitize();
         self.spiral.sanitize();
+        self.harmony.sanitize();
         // A hand-edited NaN is dropped rather than honoured, on the grounds
         // the Spiral's framing is repaired on above: it positions drawn
         // geometry, and NaN geometry is a panic inside egui's

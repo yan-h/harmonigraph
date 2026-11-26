@@ -4,6 +4,7 @@
 //! step and takes its request. A shell with no tape leaves it at its default,
 //! which says there is none.
 
+pub mod harmony;
 pub mod spectrogram;
 
 /// What a click in Tape mode asks of the plugin.
@@ -176,8 +177,18 @@ pub struct TapeView {
     /// from the recording whose audio won there, so the roll shows what an
     /// audition would play. The worker's copy, shared; rebuilt after the
     /// recording changes, only while Tape mode shows, the editor is open and
-    /// the roll is on.
+    /// the roll is on or the harmony row draws.
     pub notes: std::sync::Arc<harmonigraph_core::NoteRoll>,
+    /// The recording's harmony, section by section (#1974): the worker's
+    /// analysis of the same notes, shared, redone after the recording, Detail
+    /// or Span changes, only while Tape mode shows, the editor is open and
+    /// the harmony row is on.
+    pub harmony: std::sync::Arc<harmony::Harmony>,
+    /// Detail (0..=1) and Span (beats) as the harmony row draws them this
+    /// frame, or `None` where it does not draw: cleared as each frame lays
+    /// out the workspace and set by the docked Analyzer where it lays the row
+    /// out, read by the worker's next step.
+    pub harmony_wanted: Option<(f32, f32)>,
     /// Memory the recording holds: its audio and spectrogram, which the cap
     /// counts, and its notes, which it does not.
     pub bytes: usize,

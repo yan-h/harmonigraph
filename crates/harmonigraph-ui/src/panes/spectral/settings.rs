@@ -189,6 +189,40 @@ pub(crate) fn spectrogram_section(
     );
 }
 
+/// Tape mode's harmony row (#1974): its switch, and the two bars that fit
+/// where its sections start to the piece.
+pub(crate) fn harmony_section(ui: &mut egui::Ui, row: &mut super::tape::HarmonyRow) {
+    let fresh = super::tape::HarmonyRow::default();
+    switched_section(
+        ui,
+        "Tape harmony",
+        (
+            &mut row.show,
+            "In Tape mode, show a row of small lattices over the overview, one for each \
+             stretch of the song heard as one harmony.",
+        ),
+        |ui| {
+            ValueBar::new(&mut row.detail, 0.0..=1.0, "Detail")
+                .default_value(fresh.detail)
+                .unit(100.0, "%")
+                .hint(
+                    "How small a change of harmony starts a new thumbnail. \
+                     Higher gives more, shorter sections.",
+                )
+                .show(ui);
+            ValueBar::new(&mut row.span, super::tape::HARMONY_SPAN_RANGE, "Span")
+                .default_value(fresh.span)
+                .unit(1.0, " beats")
+                .hint(
+                    "How long a run of notes is heard as one harmony, in beats. \
+                     Set it to at least one cycle of the fastest arpeggio that should \
+                     read as a single chord; shorter, and the arpeggio splits into its notes.",
+                )
+                .show(ui);
+        },
+    );
+}
+
 /// Played MIDI notes as ribbons over the history, and their names. Their
 /// switch is in the heading.
 pub(crate) fn ribbons_section(

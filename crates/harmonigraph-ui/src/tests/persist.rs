@@ -1155,6 +1155,7 @@ fn every_editor_preference_round_trips() {
         show_perf,
         show_perf_detail,
         spiral,
+        harmony,
     } = &mut state.workspace.interaction.prefs;
     folded_sections.insert("System/Performance".into());
     *frame_rate = crate::FrameRate::Third;
@@ -1172,6 +1173,7 @@ fn every_editor_preference_round_trips() {
     *show_perf = true;
     *show_perf_detail = true;
     *spiral = crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
+    *harmony = crate::panes::spectral::tape::HarmonyRow { show: false, detail: 0.8, span: 2.0 };
     let dialled = ron::to_string(&state.workspace.interaction.prefs).unwrap();
     let fresh_pairs = top_level_pairs(&ron::to_string(&crate::EditorPrefs::default()).unwrap());
     for pair in top_level_pairs(&dialled) {

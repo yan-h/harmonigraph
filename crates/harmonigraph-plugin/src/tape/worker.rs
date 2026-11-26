@@ -15,6 +15,7 @@ use std::time::Instant;
 use harmonigraph_core::NoteRoll;
 
 use harmonigraph_record::transport;
+use harmonigraph_ui::tape::harmony::{self, Harmony};
 use harmonigraph_ui::tape::spectrogram::TapeSpectrogram;
 use harmonigraph_ui::tape::{Meter, Speed, TapeRequest, TapeSpan, TapeView};
 use harmonigraph_ui::SpectrumConfig;
@@ -123,7 +124,17 @@ enum Source {
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct DisplacedView {
     pub(crate) roll: Option<Arc<NoteRoll>>,
+    pub(crate) harmony: Option<Arc<Harmony>>,
     pub(crate) spectrogram: Option<TapeSpectrogram>,
+}
+
+/// What the harmony row's sections were analyzed from: the roll's own key,
+/// and Detail and Span by their bits.
+#[derive(Clone, Copy, PartialEq)]
+struct Analyzed {
+    roll: Option<(u64, u64)>,
+    detail: u32,
+    span: u32,
 }
 
 pub(crate) struct Worker {
@@ -194,6 +205,14 @@ pub(crate) struct Worker {
     /// A roll built between holds, for the next exchange to hand over; any
     /// displaced roll returns in [`DisplacedView`] to be freed off-lock.
     built_roll: Option<Arc<NoteRoll>>,
+    /// The roll last built, which the harmony row's sections (#1974) are
+    /// analyzed from again when only Detail or Span moved.
+    latest_roll: Option<Arc<NoteRoll>>,
+    /// Detail and Span as the row asked at the last exchange, while it draws.
+    harmony_wanted: Option<(f32, f32)>,
+    harmony_shown: Option<Analyzed>,
+    /// Sections analyzed between holds, handed over as a built roll is.
+    built_harmony: Option<Arc<Harmony>>,
 }
 
 /// Song seconds as the console prints them.
@@ -245,6 +264,10 @@ impl Worker {
             roll_shown: None,
             visible: false,
             built_roll: None,
+            latest_roll: None,
+            harmony_wanted: None,
+            harmony_shown: None,
+            built_harmony: None,
         }
     }
 
@@ -637,8 +660,12 @@ impl Worker {
         view.position = seconds(&shared.position);
         view.heard = seconds(&shared.heard);
         view.bytes = self.store.as_ref().map_or(0, Store::bytes) + self.book.bytes();
-        self.visible = view.showing && open && settings.show_roll;
+        self.harmony_wanted = view.harmony_wanted.filter(|_| view.showing && open);
+        self.visible =
+            view.showing && open && (settings.show_roll || self.harmony_wanted.is_some());
         let roll = self.built_roll.take().map(|roll| std::mem::replace(&mut view.notes, roll));
+        let harmony =
+            self.built_harmony.take().map(|built| std::mem::replace(&mut view.harmony, built));
         if self.shown != Some(self.generation) {
             self.shown = Some(self.generation);
             view.spans = self.store.as_ref().map_or_else(Vec::new, spans);
@@ -646,21 +673,38 @@ impl Worker {
             view.meters =
                 self.meters.iter().map(|(&at, &meter)| (at as f64 / rate, meter)).collect();
         }
-        DisplacedView { roll, spectrogram }
+        DisplacedView { roll, harmony, spectrogram }
     }
 
-    /// Rebuild Tape mode's roll if the recording changed under it, with no
-    /// lock held: it walks every note recorded.
+    /// Rebuild Tape mode's roll if the recording changed under it, and the
+    /// harmony row's sections if the roll, Detail or Span did, with no lock
+    /// held: each walks every note recorded.
     pub(crate) fn roll(&mut self) {
         let built = (self.generation, self.notes_generation);
-        if !self.visible || self.roll_shown == Some(built) {
+        if self.visible && self.roll_shown != Some(built) {
+            self.roll_shown = Some(built);
+            let roll = self.store.as_ref().map_or_else(Default::default, |store| {
+                super::notes::song_roll(store, &self.book.passes)
+            });
+            let roll = Arc::new(roll);
+            self.latest_roll = Some(Arc::clone(&roll));
+            self.built_roll = Some(roll);
+        }
+        let Some((detail, span)) = self.harmony_wanted else { return };
+        // The meters are in the roll's key too: a change of them alone moves
+        // `generation`.
+        let analyzed =
+            Analyzed { roll: self.roll_shown, detail: detail.to_bits(), span: span.to_bits() };
+        if self.harmony_shown == Some(analyzed) {
             return;
         }
-        self.roll_shown = Some(built);
-        let roll = self.store.as_ref().map_or_else(Default::default, |store| {
-            super::notes::song_roll(store, &self.book.passes)
-        });
-        self.built_roll = Some(Arc::new(roll));
+        let Some(roll) = &self.latest_roll else { return };
+        self.harmony_shown = Some(analyzed);
+        let rate = self.store.as_ref().map_or(1.0, |store| f64::from(store.rate));
+        let meters: Vec<(f64, Meter)> =
+            self.meters.iter().map(|(&at, &meter)| (at as f64 / rate, meter)).collect();
+        let sections = harmony::analyze(roll, &meters, detail, span);
+        self.built_harmony = Some(Arc::new(Harmony { sections }));
     }
 
     /// Analyze what the recording or a new analysis window changed, for a

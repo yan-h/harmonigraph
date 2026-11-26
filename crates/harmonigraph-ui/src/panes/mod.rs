@@ -252,6 +252,7 @@ impl Viewer<'_> {
                     self.state,
                     self.now,
                     self.interaction.prefs.frameless,
+                    self.interaction.prefs.harmony,
                 );
             }
             Tab::Spiral => {

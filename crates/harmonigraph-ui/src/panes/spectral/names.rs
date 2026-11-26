@@ -675,7 +675,7 @@ fn note_name(
 ///
 /// Kept apart from [`Namer::shows_node`], which asks only WHETHER a node
 /// matches and can stop at the first, while naming must choose AMONG matches.
-fn naming_node_from(
+pub(super) fn naming_node_from(
     nodes: impl Iterator<Item = (LatticePos, PitchClass)>,
     tempered: Tempered,
     tuning: &Tuning,

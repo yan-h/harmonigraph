@@ -461,6 +461,9 @@ pub(crate) fn show(
     // The dock is set on the Analyzer settings page, which draws through the
     // viewer rather than the layout; it reads and writes this copy.
     viewer.interaction.dock = layout.position;
+    // Tape mode's harmony row asks for its analysis on each frame that lays it
+    // out, so a frame whose Analyzer is folded asks for none.
+    viewer.state.runtime.tape.harmony_wanted = None;
     for section in Section::ALL {
         let rect = runtime.rects[section as usize].intersect(area);
         if rect.is_positive() {
