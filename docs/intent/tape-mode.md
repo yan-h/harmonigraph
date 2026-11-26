@@ -39,3 +39,7 @@ Yan's picks over six rounds of prototype sheets, with his words where they decid
   a click on a thumbnail cues the audition from its section's first attack;
   Span is in beats at the tape's recorded tempo, 4 beats fresh.
 - A pitch off the live tuning lights nothing in the row, as on the lattice, so a recorded 12-TET track under just or meantone axes is mostly unlit; this is a documented limit, with no snapping of tempered pitches to a node (Yan, "Document it", 2026-11-25).
+- From PR #1975's review questions (Yan, "Go with recommendations", 2026-11-25):
+  a struck note's flash settles over half a second of song, so it keeps step with the music at any audition speed;
+  a note held across a recording seam is struck there, as the roll draws it, so it flashes and a section can start there;
+  a pitch lights the one node it is named by, even where 12-TET axes without meantone draw a thumbnail as one column of fifths.
