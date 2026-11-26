@@ -227,6 +227,10 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 - A restore that reports a loss over a folded Settings section: Settings unfolds on the Console and the pictures squeeze until the next resize or fold click; the window does not grow.
 - Two restores before an editor frame, which includes every restore while the editor is shut (a lossy project load, then a clean preset load or undo before opening it): the newer state opens with Settings unfolded on the Console, showing the older restore's line, and its next save stores that layout without marking the project.
 
+**Cases the Tape harmony row goes without** (PR #1975; Yan, #1974), each with its cost when it occurs:
+
+- A pitch off the live tuning, or outside the lattice's naming reach: it lights nothing in the row, as on the lattice, so a recorded 12-TET track under just or meantone axes is mostly unlit.
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
