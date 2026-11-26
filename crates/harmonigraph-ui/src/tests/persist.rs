@@ -42,6 +42,7 @@ fn dialled() -> SharedState {
     appearance.render.short_edge = 2160;
     appearance.render.frame.split = 0.37;
     appearance.render.spectrogram = crate::SpectrogramRender::Scrolling;
+    appearance.render.pitch_range = crate::PitchRangeRender::Dialled;
     state.workspace.interaction.prefs.ui_scale = 1.25;
     state
 }
