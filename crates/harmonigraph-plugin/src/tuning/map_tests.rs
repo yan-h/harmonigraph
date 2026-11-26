@@ -165,6 +165,30 @@ fn an_engine_or_follow_event_past_the_top_step_selects_the_top_step() {
     assert_eq!(playback.follow, harmonigraph_core::lattice_map::Follow::ThirdsAndFifths);
 }
 
+/// A per-note tuning expression after the onset draws the pitch that goes on
+/// the wire: the player's value, the channel's bend and the map's frozen
+/// correction together, which the display and the take both record.
+#[test]
+fn lattice_map_draws_a_later_tuning_expression_with_its_bend_and_correction() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = hub().with_adaptive();
+    hub.activate();
+    let (first, _) = install(&hub);
+    hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
+    hub.run(512, vec![note(1, 0, 64, 0, true)], None);
+    let held = voice(&hub, crate::tuning::DIRECT, 64);
+    let correction = first.correction(64, Tuning::just());
+    assert!(correction != 0, "the map moves E, so the correction is in the pitch");
+    assert_eq!(held.frozen_offset_microcents, correction);
+    assert_eq!(held.velocity, 0.625, "the attack's velocity is the voice's");
+    hub.run(1024, vec![raw_midi([0xE0, 0x00, 0x60], 0)], None);
+    let bent = voice(&hub, crate::tuning::DIRECT, 64);
+    assert!(bent.pitch_microcents != held.pitch_microcents, "the bend moves the held voice");
+    hub.run(1536, vec![expression(1, 0.25, 0)], None);
+    let expressed = voice(&hub, crate::tuning::DIRECT, 64);
+    assert_eq!(expressed.pitch_microcents, bent.pitch_microcents + 25_000_000);
+}
+
 #[test]
 fn lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice() {
     let _scope = crate::test_scope::enter();
