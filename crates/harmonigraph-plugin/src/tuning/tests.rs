@@ -1630,6 +1630,20 @@ fn a_channel_bend_on_a_held_note_reaches_the_display_and_the_take() {
     }
 }
 
+/// Only a controller ends a channel's voices: a bend or channel pressure whose
+/// second byte reads 120 or 123, the two termination controllers' numbers,
+/// leaves the held note held by the Tune and the Hub alike.
+#[test]
+fn a_bend_or_pressure_reading_120_or_123_ends_no_note() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    pair.step(vec![note(1, 0, 60, 0, true)]);
+    pair.step(vec![raw_midi([0xE0, 120, 0x40], 0), raw_midi([0xD0, 123, 0], 1)]);
+    pair.idle();
+    assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), 1, "the Tune");
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), 1, "the Hub");
+}
+
 #[test]
 fn channel_bend_fanout_overflow_is_not_silent() {
     use harmonigraph_take::CanonicalRecord;
