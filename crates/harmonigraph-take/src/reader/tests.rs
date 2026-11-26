@@ -229,3 +229,19 @@ fn a_restated_onset_lost_to_a_gap_keeps_the_run_it_sounded_in() {
     let notes = notes_of(&take, 60);
     assert!(notes.len() == 1 && (notes[0].0 - song(74, 0, 2.0)).abs() < 1e-9, "{notes:?}");
 }
+
+/// A take that breaks its source's order is refused, not drawn. No producer
+/// writes one since #1885, but a take recorded before it while a Tune's delay
+/// was lowered holds a snapshot timed at the old delay after deltas timed at
+/// the new, and replaying it would draw the wrong notes with nothing saying so.
+#[test]
+fn a_take_that_breaks_its_sources_order_is_refused() {
+    let read = read(&[
+        run(0, 2.0),
+        delta(1, 60, true, 10),
+        // Timed at the old delay: after the release below, which it does not cover.
+        snapshot(1, &[struck(60, 10)], 300),
+        delta(2, 60, false, 200),
+    ]);
+    assert!(matches!(read, Err(ReadError::OutOfOrder(4))), "{read:?}");
+}
