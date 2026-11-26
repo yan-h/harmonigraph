@@ -70,16 +70,6 @@ impl State {
         self.voices = [None; HELD_PER_SOURCE];
         self.pitch = [Default::default(); 16];
     }
-    /// Every voice a channel termination ends, so the caller can turn one
-    /// controller into the note-offs the instrument is about to perform.
-    pub fn on_channel(&self, channel: u8, out: &mut [(i32, u8, u8); HELD_PER_SOURCE]) -> usize {
-        let mut count = 0;
-        for voice in self.voices().filter(|voice| voice.channel == channel) {
-            out[count] = (voice.host_note_id, voice.channel, voice.note);
-            count += 1;
-        }
-        count
-    }
 
     /// Freeze this onset's adaptive choice onto its voice. The pitch drawn
     /// includes the correction, which the Tune states as a per-note tuning

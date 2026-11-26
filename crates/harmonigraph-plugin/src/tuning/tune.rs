@@ -667,13 +667,6 @@ impl Tune {
                 *cell = None;
             }
         }
-        if let Some(channel) = event.terminated_channel() {
-            for cell in held.iter_mut() {
-                if cell.is_some_and(|voice| voice.channel == channel) {
-                    *cell = None;
-                }
-            }
-        }
         true
     }
 

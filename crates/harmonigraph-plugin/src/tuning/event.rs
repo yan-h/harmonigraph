@@ -62,16 +62,6 @@ impl Event {
         }
     }
 
-    /// The channel an All Sound Off (CC 120) or All Notes Off (CC 123) ends
-    /// every voice on.
-    pub fn terminated_channel(self) -> Option<u8> {
-        match self {
-            Self::Midi { port: 0, data: [status, 120 | 123, _], .. } if status & 0xf0 == 0xb0 => {
-                Some(status & 15)
-            }
-            _ => None,
-        }
-    }
     pub fn note_off(id: i32, channel: u8, key: u8) -> Self {
         Self::Note {
             kind: 1,

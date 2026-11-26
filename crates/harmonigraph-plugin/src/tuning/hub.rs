@@ -726,40 +726,20 @@ impl Hub {
             }
         }
         let assignment = record.onset().then(|| self.assign(position, config)).flatten();
-        // A channel termination is one controller that ends every voice on its
-        // channel. The instrument performs those endings, so the schedule owes
-        // them as note-offs rather than as one opaque controller.
-        if let Some(channel) = record.event.terminated_channel() {
-            let mut ended = [(0i32, 0u8, 0u8); HELD_PER_SOURCE];
-            let count = self.rows[source].state.on_channel(channel, &mut ended);
-            for (id, channel, key) in ended.into_iter().take(count) {
-                self.release_addressed(record, channel, key);
-                let off = Event::note_off(id, channel, key);
-                self.schedule_delta(off, record, scheduled, None);
-            }
-        } else if !record.onset() && record.event.release() {
+        if !record.onset() && record.event.release() {
             self.release_matching(record);
         }
         self.schedule_delta(record.event, record, scheduled, assignment);
     }
 
-    /// The lifetime one source's state holds for a `(channel, key)`: the voice
-    /// a termination ends, and the one a same-key onset takes over.
-    fn addressed_lifetime(&self, source: u8, channel: u8, key: u8) -> Option<u64> {
-        self.rows[usize::from(source)]
+    /// Let go of whatever an onset is about to displace, before it is scored.
+    fn forget_replaced(&mut self, source: u8, channel: u8, key: u8) {
+        let lifetime = self.rows[usize::from(source)]
             .state
             .voices()
             .find(|voice| voice.channel == channel && voice.note == key)
-            .map(|voice| voice.lifetime)
-    }
-    fn release_addressed(&mut self, record: Record, channel: u8, key: u8) {
-        if let Some(lifetime) = self.addressed_lifetime(record.source, channel, key) {
-            self.sequencer.release_voice(record.source, lifetime, record.sample);
-        }
-    }
-    /// Let go of whatever an onset is about to displace, before it is scored.
-    fn forget_replaced(&mut self, source: u8, channel: u8, key: u8) {
-        if let Some(lifetime) = self.addressed_lifetime(source, channel, key) {
+            .map(|voice| voice.lifetime);
+        if let Some(lifetime) = lifetime {
             self.sequencer.forget_voice(source, lifetime);
         }
     }

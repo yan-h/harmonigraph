@@ -1316,50 +1316,42 @@ fn an_onset_past_the_held_ceiling_is_refused_before_copy_and_output() {
 }
 
 /// The admission replay must use the same identity rules as emission, even
-/// before any onset has sounded: replacement ids, stale releases, wildcard
-/// addressing and both channel-ending controllers all run through real input.
+/// before any onset has sounded: replacement ids, stale releases and wildcard
+/// addressing all run through real input.
 #[test]
 fn pending_retriggers_and_endings_reuse_held_capacity_in_wire_order() {
     let _scope = crate::test_scope::enter();
-    for controller in [None, Some(120), Some(123)] {
-        let mut pair = Pair::new();
-        let mut input: Vec<_> =
-            (0..HELD_PER_SOURCE).map(|key| note(key as i32, 0, key as i16, 0, true)).collect();
-        let Input::Note(mut invalid_release) = note(1, 0, 1, 2, false) else { unreachable!() };
-        invalid_release.velocity = f64::NAN;
-        input.extend([
-            note(100, 0, 0, 1, true),
-            Input::Note(invalid_release),
-            note(0, 0, 0, 2, false),
-            note(200, 0, 64, 3, true),
-        ]);
-        input.push(match controller {
-            Some(cc) => raw_midi([0xb0, cc, 0], 4),
-            None => note(100, -1, -1, 4, false),
-        });
-        input.push(note(201, 0, 64, 5, true));
-        let expected_copies = input.len() - 2; // Invalid release and overflow attack.
-        pair.step(input);
-        assert_eq!(inspect_tune(&pair.tune, |tune| tune.captured), expected_copies as u64);
-        let output = pair.idle();
-        let ids: Vec<_> =
-            output.iter().filter_map(|(_, e)| e.attack().map(|(id, _, _, _)| id)).collect();
-        assert_eq!(ids, (0..HELD_PER_SOURCE as i32).chain([100, 201]).collect::<Vec<_>>());
-        assert!(output
-            .iter()
-            .any(|(time, e)| *time == 4 && (e.release() || e.terminated_channel().is_some())));
-        let held = if controller.is_some() { 1 } else { HELD_PER_SOURCE };
-        assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), held);
-        assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), held);
-        assert_eq!(
-            inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, 64).unwrap().host_note_id),
-            201
-        );
-        pair.tune.host_reset();
-        let cut = pair.idle();
-        assert_eq!(cut.iter().filter(|(_, e)| e.release()).count(), held);
-        assert!(cut.iter().any(|(_, e)| matches!(e, Event::Note { kind: 1, id: 201, .. })));
-    }
+    let mut pair = Pair::new();
+    let mut input: Vec<_> =
+        (0..HELD_PER_SOURCE).map(|key| note(key as i32, 0, key as i16, 0, true)).collect();
+    let Input::Note(mut invalid_release) = note(1, 0, 1, 2, false) else { unreachable!() };
+    invalid_release.velocity = f64::NAN;
+    input.extend([
+        note(100, 0, 0, 1, true),
+        Input::Note(invalid_release),
+        note(0, 0, 0, 2, false),
+        note(200, 0, 64, 3, true),
+        note(100, -1, -1, 4, false),
+        note(201, 0, 64, 5, true),
+    ]);
+    let expected_copies = input.len() - 2; // Invalid release and overflow attack.
+    pair.step(input);
+    assert_eq!(inspect_tune(&pair.tune, |tune| tune.captured), expected_copies as u64);
+    let output = pair.idle();
+    let ids: Vec<_> =
+        output.iter().filter_map(|(_, e)| e.attack().map(|(id, _, _, _)| id)).collect();
+    assert_eq!(ids, (0..HELD_PER_SOURCE as i32).chain([100, 201]).collect::<Vec<_>>());
+    assert!(output.iter().any(|(time, e)| *time == 4 && e.release()));
+    assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), HELD_PER_SOURCE);
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), HELD_PER_SOURCE);
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, 64).unwrap().host_note_id),
+        201
+    );
+    pair.tune.host_reset();
+    let cut = pair.idle();
+    assert_eq!(cut.iter().filter(|(_, e)| e.release()).count(), HELD_PER_SOURCE);
+    assert!(cut.iter().any(|(_, e)| matches!(e, Event::Note { kind: 1, id: 201, .. })));
 }
 
 /// A same-key onset replaces the voice State holds for that identity, so the
@@ -1656,20 +1648,6 @@ fn a_channel_bend_over_two_voices_keeps_the_takes_order() {
         }
     }
     assert_eq!(deltas, 5, "two onsets, the bend, and a delta for each voice it moved");
-}
-
-/// Only a controller ends a channel's voices: a bend or channel pressure whose
-/// second byte reads 120 or 123, the two termination controllers' numbers,
-/// leaves the held note held by the Tune and the Hub alike.
-#[test]
-fn a_bend_or_pressure_reading_120_or_123_ends_no_note() {
-    let _scope = crate::test_scope::enter();
-    let mut pair = Pair::new();
-    pair.step(vec![note(1, 0, 60, 0, true)]);
-    pair.step(vec![raw_midi([0xE0, 120, 0x40], 0), raw_midi([0xD0, 123, 0], 1)]);
-    pair.idle();
-    assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), 1, "the Tune");
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), 1, "the Hub");
 }
 
 #[test]
