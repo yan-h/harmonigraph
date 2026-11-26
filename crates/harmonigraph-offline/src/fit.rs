@@ -37,32 +37,16 @@ pub fn pitch_range(
         })?;
     }
     // The notes the frames draw: each shown voice's pitch, bends included,
-    // through the tracker the replay draws with, sampled at every record that
-    // sounds within the window and at its start for the voices held into it.
-    // A released voice was counted while it was held.
+    // through the tracker the replay draws with, sampled at every record up to
+    // the render's end. From the take's start rather than the render's, since
+    // the first frame's roll draws what was released before it (Yan, #1976);
+    // a released voice was counted while it was held.
     let mut tracker = NoteTracker::new();
-    let count = |tracker: &NoteTracker, fit: &mut PitchFit| {
-        for voice in tracker.held_voices().filter(|voice| !tracker.hides(voice.source)) {
+    for record in take.events.iter().take_while(|record| record.time() <= settings.end) {
+        record.apply(&mut tracker).expect("validated canonical take");
+        for voice in tracker.held_shown() {
             fit.note(voice.pitch);
         }
-    };
-    let mut entered = false;
-    for record in &take.events {
-        let time = record.time();
-        if time > settings.end {
-            break;
-        }
-        if time >= settings.start && !entered {
-            entered = true;
-            count(&tracker, &mut fit);
-        }
-        record.apply(&mut tracker).expect("validated canonical take");
-        if entered {
-            count(&tracker, &mut fit);
-        }
-    }
-    if !entered {
-        count(&tracker, &mut fit);
     }
     Ok(fit.range())
 }
@@ -77,7 +61,7 @@ mod tests {
     /// range: a 3 kHz tone that ends 0.15 s into the render, which its first
     /// frames draw from the audio read before them, but not a 7 kHz tone a
     /// second before the render, past that read; and a note's recorded pitch
-    /// rather than its key, but not a note before the render, one after it, or
+    /// rather than its key and one before the render, but not one after it or
     /// one while its source is hidden.
     #[test]
     fn the_fit_reads_what_the_frames_analyze_and_draw() {
@@ -103,8 +87,6 @@ mod tests {
         };
         let take = Take {
             events: vec![
-                CanonicalRecord::Note(note(0.2, 25, true)),
-                CanonicalRecord::Note(note(0.3, 25, false)),
                 shown(2.1, false),
                 CanonicalRecord::Note(note(2.2, 27, true)),
                 CanonicalRecord::Note(note(2.3, 27, false)),
@@ -142,5 +124,19 @@ mod tests {
         assert!((low - 29.0).abs() < 1e-3, "the pitch 30 holds the low end under it: {low}");
         // 3 kHz is MIDI 102.4, and 7 kHz 117.3.
         assert!((103.0..110.0).contains(&high), "the 3 kHz tone holds the high end: {high}");
+
+        // A note released before the render, which its first frames draw in
+        // their history.
+        let mut earlier = take.clone();
+        earlier.events.splice(
+            0..0,
+            [
+                CanonicalRecord::Note(note(0.2, 25, true)),
+                CanonicalRecord::Note(note(0.3, 25, false)),
+            ],
+        );
+        let (low, _) =
+            pitch_range(&earlier, Some(&mut audio), &settings, &config).unwrap().unwrap();
+        assert!((low - 24.0).abs() < 1e-3, "the note at 25 holds the low end under it: {low}");
     }
 }
