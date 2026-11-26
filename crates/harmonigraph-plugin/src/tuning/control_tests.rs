@@ -176,9 +176,11 @@ fn instance_settings_restore_independently_and_default_missing_fields() {
     shared.set_show(true);
     shared.set_name("Reference".to_owned());
     shared.request_delay(4);
+    assert!(adapter.service().modified, "an edit marks the project modified");
     adapter.save(&mut state);
     let restored = setup::Shared::hub();
     setup::Adapter(restored.clone()).parse(&state).install();
+    assert!(!setup::Adapter(restored.clone()).service().modified, "a restore marks nothing");
     assert_eq!(restored.retuning() & 1, 0);
     assert!(restored.show.load(Ordering::Acquire));
     assert_eq!(*restored.name.lock().unwrap(), "Reference");
