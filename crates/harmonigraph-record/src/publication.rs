@@ -256,11 +256,6 @@ impl Publisher {
         self.push(Value::Note(note), note.event.time)
     }
 
-    pub fn gap(&mut self, gap: PublicationGap) -> Result<(), PublishError> {
-        gap.validate().map_err(|_| PublishError::Invalid)?;
-        self.push(Value::Gap(gap), gap.time)
-    }
-
     /// What the source is sounding NOW. Published whole or not at all: both
     /// FIFOs are checked before either is written, so a marker and its frame
     /// cannot come apart and a refused snapshot costs no serial.
