@@ -141,6 +141,12 @@ impl Settings {
         ((self.end - self.start).max(0.0) * self.fps).round() as u64
     }
 
+    /// The song time frame `frame` draws, from its index rather than a
+    /// running sum, so no floating-point drift accumulates.
+    pub(crate) fn frame_time(&self, frame: u64) -> f64 {
+        self.start + frame as f64 * (1.0 / self.fps)
+    }
+
     /// The song-time stretch of the soundtrack the frames analyze, under
     /// `config` at `sample_rate`: [`soundtrack_reach`] before the first frame
     /// and past the last. What [`prepare_frame`] reads frame by frame, and
@@ -151,7 +157,7 @@ impl Settings {
         sample_rate: f32,
     ) -> (f64, f64) {
         let (before, after) = soundtrack_reach(config, sample_rate);
-        let last = self.start + self.frame_count().saturating_sub(1) as f64 / self.fps;
+        let last = self.frame_time(self.frame_count().saturating_sub(1));
         (self.start - before, last + after)
     }
 }
@@ -401,9 +407,7 @@ fn prepare_frame(
     settings: &Settings,
     frame: u64,
 ) -> Result<f64, String> {
-    // Frame-index time avoids accumulated floating-point drift.
-    let step = 1.0 / settings.fps;
-    let now = settings.start + frame as f64 * step;
+    let now = settings.frame_time(frame);
     replay.advance_to(&mut state.runtime, now);
     if let Some(soundtrack) = soundtrack {
         let audio = &soundtrack.audio;
@@ -413,7 +417,7 @@ fn prepare_frame(
         let (before, lead) = soundtrack_reach(&config, audio.sample_rate);
         let from = match frame {
             0 => now - before,
-            _ => settings.start + (frame - 1) as f64 * step + lead,
+            _ => settings.frame_time(frame - 1) + lead,
         };
         let range =
             audio.range_seconds(from - settings.audio_start, now + lead - settings.audio_start);
