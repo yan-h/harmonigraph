@@ -163,6 +163,22 @@ fn a_recorder_dropped_mid_take_fails_it() {
     std::fs::remove_dir_all(path("dropped").parent().unwrap()).unwrap();
 }
 
+/// A recorder dropped after a Stop but before a block closed its run fails the
+/// take too (#1776): the disconnect would otherwise seal it unfailed, with no
+/// end to its run, and render it.
+#[test]
+fn a_recorder_dropped_stopped_with_its_run_open_fails_it() {
+    let (mut recorder, capture) = testing::channel();
+    capture.arm();
+    recorder.is_armed();
+    recorder.run(0.0, 0.0);
+    capture.stop();
+    let probe = testing::FileWriter::new(&capture, path("dropped-stopped"));
+    drop(recorder);
+    assert!(probe.failed());
+    std::fs::remove_dir_all(path("dropped-stopped").parent().unwrap()).unwrap();
+}
+
 /// The real worker: a Stop seals once the run has ended and launches the render,
 /// and Start is refused until it has.
 #[test]

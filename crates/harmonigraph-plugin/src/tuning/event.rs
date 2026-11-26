@@ -62,31 +62,15 @@ impl Event {
         }
     }
 
-    /// true=All Sound Off (choke), false=All Notes Off (logical note-off).
-    pub fn channel_termination(self) -> Option<bool> {
-        match self {
-            Self::Midi { port: 0, data: [status, 120, _], .. } if status & 0xf0 == 0xb0 => {
-                Some(true)
-            }
-            Self::Midi { port: 0, data: [status, 123, _], .. } if status & 0xf0 == 0xb0 => {
-                Some(false)
-            }
-            _ => None,
-        }
-    }
-    pub fn note_off(id: i32, channel: u8, key: u8, midi: bool) -> Self {
-        if midi {
-            Self::Midi { port: 0, data: [0x80 | channel, key, 0], flags: 0 }
-        } else {
-            Self::Note {
-                kind: 1,
-                id,
-                port: 0,
-                channel: i16::from(channel),
-                key: i16::from(key),
-                velocity: 0.0,
-                flags: 0,
-            }
+    pub fn note_off(id: i32, channel: u8, key: u8) -> Self {
+        Self::Note {
+            kind: 1,
+            id,
+            port: 0,
+            channel: i16::from(channel),
+            key: i16::from(key),
+            velocity: 0.0,
+            flags: 0,
         }
     }
 
@@ -100,7 +84,10 @@ impl Event {
                 key: key @ 0..=127,
                 velocity,
                 ..
-            } if velocity.is_finite() && (0.0..=1.0).contains(&velocity) => {
+            } => {
+                // `emittable` refuses a velocity that is not finite, and CLAP
+                // bounds a note's velocity to 0..=1.
+                debug_assert!((0.0..=1.0).contains(&velocity), "velocity {velocity}");
                 Some((id, channel as u8, key as u8, velocity as f32))
             }
             Self::Midi { port: 0, data, .. } if data[0] & 0xf0 == 0x90 && data[2] != 0 => {
@@ -116,20 +103,12 @@ impl Event {
                 if data[0] & 0xf0 == 0x80 || data[0] & 0xf0 == 0x90 && data[2] == 0)
     }
 
-    pub fn channel(self) -> Option<u8> {
-        match self {
-            Self::Note { channel: c @ 0..=15, .. }
-            | Self::Expression { channel: c @ 0..=15, .. } => Some(c as u8),
-            Self::Midi { data, .. } if data[0] < 0xf0 => Some(data[0] & 15),
-            _ => None,
-        }
-    }
-
-    /// Start a reverse scan of one source's same-sample prefix. Only finite
-    /// tuning expressions initialize onsets; addressing is shared with output.
+    /// Start a reverse scan of one source's same-sample prefix; addressing is
+    /// shared with output. Both callers see only [`Self::emittable`] events.
     pub fn initial_tuning(self) -> Option<InitialTuning> {
         let Self::Expression { kind: 2, value, .. } = self else { return None };
-        value.is_finite().then_some(InitialTuning { expression: self, value, seen: [0; 16] })
+        debug_assert!(value.is_finite(), "emittable refuses a non-finite expression");
+        Some(InitialTuning { expression: self, value, seen: [0; 16] })
     }
 
     /// The pressure, gain or timbre this carries, by CLAP's volume (0),

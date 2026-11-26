@@ -36,6 +36,9 @@ fn a_take_stamp_reads_as_the_calendar_date_and_time_it_names() {
     // has to fall through the extra day rather than assume 28.
     assert_eq!(stamp_for(1_709_229_909), "2024-02-29_18-05-09");
     assert_eq!(stamp_for(0), "1970-01-01_00-00-00", "the Unix epoch itself");
+    // A month from March on, which the two above, both in January or
+    // February of the shifted year, never reach.
+    assert_eq!(stamp_for(1_784_107_801), "2026-07-15_09-30-01");
 }
 
 /// Independent workers receive the same candidate before either creates it.
@@ -626,4 +629,22 @@ fn audio_with_no_room_for_its_entry_stays_out_of_the_ring() {
     b.rec.audio(&mut [0.25, -0.25].into_iter(), 2, 48_000.0);
     assert!(b.ctrl.fence.failed.load(Ordering::Acquire), "the full record ring fails the take");
     assert_eq!(b.ends.audio.slots(), 2, "the second block's samples went in uncounted");
+}
+
+/// A take counts as captured only the notes played once its first run opened,
+/// and never a reset. One counted before the run would let a stopped transport
+/// end a take armed ahead of the downbeat after a single note, before anything
+/// recorded.
+#[test]
+fn a_take_counts_only_the_notes_played_into_its_runs() {
+    let mut b = Bench::new();
+    b.arm();
+    let on = |t| harmonigraph_core::NoteEvent::on(t, SourceId::DIRECT, 0, 60, 0.8).into();
+    b.rec.publish_note(on(0.5)).expect_both();
+    assert_eq!(b.ctrl.captured(), 0, "played before the first run");
+    b.rec.record(1.0, Some(0.0));
+    b.rec.publish_note(harmonigraph_core::NoteEvent::session_reset(1.0).into()).expect_both();
+    assert_eq!(b.ctrl.captured(), 0, "a reset is no note of the take's");
+    b.rec.publish_note(on(1.1)).expect_both();
+    assert_eq!(b.ctrl.captured(), 1);
 }

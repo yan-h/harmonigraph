@@ -70,16 +70,6 @@ impl State {
         self.voices = [None; HELD_PER_SOURCE];
         self.pitch = [Default::default(); 16];
     }
-    /// Every voice a channel termination ends, so the caller can turn one
-    /// controller into the note-offs the instrument is about to perform.
-    pub fn on_channel(&self, channel: u8, out: &mut [(i32, u8, u8); HELD_PER_SOURCE]) -> usize {
-        let mut count = 0;
-        for voice in self.voices().filter(|voice| voice.channel == channel) {
-            out[count] = (voice.host_note_id, voice.channel, voice.note);
-            count += 1;
-        }
-        count
-    }
 
     /// Freeze this onset's adaptive choice onto its voice. The pitch drawn
     /// includes the correction, which the Tune states as a per-note tuning
@@ -100,11 +90,10 @@ impl State {
         };
         voice.player_tuning = player;
         voice.frozen_offset_microcents = correction;
-        voice.onset_pitch_microcents = i64::from(voice.note) * 100_000_000
+        voice.pitch_microcents = i64::from(voice.note) * 100_000_000
             + correction
             + channel_pitch
             + (player * 100_000_000.0).round() as i64;
-        voice.pitch_microcents = voice.onset_pitch_microcents;
         if decision != 0 {
             voice.decision = decision;
             voice.attack_node = node;
@@ -157,7 +146,6 @@ impl State {
             return None;
         }
         voice.pitch_microcents -= correction;
-        voice.onset_pitch_microcents -= correction;
         self.retuned(lifetime, stamp)
     }
 
@@ -184,7 +172,6 @@ impl State {
                 actual_onset: stamp.time,
                 velocity,
                 pitch_microcents: pitch,
-                onset_pitch_microcents: pitch,
                 ..VoiceBaseline::default()
             });
             result =

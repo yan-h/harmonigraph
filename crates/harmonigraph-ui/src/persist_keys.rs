@@ -125,15 +125,14 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<Decod
     }
 }
 
-/// Where a position ron reports — a line, and a column counted in
-/// characters — falls in `text`, in bytes.
+/// Where a position ron reports — a column counted in characters, on the one
+/// line `ron::to_string` writes — falls in `text`, in bytes.
 fn byte_offset(text: &str, at: ron::error::Position) -> Option<usize> {
-    let line_start = match at.line {
-        0 | 1 => 0,
-        line => text.match_indices('\n').nth(line - 2)?.0 + 1,
-    };
-    let (offset, _) = text[line_start..].char_indices().nth(at.col.checked_sub(1)?)?;
-    Some(line_start + offset)
+    if at.line > 1 {
+        return None;
+    }
+    let (offset, _) = text.char_indices().nth(at.col.checked_sub(1)?)?;
+    Some(offset)
 }
 
 /// The pair whose value holds the token at byte `at`: its key's path, and the span
@@ -201,13 +200,16 @@ enum Token {
     Comma,
     Colon,
     Ident,
-    /// A number, string, character or any other byte that is none of the above.
+    /// A number, string or any other byte that is none of the above.
     Other,
 }
 
-/// RON's tokens as far as brackets, pairs and keys go. Strings, raw strings,
-/// characters and comments are skipped whole, so nothing quoted or commented
-/// out can open a bracket or name a key.
+/// RON's tokens as far as brackets, pairs and keys go, in the text
+/// `ron::to_string` writes for the editor's state: compact, with every string
+/// quoted and escaped, no comments, raw strings or characters, and an
+/// identifier for every key and variant. Strings are skipped whole, so nothing
+/// quoted can open a bracket or name a key. Other RON, hand-edited, may name
+/// the wrong key or be refused, each with its Console line.
 struct Tokens<'a> {
     text: &'a [u8],
     next: usize,
@@ -218,53 +220,16 @@ impl Tokens<'_> {
         self.text.get(i).copied().unwrap_or(0)
     }
 
-    /// Past whitespace and comments, block comments nesting as RON's do.
-    fn skip_trivia(&mut self) {
-        loop {
-            match (self.at(self.next), self.at(self.next + 1)) {
-                (b' ' | b'\t' | b'\n' | b'\r', _) => self.next += 1,
-                (b'/', b'/') => {
-                    while !matches!(self.at(self.next), b'\n' | 0) {
-                        self.next += 1;
-                    }
-                }
-                (b'/', b'*') => {
-                    let mut depth = 0;
-                    loop {
-                        match (self.at(self.next), self.at(self.next + 1)) {
-                            (b'/', b'*') => (depth, self.next) = (depth + 1, self.next + 2),
-                            (b'*', b'/') => {
-                                (depth, self.next) = (depth - 1, self.next + 2);
-                                if depth == 0 {
-                                    break;
-                                }
-                            }
-                            (0, _) => return,
-                            _ => self.next += 1,
-                        }
-                    }
-                }
-                _ => return,
-            }
-        }
-    }
-
-    /// Past a quoted string whose opening quote is at `self.next`: `hashes`
-    /// of them close a raw one, whose backslashes escape nothing.
-    fn skip_string(&mut self, raw: Option<usize>) {
+    /// Past a quoted string whose opening quote is at `self.next`.
+    fn skip_string(&mut self) {
         self.next += 1;
         loop {
             match self.at(self.next) {
                 0 => return,
-                b'\\' if raw.is_none() => self.next += 2,
+                b'\\' => self.next += 2,
                 b'"' => {
-                    let hashes = raw.unwrap_or(0);
-                    let close = self.next + 1..self.next + 1 + hashes;
                     self.next += 1;
-                    if close.clone().all(|i| self.at(i) == b'#') {
-                        self.next = close.end;
-                        return;
-                    }
+                    return;
                 }
                 _ => self.next += 1,
             }
@@ -276,16 +241,8 @@ impl Iterator for Tokens<'_> {
     type Item = (Token, Range<usize>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.skip_trivia();
         let start = self.next;
         let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-        // A raw or byte string's prefix: `r`, `b` or `br`, then `#`s.
-        let prefix = match (self.at(start), self.at(start + 1)) {
-            (b'b', b'r') => 2,
-            (b'r' | b'b', _) => 1,
-            _ => 0,
-        };
-        let hashes = (start + prefix..).take_while(|&i| self.at(i) == b'#').count();
         let token = match self.at(start) {
             0 => return None,
             b'(' | b'[' | b'{' => {
@@ -305,28 +262,10 @@ impl Iterator for Tokens<'_> {
                 Token::Colon
             }
             b'"' => {
-                self.skip_string(None);
-                Token::Other
-            }
-            _ if prefix > 0 && self.at(start + prefix + hashes) == b'"' => {
-                self.next = start + prefix + hashes;
-                let raw = self.at(start) == b'r' || prefix == 2;
-                self.skip_string(raw.then_some(hashes));
-                Token::Other
-            }
-            b'\'' => {
-                self.next += 1;
-                while !matches!(self.at(self.next), b'\'' | 0) {
-                    self.next += if self.at(self.next) == b'\\' { 2 } else { 1 };
-                }
-                self.next += 1;
+                self.skip_string();
                 Token::Other
             }
             b if ident(b) => {
-                // A raw identifier, `r#name`, is one too.
-                if self.at(start) == b'r' && hashes == 1 {
-                    self.next += 2;
-                }
                 while ident(self.at(self.next)) {
                     self.next += 1;
                 }
@@ -353,8 +292,6 @@ mod tests {
     #[serde(default)]
     struct Outer {
         name: String,
-        raw: String,
-        letter: char,
         mode: Mode,
         inner: Inner,
         maybe: Option<Mode>,
@@ -423,19 +360,18 @@ mod tests {
         assert_eq!((outer.maybe, outer.mode), (None, Mode::B));
     }
 
-    /// Quotes, escapes, raw strings, characters and comments open no
-    /// bracket and name no key, and ron's columns count characters, so text
-    /// wider than ASCII ahead of the variant moves no byte offset.
+    /// A string opens no bracket and names no key, an escaped quote ends no
+    /// string, and ron's columns count characters, so text wider than ASCII
+    /// ahead of the variant moves no byte offset.
     #[test]
-    fn strings_and_comments_do_not_mislead_the_cut() {
-        let (outer, dropped) = cut(concat!(
-            "(name:\"é, (mode:\\\" ]\", /* (mode: [ /* nested ) */ */\n",
-            " // count:9, ( \n",
-            " raw: r#\"ü),mode:B\"#, letter: '(', list:[A, /* B */ B], mode:Gone, count:7)",
-        ));
+    fn a_string_does_not_mislead_the_cut() {
+        // Read as tokens, the name would open two structs and key the
+        // variant's pair under them. The second escape sits far enough in
+        // that a cursor doubled there, not stepped past it, overshoots.
+        let (outer, dropped) =
+            cut("(name:\"é \\\" (inner:( \\\" x\",list:[A,B],mode:Gone,count:7)");
         assert_eq!(dropped, ["mode:Gone"]);
-        assert_eq!(outer.name, "é, (mode:\" ]");
-        assert_eq!((outer.raw.as_str(), outer.letter), ("ü),mode:B", '('));
+        assert_eq!(outer.name, "é \" (inner:( \" x");
         assert_eq!(outer.list, [Mode::A, Mode::B]);
         assert_eq!((outer.mode, outer.count), (Mode::A, 7));
     }

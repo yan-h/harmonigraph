@@ -178,9 +178,9 @@ pub fn edit(params: &crate::HarmonigraphParams, host: &dyn EditorHost, edit: Map
             false
         }
         MapEdit::Select(id) => {
-            if id < MAP_CAPACITY {
-                set(Row::LatticeMap, id as i32);
-            }
+            // The Tuning pane's rows name only slots the document holds.
+            debug_assert!(id < MAP_CAPACITY, "map {id} past the {MAP_CAPACITY} slots");
+            set(Row::LatticeMap, id as i32);
             false
         }
         MapEdit::EditShape(on) => {

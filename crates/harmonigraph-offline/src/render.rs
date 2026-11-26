@@ -141,6 +141,12 @@ impl Settings {
         ((self.end - self.start).max(0.0) * self.fps).round() as u64
     }
 
+    /// The song time frame `frame` draws, from its index rather than a
+    /// running sum, so no floating-point drift accumulates.
+    pub(crate) fn frame_time(&self, frame: u64) -> f64 {
+        self.start + frame as f64 * (1.0 / self.fps)
+    }
+
     /// The song-time stretch of the soundtrack the frames analyze, under
     /// `config` at `sample_rate`: [`soundtrack_reach`] before the first frame
     /// and past the last. What [`prepare_frame`] reads frame by frame, and
@@ -151,7 +157,7 @@ impl Settings {
         sample_rate: f32,
     ) -> (f64, f64) {
         let (before, after) = soundtrack_reach(config, sample_rate);
-        let last = self.start + self.frame_count().saturating_sub(1) as f64 / self.fps;
+        let last = self.frame_time(self.frame_count().saturating_sub(1));
         (self.start - before, last + after)
     }
 }
@@ -401,9 +407,7 @@ fn prepare_frame(
     settings: &Settings,
     frame: u64,
 ) -> Result<f64, String> {
-    // Frame-index time avoids accumulated floating-point drift.
-    let step = 1.0 / settings.fps;
-    let now = settings.start + frame as f64 * step;
+    let now = settings.frame_time(frame);
     replay.advance_to(&mut state.runtime, now);
     if let Some(soundtrack) = soundtrack {
         let audio = &soundtrack.audio;
@@ -413,7 +417,7 @@ fn prepare_frame(
         let (before, lead) = soundtrack_reach(&config, audio.sample_rate);
         let from = match frame {
             0 => now - before,
-            _ => settings.start + (frame - 1) as f64 * step + lead,
+            _ => settings.frame_time(frame - 1) + lead,
         };
         let range =
             audio.range_seconds(from - settings.audio_start, now + lead - settings.audio_start);
@@ -529,6 +533,42 @@ mod tests {
             ],
             ..Default::default()
         }
+    }
+
+    /// A take armed partway into a song counts its frames from its own start,
+    /// and the soundtrack its frames analyze runs from a reach before the first
+    /// frame to a reach past the last.
+    #[test]
+    fn a_take_armed_partway_in_counts_its_frames_and_soundtrack_from_its_start() {
+        let settings = Settings {
+            layout: harmonigraph_ui::Layout::split(harmonigraph_ui::LatticeSide::Left, 0.5),
+            size: [64, 36],
+            pixels_per_point: 1.0,
+            fps: 10.0,
+            start: 5.0,
+            end: 7.0,
+            audio_start: 0.0,
+        };
+        assert_eq!(settings.frame_count(), 20);
+        let config = harmonigraph_ui::SpectrumConfig {
+            window: harmonigraph_ui::SpectrumWindow::Precise,
+            ..Default::default()
+        };
+        let (before, after) = soundtrack_reach(&config, 48_000.0);
+        assert!(before > 0.0 && after > 0.0, "{before}, {after}");
+        let (from, to) = settings.soundtrack_window(&config, 48_000.0);
+        // The last of 20 frames at 10 fps from 5 s is drawn at 6.9 s.
+        assert!((from - (5.0 - before)).abs() < 1e-9, "{from}");
+        assert!((to - (6.9 + after)).abs() < 1e-9, "{to}");
+    }
+
+    /// Every frame tells egui the adapter's texture ceiling: left at egui's
+    /// own 2048, the font atlas is sized against it and a dense frame loses
+    /// labels with nothing saying so (#368).
+    #[test]
+    fn every_frame_carries_the_adapters_texture_ceiling() {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 36.0));
+        assert_eq!(frame_input(screen, 1.5, 8192).max_texture_side, Some(8192));
     }
 
     /// Stage shares describe the measured render loop.

@@ -24,7 +24,7 @@ mod wav;
 use harmonigraph_take::{RenderProgress, WARNING_PREFIX};
 use harmonigraph_ui::layout::export_pixels_per_point as default_scale;
 use harmonigraph_ui::Layout;
-use harmonigraph_ui::{PitchRangeRender, VideoEncoder};
+use harmonigraph_ui::VideoEncoder;
 use render::Settings;
 use replay::Replay;
 use sink::{Sink, VideoOptions};
@@ -481,26 +481,14 @@ fn export(args: Args) -> Result<(), String> {
         ));
     }
 
-    // Frequency range: Fit piece, set once before the first frame as Video
-    // history's Fit video is, and named here, since the preview showed the
-    // range as dialled. Here rather than in `render` because it reads the take.
-    if appearance.render.pitch_range == PitchRangeRender::Fit {
-        let spectrum = &mut appearance.spectrum;
-        let readout = harmonigraph_ui::hz_readout;
-        match fit::pitch_range(&take, audio.as_mut(), &settings, spectrum)? {
-            Some((low, high)) => {
-                eprintln!(
-                    "frequency range fitted to the piece: {}-{} (dialled {}-{})",
-                    readout(low),
-                    readout(high),
-                    readout(spectrum.low_midi),
-                    readout(spectrum.high_midi),
-                );
-                (spectrum.low_midi, spectrum.high_midi) = (low, high);
-            }
-            None => eprintln!("frequency range: nothing lit or played to fit, so drawn as dialled"),
-        }
-    }
+    // Here rather than in `render` because it reads the take.
+    fit::apply(
+        appearance.render.pitch_range,
+        &take,
+        audio.as_mut(),
+        &settings,
+        &mut appearance.spectrum,
+    )?;
 
     let out = args.out.unwrap_or_else(|| {
         std::path::Path::new(&take_path).with_extension("mp4").display().to_string()

@@ -80,8 +80,6 @@ pub struct VoiceBaseline {
     pub lifetime: u64,
     pub actual_onset: Time,
     pub pitch_microcents: i64,
-    /// Absolute pitch at attack, retained independently of later player bends.
-    pub onset_pitch_microcents: i64,
     pub player_tuning: f64,
     pub frozen_offset_microcents: i64,
     pub velocity: f32,
@@ -105,7 +103,6 @@ impl Default for VoiceBaseline {
             lifetime: 0,
             actual_onset: 0.0,
             pitch_microcents: 0,
-            onset_pitch_microcents: 0,
             player_tuning: 0.0,
             frozen_offset_microcents: 0,
             velocity: 0.0,
@@ -151,9 +148,9 @@ pub struct InvalidCanonical;
 /// (`harmonigraph_record::publication`), so the live display, which applies
 /// records in publication order, checks it in debug builds alone (#1798). A
 /// take is read in time order, which a Tune whose delay was lowered while it
-/// recorded does break (its snapshot after the cut is timed at the old delay,
-/// its next deltas at the new), so the take reader refuses such a take. It
-/// owns no musical state.
+/// recorded broke before #1885 made a row's times never go back (its snapshot
+/// after the cut was timed at the old delay, its next deltas at the new), so
+/// the take reader refuses such a take. It owns no musical state.
 #[derive(Default)]
 pub struct CanonicalOrder {
     sources: std::collections::BTreeMap<SourceId, CanonicalCursor>,

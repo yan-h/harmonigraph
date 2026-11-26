@@ -393,8 +393,7 @@ fn production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correcti
     assert_eq!(correction, expected.correction_microcents());
     assert_eq!(onset.attack_node, expected.node());
     assert_eq!(onset.player_tuning, 0.5);
-    assert_eq!(onset.onset_pitch_microcents, input_pitch + correction);
-    assert_eq!(onset.pitch_microcents, onset.onset_pitch_microcents);
+    assert_eq!(onset.pitch_microcents, input_pitch + correction);
     assert_eq!(phrase.sources[0].shared().last_input.load(Ordering::Relaxed), input_pitch);
     assert_eq!(
         phrase.sources[0].shared().last_output.load(Ordering::Relaxed),
@@ -437,7 +436,6 @@ fn production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correcti
     assert!((moved - (0.75 + correction as f64 / 100_000_000.0)).abs() < 1e-9);
     let after = phrase.voice(0, 57, 0);
     assert_eq!(after.frozen_offset_microcents, correction);
-    assert_eq!(after.onset_pitch_microcents, onset.onset_pitch_microcents);
     assert_ne!(after.pitch_microcents, onset.pitch_microcents, "what sounds did move");
     phrase.release_all();
 }
@@ -459,8 +457,7 @@ fn initial_expressions_stay_with_their_source_before_musical_sorting() {
         let voice = phrase.voice(i, 57, 0);
         let input = 5_700_000_000 + (players[i] * 100_000_000.0).round() as i64;
         assert_eq!(voice.player_tuning, players[i]);
-        assert_eq!(voice.onset_pitch_microcents, input + voice.frozen_offset_microcents);
-        assert_eq!(voice.pitch_microcents, voice.onset_pitch_microcents);
+        assert_eq!(voice.pitch_microcents, input + voice.frozen_offset_microcents);
         assert!(
             (tuning_of(&output[i]).unwrap()
                 - (players[i] + voice.frozen_offset_microcents as f64 / 1e8))
@@ -487,7 +484,7 @@ fn an_unsnapped_onset_emits_existing_drift_without_claiming_a_node_or_the_refere
     let voice = phrase.voice(2, 61, 0);
     assert_eq!(voice.attack_node, None);
     assert_eq!(voice.frozen_offset_microcents, correction);
-    assert_eq!(voice.onset_pitch_microcents, 6_105_000_000 + correction);
+    assert_eq!(voice.pitch_microcents, 6_105_000_000 + correction);
     let emitted = output[2]
         .iter()
         .find_map(|(_, event)| match event {
@@ -674,7 +671,6 @@ fn production_moving_major_thirds_travel_hundreds_of_nodes_from_the_origin() {
             Some(LatticePos::new(0, i32::from(chord), 0)),
             "chord {chord}"
         );
-        assert_eq!(voice.onset_pitch_microcents, voice.pitch_microcents);
         if chord == 303 {
             assert!(voice.frozen_offset_microcents < -4_000_000_000);
         }

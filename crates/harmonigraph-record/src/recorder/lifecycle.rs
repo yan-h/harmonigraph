@@ -151,8 +151,11 @@ pub(super) fn transition(
                 next.action = Action::Record;
                 next.state = State::Recording { motion };
                 let audio_origin = history.recorded_end.unwrap_or(position);
-                next.history.recorded_end =
-                    (duration.is_finite() && duration >= 0.0).then_some(audio_origin + duration);
+                debug_assert!(
+                    duration.is_finite() && duration >= 0.0,
+                    "a block lasts a finite, non-negative time"
+                );
+                next.history.recorded_end = Some(audio_origin + duration);
                 next.origin = Some(audio_origin);
             } else if matches!(state, State::Recording { .. }) {
                 next.state = State::Recording { motion };

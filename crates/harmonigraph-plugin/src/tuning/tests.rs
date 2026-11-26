@@ -423,7 +423,6 @@ fn initial_expression_order_and_identity_match_in_both_production_routes() {
                 inspect_hub(&hub, |hub| hub.test_voice(if direct { DIRECT } else { 0 }, 0, 57))
                     .unwrap();
             assert_eq!(voice.player_tuning, *players.last().unwrap());
-            assert_eq!(voice.pitch_microcents, voice.onset_pitch_microcents);
         }
     }
 }
@@ -478,7 +477,6 @@ fn a_same_sample_wildcard_initializes_each_addressed_onset() {
             let voice = inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, key)).unwrap();
             assert_eq!(voice.player_tuning, player, "addressed key {key}");
             let expected = i64::from(key) * 100_000_000 + (player * 100_000_000.0).round() as i64;
-            assert_eq!(voice.onset_pitch_microcents, expected);
             assert_eq!(voice.pitch_microcents, expected);
             assert_eq!(
                 published.iter().find(|delta| delta.event.note == key).unwrap().pitch_microcents,
@@ -1316,50 +1314,39 @@ fn an_onset_past_the_held_ceiling_is_refused_before_copy_and_output() {
 }
 
 /// The admission replay must use the same identity rules as emission, even
-/// before any onset has sounded: replacement ids, stale releases, wildcard
-/// addressing and both channel-ending controllers all run through real input.
+/// before any onset has sounded: replacement ids, stale releases and wildcard
+/// addressing all run through real input.
 #[test]
 fn pending_retriggers_and_endings_reuse_held_capacity_in_wire_order() {
     let _scope = crate::test_scope::enter();
-    for controller in [None, Some(120), Some(123)] {
-        let mut pair = Pair::new();
-        let mut input: Vec<_> =
-            (0..HELD_PER_SOURCE).map(|key| note(key as i32, 0, key as i16, 0, true)).collect();
-        let Input::Note(mut invalid_release) = note(1, 0, 1, 2, false) else { unreachable!() };
-        invalid_release.velocity = f64::NAN;
-        input.extend([
-            note(100, 0, 0, 1, true),
-            Input::Note(invalid_release),
-            note(0, 0, 0, 2, false),
-            note(200, 0, 64, 3, true),
-        ]);
-        input.push(match controller {
-            Some(cc) => raw_midi([0xb0, cc, 0], 4),
-            None => note(100, -1, -1, 4, false),
-        });
-        input.push(note(201, 0, 64, 5, true));
-        let expected_copies = input.len() - 2; // Invalid release and overflow attack.
-        pair.step(input);
-        assert_eq!(inspect_tune(&pair.tune, |tune| tune.captured), expected_copies as u64);
-        let output = pair.idle();
-        let ids: Vec<_> =
-            output.iter().filter_map(|(_, e)| e.attack().map(|(id, _, _, _)| id)).collect();
-        assert_eq!(ids, (0..HELD_PER_SOURCE as i32).chain([100, 201]).collect::<Vec<_>>());
-        assert!(output
-            .iter()
-            .any(|(time, e)| *time == 4 && (e.release() || e.channel_termination().is_some())));
-        let held = if controller.is_some() { 1 } else { HELD_PER_SOURCE };
-        assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), held);
-        assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), held);
-        assert_eq!(
-            inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, 64).unwrap().host_note_id),
-            201
-        );
-        pair.tune.host_reset();
-        let cut = pair.idle();
-        assert_eq!(cut.iter().filter(|(_, e)| e.release()).count(), held);
-        assert!(cut.iter().any(|(_, e)| matches!(e, Event::Note { kind: 1, id: 201, .. })));
-    }
+    let mut pair = Pair::new();
+    let mut input: Vec<_> =
+        (0..HELD_PER_SOURCE).map(|key| note(key as i32, 0, key as i16, 0, true)).collect();
+    let Input::Note(mut invalid_release) = note(1, 0, 1, 2, false) else { unreachable!() };
+    invalid_release.velocity = f64::NAN;
+    input.extend([
+        note(100, 0, 0, 1, true),
+        Input::Note(invalid_release),
+        note(0, 0, 0, 2, false),
+        note(200, 0, 64, 3, true),
+        note(100, -1, -1, 4, false),
+        note(201, 0, 64, 5, true),
+    ]);
+    let expected_copies = input.len() - 2; // Invalid release and overflow attack.
+    pair.step(input);
+    assert_eq!(inspect_tune(&pair.tune, |tune| tune.captured), expected_copies as u64);
+    let output = pair.idle();
+    let ids: Vec<_> =
+        output.iter().filter_map(|(_, e)| e.attack().map(|(id, _, _, _)| id)).collect();
+    assert_eq!(ids, (0..HELD_PER_SOURCE as i32).chain([100, 201]).collect::<Vec<_>>());
+    assert!(output.iter().any(|(time, e)| *time == 4 && e.release()));
+    assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), HELD_PER_SOURCE);
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), HELD_PER_SOURCE);
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, 64).unwrap().host_note_id), 201);
+    pair.tune.host_reset();
+    let cut = pair.idle();
+    assert_eq!(cut.iter().filter(|(_, e)| e.release()).count(), HELD_PER_SOURCE);
+    assert!(cut.iter().any(|(_, e)| matches!(e, Event::Note { kind: 1, id: 201, .. })));
 }
 
 /// A same-key onset replaces the voice State holds for that identity, so the
@@ -1628,6 +1615,36 @@ fn a_channel_bend_on_a_held_note_reaches_the_display_and_the_take() {
             assert_eq!(pair[0].1 .0, pair[1].0 .0, "{lane}: the ribbon breaks: {segments:?}");
         }
     }
+}
+
+/// A channel bend over two held voices gives each its own delta, sequenced in
+/// turn, so the take's deltas keep their source's order.
+#[test]
+fn a_channel_bend_over_two_voices_keeps_the_takes_order() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = crate::test_device::recorded(|| hub().with_adaptive());
+    hub.activate();
+    let mut raw = 0;
+    let mut step = |input: Vec<Input>| {
+        hub.run_format(raw, input, None, None, 512);
+        raw += 512;
+    };
+    step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 0, true)]);
+    step(vec![raw_midi([0xE0, 0, 0x60], 0)]);
+    step(vec![]);
+    let mut order = harmonigraph_core::canonical::CanonicalOrder::default();
+    let mut bent = Vec::new();
+    for record in capture.drain_canonical() {
+        if let CanonicalRecord::Delta(delta) = record {
+            let source = harmonigraph_core::SourceId(delta.event.source);
+            assert!(order.note(source, delta.sequence), "delta {} out of order", delta.sequence);
+            if matches!(delta.event.kind, harmonigraph_take::NoteKind::Tuning { .. }) {
+                bent.push(delta.event.note);
+            }
+        }
+    }
+    assert_eq!(bent, [60, 64], "the bend moves each held voice once, and has no delta of its own");
 }
 
 #[test]

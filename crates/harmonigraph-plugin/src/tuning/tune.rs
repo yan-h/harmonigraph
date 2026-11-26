@@ -250,7 +250,7 @@ impl Tune {
         // dropped.
         for cell in self.held.iter_mut() {
             if let Some(voice) = cell.take() {
-                let _ = self.cut.push(Event::note_off(voice.id, voice.channel, voice.key, false));
+                let _ = self.cut.push(Event::note_off(voice.id, voice.channel, voice.key));
             }
         }
         for channel in 0..16u8 {
@@ -380,9 +380,9 @@ impl Tune {
     }
 
     /// Refuse an onset before either path sees it if its eventual wire
-    /// position has no identity cell. Pending releases and channel endings
-    /// free cells; retriggers replace them. This is scratch, not a second
-    /// authority: it replays the actual held reducer in FIFO emission order.
+    /// position has no identity cell. Pending releases free cells; retriggers
+    /// replace them. This is scratch, not a second authority: it replays the
+    /// actual held reducer in FIFO emission order.
     fn can_hold(&self, event: Event) -> bool {
         // Even if every pending event adds a voice, this cannot fill the set.
         // Ordinary phrases therefore do not need to replay their delay line.
@@ -665,16 +665,6 @@ impl Tune {
                 cell.is_some_and(|voice| event.matches(voice.id, voice.channel, voice.key))
             }) {
                 *cell = None;
-            }
-        }
-        if let Event::Midi { port: 0, data, .. } = event {
-            let channel = data[0] & 15;
-            if event.channel_termination().is_some() {
-                for cell in held.iter_mut() {
-                    if cell.is_some_and(|voice| voice.channel == channel) {
-                        *cell = None;
-                    }
-                }
             }
         }
         true

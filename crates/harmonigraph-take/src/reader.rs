@@ -129,7 +129,7 @@ pub(crate) fn assemble(
 
 /// Sort by time, and refuse what no stable sort can make a valid history: a
 /// take whose records break their source's order (`CanonicalOrder`), as one
-/// does when a Tune's delay is lowered while it records.
+/// recorded before #1885 did when a Tune's delay was lowered while it recorded.
 ///
 /// Stable, so simultaneous events keep the order they were played in
 /// (note-off before the note-on that replaces it, and so on). Within a source

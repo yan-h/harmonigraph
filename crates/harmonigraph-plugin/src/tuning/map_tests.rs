@@ -165,6 +165,62 @@ fn an_engine_or_follow_event_past_the_top_step_selects_the_top_step() {
     assert_eq!(playback.follow, harmonigraph_core::lattice_map::Follow::ThirdsAndFifths);
 }
 
+/// The tuning a note arrives with is the expression on its own sample: one
+/// later in the same callback moves it from there, and does not become the
+/// pitch the map's correction was decided from.
+#[test]
+fn lattice_map_corrects_from_the_tuning_on_the_onsets_own_sample() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = hub().with_adaptive();
+    hub.activate();
+    let (first, _) = install(&hub);
+    hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
+    // The tuning the instrument is sent at the onset's sample.
+    let sent = |values: &[(u32, Event)]| {
+        values.iter().find_map(|(time, event)| match event {
+            Event::Expression { kind: 2, value, .. } if *time == 0 => Some(*value),
+            _ => None,
+        })
+    };
+    let at_onset = vec![note(1, 0, 64, 0, true), expression(1, 0.1, 0)];
+    let alone_sent = sent(&hub.run(512, at_onset, None).values);
+    let alone = voice(&hub, crate::tuning::DIRECT, 64);
+    hub.run(1024, vec![note(1, 0, 64, 0, false)], None);
+    let with_later = vec![note(2, 0, 64, 0, true), expression(2, 0.1, 0), expression(2, 0.3, 30)];
+    let later_sent = sent(&hub.run(1536, with_later, None).values);
+    let later = inspect_hub(&hub, |hub| hub.test_voice(crate::tuning::DIRECT, 0, 64)).unwrap();
+    assert_eq!(later.frozen_offset_microcents, alone.frozen_offset_microcents);
+    assert_eq!(later.attack_node, Some(first.node(64)));
+    assert!(alone_sent.is_some(), "the onset's own tuning goes on the wire at its sample");
+    assert_eq!(later_sent, alone_sent, "and the later one does not replace it there");
+}
+
+/// A per-note tuning expression after the onset draws the pitch that goes on
+/// the wire: the player's value, the channel's bend and the map's frozen
+/// correction together, in the Hub's voice that the display and the take read.
+#[test]
+fn lattice_map_draws_a_later_tuning_expression_with_its_bend_and_correction() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = hub().with_adaptive();
+    hub.activate();
+    let (first, _) = install(&hub);
+    hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
+    let Input::Note(mut struck) = note(1, 0, 64, 0, true) else { unreachable!() };
+    struck.velocity = 0.375;
+    hub.run(512, vec![Input::Note(struck)], None);
+    let held = voice(&hub, crate::tuning::DIRECT, 64);
+    let correction = first.correction(64, Tuning::just());
+    assert!(correction != 0, "the map moves E, so the correction is in the pitch");
+    assert_eq!(held.frozen_offset_microcents, correction);
+    assert_eq!(held.velocity, 0.375, "the attack's velocity is the voice's");
+    hub.run(1024, vec![raw_midi([0xE0, 0x00, 0x60], 0)], None);
+    let bent = voice(&hub, crate::tuning::DIRECT, 64);
+    assert!(bent.pitch_microcents != held.pitch_microcents, "the bend moves the held voice");
+    hub.run(1536, vec![expression(1, 0.25, 0)], None);
+    let expressed = voice(&hub, crate::tuning::DIRECT, 64);
+    assert_eq!(expressed.pitch_microcents, bent.pitch_microcents + 25_000_000);
+}
+
 #[test]
 fn lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice() {
     let _scope = crate::test_scope::enter();
@@ -182,25 +238,19 @@ fn lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice()
     assert_eq!(landed.player_tuning, semitones, "the incoming tuning is still the player's");
     assert_eq!(landed.frozen_offset_microcents, 0, "already on the map, nothing left to add");
     assert_eq!(landed.attack_node, Some(first.node(64)));
-    assert_eq!(landed.onset_pitch_microcents, 64 * 100_000_000 + e);
+    assert_eq!(landed.pitch_microcents, 64 * 100_000_000 + e);
     // Sixty cents sharp of E sounds nearer F, so it takes F's assignment and
     // is pulled onto it rather than left between two slots.
     hub.run(1024, vec![note(2, 0, 76, 0, true), expression(2, 0.6, 0)], None);
     let rounded = voice(&hub, crate::tuning::DIRECT, 76);
     assert_eq!(rounded.attack_node, Some(first.node(77)));
-    assert_eq!(
-        rounded.onset_pitch_microcents,
-        77 * 100_000_000 + first.correction(77, Tuning::just())
-    );
+    assert_eq!(rounded.pitch_microcents, 77 * 100_000_000 + first.correction(77, Tuning::just()));
     // A channel bend standing at the attack is part of the pitch that arrived,
     // exactly as the adaptive engine reads it.
     hub.run(1536, vec![raw_midi([0xE0, 0x00, 0x60], 0), note(3, 0, 67, 1, true)], None);
     let bent = voice(&hub, crate::tuning::DIRECT, 67);
     assert!(bent.frozen_offset_microcents != first.correction(67, Tuning::just()));
-    assert_eq!(
-        bent.onset_pitch_microcents,
-        68 * 100_000_000 + first.correction(68, Tuning::just())
-    );
+    assert_eq!(bent.pitch_microcents, 68 * 100_000_000 + first.correction(68, Tuning::just()));
 }
 
 #[test]
@@ -770,7 +820,7 @@ fn the_strip_sounds_each_spelling_at_one_pitch_through_a_progression() {
         let play = |on| (0..3).map(|i| note(id + i, 0, chord[i as usize], 0, on)).collect();
         session.play(play(true), vec![]);
         for key in chord {
-            let pitch = session.voice(true, 0, key as u8).onset_pitch_microcents;
+            let pitch = session.voice(true, 0, key as u8).pitch_microcents;
             sounded.entry(key).or_default().push(pitch);
         }
         session.play(play(false), vec![]);
@@ -914,7 +964,19 @@ fn the_strip_block_names_where_the_next_note_sounds_after_the_clamp() {
         // A lane's host value is its step plus `OFFSET_LIMIT`.
         session.everywhere(|| vec![parameter("map-fifths", 9.0 + fifths, 0)]);
     };
+    let policy = harmonigraph_core::configuration::PolicyConfig {
+        decode_fifths: true,
+        decoded_fifth: 696_578_428,
+        ..Default::default()
+    };
+    let shown = |session: &Decoding| {
+        hub_wrapper(&session.hub).test_inspect_plugin(|plugin| {
+            crate::lattice_maps::view(&plugin.params).strip_flat(policy)
+        })
+    };
     lane(&mut session, 8.0);
+    let lane_column = harmonigraph_core::policy::strip::moved_column(8, 0);
+    assert_eq!(shown(&session), Some(lane_column), "the lane's own column before any slide");
     for on in [true, false] {
         session.play(f_sharps(on), vec![]);
     }
@@ -924,13 +986,22 @@ fn the_strip_block_names_where_the_next_note_sounds_after_the_clamp() {
     lane(&mut session, 9.0);
     assert_eq!(session.a(), Some(a_at(top)), "still at the top");
     lane(&mut session, 8.0);
-    let policy = harmonigraph_core::configuration::PolicyConfig {
-        decode_fifths: true,
-        decoded_fifth: 696_578_428,
-        ..Default::default()
-    };
-    let shown = hub_wrapper(&session.hub)
-        .test_inspect_plugin(|plugin| crate::lattice_maps::view(&plugin.params).strip_flat(policy));
-    assert_eq!(shown, Some(top), "the Strip block");
+    assert_eq!(shown(&session), Some(top), "the Strip block");
     assert_eq!(session.a(), Some(a_at(top)), "where the next A sounds");
+}
+
+/// A note from a Tune with Retune off is no spelling: struck on the decoded
+/// D's sample, a plain A leaves the strip to the D alone, so the D sounds
+/// where it does struck by itself, not moved off the A's wolf.
+#[test]
+fn a_retune_off_note_on_a_decoded_notes_sample_does_not_move_the_strip() {
+    let _scope = crate::test_scope::enter();
+    let d = |plain: Vec<Input>| {
+        let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
+        session.play(vec![note(1, 0, 62, 0, true)], plain);
+        session.voice(true, 0, 62).attack_node
+    };
+    let alone = d(vec![]);
+    assert_eq!(d(vec![note(2, 0, 69, 0, true)]), alone);
+    assert_eq!(alone, Some(LatticePos::new(2, 0, 0)), "the fixture's D is 9/8");
 }

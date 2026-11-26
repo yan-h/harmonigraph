@@ -342,9 +342,10 @@ mod tests {
 
     #[test]
     fn seconds_and_slicing_line_up_with_the_sample_rate() {
-        let frames: Vec<Vec<f32>> = (0..100).map(|i| vec![i as f32 / 100.0]).collect();
+        // A second and a half, so a length that is not one second is read.
+        let frames: Vec<Vec<f32>> = (0..150).map(|i| vec![i as f32 / 150.0]).collect();
         let mut audio = Audio::from_bytes(&build(3, 32, 1, 100, &frames)).unwrap();
-        assert_eq!(audio.seconds(), 1.0);
+        assert_eq!(audio.seconds(), 1.5);
         assert_eq!(slice_seconds(&mut audio, 0.1, 0.2).0.len(), 10);
         // Past the end is empty, not a panic: the visual tail outlives
         // the audio whenever a note fades out at the end.
