@@ -67,9 +67,9 @@
 //! up with a separate bounce of the same song; the take's own WAV replaced
 //! that bounce (#903, #972, #1196, #1342).
 //!
-//! Hosts that report no transport fall back to a plugin-local sample
-//! count, so the standalone-style "just record what you play" case still
-//! works; the take then starts at zero whenever recording was armed.
+//! A host that reports no song position records nothing, the status line
+//! waiting for playback, as with the transport stopped: Bitwig always reports
+//! one.
 //!
 //! # Threading
 //!

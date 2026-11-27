@@ -64,16 +64,16 @@ fn a_take_carries_released_axes_in_its_configuration_records() {
         ..Default::default()
     };
     settings.submit(edit);
-    device.run(0, vec![], None);
+    rolling(&device, 0, vec![]);
     let linked = settings.view().resolved.tuning;
     settings.submit(ConfigEdit::temper(harmonigraph_core::Comma::Syntonic, false, linked));
-    device.run(64, vec![], None);
+    rolling(&device, 64, vec![]);
     let expected = settings.view().resolved;
     assert!(!expected.modes.tempered.syntonic);
     let fresh = Tuning::default().axes();
     assert!(expected.tuning.axes().iter().zip(fresh).all(|(axis, fresh)| *axis != fresh));
     capture.arm();
-    device.run(128, vec![], None);
+    rolling(&device, 128, vec![]);
     let entries = capture.drain_entries();
     let configs: Vec<_> = entries
         .iter()
@@ -106,7 +106,7 @@ fn a_take_records_the_board_s_tuning_only_while_pass_through_decodes() {
         policy: Some(PolicyConfig { decode_fifths: true, ..PolicyConfig::default() }),
         ..Default::default()
     });
-    device.run(0, vec![], None);
+    rolling(&device, 0, vec![]);
     assert_eq!(saved(&device.save()).axes[1], just.three, "a save stored the drawn fifth");
     capture.arm();
     let lattice_map = Input::Param(clap_event_param_value {
@@ -119,7 +119,7 @@ fn a_take_records_the_board_s_tuning_only_while_pass_through_decodes() {
         key: -1,
         value: f64::from(harmonigraph_core::lattice_map::TuningEngine::LatticeMap.index()),
     });
-    device.run(64, vec![lattice_map], None);
+    rolling(&device, 64, vec![lattice_map]);
     let fifths: Vec<_> = capture
         .drain_entries()
         .iter()
@@ -137,6 +137,12 @@ fn a_take_records_the_board_s_tuning_only_while_pass_through_decodes() {
     assert_eq!(drawn, [(board, true), (just.three, false)]);
     let switched = fifths[1].t - fifths[0].t;
     assert!((switched - 10.0 / 48_000.0).abs() < 1e-9, "switched {switched} s into the block");
+}
+
+/// One 64-frame callback at `raw` with the transport rolling there, as a
+/// take records: a block with no song position records nothing.
+fn rolling(device: &Device, raw: i64, events: Vec<Input>) {
+    device.run_transport(raw, events, false, None, Some(transport(raw as f64 / 48_000.0, 0)));
 }
 
 pub(in crate::configuration) fn transport(seconds: f64, time: u32) -> clap_event_transport {
@@ -1109,6 +1115,26 @@ fn a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take(
     }
 }
 
+/// A block with no song position records nothing into an armed take, which
+/// waits for playback as with the transport stopped (Bitwig always reports
+/// one); the same take records once the transport rolls.
+#[test]
+fn an_armed_take_records_nothing_from_a_block_with_no_song_position() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = crate::test_device::recorded(|| hub().with_retune());
+    device.activate();
+    capture.arm();
+    device.run(0, vec![note(0, 60, 0, CLAP_EVENT_NOTE_ON)], None);
+    device.run(64, vec![], None);
+    assert_eq!(capture.drain_entries().len(), 0, "a block with no position recorded");
+    rolling(&device, 128, vec![]);
+    let entries = capture.drain_entries();
+    assert!(
+        matches!(entries.first(), Some(harmonigraph_record::Entry::Run { .. })),
+        "the take records once the transport rolls"
+    );
+}
+
 #[test]
 fn a_configuration_applied_before_arming_records_once_as_the_takes_initial_value() {
     let _scope = crate::test_scope::enter();
@@ -1117,9 +1143,9 @@ fn a_configuration_applied_before_arming_records_once_as_the_takes_initial_value
     for i in 0..9 {
         device.settings().submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0 + i as f32)));
     }
-    device.run(0, vec![], None);
+    rolling(&device, 0, vec![]);
     capture.arm();
-    device.run(64, vec![], None);
+    rolling(&device, 64, vec![]);
     let records = capture.drain_entries();
     let configs: Vec<_> = records
         .into_iter()
@@ -1230,11 +1256,11 @@ fn every_engine_records_a_tuning_edit_at_the_callback_that_applies_it() {
             .params
             .insert("tuning-engine".into(), harmonigraph_clap::plugin::ParamValue::I32(engine));
         device.load(state);
-        device.run(0, vec![], None);
+        rolling(&device, 0, vec![]);
         capture.arm();
-        device.run(64, vec![], None);
+        rolling(&device, 64, vec![]);
         device.settings().submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0)));
-        device.run(128, vec![], None);
+        rolling(&device, 128, vec![]);
         let configs: Vec<_> = capture
             .drain_entries()
             .into_iter()

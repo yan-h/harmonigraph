@@ -458,8 +458,7 @@ impl Recorder {
     /// Close or open this block's run. `origin` is where the block sits in the
     /// take's audio when it records, and `at` is its first sample on the
     /// presentation clock. The transport observation gives an origin only to
-    /// an armed take that rolls, and a block with no transport position gives
-    /// its local clock to any armed take.
+    /// an armed take that rolls, and a block with no song position gives none.
     ///
     /// A run opened before the take was last armed ends here, and the block
     /// opens a new one: a Stop and a Start between two callbacks.
