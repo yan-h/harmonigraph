@@ -25,12 +25,12 @@ pub(super) struct Offscreen {
     pub(super) bloom: Option<LatticeBloom>,
     /// The node glow's own target, present only while the view asks for one.
     pub(super) glow: Option<GlowTarget>,
-    /// The names' shadow atlas, present only while a frame has names casting a
-    /// shadow (`ensure_shadow`).
+    /// The shadow atlas — every node's, marker's and name's cell — present
+    /// only while a frame has a caster that takes one (`ensure_shadow`).
     ///
     /// Its own lifetime rather than a member of [`GlowTarget`], because the two
-    /// answer to different bars: a name's shadow lands on the ground at a Reach
-    /// of 0, where there is no light and no glow target at all.
+    /// answer to different bars: a shadow lands on the ground at a Reach of 0,
+    /// where there is no light and no glow target at all.
     pub(super) shadow: Option<shadow::ShadowTarget>,
     /// Composite: background + node ink + blurred bloom (quarter A) + uniforms.
     pub(super) composite_bind_group: wgpu::BindGroup,
@@ -349,11 +349,11 @@ impl Offscreen {
 
     /// Make this pane's shadow atlas hold `want` texels — none at all where
     /// `want` is `None` — the bargain [`ensure_glow`](Offscreen::ensure_glow)
-    /// strikes, on the names' shadows instead of the Reach.
+    /// strikes, on the shadows instead of the Reach.
     ///
     /// Grown to demand and never shrunk while it is wanted: a layout is a pure
     /// function of its frame (`shadow::pack_into`), so the texture's size decides
-    /// nothing drawn, and a smaller one rebuilt on every frame a name leaves
+    /// nothing drawn, and a smaller one rebuilt on every frame a caster leaves
     /// would be an allocation per frame of a fade. Nothing is carried across a
     /// rebuild the way a glow's ink strip is: the atlas is rewritten from the
     /// ink up every frame it is used.

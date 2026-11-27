@@ -1791,8 +1791,8 @@ struct PaneTargets {
     /// The node light, which Background glow reach or gain at 0 switches off
     /// (`Offscreen::ensure_glow`).
     glow: bool,
-    /// The names' shadow atlas, at the size this frame's cells pack to, or
-    /// none where no name casts one (`Offscreen::ensure_shadow`).
+    /// The shadow atlas, at the size this frame's cells pack to, or none
+    /// where no caster takes a cell (`Offscreen::ensure_shadow`).
     shadow: Option<[u32; 2]>,
     /// How many nodes this frame lights: the rows its light table and ink
     /// strip have to hold.

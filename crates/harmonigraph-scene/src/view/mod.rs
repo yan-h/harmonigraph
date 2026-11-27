@@ -513,9 +513,8 @@ pub struct ViewConfig {
     /// brightness, the same units [`Gradient::lightness`](crate::Gradient) is
     /// authored in, so a ground and a gradient can be compared by their
     /// numbers. There is no off position and it needs none — each ring has a
-    /// width. What the bottom of the bar reaches is black, which against this
-    /// skin's panel reads as holes punched through the lattice; a little above
-    /// it, at the panel's own `L*` (8.8 on the fresh skin), a quiet node
+    /// width. What the bottom of the bar reaches is black, the picture's own
+    /// ground the lattice is drawn on (`skin::PICTURE`), where a quiet node
     /// vanishes into the pane and only sounding ones draw.
     pub lattice_ground: f32,
     /// The resting MARKERS, as an `L*` 0..100 on the same axis as

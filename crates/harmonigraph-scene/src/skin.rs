@@ -26,10 +26,10 @@ use glam::Vec4;
 #[derive(Clone, Copy, Debug)]
 pub struct Skin {
     // ---- UI chrome (sRGB bytes; converted to egui colors in theme) ----
-    // CHROME only. What the lattice is drawn AT REST in — its markers, both of
-    // a node's rings where nothing is lit — is a view setting rather than a
-    // skin color (`ViewConfig::lattice_ground`), because it is a thing to be
-    // dialled while a picture is being read.
+    // CHROME only. What the lattice is drawn AT REST in — both of a node's
+    // rings where nothing is lit, and its markers — is view settings rather
+    // than skin colors (`ViewConfig::lattice_ground`, `ViewConfig::marker_ink`),
+    // because they are things to be dialled while a picture is being read.
     /// Window/panel background: the settings page, and every popup.
     pub panel: [u8; 3],
     /// Pane headers and folded rails, one step above `panel`.

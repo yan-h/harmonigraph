@@ -111,11 +111,11 @@ struct ShadowCaster {
 // Every caster's shadow, indexed by the caster's own index in the frame
 // (`pack_into`'s order).
 //
-// A storage buffer and a group of its own. A node's instance rows and the box
-// beside them already take fifteen of the sixteen attribute locations a vertex
-// layout has, where a caster is four vec4 rows (see `ShadowCaster` in
-// shadow.rs); and a cell is read by a node, a marker and a name alike, so one
-// array they all index is also one place the shape is written down.
+// A storage buffer and a group of its own, rather than four more vec4 rows
+// (see `ShadowCaster` in shadow.rs) beside the fourteen attribute locations a
+// node's instance rows and the box beside them take: a cell is read by a
+// node, a marker and a name alike, so one array they all index is also one
+// place the shape is written down.
 @group(3) @binding(0) var<storage, read> shadow_casters: array<ShadowCaster>;
 
 // Which node casters can cover each part of the pane (`shadow::node_occluders`):
