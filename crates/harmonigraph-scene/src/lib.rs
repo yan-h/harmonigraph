@@ -306,8 +306,9 @@ pub fn clamp_span(lo: f32, hi: f32, (min, max): (f32, f32), min_span: f32) -> (f
 /// `L*` 94 at hues about 120-130 has a sharp corner (green saturates while
 /// blue turns steep within 0.2 `L*`), and its brightness bend puts the corner
 /// where the table samples more coarsely. #1143 accepted that miss at
-/// non-default dials (#1111 measured it at up to 36.7/255) a day before #1205
-/// made a bent gradient the fresh one, and Yan accepted it on the fresh look
+/// non-default dials (#1111 measured up to 30.9/255 on unbent gradients, and
+/// #1110's branch 36.7 with a bend) a day before #1205 made a bent gradient
+/// the fresh one, and Yan accepted it on the fresh look
 /// too (#1994 CL1). What would remove it is a table entry pinned on the
 /// corner — a second warp beside the bend's in [`LutSpacing`] and in every
 /// shader's `lut_position`, catching only the one corner the arc crosses — or
