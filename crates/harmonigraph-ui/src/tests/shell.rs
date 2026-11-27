@@ -148,14 +148,14 @@ fn the_soonest_ask_wins_and_one_past_the_poll_holds_nothing() {
     assert_eq!(held.next_change(), Some(0.01));
     assert!(!held.every_frame(Some(144.0)), "a 10 ms pace was judged against 144 Hz");
     assert!(held.every_frame(Some(60.0)), "a pace under one 60 Hz frame was not judged");
-    held.hold(Reason::Releasing);
+    held.hold(Reason::Lattice);
     assert_eq!(held.next_change(), Some(0.0));
 
     let mut still = Animating::default();
     still.hold_for(Reason::Audible, crate::IDLE_REPAINT_INTERVAL.as_secs_f64());
     assert!(!still.asks(), "a pace at the idle poll held the loop");
     assert_eq!(still.to_string(), "");
-    assert_eq!(held.to_string(), "roll~ releasing playhead~");
+    assert_eq!(held.to_string(), "roll~ lattice playhead~");
 }
 
 /// Run one frame of `panes` at `t`, each filling a pass of its own, as a shell
@@ -245,7 +245,7 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
             );
             let visible = level * gain > 0.5 / 255.0;
             assert_eq!(
-                Animating::of(&state).asks_for(Reason::Releasing),
+                Animating::of(&state).asks_for(Reason::Lattice),
                 visible,
                 "at {t} s the light is {level} at gain {gain}"
             );
@@ -288,19 +288,19 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
         draw(&mut abandoned, t);
     }
     assert!(
-        Animating::of(&abandoned).asks_for(Reason::Releasing),
+        Animating::of(&abandoned).asks_for(Reason::Lattice),
         "the tail was over before the surface hid"
     );
     draw_panes(&ctx, &mut abandoned, 4.05, &[]);
     assert!(
-        !Animating::of(&abandoned).asks_for(Reason::Releasing),
+        !Animating::of(&abandoned).asks_for(Reason::Lattice),
         "an undrawn surface held the loop awake"
     );
 
     state.picture.appearance.view.glow_strength = 0.0;
     draw(&mut state, 60.0);
     assert!(
-        !Animating::of(&state).asks_for(Reason::Releasing),
+        !Animating::of(&state).asks_for(Reason::Lattice),
         "a glow that does not draw held the loop awake"
     );
 }
@@ -340,10 +340,10 @@ fn a_released_note_keeps_repainting_through_its_staggered_departure() {
     // starting half a fade later: 1.15 s past the off.
     draw_panes(&ctx, &mut state, 1.0 + 1.1, &[Pane::Lattice]);
     assert!(state.picture.runtime.tracker.voices().next().is_none(), "the voice outlasted 1 s");
-    assert!(Animating::of(&state).asks_for(Reason::Releasing), "the departure was cut short");
+    assert!(Animating::of(&state).asks_for(Reason::Lattice), "the departure was cut short");
     draw_panes(&ctx, &mut state, 1.0 + 1.2, &[Pane::Lattice]);
     assert!(
-        !Animating::of(&state).asks_for(Reason::Releasing),
+        !Animating::of(&state).asks_for(Reason::Lattice),
         "the loop stayed awake past the departure"
     );
 }

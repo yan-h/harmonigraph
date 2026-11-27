@@ -142,7 +142,7 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize,
     }
     let glow = state.surfaces.glow_fade.entry(surface).or_default();
     let moving = glow.step_drawn(scene, now);
-    state.surfaces.moving_this_frame.hold_if(crate::Reason::Releasing, moving);
+    state.surfaces.moving_this_frame.hold_if(crate::Reason::Lattice, moving);
 }
 
 /// The attack and release coefficients for a step from `previous` to `now`:
@@ -183,7 +183,7 @@ impl GlowFade {
     /// Answers whether some light still moves a pixel on its own after the
     /// step: the larger of its level's distance from its target and its
     /// colour's still to move ([`easing`]), times the glow gain, is over
-    /// [`VISIBLE_STEP`]. What the frame loop stays awake for (`releasing` in
+    /// [`VISIBLE_STEP`]. What the frame loop stays awake for (`lattice` in
     /// `lib.rs`), asked on the step's own draw.
     ///
     /// Stepped on the Glow times of the scene's own view, the look it was

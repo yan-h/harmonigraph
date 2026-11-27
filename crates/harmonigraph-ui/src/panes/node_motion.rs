@@ -13,9 +13,9 @@ pub(super) fn apply(scene: &mut Scene, state: &mut crate::PictureState, surface:
         now,
     );
     let moving = &mut state.surfaces.moving_this_frame;
-    moving.hold_if(crate::Reason::Releasing, motion.moving());
+    moving.hold_if(crate::Reason::Lattice, motion.moving());
     // A departure that starts at its time with nothing moving before it.
     if let Some(at) = motion.off_due() {
-        moving.hold_for(crate::Reason::Releasing, at - now);
+        moving.hold_for(crate::Reason::Lattice, at - now);
     }
 }

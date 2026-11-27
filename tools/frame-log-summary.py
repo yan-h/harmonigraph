@@ -390,7 +390,7 @@ def report_first_note(run, evs, t0):
     stretches = timeline(evs, run[-1]['t'], 'animating')
     # A note asks no reason of its own since #1983: it shows as the pictures
     # it moves, its lattice node arriving, its ribbon or its envelope.
-    notes = ('releasing', 'roll', 'envelope')
+    notes = ('lattice', 'roll', 'envelope')
     note = next((start for start, _, reasons in stretches
                  if any(r in reasons for r in notes)), None)
     if note is None:

@@ -607,7 +607,7 @@ reasons! {
     /// its colour still easing toward its reading
     /// ([`GlowFade::step_drawn`](panes::glow_fade::GlowFade::step_drawn)),
     /// which can outlast the slices by many seconds.
-    Releasing => "releasing",
+    Lattice => "lattice",
     /// A picture drawn from audio above silence. Samples arriving are not
     /// enough, because a host streams silence with its transport stopped and
     /// drawing that at full rate cost Bitwig's main thread about 30% for a
@@ -629,7 +629,7 @@ reasons! {
     ///   wedge is drawn, on the note Fade
     ///   ([`RingFade`](harmonigraph_scene::RingFade)). That fade is the whole of
     ///   a ring-posed node's leaving: the pose itself snaps back behind a
-    ///   presence already at zero, so nothing in `Releasing` moves for it.
+    ///   presence already at zero, so nothing in `Lattice` moves for it.
     ///
     /// A stage downstream of another answers only for its own state: while the
     /// stage it reads is still moving, that stage holds the loop, and each
