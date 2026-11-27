@@ -584,10 +584,8 @@ impl LatticeCallback {
                         ),
                         curve: scene.view.glow_curve.shape(),
                         wash: scene.view.glow_wash,
-                        // Prepare sets this when any shipped instance is lit.
-                        lit: 0.0,
                         accumulation: scene.view.glow_accumulation,
-                        padding_end: 0.0,
+                        padding_end: Float2::default(),
                     }
                 } else {
                     bytemuck::Zeroable::zeroed()

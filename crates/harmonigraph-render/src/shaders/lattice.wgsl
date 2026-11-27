@@ -69,9 +69,8 @@ struct GlowParams {
     span: f32,
     curve: f32,
     wash: f32,
-    lit: f32,
     accumulation: f32,
-    padding_end: f32,
+    padding_end: vec2<f32>,
 };
 
 struct TextureParams {
@@ -3405,9 +3404,6 @@ fn fs_glow_splat(in: GlowSplatOut) -> GlowStatistics {
 
 @fragment
 fn fs_glow_resolve(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    if u.glow.lit <= 0.0 {
-        return vec4<f32>(0.0);
-    }
     let pixel = vec2<i32>(pos.xy);
     let scene_pixel = pos.xy * u.texture.target_size / vec2<f32>(textureDimensions(glow_sum));
     let sum = textureLoad(glow_sum, pixel, 0);
