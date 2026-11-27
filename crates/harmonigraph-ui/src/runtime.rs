@@ -95,8 +95,6 @@ pub struct VisualRuntime {
     /// Offline replay supplies recorded resolved boundaries, never frame-driven detection.
     pub replayed_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
     pub adaptive_policy: harmonigraph_core::configuration::PolicyConfig,
-    /// The owner's host input was lost ([`ConfigurationView::input_lost`](crate::params::ConfigurationView::input_lost)).
-    pub configuration_input_lost: bool,
     /// Show "Tuning change pending audio adoption": the configuration the
     /// editor requested has gone unadopted for [`PENDING_AFTER`].
     pub configuration_pending_shown: bool,
@@ -144,7 +142,6 @@ impl Default for VisualRuntime {
             config_reducer: Default::default(),
             replayed_configuration: None,
             adaptive_policy: Default::default(),
-            configuration_input_lost: false,
             configuration_pending_shown: false,
             configuration_unadopted: PendingLabel::default(),
             maps_pending: false,
@@ -203,7 +200,6 @@ impl VisualRuntime {
             self.apply_view(owned);
         } else {
             self.board_drawn = false;
-            self.configuration_input_lost = false;
             match self.replayed_configuration {
                 Some(recorded) => self.apply_resolved(recorded),
                 None => self.apply_resolved(self.config_reducer.resolved()),
@@ -216,7 +212,6 @@ impl VisualRuntime {
     fn apply_view(&mut self, owned: crate::params::ConfigurationView) {
         self.board_drawn = owned.board;
         self.apply_resolved(owned.resolved);
-        self.configuration_input_lost = owned.input_lost;
         self.configuration_pending_shown =
             self.configuration_unadopted.shown(owned.unadopted, Instant::now());
     }

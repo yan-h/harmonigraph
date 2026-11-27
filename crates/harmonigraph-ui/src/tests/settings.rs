@@ -1152,9 +1152,15 @@ fn a_configuration_fault_asks_for_a_host_reset() {
     use panes::tuning::CONFIGURATION_FAULT_NOTICE as FAULT;
     let shapes = |input_lost, too_many| {
         let mut state = fresh();
-        state.picture.runtime.configuration_input_lost = input_lost;
         state.picture.runtime.learn_too_many = too_many;
-        tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT).shapes
+        let configuration = params::ConfigurationView {
+            resolved: harmonigraph_core::configuration::ConfigReducer::default().resolved(),
+            board: false,
+            input_lost,
+            unadopted: None,
+        };
+        let backend = RecordingBackend { configuration: Some(configuration), ..Default::default() };
+        backed_tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT, &backend).shapes
     };
     assert!(text_y(&shapes(false, false), FAULT).is_none());
     assert!(text_y(&shapes(true, false), FAULT).is_some(), "configuration fault");

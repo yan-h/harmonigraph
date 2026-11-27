@@ -308,7 +308,8 @@ pub(super) fn tuning_pane(
     });
 
     // Faults remain visible even when the tuning controls are folded.
-    let configuration_notice = if state.runtime.configuration_input_lost {
+    let input_lost = params.configuration().is_some_and(|view| view.input_lost);
+    let configuration_notice = if input_lost {
         crate::widgets::label(
             ui,
             egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
