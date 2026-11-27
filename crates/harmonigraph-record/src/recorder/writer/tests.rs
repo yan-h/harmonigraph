@@ -173,76 +173,17 @@ impl Bench {
 /// it was handed.
 ///
 /// An odd `samples` is what a caller hands over the moment it sizes a block
-/// by the host's channel count instead of [`TAKE_CHANNELS`]. The tail
-/// sample has to be dropped rather than written out of phase, and counted
-/// as the hole in the recording that it is.
-///
-/// This pins the BLOCK-size half of the reservation, which is the half that
-/// does the work: the ring here is only ever written in whole frames, so
-/// its free count cannot go odd on its own. The free-space half is proved
-/// exhaustively over on `whole_frames_reserved`, since driving this ring
-/// to an odd occupancy would mean reaching past the writer thread.
+/// by the host's channel count instead of [`TAKE_CHANNELS`]: half a frame
+/// would put the ring out of phase for the rest of the take, swapping the
+/// WAV's channels with nothing downstream able to tell. No caller does; the
+/// one there is multiplies by `TAKE_CHANNELS`, so it is a debug assertion.
 #[test]
-fn recorded_audio_reserves_whole_frames_and_counts_the_dropped_tail() {
+#[cfg(debug_assertions)]
+#[should_panic(expected = "a block of whole frames")]
+fn an_odd_audio_block_is_refused() {
     let Bench { mut rec, ctrl, .. } = Bench::new();
     ctrl.recording.store(true, Ordering::Relaxed);
-
-    // Even, into an empty ring: the whole block fits, nothing is dropped.
-    rec.audio(&mut std::iter::repeat_n(0.25f32, 8), 8, 48_000.0);
-    ctrl.tick(true, 0);
-    assert!(
-        !ctrl.status().contains("DROPPED"),
-        "an even block fits whole, but got: {}",
-        ctrl.status()
-    );
-
-    // Odd: the last sample is half a frame and must not reach the ring.
     rec.audio(&mut std::iter::repeat_n(0.25f32, 9), 9, 48_000.0);
-    ctrl.tick(true, 0);
-    assert!(
-        ctrl.dropped.load(Ordering::Relaxed) == 1 && ctrl.fence.failed.load(Ordering::Acquire),
-        "an odd tail must be dropped, not written out of phase; got: {}",
-        ctrl.status()
-    );
-}
-
-/// The phase-slip guard, exhaustively. A reservation that is not a whole
-/// number of frames leaves the ring one sample out of alignment, and every
-/// frame after it hands the left channel's samples to the right — for as
-/// long as the plugin runs, with nothing downstream able to tell that from
-/// the signal itself.
-#[test]
-fn a_reservation_is_always_a_whole_number_of_frames() {
-    for free_slots in 0..96usize {
-        for samples in 0..48usize {
-            let want = whole_frames_reserved(free_slots, samples);
-            assert_eq!(
-                want % TAKE_CHANNELS,
-                0,
-                "{want} samples is a partial frame (free_slots={free_slots}, samples={samples})"
-            );
-            assert!(want <= free_slots, "reserved {want} of {free_slots} free slots");
-            assert!(want <= samples, "reserved {want}, more than the {samples} this block holds");
-        }
-    }
-}
-
-/// What the reservation does at each end: a ring with room takes the whole
-/// block, a full one drops it rather than stalling the audio thread, and a
-/// nearly-full one takes whole frames and drops the tail.
-#[test]
-fn a_full_ring_drops_the_block_rather_than_stalling() {
-    // Room to spare: the whole block of 512 stereo frames.
-    assert_eq!(whole_frames_reserved(4096, 1024), 1024);
-    // Exactly enough.
-    assert_eq!(whole_frames_reserved(1024, 1024), 1024);
-    // Full: nothing, and the caller skips the write entirely.
-    assert_eq!(whole_frames_reserved(0, 1024), 0);
-    // Nearly full, with the free space a PARTIAL frame: round down, so the
-    // tail is dropped on a frame boundary rather than mid-frame.
-    assert_eq!(whole_frames_reserved(7, 1024), 6);
-    // Less free space than a single frame: nothing at all.
-    assert_eq!(whole_frames_reserved(1, 1024), 0);
 }
 
 /// Loop end, from the GUI's setting to the end it reads back: the setting
@@ -281,13 +222,15 @@ fn the_guis_stop_bar_reaches_the_audio_thread_and_its_end_comes_back() {
     assert!(b.ctrl.has_ended(), "the GUI is told to stop and render");
 }
 
+/// A block is written whole or not at all: one the audio ring cannot hold
+/// writes nothing, and the take, missing that audio, fails.
 #[test]
 fn configuration_audio_exhaustion_marks_the_recording_incomplete() {
     let mut b = Bench::new();
     b.rec.audio(&mut std::iter::repeat(0.0), 1026, 48_000.0);
     assert!(b.ctrl.fence.failed.load(Ordering::Acquire));
     assert_eq!(b.ctrl.dropped.load(Ordering::Relaxed), 1);
-    assert_eq!(b.ends.audio.slots(), 1024, "the fixture must fill the actual ring");
+    assert_eq!(b.ends.audio.slots(), 0, "none of the block that did not fit was written");
 }
 
 /// Only parameters that MOVED are recorded — a full set every block would
@@ -359,12 +302,6 @@ fn reserved_audio_is_actually_written() {
     assert_eq!(b.written(), [0.25, -0.25, 0.5, -0.5]);
     assert_eq!(b.pushed(), ["audio 4"], "and the ring says where they belong");
     assert_eq!(b.ctrl.dropped.load(Ordering::Relaxed), 0);
-
-    // An odd block still writes its whole frames; only the half frame on
-    // the end is dropped.
-    b.rec.audio(&mut [1.0f32, -1.0, 0.75].into_iter(), 3, 48_000.0);
-    assert_eq!(b.written(), [1.0, -1.0], "the whole frame lands, the half frame does not");
-    assert_eq!(b.ctrl.dropped.load(Ordering::Relaxed), 1);
 }
 
 /// The take's state resets on the arming EDGE, not on the armed LEVEL.

@@ -54,21 +54,6 @@ const AUDIO_RING_CAPACITY: usize = 1 << 20;
 /// not have, and nothing downstream checks.
 pub const TAKE_CHANNELS: usize = 2;
 
-/// How much of a block of `samples` interleaved [`TAKE_CHANNELS`] samples
-/// fits in the take's audio ring with `free_slots` free, in SAMPLES, rounded
-/// DOWN to whole frames.
-///
-/// The rounding is the one thing here that must not be wrong. A tail dropped
-/// mid-frame leaves the ring one sample out of phase, and every later frame
-/// hands the left channel's data to the right for as long as the plugin runs —
-/// silently, because nothing downstream can tell a phase slip from the signal.
-/// Bounding by free space is what makes a near-full ring (a stalled or closed
-/// consumer) drop the block's tail rather than stall the audio thread.
-fn whole_frames_reserved(free_slots: usize, samples: usize) -> usize {
-    let whole = |count: usize| count / TAKE_CHANNELS * TAKE_CHANNELS;
-    whole(samples).min(whole(free_slots))
-}
-
 /// One recorded thing, in a form the audio thread can push without
 /// allocating. Converted to a `harmonigraph_take::Record` on the writer thread.
 ///
@@ -476,22 +461,17 @@ impl Recorder {
     ///
     /// Reserves the whole block at once rather than pushing per sample:
     /// one ring-atomic touch per block instead of tens of thousands a
-    /// second. A short reservation means the ring filled, which is a
-    /// hole in the recording, so it is counted like any dropped record.
-    ///
-    /// Rounded down to whole FRAMES, for the reason `whole_frames_reserved`
-    /// gives: this ring lands in a WAV, so half a frame swaps that file's
-    /// channels from there on, permanently, and the writer cannot notice: it derives its frame
-    /// count by dividing the bytes it was handed. The callers happen to keep
-    /// the free count even today (even capacity, even `samples`, and a drain
-    /// that commits everything), but nothing declares that, and an odd
-    /// capacity or a partial drain would end the argument silently.
+    /// second. The block is written whole or not at all: one the ring cannot
+    /// hold is a hole in the recording, counted like any dropped record, and
+    /// fails the take. `samples` is whole [`TAKE_CHANNELS`] frames, as its one
+    /// caller sizes it, so the ring stays in phase.
     ///
     /// `rate` is the rate the block was produced at, which travels with it to
     /// the WAV: the host can reactivate the plugin at another rate while a take
     /// is armed, and a rate fixed when Record was clicked would then state the
     /// wrong speed for every block after (#1928).
     pub fn audio(&mut self, block: &mut dyn Iterator<Item = f32>, samples: usize, rate: f32) {
+        debug_assert!(samples.is_multiple_of(TAKE_CHANNELS), "a block of whole frames: {samples}");
         if self.fence.failed.load(Ordering::Acquire) {
             return;
         }
@@ -503,23 +483,13 @@ impl Recorder {
             self.fence.fail();
             return;
         }
-        let room = whole_frames_reserved(self.audio.slots(), samples);
-        if room < samples {
+        let Ok(chunk) = self.audio.write_chunk_uninit(samples) else {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             self.fence.fail();
-        }
-        if room == 0 {
             return;
-        }
-        let written = if let Ok(chunk) = self.audio.write_chunk_uninit(room) {
-            chunk.fill_from_iter(block.take(room));
-            true
-        } else {
-            false
         };
-        if written {
-            self.push(Entry::AudioSamples { samples: room, rate });
-        }
+        chunk.fill_from_iter(block.take(samples));
+        self.push(Entry::AudioSamples { samples, rate });
     }
 
     /// Note where the transport is, and answer whether it is rolling —
