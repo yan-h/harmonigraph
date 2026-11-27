@@ -1,6 +1,8 @@
-//! Light and shadow for each picture: the lattice's bloom, background glow and shadows in
-//! separate Lattice sections, and the Analyzer and Spiral shadows on the
-//! Analyzer page. Note bloom sits with the MIDI ribbons it lights.
+//! Light and shadow for each picture: Note bloom, the lattice's background
+//! glow and shadows in separate Lattice sections, and the Analyzer and Spiral
+//! shadows on the Analyzer page. Note bloom lights the lattice, the MIDI
+//! ribbons and the Spiral's dots, and sits with the ribbons on the Analyzer
+//! page as well.
 
 use super::section;
 use crate::widgets::ValueBar;
@@ -131,7 +133,8 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
     .on_hover_text("MIDI ribbons and Spiral note dots");
 }
 
-/// The same global note bloom is editable beside either picture it affects.
+/// The one global note bloom, lighting the lattice, the MIDI ribbons and the
+/// Spiral's dots: editable on the Lattice page and beside the ribbons.
 pub(crate) fn note_bloom(ui: &mut egui::Ui, strength: &mut f32) {
     ValueBar::new(strength, NOTE_BLOOM_RANGE, "Note bloom")
         .unit(1.0, "×")
