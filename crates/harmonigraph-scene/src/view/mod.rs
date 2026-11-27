@@ -1467,10 +1467,10 @@ impl ViewConfig {
         self.glow_release =
             repair(self.glow_release, fresh.glow_release, 0.0..=GLOW_BALLISTICS_MAX);
 
-        // These post-process controls are stored beside the view. The
-        // renderer clamps the resolution to this same range, and the blooms
-        // to a wider backstop (`bloom_strength`), for a scene built without
-        // `derive_scene`, which runs this sanitizer on every view it carries.
+        // These post-process controls are stored beside the view, and the
+        // renderer reads them as this leaves them, the blooms' backstop
+        // (`bloom_strength`) aside: `derive_scene` runs it on every view it
+        // carries.
         self.render_scale =
             repair(self.render_scale, fresh.render_scale, LATTICE_RENDER_SCALE_RANGE);
         self.note_bloom = repair(self.note_bloom, fresh.note_bloom, NOTE_BLOOM_RANGE);

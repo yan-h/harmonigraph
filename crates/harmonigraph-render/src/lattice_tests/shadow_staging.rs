@@ -45,7 +45,7 @@ fn callback(nodes: usize, labels: usize, pane: u64) -> LatticeCallback {
 }
 
 fn collected(cb: &LatticeCallback, has_atlas: bool, max_dim: u32) -> [Vec<shadow::ShadowBox>; 2] {
-    let packed = shadow::pack(&cb.casters, cb.render_scale, max_dim);
+    let packed = shadow::pack(&cb.casters, cb.render_scale(), max_dim);
     let nodes = cb
         .node_cells
         .iter()

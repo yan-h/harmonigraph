@@ -930,12 +930,9 @@ struct LatticeCallback {
     target_format: wgpu::TextureFormat,
     pane_id: u64,
     /// The callback rect's size in egui points; `prepare` multiplies by the
-    /// screen's pixels-per-point and `render_scale` to size the offscreen
-    /// target.
+    /// screen's pixels-per-point and the view's render scale
+    /// ([`LatticeCallback::render_scale`]) to size the offscreen target.
     size_points: [f32; 2],
-    /// From the scene (a view setting), clamped to the bar's own range,
-    /// [`harmonigraph_scene::LATTICE_RENDER_SCALE_RANGE`].
-    render_scale: f32,
     /// Where to publish this pane's own measurements.
     stats: Option<std::sync::Arc<LatticeStats>>,
     /// Where this frame's vectors go back to once it is dropped, and the
@@ -1007,6 +1004,12 @@ enum Draw {
 }
 
 impl LatticeCallback {
+    /// The view's render scale, as the sanitizer left it: the copy the
+    /// composite reads, so the target is sized on the same number.
+    pub(crate) fn render_scale(&self) -> f32 {
+        self.uniforms.composite.render_scale
+    }
+
     /// Whether this callback may drive the shared [`GpuTimer`] — true only for
     /// the one carrying a stats sink, i.e. the pane that publishes the reading.
     ///

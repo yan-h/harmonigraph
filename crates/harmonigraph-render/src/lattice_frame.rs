@@ -88,12 +88,8 @@ impl LatticeCallback {
             walk: Walk { order, plus_of, glyphs_of },
         } = vecs;
         let aspect = size_points.x / size_points.y.max(1.0);
-        let render_scale = scene.view.render_scale.clamp(
-            *harmonigraph_scene::LATTICE_RENDER_SCALE_RANGE.start(),
-            *harmonigraph_scene::LATTICE_RENDER_SCALE_RANGE.end(),
-        );
         let camera = scene.camera;
-        let atmosphere = scene.view.atmosphere.sanitized();
+        let atmosphere = scene.view.atmosphere;
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
 
@@ -300,7 +296,7 @@ impl LatticeCallback {
         // (all of it while that ink is opaque).
         let geometry = scene.view.shadow.lattice_geometry;
         let text = scene.view.shadow.lattice_text;
-        let hide_behind = scene.view.hide_behind.clamp(0.0, 1.0);
+        let hide_behind = scene.view.hide_behind;
         let sigma_of = |style: harmonigraph_scene::ShadowStyle, packs: bool| {
             if packs {
                 shadow::sigma_points(style.width, node_points)
@@ -520,7 +516,7 @@ impl LatticeCallback {
                 composite: CompositeParams {
                     darkest_pitch: scene.view.darkest_pitch,
                     brightest_pitch: scene.view.brightest_pitch,
-                    render_scale,
+                    render_scale: scene.view.render_scale,
                     bloom_strength: bloom_strength(scene.view.note_bloom),
                     background: Float4(scene.background.to_array()),
                     edge_softness_pixels: scene.edge_softness_points,
@@ -642,7 +638,6 @@ impl LatticeCallback {
             target_format,
             pane_id,
             size_points: [size_points.x, size_points.y],
-            render_scale,
             stats,
             frames: None,
             walk: Walk { order, plus_of, glyphs_of },
