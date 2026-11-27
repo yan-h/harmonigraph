@@ -128,10 +128,12 @@ pub(crate) struct DisplacedView {
     pub(crate) spectrogram: Option<TapeSpectrogram>,
 }
 
-/// What the harmony row's sections were analyzed from: the roll's own key
-/// with Detail and Span by their bits, and the sources hidden with Show.
+/// What the harmony row's sections were analyzed from: the roll's own key,
+/// Detail and Span by their bits, and the sources hidden with Show.
 struct Analyzed {
-    key: (Option<(u64, u64)>, u32, u32),
+    roll: Option<(u64, u64)>,
+    detail: u32,
+    span: u32,
     hidden: BTreeSet<SourceId>,
 }
 
@@ -703,17 +705,26 @@ impl Worker {
         let Some((detail, span)) = self.harmony_wanted else { return };
         // The meters are in the roll's key too: a change of them alone moves
         // `generation`.
-        let key = (self.roll_shown, detail.to_bits(), span.to_bits());
-        let current = |shown: &Analyzed| shown.key == key && shown.hidden == self.hidden;
-        if self.harmony_shown.as_ref().is_some_and(current) {
+        let current = self.harmony_shown.as_ref().is_some_and(|shown| {
+            shown.roll == self.roll_shown
+                && shown.detail == detail.to_bits()
+                && shown.span == span.to_bits()
+                && shown.hidden == self.hidden
+        });
+        if current {
             return;
         }
-        let Some(roll) = &self.latest_roll else { return };
-        self.harmony_shown = Some(Analyzed { key, hidden: self.hidden.clone() });
+        let Some(latest) = &self.latest_roll else { return };
+        self.harmony_shown = Some(Analyzed {
+            roll: self.roll_shown,
+            detail: detail.to_bits(),
+            span: span.to_bits(),
+            hidden: self.hidden.clone(),
+        });
         let rate = self.store.as_ref().map_or(1.0, |store| f64::from(store.rate));
         let meters: Vec<(f64, Meter)> =
             self.meters.iter().map(|(&at, &meter)| (at as f64 / rate, meter)).collect();
-        let sections = harmony::analyze(roll, &self.hidden, &meters, detail, span);
+        let sections = harmony::analyze(latest, &self.hidden, &meters, detail, span);
         self.built_harmony = Some(Arc::new(Harmony { sections }));
     }
 
