@@ -50,7 +50,8 @@ const LEVEL_COLORS_HINT: &str =
 
 /// The tooltip both groups' curve plots carry.
 const BEND_HINT: &str = "Where along the range the selected color components spend their change. \
-                 Across is the range, up is how much of the change has happened.";
+                 Across is the range, up is how much of the change has happened. \
+                 A corner further right holds the change back for the top of the range, for example the loudest few dB.";
 
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // The gradient a fresh view opens on, which is where a double-click on any
@@ -75,7 +76,10 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     let preview = GradientPreview::reserve(ui);
     SpectrumBar::new(&mut view.pitch_gradient, home).hint("Hue range for MIDI notes.").show(ui);
     SpreadBar::brightness(&mut view.pitch_gradient, home)
-        .hint("Brightness at the low and high pitches: 0% is black, 100% is white.")
+        .hint(
+            "Brightness at the low and high pitches: 0% is black, 100% is white. \
+             Crossed ends reverse the brightness ramp.",
+        )
         .show(ui);
     SpreadBar::chroma(&mut view.pitch_gradient, home)
         .hint(
