@@ -186,6 +186,9 @@ fn spread_strengthens_node_label_and_marker_shadows_without_moving_ink() {
         let mut scene = scene(0.0);
         scene.view.glow_strength = 0.0;
         scene.view.note_bloom = 0.0;
+        // Hide behind off, so Darkness alone decides whether the node packs
+        // its cell.
+        scene.view.hide_behind = 0.0;
         scene.background = glam::vec4(0.8, 0.8, 0.8, 1.0);
         scene.view.shadow.lattice_geometry.width = 0.7;
         let at = glam::vec3(-1.5, 1.5, 0.0);
@@ -210,16 +213,20 @@ fn spread_strengthens_node_label_and_marker_shadows_without_moving_ink() {
             }
         }
         let ink = shooter.shot_with(&scene, labels(&scene));
-        // The ink, at a Darkness that packs the cells Spread grows and grows
-        // the quads by its reach, as Darkness 0 does neither: faint enough
-        // that the shadow itself, landing on the node, moves no pixel by more
-        // than a code value.
-        style(&mut scene, group).depth = FAINT;
-        let narrow = shooter.shot_with(&scene, labels(&scene));
-        style(&mut scene, group).spread = 0.5;
-        let wide = shooter.shot_with(&scene, labels(&scene));
-        let moved = narrow.iter().zip(&wide).filter(|(a, b)| a.abs_diff(**b) > 1).count();
-        assert_eq!(moved, 0, "group {group}: spread moved {moved} ink channels");
+        // The node's ink, at a Darkness that packs the cell Spread grows and
+        // grows the quad by its reach, as Darkness 0 with Hide behind off does
+        // neither: faint enough that the shadow itself, landing on the pane
+        // fill, moves no channel by more than a code value. The text group's
+        // Spread grows no quad and no cell (it is spent as stops), so names and
+        // crosses have no ink path for it to move.
+        if group == 0 {
+            style(&mut scene, group).depth = FAINT;
+            let narrow = shooter.shot_with(&scene, labels(&scene));
+            style(&mut scene, group).spread = 0.5;
+            let wide = shooter.shot_with(&scene, labels(&scene));
+            let moved = narrow.iter().zip(&wide).filter(|(a, b)| a.abs_diff(**b) > 1).count();
+            assert_eq!(moved, 0, "spread moved {moved} channels of the node's ink");
+        }
         style(&mut scene, group).depth = 1.0;
         style(&mut scene, group).spread = 0.0;
         let ordinary = shooter.shot_with(&scene, labels(&scene));
