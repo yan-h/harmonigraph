@@ -512,8 +512,8 @@ pub(super) fn draw_rolls(
 /// [`Reason::RollInSpan`](crate::Reason::RollInSpan).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct RollMotion {
-    /// A Lead still standing: its release fades it in place, a change every
-    /// frame.
+    /// A Lead its release is still fading in place, a change every frame. A
+    /// held one stands still.
     pub(super) fading: bool,
     /// A ribbon or a name still inside its Span: it only scrolls, so it
     /// changes on screen once a device pixel's worth of time has passed.
@@ -805,9 +805,11 @@ fn source_instances(
         // Painted in its ribbon's order among the tongues, as the ribbon is
         // among the history, so two overlapping held notes keep one order
         // across the line.
+        // Only a Lead its release is fading changes on its own: a held one
+        // stands still at the line, and what changes it next is an edit.
         if let Some(tongue) = tongue {
             tongues.push(tongue);
-            motion.fading = true;
+            motion.fading |= standing < 1.0;
         }
         let dense = ribbon.dense();
         let first_instance = instances.len();

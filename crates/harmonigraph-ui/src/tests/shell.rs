@@ -85,8 +85,20 @@ fn a_scrolling_roll_asks_for_its_next_pixel_and_a_fading_lead_for_every_frame() 
     assert_eq!(fading, Some(0.0), "a fading Lead was paced as a scroll");
 }
 
+/// A held note's Lead stands still at the now-line, its ribbon only scrolling
+/// behind it, so the live roll asks for the frame where the ribbon next
+/// crosses a device pixel rather than for every frame: a chord held over a
+/// still picture costs the main thread its scroll, not the display rate.
+#[test]
+fn a_held_notes_lead_asks_for_no_frame_of_its_own() {
+    let (held, drawn) = roll_frame(&[(72, 0.0, f64::INFINITY)], 5.0, 10.0, 4.0);
+    let held = held.expect("a held note's ribbon idled");
+    assert!(drawn > 0 && held > 0.0, "a held Lead asked for every frame: {held} s");
+}
+
 /// One frame of the Spectral pane at `now`, with `notes` (key, on, off) played
-/// into a roll of `span` seconds at `ppp` device pixels a point: fine ones,
+/// into a roll of `span` seconds at `ppp` device pixels a point (an infinite
+/// off leaves its note held): fine ones,
 /// as the Retina display's, make its scroll cross a device pixel sooner than
 /// the idle poll would draw it:
 /// when the roll asked for its next frame, and how many instances it drew.
@@ -105,7 +117,9 @@ fn roll_frame(notes: &[(u8, f64, f64)], now: f64, span: f32, ppp: f32) -> (Optio
     let tracker = &mut state.picture.runtime.tracker;
     for &(key, on, off) in notes {
         tracker.handle_event(NoteEvent::on(on, SourceId::DIRECT, 0, key, 1.0));
-        tracker.handle_event(NoteEvent::off(off, SourceId::DIRECT, 0, key));
+        if off.is_finite() {
+            tracker.handle_event(NoteEvent::off(off, SourceId::DIRECT, 0, key));
+        }
     }
     let ctx = super::probe::themed_at(ppp);
     // egui lays out the first pass after a change of scale in its default
