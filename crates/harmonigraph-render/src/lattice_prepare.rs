@@ -281,7 +281,7 @@ impl LatticeCallback {
         motion: crate::travel::Motion,
     ) {
         let FrameSheets { has_atlas, sizes: sheet_sizes } = sheets;
-        let PreparedFrame { has_light, packed, .. } = frame;
+        let PreparedFrame { packed, .. } = frame;
         if self.instances.len() > pane.instance_capacity {
             pane.instance_capacity = self.instances.len().next_power_of_two();
             pane.instance_buffer = create_vertex_buffer::<GpuInstance>(
@@ -443,7 +443,7 @@ impl LatticeCallback {
                         // The lattice's own `node_occlusion`: the Hide behind
                         // bar, which a name takes from the node in front of it
                         // exactly as a ring does.
-                        node_occlusion: self.uniforms.geometry_shadow.occlusion.clamp(0.0, 1.0),
+                        node_occlusion: self.uniforms.geometry_shadow.occlusion,
                         _pad0: 0.0,
                         _pad1: Float2::default(),
                     }),
@@ -478,8 +478,6 @@ impl LatticeCallback {
         let mut uniforms = self.uniforms;
         uniforms.composite.edge_softness_pixels *= screen_descriptor.pixels_per_point;
         uniforms.ink_kernel = lattice_node_glow::ink_kernel(self.glow_blend);
-        // Whether this frame contributes any light to the statistics targets.
-        uniforms.glow.lit = f32::from(*has_light);
         if let Some(target) = &pane.offscreen {
             uniforms.texture.target_size = Float2(target.size.map(|v| v as f32));
         }
@@ -520,7 +518,7 @@ impl LatticeCallback {
                 ((self.size_points[1] * px).round() as u32).clamp(1, max_dim),
             ]
         };
-        let size = px_size(self.render_scale);
+        let size = px_size(self.render_scale());
         let screen_size = px_size(1.0);
         // Nothing to draw (matches paint()'s early-out): skip the offscreen
         // target and pass entirely. The EDGES count as much as the nodes —
@@ -552,7 +550,7 @@ impl LatticeCallback {
         // from the field's reach.
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let ShadowBuffers { mut packed, mut occluders, scratch: mut pack_scratch } = lent;
-        let px_per_point = ppp * self.render_scale;
+        let px_per_point = ppp * self.render_scale();
         shadow::pack_into(&self.casters, px_per_point, max_dim, &mut packed, &mut pack_scratch);
         // Every receiver, including a label with its own shadow disabled, is
         // occluded by the node casters after it in painter order whose box

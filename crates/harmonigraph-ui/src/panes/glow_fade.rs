@@ -90,11 +90,11 @@ pub struct GlowFade {
 struct Lit {
     level: f32,
     light: GlowLight,
-    /// The node's [`glow_target`](harmonigraph_scene::NodeInstance::glow_target)
-    /// as of the last step that saw it: what the pass after the walk keeps
-    /// lights by, and what [`GlowFade::clear_released`] reads between steps.
-    /// Written on every step that sees the node, and a light a step does not
-    /// see is dropped.
+    /// The level the node's light heads for as of the last step that saw it:
+    /// its reading's, or 0 where no layer that draws holds it. What the pass
+    /// after the walk keeps lights by, and what [`GlowFade::clear_released`]
+    /// reads between steps. Written on every step that sees the node, and a
+    /// light a step does not see is dropped.
     target: f32,
     /// The step this node was last seen on (see [`GlowFade::frame`]).
     seen: u64,
@@ -148,12 +148,17 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize,
 /// The attack and release coefficients for a step from `previous` to `now`:
 /// how much of the way to its target a light rising and a light falling move.
 ///
-/// A clock that ran BACKWARDS — a host looping its transport — holds every
-/// light where it is, as a frame drawn twice at one time does. A negative step
-/// is not a short one: run through the exponential it gives a coefficient below
-/// zero, which moves the light away from its target.
+/// A clock that ran BACKWARDS holds every light where it is, as a frame drawn
+/// twice at one time does. The editor's display clock never does (it holds
+/// rather than rewinds, `ClockMapper::now` in harmonigraph-plugin); the guard
+/// stays, as #1784 kept it. A negative step is not a short one: run through
+/// the exponential it gives a coefficient below zero, which moves the light
+/// away from its target.
+///
+/// A FIRST step has no time behind it either, so it moves nothing: a light it
+/// starts starts dark, as on an export's first frame or a fresh Video preview.
 fn coefficients(now: f64, previous: Option<f64>, attack: f32, release: f32) -> (f32, f32) {
-    let dt = previous.map_or(f64::INFINITY, |at| now - at);
+    let dt = previous.map_or(0.0, |at| now - at);
     let alpha = |seconds: f32| {
         if dt.is_nan() || dt <= 0.0 {
             0.0
@@ -191,13 +196,7 @@ impl GlowFade {
     fn step_drawn(&mut self, scene: &mut Scene, now: f64) -> bool {
         let view = &scene.view;
         let (up, down) = coefficients(now, self.at, view.glow_attack, view.glow_release);
-        let seed = if view.glow_attack <= 0.0 {
-            1.0
-        } else if self.at.is_none() {
-            0.0
-        } else {
-            up
-        };
+        let seed = if view.glow_attack <= 0.0 { 1.0 } else { up };
         scene.glow_clock = Some(now);
         self.at = Some(now);
         self.frame += 1;
@@ -249,8 +248,9 @@ impl GlowFade {
             // that itself (`NodeInstance::glow_light`), marks included, each
             // layer read after the Opacity mapping — not
             // `presence_with_opacity`, the presence that holds through a
-            // release — and the level is read off the same weights, so the two
-            // halves of one light cannot come to disagree about what lit it.
+            // release — and the level is read off the same weights. The colour
+            // takes only the weights the ring draws, so a light whose weights
+            // all sit off the ring has a level and no colour, and draws nothing.
             let goal = Some(node.glow_light()).filter(shines).unwrap_or_default();
             let target = goal.level();
             node.glow = match self.nodes.get_mut(&node.lattice_pos) {
@@ -923,7 +923,8 @@ mod tests {
             let mut scene = scene_at(state, now);
             apply(&mut scene, state, 0, now);
             let lit = scene.nodes.iter().filter(|n| n.glow.level > 0.0);
-            lit.map(|n| (n.lattice_pos, n.glow.level, n.glow_target() > 0.0)).collect::<Vec<_>>()
+            lit.map(|n| (n.lattice_pos, n.glow.level, n.glow_light().level() > 0.0))
+                .collect::<Vec<_>>()
         };
         levels(&mut state, 0.0);
         levels(&mut state, 1.0);
@@ -956,6 +957,24 @@ mod tests {
             assert!((node.glow.level - expected).abs() < 0.001, "attack at {time}: {node:?}");
             assert_eq!(node.glow.light, node.glow_light(), "the light was not seeded whole");
         }
+    }
+
+    /// A glow pass's FIRST step starts a held note's light dark too, as an
+    /// export's first frame and a fresh Video preview do: with no step before
+    /// it there is no time to attack over, and it is not an infinitely long one.
+    #[test]
+    fn a_first_step_starts_a_held_light_dark() {
+        let mut state = lit(1.0, 0.5);
+        // A band that draws, so the note's light shines on a drawn layer
+        // whatever the fresh look's widths are.
+        state.appearance.view.band_width = 0.2;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let mut fade = GlowFade::default();
+        let mut scene = scene_at(&state, 0.0);
+        assert!(scene.outer_outer > scene.outer_inner, "the fixture's band draws nothing");
+        fade.step_drawn(&mut scene, 0.0);
+        assert!(fade.owns(LatticePos::ORIGIN), "the held note was given no light");
+        assert_eq!(node_at(&scene, LatticePos::ORIGIN).glow.level, 0.0, "the light arrived lit");
     }
 
     /// The attack and release over a clock that ran BACKWARDS hold the light

@@ -211,7 +211,7 @@ impl LatticeCallback {
 /// the Color smoothing bar: a von Mises lobe of concentration 4 (roughly half a
 /// radian wide) at 0, widening to the uniform circular mean at 1.
 pub(super) fn ink_kernel(blend: f32) -> [Float4; INK_STRIP_N as usize / 4] {
-    let kappa = 4.0 * (1.0 - blend.clamp(0.0, 1.0));
+    let kappa = 4.0 * (1.0 - blend);
     let mut weights = [Float4::default(); INK_STRIP_N as usize / 4];
     for i in 0..INK_STRIP_N as usize {
         let off =

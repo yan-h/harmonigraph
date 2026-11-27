@@ -96,19 +96,25 @@ pub(super) fn luminance(pixel: &[u8; 4]) -> f64 {
 #[test]
 fn a_lone_glow_keeps_its_colour_profile_and_fade() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    // Read a 256-square glow directly: a pane the glow target's divisor times
+    // that size renders one, read back at SIZE. This checks the analytic
+    // profile before reconstruction.
+    let pane = SIZE.map(|n| n * crate::lattice_targets::GLOW_DIVISOR);
+    let mut glow = |scene: &Scene| {
+        shooter.size = pane;
+        shooter.shot(scene);
+        shooter.size = SIZE;
+        read_glow(&shooter)
+    };
     for (gain, level) in [(0.15, 1.0), (1.0, 0.25), (2.0, 1.0)] {
         let mut scene = scene(&[level], gain, false);
-        // Read a 256-square glow directly: the scene renders at the glow
-        // target's divisor times that resolution. This checks the analytic
-        // profile before reconstruction.
-        scene.view.render_scale = crate::lattice_targets::GLOW_DIVISOR as f32;
         let colour = [0.8, 0.4, 0.1];
         scene.pitch_lut = [glam::Vec4::new(colour[0], colour[1], colour[2], 1.0);
             harmonigraph_scene::PITCH_LUT_N];
-        let pixels = glow(&mut shooter, &scene);
+        let pixels = glow(&scene);
         for accumulation in [0.5, 1.0] {
             scene.view.glow_accumulation = accumulation;
-            assert_eq!(glow(&mut shooter, &scene), pixels, "a lone glow cannot change");
+            assert_eq!(glow(&scene), pixels, "a lone glow cannot change");
         }
         let per_uv = on_screen(
             &scene,

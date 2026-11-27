@@ -375,7 +375,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         );
         let callback_ms = callback_start.elapsed().as_secs_f64() * 1000.0;
         if frame == 0 {
-            let target = size.map(|v| (v as f32 * cb.render_scale).round() as u32);
+            let target = size.map(|v| (v as f32 * cb.render_scale()).round() as u32);
             let lit = cb.instances.iter().filter(|node| node.glow[0] > 0.0).count();
             let landed = cb
                 .casters
