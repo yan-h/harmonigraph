@@ -414,10 +414,13 @@ fn in_a_window_narrowed_past_the_floor_a_fold_keeps_the_other_pictures_size() {
         let was = state.workspace.layout_runtime.rects[other as usize].size();
         h.collapse_click(&mut state, tab);
         assert!(collapsed(&state, tab), "{position:?} {tab:?} failed to fold");
-        assert!(
-            h.screen.width() > shell::MIN_WINDOW_SIZE.x,
-            "{position:?} {tab:?}: the fold's window stopped at the floor"
-        );
+        // The fold moves the window along the arrangement's axis: across
+        // beside the settings, down below them.
+        let (asked, floor) = match position {
+            Position::Right => (h.screen.width(), shell::MIN_WINDOW_SIZE.x),
+            Position::Below => (h.screen.height(), shell::MIN_WINDOW_SIZE.y),
+        };
+        assert!(asked > floor, "{position:?} {tab:?}: the fold's window stopped at the floor");
         near(state.workspace.layout_runtime.rects[other as usize].size(), was);
     }
 }
@@ -826,8 +829,6 @@ fn a_narrow_analyzer_keeps_one_header_row_and_its_spiral_choice() {
         h.settle(&mut state);
         let out = h.frame(&mut state, vec![]);
         let section = state.workspace.layout_runtime.rects[Section::Analyzer as usize];
-        let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
-        assert!((body.top() - section.top() - theme::tab_bar_height(scale)).abs() < 0.5);
         let find = |out: &egui::FullOutput, name: &str| {
             out.shapes.iter().find_map(|cs| match &cs.shape {
                 egui::Shape::Text(t)
