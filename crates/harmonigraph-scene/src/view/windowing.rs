@@ -1,7 +1,8 @@
 //! The windows a [`ViewConfig`] hands out — the block one pane draws
 //! ([`ViewConfig::scrolled`]), the naming reach the whole UI shares
-//! ([`ViewConfig::reach`]), and the center-following that keeps the picture
-//! under the camera.
+//! ([`ViewConfig::naming_reach`]), the block of the same size under the
+//! camera ([`ViewConfig::around_center`]), and the center-following that keeps
+//! the picture under the camera.
 
 use super::*;
 
@@ -15,7 +16,7 @@ impl ViewConfig {
     /// view: it says which nodes to build and nothing about how they look, and
     /// the settings it would otherwise carry a copy of are the ones every pane
     /// shares. The type is also what keeps it from being handed to a reader
-    /// that wanted the naming [`reach`](Self::reach); see [`DrawnWindow`] for
+    /// that wanted the [`naming_reach`](Self::naming_reach); see [`DrawnWindow`] for
     /// the picture that mix-up drew.
     ///
     /// The view's CENTER is not this function's to move: the block
@@ -47,8 +48,8 @@ impl ViewConfig {
     /// Falls back to this view's own window where the geometry gives no
     /// rectangle at all (see [`Camera::visible_world_bounds`], which names the
     /// one camera that does that — and it is a degenerate matrix, not a steep
-    /// camera). Drawing the reach window there is a picture; an arbitrary huge
-    /// number is a stall.
+    /// camera). Drawing [`around_center`](Self::around_center) there is a
+    /// picture; an arbitrary huge number is a stall.
     /// This is the DEMAND — what the geometry asks for, before
     /// [`MAX_DRAWN_NODES`] holds it down.
     /// [`scrolled`](Self::scrolled) is the same window trimmed to fit, and the
@@ -71,7 +72,7 @@ impl ViewConfig {
         let back = (low - center.sevens) as f32;
         let front = (high - center.sevens) as f32;
         let Some(sheet) = camera.visible_world_bounds(aspect, back, front) else {
-            return self.reach();
+            return self.around_center();
         };
         // Where the pane shows the sheets all the way to the horizon there is
         // no far edge to take, and the rectangle's own is a corner's line
@@ -206,22 +207,38 @@ impl ViewConfig {
         Some(window)
     }
 
-    /// How far out a played pitch is hunted for a spelling and a node, as a
-    /// block — the naming REACH, centered on the camera but sized by the
-    /// setting rather than by any pane.
+    /// How far out a played pitch is hunted for a spelling, as a block — the
+    /// naming REACH: `REACH_THREES` (12) fifths and `REACH_FIVES` (20) thirds
+    /// either side of the lattice's origin, on every sheet the view draws.
     ///
-    /// Not what is drawn; [`scrolled`](Self::scrolled) is. This is one answer
-    /// the whole UI shares, so that a name does not change under a pan, and it
-    /// is the fallback for the readers that want the picture's window on a
-    /// frame where no lattice pane drew one.
-    pub fn reach(&self) -> DrawnWindow {
-        let center = self.center();
-        let extent = LatticePos::new(self.extent_threes.max(0), self.extent_fives.max(0), 0);
+    /// Not what is drawn; [`scrolled`](Self::scrolled) is. Centered on the
+    /// ORIGIN rather than on the camera, so it is the same block whatever the
+    /// camera is doing and a pan never respells a note it spells: the pieces
+    /// pan farther than it reaches within one Span (Yan, #1994 RL2). A pitch it
+    /// cannot spell is named by the picture's own window where that draws a
+    /// node for it (`Namer` in the UI's note names).
+    pub fn naming_reach(&self) -> DrawnWindow {
+        self.block_about(LatticePos::ORIGIN, REACH_THREES, REACH_FIVES)
+    }
+
+    /// A block the naming reach's size about the view's center, which
+    /// [`follow_camera`](Self::follow_camera) keeps under the camera: the
+    /// picture's window on a frame where no lattice pane measured one, and
+    /// where Frame notes looks for the lit copy nearest the camera
+    /// ([`lit_positions`](crate::framing::lit_positions)).
+    pub fn around_center(&self) -> DrawnWindow {
+        self.block_about(self.center(), REACH_THREES, REACH_FIVES)
+    }
+
+    /// `threes` fifths and `fives` thirds either side of `center`, on every
+    /// sheet the view draws.
+    pub fn block_about(&self, center: LatticePos, threes: i32, fives: i32) -> DrawnWindow {
+        let extent = LatticePos::new(threes, fives, 0);
         // The sevens ends are absolute sheets rather than a count each side,
         // so they go on whole instead of through the symmetric pair above.
-        // They must not be narrowed to a symmetric reach either: this is what
-        // names what `scrolled` draws, and a stack leaning one way would have
-        // its far sheets drawn out past the block that can spell them.
+        // They must not be narrowed to a symmetric reach either: a stack
+        // leaning one way would have its far sheets drawn out past the block
+        // that can spell them.
         let (low, high) = self.sevens_window();
         let min = center - extent;
         let max = center + extent;
@@ -246,13 +263,12 @@ impl ViewConfig {
     /// world unit from every node's world position, and taking the same off the
     /// camera's target leaves each node exactly where it was on screen.
     ///
-    /// This is what puts the picture under the camera at all, and both windows
-    /// depend on it. The block `derive_scene` builds is pinned to the world
-    /// origin, so the camera has to be brought back to the origin for there to
-    /// be anything in front of it; and the reach the note names are chosen out
-    /// of (see [`reach`](Self::reach)) is centered here, so it has to follow
-    /// or scrolling away would leave every note on screen outside the set that
-    /// can name it.
+    /// This is what puts the picture under the camera at all. The block
+    /// `derive_scene` builds is pinned to the world origin, so the camera has
+    /// to be brought back to the origin for there to be anything in front of
+    /// it; and [`around_center`](Self::around_center), the picture's window
+    /// where no pane measured one, is centered here. The naming reach is not:
+    /// it stays on the lattice's origin ([`naming_reach`](Self::naming_reach)).
     ///
     /// The x and y axes are carried into the center, which is the pair the
     /// lattice's own sheet runs on. The DEPTH is zeroed instead, and that is

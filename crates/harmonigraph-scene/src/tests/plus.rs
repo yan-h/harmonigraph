@@ -18,14 +18,23 @@ use harmonigraph_core::{LatticePos, NoteEvent, NoteTracker, SourceId, Tuning};
 /// subject — and under `All` there would be no marker left to measure at all. The
 /// naming rule has its own tests, which set the mode themselves.
 fn plus_view() -> ViewConfig {
-    ViewConfig {
-        extent_threes: 3,
-        extent_fives: 3,
-        min_sevens: -1,
-        max_sevens: 1,
-        note_names: NoteNames::Played,
-        ..plain_view()
-    }
+    ViewConfig { min_sevens: -1, max_sevens: 1, note_names: NoteNames::Played, ..plain_view() }
+}
+
+/// How far [`plus_view`]'s window runs either side of the view's center, on
+/// both axes.
+const PLUS_EXTENT: i32 = 3;
+
+/// The suite's window: [`PLUS_EXTENT`] either way about the view's center,
+/// on every sheet it draws.
+fn plus_window(view: &ViewConfig) -> DrawnWindow {
+    view.block_about(view.center(), PLUS_EXTENT, PLUS_EXTENT)
+}
+
+/// The harness's scene, in [`plus_window`] rather than the naming reach's
+/// size: every scene this suite builds.
+fn scene_of(tracker: &NoteTracker, tuning: &Tuning, view: &ViewConfig, now: f64) -> Scene {
+    scene_in(tracker, tuning, view, &plus_window(view), now)
 }
 
 /// A note played and let go of long enough ago that its fade is over and it
@@ -406,12 +415,7 @@ fn a_fresh_lattice_holds_its_markers_above_the_ring_ground() {
         fresh.marker_ink,
         fresh.lattice_ground,
     );
-    let scene = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &ViewConfig { extent_threes: 2, extent_fives: 2, ..fresh },
-        0.0,
-    );
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &fresh, 0.0);
     let marker = scene.pluses.first().expect("the home sheet draws a resting marker field");
     assert_eq!(
         marker.color,
@@ -483,7 +487,7 @@ fn a_marker_that_survives_a_chord_is_painted_exactly_as_it_was() {
     for note in [60u8, 67] {
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
     }
-    let view = ViewConfig { extent_threes: 3, extent_fives: 3, ..plus_view() };
+    let view = plus_view();
     let silent = pluses_of(&view);
     let played = pluses_of_with(&view, &tracker);
     assert!(
@@ -566,7 +570,7 @@ fn a_hovered_position_draws_no_marker() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &view.reach(),
+        &plus_window(&view),
         crate::Camera::default(),
         Some(at),
     );
@@ -592,18 +596,13 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
     // draws at is what says how far off it has gone. A chain drawn down to
     // home would be the other answer, and the field is what it costs — so the
     // field is the same field whether that note sounds or not.
-    let view = ViewConfig {
-        extent_threes: 0,
-        extent_fives: 0,
-        min_sevens: -2,
-        max_sevens: 2,
-        ..plain_view()
-    };
+    let view = ViewConfig { min_sevens: -2, max_sevens: 2, ..plain_view() };
     // 12-TET default: a sevens step is 1000¢, so (0,0,2) is MIDI 68's pitch
     // class. The home node is C.
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 68, 1.0));
-    let scene = scene_of(&tracker, &Tuning::default(), &view, 0.0);
+    let column = view.block_about(view.center(), 0, 0);
+    let scene = scene_in(&tracker, &Tuning::default(), &view, &column, 0.0);
     assert!(
         scene.nodes.iter().any(|n| !n.on_home && n.presence_with_opacity > 0.0),
         "the off-sheet note has to be lit for this to mean anything",
@@ -784,7 +783,7 @@ fn a_soft_notes_name_and_cross_hold_still_at_key_up() {
         }
         tracker.prune(now, &env);
         let mut scene =
-            derive_scene(&tracker, &tuning, &view, &view.reach(), Camera::default(), None);
+            derive_scene(&tracker, &tuning, &view, &plus_window(&view), Camera::default(), None);
         motion.step(&mut scene, &tracker, &tuning, &RingFade::default(), now);
         let node = *origin_node(&scene);
         let name = node.name_level(&view);

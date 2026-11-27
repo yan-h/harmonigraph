@@ -936,7 +936,7 @@ mod tests {
         // full-scale tone, which is a whisper against the default 60 dB window
         // and is the "dim floor" the design admits to rather than nothing at
         // all — the honest answer, since those frequencies really are sounding.
-        for pos in ViewConfig::default().reach().positions() {
+        for pos in ViewConfig::default().around_center().positions() {
             let got = hiss.db(NARROW, pos);
             assert!(
                 got < tone - 20.0,
@@ -1040,7 +1040,7 @@ mod tests {
     /// and goes rather than about what it reads. A state carried across two of
     /// these has a fade running through it, exactly as a shell does.
     fn scene_of_at(state: &mut PictureState, now: f64) -> Scene {
-        let window = state.appearance.view.reach();
+        let window = state.appearance.view.around_center();
         crate::panes::lattice::compose_scene(state, &window, 1.0, None, 0, now)
     }
 

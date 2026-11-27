@@ -23,7 +23,7 @@ use harmonigraph_core::{LatticePos, NoteTracker, Tuning};
 /// `window` is which nodes to build and `view` is how they look — the split
 /// that lets two panes draw one view at two aspects. It is the pane's own
 /// ([`ViewConfig::scrolled`]); handing it the view's naming
-/// [`reach`](ViewConfig::reach) instead draws a picture that is subtly the
+/// [`reach`](ViewConfig::naming_reach) instead draws a picture that is subtly the
 /// wrong size, which is why the two are different types.
 pub fn derive_scene(
     tracker: &NoteTracker,

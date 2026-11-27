@@ -26,9 +26,11 @@ const PASSES: usize = 16;
 const HALVINGS: usize = 32;
 
 /// The node each of `classes` lights under `tuning`, the one nearest `near`
-/// (absolute fifths and thirds) where several do, within the naming reach
-/// ([`ViewConfig::reach`]): the block a played pitch is hunted through for a
-/// name and a node.
+/// (absolute fifths and thirds) where several do, within a block the naming
+/// reach's size about the view's center, which follows the camera
+/// ([`ViewConfig::around_center`]). Not the naming reach itself, which stays
+/// on the lattice's origin: framed there, a piece the camera has followed
+/// past it would frame nothing, or the copies back by the origin.
 ///
 /// Several do under a tempered tuning, where a pitch class repeats across the
 /// whole sheet, and under a just one wherever a comma falls inside the
@@ -48,7 +50,7 @@ pub fn lit_positions(
         return Vec::new();
     }
     let nodes: Vec<_> = view
-        .reach()
+        .around_center()
         .positions()
         .map(|pos| {
             let offset = Vec3::new(

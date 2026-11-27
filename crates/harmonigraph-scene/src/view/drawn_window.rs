@@ -7,7 +7,7 @@ use super::*;
 ///
 /// Two of these are in play and they answer different questions: the DRAWN
 /// window one pane builds from its camera ([`ViewConfig::scrolled`]), and the
-/// naming REACH the whole UI shares ([`ViewConfig::reach`]). A type of their
+/// naming REACH the whole UI shares ([`ViewConfig::naming_reach`]). A type of their
 /// own is what keeps them apart — #357 passed them as two `ViewConfig`s, and
 /// its own coverage test then projected through the reach while the renderer
 /// drew through the derived window, where the two offsets cancelled and it

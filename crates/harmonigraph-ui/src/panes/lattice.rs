@@ -1323,7 +1323,7 @@ mod tests {
         use harmonigraph_core::lattice_map::TuningEngine;
         use harmonigraph_core::LatticePos;
         let mut state = fresh();
-        let window = state.appearance.view.reach();
+        let window = state.appearance.view.around_center();
         let scene = compose_scene(&mut state, &window, 1.0, None, 0, 0.0);
         state.surfaces.hovered = Some(LatticePos::ORIGIN);
         state.runtime.lattice_maps = Some(MapView {
@@ -1367,7 +1367,7 @@ mod tests {
         use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
         use harmonigraph_core::LatticePos;
         let mut state = fresh();
-        let window = state.appearance.view.reach();
+        let window = state.appearance.view.around_center();
         let scene = compose_scene(&mut state, &window, 1.0, None, 0, 0.0);
         let map = LatticeMap::default();
         state.runtime.lattice_maps = Some(MapView {
@@ -1415,7 +1415,7 @@ mod tests {
     fn assignment_dot_keeps_sounding_ink_when_silent_and_shares_the_name_run() {
         let mut state = fresh();
         state.appearance.view.note_names = NoteNames::Played;
-        let window = state.appearance.view.reach();
+        let window = state.appearance.view.around_center();
         let mut scene = compose_scene(&mut state, &window, 1.0, None, 0, 0.0);
         let index = scene
             .nodes
@@ -1498,7 +1498,7 @@ mod tests {
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
         let scene = {
-            let window = state.appearance.view.reach();
+            let window = state.appearance.view.around_center();
             compose_scene(&mut state, &window, 1.0, None, 0, 0.05)
         };
         let mut batch = crate::text::TextBatch::default();
@@ -1796,7 +1796,7 @@ mod tests {
         state.appearance.view.fade_time = 1.0;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let scene = {
-            let window = state.appearance.view.reach();
+            let window = state.appearance.view.around_center();
             compose_scene(&mut state, &window, 1.0, None, 0, 0.05)
         };
         let view = &state.appearance.view;
@@ -1829,7 +1829,7 @@ mod tests {
         // above.
         state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let scene = {
-            let window = state.appearance.view.reach();
+            let window = state.appearance.view.around_center();
             compose_scene(&mut state, &window, 1.0, None, 0, 1.9)
         };
         let node = scene
@@ -1866,7 +1866,7 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let scene = {
-            let window = state.appearance.view.reach();
+            let window = state.appearance.view.around_center();
             compose_scene(&mut state, &window, 1.0, None, 0, 1.9)
         };
         let view = &state.appearance.view;
@@ -2179,7 +2179,7 @@ mod tests {
         // would find the kept name still unrecorded and nothing named at all.
         state.runtime.tracker.prune(secs, &state.appearance.view.envelope());
         let scene = {
-            let window = state.appearance.view.reach();
+            let window = state.appearance.view.around_center();
             compose_scene(state, &window, 1.0, None, 0, secs)
         };
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 450.0));

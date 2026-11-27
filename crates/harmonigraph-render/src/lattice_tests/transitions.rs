@@ -144,7 +144,7 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
             &tracker,
             &Tuning::default(),
             &view,
-            &view.reach(),
+            &view.around_center(),
             Camera::default(),
             None,
             now,

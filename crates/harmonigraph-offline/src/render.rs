@@ -1350,8 +1350,9 @@ mod tests {
 
     /// An exported frame's spectral pane describes the lattice drawn beside it
     /// in that frame, from the first frame on (#1833). Read from the frame
-    /// before, frame 0 had only the reach, which a zoomed-out perspective lattice
-    /// draws far past, so a note the lattice lit wore the off-lattice band.
+    /// before, frame 0 had only the fallback block about the view's center,
+    /// which a zoomed-out perspective lattice draws far past, so a note the
+    /// lattice lit wore the off-lattice band.
     #[test]
     fn an_exported_frame_flags_nothing_its_own_lattice_draws() {
         use harmonigraph_core::LatticePos;
@@ -1360,7 +1361,8 @@ mod tests {
         let placements = Layout::split(harmonigraph_ui::LatticeSide::Right, 0.36).resolve(COMPOSED);
         let (_, lattice) = placements[0];
         let window = window_in(&state, allocated(lattice));
-        let reach = state.appearance.view.reach();
+        // What a spectral pane with no lattice beside it asks instead.
+        let fallback = state.appearance.view.around_center();
         let far = [
             LatticePos::new(0, window.min.fives, 0),
             LatticePos::new(0, window.max.fives, 0),
@@ -1368,14 +1370,14 @@ mod tests {
             LatticePos::new(window.max.threes, 0, 0),
         ]
         .into_iter()
-        .find(|&pos| window.contains(pos) && !reach.contains(pos))
-        .expect("a zoomed-out perspective lattice draws nothing the reach cannot name");
+        .find(|&pos| window.contains(pos) && !fallback.contains(pos))
+        .expect("a zoomed-out perspective lattice draws nothing past the fallback block");
         sound(&mut state, far);
 
         // The fixture reaches the band: with no lattice in the frame, the
-        // pane asks the reach and flags the note.
+        // pane asks the block about the view's center and flags the note.
         let alone = [placements[1]];
-        assert_eq!(composed_frame(&mut state, &alone, now).0, 1, "the note is not off the reach");
+        assert_eq!(composed_frame(&mut state, &alone, now).0, 1, "the note is not off the block");
 
         let (bands, _) = composed_frame(&mut state, &placements, now);
         assert_eq!(bands, 0, "the lattice lights this note and frame 0 flags it as off it");

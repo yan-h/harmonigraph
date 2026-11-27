@@ -1039,25 +1039,29 @@ impl PictureState {
     /// Three readers ask it through [`Namer`](crate::panes::spectral::names::Namer):
     /// the analyzer's red band checks for a matching node, while the roll's
     /// and the spiral's note names choose a spelling.
-    /// Asking the view's REACH instead — which the band used to do — makes it
-    /// contradict what the lattice is drawing, because the drawn window is
-    /// the camera's and runs wider than the reach under everything but
-    /// cabinet: at 16:9, fully zoomed out, perspective draws 73% of its nodes
-    /// outside it, so a lit node could wear a red band down the spectrum.
+    /// Asking the view's naming REACH instead — which the band used to do —
+    /// makes it contradict what the lattice is drawing, because the drawn
+    /// window is the camera's: it runs wider than the reach under everything
+    /// but cabinet (at 16:9, fully zoomed out, perspective draws 73% of its
+    /// nodes outside it), and since the reach stays on the lattice's origin, a
+    /// pan carries it away from the reach altogether. A lit node would wear a
+    /// red band down the spectrum.
     ///
     /// The name readers ask differently on purpose — the reach first,
-    /// this only where the reach comes up empty — so a name does not move
-    /// under a pan. The two answers are allowed to differ, and where they do
-    /// the picture is what wears the band: a pitch the reach can spell but the
-    /// pane is not drawing is named and banded at once.
+    /// this only where the reach comes up empty — so a pan does not move a
+    /// name the reach can spell. The two answers are allowed to differ, and
+    /// where they do the picture is what wears the band: a pitch the reach
+    /// can spell but the pane is not drawing is named and banded at once.
     ///
-    /// The reach is the fallback rather than the answer, for the frame before
-    /// the docked lattice first draws and for a frame after one where it was
-    /// folded, as it is for a composed layout with no lattice pane in it at
-    /// all ([`crate::draw_panes`]). There is no picture to describe
-    /// there, and the reach is the only window that does not depend on one.
+    /// A block the reach's size about the view's center
+    /// ([`ViewConfig::around_center`](harmonigraph_scene::ViewConfig::around_center))
+    /// is the fallback, for the frame before the docked lattice first draws
+    /// and for a frame after one where it was folded, as it is for a composed
+    /// layout with no lattice pane in it at all ([`crate::draw_panes`]). There
+    /// is no picture to describe there, and the center is where one would
+    /// look, since it follows the camera.
     pub fn shown(&self) -> DrawnWindow {
-        self.surfaces.drawn.unwrap_or_else(|| self.appearance.view.reach())
+        self.surfaces.drawn.unwrap_or_else(|| self.appearance.view.around_center())
     }
     /// Tell the state what ground the lattice pane stands on — what it paints,
     /// and what it hands the scene (see the `background` field). Takes sRGB

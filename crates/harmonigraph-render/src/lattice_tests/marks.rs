@@ -675,10 +675,7 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
     for note in [60u8, 64, 67] {
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
     }
-    // A small window so the nodes draw big enough to measure.
     let base = ViewConfig {
-        extent_threes: 2,
-        extent_fives: 2,
         min_sevens: 0,
         max_sevens: 0,
         // No envelope: every layer of a node eases in from its note-on over
@@ -694,7 +691,9 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
             ..base.clone()
         };
         let tuning = Tuning::default();
-        animated_snapshot(&tracker, &tuning, &view, &base.reach(), Camera::default(), None, 0.5)
+        // A small window so the nodes draw big enough to measure.
+        let window = base.block_about(base.center(), 2, 2);
+        animated_snapshot(&tracker, &tuning, &view, &window, Camera::default(), None, 0.5)
     };
 
     // The composed derivation and motion passes must supply the masks.

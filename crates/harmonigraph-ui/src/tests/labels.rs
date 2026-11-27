@@ -527,7 +527,7 @@ fn only_the_all_mode_names_a_node_nothing_has_happened_on() {
         let mut state = fresh();
         state.picture.appearance.view.note_names = names;
         let scene = {
-            let window = state.picture.appearance.view.reach();
+            let window = state.picture.appearance.view.around_center();
             panes::lattice::compose_scene(&mut state.picture, &window, 1.0, None, 0, 0.0)
         };
         pane_labels(&scene, &state.picture.appearance.view, 1.0)
@@ -604,7 +604,7 @@ fn a_name_and_the_marker_under_it_add_up_to_one_mark() {
             1.0,
         ));
         let scene = {
-            let window = state.picture.appearance.view.reach();
+            let window = state.picture.appearance.view.around_center();
             panes::lattice::compose_scene(&mut state.picture, &window, 1.0, None, 0, 4.0)
         };
         let batch = pane_labels(&scene, &state.picture.appearance.view, 1.0);
@@ -669,7 +669,7 @@ fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egu
         1.0,
     ));
     let scene = {
-        let window = state.picture.appearance.view.reach();
+        let window = state.picture.appearance.view.around_center();
         panes::lattice::compose_scene(&mut state.picture, &window, 1.0, None, 0, 0.0)
     };
 
@@ -923,7 +923,7 @@ fn the_cents_readout_sits_right_under_the_note_name() {
         1.0,
     ));
     let scene = {
-        let window = state.picture.appearance.view.reach();
+        let window = state.picture.appearance.view.around_center();
         panes::lattice::compose_scene(&mut state.picture, &window, 1.0, None, 0, 0.0)
     };
 
@@ -1012,7 +1012,7 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
         ));
     }
     let scene = {
-        let window = state.picture.appearance.view.reach();
+        let window = state.picture.appearance.view.around_center();
         panes::lattice::compose_scene(&mut state.picture, &window, 1.0, None, 0, 0.0)
     };
 
@@ -1111,7 +1111,7 @@ fn a_names_drawn_marks_go_into_its_own_nodes_run() {
         1.0,
     ));
     let scene = {
-        let window = state.picture.appearance.view.reach();
+        let window = state.picture.appearance.view.around_center();
         panes::lattice::compose_scene(&mut state.picture, &window, 1.0, None, 0, 0.0)
     };
 
@@ -1158,7 +1158,7 @@ fn lattice_names_reconstruct_both_axes_the_camera_moves() {
         1.0,
     ));
     let scene = {
-        let window = state.picture.appearance.view.reach();
+        let window = state.picture.appearance.view.around_center();
         panes::lattice::compose_scene(&mut state.picture, &window, 1.0, None, 0, 0.0)
     };
     let labels = lattice_labels_in(PANE, &scene, &state);

@@ -23,10 +23,14 @@ use harmonigraph_core::Tuning;
 /// out, so one added anywhere in the view, a nested group or a gradient knob
 /// included, is poisoned without an edit here; the test below holds that the
 /// fixture leaves no real float behind.
+/// The window every scene here is built in: three steps either way about
+/// [`poisoned_view`]'s center, on its three sheets.
+fn window() -> DrawnWindow {
+    poisoned_view().block_about(LatticePos::ORIGIN, 3, 3)
+}
+
 fn poisoned_view() -> ViewConfig {
     let mut base = ViewConfig {
-        extent_threes: 3,
-        extent_fives: 3,
         min_sevens: -1,
         max_sevens: 1,
         center_threes: 0,
@@ -126,7 +130,7 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
     const NOW: f64 = 1.0;
     let real = floats_where(&poisoned_view(), f64::is_finite);
     assert!(real.is_empty(), "the poisoned view still holds real floats: {}", real.join(", "));
-    let scene = scene_of(&sounding(), &Tuning::default(), &poisoned_view(), NOW);
+    let scene = scene_in(&sounding(), &Tuning::default(), &poisoned_view(), &window(), NOW);
 
     // The fixture has to ARRIVE, or the sweep below passes over an empty
     // picture and reads as coverage while measuring nothing.
@@ -148,7 +152,7 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         &sounding(),
         &Tuning::default(),
         &normalized,
-        &poisoned_view().reach(),
+        &window(),
         Camera::default(),
         None,
     );
@@ -168,7 +172,7 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
 
     // A nonzero arm makes the marker walk reach its geometry and ink too.
     let drawable = ViewConfig { plus_arm: 0.5, ..poisoned_view() };
-    let scene = scene_of(&sounding(), &Tuning::default(), &drawable, NOW);
+    let scene = scene_in(&sounding(), &Tuning::default(), &drawable, &window(), NOW);
     assert!(!scene.pluses.is_empty(), "a real arm still shipped no marker field");
     let names = broken(&scene);
     assert!(names.is_empty(), "a NaN view reached the marked scene at: {}", names.join(", "));

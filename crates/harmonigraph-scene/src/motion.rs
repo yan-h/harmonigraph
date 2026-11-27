@@ -1077,8 +1077,14 @@ mod tests {
         let view = &ViewConfig { fade_time: duration, ..view.clone() };
         let env = view.envelope();
         tracker.prune(now, &env);
-        let mut scene =
-            derive_scene(tracker, &Tuning::default(), view, &view.reach(), Camera::default(), None);
+        let mut scene = derive_scene(
+            tracker,
+            &Tuning::default(),
+            view,
+            &view.around_center(),
+            Camera::default(),
+            None,
+        );
         let mut fade = RingFade::default();
         if audio {
             scene.spectral.inner = 0.1;
@@ -2435,7 +2441,7 @@ mod tests {
                         &tracker,
                         &Tuning::default(),
                         &view,
-                        &view.reach(),
+                        &view.around_center(),
                         Camera::default(),
                         None,
                     );
