@@ -210,50 +210,25 @@ impl BaselineRecord {
 pub enum GapReasonRecord {
     #[default]
     PublicationFull,
-    InvalidRecord,
     ProducerLost,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GapRecord {
-    pub source: Option<u64>,
     pub t: f64,
     pub through: f64,
     pub first: u64,
     pub last: u64,
-    pub reason: GapReasonRecord,
 }
 impl From<PublicationGap> for GapRecord {
     fn from(g: PublicationGap) -> Self {
-        Self {
-            source: g.source.map(|s| s.0),
-            t: g.time,
-            through: g.through,
-            first: g.first,
-            last: g.last,
-            reason: match g.reason {
-                GapReason::PublicationFull => GapReasonRecord::PublicationFull,
-                GapReason::InvalidRecord => GapReasonRecord::InvalidRecord,
-                GapReason::ProducerLost => GapReasonRecord::ProducerLost,
-            },
-        }
+        Self { t: g.time, through: g.through, first: g.first, last: g.last }
     }
 }
 impl From<GapRecord> for PublicationGap {
     fn from(g: GapRecord) -> Self {
-        Self {
-            source: g.source.map(SourceId),
-            time: g.t,
-            through: g.through,
-            first: g.first,
-            last: g.last,
-            reason: match g.reason {
-                GapReasonRecord::PublicationFull => GapReason::PublicationFull,
-                GapReasonRecord::InvalidRecord => GapReason::InvalidRecord,
-                GapReasonRecord::ProducerLost => GapReason::ProducerLost,
-            },
-        }
+        Self { time: g.t, through: g.through, first: g.first, last: g.last }
     }
 }
 

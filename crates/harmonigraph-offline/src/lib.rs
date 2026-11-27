@@ -941,7 +941,7 @@ mod tests {
     /// refusing is worth nothing if the surviving records are dropped too.
     #[test]
     fn a_take_missing_note_history_is_exported_with_a_warning() {
-        use harmonigraph_core::canonical::{GapReason, PublicationGap};
+        use harmonigraph_core::canonical::PublicationGap;
         use harmonigraph_take::{CanonicalRecord, Header, NoteKind, NoteRecord, Record, Take};
 
         let note = |t: f64, note: u8| {
@@ -950,15 +950,7 @@ mod tests {
             Record::Canonical(CanonicalRecord::Delta(event.into()))
         };
         let gap = Record::Canonical(CanonicalRecord::Gap(
-            PublicationGap {
-                source: Some(harmonigraph_core::SourceId(1)),
-                time: 0.4,
-                through: 0.9,
-                first: 6,
-                last: 8,
-                reason: GapReason::PublicationFull,
-            }
-            .into(),
+            PublicationGap { time: 0.4, through: 0.9, first: 6, last: 8 }.into(),
         ));
         let run = Record::Run(harmonigraph_take::RunRecord::default());
         let header = Header {

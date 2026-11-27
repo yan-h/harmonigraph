@@ -10,9 +10,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use harmonigraph_core::canonical::{
-    CanonicalEvent, GapReason, NoteDelta, PublicationGap, SourceBaseline,
-};
+use harmonigraph_core::canonical::{CanonicalEvent, NoteDelta, PublicationGap, SourceBaseline};
 
 pub const PUBLICATION_RING: usize = 4096;
 /// A snapshot frame is two orders of magnitude larger than an item, so it
@@ -206,14 +204,7 @@ impl Publisher {
             Some(old) => {
                 PublicationGap { last: self.serial, through: old.through.max(time), ..old }
             }
-            None => PublicationGap {
-                source: None,
-                time,
-                through: time,
-                first: self.serial,
-                last: self.serial,
-                reason: GapReason::PublicationFull,
-            },
+            None => PublicationGap { time, through: time, first: self.serial, last: self.serial },
         };
         self.outage = Some(gap);
         self.flush_outage();

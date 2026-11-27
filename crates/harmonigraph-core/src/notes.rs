@@ -1409,15 +1409,13 @@ mod tests {
         }
     }
 
-    /// Publication lost over one source, or over the whole canonical stream.
-    fn gap(time: Time, source: Option<SourceId>) -> CanonicalEvent<'static> {
+    /// Publication lost over the canonical stream.
+    fn gap(time: Time) -> CanonicalEvent<'static> {
         CanonicalEvent::Gap(crate::canonical::PublicationGap {
-            source,
             time,
             through: time,
             first: 1,
             last: 1,
-            reason: crate::canonical::GapReason::PublicationFull,
         })
     }
 
@@ -1433,7 +1431,7 @@ mod tests {
         };
         let mut tracker = NoteTracker::new();
         tracker.replace_source(&baseline(1.0, &[kept, lost])).unwrap();
-        for gap in [gap(2.0, Some(source)), gap(2.5, None)] {
+        for gap in [gap(2.0), gap(2.5)] {
             assert_eq!(tracker.handle_canonical(gap), Ok(()));
         }
         assert_eq!(tracker.held_count(), 2, "a gap releases nothing");

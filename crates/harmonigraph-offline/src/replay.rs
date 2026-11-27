@@ -224,12 +224,10 @@ mod tests {
             )),
             // The Off for key 60 never reaches the file: it is inside the gap.
             CanonicalRecord::from_event(CanonicalEvent::Gap(PublicationGap {
-                source: None,
                 time: 2.0,
                 through: 2.0,
                 first: 2,
                 last: 2,
-                reason: GapReason::PublicationFull,
             })),
             CanonicalRecord::from_event(CanonicalEvent::Baseline(&silent)),
         ] {
@@ -357,12 +355,10 @@ mod tests {
             ),
             CanonicalRecord::from_event(CanonicalEvent::Baseline(&held)),
             CanonicalRecord::from_event(CanonicalEvent::Gap(PublicationGap {
-                source: Some(source),
                 time: 0.2,
                 through: 0.29,
                 first: 6,
                 last: 8,
-                reason: GapReason::PublicationFull,
             })),
             CanonicalRecord::from_event(CanonicalEvent::Baseline(&recovered)),
             delta(NoteEvent::off(0.4, source, 0, 60), 9),

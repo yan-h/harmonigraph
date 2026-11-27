@@ -24,15 +24,8 @@ fn take_with_a_gap(path: &std::path::Path) {
         Record::Canonical(CanonicalRecord::Delta(event.into()))
     };
     let gap = Record::Canonical(CanonicalRecord::Gap(
-        harmonigraph_core::canonical::PublicationGap {
-            source: Some(harmonigraph_core::SourceId(1)),
-            time: 0.4,
-            through: 0.9,
-            first: 6,
-            last: 8,
-            reason: harmonigraph_core::canonical::GapReason::PublicationFull,
-        }
-        .into(),
+        harmonigraph_core::canonical::PublicationGap { time: 0.4, through: 0.9, first: 6, last: 8 }
+            .into(),
     ));
     let run = Record::Run(harmonigraph_take::RunRecord::default());
     // A look, as every take writer records one: without it the export refuses

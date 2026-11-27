@@ -87,7 +87,7 @@ pub(crate) fn assemble(
                 take.incomplete.get_or_insert(IncompleteRecord {
                     first_publication: gap.first,
                     last_publication: gap.last,
-                    reason: gap.reason,
+                    reason: crate::canonical::GapReasonRecord::PublicationFull,
                 });
                 gap.t = gap.t.max(run.start) + run.offset;
                 gap.through = (gap.through.min(run.end) + run.offset).max(gap.t);
