@@ -54,21 +54,20 @@ const MAX_DRAWN_EXTENT: i32 = 4096;
 
 /// How far from C the window's center may sit. Nothing musical is out here —
 /// a billion fifths is not a pitch anyone reaches by scrolling — so this is
-/// the bound that keeps `center + extent` inside `i32` for every window built
-/// about the center, with room to spare for the widest extent
+/// the bound that keeps `center + extent` inside `i32` for every reader of
+/// [`ViewConfig::reach`], with room to spare for the widest extent
 /// [`MAX_DRAWN_EXTENT`] allows.
 const MAX_CENTER: i32 = 1 << 30;
 
-/// How far the naming reach runs along the fifths axis either side of its
-/// middle ([`ViewConfig::naming_reach`]), in steps.
+/// How far the naming reach runs along the fifths axis either side of the
+/// view's center ([`ViewConfig::reach`]), in steps.
 ///
 /// The reach is oblong, like the panes it was sized to cover:
 /// `lattice_to_world` puts the THIRDS axis (`fives`) on world x, so that is the
 /// one running across the screen and the one [`REACH_FIVES`] spends the width
-/// on. The two hold the whole of what a CABINET pane looking at the origin
-/// shows, at every zoom, up to a 16:9 frame — the projection this matters
-/// under and the shape a render is. They do NOT hold what the other two
-/// draw: a flat 16:9 perspective pane at the zoom limit draws 3825 nodes
+/// on. The two hold the whole of what a CABINET pane shows, at every zoom, up
+/// to a 16:9 frame — the projection this matters under and the shape a
+/// render is. They do NOT hold what the other two draw: a flat 16:9 perspective pane at the zoom limit draws 3825 nodes
 /// against this block's 1025. Covering it would mean naming a pitch sixty
 /// fifths out, which is a spelling nobody wants, on a walk this wide per
 /// played pitch per frame; the readers that describe the PICTURE ask the
@@ -77,8 +76,8 @@ const MAX_CENTER: i32 = 1 << 30;
 /// Constants since #1994 LN1: the pair were saved fields with no bar since
 /// #357, and every value ever saved loaded floored at these since #360.
 pub(crate) const REACH_THREES: i32 = 12;
-/// How far the naming reach runs along the thirds axis either side of its
-/// middle; see [`REACH_THREES`].
+/// How far the naming reach runs along the thirds axis either side of the
+/// view's center; see [`REACH_THREES`].
 pub(crate) const REACH_FIVES: i32 = 20;
 
 /// How far from C a septimal sheet may sit — the axis the layer strip offers,
@@ -334,10 +333,9 @@ pub struct ViewConfig {
     /// walk the content away from the camera.
     ///
     /// The fifths and thirds centers are driven by the camera rather than by a
-    /// bar ([`follow_camera`](Self::follow_camera)): they are where the window
-    /// [`around_center`](Self::around_center) is centered, and it has to stay
-    /// under what is on screen. The
-    /// sevens center is the home sheet, which is a choice, and keeps a control
+    /// bar ([`follow_camera`](Self::follow_camera)): they are where the
+    /// [`reach`](Self::reach) is centered, and it has to stay under what is on
+    /// screen. The sevens center is the home sheet, which is a choice, and keeps a control
     /// — the middle handle of the strip whose ends are
     /// [`min_sevens`](Self::min_sevens) and [`max_sevens`](Self::max_sevens),
     /// since which sheet is home is only meaningful among the sheets drawn.
@@ -1256,7 +1254,7 @@ impl ViewConfig {
     }
 
     /// The window's center as a lattice position: the node drawn at the world
-    /// origin, and what [`around_center`](Self::around_center) is centered on.
+    /// origin, and what the reach is centered on.
     pub fn center(&self) -> LatticePos {
         LatticePos::new(self.center_threes, self.center_fives, self.center_sevens)
     }
@@ -1287,8 +1285,8 @@ impl ViewConfig {
 
         // The window's own integers, which are the one group here that is not
         // a float. `DrawnWindow::count` multiplies the three spans together
-        // and `around_center` adds each center to its extent, so a blob
-        // carrying a billion sheets overflows both — and the derived window
+        // and `reach` adds each center to its extent, so a blob carrying a
+        // billion sheets overflows both — and the derived window
         // now counts nodes on every draw, which puts that arithmetic in the
         // frame rather than at the edge of it. The sevens ends are held to
         // what their strip offers.

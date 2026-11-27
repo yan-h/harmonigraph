@@ -547,24 +547,21 @@ fn anchor_edge(note: &RollNote, time: &TimeAxis, anchor: NameAnchor) -> Edge {
 /// says the pitch CLASS and nothing about which octave is sounding. What
 /// answers that is the dots on the turns, which are not the name.
 ///
-/// The REACH ([`ViewConfig::naming_reach`]) is asked first and the
-/// picture's own window ([`PictureState::shown`](crate::PictureState::shown))
-/// only where the reach comes back empty, which is what keeps two things true
-/// at once. A name the reach spells is stable: the reach is the same block
-/// about the lattice's origin whatever the camera is doing, so panning and
-/// zooming never respell it, and the walk is over a thousand positions rather
-/// than the twenty thousand a drawn window can reach — per played pitch, per
-/// frame. And where the lattice is drawing a node for a pitch no node of the
-/// reach is within tolerance of, that node names the note, instead of the
-/// pitch dropping to a spelling the lattice is visibly contradicting one pane
-/// away; such a pitch keeps the picture's name only while the picture draws
-/// its node.
-///
-/// A just pitch more than 12 fifths or 20 thirds from the origin is seldom
-/// that pitch: the reach is dense enough that about 70% of the octave lies
-/// within the half-cent tolerance of one of its nodes, so such a pitch is
-/// usually named by that nearby coincidence rather than by its own node,
-/// even on screen (PR #1996).
+/// The REACH is asked first and the picture's own window
+/// ([`PictureState::shown`](crate::PictureState::shown)) only where the reach
+/// comes back empty, which is what keeps two things true at once. A name is
+/// stable: the reach is sized by constants rather than by any pane, so
+/// zooming never respells a note, and neither does a pan until the camera's
+/// center has moved more than 12 fifths or 20 thirds from the note's node,
+/// since the reach is centered on the view's center, which follows the
+/// camera. Past that a pan can respell it (#1994 RL2: pinned to the origin
+/// instead, a far just note was named after an unrelated node near the
+/// origin within the half-cent match, PR #1996). The walk is over a thousand
+/// positions rather than the twenty thousand a drawn window can reach — per
+/// played pitch, per frame. And a name agrees with the
+/// picture: where the lattice is drawing a node the reach cannot spell, that
+/// node names the note, instead of the pitch dropping to a spelling the
+/// lattice is visibly contradicting one pane away.
 ///
 /// The equal-tempered fallback is what is left when NEITHER window has a node
 /// — still a [`NoteName`], so it draws identically and there is one rendering
@@ -593,7 +590,7 @@ impl Namer {
         tempered: Tempered,
     ) -> Self {
         Self {
-            reach: view.naming_reach(),
+            reach: view.reach(),
             shown,
             tuning: *tuning,
             tempered,
@@ -2431,23 +2428,23 @@ mod tests {
         }
     }
 
-    /// A pan never respells a note the naming reach spells (#1994 RL2). The
-    /// reach stays on the lattice's origin, so a just third keeps its lattice
-    /// spelling with the camera panned thirty fifths away, past where the
-    /// block about the camera holds its node; and in an equal temperament,
-    /// where a dozen nodes answer to middle C, the one the tiebreak picks is
-    /// picked out of the same block wherever the camera is.
+    /// The tiebreak's stated job is to keep a name from moving when the view
+    /// is panned. In a collapsed tuning many nodes answer to one pitch, and
+    /// which of them the iteration reaches first changes with the view — so
+    /// without a rule the name changes with it too.
     #[test]
     fn panning_the_lattice_does_not_rename_a_pitch() {
-        let (just, equal) = (Tuning::just(), Tuning::default());
-        let third = 60.0 + just.five_cents() / 100.0;
-        let named = |tuning: &Tuning, midi: f32, centre: i32| {
-            let view = ViewConfig { center_threes: centre, ..ViewConfig::default() };
-            note_name(&view, &view.around_center(), tuning, UNLINKED, midi).to_string()
+        let equal = harmonigraph_core::Tuning::default();
+        let named = |centre: i32| {
+            let view = harmonigraph_scene::ViewConfig {
+                center_threes: centre,
+                ..harmonigraph_scene::ViewConfig::default()
+            };
+            note_name(&view, &view.reach(), &equal, linked(), 60.0).to_string()
         };
-        for centre in [0, -2, 1, 30, -40] {
-            assert_eq!(named(&just, third, centre), "E-", "panned to {centre}, the third");
-            assert_eq!(named(&equal, 60.0, centre), "C", "panned to {centre}, middle C");
+        assert_eq!(named(0), "C");
+        for centre in [-2, -1, 1, 2] {
+            assert_eq!(named(centre), "C", "panned to {centre}, middle C is still C");
         }
     }
 
@@ -2464,11 +2461,10 @@ mod tests {
         let just = harmonigraph_core::Tuning::just();
         // A node past the reach, and the pitch that sounds it.
         let far = harmonigraph_core::LatticePos::new(0, 25, 0);
-        assert!(!view.naming_reach().contains(far));
+        assert!(!view.reach().contains(far));
         let midi = 60.0 + just.pitch_class(far).to_cents() / 100.0;
 
-        let equal_tempered =
-            note_name(&view, &view.naming_reach(), &just, linked(), midi).to_string();
+        let equal_tempered = note_name(&view, &view.reach(), &just, linked(), midi).to_string();
         assert_eq!(
             equal_tempered,
             equal_tempered_name(midi).to_string(),
@@ -2546,7 +2542,7 @@ mod tests {
         let view = harmonigraph_scene::ViewConfig::default();
         let equal = harmonigraph_core::Tuning::default();
         assert_eq!(
-            note_name(&view, &view.naming_reach(), &equal, linked(), 66.0).to_string(),
+            note_name(&view, &view.reach(), &equal, linked(), 66.0).to_string(),
             "F\u{266F}"
         );
     }
@@ -2729,7 +2725,7 @@ mod tests {
         let view = harmonigraph_scene::ViewConfig::default();
         let equal = harmonigraph_core::Tuning::default();
         let name = |midi| {
-            let name = note_name(&view, &view.naming_reach(), &equal, linked(), midi).to_string();
+            let name = note_name(&view, &view.reach(), &equal, linked(), midi).to_string();
             let mut state = state(24.0, 10.0);
             state.appearance.view = view.clone();
             state.runtime.tuning = equal;
@@ -2788,8 +2784,7 @@ mod tests {
         let view =
             harmonigraph_scene::ViewConfig { min_sevens: -1, max_sevens: 1, ..Default::default() };
         let equal = harmonigraph_core::Tuning::default();
-        let name =
-            |midi| note_name(&view, &view.naming_reach(), &equal, UNLINKED, midi).to_string();
+        let name = |midi| note_name(&view, &view.reach(), &equal, UNLINKED, midi).to_string();
 
         // Every one of these has an equal-tempered twin one sevens step off,
         // nearer the origin, that would win on distance alone.
@@ -2820,14 +2815,14 @@ mod tests {
         let midi = 60.0 + just.five_cents() / 100.0;
         let pitch = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
         let view = ViewConfig::default();
-        let mut before = Namer::new(&view, view.naming_reach(), &just, UNLINKED);
+        let mut before = Namer::new(&view, view.reach(), &just, UNLINKED);
         assert!(before.shows_node(pitch));
         assert_eq!(before.name(midi).to_string(), "E-");
 
         // The held acoustic pitch stays fixed as the current tuning changes.
         // Prove neither naming window contains a match before testing fallback.
         let equal = Tuning::default();
-        let shown = view.naming_reach();
+        let shown = view.reach();
         assert!(naming_node_from(
             shown.positions().map(|pos| (pos, equal.pitch_class(pos))),
             linked(),

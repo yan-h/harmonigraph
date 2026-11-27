@@ -764,7 +764,7 @@ impl Placed {
     ) -> Placed {
         use harmonigraph_core::tuning::PitchClass;
         let (tuning, tempered) = (state.runtime.tuning, state.runtime.tempered);
-        let reach = state.appearance.view.naming_reach();
+        let reach = state.appearance.view.reach();
         let kept = ctx
             .data(|d| d.get_temp::<Placed>(id))
             .filter(|kept| (kept.tuning, kept.tempered, kept.reach) == (tuning, tempered, reach));

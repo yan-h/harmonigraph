@@ -168,9 +168,8 @@ fn lattice(view: &harmonigraph_scene::ViewConfig, camera: Camera) -> Scene {
     // in the frame — at 0.0 a chord held at 0.0 has earned none of them.
     const NOW: f64 = 1.0;
     let tuning = Tuning::default();
-    let derive = |camera| {
-        animated_snapshot(&tracker, &tuning, view, &view.around_center(), camera, None, NOW)
-    };
+    let derive =
+        |camera| animated_snapshot(&tracker, &tuning, view, &view.reach(), camera, None, NOW);
     // Aimed at a lit NODE, in a second pass. Where the lit set sits depends on
     // the chord and on the window's own centre, so a camera pointed at the
     // lattice origin frames a different share of it in each scene here, and at

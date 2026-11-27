@@ -2290,9 +2290,9 @@ fn a_note_lit_on_the_lattice_is_not_flagged_off_it() {
         ..Default::default()
     };
     let window = view.scrolled(&camera, 16.0 / 9.0);
-    // Whichever edge of the picture has left the block about the center that
-    // the pane falls back to — which one that is depends on where the default
-    // camera is pointed, and the disagreement is the same at any of them.
+    // Whichever edge of the picture has left the reach — which one that is
+    // depends on where the default camera is pointed, and the disagreement is
+    // the same at any of them.
     let far = [
         harmonigraph_core::LatticePos::new(0, window.min.fives, 0),
         harmonigraph_core::LatticePos::new(0, window.max.fives, 0),
@@ -2300,8 +2300,8 @@ fn a_note_lit_on_the_lattice_is_not_flagged_off_it() {
         harmonigraph_core::LatticePos::new(window.max.threes, 0, 0),
     ]
     .into_iter()
-    .find(|&pos| window.contains(pos) && !view.around_center().contains(pos))
-    .expect("a zoomed-out perspective pane draws nothing past the fallback block");
+    .find(|&pos| window.contains(pos) && !view.reach().contains(pos))
+    .expect("a zoomed-out perspective pane draws nothing the reach cannot name");
 
     let bands = |shown: Option<harmonigraph_scene::DrawnWindow>| {
         let mut state = fresh();
@@ -2330,9 +2330,9 @@ fn a_note_lit_on_the_lattice_is_not_flagged_off_it() {
             .count()
     };
 
-    // No lattice pane has drawn, so the block about the center is all there
-    // is to go on — and it does not hold this node.
-    assert_eq!(bands(None), 1, "with only the fallback to ask, the note reads as off the lattice");
+    // No lattice pane has drawn, so the reach is all there is to go on — and
+    // it cannot reach this node.
+    assert_eq!(bands(None), 1, "with only the reach to ask, the note reads as off the lattice");
     assert_eq!(
         bands(Some(window)),
         0,
@@ -3846,6 +3846,8 @@ fn on_tape_in_two_sections(g_struck: f64) -> PictureState {
     use crate::tape::harmony::{Entry, Harmony, Section};
     let mut state = on_tape();
     state.runtime.tuning = harmonigraph_core::Tuning::just();
+    let view = &mut state.appearance.view;
+    (view.center_threes, view.center_fives) = (0, 0);
     let c = Entry { pitch: 60.0, held: false, strikes: vec![0.0] };
     let g = Entry { pitch: 67.019_55, held: false, strikes: vec![g_struck] };
     let sections = vec![
@@ -4063,6 +4065,8 @@ fn under_a_temperament_a_pitch_lights_the_one_node_it_is_named_by() {
     use crate::tape::harmony::{Entry, Harmony, Section};
     let mut state = on_tape();
     state.runtime.tuning = harmonigraph_core::Tuning::default();
+    let view = &mut state.appearance.view;
+    (view.center_threes, view.center_fives) = (0, 0);
     let entries =
         [60.0, 65.0, 67.0].map(|pitch| Entry { pitch, held: false, strikes: vec![0.0] }).to_vec();
     let sections = vec![Section { start: 0.0, end: 40.0, strength: 1.0, entries }];

@@ -320,7 +320,7 @@ mod tests {
             &state.runtime.tracker,
             &state.runtime.tuning,
             &state.appearance.view,
-            &state.appearance.view.around_center(),
+            &state.appearance.view.reach(),
             state.appearance.camera,
             None,
         );
@@ -854,7 +854,7 @@ mod tests {
                 &state.runtime.tracker,
                 &state.runtime.tuning,
                 &state.appearance.view,
-                &state.appearance.view.around_center(),
+                &state.appearance.view.reach(),
                 state.appearance.camera,
                 None,
             );

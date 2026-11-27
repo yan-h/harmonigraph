@@ -10,12 +10,11 @@ pub(super) fn scene_of(
     view: &ViewConfig,
     now: f64,
 ) -> Scene {
-    scene_in(tracker, tuning, view, &view.around_center(), now)
+    scene_in(tracker, tuning, view, &view.reach(), now)
 }
 
-/// [`scene_of`] over `window` rather than the block the naming reach's size
-/// about the view's center: for a suite that wants a few nodes, or ones the
-/// fresh block does not hold.
+/// [`scene_of`] over `window` rather than the view's reach: for a suite that
+/// wants a few nodes, or ones the reach does not hold.
 pub(super) fn scene_in(
     tracker: &NoteTracker,
     tuning: &Tuning,

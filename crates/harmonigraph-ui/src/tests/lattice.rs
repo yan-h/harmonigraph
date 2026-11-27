@@ -389,8 +389,8 @@ fn learn_measures_the_septimal_comma_against_the_derived_third() {
 /// whatever had been drawn by the time they were asked.
 ///
 /// The dock draws its panes in the order the user has arranged them, so a
-/// band reading this frame's window would answer from the fallback block or
-/// from the picture depending on where the lattice section sits in the layout. `drawn` is
+/// band reading this frame's window would answer from the reach or from the
+/// picture depending on where the lattice section sits in the layout. `drawn` is
 /// the previous frame's, rotated in `begin_frame`, which is one answer for
 /// every reader whatever the arrangement.
 #[test]
@@ -399,8 +399,8 @@ fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
     assert!(state.picture.surfaces.drawn.is_none(), "nothing has drawn yet");
     assert_eq!(
         state.picture.shown(),
-        state.picture.appearance.view.around_center(),
-        "with no picture to describe, the block about the center is what there is",
+        state.picture.appearance.view.reach(),
+        "with no picture to describe, the reach is what there is",
     );
 
     let mut h = DockHarness::new();
@@ -415,17 +415,17 @@ fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
     );
     assert_ne!(
         drawn,
-        state.picture.appearance.view.around_center(),
-        "the published window is the fallback block, so nothing says it came from a camera",
+        state.picture.appearance.view.reach(),
+        "the published window is the reach, so nothing says it came from a camera",
     );
     // The docked pane's own, at the docked pane's own aspect — a window a
     // section of this shape really produces, not the whole editor's.
     assert!(
-        drawn.count() < state.picture.appearance.view.around_center().count(),
+        drawn.count() < state.picture.appearance.view.reach().count(),
         "the lattice section is a fraction of the window, so its cabinet view is \
-         well inside the fallback block: {} nodes against {}",
+         well inside the reach: {} nodes against {}",
         drawn.count(),
-        state.picture.appearance.view.around_center().count(),
+        state.picture.appearance.view.reach().count(),
     );
     // A composed frame, an export or the Video preview, hands its spectral
     // pane the window its own lattice drew instead (`crate::draw_panes`), held

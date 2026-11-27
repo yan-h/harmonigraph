@@ -50,7 +50,7 @@ fn frame(state: &mut PictureState, now: f64, surface: usize, audio: bool) -> Sce
             &state.appearance.spectrum,
         );
     }
-    let window = state.appearance.view.around_center();
+    let window = state.appearance.view.reach();
     compose_scene(state, &window, 1.0, None, surface, now)
 }
 
@@ -94,7 +94,7 @@ fn markers_and_midi_ring_floor_follow_the_reversed_note_and_existing_history() {
             assert!(scene.nodes.iter().any(|n| !n.on_home));
             assert!(scene.pluses.iter().all(|p| scene.nodes[p.node].on_home));
             // Hover wins whatever the names would show.
-            let window = state.appearance.view.around_center();
+            let window = state.appearance.view.reach();
             let hovered = compose_scene(&mut state, &window, 1.0, Some(LatticePos::ORIGIN), 0, now);
             assert_eq!(origin(&hovered).name_level(&state.appearance.view), 1.0);
             assert!(!hovered.pluses.iter().any(|p| p.node == index));

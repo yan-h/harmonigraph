@@ -515,7 +515,7 @@ pub fn draw_panes(
             }
             // Text sizes itself off the pane, here as everywhere.
             Pane::Spectral => {
-                let shown = shown.unwrap_or_else(|| state.appearance.view.around_center());
+                let shown = shown.unwrap_or_else(|| state.appearance.view.reach());
                 let navigation = panes::spectral::Navigation::None;
                 let solo = panes::lattice::NO_SOLO;
                 panes::spectral::spectral_pane(

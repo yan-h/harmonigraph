@@ -60,28 +60,12 @@ fn everything_the_pane_shows_is_in_the_window() {
         // count either side of home, which is what a leaning stack would come
         // out as if anything downstream re-derived it symmetrically.
         assert_eq!(
-            (view.naming_reach().min.sevens, view.naming_reach().max.sevens),
+            (view.reach().min.sevens, view.reach().max.sevens),
             (min_sevens, max_sevens),
             "the naming reach narrowed a leaning stack",
         );
         sweep_the_pane(&view);
     }
-}
-
-/// The naming reach stays on the lattice's origin wherever the camera has
-/// taken the view's center, on every sheet the view draws, so a pan never
-/// moves the block a note is spelled from (#1994 RL2).
-#[test]
-fn the_naming_reach_stays_on_the_origin_under_a_pan() {
-    let home = ViewConfig { min_sevens: -1, max_sevens: 2, ..ViewConfig::default() };
-    let reach = home.naming_reach();
-    assert_eq!(
-        (reach.min, reach.max),
-        (LatticePos::new(-12, -20, -1), LatticePos::new(12, 20, 2)),
-        "the reach is not 12 fifths and 20 thirds about the origin",
-    );
-    let panned = ViewConfig { center_threes: 30, center_fives: -45, ..home };
-    assert_eq!(panned.naming_reach(), reach, "a pan moved the naming reach");
 }
 
 /// The sweep [`everything_the_pane_shows_is_in_the_window`] runs per stack.
@@ -127,20 +111,20 @@ fn sweep_the_pane(view: &ViewConfig) {
     }
 }
 
-/// Every node a cabinet pane looking at the origin draws is one the naming
-/// reach can spell: the drawn window never leaves it there, at any zoom, up
-/// to a 16:9 frame.
+/// Every node a cabinet pane draws is one the analyzer can name: the drawn
+/// window never leaves the naming reach, at any zoom, up to a 16:9 frame.
 ///
 /// The two windows answer different questions and are sized apart — the drawn
-/// one per pane from the camera, the reach once for the whole UI, about the
-/// lattice's origin — so nothing structural keeps them in step. The reach's
-/// size is set on exactly this, which is why it is checked rather than
-/// assumed. Panned away, the pane draws past the reach, and the names there
-/// come from the picture's own window (`Namer` in the UI).
+/// one per pane from the camera, the reach once for the whole UI — so nothing
+/// structural keeps them in step, and where they part company the picture and
+/// the analyzer contradict each other: a node lit on the lattice while the
+/// analyzer draws its off-lattice band for the same pitch and the roll's and
+/// spiral's note names show no node at all. The reach's default is sized on exactly this, which
+/// is why it is checked rather than assumed.
 #[test]
 fn a_cabinet_pane_never_draws_a_node_the_reach_cannot_name() {
     let view = ViewConfig::default();
-    let reach: std::collections::HashSet<_> = view.naming_reach().positions().collect();
+    let reach: std::collections::HashSet<_> = view.reach().positions().collect();
     for aspect in [0.6, 1.0, 1.5, 16.0 / 9.0] {
         for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
             for cabinet_scale in [0.1, 0.6, 1.0] {
@@ -501,17 +485,16 @@ fn panning_a_long_way_keeps_the_window_full() {
             "{projection:?}: the target walked off with the window: {:?}",
             camera.target,
         );
-        // The block about the center came along, so on a frame where no pane
-        // measured the picture's window, the one the picture falls back to
-        // (`around_center`) still holds the nodes on screen. The naming reach
-        // did not: it stays on the lattice's origin
-        // (`the_naming_reach_stays_on_the_origin_under_a_pan`).
+        // The reach the names are chosen out of came along, so the notes on
+        // screen are still ones the analyzer can name.
         //
-        // Held strictly for cabinet alone, which is what the block is sized
+        // Held strictly for cabinet alone, which is what the reach is sized
         // on. A tilted camera's window has to reach back to the world origin
         // as well as across the pane (see `scrolled`), so its far corner can
-        // sit outside a block that covers everything actually visible.
-        let reach: std::collections::HashSet<_> = view.around_center().positions().collect();
+        // sit outside a reach that covers everything actually visible — and
+        // a reach sized for THAT is a walk of thousands per played pitch,
+        // every frame, to name the corner of a picture nobody is reading.
+        let reach: std::collections::HashSet<_> = view.reach().positions().collect();
         let outside = far
             .positions()
             .filter(|&pos| {
@@ -521,7 +504,7 @@ fn panning_a_long_way_keeps_the_window_full() {
             .filter(|pos| !reach.contains(pos))
             .count();
         if projection == Projection::Cabinet {
-            assert_eq!(outside, 0, "cabinet: {outside} nodes on screen are outside the block");
+            assert_eq!(outside, 0, "cabinet: {outside} nodes on screen are outside the reach");
         }
     }
 }

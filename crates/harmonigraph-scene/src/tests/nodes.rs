@@ -759,11 +759,11 @@ fn window_center_pans_which_nodes_display() {
         max_sevens: 0,
         ..ViewConfig::default()
     };
-    let window = view.around_center();
+    let window = view.reach();
     assert_eq!(
         (window.min, window.max),
         (LatticePos::new(5 - 12, -20, 0), LatticePos::new(5 + 12, 20, 0)),
-        "the block about the center did not follow it",
+        "the reach did not follow the center",
     );
 
     // The center node renders at the world origin.

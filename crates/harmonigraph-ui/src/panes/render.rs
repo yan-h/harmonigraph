@@ -658,7 +658,7 @@ fn preview_panes(
                 shown = shown.or(window);
             }
             Pane::Spectral => {
-                let shown = shown.unwrap_or_else(|| state.appearance.view.around_center());
+                let shown = shown.unwrap_or_else(|| state.appearance.view.reach());
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                 super::spectral::spectral_pane(
                     &mut child,
