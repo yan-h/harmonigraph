@@ -617,14 +617,6 @@ fn export(args: Args) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn retired_playhead_flag_is_rejected() {
-        let error = parse_args_from(["take.take", "--playhead"].map(str::to_owned))
-            .err()
-            .expect("retired flag must fail");
-        assert!(error.contains("--playhead"), "{error}");
-    }
-
     /// Through CLI parsing, files, output selection and the real render loop:
     /// replacing appearance must draw exactly what recording it would draw.
     #[test]

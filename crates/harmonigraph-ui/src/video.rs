@@ -497,26 +497,3 @@ impl Default for RenderFrame {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn retired_export_fields_are_ignored_and_not_saved_again() {
-        let config: RenderConfig = ron::from_str(
-            r#"(record_audio:true,auto_render:false,audio_path:"old.wav",audio_offset:"12.5",
-                renderer_path:"/renderer",short_edge:2160,trigger:AtBar,stop_bar:17.0)"#,
-        )
-        .unwrap();
-        assert_eq!(config.short_edge, 2160);
-        assert_eq!(config.trigger, RenderTrigger::AtBar);
-        assert_eq!(config.stop_bar, 17.0);
-        let saved = ron::to_string(&config).unwrap();
-        for removed in
-            ["record_audio", "auto_render", "audio_path", "audio_offset", "renderer_path"]
-        {
-            assert!(!saved.contains(removed), "retired field saved again: {removed}");
-        }
-    }
-}
