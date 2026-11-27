@@ -872,45 +872,18 @@ mod tests {
     /// An edit dated ahead of the display clock, as a Hub's are by the Tuning
     /// delay, draws nothing new in the pass asked for at its drain, so the
     /// worker goes on asking until the step whose clock has passed it, and
-    /// stops after.
+    /// stops after; one dated where the clock already stands asks at its own
+    /// step alone.
     #[test]
     fn an_edit_dated_ahead_asks_until_the_clock_has_passed_it() {
-        let mut h = harness();
-        h.editor_state.set_open(true);
-        let asked = |h: &Harness| h.editor_state.pass_request.take();
-        h.push_note(1.0, 60);
-        h.step();
-        assert!(asked(&h));
-        // Published at the clock's 1.0 s, to sound a tenth of a second later.
-        let ahead = CoreNoteEvent::on(1.1, SourceId::DIRECT, 0, 64, 1.0);
-        h.notes.note(ahead.into()).expect("the ring is sized for this");
-        h.step();
-        assert!(asked(&h), "the edit's own step asked nothing");
-        let (due, mut display) = {
-            let mut shared = h.shared.lock();
-            let tracker = &shared.ui.picture.runtime.tracker;
-            let due = tracker.voices().find(|v| v.note == 64).expect("the edit arrived").on_time;
-            let now = shared.clock.now();
-            (due, shared.clock.display_now(now))
-        };
-        assert!(due > display + 0.05, "the fixture's edit must be dated ahead: {due} at {display}");
-        let mut steps = 0;
-        while display < due {
-            std::thread::sleep(POLL);
-            h.step();
-            assert!(asked(&h), "a step before the clock passed the edit asked nothing");
-            let mut shared = h.shared.lock();
-            let now = shared.clock.now();
-            display = shared.clock.display_now(now);
-            steps += 1;
-        }
-        assert!(steps > 5, "the fixture's clock passed the edit in {steps} steps");
-        // The step whose own reading passed it asks once more, and may be the
-        // last of those above or the next.
-        h.step();
-        asked(&h);
-        h.step();
-        assert!(!asked(&h), "the worker went on asking after the clock passed the edit");
+        let mut seen = super::Seen::default();
+        let edits = |count, latest| harmonigraph_core::Edits { count, latest };
+        assert!(seen.edited(edits(1, 1.10), 1.00), "the edit's own step asked nothing");
+        assert!(seen.edited(edits(1, 1.10), 1.05), "a step before the clock reached it");
+        assert!(seen.edited(edits(1, 1.10), 1.12), "the step whose clock passed it");
+        assert!(!seen.edited(edits(1, 1.10), 1.16), "a step after the clock passed it");
+        assert!(seen.edited(edits(2, 1.16), 1.16), "an edit at the clock's own time");
+        assert!(!seen.edited(edits(2, 1.16), 1.20), "a step after it");
     }
 
     /// A take ends itself with no frame running: with the window SHUT, which

@@ -73,7 +73,7 @@ SILENCE_MIN = 60.0
 NOTE_AFTER = 1.5
 # How much of an export, and of the time before it, is compared.
 EXPORT_COMPARE = 30.0
-# A shown editor draws at least its 50 ms idle poll, so a longer gap between
+# A shown editor draws at least its 250 ms idle poll, so a longer gap between
 # drawn frames is a window that could not present: covered, or minimized.
 UNSHOWN_GAP = 1.0
 RATES = {1: 'Display', 2: 'Half', 3: 'Third', 4: 'Quarter'}

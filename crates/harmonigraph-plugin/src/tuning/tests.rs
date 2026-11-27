@@ -168,6 +168,49 @@ fn tune_and_hub_diagnostics_publish_once_per_audio_interval() {
     }
 }
 
+/// A Hub whose blocks carry nothing, transport stopped or rolling, publishes
+/// nothing its display's tracker takes as an edit, long past the snapshots a
+/// played note owes, once a stop's cut is in: the input worker asks a still
+/// editor for a pass at every edit, so one here would hold it at the display
+/// rate for good.
+#[test]
+fn an_idle_hub_edits_nothing_its_display_draws() {
+    let _scope = crate::test_scope::enter();
+    let mut device = hub();
+    device.activate_format(48_000.0, 64);
+    let lock = device.editor_lock();
+    let edits = || {
+        // Past the input worker's next step with the editor shut.
+        std::thread::sleep(crate::background::SHUT_POLL * 5);
+        lock.lock().ui.picture.runtime.tracker.edits().count
+    };
+    let mut raw = 0;
+    let mut block = |events: Vec<Input>, rolling: bool| {
+        let transport = Some(timeline(raw as f64 / 48_000.0, rolling));
+        device.run_callback(raw, events, (None, None), (64, false), transport);
+        raw += 64;
+    };
+    block(vec![note(1, 0, 60, 0, true)], true);
+    block(vec![note(1, 0, 60, 0, false)], true);
+    for _ in 0..1600 {
+        block(vec![], true);
+    }
+    let mut settled = edits();
+    assert!(settled > 0, "the fixture's note never reached the display");
+    for rolling in [true, false] {
+        // The transport's stop is an edit of its own, once: the cut that ends
+        // what was held, a callback after the stop.
+        for _ in 0..4 {
+            block(vec![], rolling);
+        }
+        settled = edits();
+        for _ in 0..1600 {
+            block(vec![], rolling);
+        }
+        assert_eq!(edits(), settled, "an idle Hub edited the display, rolling: {rolling}");
+    }
+}
+
 /// The whole of the delay contract: an input emits at its own sample plus D,
 /// with the correction that came back for it.
 #[test]
