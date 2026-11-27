@@ -362,7 +362,7 @@ A take recorded without a look is refused, with the reason in the export list.
 **Output size (px)** shows the actual width and height for the chosen aspect ratio.
 **Archive copy** also saves a small AV1 copy beside each video, to keep once the video is uploaded;
 see [Archive copy](offline-rendering.md#archive-copy).
-**Frame notes** pans and zooms the lattice onto every note drawn since Clear display history and sizes the lattice's share of the frame to fit them,
+**Frame notes** pans and zooms the lattice onto the notes sounding and the pitches played since Clear display history or Clear label history, the last 384 of them, and sizes the lattice's share of the frame to fit them,
 so play the piece through first.
 Shift-drag either picture to an edge of the preview to arrange the pictures.
 Drag either picture without Shift to navigate,

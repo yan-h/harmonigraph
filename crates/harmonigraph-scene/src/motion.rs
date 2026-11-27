@@ -751,12 +751,12 @@ impl NodeMotion {
         }
         let floor = now - horizon;
         let intensity = view.intensity;
-        // A note that ended before every horizon a host can set can never
-        // count as late again, whatever the settings do next, so its cursor
-        // has nothing left to guard. Skipping it bounds this scan by the last
-        // few seconds of playing rather than by the whole roll. The longest
-        // a host can set has every field `departure` reads at the top of its
-        // range; `horizon` raises the spread itself.
+        // A note that ended before every horizon the settings can reach can
+        // never count as late again, whatever a bar drag, undo or preset does
+        // to them next, so its cursor has nothing left to guard. Skipping it
+        // bounds this scan by the last few seconds of playing rather than by
+        // the whole roll. The longest horizon has every field `departure`
+        // reads at the top of its range; `horizon` raises the spread itself.
         let longest = NoteAnimationConfig {
             fade_out_delay: *crate::FADE_OUT_DELAY_RANGE.end(),
             ..NoteAnimationConfig::default()
