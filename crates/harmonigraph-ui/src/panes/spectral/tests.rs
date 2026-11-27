@@ -3784,6 +3784,34 @@ fn a_tape_playhead_asks_for_a_frame_each_device_pixel_it_crosses() {
     assert!(rolling.is_some(), "the transport idled");
 }
 
+/// A live note struck over an audition and still held once it has stopped
+/// grows along the song axis at the audition's speed with no playhead left
+/// to ask for frames, so the overlay asks for its own, a device pixel at a
+/// time; released, it stands still and asks nothing.
+#[test]
+fn a_live_note_held_over_a_stopped_audition_asks_for_its_pixels() {
+    let (ctx, mut state) = auditioning(1.0, false);
+    // The pane draws at the display time 100 s: the audition began from
+    // song 1 s at 99 s and stopped at 99.5 s, the note struck at 99.2 s.
+    state.runtime.tape.audition =
+        Some(crate::tape::Audition { clock: 99.0, song: 1.0, speed: 1.0, until: Some(99.5) });
+    state.runtime.tape.heard = None;
+    state.appearance.spectrum.show_roll = true;
+    state.runtime.tracker.handle_event(NoteEvent::on(99.2, SourceId::DIRECT, 0, 60, 1.0));
+    let held = |state: &mut PictureState| {
+        playhead_frames(&ctx, state, Drawn::Pane, 1, false);
+        let drawn = crate::panes::spectral::roll::take_roll_draw_probe();
+        (drawn.map_or(0, |probe| probe.note_count), state.surfaces.moving_this_frame)
+    };
+    let (drawn, asked) = held(&mut state);
+    assert!(drawn > 0, "the fixture's live note must be drawn over the song");
+    let pace = asked.after(crate::Reason::RollOnScreen).expect("the growing note idled");
+    assert!(pace > 0.0, "a growing note asked for every frame: {pace} s");
+    state.runtime.tracker.handle_event(NoteEvent::off(99.8, SourceId::DIRECT, 0, 60));
+    let (_, asked) = held(&mut state);
+    assert!(!asked.asks_for(crate::Reason::RollOnScreen), "a released overlay asked");
+}
+
 /// The overview's playhead, drawn alone, by the same rule as the pane's: on a
 /// short recording its fitted strip moves a playhead visibly, and a recording
 /// whose end the position sets grows with it, so the mark stands still on
