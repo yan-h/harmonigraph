@@ -438,7 +438,7 @@ fn textures_preserve_levels_and_vanishing_refraction_is_exact_identity() {
     let moved = bent.iter().zip(&straight).filter(|(a, b)| a.abs_diff(**b) > 4).count();
     assert!(moved > bent.len() / 50, "{style:?} did not displace structured sound");
     let targets = cloud(&resources);
-    assert_eq!(targets.shape().tone, None, "the wash drew a tone target");
+    assert_eq!(targets.shape().scales_tone, None, "the wash drew a tone target");
     assert!(targets.shape().tile.is_some());
     // Intermediate depth must stay on the curved palette too.
     // Mixing RGB endpoints would cut across this ramp's curve.
@@ -558,7 +558,7 @@ fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
     assert!(steps(&stars) > 4 * steps(&bare).max(1), "no stars");
     let targets = cloud(&resources);
     let shape = targets.shape();
-    assert!(shape.stars.is_some() && shape.tone.is_none() && shape.tile.is_none());
+    assert!(shape.stars.is_some() && shape.scales_tone.is_none() && shape.tile.is_none());
     assert!(targets.shape().memory.is_some(), "the fresh Stars ran without their history");
     cb.grid.fill(0);
     let release = f64::from(fresh.color_release);
@@ -2529,7 +2529,7 @@ fn scales_draw_no_seam_where_their_region_starts() {
     }
     let mut whole_res = CallbackResources::default();
     let whole = frame_with(&device, &queue, &mut whole_res, &cb);
-    let tone = cloud(&whole_res).shape().tone.expect("Scales drew no tone target");
+    let tone = cloud(&whole_res).shape().scales_tone.expect("Scales drew no tone target");
     assert!(tone[1] < SIDE, "Scales sample every pixel, so no read lands between texels");
     let split = 0.25;
     {

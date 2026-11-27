@@ -823,7 +823,7 @@ fn fresh_colour_memory_under_watercolor_settles_then_fades() {
         hold(&mut cb, &mut resources);
         let targets = cloud(&resources);
         assert_eq!(targets.memory.as_ref().map(|m| m.extent), Some([PANE + 2; 2]), "{case}");
-        assert_eq!(targets.shape().tone, None, "{case}: a tone target nothing draws");
+        assert_eq!(targets.shape().scales_tone, None, "{case}: a tone target nothing draws");
         assert!(targets.shape().tile.is_some(), "{case}: no texture was drawn");
         cb.grid.fill(0);
         let floor = alone(&mut cb, |s| s.cloud_depth = 0.0);

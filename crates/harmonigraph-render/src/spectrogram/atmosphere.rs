@@ -1083,7 +1083,7 @@ pub(super) struct Targets {
     tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 2],
     /// Scales' scalar tone, allocated at [`Shape::tone`].
-    tone: Option<wgpu::TextureView>,
+    scales_tone: Option<wgpu::TextureView>,
     tile: Option<Tile>,
     stars: Option<Stars>,
     source_uniform: wgpu::Buffer,
@@ -1206,7 +1206,7 @@ pub(super) struct Shape {
     pub size: [u32; 2],
     /// Scales' scalar tone ([`scales_tone_size`]). The wash works its tone out
     /// per pixel in the composite; the starfield has its own image.
-    pub tone: Option<[u32; 2]>,
+    pub scales_tone: Option<[u32; 2]>,
     /// One side of the square tile, in texels ([`TileKey::texels`]).
     pub tile: Option<u32>,
     /// The starfield's targets; `None` unless it is drawn.
@@ -1288,7 +1288,13 @@ impl Plan {
             }
         });
         Some(Self {
-            shape: Shape { size, tone, tile: tile.map(TileKey::texels), stars: star_shape, memory },
+            shape: Shape {
+                size,
+                scales_tone: tone,
+                tile: tile.map(TileKey::texels),
+                stars: star_shape,
+                memory,
+            },
             tile,
             stars,
             memory_extent,
@@ -1340,7 +1346,7 @@ impl Targets {
     ) -> Self {
         let Shape {
             size,
-            tone: tone_size,
+            scales_tone: tone_size,
             tile: tile_texels,
             stars: star_shape,
             memory: memory_size,
@@ -1365,7 +1371,7 @@ impl Targets {
                         .memory
                         .filter(|_| previous.shape.memory == memory_size)
                         .map(|m| (m.views, m.index, m.frame)),
-                    previous.tone.filter(|_| previous.shape.tone == tone_size),
+                    previous.scales_tone.filter(|_| previous.shape.scales_tone == tone_size),
                     (
                         atlas.filter(|_| held.is_some_and(|(was, is)| was.atlas == is.atlas)),
                         image.filter(|_| held.is_some_and(|(was, is)| was.image == is.image)),
@@ -1521,7 +1527,7 @@ impl Targets {
                 6,
             ),
             views,
-            tone,
+            scales_tone: tone,
             tile,
             stars,
             source_uniform,
@@ -1608,7 +1614,9 @@ impl Targets {
         // Scales draw their tone and then remember it; the wash's history works
         // its tone out per texel, and a Stars history goes before the starfield
         // redraws its atlas.
-        if let Some((tone_view, tone_group)) = self.tone.as_ref().zip(self.tone_group.as_ref()) {
+        if let Some((tone_view, tone_group)) =
+            self.scales_tone.as_ref().zip(self.tone_group.as_ref())
+        {
             #[cfg(test)]
             self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2550,7 +2558,7 @@ mod tests {
                 let plan =
                     super::Plan::new(pixels, ppp, atmosphere, Default::default(), None, 16384)
                         .expect("a plan");
-                assert_eq!(plan.shape.tone, None, "a wash tone target at {ppp} px/pt");
+                assert_eq!(plan.shape.scales_tone, None, "a wash tone target at {ppp} px/pt");
                 let extent = remembers.then_some([pixels[0] + 2, pixels[1] + 2]);
                 assert_eq!(plan.memory_extent, extent, "the history's grid at {ppp} px/pt");
             }
@@ -2651,10 +2659,11 @@ mod tests {
         );
         let lut = crate::stars::image(&device, "lut", [1, 1], FORMAT);
         let stars = Some(StarShape { atlas: [96, 40], image: [64, 48] });
-        let at = |size, tone, stars| Shape { size, tone, tile: None, stars, memory: None };
+        let at =
+            |size, tone, stars| Shape { size, scales_tone: tone, tile: None, stars, memory: None };
         let kept = |targets: &Targets| {
             let stars = targets.stars.as_ref();
-            [stars.map(|s| &s.atlas), stars.map(|s| &s.image), targets.tone.as_ref()]
+            [stars.map(|s| &s.atlas), stars.map(|s| &s.image), targets.scales_tone.as_ref()]
                 .map(|view| view.map(|view| view.texture().clone()))
         };
         for (tone, stars) in [(None, stars), (Some([32, 24]), None)] {
