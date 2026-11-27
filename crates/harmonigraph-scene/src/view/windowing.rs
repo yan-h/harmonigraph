@@ -207,16 +207,21 @@ impl ViewConfig {
     }
 
     /// How far out a played pitch is hunted for a spelling and a node, as a
-    /// block — the naming REACH, centered on the camera but sized by the
-    /// setting rather than by any pane.
+    /// block — the naming REACH: `REACH_THREES` fifths and `REACH_FIVES`
+    /// thirds either side of the view's center, which follows the camera, on
+    /// every sheet the view draws.
     ///
     /// Not what is drawn; [`scrolled`](Self::scrolled) is. This is one answer
-    /// the whole UI shares, so that a name does not change under a pan, and it
+    /// the whole UI shares, sized by constants rather than by any pane, and it
     /// is the fallback for the readers that want the picture's window on a
-    /// frame where no lattice pane drew one.
+    /// frame where no lattice pane drew one. A pan moves it, and so can change
+    /// a name: `Namer` in the UI's note names says how names are looked up.
+    /// It stays with the camera rather than the lattice's origin, where far
+    /// just notes were named after unrelated nodes near the origin (Yan,
+    /// #1994 RL2, PR #1996).
     pub fn reach(&self) -> DrawnWindow {
         let center = self.center();
-        let extent = LatticePos::new(self.extent_threes.max(0), self.extent_fives.max(0), 0);
+        let extent = LatticePos::new(REACH_THREES, REACH_FIVES, 0);
         // The sevens ends are absolute sheets rather than a count each side,
         // so they go on whole instead of through the symmetric pair above.
         // They must not be narrowed to a symmetric reach either: this is what
@@ -277,32 +282,17 @@ impl ViewConfig {
     /// offline renderer needs none because `set_camera_movement` already
     /// re-centres a replayed camera. It is idempotent on a target already inside its cell.
     pub fn follow_camera(&mut self, camera: &mut Camera) {
-        if !camera.target.is_finite() {
-            return;
-        }
-        // Bounded well inside `i32`, because the center is added to an extent
-        // (`reach`) and that sum must not overflow. Saturating the center
-        // instead leaves a target that cannot be reduced — it keeps
-        // stepping and the center cannot take the step — so the two stop
-        // agreeing and the reach comes out EMPTY, which reads as every note
-        // being off the lattice, permanently. Clamping the step keeps them in
-        // step: an absurd target walks back a bound's worth per frame and
-        // arrives.
-        let steps = |world: f32| {
-            if world.is_finite() {
-                world.round().clamp(-(MAX_CENTER as f32), MAX_CENTER as f32) as i32
-            } else {
-                0
-            }
-        };
-        let (fives, threes) = (steps(camera.target.x), steps(camera.target.y));
-        // Saturating BEFORE the clamp, not after: a center already at the
-        // bound plus a step of the bound is `2^31`, one past what an `i32`
-        // holds, so the clamp would be handed a number that had already
-        // wrapped negative.
-        self.center_fives = self.center_fives.saturating_add(fives).clamp(-MAX_CENTER, MAX_CENTER);
-        self.center_threes =
-            self.center_threes.saturating_add(threes).clamp(-MAX_CENTER, MAX_CENTER);
+        // Whole steps of a target within a few cells of the center: in the
+        // plugin `sync_camera` re-splits the host's absolute pan (±128 cells)
+        // into center and target every frame before a pane runs, leaving the
+        // target inside one cell, and a gesture moves it a few between two
+        // calls. A target a blob carries never reaches here, so the sum stays
+        // far inside `i32`, and a non-finite target, which no producer writes,
+        // is a `debug_assert` (#1631).
+        debug_assert!(camera.target.is_finite(), "a non-finite camera target: {:?}", camera.target);
+        let (fives, threes) = (camera.target.x.round() as i32, camera.target.y.round() as i32);
+        self.center_fives += fives;
+        self.center_threes += threes;
         camera.target.x -= fives as f32;
         camera.target.y -= threes as f32;
         camera.target.z = 0.0;

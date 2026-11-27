@@ -62,11 +62,11 @@ pub struct NodeMotion {
     /// leave 0, the wait at a departure. The equivalence
     /// test holds a table that never drops one against this one, frame for
     /// frame.
+    ///
+    /// A node the audio ring has posed keeps a full entry: with the ring on at
+    /// its floor that is every unlit node in view, the whole window again,
+    /// which is a cost of a ring that goes unused (Yan, #1994 LN2).
     nodes: HashMap<LatticePos, Motion>,
-    /// The visible nodes holding nothing but an audio pose ([`Motion::POSED`]),
-    /// kept out of `nodes`. With the ring on at its floor every unlit node in
-    /// view wears one, which is the whole window again in full entries.
-    posed: HashSet<LatticePos>,
     /// The positions the last step drew, in the scene's lattice order: what
     /// tells a node scrolling into view from one that sat at rest in it, which
     /// was the absent entry's job while every visible node had one.
@@ -238,46 +238,33 @@ fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
 // owns a `Vec` is not promoted to one: `&Motion::REST` would build a fresh
 // temporary for every visible node on every frame.
 static REST: Motion = Motion::REST;
-static POSED: Motion = Motion::POSED;
 impl Motion {
     /// A node nothing has lit, and what every position [`NodeMotion`] holds no
     /// entry for reads as.
-    const REST: Self = Self::still_at(0.0, false);
-    /// A node at rest that the audio ring has posed, settled and waiting for a
-    /// note. Nothing in `advance` moves it.
-    const POSED: Self = Self::still_at(1.0, true);
-    /// Spelled out rather than `..Self::REST`: `edges` owns an allocation, so
-    /// a const cannot drop the fields such an update leaves behind.
-    const fn still_at(progress: f32, audio_waiting: bool) -> Self {
-        Self {
-            progress: [progress; 11],
-            seen: [false; 11],
-            edges: Vec::new(),
-            levels: [0.0; 11],
-            colors: [0.0; 11],
-            targets: [0.0; 11],
-            readings: [IntensityReading::REST; 11],
-            gate: false,
-            melody: MarkMotion::REST,
-            bass: MarkMotion::REST,
-            level_wait: [0.0; 11],
-            audio_waiting,
-        }
-    }
+    const REST: Self = Self {
+        progress: [0.0; 11],
+        seen: [false; 11],
+        edges: Vec::new(),
+        levels: [0.0; 11],
+        colors: [0.0; 11],
+        targets: [0.0; 11],
+        readings: [IntensityReading::REST; 11],
+        gate: false,
+        melody: MarkMotion::REST,
+        bass: MarkMotion::REST,
+        level_wait: [0.0; 11],
+        audio_waiting: false,
+    };
     /// Nothing held, nothing moving and nothing left to fade: `advance` would
     /// write back exactly what is here. Most visible nodes are this at once,
     /// and [`NodeMotion`] keeps no entry for one.
+    ///
+    /// No gate, no mark, nothing delayed, lit or fading, no audio pose, and
+    /// every slice retracted.
     fn at_rest(&self) -> bool {
-        self.still() && !self.audio_waiting && self.progress == [0.0; 11]
-    }
-    /// [`at_rest`](Self::at_rest) but for an audio pose: exactly [`Self::POSED`]
-    /// in everything that is read before it is written.
-    fn posed(&self) -> bool {
-        self.still() && self.audio_waiting && self.progress == [1.0; 11]
-    }
-    /// No gate, no mark, and nothing delayed, lit or fading.
-    fn still(&self) -> bool {
-        !self.gate
+        !self.audio_waiting
+            && self.progress == [0.0; 11]
+            && !self.gate
             && self.melody.target.is_none()
             && self.bass.target.is_none()
             && self.edges.is_empty()
@@ -404,7 +391,7 @@ impl Motion {
     /// A departure whose presence lands on nothing settles its slices on that
     /// same step (the end of `advance`), so they need no case of their own.
     fn moving(&self) -> bool {
-        if self.at_rest() || self.posed() {
+        if self.at_rest() {
             return false;
         }
         // An audio pose pins every slice open, whatever reaches it.
@@ -587,17 +574,12 @@ impl NodeMotion {
             let (motion, vacant) = match self.nodes.entry(pos) {
                 Entry::Occupied(entry) => (entry.into_mut(), false),
                 Entry::Vacant(entry) => {
-                    let posed = self.posed.contains(&pos);
-                    // Nothing lights it, and the ring neither starts nor stops
-                    // ringing at it: every write below puts back what `REST`,
-                    // or the pose, already holds.
-                    if !gate && audio == posed && !dense {
+                    // Nothing lights it, and the ring does not ring at it:
+                    // every write below puts back what `REST` already holds.
+                    if !gate && !audio && !dense {
                         continue;
                     }
-                    if posed {
-                        self.posed.remove(&pos);
-                    }
-                    (entry.insert(if posed { Motion::POSED } else { Motion::REST }), true)
+                    (entry.insert(Motion::REST), true)
                 }
             };
             // New to the view on the step's first pass alone, as it was while
@@ -751,12 +733,12 @@ impl NodeMotion {
         }
         let floor = now - horizon;
         let intensity = view.intensity;
-        // A note that ended before every horizon a host can set can never
-        // count as late again, whatever the settings do next, so its cursor
-        // has nothing left to guard. Skipping it bounds this scan by the last
-        // few seconds of playing rather than by the whole roll. The longest
-        // a host can set has every field `departure` reads at the top of its
-        // range; `horizon` raises the spread itself.
+        // A note that ended before every horizon the settings can reach can
+        // never count as late again, whatever a bar drag, undo or preset does
+        // to them next, so its cursor has nothing left to guard. Skipping it
+        // bounds this scan by the last few seconds of playing rather than by
+        // the whole roll. The longest horizon has every field `departure`
+        // reads at the top of its range; `horizon` raises the spread itself.
         let longest = NoteAnimationConfig {
             fade_out_delay: *crate::FADE_OUT_DELAY_RANGE.end(),
             ..NoteAnimationConfig::default()
@@ -972,34 +954,16 @@ impl NodeMotion {
             self.visible.sort_unstable_by_key(lattice_order);
         }
         let dense = self.dense();
-        let Self { nodes, posed, visible, .. } = self;
-        posed.retain(|pos| shown(visible, pos));
-        nodes.retain(|pos, motion| {
-            if !shown(visible, pos) {
-                return false;
-            }
-            if dense {
-                return true;
-            }
-            if motion.posed() {
-                posed.insert(*pos);
-                return false;
-            }
-            !motion.at_rest()
-        });
+        let Self { nodes, visible, .. } = self;
+        nodes.retain(|pos, motion| shown(visible, pos) && (dense || !motion.at_rest()));
         // Give back what a lattice-wide chord grew, once it has faded, and
         // with room either side so a held chord does not grow and shrink it.
         if nodes.capacity() > 4 * (nodes.len() + 64) {
             nodes.shrink_to(2 * nodes.len());
         }
-        if posed.capacity() > 4 * (posed.len() + 64) {
-            posed.shrink_to(2 * posed.len());
-        }
         self.moving = self.nodes.values().any(Motion::moving);
         for node in &mut scene.nodes {
-            let pos = &node.lattice_pos;
-            let resting = if self.posed.contains(pos) { &POSED } else { &REST };
-            let motion = self.nodes.get(pos).unwrap_or(resting);
+            let motion = self.nodes.get(&node.lattice_pos).unwrap_or(&REST);
             node.slice_progress = motion.progress;
             // Opacity fades each slot's colour, and the node's presence with
             // it, while the presence without Opacity runs untouched. Thickness
@@ -1055,8 +1019,7 @@ mod tests {
     impl NodeMotion {
         /// A position's motion, absent read as the rest it stands for.
         fn at(&self, pos: LatticePos) -> &Motion {
-            let resting = if self.posed.contains(&pos) { &POSED } else { &REST };
-            self.nodes.get(&pos).unwrap_or(resting)
+            self.nodes.get(&pos).unwrap_or(&REST)
         }
     }
 
@@ -2377,8 +2340,9 @@ mod tests {
     /// every branch where the two could part: chords at random velocities and
     /// pressures, bends into nodes at rest, retriggers at one instant, notes
     /// delivered after the frame that passed them, the view scrolling nodes
-    /// lit by held notes out and back in, the audio ring posing nodes between
-    /// notes, and a gap long enough to reset the surface.
+    /// lit by held notes out and back in, and a gap long enough to reset the
+    /// surface. The audio ring lies outside the use (#1994 LN2), so it is not
+    /// among them.
     #[test]
     fn a_sparse_table_draws_what_a_dense_one_does() {
         use harmonigraph_core::{Expression, NoteEventKind};
@@ -2401,7 +2365,6 @@ mod tests {
             let (mut now, mut clock) = (0.0f64, 0.0f64);
             let mut held: Vec<u8> = Vec::new();
             let (mut fewest, mut most) = (usize::MAX, 0);
-            let (mut fewest_ringing, mut posed_most) = (usize::MAX, 0);
             for i in 0..900i32 {
                 let shown = now;
                 now += match i {
@@ -2468,7 +2431,6 @@ mod tests {
                     }
                 }
                 tracker.prune(now, &env);
-                let audio = (i / 70) % 3 == 1;
                 let scene = || {
                     let mut scene = derive_scene(
                         &tracker,
@@ -2484,17 +2446,9 @@ mod tests {
                     scene.nodes.retain(|n| {
                         (n.lattice_pos.threes + 3 * n.lattice_pos.fives + shift).rem_euclid(7) != 0
                     });
-                    if audio {
-                        scene.spectral.inner = 0.1;
-                        scene.spectral.outer = 0.4;
-                        scene.spectral.gate = 0.0;
-                    }
                     scene
                 };
-                let mut fade = RingFade::default();
-                if audio {
-                    fade.advance(&crate::RingGate::new(&scene().spectral), &env, now);
-                }
+                let fade = RingFade::default();
                 let visible = scene().nodes.len();
                 let mut drawn = Vec::new();
                 for motion in [&mut dense, &mut sparse] {
@@ -2508,24 +2462,12 @@ mod tests {
                 assert_eq!(dense.nodes.len(), visible);
                 fewest = fewest.min(sparse.nodes.len());
                 most = most.max(sparse.nodes.len());
-                if audio {
-                    fewest_ringing = fewest_ringing.min(sparse.nodes.len());
-                    posed_most = posed_most.max(sparse.posed.len());
-                }
-                assert!(sparse.nodes.values().all(|m| !m.posed()), "a pose kept a full entry");
             }
             let reached = sparse.reached;
-            eprintln!(
-                "{reached:?}, the table between {fewest} and {most} entries, \
-                 up to {posed_most} poses"
-            );
+            eprintln!("{reached:?}, the table between {fewest} and {most} entries");
             assert!(reached.revived > 0 && reached.scrolled_in > 0 && reached.lit_in_view > 0);
             assert!(reached.lit_after_entering > 0);
             assert_eq!(fewest, 0, "the table never emptied");
-            // The ring at its floor poses every unlit node in view, and those
-            // poses are what a full table of them would be.
-            assert_eq!(fewest_ringing, 0, "the table never emptied under the ring");
-            assert!(posed_most > 500, "the ring posed too little of the window: {posed_most}");
             assert!(most > 50, "nothing lit enough of the lattice to measure: {most}");
         }
     }
