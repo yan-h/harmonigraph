@@ -1209,18 +1209,15 @@ mod tests {
         assert!(rect.max.x < axes.at(0.5, 0.8).x, "growing back into the note, not past it");
     }
 
-    /// The same claim as
-    /// [`the_letter_lines_up_with_or_without_an_accidental`], but read off
-    /// the glyphs [`draw`] actually queues through a real `egui::Context`, so
-    /// it is about the letters a reader sees rather than about the boxes they
-    /// were chosen in.
+    /// A letter lines up with or without an accidental, read off the glyphs
+    /// [`draw`] actually queues through a real `egui::Context`, so it is about
+    /// the letters a reader sees rather than about the boxes they were chosen
+    /// in.
     ///
     /// What it holds is that the mark column cannot reach the letter's
     /// placement: the two names differ by a comma sign, and the drawn letter
-    /// does not move. The former arithmetic-only test asked it of an estimate, where
-    /// the extent is what decides it; here nothing consults the extent at all
-    /// — the lead is a point and [`marks::NameLead::Letter`] measures the glyph
-    /// — so the two are the same sentence proved of two different mechanisms.
+    /// does not move. Nothing here consults the extent: the lead is a point
+    /// and [`marks::NameLead::Letter`] measures the glyph.
     #[test]
     fn the_drawn_letter_lines_up_across_notes_in_right_orientation() {
         let cfg =

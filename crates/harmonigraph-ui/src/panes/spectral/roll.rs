@@ -447,7 +447,7 @@ pub(super) fn draw_rolls(
     //
     // It bounds the far end and the pitch range too, which the pane's own clip
     // already did — a note is deliberately allowed to overhang the window's
-    // oldest edge and slide out under the scissor (see `note_instances`), and
+    // oldest edge and slide out under the scissor (see `source_instances`), and
     // this is the same edge in the same place.
     let (lead_px, _) =
         if leads { lead(&state.appearance.spectrum, axes, options.split) } else { (0.0, 0.0) };
@@ -541,9 +541,9 @@ impl RollMotion {
 
 /// Every visible note segment as one GPU instance, in paint order.
 ///
-/// The whole geometry of the roll, and the only place it is decided — the
-/// shader turns an instance into pixels but invents nothing. Split out from
-/// [`draw_roll`] so the geometry can be read back in tests without a GPU.
+/// The live roll's geometry, read back in tests without a GPU: a wrapper over
+/// [`source_instances`], which is where it is decided — the shader turns an
+/// instance into pixels but invents nothing — and which [`draw_rolls`] draws.
 ///
 /// Rebuilt from scratch every frame, deliberately: see the note on
 /// append-and-evict in `harmonigraph_render::roll`. It also keeps the far-edge
@@ -685,7 +685,7 @@ fn source_instances(
     //
     // A segment's ink along pitch is its own drawn pitch span, widened by the
     // ribbon's half width and the outline's reach (see the cull in
-    // [`note_instances`]'s loop, and `vs_note_cut`), and a note's segments each
+    // [`source_instances`]'s loop, and `vs_note_cut`), and a note's segments each
     // span less than the note does. Testing them one by one draws only the
     // segments of a long, bent note that are actually in range.
     //

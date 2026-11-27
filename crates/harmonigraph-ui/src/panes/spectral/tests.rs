@@ -2864,7 +2864,7 @@ fn paint(
 /// orientation, because which screen side the spectrum is on is exactly what
 /// the pane's four turns change.
 ///
-/// Driven straight at [`roll::draw_roll`] rather than through the whole pane,
+/// Driven straight at [`roll::draw_rolls`] rather than through the whole pane,
 /// so the one callback in the output is the roll's — the markings draw one of
 /// their own (`crate::text`), and theirs is allowed everywhere.
 #[test]
