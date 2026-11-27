@@ -12,8 +12,7 @@ use harmonigraph_scene::{
     GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SPECTRAL_SHADOW_MAX,
 };
 use harmonigraph_scene::{
-    GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, HIDE_BEHIND_RANGE,
-    NOTE_BLOOM_RANGE,
+    GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, HIDE_BEHIND_RANGE, NOTE_BLOOM_RANGE,
 };
 
 /// The shadows under the lattice's ink, in their own section. They stay
