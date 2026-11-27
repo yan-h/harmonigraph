@@ -171,9 +171,9 @@ These are proposals; only the first has a measured bound.
 
 **Lever 1 was built** as the `Cloud pixel size` dial,
 running 0.5 to 4 points per sample.
-It is now fixed at 0.5 pt and the control is retired;
+It was fixed at 0.5 pt and the control retired,
+and the reduced path itself went in #1994 TX1, along with the `PROBE_CLOUD_PIXEL` probe dial that re-read the table above;
 these measurements describe the original comparison.
-`PROBE_CLOUD_PIXEL` re-reads the table above at any of its settings.
 Measured at 3840x2160 and 2 px/pt, light plus paint, median ms per frame:
 
 | `Cloud pixel size` | Mosaic | Watercolor |

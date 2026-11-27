@@ -24,7 +24,7 @@ and an export's placements until that export ends.
 Per surface, that is roughly:
 
 - the roll's instance buffer, bloom chain and cut targets, about 15–20 MB (61131fd1);
-- the spectrogram's grid copy and the cloud's targets: the star atlas (about 19 MB), the tone target, and the baked tile, up to 75 MB at its 2048-texel ceiling;
+- the spectrogram's grid copy and the cloud's targets: the star atlas (about 19 MB), Scales' tone target, the baked tile, up to 75 MB at its 2048-texel ceiling, and the colour history, two `Rgba32Float` texels a pane pixel (about 155 MB under a full 3360x1440 export frame, #1994 TX1);
 - each text batch's glyph buffer and shadow atlas, not measured;
 - the lattice's own targets, which have always been kept this way.
 
