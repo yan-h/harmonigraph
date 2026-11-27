@@ -69,6 +69,47 @@ fn a_take_with_a_hole_warns_before_the_command_line_is_judged() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// A take whose WAV was never finished, as a crash mid-take leaves it, exports
+/// its audio with a warning naming the file: without one, a video with no
+/// spectrum would say nothing about why (#1980).
+#[test]
+fn a_take_whose_audio_was_never_finished_says_so() {
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-offline-crashed-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut wav = harmonigraph_take::WavWriter::create(directory.join("crashed.wav"), 2).unwrap();
+    wav.write(48_000.0, &[0.25; 48_000]).unwrap();
+    // Neither `finish` nor the drop patches its sizes, as after a crash.
+    std::mem::forget(wav);
+    let take = directory.join("crashed.take");
+    let header = Header {
+        appearance: Some(harmonigraph_ui::AppearanceDocument::default().serialize()),
+        audio_file: Some("crashed.wav".into()),
+        ..Default::default()
+    };
+    let lines = [Record::Header(header), Record::Run(harmonigraph_take::RunRecord::default())];
+    let encoded =
+        lines.iter().map(|r| ron::to_string(r).unwrap()).collect::<Vec<_>>().join("\n") + "\n";
+    std::fs::write(&take, encoded).unwrap();
+
+    // An output that refuses once the audio is read, before anything is drawn.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
+        .arg(&take)
+        .args(["--out", "/dev/null/impossible.png"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "the unusable output refuses: {stderr}");
+    assert!(
+        stderr.lines().any(|line| line.starts_with("warning:")
+            && line.contains("crashed.wav")
+            && line.contains("never finished")
+            && line.contains("0.5 s")),
+        "{stderr}"
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 /// A renderer told another build's tag says so first, naming both, even when
 /// it then cannot read the take (#1928 B): the failure a mismatched pair
 /// most plausibly meets is a take or look this build cannot read.
