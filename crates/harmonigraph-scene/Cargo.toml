@@ -10,6 +10,12 @@ license.workspace = true
 # (#1181). Drop this with the first doc example that should run.
 doctest = false
 
+[features]
+# The designed colour curve the shared colour table samples, for the UI's test
+# that measures the table against it on the fresh look's gradients, whose
+# level gradient is the UI's. Only the UI's dev-dependencies enable it.
+testing = []
+
 [dependencies]
 harmonigraph-core = { workspace = true }
 glam = { workspace = true }

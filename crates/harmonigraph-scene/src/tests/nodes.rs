@@ -600,42 +600,6 @@ fn one_pitch_gives_the_disc_and_the_glyph_one_color() {
 }
 
 #[test]
-fn the_table_tracks_the_curve_it_samples() {
-    // Agreement between shapes is structural (the test above); what
-    // PITCH_LUT_N buys is how closely the table follows the designed curve.
-    // Pin that separately so a future cut to the constant shows up as the
-    // gradient drifting off its design rather than as nothing at all.
-    //
-    // 4.2/255 against the 3.4 the constant currently measures on the default
-    // gradient. The slack is there because the worst case is governed by where
-    // a sample lands relative to a corner in the gamut's own boundary, so a
-    // change to the default's six knobs moves those corners and swings the
-    // number without anything being wrong — but it is drawn tight enough to
-    // fail every cut a person would actually make: 48 measures 5.6/255, 32
-    // measures 7.5, 24 measures 7.0, and 16 measures 8.0.
-    let (dark, bright) = (24.0f32, 108.0f32);
-    let mut worst = 0.0f32;
-    let mut worst_pitch = 0.0f32;
-    let mut pitch = dark;
-    while pitch <= bright {
-        let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
-        let table = pitch_lut_color(pitch, dark, bright, Gradient::default());
-        let curve = crate::color::designed_pitch_ramp(f64::from(t), Gradient::default());
-        let e = (table - curve).truncate().abs().max_element();
-        if e > worst {
-            worst = e;
-            worst_pitch = pitch;
-        }
-        pitch += 0.01;
-    }
-    assert!(
-        worst * 255.0 < 4.2,
-        "table strays {:.1}/255 from the designed curve at MIDI {worst_pitch:.2}",
-        worst * 255.0
-    );
-}
-
-#[test]
 fn octaves_fade_independently() {
     // Hold C4, release a settled C5: the C5 indicator must decay on
     // its own envelope even though the node stays fully active.
@@ -942,33 +906,6 @@ fn each_node_draws_its_own_octaves_nearest_the_center() {
     assert!((turn(700.0) - 5.0 * semitone).abs() < 1e-4, "a G node turned the wrong way");
     assert!((turn(200.0) + 2.0 * semitone).abs() < 1e-4, "a D node turned the wrong way");
     assert!((turn(600.0).abs() - 6.0 * semitone).abs() < 1e-4, "an F# node is half a slice round");
-}
-
-#[test]
-fn a_degenerate_color_range_lands_where_the_shader_lands() {
-    // The two ends of the gradient are independent params over 0..120 (the
-    // 12-semitone ordering is the range bar's, not the param's), so a host
-    // reaches ranges the UI cannot draw: inverted, and collapsed to a point.
-    // The shader takes both without complaint — it clamps the RATIO
-    // (`pitch_lut_color`, lattice.wgsl) — so the CPU has to land where it
-    // lands, or a mark is painted one end of the ramp while the very glyph it
-    // extends is painted the other.
-    let shader_t = |pitch: f32, dark: f32, bright: f32| {
-        ((pitch - dark) / (bright - dark).max(0.01)).clamp(0.0, 1.0)
-    };
-    for (dark, bright) in [(24.0f32, 108.0f32), (60.0, 60.0), (110.0, 108.0), (108.0, 24.0)] {
-        for pitch in [0.0f32, 36.0, 60.0, 72.0, 108.0, 120.0] {
-            let lut = pitch_ramp_lut(Gradient::default());
-            let f = shader_t(pitch, dark, bright) * (PITCH_LUT_N - 1) as f32;
-            let i0 = f.floor() as usize;
-            let want = lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor());
-            assert_eq!(
-                pitch_lut_color(pitch, dark, bright, Gradient::default()),
-                want,
-                "pitch {pitch} over range {dark}..{bright}"
-            );
-        }
-    }
 }
 
 #[test]

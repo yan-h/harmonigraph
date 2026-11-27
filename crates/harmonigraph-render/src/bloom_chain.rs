@@ -65,11 +65,11 @@ pub(super) struct BloomChain {
 /// What the chain's threshold reads its source as.
 #[derive(Clone, Copy)]
 pub(super) enum BloomSource {
-    /// A finished picture: `fs_bright`, for the lattice's scene and the
-    /// spiral's marks.
+    /// A finished picture: `fs_bright`, for the lattice's scene.
     Picture,
     /// Premultiplied marks, whose straight colour decides what glows before
-    /// their coverage is spent on it: `fs_bright_coverage`, for the roll.
+    /// their coverage is spent on it: `fs_bright_coverage`, for the roll and
+    /// the Spiral's dots, which it draws.
     Coverage,
 }
 

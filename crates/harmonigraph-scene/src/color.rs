@@ -26,24 +26,20 @@ use glam::Vec4;
 /// `darkest_pitch`, 1 at `brightest_pitch` (both MIDI note numbers).
 ///
 /// The RATIO is what gets clamped, which is the shader's own form
-/// (`pitch_lut_color` in `lattice.wgsl`) and the reason anything can be
-/// colored to match what the shader draws. Clamping the PITCH into
-/// `darkest..brightest` instead reads the same over every range the Pitch
-/// color range bar can dial, and comes apart at the two the bar cannot: the ends are
-/// independent params over 0..120, ordered only by the range bar's min span,
-/// so a host reaches an inverted pair — where `f32::clamp` panics on
-/// `min > max` — and a collapsed one, where clamping the pitch first pins
-/// every note to the dark end while the shader takes the bright one.
+/// (`pitch_lut_color` in `lattice.wgsl`), so a pitch past either end takes
+/// that end's color in both.
 ///
-/// Non-finite ends yield the darkest color rather than a NaN that would ride
-/// into the instance buffer unnoticed.
+/// The range is finite and at least [`COLOR_RANGE_MIN_SPAN`](crate::COLOR_RANGE_MIN_SPAN)
+/// wide: it is a look setting since #1790, which the load orders with
+/// [`clamp_span`](crate::clamp_span) and whose bar holds the span, and the
+/// editor's `compose_scene` asserts the view it draws is sanitized. A pair no producer
+/// writes is asserted here in debug builds rather than repaired (#1631).
 pub(crate) fn ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
-    if !darkest_pitch.is_finite() || !brightest_pitch.is_finite() {
-        return 0.0;
-    }
-    f64::from(
-        ((pitch - darkest_pitch) / (brightest_pitch - darkest_pitch).max(0.01)).clamp(0.0, 1.0),
-    )
+    debug_assert!(
+        darkest_pitch.is_finite() && brightest_pitch.is_finite() && darkest_pitch < brightest_pitch,
+        "an unsanitized color range {darkest_pitch}..{brightest_pitch}",
+    );
+    f64::from(((pitch - darkest_pitch) / (brightest_pitch - darkest_pitch)).clamp(0.0, 1.0))
 }
 
 /// The luminance one `L*` names, CIE's own piecewise inverse.
@@ -493,7 +489,7 @@ fn ramp_color(t: f64, gradient: Gradient) -> Vec4 {
 /// Takes an already-sanitized gradient and does not re-sanitize. The invariant
 /// has boundaries rather than a scattering of owners — [`with_lut`] applies it
 /// once for a whole table (and keys the memo on the result),
-/// `designed_pitch_ramp` does it for the test path, and
+/// `designed_ramp` does it for the test path, and
 /// [`Gradient::lightness_and_hue`] holds up its own public end. Only
 /// [`Gradient::chroma_at`] is read raw, which is what lets the gamut test
 /// hand in the out-of-range fraction a control cannot produce.
@@ -532,11 +528,12 @@ pub(crate) fn ramp_sample_in_gamut(t: f64, gradient: Gradient) -> bool {
     in_gamut_within(l, h, c, 0.5)
 }
 
-/// The designed curve, for the test that pins how closely [`pitch_ramp_lut`]
+/// The designed curve, for the tests that pin how closely [`pitch_ramp_lut`]
 /// tracks it. Nothing in the draw path may call this — going off the curve
-/// direct is precisely the mismatch the shared table exists to prevent.
-#[cfg(test)]
-pub(crate) fn designed_pitch_ramp(t: f64, gradient: Gradient) -> Vec4 {
+/// direct is precisely the mismatch the shared table exists to prevent — so
+/// it is built only for tests, the UI's through the `testing` feature.
+#[cfg(any(test, feature = "testing"))]
+pub fn designed_ramp(t: f64, gradient: Gradient) -> Vec4 {
     ramp_color(t, gradient.sanitized())
 }
 
@@ -773,9 +770,9 @@ impl LutSpacing {
 /// `darkest_pitch`/`brightest_pitch` into the entries would make that cache
 /// wrong, not just stale.
 ///
-/// Hands back a copy for the scene: the renderer uploads it and node motion
-/// samples it directly. Callers without a scene use [`gradient_color`] to
-/// read the memoized table without copying it.
+/// Hands back a copy, for the scene, which the renderer uploads, and for the
+/// lattice audio ring's paint. Callers wanting a color use
+/// [`gradient_color`] to read the memoized table without copying it.
 pub fn pitch_ramp_lut(gradient: Gradient) -> [Vec4; PITCH_LUT_N] {
     with_lut(gradient, |lut| *lut)
 }
@@ -972,14 +969,15 @@ pub fn gradient_color(t: f32, gradient: Gradient) -> Vec4 {
     with_lut(gradient, |lut| sample_lut(t, lut, spacing))
 }
 
-/// Sample an already prepared table with the spacing it was built for.
-/// Motion uses the scene's pair, avoiding a memo lookup for every mark.
-pub(crate) fn sample_lut(t: f32, lut: &[Vec4; PITCH_LUT_N], spacing: LutSpacing) -> Vec4 {
-    // A NaN takes the bottom of the range, which is [`ramp_t`]'s own answer for
-    // a non-finite RANGE and wanted here for the same reason: `clamp` hands NaN
-    // straight back, `as usize` then saturates the index to 0, and the lerp
-    // weight stays NaN — so the color would ride out as a NaN nobody sees rather
-    // than as the ramp's dark end.
+/// Sample an already prepared table with the spacing it was built for: the
+/// one walk [`gradient_color`] and [`pitch_glow_color`] share.
+fn sample_lut(t: f32, lut: &[Vec4; PITCH_LUT_N], spacing: LutSpacing) -> Vec4 {
+    // A NaN takes the bottom of the range: `clamp` hands NaN straight back,
+    // `as usize` then saturates the index to 0, and the lerp weight stays NaN —
+    // so the color would ride out as a NaN nobody sees rather than as the
+    // ramp's dark end. It is also where a release build lands a pitch over the
+    // non-finite or collapsed range [`ramp_t`] asserts against, whose `t` is
+    // NaN.
     //
     // NaN alone, and not every non-finite value: the INFINITIES clamp correctly
     // and mean something, `+inf` being as far past the top of the range as a

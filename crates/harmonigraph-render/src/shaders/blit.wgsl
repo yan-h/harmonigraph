@@ -161,8 +161,7 @@ const BLOOM_KNEE: f32 = 0.25;
 // side not a multiple of 4, or a render scale other than 1 — it drifts toward
 // a point sample, and a thin bright line's halo pulsed as it crossed the taps.
 // Adjacent texels go in pairs, each pair one bilinear tap placed by their
-// shares of the box, so the exact 2:1 case is still the one tap it was, and
-// the spiral's marks, drawn at half size already, one tap at a texel centre.
+// shares of the box, so the exact 2:1 case is still the one tap it was.
 @fragment
 fn fs_bright(in: BlitOut) -> @location(0) vec4<f32> {
     let size = vec2<f32>(textureDimensions(scene_tex));

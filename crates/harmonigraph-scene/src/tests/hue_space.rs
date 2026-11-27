@@ -62,7 +62,7 @@ const RETIRED_ARC_CHROMA: f64 = 0.5;
 /// The color the shipped path draws at `t` for this gradient, off the curve
 /// rather than the table, so table resolution is not in the measurement.
 fn sample(t: f64, gradient: Gradient) -> Vec4 {
-    crate::color::designed_pitch_ramp(t, gradient)
+    crate::color::designed_ramp(t, gradient)
 }
 
 /// The guarantee the whole two-space design buys: turning the CHROMA knob does

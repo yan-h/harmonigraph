@@ -57,7 +57,7 @@ fn a_bend_moves_only_the_channels_on_it_and_never_their_ends() {
     let even = Gradient { chroma_ramp: 0.4, ..Gradient::default() };
     let bend = Bend { at: 0.9, share: 0.15, hue: true, lightness: false, chroma: true };
     let bent = Gradient { bend, ..even };
-    let color = |t: f64, g: Gradient| crate::color::designed_pitch_ramp(t, g);
+    let color = |t: f64, g: Gradient| crate::color::designed_ramp(t, g);
     for t in [0.0, 1.0] {
         assert_eq!(color(t, bent), color(t, even), "a bend moved the end at t = {t}");
     }
@@ -83,8 +83,7 @@ fn a_bend_moves_only_the_channels_on_it_and_never_their_ends() {
 /// spacing has to serve twice over — the steep channel packed along the bend,
 /// and the hue and chroma walking evenly beside it across the same entries.
 /// An even table misses these by 27/255 and 19/255; spaced along the bend they
-/// measure 3.0/255 and 0.5/255, and the bound is
-/// `the_table_tracks_the_curve_it_samples`'s own for an unbent gradient.
+/// measure 3.0/255 and 0.5/255, against a bound of 4.2.
 #[test]
 fn a_steep_bend_is_drawn_as_the_curve() {
     for (at, share) in [(Bend::AT_LIMITS.1, 0.0), (Bend::AT_LIMITS.0, 1.0)] {
@@ -93,7 +92,7 @@ fn a_steep_bend_is_drawn_as_the_curve() {
         let mut worst = (0.0f32, 0.0f32);
         for i in 0..=10_000 {
             let t = i as f32 / 10_000.0;
-            let curve = crate::color::designed_pitch_ramp(f64::from(t), g);
+            let curve = crate::color::designed_ramp(f64::from(t), g);
             let e = (crate::gradient_color(t, g) - curve).truncate().abs().max_element();
             if e > worst.0 {
                 worst = (e, t);
