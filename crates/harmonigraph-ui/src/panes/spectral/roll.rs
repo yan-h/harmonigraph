@@ -1275,8 +1275,8 @@ fn note_instances_with_floor(
 
 /// The color of a note at `pitch`: the lattice's own, off the same
 /// [`pitch_lut_color`] ramp the nodes are painted through, so a ribbon and the
-/// node it lit up are the same color. Shared with the Spiral pane's radial
-/// marks, which are the same notes drawn somewhere else.
+/// node it lit up are the same color. Shared with the Spiral pane's dots,
+/// which are the same notes drawn somewhere else.
 ///
 /// The only coloring there is, deliberately. The obvious alternative — one
 /// flat accent for the roll — breaks the identity that makes it readable
