@@ -261,8 +261,8 @@ fn a_marked_slice_the_note_has_left_keeps_the_whole_light() {
 /// for, and the glow's check that it found some.
 ///
 /// The note and its mark both fading on that slot, as `NodeMotion` writes
-/// them, byte-identical with the Reach off, against the same node on a wheel
-/// that still draws the slot, which lights.
+/// them: byte-identical with the Reach off, and the glow target transparent,
+/// against the same node on a wheel that still draws the slot, which lights.
 #[test]
 fn a_light_on_a_slot_the_wheel_no_longer_draws_gives_off_none() {
     const SIZE: [u32; 2] = [256, 256];
@@ -284,16 +284,24 @@ fn a_light_on_a_slot_the_wheel_no_longer_draws_gives_off_none() {
         node.glow = harmonigraph_scene::GlowStep { level: light.level(), light };
         scene.view.glow_reach = reach;
         scene.view.glow_strength = 1.5;
-        shooter.shot(&scene)
+        let frame = shooter.shot(&scene);
+        (frame, super::glow_overlap::read_glow(&shooter))
     };
-    assert!(shot(wide, 0.8) != shot(wide, 0.0), "the note lit nothing where its slot is drawn");
-    let (on, off) = (shot(narrow, 0.8), shot(narrow, 0.0));
+    let (lit, lit_glow) = shot(wide, 0.8);
+    assert!(lit != shot(wide, 0.0).0, "the note lit nothing where its slot is drawn");
+    assert!(lit_glow.iter().any(|&b| b > 0), "the drawn slot's light reached no glow texel");
+    let ((on, glow), (off, _)) = (shot(narrow, 0.8), shot(narrow, 0.0));
     assert!(
         on == off,
         "a light on an undrawn slot lit {} against {} with the glow off",
         total_light(&on),
         total_light(&off),
     );
+    // And nothing in the glow's own target, which a halo with no colour would
+    // still fill with coverage: premultiplied black that darkens whatever it
+    // lands on that is not black.
+    let written = glow.iter().filter(|&&b| b > 0).count();
+    assert_eq!(written, 0, "a light on an undrawn slot wrote {written} glow channels");
 }
 
 /// One node lit in TWO colours no mixing of the other's table can reach: the
