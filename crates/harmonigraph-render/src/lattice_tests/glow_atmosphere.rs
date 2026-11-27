@@ -133,10 +133,6 @@ fn watercolor_motion_and_silence_use_the_production_light() {
     shooter.shot_again(&scene);
     assert_eq!(baseline, read_glow(&shooter), "depth zero restores the production smooth source");
     scene.view.atmosphere.material_amount = 1.0;
-    scene.view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::None;
-    shooter.shot_again(&scene);
-    assert_eq!(baseline, read_glow(&shooter), "disabled material is exact");
-    scene.view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
     shooter.shot_again(&scene);
     assert_eq!(moved, read_glow(&shooter), "a disabled material goes on from where it was");
     for node in &mut scene.nodes {
@@ -261,6 +257,7 @@ fn textures_feed_materials_before_sampling() {
         let texture_only = glow(&mut shooter, &scene);
         scene.view.atmosphere.material_settings.wash_size = 1.0;
         scene.view.atmosphere.material_style = material;
+        scene.view.atmosphere.material_amount = 1.0;
         let combined = glow(&mut shooter, &scene);
         // Read the actual material input, proving order rather than just two visible effects.
         let resources = shooter.resources.get::<LatticeResources>().unwrap();
@@ -321,6 +318,7 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
     scene.view.atmosphere.texture_depth = 0.85;
     scene.view.atmosphere.texture_scale = 2.0;
     scene.view.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.view.atmosphere.material_amount = 1.0;
     scene.view.atmosphere.breath_amount = 0.0;
     scene.view.atmosphere.texture_speed = 0.0;
     scene.view.atmosphere.material_speed = 0.0;
@@ -361,17 +359,11 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
     assert_eq!(Some(original_tile), geometry(&shooter));
     assert_eq!(read_glow(&shooter), glow(&mut shooter, &scene));
     // Crossing the bypass boundary deliberately releases resources; reactivation is fresh.
-    for (contrast, material, amount) in [
-        (0.0, LatticeMaterial::Watercolor, 0.6),
-        (0.4, LatticeMaterial::None, 0.6),
-        (0.4, LatticeMaterial::Watercolor, 0.0),
-        (0.4, LatticeMaterial::Watercolor, 0.6),
-    ] {
+    for (contrast, amount) in [(0.0, 0.6), (0.4, 0.0), (0.4, 0.6)] {
         scene.view.atmosphere.texture_depth = contrast;
-        scene.view.atmosphere.material_style = material;
         scene.view.atmosphere.material_amount = amount;
         shooter.shot_again(&scene);
-        assert_eq!(geometry(&shooter).is_some(), material != LatticeMaterial::None && amount > 0.0);
+        assert_eq!(geometry(&shooter).is_some(), amount > 0.0);
         assert_eq!(read_glow(&shooter), glow(&mut shooter, &scene));
     }
     scene.view.render_scale = 1.5;
@@ -390,6 +382,7 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
     let mut base = scene(&[1.0, 1.0], 0.75, true);
     base.view.atmosphere.breath_amount = 0.0;
     base.view.atmosphere.texture_depth = 0.8;
+    base.view.atmosphere.material_amount = 1.0;
     base.view.atmosphere.material_speed = 0.0;
     base.view.atmosphere.material_settings = MaterialSettings {
         wash_size: 2.0,
@@ -567,14 +560,15 @@ fn dense_stars_follow_the_pattern_darkness_of_their_light() {
     scene.view.atmosphere.stars = harmonigraph_scene::StarSettings::default()
         .scaled(1.0 / harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
     scene.glow_clock = Some(1.0);
-    let mut mean = |material, depth| {
-        scene.view.atmosphere.material_style = material;
+    scene.view.atmosphere.material_style = LatticeMaterial::Stars;
+    let mut mean = |amount, depth| {
+        scene.view.atmosphere.material_amount = amount;
         scene.view.atmosphere.texture_depth = depth;
         let px = glow(&mut shooter, &scene);
         px.as_chunks::<4>().0.iter().map(luminance).sum::<f64>() / (px.len() / 4) as f64
     };
-    let plain = [mean(LatticeMaterial::None, 0.0), mean(LatticeMaterial::None, 1.0)];
-    let stars = [mean(LatticeMaterial::Stars, 0.0), mean(LatticeMaterial::Stars, 1.0)];
+    let plain = [mean(0.0, 0.0), mean(0.0, 1.0)];
+    let stars = [mean(1.0, 0.0), mean(1.0, 1.0)];
     let (kept, plain_kept) = (stars[1] / stars[0], plain[1] / plain[0]);
     assert!(kept < plain_kept * 1.25, "contrast darkens stars: {kept} vs {plain_kept}");
 }
@@ -608,10 +602,6 @@ fn stars_carried_material_and_resolution_transitions_match_fresh_panes() {
             glow(&mut shooter, &scene),
             "{style:?}, {amount}, {resolution}, {scale}"
         );
-        if amount == 0.0 {
-            scene.view.atmosphere.material_style = LatticeMaterial::None;
-            assert_eq!(carried, glow(&mut shooter, &scene), "amount zero is exact bypass");
-        }
     }
 }
 
@@ -686,6 +676,7 @@ fn a_stars_resolution_change_rebuilds_the_lattice_star_image_alone() {
     let Some(mut shooter) = Shooter::fresh(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
     scene.view.atmosphere.material_style = LatticeMaterial::Stars;
+    scene.view.atmosphere.material_amount = 1.0;
     scene.glow_clock = Some(3.0);
     let targets = |shooter: &Shooter| {
         let resources = shooter.resources.get::<LatticeResources>().unwrap();

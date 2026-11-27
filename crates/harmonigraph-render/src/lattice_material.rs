@@ -487,9 +487,8 @@ pub(super) fn prepare(
         return motion;
     };
     let velvet = material.style == harmonigraph_scene::LatticeMaterial::VelvetScales;
-    let displaced = velvet || material.style == harmonigraph_scene::LatticeMaterial::Watercolor;
     let starfield = material.style == harmonigraph_scene::LatticeMaterial::Stars;
-    if (!displaced && !starfield) || material.amount <= 0.0 {
+    if material.amount <= 0.0 {
         glow.material_source = None;
         pane.material_tile = None;
         return motion;

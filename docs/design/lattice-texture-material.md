@@ -15,7 +15,7 @@ Keep `ViewConfig::atmosphere` as the owner of lattice glow effects.
 Replace its combined enable/material controls with two independently selectable stages:
 
 - Texture: Clouds; depth (Pattern contrast, where zero turns it off), size and speed.
-- Material: None, Watercolor, Stars, Scales; amount and drift direction.
+- Material: Watercolor, Stars, Scales; amount (where zero turns it off) and drift direction.
 Watercolor and Scales use Drift speed;
 Stars uses its per-layer Star speed.
 - Watercolor: patch size, edge feathering, shape warp, refraction, random brightness and fine layer mix.
@@ -29,18 +29,19 @@ both views use the same geometry and motion widgets, ranges and meanings.
 Size is relative to pane height in both views.
 No color memory is added to the lattice.
 Two small enums express the valid choices;
-None bypasses a stage without resetting its numeric settings.
+Zero depth or amount bypasses a stage without resetting its numeric settings;
+the Material row had a None until #1994 TX2 left amount 0 as its one off switch, as the pattern's contrast is.
 The `material_style` key deliberately replaces the old `material` key:
 serde ignores the retired key without any compatibility shim or dropped-variant parse failure.
 The existing container-level serde defaults and normalization remain the persistence boundary.
 Keep texture defaults numerically equal to today's Clouds settings and preserve breathing defaults.
-Material defaults to None, with amount 1 ready when selected.
+Material defaults to Watercolor at amount 1 (since #1475).
 Geometry and motion defaults match the spectrogram’s captured defaults.
 The material size range is 1/16× to 2×;
 the texture size range is 1/32× to 4×, on an eased (logarithmic) bar.
 Reset texture and material independently;
 breathing has its own reset beside the glow controls.
-Hide stage-specific controls when None is selected;
+Show the selected material's controls at any amount;
 dim effect controls when glow reach or gain is zero.
 
 ## Rendering
@@ -70,7 +71,7 @@ Scales and Stars bake no tile.
 Texture settings, amount, refraction, random brightness, fine layer mix, drift, illumination, camera and the inactive style’s controls do not invalidate geometry.
 The active material source target has a lifetime bounded by the glow allocation;
 resizing the glow replaces that source as before.
-None or zero material amount releases both source and geometry resources and skips the pass, as before.
+Zero material amount releases both source and geometry resources and skips the pass, as before.
 Reactivation recreates them; changes between positive amounts retain geometry.
 Zero texture depth bypasses modulation without disabling the material.
 
@@ -101,7 +102,7 @@ Compare carried panes with fresh panes after each edit.
 Verify independent lattice/spectrogram material values survive a save/load.
 Keep default golden frames unchanged and inspect any unexpected difference before accepting it.
 Extend persistence coverage to non-default values in both stages, partial old-key loading and normalization.
-Update settings reachability coverage for None and each enabled stage.
+Update settings reachability coverage for each material.
 Run fmt, focused scene/UI/render tests and relevant lint checks.
 Regenerate Metal assets on the runner and import them into the implementation commit.
 Open a draft PR, then build both plugin and offline release binaries for handover.
@@ -110,7 +111,7 @@ Open a draft PR, then build both plugin and offline release binaries for handove
 
 An independent review approved the fixed two-stage design and separate GPU parameters.
 Its lifecycle clarification is incorporated above:
-retain geometry only while active, release on None/zero, and compare reactivation and resize with fresh panes.
+retain geometry only while active, release on zero, and compare reactivation and resize with fresh panes.
 No extra abstractions or configurable ordering were recommended.
 
 ## Shared Stars material

@@ -8,12 +8,7 @@ use harmonigraph_scene::{
 
 /// The Material row's options, which the settings sweeps also iterate, so a
 /// material added here is drawn by them without a list of their own.
-pub(crate) const MATERIAL_CHOICES: [(LatticeMaterial, &str, &str); 4] = [
-    (
-        LatticeMaterial::None,
-        "None",
-        "Keep the textured light as it is; preserves material settings",
-    ),
+pub(crate) const MATERIAL_CHOICES: [(LatticeMaterial, &str, &str); 3] = [
     (LatticeMaterial::Watercolor, "Watercolor", "Overlapping washes of the textured note light"),
     (LatticeMaterial::VelvetScales, "Scales", "Soft overlapping scallops carrying the note light"),
     (LatticeMaterial::Stars, "Stars", "Drifting stars colored by the note light"),
@@ -71,51 +66,49 @@ pub(super) fn settings(
         }
         ui.add_enabled_ui(glow_enabled, |ui| {
         choice_row(ui, "Material", &mut settings.material_style, &MATERIAL_CHOICES);
-        if settings.material_style != LatticeMaterial::None {
-            ValueBar::new(&mut settings.material_amount, UNIT, "Material amount")
-                .default_value(super::fresh_view().atmosphere.material_amount)
-                .percent()
-                .hint(
-                    "How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.",
-                )
-                .show(ui);
-            if settings.material_style == LatticeMaterial::Stars {
-                super::material::stars_resolution(ui, &mut settings.stars, &super::fresh_view().atmosphere.stars);
-            }
-            // Stars put their look first: size and spacing matter more than
-            // how they drift.
-            let stars = settings.material_style == LatticeMaterial::Stars;
+        ValueBar::new(&mut settings.material_amount, UNIT, "Material amount")
+            .default_value(super::fresh_view().atmosphere.material_amount)
+            .percent()
+            .hint(
+                "How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.",
+            )
+            .show(ui);
+        if settings.material_style == LatticeMaterial::Stars {
+            super::material::stars_resolution(ui, &mut settings.stars, &super::fresh_view().atmosphere.stars);
+        }
+        // Stars put their look first: size and spacing matter more than
+        // how they drift.
+        let stars = settings.material_style == LatticeMaterial::Stars;
+        if stars {
+            super::block(ui, "Appearance", |ui| {
+                super::material::stars(ui, &mut settings.stars, solo, &super::fresh_view().atmosphere.stars, harmonigraph_scene::StarPane::Lattice);
+            });
+        }
+        super::block(ui, "Motion", |ui| {
             if stars {
+                super::material::stars_motion(ui, &mut settings.stars, &super::fresh_view().atmosphere.stars);
+            }
+            let speed = (!stars).then_some(&mut settings.material_speed);
+            let fresh = &super::fresh_view().atmosphere;
+            crate::widgets::drift(
+                ui,
+                &mut settings.material_direction,
+                speed,
+                (fresh.material_direction, fresh.material_speed),
+            );
+        });
+        match settings.material_style {
+            LatticeMaterial::Watercolor => {
                 super::block(ui, "Appearance", |ui| {
-                    super::material::stars(ui, &mut settings.stars, solo, &super::fresh_view().atmosphere.stars, harmonigraph_scene::StarPane::Lattice);
+                    super::material::watercolor(ui, &mut settings.material_settings, &super::fresh_view().atmosphere.material_settings);
                 });
             }
-            super::block(ui, "Motion", |ui| {
-                if stars {
-                    super::material::stars_motion(ui, &mut settings.stars, &super::fresh_view().atmosphere.stars);
-                }
-                let speed = (!stars).then_some(&mut settings.material_speed);
-                let fresh = &super::fresh_view().atmosphere;
-                crate::widgets::drift(
-                    ui,
-                    &mut settings.material_direction,
-                    speed,
-                    (fresh.material_direction, fresh.material_speed),
-                );
-            });
-            match settings.material_style {
-                LatticeMaterial::Watercolor => {
-                    super::block(ui, "Appearance", |ui| {
-                        super::material::watercolor(ui, &mut settings.material_settings, &super::fresh_view().atmosphere.material_settings);
-                    });
-                }
-                LatticeMaterial::VelvetScales => {
-                    super::block(ui, "Appearance", |ui| {
-                        super::material::velvet(ui, &mut settings.material_settings, &super::fresh_view().atmosphere.material_settings);
-                    });
-                }
-                LatticeMaterial::Stars | LatticeMaterial::None => {},
+            LatticeMaterial::VelvetScales => {
+                super::block(ui, "Appearance", |ui| {
+                    super::material::velvet(ui, &mut settings.material_settings, &super::fresh_view().atmosphere.material_settings);
+                });
             }
+            LatticeMaterial::Stars => {},
         }
         crate::widgets::button_row(ui, |ui| {
             if ui.button("Reset material").on_hover_text("Reset only the material choice, amount, motion and geometry controls.").clicked() {
