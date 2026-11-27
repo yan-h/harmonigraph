@@ -860,7 +860,7 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
     painter.rect_filled(rect, 0.0, theme::picture());
     let x_of = |seconds: f64| axes.across_pitch(axis.depth_of(seconds))[0].x;
 
-    let harmony = std::sync::Arc::clone(&state.runtime.tape.harmony);
+    let harmony = std::sync::Arc::clone(&state.runtime.tape.shown_harmony);
     let tuning = state.runtime.tuning;
     let class_of = |pitch: f32| PitchClass::from_cents(pitch * 100.0);
     let placed = Placed::of(ui.ctx(), id.with("placed"), &harmony, state);

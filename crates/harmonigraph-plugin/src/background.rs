@@ -771,7 +771,8 @@ mod tests {
         h.push_placed(4800, None, None);
         h.step();
         h.step();
-        let sections = |h: &Harness| h.shared.lock().ui.picture.runtime.tape.harmony.sections.len();
+        let sections =
+            |h: &Harness| h.shared.lock().ui.picture.runtime.tape.shown_harmony.sections.len();
         assert_eq!(sections(&h), 1, "the recorded note is one section");
 
         for (shown, expected) in [(false, 0), (true, 1)] {

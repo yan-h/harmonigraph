@@ -672,8 +672,10 @@ impl Worker {
         self.visible =
             view.showing && open && (settings.show_roll || self.harmony_wanted.is_some());
         let roll = self.built_roll.take().map(|roll| std::mem::replace(&mut view.notes, roll));
-        let harmony =
-            self.built_harmony.take().map(|built| std::mem::replace(&mut view.harmony, built));
+        let harmony = self
+            .built_harmony
+            .take()
+            .map(|built| std::mem::replace(&mut view.shown_harmony, built));
         if self.shown != Some(self.generation) {
             self.shown = Some(self.generation);
             view.spans = self.store.as_ref().map_or_else(Vec::new, spans);

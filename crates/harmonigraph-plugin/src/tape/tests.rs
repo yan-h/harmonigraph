@@ -884,11 +884,11 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     };
     let step = |worker: &mut Worker, view: &mut TapeView| step_hiding(worker, view, SHOWN);
     let pitches = |view: &TapeView| -> Vec<Vec<f32>> {
-        let sections = view.harmony.sections.iter();
+        let sections = view.shown_harmony.sections.iter();
         sections.map(|section| section.entries.iter().map(|entry| entry.pitch).collect()).collect()
     };
     let starts = |view: &TapeView| -> Vec<f64> {
-        view.harmony
+        view.shown_harmony
             .sections
             .iter()
             .map(|section| (section.start * 100.0).round() / 100.0)
@@ -897,7 +897,7 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     // Not asked for: nothing is analyzed.
     let mut view = TapeView { showing: true, ..Default::default() };
     let _ = step(&mut worker, &mut view);
-    assert!(view.harmony.sections.is_empty());
+    assert!(view.shown_harmony.sections.is_empty());
 
     view.harmony_wanted = Some((0.5, 4.0));
     let displaced = step(&mut worker, &mut view);
@@ -906,9 +906,9 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     assert_eq!(pitches(&view), [vec![60.0], vec![60.0, 64.0, 67.0]]);
 
     // Nothing moved: the same analysis stands.
-    let first = Arc::clone(&view.harmony);
+    let first = Arc::clone(&view.shown_harmony);
     assert!(step(&mut worker, &mut view).harmony.is_none());
-    assert!(Arc::ptr_eq(&first, &view.harmony));
+    assert!(Arc::ptr_eq(&first, &view.shown_harmony));
     // Span moved: analyzed again, the old one handed back to drop off-lock.
     view.harmony_wanted = Some((0.5, 2.0));
     assert!(step(&mut worker, &mut view).harmony.is_some_and(|old| Arc::ptr_eq(&old, &first)));
@@ -931,7 +931,7 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     let (block, samples) = ring_block(source, None, new_format);
     worker.capture(block, &samples);
     let _ = step(&mut worker, &mut view);
-    assert!(view.harmony.sections.is_empty());
+    assert!(view.shown_harmony.sections.is_empty());
 }
 
 #[test]
