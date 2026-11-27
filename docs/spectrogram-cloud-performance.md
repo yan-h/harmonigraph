@@ -233,7 +233,7 @@ Sampled bilinearly at the fractional offset instead, the motion stays smooth and
 both controls and their saved fields are retired.
 Existing appearances use these values when reopened,
 including recorded appearances used for video export.
-The timing probe can still override sampling for comparisons,
+The timing probe can still override the tile's period for comparisons (the 0.5 pt sampling, and its probe override, went in #1994 TX1, which draws the wash per pixel at every scale),
 but never to a period of 0:
 the composite's live-walk arm was retired in #1100 (below),
 and the Mosaic tile test that kept the unwrapped walk as its reference left with Mosaic.
@@ -357,7 +357,7 @@ The tone reads the sound, so a stale tone lags the music; the walk is the only p
 1. Yan selected `P = 40`; revisit only if its repetition becomes visible over real music.
 2. Does the drift-phase softening shimmer at `Fuzz` 0? If it does, bake at 1.5x texel density before reaching for anything cleverer.
 3. Resolved: fixed 40-cell tiles, with updated golden frames. The shader and pipeline layouts are unchanged.
-4. Resolved: `Cloud pixel size` is fixed at 0.5 pt and its control is retired. The live walk left the composite in #1100; no test holds the tile against an unwrapped walk since the Mosaic tile test left with Mosaic.
+4. Resolved: `Cloud pixel size` was fixed at 0.5 pt and its control retired; the reduced path itself went in #1994 TX1. The live walk left the composite in #1100; no test holds the tile against an unwrapped walk since the Mosaic tile test left with Mosaic.
 5. ~~`Ragged`~~ RETIRED in the PR stacked on #991. It shipped at 1.0 and its wobble was one-sided, so the radius band was scaled by 1.15 (`WASH_RADIUS_MIN` 1.02 → 1.17, `WASH_RADIUS_MAX` 1.66 → 1.91) to keep the default globs their size. The reach bound stopped carrying `(1 + RAGGED)` and `RADIUS_MAX` now sits 1.91 against a bound of 2.217, so a band WIDER than 1.63:1 is available and deliberately untaken — a look change for Yan's eye (#992).
 6. The scrolling window above, only if 1 fails.
 

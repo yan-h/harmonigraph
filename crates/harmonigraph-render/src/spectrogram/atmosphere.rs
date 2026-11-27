@@ -242,7 +242,8 @@ pub(super) fn memory_allocation_size(extent: [u32; 2], limit: u32) -> [u32; 2] {
 }
 
 /// Scales' tone target, or `None` where Scales are not drawn. The wash works
-/// its tone out per pixel in the composite, and Stars size their own image
+/// its tone out per device pixel, in the composite or, with colour memory on,
+/// per history texel in `fs_color_memory`; Stars size their own image
 /// ([`star_image_size`]).
 ///
 /// S1's broad bodies need 32 samples per cell, independent of display
@@ -1205,7 +1206,8 @@ pub(super) struct Shape {
     /// The light field, which the blur and the material passes share.
     pub size: [u32; 2],
     /// Scales' scalar tone ([`scales_tone_size`]). The wash works its tone out
-    /// per pixel in the composite; the starfield has its own image.
+    /// per device pixel, in the composite or, with colour memory on, per
+    /// history texel in `fs_color_memory`; the starfield has its own image.
     pub scales_tone: Option<[u32; 2]>,
     /// One side of the square tile, in texels ([`TileKey::texels`]).
     pub tile: Option<u32>,
