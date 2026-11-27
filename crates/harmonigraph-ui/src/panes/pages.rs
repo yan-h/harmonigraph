@@ -43,9 +43,10 @@ pub(super) fn lattice_settings_pane(
 }
 
 /// The Analyzer page, most dialled first: the spectrogram's look and the MIDI
-/// ribbons over it, then the analyzer's layout and its two axes, the audio
-/// analysis every audio view shares, and last the Spiral's bloom and the
-/// shadows the Analyzer and Spiral cast. Sorted as the Lattice page is.
+/// ribbons over it, Tape mode's harmony row, then the analyzer's layout and
+/// its two axes, the audio analysis every audio view shares, and last the
+/// Spiral's bloom and the shadows the Analyzer and Spiral cast. Sorted as the
+/// Lattice page is.
 pub(super) fn analyzer_settings_pane(
     ui: &mut egui::Ui,
     state: &mut PictureState,
