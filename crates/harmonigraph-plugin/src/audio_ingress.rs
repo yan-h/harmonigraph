@@ -6,7 +6,7 @@
 //! Source frames count from an epoch's first callback, including dropped frames.
 //! An explicit plugin reset or format/input change starts a new epoch. Each
 //! block carries its first frame's time on the plugin's one presentation clock
-//! (`presentation`), not seekable project transport time: loops, stops and
+//! (`start`), not seekable project transport time: loops, stops and
 //! seeks do not rewind it, and samples nobody processed take none of it.
 //! LiveInput converts it to GUI seconds with the current shared ClockMapper
 //! offset once per drain; no separate analyzer clock estimate is maintained.
@@ -36,13 +36,6 @@ pub(crate) struct Block {
     /// What the tape did in this block: what its notes are played into the
     /// picture by, on the same clock as the audio they sound in.
     pub tape: TapePlay,
-}
-
-impl Block {
-    /// The presentation time of the block's first frame.
-    pub(crate) fn presentation(&self) -> f64 {
-        self.start
-    }
 }
 
 /// The tape in one block, as the deck left it.

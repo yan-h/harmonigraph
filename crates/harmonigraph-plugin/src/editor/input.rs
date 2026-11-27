@@ -89,7 +89,7 @@ impl Taken<'_> {
     ) -> impl Iterator<Item = (crate::audio_ingress::Block, f64)> + '_ {
         let scratch = &self.input.scratch;
         let offset = scratch.offset;
-        scratch.blocks.iter().map(move |taken| (taken.block, taken.block.presentation() + offset))
+        scratch.blocks.iter().map(move |taken| (taken.block, taken.block.start + offset))
     }
     /// Whether this step found audio, and has analyzed none of it yet.
     #[cfg(test)]
@@ -220,7 +220,7 @@ impl LiveInput {
             let position = (block.epoch, block.first_frame);
             let restart = self.audio_position != Some(position);
             if restart {
-                self.audio_origin = block.presentation();
+                self.audio_origin = block.start;
             }
             // Straight from the ring, the one copy a block takes under the
             // lock.

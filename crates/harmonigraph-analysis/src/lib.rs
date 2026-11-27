@@ -429,9 +429,8 @@ impl ChannelBank {
     /// BY VALUE, where [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) is
     /// borrowed — deliberately, and not an oversight to fix next. The per-
     /// channel copies it removed were one per channel per column; this one is
-    /// one per column, and its caller holds the result across a `&mut self`
-    /// call of its own (the history push), so borrowing here would cost that
-    /// caller a restructure to buy a single 15.3 KB copy at the column rate.
+    /// one per column, and the caller moves it into the column it delivers,
+    /// which a borrow would have to be copied into anyway.
     pub fn power_sum(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
         let mut total = [0.0f32; SPECTRUM_BINS];
         for analyzer in &mut self.per_channel {

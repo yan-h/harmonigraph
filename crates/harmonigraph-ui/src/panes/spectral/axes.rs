@@ -862,7 +862,7 @@ pub(super) fn level_grid(
     // the bottom of the scale is named whatever the window has been dragged to.
     // Numbering the round multiples of `labels` instead reads the same on a
     // window whose floor happens to sit on the ladder and leaves the lowest line
-    // bare on every other one — the -60..-20 default among them, where numbers
+    // bare on every other one — a -60..-20 window among them, where numbers
     // every 20 dB would name -40 and nothing else.
     let stride = (labels / step).round().max(1.0) as i32;
     (first..=last)
