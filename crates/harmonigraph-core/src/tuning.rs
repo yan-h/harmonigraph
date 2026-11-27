@@ -564,8 +564,9 @@ pub fn learn_sorted_classes(classes: &[PitchClass]) -> LearnedTuning {
 }
 
 /// Distinct pitch classes one inference reads at most. It visits every pair,
-/// so its audio-thread cost grows with the square: 0.10 ms at 256 classes,
-/// 1.6 ms at the 1,088 every held voice could make (release build).
+/// so its cost on the input worker, where Learn runs (#1942), grows with the
+/// square: 0.10 ms at 256 classes, 1.6 ms at 1,088 (release build, measured
+/// in #1792).
 pub const LEARN_CLASSES_MAX: usize = 256;
 
 /// An armed Learn did not run: more distinct classes than

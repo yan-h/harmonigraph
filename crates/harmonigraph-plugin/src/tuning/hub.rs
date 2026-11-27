@@ -177,7 +177,7 @@ impl Default for Sequencer {
 
 impl Sequencer {
     /// Released memory and everything the moving context carries forward: the
-    /// Adaptive memory, the map's follow offset and the strip's key alike.
+    /// Adaptive memory, the map's follow offset and the strip's place alike.
     /// Held voices stay.
     fn forget_history(&mut self) {
         self.memory.clear();

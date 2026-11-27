@@ -7,8 +7,9 @@ use harmonigraph_core::tuning::{LearnedTuning, LearningState, PitchClass};
 use harmonigraph_core::{NoteTracker, Tuning};
 use std::time::{Duration, Instant};
 
-/// Held voices Learn reads at most: past the 64 per source and 256 per
-/// session the plugin's caps allow, so only a shell with no caps reaches it.
+/// Held voices Learn reads at most. The plugin's seventeen sources (sixteen
+/// Tunes and the Hub's own input) hold up to 64 each, 1,088 in all, so only a
+/// session far past the stated load, or a shell with no caps, reaches it.
 pub const LEARN_VOICES: usize = 1024;
 
 /// How long one requested state may go unadopted by the audio thread before
@@ -94,7 +95,6 @@ pub struct VisualRuntime {
     /// Offline replay supplies recorded resolved boundaries, never frame-driven detection.
     pub replayed_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
     pub adaptive_policy: harmonigraph_core::configuration::PolicyConfig,
-    pub configuration_status: u32,
     /// Show "Tuning change pending audio adoption": the configuration the
     /// editor requested has gone unadopted for [`PENDING_AFTER`].
     pub configuration_pending_shown: bool,
@@ -106,8 +106,9 @@ pub struct VisualRuntime {
     /// Learn's scratch and the class set it last learned from, so a held
     /// chord is learned once ([`learn`](Self::learn)).
     learning: Box<LearningState<LEARN_VOICES>>,
-    /// Learn's last step heard more distinct classes than it reads.
-    learn_too_many: bool,
+    /// Learn's last step heard more distinct classes than it reads: the
+    /// Tuning pane's notice.
+    pub(crate) learn_too_many: bool,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
     /// How far open the audio ring's Gate stands at each bucket of the
@@ -141,7 +142,6 @@ impl Default for VisualRuntime {
             config_reducer: Default::default(),
             replayed_configuration: None,
             adaptive_policy: Default::default(),
-            configuration_status: 0,
             configuration_pending_shown: false,
             configuration_unadopted: PendingLabel::default(),
             maps_pending: false,
@@ -200,7 +200,6 @@ impl VisualRuntime {
             self.apply_view(owned);
         } else {
             self.board_drawn = false;
-            self.configuration_status = self.learn_status();
             match self.replayed_configuration {
                 Some(recorded) => self.apply_resolved(recorded),
                 None => self.apply_resolved(self.config_reducer.resolved()),
@@ -213,17 +212,8 @@ impl VisualRuntime {
     fn apply_view(&mut self, owned: crate::params::ConfigurationView) {
         self.board_drawn = owned.board;
         self.apply_resolved(owned.resolved);
-        self.configuration_status = owned.status | self.learn_status();
         self.configuration_pending_shown =
             self.configuration_unadopted.shown(owned.unadopted, Instant::now());
-    }
-
-    fn learn_status(&self) -> u32 {
-        if self.learn_too_many {
-            crate::params::ConfigurationView::TOO_MANY_CLASSES
-        } else {
-            0
-        }
     }
 
     /// Both pending labels' waits, as if they began [`PENDING_AFTER`] ago:
@@ -304,8 +294,8 @@ impl VisualRuntime {
                 *slot = PitchClass::from_cents((voice.pitch - voice.correction) * 100.0);
                 count += 1;
             }
-            // Past the plugin's caps, which no producer writes beyond.
-            debug_assert!(count < LEARN_VOICES, "more held voices than Learn reads");
+            // Past `LEARN_VOICES`, far past the stated load though within the
+            // plugin's caps, Learn reads the first 1,024.
             count
         });
         self.learn_too_many = inferred.is_err();
