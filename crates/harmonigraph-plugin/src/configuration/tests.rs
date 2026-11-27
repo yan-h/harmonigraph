@@ -668,7 +668,8 @@ fn a_restore_that_reports_a_loss_opens_the_console() {
 
 /// A project saved while the axes were host parameters (#1756) holds them
 /// there, beside musical settings without axes. It opens at fresh axes with
-/// one Console notice, keeps its links, and saves no tuning parameter back.
+/// one Console line, which names them, keeps its links, and saves neither
+/// parameter back.
 #[test]
 fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     let _scope = crate::test_scope::enter();
@@ -689,8 +690,7 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
                 .into()
         ))
     );
-    assert_eq!(settings.next_notice(), Some(Notice::Restore(LEGACY_AXES.into())));
-    assert_eq!(settings.next_notice(), None, "the notice is given once");
+    assert_eq!(settings.next_notice(), None, "one line");
     device.activate();
     device.run(0, vec![], None);
     let opened = shown(&device.settings());
@@ -698,7 +698,7 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     let modes = opened.view.resolved.modes.tempered;
     assert_eq!((modes.syntonic, modes.septimal_kleisma), (false, true));
     let resaved = device.save();
-    assert!(LEGACY_AXIS_IDS.iter().all(|id| !resaved.params.contains_key(*id)));
+    assert!(["tuning-three", "tuning-tolerance"].iter().all(|id| !resaved.params.contains_key(*id)));
     assert_eq!(saved(&resaved).axes, MusicalSettings::default().axes);
 }
 

@@ -20,9 +20,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 pub const MUSICAL_SETTINGS: &str = "musical-settings";
-/// The host parameter ids the axes had until #1756.
-const LEGACY_AXIS_IDS: [&str; 5] =
-    ["tuning-c-offset", "tuning-three", "tuning-five", "tuning-seven", "tuning-tolerance"];
 
 /// The saved record: the raw axes the reducer holds, its links and Learn,
 /// and the adaptive policy.
@@ -97,9 +94,8 @@ pub(crate) struct Settings {
     /// A lattice-map document edit since the host last asked: the Lattice
     /// Map's label names its maps, so the host reads its text again.
     text: AtomicBool,
-    /// The Console lines the editor owes, oldest first: a restore that opened
-    /// a project at fresh axes, what a restore skipped (`saved_fields`), or a
-    /// line about the host.
+    /// The Console lines the editor owes, oldest first: what a restore
+    /// skipped (`saved_fields`), or a line about the host.
     notice: Mutex<std::collections::VecDeque<Notice>>,
     wake: OnceLock<Arc<dyn Fn() + Send + Sync>>,
 }
@@ -114,11 +110,6 @@ pub enum Notice {
     /// A line about the host, which only appends.
     Host(String),
 }
-
-/// The Console line for a project saved while the tuning axes were host
-/// parameters, before #1756: those values are not read.
-pub(crate) const LEGACY_AXES: &str = "This project saved its tuning axes as host parameters, \
-     which are no longer read: it opened at fresh axes. Set the tuning again and save the project.";
 
 impl Default for Settings {
     fn default() -> Self {
@@ -272,11 +263,10 @@ impl Settings {
             notes,
         )
         .unwrap_or_default();
-        // The parameter table skips an id it does not know, so the host
-        // values of a project saved before #1756 vanish on their own; only
-        // the notice is ours to give.
-        let legacy = LEGACY_AXIS_IDS.iter().any(|id| state.params.contains_key(*id));
-        Restore { settings: self.clone(), value, legacy }
+        // A project saved before #1756 holds its axes as host parameters,
+        // which the parameter table skips and names in its one Console line
+        // for parameters this build no longer has (`saved_fields`).
+        Restore { settings: self.clone(), value }
     }
 }
 
@@ -298,19 +288,12 @@ impl Parsed for HubParsed {
 struct Restore {
     settings: Arc<Settings>,
     value: MusicalSettings,
-    legacy: bool,
 }
 impl Restore {
     /// The document takes the saved value whole, without marking the project
     /// modified: it holds what the host just gave.
     fn install(self) {
-        let settings = &self.settings;
-        settings.write(|reducer| reducer.apply(self.value.mutation()));
-        if self.legacy {
-            // The log keeps it for a project saved before an editor opens.
-            shell_error!("{LEGACY_AXES}");
-            settings.notify(Notice::Restore(LEGACY_AXES.into()));
-        }
+        self.settings.write(|reducer| reducer.apply(self.value.mutation()));
     }
 }
 
