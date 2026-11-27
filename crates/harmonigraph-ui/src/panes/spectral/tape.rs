@@ -387,18 +387,14 @@ fn marks(
     let (position_rate, heard_rate) = rates(view);
     let mut pixel = None::<f64>;
     let mut mark = |at: Option<f64>, rate: Option<f64>, last: &mut Option<(f64, f64)>, stroke| {
-        let Some(at) = at else {
-            *last = None;
-            return;
-        };
-        // First seen, it has not been seen to move.
-        let advancing = advancing(last, at, clock, false);
+        let moving = advancing(last, at, clock);
+        let Some(at) = at else { return };
         if !axis.shows(at) {
             return;
         }
         painter.line_segment(axes.across_pitch(axis.depth_of(at)), stroke);
         let speed = rate.map_or(0.0, |rate| screen_speed(view, axis, at, rate, ppp));
-        if advancing && speed > 0.0 {
+        if moving && speed > 0.0 {
             pixel = Some(pixel.map_or(1.0 / speed, |sooner| sooner.min(1.0 / speed)));
         }
     };
@@ -412,14 +408,17 @@ fn marks(
 
 /// A playhead at `at` is still advancing: its value changed within
 /// [`PLAYHEAD_STALL_SECONDS`] of `clock`. `last` keeps its value and when that
-/// last changed, and a value seen for the first time counts as just changed
-/// only where `first_moves`.
-fn advancing(last: &mut Option<(f64, f64)>, at: f64, clock: f64, first_moves: bool) -> bool {
+/// last changed. A value seen for the first time counts as just changed, so a
+/// cue's first frame already asks for the next one. Forgotten with the
+/// playhead, so one that comes back on the value it left on is seen afresh.
+fn advancing(last: &mut Option<(f64, f64)>, at: Option<f64>, clock: f64) -> bool {
+    let Some(at) = at else {
+        *last = None;
+        return false;
+    };
     let changed = match *last {
         Some((value, since)) if value == at => since,
-        Some(_) => clock,
-        None if first_moves => clock,
-        None => f64::NEG_INFINITY,
+        _ => clock,
     };
     *last = Some((at, changed));
     clock - changed <= PLAYHEAD_STALL_SECONDS
@@ -892,13 +891,9 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
     // (`marks`): its value changed within the stall allowance.
     let under = view.heard.map(|at| (at, heard_rate)).or(view.position.zip(position_rate));
     let clock = ui.input(|i| i.time);
-    // Forgotten with the playhead, so one that comes back on the value it
-    // left on is seen afresh. First seen counts as moving, unlike in `marks`,
-    // which waits to see it move before asking for frames: a cue's first
-    // frame must already hide what the section has not yet struck.
-    let mut seen = ui.data(|d| d.get_temp::<Option<(f64, f64)>>(id)).flatten();
-    let advancing = under.is_some_and(|(at, _)| advancing(&mut seen, at, clock, true));
-    ui.data_mut(|d| d.insert_temp(id, seen.filter(|_| under.is_some())));
+    // A cue's first frame already hides what the section has not yet struck.
+    let moving =
+        ui.data_mut(|d| advancing(d.get_temp_mut_or_default(id), under.map(|(at, _)| at), clock));
     let mut next_change = None::<f64>;
 
     let white = egui::Color32::WHITE;
@@ -931,7 +926,7 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
             }
         }
         // Under an advancing playhead, only what has been struck by now.
-        let now = under.filter(|&(at, _)| advancing && (cell.start..next).contains(&at));
+        let now = under.filter(|&(at, _)| moving && (cell.start..next).contains(&at));
         // A node's rings: each the octave it sounds in, how far its flash has
         // to settle, and its colour.
         type Ring = (i32, f32, egui::Color32);

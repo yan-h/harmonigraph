@@ -3752,6 +3752,18 @@ fn a_tape_playhead_asks_for_a_frame_each_device_pixel_it_crosses() {
     assert!(rolling.is_some(), "the transport idled");
 }
 
+/// A cue's first heard frame already asks for the next, rather than leaving
+/// the playhead's start to the idle poll that would see it move.
+#[test]
+fn a_cues_first_heard_frame_asks_for_the_next() {
+    let (ctx, mut state) = auditioning(1.0, true);
+    let first = playhead_frames(&ctx, &mut state, Drawn::Pane, 1, false);
+    assert!(
+        first.is_some_and(|wait| wait < 1.0 / 144.0),
+        "the cue's first frame waited: {first:?}"
+    );
+}
+
 /// The overview's playhead, drawn alone, by the same rule as the pane's: on a
 /// short recording its fitted strip moves a playhead visibly, and a recording
 /// whose end the position sets grows with it, so the mark stands still on
