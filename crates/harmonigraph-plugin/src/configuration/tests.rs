@@ -512,9 +512,9 @@ fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
 #[test]
 fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
     let _scope = crate::test_scope::enter();
-    for commands in [false, true] {
+    for pending in [false, true] {
         let mut device = hub().with_retune();
-        if commands {
+        if pending {
             let settings = device.settings();
             device.load(restored(&device, 690.0));
             device.activate();
@@ -528,7 +528,7 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
             let lost = vec![device.param(ParamKey::CameraDistance, 7.0, 64)];
             let (status, _) = device.run_transport(64, lost, false, None, None);
             assert_eq!(status, CLAP_PROCESS_ERROR);
-            assert_eq!(shown(&device.settings()).view.status & 2, 2);
+            assert!(shown(&device.settings()).view.input_lost);
         }
         drop(device);
     }
@@ -668,7 +668,8 @@ fn a_restore_that_reports_a_loss_opens_the_console() {
 
 /// A project saved while the axes were host parameters (#1756) holds them
 /// there, beside musical settings without axes. It opens at fresh axes with
-/// one Console notice, keeps its links, and saves no tuning parameter back.
+/// one Console line, which names them, keeps its links, and saves neither
+/// parameter back.
 #[test]
 fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     let _scope = crate::test_scope::enter();
@@ -681,16 +682,11 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     state.params.insert("tuning-tolerance".into(), ParamValue::F32(3.0));
     state.fields.insert(MUSICAL_SETTINGS.into(), r#"{"meantone":false,"marvel":true}"#.into());
     device.load(state);
-    assert_eq!(
-        settings.next_notice(),
-        Some(Notice::Restore(
-            "This project saved parameters this build no longer has, which were not read: \
-             tuning-three, tuning-tolerance."
-                .into()
-        ))
-    );
-    assert_eq!(settings.next_notice(), Some(Notice::Restore(LEGACY_AXES.into())));
-    assert_eq!(settings.next_notice(), None, "the notice is given once");
+    let Some(Notice::Restore(line)) = settings.next_notice() else {
+        panic!("the restore owes a Console line");
+    };
+    assert!(line.contains("tuning-three") && line.contains("tuning-tolerance"), "{line}");
+    assert_eq!(settings.next_notice(), None, "one line");
     device.activate();
     device.run(0, vec![], None);
     let opened = shown(&device.settings());
@@ -698,7 +694,9 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     let modes = opened.view.resolved.modes.tempered;
     assert_eq!((modes.syntonic, modes.septimal_kleisma), (false, true));
     let resaved = device.save();
-    assert!(LEGACY_AXIS_IDS.iter().all(|id| !resaved.params.contains_key(*id)));
+    assert!(["tuning-three", "tuning-tolerance"]
+        .iter()
+        .all(|id| !resaved.params.contains_key(*id)));
     assert_eq!(saved(&resaved).axes, MusicalSettings::default().axes);
 }
 
@@ -1120,7 +1118,7 @@ fn a_fresh_hub_passes_note_pitch_through() {
     device.activate();
     device.run(0, vec![], None);
     let (param, engine) = device.wrapper().test_inspect_plugin(|plugin| {
-        (plugin.params.int(crate::Row::TuningEngine), plugin.params.map_playback.lock().engine)
+        (plugin.params.int(crate::Row::TuningEngine), plugin.params.map_playback.read().engine)
     });
     assert_eq!(param, 0);
     assert_eq!(engine, harmonigraph_core::lattice_map::TuningEngine::Off);
@@ -1190,7 +1188,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     }
     device.run(0, vec![], None);
     device.wrapper().test_inspect_plugin(|plugin| {
-        let playback = *plugin.params.map_playback.lock();
+        let playback = plugin.params.map_playback.read();
         assert_eq!(playback.engine, TuningEngine::LatticeMap);
         assert_eq!(playback.selected, 1);
         assert_eq!(playback.map, Some(map));
@@ -1245,7 +1243,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     });
     device.run(64, vec![], None);
     device.wrapper().test_inspect_plugin(|plugin| {
-        let playback = *plugin.params.map_playback.lock();
+        let playback = plugin.params.map_playback.read();
         let moved = crate::lattice_maps::offsets(&plugin.params);
         assert_eq!((moved.fine.fives, moved.extension.fives), (0, 0), "−2 + 2 is exactly zero");
         assert_eq!(playback.selected, 2, "a duplicate is selected for further edits");
@@ -1261,7 +1259,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     });
     device.run(80, vec![], None);
     device.wrapper().test_inspect_plugin(|plugin| {
-        let playback = *plugin.params.map_playback.lock();
+        let playback = plugin.params.map_playback.read();
         assert_eq!(playback.selected, 2, "deleting another map leaves the selection alone");
         let moved = crate::lattice_maps::offsets(&plugin.params).total();
         let kept = LatticeMap { position: moved, ..changed };
@@ -1272,7 +1270,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     });
     device.run(96, vec![], None);
     device.wrapper().test_inspect_plugin(|plugin| {
-        let playback = *plugin.params.map_playback.lock();
+        let playback = plugin.params.map_playback.read();
         assert_eq!(playback.selected, 1, "deleting the last map in order selects the previous");
         let moved = crate::lattice_maps::offsets(&plugin.params).total();
         let neighbour = LatticeMap { position: moved, ..changed };
@@ -1290,7 +1288,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     });
     device.run(128, vec![], None);
     device.wrapper().test_inspect_plugin(|plugin| {
-        assert_eq!(plugin.params.map_playback.lock().map, Some(map));
+        assert_eq!(plugin.params.map_playback.read().map, Some(map));
     });
     // Old or partial presets must not retain lanes from the current preset,
     // and repaired plain values must agree with host and editor readback.
@@ -1316,7 +1314,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(preview.playback.selected, 0);
         assert_eq!(preview.offsets.extension, harmonigraph_core::LatticePos::ORIGIN);
         assert_eq!(preview.playback.offset, harmonigraph_core::LatticePos::new(9, -9, -9));
-        assert_eq!(plugin.params.map_playback.lock().offset, preview.playback.offset);
+        assert_eq!(plugin.params.map_playback.read().offset, preview.playback.offset);
         assert_eq!(preview.playback.follow, harmonigraph_core::lattice_map::Follow::Thirds);
     });
     let repaired = device.save();
@@ -1358,7 +1356,7 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
         device.run(64 * round as i64, vec![], None);
         device.wrapper().test_inspect_plugin(|plugin| {
             let preview = crate::lattice_maps::view(&plugin.params);
-            let audio = *plugin.params.map_playback.lock();
+            let audio = plugin.params.map_playback.read();
             assert_eq!(plugin.params.label(crate::Row::TuningEngine), shown);
             assert_eq!(preview.playback.engine, decoded, "the editor disagrees");
             assert_eq!(audio.engine, decoded, "the audio disagrees");
