@@ -49,9 +49,10 @@ OPTIONS:
                            take was framed at, the picture is recomposed to
                            fit rather than letterboxed, and it says so.
                            [default: the take's own aspect and Output size]
-        --scale <F>        Pixels per point — the UI's zoom. Bigger means
-                           chunkier text relative to the frame.
-                           [default: sized so the UI reads like the plugin]
+        --scale <F>        Pixels per point. Text sizes with its pane, so
+                           this sets how sharp the picture is and how large
+                           point-sized details such as shadows draw.
+                           [default: 1280 points across, as the Video preview]
         --fps <N>          Frames per second.  [default: 60]
         --start <SEC>      Skip to here, as a song position — take times are
                            the take's own audio position, so 0 is the song's
@@ -249,11 +250,7 @@ fn parse_size(text: &str) -> Result<[u32; 2], String> {
 /// `harmonigraph-offline take.take` therefore reproduces what was previewed,
 /// which is what makes re-rendering a take by hand to change one unrelated flag
 /// safe: changing `--fps` on its own must not also take a 4K take back down to
-/// 1080.
-///
-/// The fallback for a take carrying no blob at all is `RenderConfig::default()`,
-/// so the resolution and the aspect fall back together rather than to a constant
-/// here that a second definition could drift from.
+/// 1080. A take with no look is refused before this (`render::appearance_for`).
 fn output_size(size: Option<[u32; 2]>, config: &harmonigraph_ui::RenderConfig) -> [u32; 2] {
     size.unwrap_or_else(|| config.frame.pixels(config.short_edge))
 }

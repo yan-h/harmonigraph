@@ -743,8 +743,8 @@ pub struct Control {
     latches: Arc<TakeLatches>,
     /// How far the background render has got, for the Video pane's bar.
     progress: Arc<Progress>,
-    /// Shared by every render this Control starts, so a new request cancels
-    /// the one in flight rather than racing it. See [`RenderControl`].
+    /// Shared by every render this Control starts, so a new request queues
+    /// behind the one in flight rather than racing it. See [`RenderControl`].
     render: Arc<RenderControl>,
 }
 
@@ -811,8 +811,8 @@ impl Control {
 
     /// Append an independent export with settings already captured by the caller.
     ///
-    /// `appearance` is the document selected at queue time (current, saved or
-    /// recorded), and the renderer takes the output size from it alone: `size`
+    /// `appearance` is the document selected at queue time (the current look or
+    /// the take's recorded one), and the renderer takes the output size from it alone: `size`
     /// is only what the Exports list shows for the job.
     pub fn queue_export(&self, path: std::path::PathBuf, appearance: String, size: [u32; 2]) {
         spawn_render(

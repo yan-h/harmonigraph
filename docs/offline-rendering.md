@@ -75,9 +75,8 @@ A valid replacement overrides the recorded document completely.
 A take with no recorded appearance is refused unless `--appearance` gives one, as the Video pane's export refuses it under **Recorded**;
 every take writer records one.
 Missing settings groups use their normal defaults.
-The retired `record_audio`, `auto_render`, `audio_path` and `audio_offset` saved settings are ignored and are not saved again.
-They were inactive;
-capture and automatic rendering remain unconditional for a finished take.
+A key this build does not read, such as a retired setting, costs that setting alone and is not saved again;
+an export names each one in a `warning:` line.
 Lattice steps are fixed at one world unit.
 Old appearance files' `spacing` keys are ignored without discarding their other settings;
 custom-spacing looks are lost,
@@ -343,17 +342,17 @@ the layout recomposes at whatever pixels it is handed, so the split falls elsewh
 That is a legitimate thing to ask for, so it is allowed, but it renders a different picture from the preview and the renderer says so.
 
 `--scale` is the one that isn't obvious.
-Font sizes and paddings are in *points*, so the scale decides how large the UI reads **relative to the frame**.
-The default keeps the same apparent size at any output resolution;
-raise it for chunkier text, lower it to fit more lattice in.
+It is pixels per point, and text sizes with its pane,
+so it changes how sharp the picture is and how large point-sized details such as shadows draw relative to the frame, not the text.
+The default puts 1280 points across the frame at any output resolution, as the Video preview does.
 
 The spectrogram and roll scroll past a fixed now-line.
 Under **Scrolling** they span the Analyzer's history;
 under **Fit video**, the fresh choice, that span is the render's own length, capped at 10 minutes.
 
-Rendering is faster than realtime on an M-series Mac (roughly 19 s of 1080p60 in 17 s), so a five-minute piece is a coffee, not an afternoon.
+Rendering is faster than realtime on an M-series Mac: an 82.6 s video at 2560x1440@60 took 40-42 s through x264 and 30.1 s through the hardware encoder on an M5 Pro, so a five-minute piece is a coffee, not an afternoon.
 
-Every export ends with a line saying where that time went:
+Every export ends with a line saying where that time went, here from an early export (#903), when x264 ran its `slow` preset and the encoder was the bottleneck:
 
 ```
 timing: a 5442-frame export in 774.6 s, 718.9 s of it drawing at 7.6 fps — ui+tess 5.54 ms/frame (4%), submit 7.20 ms/frame (5%), readback 20.79 ms/frame (16%), emit 98.47 ms/frame (75%)

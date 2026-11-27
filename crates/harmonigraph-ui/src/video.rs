@@ -247,9 +247,7 @@ impl Default for RenderConfig {
     fn default() -> Self {
         RenderConfig {
             // Transport stop, the trigger that also ends a take during an
-            // arrangement export (see docs/intent/video-export.md). The
-            // offline renderer reads the same default for a take that cannot
-            // say how it ended.
+            // arrangement export (see docs/intent/video-export.md).
             trigger: RenderTrigger::default(),
             // Off-trigger by default, so this only ever matters once `AtBar`
             // is chosen. 65 rather than 1: a stop bar equal to the song start
@@ -265,8 +263,8 @@ impl Default for RenderConfig {
             // as captured from the DAW on 2026-10-07.
             short_edge: 1440,
             tail: 0.0,
-            // VideoToolbox: the same picture in under half the export time at
-            // 1440p, for a larger file (see [`VideoEncoder`]).
+            // VideoToolbox: the same picture about a third faster than x264
+            // at 1440p, for a larger file (see [`VideoEncoder`]).
             encoder: VideoEncoder::Hardware,
             // Off: the copy roughly doubles an export's wait.
             archive: false,
