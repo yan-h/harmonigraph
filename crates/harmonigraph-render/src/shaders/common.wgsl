@@ -111,11 +111,11 @@ struct ShadowCaster {
 // Every caster's shadow, indexed by the caster's own index in the frame
 // (`pack_into`'s order).
 //
-// A storage buffer and a group of its own. A node's instance rows and the box
-// beside them already take fifteen of the sixteen attribute locations a vertex
-// layout has, where a caster is four vec4 rows (see `ShadowCaster` in
-// shadow.rs); and a cell is read by a node, a marker and a name alike, so one
-// array they all index is also one place the shape is written down.
+// A storage buffer and a group of its own, rather than four more vec4 rows
+// (see `ShadowCaster` in shadow.rs) beside the fourteen attribute locations a
+// node's instance rows and the box beside them take: a cell is read by a
+// node, a marker and a name alike, so one array they all index is also one
+// place the shape is written down.
 @group(3) @binding(0) var<storage, read> shadow_casters: array<ShadowCaster>;
 
 // Which node casters can cover each part of the pane (`shadow::node_occluders`):
@@ -200,28 +200,23 @@ fn node_shadow_kernel(who: u32, points: vec2<f32>) -> f32 {
 const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
 
 // What a caster's shadow leaves of the frame under one fragment, 0..=1: `keep`
-// raised to the exponent `shadow_kernel` came to, with the caster's LEVEL spent
-// as a share of the result rather than inside the exponent.
+// raised to the exponent `shadow_kernel` came to — darkness spent in stops,
+// which keeps a stronger tail than a linear veil would.
 //
-// Spectral shadows spend darkness in stops, retaining stronger tails that
-// separate dots and labels from the spectrum. (Ribbons do not come through
-// here: their surround is the backdrop cut, read off their edge's distance in
-// roll.wgsl.) Lattice shadows use the
+// Two laws spend it: a spectral name's shadow (`fs_spectral_shadow` in
+// text.wgsl), whose tail separates the name from the spectrum under it, and
+// the Hide behind field (`node_visibility` below), which spends it at full
+// depth. (Ribbons do not come through here: their surround is the backdrop
+// cut, read off their edge's distance in roll.wgsl.) Lattice shadows use the
 // linear local_shadow_transmittance below. Each caller owns its kernel sample.
 //
 // `full` arrives already in 0..=1 and already spent through the Gaussian's
-// gain (`shadow_kernel`). What is left here is how dark the shadow lands.
-//
-// The level is spent as a SHARE because `1 - level * (1 - T)` is a caster of
-// opacity `level` letting the rest of the light straight through: a marker a
-// tenth of the way in at the top of the depth bar casts a tenth of a shadow,
-// where the same level inside the exponent would have it cast half
-// (`SHADOW_KEEP_FLOOR` to the 0.1 is 0.5) — a shadow snapping on while its ink
-// is barely there.
-fn shadow_transmittance(full: f32, depth: f32, level: f32) -> f32 {
+// gain (`shadow_kernel`). What is left here is how dark the shadow lands. Both
+// callers' casters are whole: a name's strength is its rim's alpha, laid on
+// after, and a node casts at level 1 or packs no cell.
+fn shadow_transmittance(full: f32, depth: f32) -> f32 {
     let keep = max(1.0 - clamp(depth, 0.0, 1.0), SHADOW_KEEP_FLOOR);
-    let through = pow(keep, clamp(full, 0.0, 1.0));
-    return 1.0 - clamp(level, 0.0, 1.0) * (1.0 - through);
+    return pow(keep, clamp(full, 0.0, 1.0));
 }
 
 // Lattice notation is a local veil over displayed light. Its depth scales
@@ -340,13 +335,12 @@ fn node_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
         // edge would otherwise extend its last nonzero texel indefinitely.
         if all(points >= caster.rect.xy) && all(points <= caster.rect.xy + caster.rect.zw) {
             let full = node_shadow_kernel(at, points);
-            let level = clamp(caster.shade.x, 0.0, 1.0);
             // A wide Gaussian dilutes thin rings into fractional coverage.
             // Spend that field at full depth to hide rear ink through its
             // soft edge; linear coverage alone barely fades it. Hide behind
             // then scales the result through `occlusion`, as Darkness scales
             // the ordinary shadow's amplitude without reshaping it.
-            let hidden = 1.0 - shadow_transmittance(full, 1.0, level);
+            let hidden = 1.0 - shadow_transmittance(full, 1.0);
             visibility *= 1.0 - strength * hidden;
         }
         if visibility == 0.0 {

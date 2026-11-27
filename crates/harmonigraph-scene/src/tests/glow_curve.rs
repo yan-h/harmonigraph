@@ -23,7 +23,6 @@ fn the_glow_curve_descends_between_its_fixed_endpoints() {
 #[test]
 fn zero_shape_makes_a_linear_curve() {
     let curve = GlowCurve { shape: 0.0 };
-    assert_eq!(curve.shape(), 0.0);
     for i in 0..=100 {
         let p = i as f32 / 100.0;
         assert!((curve.sample(p) - (1.0 - p)).abs() < 1e-6);

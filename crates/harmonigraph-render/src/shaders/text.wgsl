@@ -542,7 +542,7 @@ fn fs_spectral_shadow(in: SpectralShadowOut) -> @location(0) vec4<f32> {
         discard;
     }
     let full = shadow_kernel(in.who, in.at);
-    let alpha = 1.0 - shadow_transmittance(full, locals.shadow_depth, 1.0);
+    let alpha = 1.0 - shadow_transmittance(full, locals.shadow_depth);
     if alpha <= 0.0 {
         discard;
     }
