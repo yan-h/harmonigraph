@@ -291,28 +291,31 @@ pub fn clamp_span(lo: f32, hi: f32, (min, max): (f32, f32), min_span: f32) -> (f
 ///
 /// Swept over the fresh look's two gradients, the lattice's pitch gradient and
 /// the heatmap's bent level gradient, worst channel error is 9.8/255 and 21.1
-/// at 32 entries, 4.9 and 12.7 at 48, 8.2 and 14.5 at 64, and about 6.2 and
-/// 14.9 at 96. The sequence is not monotone and that is the point: the worst
-/// case is set by where a sample lands relative to a CORNER of the gamut's own
+/// at 32 entries, 4.9 and 12.7 at 48, 8.2 and 14.5 at 64, and 6.3 and 15.2 at
+/// 96. The sequence is not monotone and that is the point: the worst case is
+/// set by where a sample lands relative to a CORNER of the gamut's own
 /// boundary, not by how many samples there are, so more entries can measure
 /// worse, and a change to a gradient's knobs moves those corners and swings
 /// the figure without anything being wrong. It is a distance from an IDEAL,
 /// not a disagreement between two shapes, which stays exact at every table
 /// size.
 ///
+/// The table stays at 64 by Yan's choice (#1994 CL1). That 48 entries measure
+/// better on these two gradients is where their corners happen to fall: on
+/// `Gradient::default()` it goes the other way, 2.1/255 at 48 against 1.3 at
+/// 64.
+///
 /// The pitch gradient's 8.2/255 sits near MIDI 27, at the dark end of its
-/// range. The level gradient's 14.5 sits near the loud end (`t` 0.97): its
-/// chroma fraction reaches exactly 1.0 at its top, where the boundary near
-/// `L*` 94 at hues about 120-130 has a sharp corner (green saturates while
-/// blue turns steep within 0.2 `L*`), and its brightness bend puts the corner
-/// where the table samples more coarsely. #1143 accepted that miss at
-/// non-default dials (#1111 measured up to 30.9/255 on unbent gradients, and
-/// #1110's branch 36.7 with a bend) a day before #1205 made a bent gradient
-/// the fresh one, and Yan accepted it on the fresh look
-/// too (#1994 CL1). What would remove it is a table entry pinned on the
-/// corner — a second warp beside the bend's in [`LutSpacing`] and in every
-/// shader's `lut_position`, catching only the one corner the arc crosses — or
-/// a chroma fraction held under 1.0, which moves the look.
+/// range. The level gradient's 14.5 sits near its loud end, at `t` 0.968 to
+/// 0.977, `L*` about 88 to 91.5 and hue 166 to 173 in the gradient's own
+/// degrees, where its brightness bend has the table sampling coarsely. #1143
+/// accepted a miss at the level gradient's loud end at non-default dials
+/// (#1111 measured up to 30.9/255 on unbent gradients, and #1110's branch 36.7
+/// with a bend) a day before #1205 made a bent gradient the fresh one, and Yan
+/// accepted the fresh look's too (#1994 CL1). What would remove it is a table
+/// entry pinned on the corner — a second warp beside the bend's in
+/// [`LutSpacing`] and in every shader's `lut_position` — or a chroma fraction
+/// held under 1.0, which moves the look.
 /// `the_colour_table_tracks_the_fresh_gradients_curves`, in the UI crate,
 /// whose `SpectrumConfig` holds the fresh level gradient, holds both figures.
 ///
