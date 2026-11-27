@@ -349,6 +349,9 @@ mod tests {
     /// makes no second device and moves the job to none. Under hot reload,
     /// which the workspace's test run turns on, the device half still holds;
     /// only the job is missing, since that build initializes synchronously.
+    /// So the job half runs only without hot reload, in
+    /// `cargo test -p harmonigraph-plugin`; `ci.sh`'s workspace gate reaches
+    /// the device half and the early return below it.
     #[test]
     fn activation_retains_the_device_its_job_compiles_on() {
         if harmonigraph_render::test_gpu_adapter().is_none() {
