@@ -196,7 +196,11 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
     use harmonigraph_scene::{Camera, Projection, ViewConfig};
 
     let view = ViewConfig { min_sevens: -2, max_sevens: 2, ..ViewConfig::default() };
-    let window = view.block_about(view.center(), 1, 1);
+    let c = view.center();
+    let window = harmonigraph_scene::DrawnWindow {
+        min: harmonigraph_core::LatticePos::new(c.threes - 1, c.fives - 1, -2),
+        max: harmonigraph_core::LatticePos::new(c.threes + 1, c.fives + 1, 2),
+    };
     for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic] {
         let mut scene = animated_snapshot(
             &harmonigraph_core::NoteTracker::new(),

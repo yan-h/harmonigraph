@@ -257,11 +257,14 @@ fn zoom_by_scales_distance_and_clamps() {
 #[test]
 fn a_windows_count_matches_its_positions() {
     // `DrawnWindow::count` is a `Vec::with_capacity` hint; it must equal the
-    // number `positions` actually enumerates, an axis collapsed to the center
-    // node included.
-    for &(t, f, s) in &[(0, 0, 0), (2, 1, 0), (3, 3, 3), (1, 0, 4), (0, 2, 0)] {
-        let view = ViewConfig { min_sevens: -s, max_sevens: s, ..ViewConfig::default() };
-        let window = view.block_about(LatticePos::new(2, -3, 0), t, f);
+    // number `positions` actually enumerates: an axis collapsed to the center
+    // node included, and a reversed one, which is empty rather than a wrapped
+    // `usize`.
+    for &(t, f, s) in &[(0, 0, 0), (2, 1, 0), (3, 3, 3), (1, 0, 4), (-1, 2, 0)] {
+        let window = DrawnWindow {
+            min: LatticePos::new(2 - t, -3 - f, -s),
+            max: LatticePos::new(2 + t, -3 + f, s),
+        };
         assert_eq!(window.count(), window.positions().count(), "extents ({t}, {f}, {s})");
     }
 }

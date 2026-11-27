@@ -692,7 +692,11 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         };
         let tuning = Tuning::default();
         // A small window so the nodes draw big enough to measure.
-        let window = base.block_about(base.center(), 2, 2);
+        let c = base.center();
+        let window = harmonigraph_scene::DrawnWindow {
+            min: harmonigraph_core::LatticePos::new(c.threes - 2, c.fives - 2, 0),
+            max: harmonigraph_core::LatticePos::new(c.threes + 2, c.fives + 2, 0),
+        };
         animated_snapshot(&tracker, &tuning, &view, &window, Camera::default(), None, 0.5)
     };
 

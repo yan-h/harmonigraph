@@ -768,7 +768,7 @@ fn window_center_pans_which_nodes_display() {
 
     // The center node renders at the world origin.
     let tracker = NoteTracker::new();
-    let column = view.block_about(view.center(), 1, 0);
+    let column = block(&view, 1, 0);
     let scene = scene_in(&tracker, &Tuning::default(), &view, &column, 0.0);
     let center_node =
         scene.nodes.iter().find(|n| n.lattice_pos == LatticePos::new(5, 0, 0)).unwrap();

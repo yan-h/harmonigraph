@@ -26,7 +26,7 @@ use harmonigraph_core::Tuning;
 /// The window every scene here is built in: three steps either way about
 /// [`poisoned_view`]'s center, on its three sheets.
 fn window() -> DrawnWindow {
-    poisoned_view().block_about(LatticePos::ORIGIN, 3, 3)
+    block(&poisoned_view(), 3, 3)
 }
 
 fn poisoned_view() -> ViewConfig {

@@ -18,7 +18,7 @@ fn home_sheet_nodes_are_flagged_for_the_blank_ring() {
         center_sevens: 2,
         ..ViewConfig::default()
     };
-    let window = view.block_about(view.center(), 0, 0);
+    let window = block(&view, 0, 0);
     let scene = scene_in(&NoteTracker::new(), &Tuning::default(), &view, &window, 0.0);
     for n in &scene.nodes {
         assert_eq!(n.on_home, n.lattice_pos.sevens == 2, "{:?}", n.lattice_pos);
@@ -35,7 +35,7 @@ fn the_marker_field_is_the_home_sheet_and_only_it() {
     let view = ViewConfig { min_sevens: -2, max_sevens: 2, ..plain_view() };
     let home_count = |scene: &Scene| scene.nodes.iter().filter(|n| n.on_home).count();
 
-    let window = view.block_about(view.center(), 1, 0);
+    let window = block(&view, 1, 0);
     // Idle: a marker at every home position, and no mark anywhere off it.
     let scene = scene_in(&NoteTracker::new(), &Tuning::default(), &view, &window, 0.0);
     assert_eq!(scene.pluses.len(), home_count(&scene));

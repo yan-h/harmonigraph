@@ -221,14 +221,8 @@ impl ViewConfig {
     /// half-cent match, so the reach stays with the camera (Yan, #1994 RL2,
     /// PR #1996).
     pub fn reach(&self) -> DrawnWindow {
-        self.block_about(self.center(), REACH_THREES, REACH_FIVES)
-    }
-
-    /// `threes` fifths and `fives` thirds either side of `center`, on every
-    /// sheet the view draws: the reach's shape at another size, for a window
-    /// smaller than it.
-    pub fn block_about(&self, center: LatticePos, threes: i32, fives: i32) -> DrawnWindow {
-        let extent = LatticePos::new(threes, fives, 0);
+        let center = self.center();
+        let extent = LatticePos::new(REACH_THREES, REACH_FIVES, 0);
         // The sevens ends are absolute sheets rather than a count each side,
         // so they go on whole instead of through the symmetric pair above.
         // They must not be narrowed to a symmetric reach either: this is what

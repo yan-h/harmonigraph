@@ -28,7 +28,7 @@ const PLUS_EXTENT: i32 = 3;
 /// The suite's window: [`PLUS_EXTENT`] either way about the view's center,
 /// on every sheet it draws.
 fn plus_window(view: &ViewConfig) -> DrawnWindow {
-    view.block_about(view.center(), PLUS_EXTENT, PLUS_EXTENT)
+    block(view, PLUS_EXTENT, PLUS_EXTENT)
 }
 
 /// The harness's scene, in [`plus_window`] rather than the naming reach's
@@ -601,7 +601,7 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
     // class. The home node is C.
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 68, 1.0));
-    let column = view.block_about(view.center(), 0, 0);
+    let column = block(&view, 0, 0);
     let scene = scene_in(&tracker, &Tuning::default(), &view, &column, 0.0);
     assert!(
         scene.nodes.iter().any(|n| !n.on_home && n.presence_with_opacity > 0.0),
