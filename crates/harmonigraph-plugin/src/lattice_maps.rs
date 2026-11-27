@@ -353,10 +353,10 @@ impl Maps {
 }
 
 /// The map playback audio last adopted, which the frame's pending label
-/// compares with the request and the input worker reads the engine from.
-/// Audio publishes it wait-free as each observation resolves it, as the
-/// document publishes to audio (#1938), here the other way: audio writes, and
-/// the readers share the one output behind a lock audio never takes.
+/// compares with the request. Audio publishes it wait-free as each
+/// observation resolves it, as the document publishes to audio (#1938), here
+/// the other way: audio writes, and the output sits behind a lock audio never
+/// takes.
 pub struct AdoptedPlayback {
     /// Taken once, by the audio owner.
     audio: Mutex<Option<triple_buffer::Input<MapPlayback>>>,
@@ -369,8 +369,7 @@ impl Default for AdoptedPlayback {
     }
 }
 impl AdoptedPlayback {
-    /// The latest playback audio published, off audio: a frame or the input
-    /// worker, which wait only on each other's copy.
+    /// The latest playback audio published, off audio: a frame, or a test.
     pub fn read(&self) -> MapPlayback {
         *self.readers.lock().read()
     }

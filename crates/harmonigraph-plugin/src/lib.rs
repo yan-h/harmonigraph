@@ -800,7 +800,7 @@ impl Default for Harmonigraph {
             params.editor_state.clone(),
             tape_worker,
             input,
-            board::Lights::live(params.settings.clone(), params.map_playback.clone()),
+            board::Lights::live(params.clone()),
             Some(params.clone()),
         );
         params.ui_state.attach(&editor_shared);
