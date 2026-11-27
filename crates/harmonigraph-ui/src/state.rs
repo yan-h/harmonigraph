@@ -446,7 +446,6 @@ pub struct Workspace {
     pub(crate) layout_runtime: workspace::Runtime,
     /// One-shot change to the outer window, consumed by its shell.
     pub(crate) window_size_change: egui::Vec2,
-    pub min_window_size: egui::Vec2,
 }
 
 impl Default for Workspace {
@@ -456,7 +455,6 @@ impl Default for Workspace {
             layout: workspace::Layout::default(),
             layout_runtime: workspace::Runtime::default(),
             window_size_change: egui::Vec2::ZERO,
-            min_window_size: egui::Vec2::ZERO,
         }
     }
 }

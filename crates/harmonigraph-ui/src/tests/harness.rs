@@ -246,13 +246,13 @@ impl DockHarness {
     }
 
     /// Answer a sideways fold's resize the way a shell does — the window it
-    /// asked for, never below the floor it holds (see `fold`). Without this
+    /// asked for, never below [`crate::shell::MIN_WINDOW_SIZE`]. Without this
     /// the harness is a host that refuses every resize, which is a state the
     /// fold layout has its own handling for.
     pub(super) fn resize(&mut self, state: &mut SharedState) {
         if let Some(change) = state.workspace.take_window_size_change() {
-            self.screen.max = self.screen.min
-                + (self.screen.size() + change).max(state.workspace.min_window_size);
+            self.screen.max =
+                self.screen.min + (self.screen.size() + change).max(crate::shell::MIN_WINDOW_SIZE);
         }
     }
 
