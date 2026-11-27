@@ -184,72 +184,6 @@ pub(crate) struct TexLayout {
     pub(crate) tex_span: f64,
 }
 
-/// A gradient reduced to the knobs that actually decide a texel — the cases
-/// where two different gradients name one picture, and so have to be one key.
-///
-/// There are two, one per axis, and each is an axis collapsing to a point:
-///
-/// - **No chroma anywhere.** At `chroma` and `chroma_ramp` both 0, `chroma_at`
-///   is 0 at every level, so the absolute chroma is 0 whatever the gamut holds,
-///   and Oklab's `a` and `b` are `c * cos(h)` and `c * sin(h)` — identically 0.
-///   Every texel is the same grey at every angle, and the HUE pair decides
-///   nothing. That is the Saturation bar dragged to 0 at both ends.
-/// - **A brightness pair closed on either end of the `L*` axis.** `HUE_FLOOR` is
-///   0 at both 0 and 100, so `chroma_of` answers 0 for every fraction and every
-///   hue, and `oklab_srgb` is black at 0 and white at 100 whichever way the arc
-///   runs. Here the CHROMA pair decides nothing either, so both fold.
-///
-/// Both are drags a reader is dialling their way OUT of, which is what makes
-/// them worth folding rather than curiosities: the bars that reach them are the
-/// bars that fix them. Every preset opens with silence at `L*` 0 and
-/// `Spread::snapped` rounds to whole units, so the second is landed on exactly
-/// and in one gesture rather than by luck.
-/// `the_lut_key_folds_two_gradients_that_draw_one_picture` holds both
-/// directions of both.
-///
-/// **Here and not in [`Gradient::sanitized`]**, which is the tempting place and
-/// the wrong one. Sanitize's answer is what the BARS read back and write, so
-/// folding there would snap the hue home under a pointer dragging it — and a hue
-/// dialled at no chroma is a real setting, the one a picture opens on when the
-/// chroma bar is next raised off 0. The key's question is not "is this legal" but "does this decide
-/// a texel", and only the key may answer it.
-fn what_decides_a_texel(g: Gradient) -> Gradient {
-    let toneless = g.chroma == 0.0 && g.chroma_ramp == 0.0;
-    // The ends of the axis, and only the ends: a pair closed anywhere BETWEEN
-    // them still draws a colour, so the hues decide a texel there. `sanitized`
-    // is what makes the equality safe to write — it holds `lightness` inside
-    // 0..=100 and keeps a -0.0 out of the ramp, so a pair at the wall lands on
-    // exactly these two numbers.
-    let unlit = g.lightness_ramp == 0.0 && (g.lightness == 0.0 || g.lightness == 100.0);
-    // A straight curve applies to nothing, so which channels it is switched
-    // onto decides nothing either; and a channel's switch decides nothing
-    // where that channel does not.
-    let fresh = harmonigraph_scene::Bend::default();
-    let g = if g.bend.is_straight() { Gradient { bend: fresh, ..g } } else { g };
-    match (toneless, unlit) {
-        (_, true) => Gradient {
-            hue_start: 0.0,
-            hue_span: 0.0,
-            chroma: 0.0,
-            chroma_ramp: 0.0,
-            bend: fresh,
-            ..g
-        },
-        // Without tone, the hue and chroma switches no longer decide a color,
-        // but whether EITHER is on still decides how the table is spaced.
-        (true, false) => {
-            let tone = g.bend.hue || g.bend.chroma;
-            Gradient {
-                hue_start: 0.0,
-                hue_span: 0.0,
-                bend: harmonigraph_scene::Bend { hue: tone, chroma: tone, ..g.bend },
-                ..g
-            }
-        }
-        (false, false) => g,
-    }
-}
-
 /// Levels the ramp is sampled at, and so entries in the table the shader reads.
 ///
 /// A table indexed by level cannot be exact for every row at once — a row's
@@ -284,9 +218,8 @@ pub(crate) fn silence_color(gradient: Gradient) -> egui::Color32 {
 
 /// The gradient's table as the shader reads it, and the gradient it stands for.
 struct ShadeLut {
-    /// The FOLDED gradient (see [`what_decides_a_texel`]) the entries were built
-    /// for. Two gradients that fold together draw one picture, so one table
-    /// serves both; the entries themselves come off the gradient as dialled.
+    /// The sanitized gradient the entries were built from, which is all that
+    /// decides one.
     gradient: Gradient,
     lut: Arc<Vec<[u8; 4]>>,
 }
@@ -498,17 +431,24 @@ impl FoldedGrid {
     }
 
     /// The gradient table a frame hands to the callback, built here on the
-    /// first sight of a gradient that draws a different picture.
+    /// first sight of a different gradient.
     ///
     /// Only the gradient decides an entry: the dB window and the tilt reach a
     /// texel through the level it is looked up at, which is a uniform.
+    ///
+    /// Keyed on the gradient whole, though a few drags change no entry, such
+    /// as the hues at no chroma: each frame of one rebuilds the table, as any
+    /// gradient drag does, and the renderer, which compares the entries, uploads
+    /// nothing. Since #513 a texel reads the table on the GPU, so a rebuild no
+    /// longer recomposes the heatmap, which a fold of those drags once saved
+    /// (#300).
     fn shades(&mut self, cfg: &SpectrumConfig) -> SpectrogramShades {
-        let gradient = what_decides_a_texel(cfg.spectrogram_gradient.sanitized());
+        let gradient = cfg.spectrogram_gradient.sanitized();
         if self.lut.as_ref().is_none_or(|held| held.gradient != gradient) {
-            let lut = (0..SHADES).map(|i| shade(cfg.spectrogram_gradient, i).to_array()).collect();
+            let lut = (0..SHADES).map(|i| shade(gradient, i).to_array()).collect();
             self.lut = Some(ShadeLut { gradient, lut: Arc::new(lut) });
         }
-        let held = self.lut.as_ref().expect("built above when the fold moved");
+        let held = self.lut.as_ref().expect("built above on a new gradient");
         SpectrogramShades { lut: held.lut.clone() }
     }
 

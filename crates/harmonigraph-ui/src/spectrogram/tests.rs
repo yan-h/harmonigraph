@@ -767,23 +767,16 @@ fn the_folded_snapshot_changes_only_at_oldest_slab_boundaries() {
     assert!(grid.run.iter().zip(&snapshot.run[2..]).all(|(a, b)| Arc::ptr_eq(a, b)));
 }
 
-/// The gradient table is keyed on what decides a texel of it, so two
-/// gradients that draw one picture share a table and every other change
-/// builds a new one.
+/// The gradient table is keyed on the gradient, so each of its knobs builds
+/// a new table and the level window does not.
 ///
 /// Both directions matter and they fail differently. A knob the key misses
 /// leaves the OLD table on the GPU under a gradient that no longer draws it
-/// — a wrong picture, which no frame counter reports. A knob the key watches
-/// that decides nothing rebuilds and re-uploads 4096 entries on every frame
-/// of the drag that moves it, which is the cost
-/// [`what_decides_a_texel`] exists to remove.
-///
-/// The folded pairs are checked as PICTURES and not just as keys: the fold
-/// claims two gradients draw the same table, so the tables themselves are
-/// compared. A fold that were merely a key equality would serve one
-/// gradient's colours under another's settings.
+/// — a wrong picture, which no frame counter reports. A setting the key
+/// watches that decides no entry rebuilds 4096 entries on every frame of the
+/// drag that moves it.
 #[test]
-fn the_lut_key_folds_two_gradients_that_draw_one_picture() {
+fn the_lut_key_is_the_gradient_and_not_the_level_window() {
     // Keep every gradient knob away from its clamp. The captured default
     // spends the whole lightness axis, where moving its midpoint alone is
     // correctly sanitized back to the same pair and would not exercise a
@@ -793,14 +786,14 @@ fn the_lut_key_folds_two_gradients_that_draw_one_picture() {
         ..SpectrumConfig::default()
     };
     let mut gpu = FoldedGrid::default();
-    // A table built for `c` alone, so a folded pair can be compared as
-    // pixels rather than as keys.
+    // A table built for `c` alone, so a knob's move is checked as pixels as
+    // well as a key.
     let table = |c: &SpectrumConfig| {
         let mut fresh = FoldedGrid::default();
         fresh.shades(c).lut
     };
     // Whether the table `c` is served is a NEW one: its allocation changes
-    // only where the fold does, whatever order these are asked in.
+    // only where the key does, whatever order these are asked in.
     let mut rebuilds = |c: &SpectrumConfig| {
         let before = gpu.shades(&cfg).lut;
         !Arc::ptr_eq(&gpu.shades(c).lut, &before)
@@ -844,140 +837,6 @@ fn the_lut_key_folds_two_gradients_that_draw_one_picture() {
         edit(&mut moved);
         assert!(!rebuilds(&moved), "a drag on this rebuilds the table on every frame");
     }
-
-    // The hue pair at NO CHROMA, a grey ramp and the one place
-    // a gradient knob decides nothing. `chroma_at` is 0 at every level, so
-    // the absolute chroma is 0 whatever the hue, and Oklab's `a` and `b` are
-    // `c * cos(h)` and `c * sin(h)` — identically 0. Every texel is the same
-    // grey at every angle, and the spectrum bar's track is a DRAG.
-    let mono = harmonigraph_scene::Gradient {
-        lightness: 50.0,
-        lightness_ramp: 100.0,
-        chroma: 0.0,
-        chroma_ramp: 0.0,
-        ..crate::SpectrogramPreset::Ice.gradient()
-    };
-    let toneless = SpectrumConfig { spectrogram_gradient: mono, ..cfg };
-    for turned in [30.0f32, 180.0, 359.0] {
-        let mut c = toneless;
-        c.spectrogram_gradient.hue_start = (mono.hue_start + turned).rem_euclid(360.0);
-        c.spectrogram_gradient.hue_span = turned;
-        assert_eq!(
-            what_decides_a_texel(c.spectrogram_gradient.sanitized()),
-            what_decides_a_texel(toneless.spectrogram_gradient.sanitized()),
-            "a hue turned {turned} degrees at no chroma rebuilds a table that was \
-                 still good",
-        );
-        assert_eq!(table(&c), table(&toneless), "...and it really does draw the same table");
-    }
-
-    // The same fact along the OTHER axis: a Brightness pair closed on either
-    // end of the `L*` axis. `HUE_FLOOR` is 0 at both 0 and 100, so
-    // `chroma_of` answers 0 for every fraction and every hue, and
-    // `oklab_srgb` is black (white at 100) whichever way the arc runs — the
-    // whole picture is one colour, and neither the hue pair nor the chroma
-    // pair decides a texel of it.
-    //
-    // Reachable in one gesture and landed on exactly, not by luck:
-    // `Spread::snapped` rounds both handles to whole `L*`, and every preset
-    // already opens with silence at 0, so closing the pair down to the wall
-    // is where a reader ends up. Reaching for the hue track or the Chroma
-    // bar to get back OUT is then a drag rebuilding the table every frame
-    // while changing not one entry.
-    for l in [0.0f32, 100.0] {
-        let flat = SpectrumConfig {
-            spectrogram_gradient: Gradient {
-                lightness: l,
-                lightness_ramp: 0.0,
-                chroma: 0.5,
-                chroma_ramp: 0.0,
-                hue_start: 40.0,
-                hue_span: 120.0,
-                ..Gradient::default()
-            },
-            ..cfg
-        };
-        for edit in [
-            (|g: &mut Gradient| g.hue_start = (g.hue_start + 90.0).rem_euclid(360.0))
-                as fn(&mut Gradient),
-            |g: &mut Gradient| g.hue_span = -300.0,
-            |g: &mut Gradient| g.chroma = 0.9,
-            |g: &mut Gradient| g.chroma_ramp = 0.2,
-        ] {
-            let mut moved = flat;
-            edit(&mut moved.spectrogram_gradient);
-            assert_eq!(
-                what_decides_a_texel(moved.spectrogram_gradient.sanitized()),
-                what_decides_a_texel(flat.spectrogram_gradient.sanitized()),
-                "at a Brightness pair closed on L* {l} the picture is one colour, and a \
-                     drag on the hue or the chroma rebuilds the table every frame",
-            );
-            assert_eq!(table(&moved), table(&flat), "...and the table really is the same");
-        }
-    }
-
-    // The curve's switches, folded the same three ways: a straight curve
-    // applies to nothing, so which channels it is on decides nothing; a pair
-    // closed on a wall is one colour whatever the curve; and without tone the
-    // hue and chroma switches decide only the spacing, through whether either
-    // is on. Each pair is a key AND a table, as above.
-    let bend = |at, hue, lightness, chroma| harmonigraph_scene::Bend {
-        at,
-        share: 0.5,
-        hue,
-        lightness,
-        chroma,
-    };
-    let with = |c: SpectrumConfig, b| SpectrumConfig {
-        spectrogram_gradient: Gradient { bend: b, ..c.spectrogram_gradient },
-        ..c
-    };
-    let unlit = SpectrumConfig {
-        spectrogram_gradient: Gradient { lightness: 0.0, lightness_ramp: 0.0, ..mono },
-        ..cfg
-    };
-    for (base, a, b, why) in [
-        (cfg, bend(0.5, true, false, false), bend(0.5, false, true, true), "a straight curve"),
-        (unlit, bend(0.2, true, true, true), bend(0.8, false, false, true), "a closed pair"),
-        (toneless, bend(0.2, true, false, false), bend(0.2, true, false, true), "no tone, hue"),
-        (toneless, bend(0.2, false, false, true), bend(0.2, true, false, true), "no tone, chroma"),
-    ] {
-        let (a, b) = (with(base, a), with(base, b));
-        assert_eq!(
-            what_decides_a_texel(a.spectrogram_gradient.sanitized()),
-            what_decides_a_texel(b.spectrogram_gradient.sanitized()),
-            "{why}: a switch that decides no texel rebuilds the table",
-        );
-        assert_eq!(table(&a), table(&b), "{why}: ...and the table really is the same");
-    }
-
-    // The converses, so neither fold can be a blanket "ignore the hues": a
-    // picture WITH chroma watches them, and so does a brightness pair closed
-    // anywhere BETWEEN the ends, which still draws a colour.
-    let mut coloured = toneless;
-    coloured.spectrogram_gradient.chroma = 0.5;
-    let mut turned = coloured;
-    turned.spectrogram_gradient.hue_start += 40.0;
-    assert_ne!(table(&turned), table(&coloured), "a coloured ramp must watch its hues");
-    let mid = SpectrumConfig {
-        spectrogram_gradient: Gradient {
-            lightness: 50.0,
-            lightness_ramp: 0.0,
-            chroma: 0.5,
-            chroma_ramp: 0.0,
-            hue_start: 40.0,
-            hue_span: 120.0,
-            ..Gradient::default()
-        },
-        ..cfg
-    };
-    let mut mid_turned = mid;
-    mid_turned.spectrogram_gradient.hue_start += 90.0;
-    assert_ne!(
-        what_decides_a_texel(mid_turned.spectrogram_gradient.sanitized()),
-        what_decides_a_texel(mid.spectrogram_gradient.sanitized()),
-        "a flat ramp between the ends still draws a colour",
-    );
 }
 
 /// The affine and the table the UI hands the shader stand in for the
