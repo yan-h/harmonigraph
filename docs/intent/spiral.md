@@ -11,3 +11,7 @@
 
 ## 2026-11-14 (premises audit, #1739)
 - The Spiral's dots draw through the roll renderer and `glow.rs` goes: its bloom takes the ribbons' Coverage threshold in half floats (a fading dot's halo lasts as long as the dot), the dot cut stays on `dot_surround` (#1545), and an analytic holdout stops a translucent dot showing a neighbour's cut. #1739 D9, #1748
+
+## 2026-11-27 (drift audit, #1994)
+
+- The Spiral's dots bloom at Note bloom, as the lattice and the ribbons do, and the Spiral bloom bar and its saved key retire; a saved Spiral bloom is dropped with a Console line. Both reasons for a separate value had gone: it sat alone in its section, and #1314 Colors Q2 made intensity drive the dots. Yan, 2026-11-27, taking the recommendation. #1994 SP1, #1987

@@ -35,7 +35,7 @@ The 2026-10-22 section moved here from `editor-shell.md` when the 2026-11-02 dri
 
 ## 2026-11-14 (premises audit, #1739)
 - No committed Metal shader corpus: delete it, its provider, gates, workflow, skill and the wgpu-hal sites that served only it, and start the editor's loading job at plugin activation on the device the editor reuses. Branch builds Yan loads were built before the runner regenerated the corpus, so it only ever spared the first load after a merge or an OS update; up to about 2.4 s of loading screen there is accepted. Supersedes #1712. #1739 D2, #1746
-- Idle pacing takes #1676 option 2 now: check whether a pass is due before running the UI, on the display link's clock, with a wake from the input worker and the 50 ms poll kept; this supersedes the 2026-11-10 option-1 line above and retires the prediction chain in the vendored crates and #1708. Chosen for maintenance, ahead of the recorded trigger. #1739 D3, #1747
+- Idle pacing takes #1676 option 2 now: check whether a pass is due before running the UI, on the display link's clock, with a wake from the input worker and the 50 ms poll kept; this supersedes the 2026-11-10 option-1 line above and retires the prediction chain in the vendored crates and #1708. Chosen for maintenance, ahead of the recorded trigger. #1739 D3, #1747 (Its 50 ms poll superseded 2026-11-27 by #1994 HW1, below.)
 
 ## 2026-11-17 (the shared own window, yan-h/otonal#1673)
 
@@ -75,3 +75,7 @@ Yan took the recommendations made after the audit was checked against the code (
 - The smoothed spectrum stops asking for frames once its columns draw nothing at any pitch: no bucket of the column or the curve it leaves stands over the faintest dB any reading draws there (the lower of the curve's floor and the volume colours' floor, under the tilt).
   No hold follows the column it goes flat in; the hold stays only for samples ceasing to arrive, where the curve hides.
   The heatmap's fresh edge still asks for every frame while the slab holding its last drawn column takes columns. #1917 Q2
+
+## 2026-11-27 (drift audit, #1994)
+
+- The idle poll lengthens from 50 ms to about 250 ms, its reason gone with the input worker's wake (#1786): slow scrolls ask for their own frames, and what still relies on the poll (host automation over a still picture, restores, Console lines, Tape's silent strip, the tuning rows) waits up to that long. Yan, 2026-11-27, taking the recommendation. #1994 HW1, #1983

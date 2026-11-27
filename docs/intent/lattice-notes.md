@@ -31,3 +31,9 @@ Yan took the recommendations made after the audit was checked against the code (
 ## 2026-11-20 (questions from the #1861 build wave, #1893)
 
 - Every lattice note waits out its attack before it leaves, as the Spiral and the note band already do, so a 1 ms note pulses as a 0 ms one does. The melody and bass marks follow the same held set: a note shorter than the Fade keeps its end until its attack lands, and is marked when the Fade outlasts the Mark delay (answer A, Yan, 2026-11-20). Built in PR #1912. #1893 item 7
+
+## 2026-11-27 (drift audit, #1994)
+
+- The naming reach becomes constants (12 fifths, 20 thirds), its two saved fields retiring: every value ever saved loaded as those. A saved project opens once with their `persist dropped` line. Yan, 2026-11-27, taking the recommendation. #1994 LN1, #1990
+- Yan never uses the audio ring (Audio width above 0), so a case only it reaches lies outside the use; the ring stays as a feature, and the `posed` set built for it (#1507) goes. Yan, 2026-11-27. #1994 LN2, #1990
+- Yan's pieces pan the lattice more than 12 fifths or 20 thirds within one Span, so the naming reach is centred on the lattice's origin rather than the camera, and a pan never respells a note. Yan, 2026-11-27. #1994 RL2, #1991
