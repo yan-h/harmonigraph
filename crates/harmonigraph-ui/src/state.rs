@@ -896,9 +896,10 @@ impl SharedState {
 /// arrives — but NOTHING gates a blob one bump behind, which is what a project
 /// saved by the previous build carries. Changing the ids again would buy that
 /// gate back at the price of orphaning every project that loads the plugin,
-/// which is the worse trade; the refusal is made audible instead. See
-/// [`SharedState::install_document`], which sets out both halves and which of its
-/// callers each covers.
+/// which is the worse trade; the refusal is made audible instead:
+/// [`SharedState::install_document`] opens the Console on it and leaves the
+/// current content intact. A take's look is not this blob and has its own
+/// floor, `APPEARANCE_VERSION`.
 ///
 /// 7: camera, view, spectrum, spiral and render moved into one appearance
 /// document. Previous editor saves are refused whole, with no migration. The

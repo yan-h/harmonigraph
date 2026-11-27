@@ -106,6 +106,7 @@ its spread and motion settings are kept.
 There is no Lit slices first switch either:
 the slices a note lights always appear first and leave in their turn,
 and a saved setting is ignored.
+Each of these saved keys opens the Console on a `persist dropped` line naming it.
 
 ## Note bloom
 
@@ -171,7 +172,7 @@ Lowering **Thickness max** also clamps **Thickness base** to that ceiling.
 Old one-target-per-source routes and weights are ignored on load,
 so those mappings must be added again.
 Base values are retained.
-A saved **Gain range** setting is ignored on load.
+A saved **Gain range** setting is ignored on load, with a `persist dropped` line in the Console.
 Saved opacity bases above 1 are clamped to 1.
 Saved projects without **Thickness base** load it at its default of 0.989×.
 
