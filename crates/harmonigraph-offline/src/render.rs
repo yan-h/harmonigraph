@@ -122,8 +122,8 @@ pub struct Settings {
     pub layout: Layout,
     /// Output size in physical pixels.
     pub size: [u32; 2],
-    /// Pixels per point. Text sizes with its pane, so this decides how sharp
-    /// the picture is and how large point-sized details such as shadows draw
+    /// Pixels per point. Text sizes with its pane, so at a given `size` this
+    /// decides how large point-sized details (shadows, hairlines, insets) draw
     /// relative to the frame (`harmonigraph_ui::layout::export_pixels_per_point`).
     pub pixels_per_point: f32,
     pub fps: f64,

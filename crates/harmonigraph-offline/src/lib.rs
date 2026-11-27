@@ -50,8 +50,9 @@ OPTIONS:
                            fit rather than letterboxed, and it says so.
                            [default: the take's own aspect and Output size]
         --scale <F>        Pixels per point. Text sizes with its pane, so
-                           this sets how sharp the picture is and how large
-                           point-sized details such as shadows draw.
+                           this scales point-sized details (shadows,
+                           hairlines, insets) against the frame; --size sets
+                           the pixels.
                            [default: 1280 points across, as the Video preview]
         --fps <N>          Frames per second.  [default: 60]
         --start <SEC>      Skip to here, as a song position — take times are

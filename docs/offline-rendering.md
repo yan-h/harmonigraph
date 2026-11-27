@@ -301,7 +301,7 @@ The flags worth knowing (`--help` lists them all):
 |---|---|
 | `--out` | `.mp4`/`.mov`/`.mkv` → ffmpeg; `.png` → numbered stills; `.rgba` → raw |
 | `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect and Output size, whose fresh short edge is 1440 |
-| `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
+| `--scale` | pixels per point: how large point-sized details (shadows, hairlines, insets) draw against the frame; text sizes with its pane |
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |
 | `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note, the appearance's **Tail** by default |
@@ -343,7 +343,8 @@ That is a legitimate thing to ask for, so it is allowed, but it renders a differ
 
 `--scale` is the one that isn't obvious.
 It is pixels per point, and text sizes with its pane,
-so it changes how sharp the picture is and how large point-sized details such as shadows draw relative to the frame, not the text.
+so at a given `--size` it scales point-sized details such as shadows, hairlines and insets relative to the frame, and not the text;
+`--size` alone sets how many pixels there are.
 The default puts 1280 points across the frame at any output resolution, as the Video preview does.
 
 The spectrogram and roll scroll past a fixed now-line.
