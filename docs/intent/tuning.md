@@ -35,7 +35,7 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 ## 2026-11-14 (#1756)
 
 - Bitwig's own undo no longer covers edits of the tuning axes, now that they are plugin settings rather than host parameters; no editor undo replaces it. Accepted by Yan. #1756, #1795
-- A project saved while the axes were host parameters opens at fresh axes, keeping its links and policy, with one Console line saying so; there is no compatibility shim. Accepted by Yan. #1756, #1795
+- A project saved while the axes were host parameters opens at fresh axes, keeping its links and policy, with one Console line saying so; there is no compatibility shim. Accepted by Yan. #1756, #1795 (Superseded 2026-11-27 by the line below.)
 - After lost host input, editor tuning edits and Learn keep applying until the host resets; the fault notice says so, and a take recorded after the loss still refuses its configuration. Accepted by Yan. #1795
 
 ## 2026-11-15 (drift audit, #1798)
@@ -178,3 +178,7 @@ Yan took the rework, chose Learn shape C, "I want to keep it around in case I us
 - Learn hears each note at its incoming pitch, a tuner's frozen correction taken back off, so a chord held across a switch from Lattice Map to Pass through teaches its incoming pitch, the rule #1898 set for Decode fifths. Yan, 2026-11-22, on #1942
 - When processing stops, the notes held then leave the lattice and the board's key lights go out at once, for every reader, Learn included, not only for Learn: `Plugin::stop` publishes a session reset in the note stream, which ends every live source's presses and leaves the tape's, and a restart's notes, published after it, stay held. This supersedes the line this entry first carried, that Learn alone stopped hearing them through a cut of its own. Yan, 2026-11-23, #1948
 - Not protected, each cheap: a faster-than-real-time bounce with Learn armed records each learned change up to the bounce speed times 20 ms late, and two runs can differ; a chord that starts and ends between two worker polls can go unlearned. Yan kept both, 2026-11-22, on #1942
+
+## 2026-11-27 (drift audit, #1994)
+
+- A project saved while the axes were host parameters opens at fresh axes, keeping its links and policy, with the generic Console line naming the parameters it did not read; the line saying it opened at fresh axes goes. Yan, 2026-11-27, taking the recommendation. PR #1999
