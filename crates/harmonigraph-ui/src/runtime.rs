@@ -7,8 +7,9 @@ use harmonigraph_core::tuning::{LearnedTuning, LearningState, PitchClass};
 use harmonigraph_core::{NoteTracker, Tuning};
 use std::time::{Duration, Instant};
 
-/// Held voices Learn reads at most: past the 64 per source and 256 per
-/// session the plugin's caps allow, so only a shell with no caps reaches it.
+/// Held voices Learn reads at most. The plugin's seventeen sources (sixteen
+/// Tunes and the Hub's own input) hold up to 64 each, 1,088 in all, so only a
+/// session far past the stated load, or a shell with no caps, reaches it.
 pub const LEARN_VOICES: usize = 1024;
 
 /// How long one requested state may go unadopted by the audio thread before
@@ -298,7 +299,8 @@ impl VisualRuntime {
                 *slot = PitchClass::from_cents((voice.pitch - voice.correction) * 100.0);
                 count += 1;
             }
-            // Past the plugin's caps, which no producer writes beyond.
+            // Far past the stated load, though within the plugin's caps (see
+            // `LEARN_VOICES`): a release build reads the first 1,024.
             debug_assert!(count < LEARN_VOICES, "more held voices than Learn reads");
             count
         });

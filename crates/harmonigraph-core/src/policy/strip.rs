@@ -1,13 +1,16 @@
 //! Adaptive for spelled input: every spelling takes its one copy inside a
-//! strip of the lattice four fifths wide, which the key places (#1896).
+//! strip of the lattice four fifths wide, which the Position places and
+//! following moves (#1896).
 //!
 //! A spelling `k` (its place on the chain of fifths, C = 0) has just copies
 //! one syntonic comma apart along one diagonal: `(k, 0)`, `(k - 4, 1)`,
 //! `(k + 4, -1)` and so on. A strip of four columns holds exactly one of them,
 //! so the comma, the guess Adaptive's search kept getting wrong, is one
-//! integer the key sets rather than something each chord decides. There is no
-//! candidate and no score: the same spelling in the same strip is the same
-//! node whenever it is struck, so nothing drifts.
+//! integer the strip's place sets rather than something each chord decides.
+//! There is no candidate and no score: the same spelling in the same strip is
+//! the same node whenever it is struck. Following moves the strip a fifth at a
+//! time, only to keep a new note pure, so a passage may drift by commas (Yan,
+//! 2026-11-23, `docs/intent/tuning.md`).
 //!
 //! The price is the wolf. Every fourth fifth along the chain is the one that
 //! leaves the strip's sharp edge, 40/27 rather than 3/2: with the strip on
