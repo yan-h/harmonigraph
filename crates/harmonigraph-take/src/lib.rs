@@ -299,7 +299,6 @@ pub struct RunEndRecord {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Record {
     Header(Header),
-    Note(NoteRecord),
     Param(ParamRecord),
     Configuration(ConfigurationRecord),
     Canonical(CanonicalRecord),
@@ -326,17 +325,10 @@ pub struct Take {
     /// and usable; callers should say so rather than pretend the take is
     /// whole.
     pub truncated: bool,
-    /// The hole in the note history the take carries, if it has one: the
-    /// FIRST the file names, whether as a `Gap` that overlaps one of its runs
-    /// or an `Incomplete` marker.
-    ///
-    /// First rather than last because a later gap adds nothing to the warning:
-    /// the reader took the last line once, so a take with two gaps exported
-    /// with a warning naming a different gap from its own marker (#895).
-    pub incomplete: Option<IncompleteRecord>,
-    /// File name (not path) of the WAV recorded beside the take.
-    pub audio_file: Option<String>,
-    /// Song time of that WAV's first sample.
+    /// The recording failed: the file holds an `Incomplete` marker. Whatever
+    /// note history it also lost is [`Take::gap`].
+    pub failed: bool,
+    /// Song time of the first sample of the WAV the header names.
     ///
     /// Arming mid-song does not start at zero, and without it the spectrum
     /// and the muxed track would both sit at the wrong place by exactly
@@ -447,12 +439,6 @@ impl Take {
                     }
                     header = Some(read);
                 }
-                Record::Note(note) => {
-                    CanonicalRecord::Note(note)
-                        .validate()
-                        .map_err(|_| ReadError::InvalidCanonical(i + 1))?;
-                    records.push((i + 1, Record::Note(note)));
-                }
                 Record::Canonical(record) => {
                     record.validate().map_err(|_| ReadError::InvalidCanonical(i + 1))?;
                     records.push((i + 1, Record::Canonical(record)));
@@ -506,6 +492,15 @@ impl Take {
             .reduce(f64::min)
     }
 
+    /// The first hole in the note history the take carries: the earliest
+    /// `Gap` that overlaps one of its runs, the only ones the reader keeps.
+    pub fn gap(&self) -> Option<&canonical::GapRecord> {
+        self.events.iter().find_map(|event| match event {
+            CanonicalRecord::Gap(gap) => Some(gap),
+            _ => None,
+        })
+    }
+
     /// Derived note-only inspection. Replay consumes `events`, including every
     /// baseline/gap in its original equal-time order.
     pub fn notes(&self) -> impl Iterator<Item = NoteRecord> + '_ {
@@ -551,10 +546,6 @@ impl Writer {
         }
     }
 
-    pub fn note(&mut self, note: NoteRecord) -> std::io::Result<()> {
-        self.write(&Record::Note(note))
-    }
-
     pub fn canonical(&mut self, record: CanonicalRecord) -> std::io::Result<()> {
         record.validate().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid canonical record")
@@ -562,8 +553,9 @@ impl Writer {
         self.write(&Record::Canonical(record))
     }
 
-    pub fn incomplete(&mut self, record: IncompleteRecord) -> std::io::Result<()> {
-        self.write(&Record::Incomplete(record))
+    /// Mark the take failed.
+    pub fn incomplete(&mut self) -> std::io::Result<()> {
+        self.write(&Record::Incomplete(IncompleteRecord {}))
     }
 
     pub fn configuration(&mut self, config: ConfigurationRecord) -> std::io::Result<()> {
@@ -589,6 +581,11 @@ impl Drop for Writer {
 mod tests {
     use super::*;
 
+    /// A note's line as the standalone synth writes it.
+    fn delta(note: NoteRecord) -> Record {
+        Record::Canonical(CanonicalRecord::Delta(note.into()))
+    }
+
     /// Where the render starts is anchored to this, so it has to answer for a
     /// take with no notes: a passage carrying sound but no MIDI. Arming writes
     /// a full parameter snapshot regardless, so the params are what keep the
@@ -596,7 +593,7 @@ mod tests {
     #[test]
     fn first_event_survives_a_take_with_no_notes() {
         let take = |notes: Vec<NoteRecord>, params: Vec<ParamRecord>| Take {
-            events: notes.into_iter().map(CanonicalRecord::Note).collect(),
+            events: notes.into_iter().map(|note| CanonicalRecord::Delta(note.into())).collect(),
             params,
             ..Take::default()
         };
@@ -674,7 +671,7 @@ mod tests {
             let mut writer = Writer::create(&path, &header).unwrap();
             writer.write(&Record::Run(RunRecord::default())).unwrap();
             for note in &notes {
-                writer.note(*note).unwrap();
+                writer.write(&delta(*note)).unwrap();
             }
             for param in &params {
                 writer.param(param.clone()).unwrap();
@@ -708,7 +705,7 @@ mod tests {
         let mut text = opened(header);
         text.push('\n');
         for note in &notes {
-            text.push_str(&ron::to_string(&Record::Note(*note)).unwrap());
+            text.push_str(&ron::to_string(&delta(*note)).unwrap());
             text.push('\n');
         }
         // Chop mid-record, as a killed process would.
@@ -727,7 +724,7 @@ mod tests {
         let text = format!(
             "{}\n{}\n{}",
             opened(header),
-            ron::to_string(&Record::Note(notes[0])).unwrap(),
+            ron::to_string(&delta(notes[0])).unwrap(),
             &parameter[..inside_id]
         );
         let take = Take::parse(std::io::Cursor::new(text)).unwrap();
@@ -742,8 +739,8 @@ mod tests {
         let (header, notes, _) = sample();
         let mut text = ron::to_string(&Record::Header(header)).unwrap();
         text.push('\n');
-        text.push_str("Note((t:0.0,channel:  <- garbage\n");
-        text.push_str(&ron::to_string(&Record::Note(notes[0])).unwrap());
+        text.push_str("Canonical(Delta((event:(t:0.0,channel:  <- garbage\n");
+        text.push_str(&ron::to_string(&delta(notes[0])).unwrap());
         text.push('\n');
         assert!(matches!(
             Take::parse(std::io::Cursor::new(text.as_bytes())),
@@ -755,7 +752,7 @@ mod tests {
     fn an_unfinished_record_before_trailing_lines_is_corruption() {
         let header = ron::to_string(&Record::Header(Header::default())).unwrap();
         for suffix in ["\n", "# trailing comment\n"] {
-            let text = format!("{header}\nNote((t:0.0,\n{suffix}");
+            let text = format!("{header}\nCanonical(Delta((event:(t:0.0,\n{suffix}");
             assert!(matches!(Take::parse(std::io::Cursor::new(text)), Err(ReadError::Parse(2, _))));
         }
     }
@@ -771,7 +768,7 @@ mod tests {
         text.push('\n');
         for t in out_of_order {
             let note = NoteRecord { source: 0, t, channel: 0, note: 60, kind: NoteKind::Off };
-            text.push_str(&ron::to_string(&Record::Note(note)).unwrap());
+            text.push_str(&ron::to_string(&delta(note)).unwrap());
             text.push('\n');
             let param = ParamRecord { t, id: "camera-yaw".into(), value: t as f32 };
             text.push_str(&ron::to_string(&Record::Param(param)).unwrap());
@@ -794,7 +791,7 @@ mod tests {
         text.push('\n');
         for kind in [NoteKind::Off, NoteKind::On { velocity: 0.5 }] {
             let note = NoteRecord { source: 0, t: 2.0, channel: 0, note: 60, kind };
-            text.push_str(&ron::to_string(&Record::Note(note)).unwrap());
+            text.push_str(&ron::to_string(&delta(note)).unwrap());
             text.push('\n');
         }
         let take = Take::parse(std::io::Cursor::new(text.as_bytes())).unwrap();
@@ -821,7 +818,7 @@ mod tests {
     #[test]
     fn a_file_without_a_header_is_rejected() {
         let note = NoteRecord { source: 0, t: 0.0, channel: 0, note: 60, kind: NoteKind::Off };
-        let text = ron::to_string(&Record::Note(note)).unwrap();
+        let text = ron::to_string(&delta(note)).unwrap();
         assert!(matches!(
             Take::parse(std::io::Cursor::new(text.as_bytes())),
             Err(ReadError::MissingHeader)
@@ -835,7 +832,7 @@ mod tests {
     fn a_malformed_note_line_is_refused_at_its_line() {
         let header = ron::to_string(&Record::Header(Header::default())).unwrap();
         let parse = |note: NoteRecord| {
-            let line = ron::to_string(&Record::Note(note)).unwrap();
+            let line = ron::to_string(&delta(note)).unwrap();
             Take::parse(std::io::Cursor::new(format!("{header}\n{line}\n")))
         };
         let edge = NoteRecord {
@@ -1093,10 +1090,10 @@ mod tests {
 /// one gesture.
 ///
 /// Float rather than 16-bit PCM: no conversion, no dither, and nothing
-/// to clip if the bus is hot. The size fields are patched on close, so a
-/// file from a crashed session is still readable by anything that
-/// tolerates a short RIFF size — and `harmonigraph-offline`'s reader
-/// deliberately does.
+/// to clip if the bus is hot. The layout is fixed, a 44-byte header and the
+/// samples to the end of the file, and [`WavWriter::read_header`] is its one
+/// reader: the size fields are patched on close, so a file from a crashed
+/// session still reads, its frames taken from the file's length.
 pub struct WavWriter {
     file: std::fs::File,
     channels: u16,
@@ -1115,9 +1112,15 @@ impl WavWriter {
     /// 32-bit IEEE float.
     const BITS: u16 = 32;
     const FORMAT_FLOAT: u16 = 3;
-    const HEADER_BYTES: u32 = 44;
+    /// The header's length: the samples start here and run to the end of
+    /// the file.
+    pub const HEADER_BYTES: u32 = 44;
+    /// Where the header's RIFF size field sits.
+    const RIFF_SIZE_AT: u64 = 4;
     /// Where the header's sample-rate and byte-rate fields sit.
     const RATE_AT: u64 = 24;
+    /// Where the header's data size field sits.
+    const DATA_SIZE_AT: u64 = 40;
     /// What the header states until frames arrive. A file that never gets any
     /// keeps it: no frames have no speed, and ffmpeg refuses a rate of zero.
     const UNSET_RATE: u32 = 48_000;
@@ -1296,11 +1299,41 @@ impl WavWriter {
         // A failed write_all may have appended a partial chunk. Only frames
         // whose entire write succeeded belong to the file's declared prefix.
         self.file.set_len(u64::from(Self::HEADER_BYTES) + u64::from(data_bytes))?;
-        self.file.seek(SeekFrom::Start(4))?;
+        self.file.seek(SeekFrom::Start(Self::RIFF_SIZE_AT))?;
         self.file.write_all(&riff_bytes.to_le_bytes())?;
-        self.file.seek(SeekFrom::Start(40))?;
+        self.file.seek(SeekFrom::Start(Self::DATA_SIZE_AT))?;
         self.file.write_all(&data_bytes.to_le_bytes())?;
         self.file.flush()
+    }
+
+    /// Read back the header this writer writes, for a file `file_len` bytes
+    /// long, refusing any other layout. The frames are whatever whole ones
+    /// follow the header: a crash leaves the sizes unpatched.
+    pub fn read_header(header: &[u8; 44], file_len: u64) -> Result<WavHeader, String> {
+        let u16_at = |at: usize| u16::from_le_bytes([header[at], header[at + 1]]);
+        let u32_at = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
+        let channels = u16_at(22);
+        let rate = u32_at(Self::RATE_AT as usize);
+        let layout = &header[..4] == b"RIFF"
+            && &header[8..16] == b"WAVEfmt "
+            && u32_at(16) == 16
+            && u16_at(20) == Self::FORMAT_FLOAT
+            && channels > 0
+            && rate > 0
+            && u16_at(32) == channels * (Self::BITS / 8)
+            && u16_at(34) == Self::BITS
+            && &header[36..40] == b"data"
+            && file_len >= u64::from(Self::HEADER_BYTES);
+        if !layout {
+            return Err("not a take's WAV: 32-bit float, one fmt chunk and its data".into());
+        }
+        let data = file_len - u64::from(Self::HEADER_BYTES);
+        let frame = u64::from(channels) * u64::from(Self::BITS / 8);
+        // Finished, the writer states both sizes and truncates the file to
+        // them; until then the RIFF size is 0.
+        let finished = u32_at(Self::RIFF_SIZE_AT as usize) != 0
+            && u64::from(u32_at(Self::DATA_SIZE_AT as usize)) == data;
+        Ok(WavHeader { channels, rate, frames: data / frame, finished })
     }
 
     fn sizes(frames: u64, channels: u16) -> std::io::Result<(u32, u32)> {
@@ -1311,6 +1344,18 @@ impl WavWriter {
         });
         sizes.ok_or_else(|| std::io::Error::other("WAV exceeds the 4 GiB RIFF size limit"))
     }
+}
+
+/// What [`WavWriter::read_header`] reads of a take's WAV.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WavHeader {
+    pub channels: u16,
+    pub rate: u32,
+    /// Whole frames after the header, to the end of the file.
+    pub frames: u64,
+    /// Whether the writer's finalization patched the sizes. A take whose
+    /// process died first, or whose WAV the writer could not finish, says not.
+    pub finished: bool,
 }
 
 impl Drop for WavWriter {

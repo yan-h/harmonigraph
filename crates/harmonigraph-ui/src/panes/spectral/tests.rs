@@ -3129,8 +3129,7 @@ fn resizing_the_editors_pane_leaves_the_exported_split_alone() {
 /// the curve's columns become `footprint_mean_db`'s span — and a floor claims
 /// more pixels than the device has, so each sample integrates a fraction of
 /// the buckets it covers. Only a render BELOW 1x separates them, which
-/// `--scale` reaches with no clamp and `docs/offline-rendering.md` recommends
-/// for fitting more lattice in.
+/// `--scale` reaches with no clamp.
 #[test]
 fn both_spectral_pictures_size_themselves_from_one_raw_reading_of_the_density() {
     let heatmap = include_str!("spectrogram.rs");

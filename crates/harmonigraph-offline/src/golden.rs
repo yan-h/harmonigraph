@@ -298,7 +298,6 @@ impl Shot {
             params: Vec::new(),
             configurations: Vec::new(),
             truncated: false,
-            incomplete: None,
             ..Default::default()
         }
     }
@@ -512,11 +511,13 @@ fn spectral_shadows_draw_the_frame_on_record() {
         .collect();
     let take = Take {
         header: Header { appearance: Some(appearance.serialize()), ..Default::default() },
-        events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
+        events: notes
+            .into_iter()
+            .map(|note| harmonigraph_take::CanonicalRecord::Delta(note.into()))
+            .collect(),
         params: Vec::new(),
         configurations: Vec::new(),
         truncated: false,
-        incomplete: None,
         ..Default::default()
     };
     check_take("spectrogram-spectral-shadows", shot, take);

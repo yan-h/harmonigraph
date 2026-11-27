@@ -27,8 +27,9 @@ pub enum RenderTrigger {
     /// Once the transport has stayed stopped for 0.4 s after recording
     /// something — so a play-through, or an audio export, produces a video
     /// with nothing further to click. Recording disarms itself at the same
-    /// moment. A jump while playing, back or forward, records on: the video
-    /// shows a jump where you jumped.
+    /// moment. A jump while playing, back or forward, records on, and the
+    /// video runs on through it: a take's time follows its own audio, not the
+    /// host's position.
     ///
     /// Falls back gracefully: if a host stops calling `process` while the
     /// transport rolls, no stillness is counted and the take records on until
@@ -40,10 +41,13 @@ pub enum RenderTrigger {
     /// stop by hand. Meant for looped recording, where a manual stop is always
     /// a beat or two off.
     ///
-    /// Detected by the transport wrapping, so **looping must be enabled**.
-    /// Hosts don't reliably tell a plugin where the loop markers are (Bitwig
-    /// doesn't flag its loop as active, so nih-plug's loop range is `None`), so
-    /// with looping off there is nothing to wrap on and it waits for you to
+    /// Detected as the transport jumping back after it has moved forward,
+    /// which is what a loop's wrap looks like: hosts don't reliably tell a
+    /// plugin where the loop markers are (Bitwig doesn't flag its loop as
+    /// active), so the first backward jump after forward motion ends the take
+    /// there, a scrub back included. Up to 50 ms of backward movement while
+    /// playing is playback's jitter and ignored
+    /// (`harmonigraph_record::transport::JITTER_SECONDS`). With nothing to wrap on it waits for you to
     /// disarm, like [`OnDisarm`](Self::OnDisarm).
     AtLoopEnd,
     /// When the transport plays THROUGH [`stop_bar`](RenderConfig::stop_bar):
@@ -247,9 +251,7 @@ impl Default for RenderConfig {
     fn default() -> Self {
         RenderConfig {
             // Transport stop, the trigger that also ends a take during an
-            // arrangement export (see docs/intent/video-export.md). The
-            // offline renderer reads the same default for a take that cannot
-            // say how it ended.
+            // arrangement export (see docs/intent/video-export.md).
             trigger: RenderTrigger::default(),
             // Off-trigger by default, so this only ever matters once `AtBar`
             // is chosen. 65 rather than 1: a stop bar equal to the song start
@@ -265,8 +267,8 @@ impl Default for RenderConfig {
             // as captured from the DAW on 2026-10-07.
             short_edge: 1440,
             tail: 0.0,
-            // VideoToolbox: the same picture in under half the export time at
-            // 1440p, for a larger file (see [`VideoEncoder`]).
+            // VideoToolbox: the same picture about a third faster than x264
+            // at 1440p, for a larger file (see [`VideoEncoder`]).
             encoder: VideoEncoder::Hardware,
             // Off: the copy roughly doubles an export's wait.
             archive: false,
@@ -494,29 +496,6 @@ impl Default for RenderFrame {
             // IS its time axis, so width buys it seconds on screen.
             split: 0.363_348_75,
             lattice: LatticeSide::Right,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn retired_export_fields_are_ignored_and_not_saved_again() {
-        let config: RenderConfig = ron::from_str(
-            r#"(record_audio:true,auto_render:false,audio_path:"old.wav",audio_offset:"12.5",
-                renderer_path:"/renderer",short_edge:2160,trigger:AtBar,stop_bar:17.0)"#,
-        )
-        .unwrap();
-        assert_eq!(config.short_edge, 2160);
-        assert_eq!(config.trigger, RenderTrigger::AtBar);
-        assert_eq!(config.stop_bar, 17.0);
-        let saved = ron::to_string(&config).unwrap();
-        for removed in
-            ["record_audio", "auto_render", "audio_path", "audio_offset", "renderer_path"]
-        {
-            assert!(!saved.contains(removed), "retired field saved again: {removed}");
         }
     }
 }

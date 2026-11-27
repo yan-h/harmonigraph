@@ -305,7 +305,6 @@ impl Pump {
             if let Some(Err(error)) = open.as_mut().map(|open| open.writer.canonical(record)) {
                 fail_with(fence, status, error.to_string());
             }
-            true
         })
     }
 }
@@ -331,8 +330,6 @@ pub mod testing;
 struct Recording {
     path: std::path::PathBuf,
     writer: harmonigraph_take::Writer,
-    /// The WAV's file name, which the header names.
-    audio_file: Option<String>,
     /// The WAV itself, until it is finalized or a write to it fails.
     audio: Option<harmonigraph_take::WavWriter>,
     /// Whether the file holds a `Run` no `RunEnd` has followed yet: a stopped
@@ -402,7 +399,6 @@ impl Recording {
                 }
             };
             return Ok(Recording {
-                audio_file: header.audio_file.clone(),
                 path,
                 writer,
                 audio: Some(audio),
@@ -436,8 +432,9 @@ impl Recording {
         notes.and(audio).map(|_| self.path.clone())
     }
 
+    /// The WAV beside the take, which its header names.
     fn wav_path(&self) -> std::path::PathBuf {
-        self.path.with_file_name(self.audio_file.as_deref().unwrap_or_default())
+        self.path.with_extension("wav")
     }
 
     fn finish_audio(&mut self) -> std::io::Result<()> {
@@ -454,20 +451,15 @@ impl Recording {
 
     /// Write the take's failure marker, once.
     fn mark_incomplete(&mut self) -> std::io::Result<()> {
-        let record = harmonigraph_take::IncompleteRecord {
-            reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
-            ..Default::default()
-        };
         if self.marked {
             return Ok(());
         }
-        let result =
-            self.writer.incomplete(record).and_then(|_| self.writer.flush()).map_err(|error| {
-                std::io::Error::new(
-                    error.kind(),
-                    format!("cannot write incomplete marker {}: {error}", self.path.display()),
-                )
-            });
+        let result = self.writer.incomplete().and_then(|_| self.writer.flush()).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("cannot write incomplete marker {}: {error}", self.path.display()),
+            )
+        });
         if result.is_ok() {
             self.marked = true;
         }

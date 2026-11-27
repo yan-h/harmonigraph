@@ -26,9 +26,10 @@ pub use writer::testing;
 use configuration::{RecordFence, RecordIntent};
 use lifecycle::{Action, End, History, Observation, Policy, State};
 
-/// Record-ring capacity. Expressive voices can produce several records per
-/// audio block, multiplied by export speed. This bounded queue absorbs worker
-/// scheduling delays; the separate canonical publication lane has its own cap.
+/// Record-ring capacity. A block writes its run's edges, its configuration
+/// changes, its parameter changes and its audio's marker, multiplied by
+/// export speed; notes ride the canonical publication lane, which has its own
+/// cap. This bounded queue absorbs worker scheduling delays.
 const TAKE_RING_CAPACITY: usize = 1 << 16;
 
 const FINISHING: &str = "finishing…";
@@ -36,14 +37,14 @@ const FINISHING_PREVIOUS: &str = "finishing the previous take…";
 /// What the status line says of a failed take whose cause carries no message:
 /// one the audio thread found (a full ring, a refused publication into an
 /// armed take, lost input).
-pub(crate) const CONFIGURATION_FAILURE: &str =
-    "recording incomplete: configuration/audio ownership failed; no render started";
+pub(crate) const AUDIO_THREAD_FAILURE: &str = "recording incomplete: the take lost records \
+     (a full ring, a refused note or lost input); no render started";
 
 /// Capacity of the audio ring, in interleaved samples. Generous on
 /// purpose: during an offline export audio arrives many times faster than
-/// realtime, and unlike the spectrum's ring — which drops by design,
-/// because a stalled meter must never stall audio — dropping here would
-/// put a silent hole in the finished video.
+/// realtime, and unlike the live analyzer's ring — which drops by design,
+/// because a stalled meter must never stall audio — a block that does not fit
+/// here fails the take.
 const AUDIO_RING_CAPACITY: usize = 1 << 20;
 
 /// A take's WAV is always stereo, whatever selected audio stream the host
@@ -52,32 +53,6 @@ const AUDIO_RING_CAPACITY: usize = 1 << 20;
 /// number: if any of them disagrees, the header describes frames the data does
 /// not have, and nothing downstream checks.
 pub const TAKE_CHANNELS: usize = 2;
-
-/// How much of a block fits in an interleaved audio ring, in SAMPLES, rounded
-/// DOWN to whole frames.
-///
-/// The rounding is the one thing here that must not be wrong. A tail dropped
-/// mid-frame leaves the ring one sample out of phase, and every later frame
-/// hands the left channel's data to the right for as long as the plugin runs —
-/// silently, because nothing downstream can tell a phase slip from the signal.
-/// Bounding by free space is what makes a near-full ring (a stalled or closed
-/// consumer) drop the block's tail rather than stall the audio thread.
-///
-/// Shared by [`Recorder::audio`] and the plugin's own spectrum ring, which is
-/// why it is public: one guard, so the two cannot disagree about what a whole
-/// frame is.
-///
-/// The zero-channel arm is not a live path — both callers gate on a positive
-/// channel count. It is handled so the function carries no precondition a
-/// caller can violate, which is what makes it safe to reuse; it does not move
-/// the division off the audio thread, and does not pretend to.
-pub fn interleaved_reservation(free_slots: usize, samples: usize, channels: usize) -> usize {
-    if channels == 0 {
-        return 0;
-    }
-    let free = free_slots / channels * channels;
-    (samples * channels).min(free)
-}
 
 /// One recorded thing, in a form the audio thread can push without
 /// allocating. Converted to a `harmonigraph_take::Record` on the writer thread.
@@ -207,7 +182,7 @@ impl TakeLatches {
 
     /// Clear what the previous take left behind, so its end reason cannot end
     /// this one before the transport even rolls — nor its note count, which
-    /// would read as this take being under way.
+    /// would open this take's tally on the status line.
     ///
     /// The stop BAR itself is not here: it is the GUI's setting for the take
     /// about to run, written every frame, and clearing it would disarm the
@@ -268,8 +243,8 @@ pub struct Recorder {
     /// records. See [`Recorder::record`].
     open: Option<OpenRun>,
     /// Whether this take has opened a run, so its notes count from there: the
-    /// On transport stop countdown reads the count, and a note played before
-    /// playback must not start it.
+    /// status line's tally counts what the take recorded, not a note played
+    /// before playback.
     run_opened: bool,
     /// Set by the GUI under `AtLoopEnd`, whose take is over the moment the
     /// loop wraps: a backward jump after forward motion ends it there rather
@@ -393,7 +368,7 @@ impl Recorder {
     /// A hole in the note history is NOT a recording failure (#712): the take
     /// keeps capturing, finalises normally and exports with a warning, and the
     /// gap the lane queued on its reserved cell is what carries that warning
-    /// into the file as an `IncompleteRecord`. Refusal is left to failures
+    /// into the file, as a `Gap` record the reader warns of. Refusal is left to failures
     /// that are actually fatal to the recording — audio, ownership and I/O,
     /// which reach the fence through [`Recorder::fail_configuration`] and the
     /// writer's paths — plus `Invalid` here, which is the one publication
@@ -469,8 +444,7 @@ impl Recorder {
     /// Close or open this block's run. `origin` is where the block sits in the
     /// take's audio when it records, and `at` is its first sample on the
     /// presentation clock. The transport observation gives an origin only to
-    /// an armed take that rolls, and a block with no transport position gives
-    /// its local clock to any armed take.
+    /// an armed take that rolls, and a block with no song position gives none.
     ///
     /// A run opened before the take was last armed ends here, and the block
     /// opens a new one: a Stop and a Start between two callbacks.
@@ -483,32 +457,21 @@ impl Recorder {
         }
     }
 
-    /// Every armed take records audio, until the take has failed.
-    pub fn wants_audio(&self) -> bool {
-        self.lifecycle.armed() && !self.fence.failed.load(Ordering::Acquire)
-    }
-
     /// Append one block of interleaved input samples.
     ///
     /// Reserves the whole block at once rather than pushing per sample:
     /// one ring-atomic touch per block instead of tens of thousands a
-    /// second. A short reservation means the ring filled, which is a
-    /// hole in the recording, so it is counted like any dropped record.
-    ///
-    /// Rounded down to whole FRAMES, for the reason `interleaved_reservation`
-    /// gives — and it matters more here than on the spectrum's ring. This one
-    /// lands in a WAV, so half a frame swaps that file's channels from there
-    /// on, permanently, and the writer cannot notice: it derives its frame
-    /// count by dividing the bytes it was handed. The callers happen to keep
-    /// the free count even today (even capacity, even `samples`, and a drain
-    /// that commits everything), but nothing declares that, and an odd
-    /// capacity or a partial drain would end the argument silently.
+    /// second. The block is written whole or not at all: one the ring cannot
+    /// hold is a hole in the recording, counted like any dropped record, and
+    /// fails the take. `samples` is whole [`TAKE_CHANNELS`] frames, as its one
+    /// caller sizes it, so the ring stays in phase.
     ///
     /// `rate` is the rate the block was produced at, which travels with it to
     /// the WAV: the host can reactivate the plugin at another rate while a take
     /// is armed, and a rate fixed when Record was clicked would then state the
     /// wrong speed for every block after (#1928).
     pub fn audio(&mut self, block: &mut dyn Iterator<Item = f32>, samples: usize, rate: f32) {
+        debug_assert!(samples.is_multiple_of(TAKE_CHANNELS), "a block of whole frames: {samples}");
         if self.fence.failed.load(Ordering::Acquire) {
             return;
         }
@@ -520,24 +483,13 @@ impl Recorder {
             self.fence.fail();
             return;
         }
-        let room =
-            interleaved_reservation(self.audio.slots(), samples / TAKE_CHANNELS, TAKE_CHANNELS);
-        if room < samples {
+        let Ok(chunk) = self.audio.write_chunk_uninit(samples) else {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             self.fence.fail();
-        }
-        if room == 0 {
             return;
-        }
-        let written = if let Ok(chunk) = self.audio.write_chunk_uninit(room) {
-            chunk.fill_from_iter(block.take(room));
-            true
-        } else {
-            false
         };
-        if written {
-            self.push(Entry::AudioSamples { samples: room, rate });
-        }
+        chunk.fill_from_iter(block.take(samples));
+        self.push(Entry::AudioSamples { samples, rate });
     }
 
     /// Note where the transport is, and answer whether it is rolling —
@@ -743,8 +695,8 @@ pub struct Control {
     latches: Arc<TakeLatches>,
     /// How far the background render has got, for the Video pane's bar.
     progress: Arc<Progress>,
-    /// Shared by every render this Control starts, so a new request cancels
-    /// the one in flight rather than racing it. See [`RenderControl`].
+    /// Shared by every render this Control starts, so a new request queues
+    /// behind the one in flight rather than racing it. See [`RenderControl`].
     render: Arc<RenderControl>,
 }
 
@@ -811,8 +763,8 @@ impl Control {
 
     /// Append an independent export with settings already captured by the caller.
     ///
-    /// `appearance` is the document selected at queue time (current, saved or
-    /// recorded), and the renderer takes the output size from it alone: `size`
+    /// `appearance` is the document selected at queue time (the current look or
+    /// the take's recorded one), and the renderer takes the output size from it alone: `size`
     /// is only what the Exports list shows for the job.
     pub fn queue_export(&self, path: std::path::PathBuf, appearance: String, size: [u32; 2]) {
         spawn_render(
@@ -919,7 +871,9 @@ impl Control {
     }
 
     /// Called each GUI frame while recording, so the status line reflects
-    /// what the audio thread is actually doing.
+    /// what the audio thread is actually doing. Paused and waiting are told
+    /// apart by whether the take has rolled, the latch the Transport stop
+    /// timer reads, and `events` is the tally.
     pub fn tick(&self, rolling: bool, events: u64) {
         if !self.is_recording() {
             return;
@@ -931,7 +885,7 @@ impl Control {
             format!("RECORDS DROPPED ({dropped}) — the take is incomplete")
         } else if rolling {
             format!("recording · {events} events")
-        } else if events > 0 {
+        } else if self.has_rolled() {
             format!("paused · {events} events")
         } else {
             "waiting for playback".into()

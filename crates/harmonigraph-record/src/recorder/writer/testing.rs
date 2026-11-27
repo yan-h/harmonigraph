@@ -50,7 +50,6 @@ impl Capture {
         let mut events = Vec::new();
         self.displayed.drain(|event| {
             events.push(harmonigraph_take::CanonicalRecord::from_event(event));
-            true
         });
         events
     }
@@ -67,7 +66,6 @@ impl Capture {
         self.displayed.drain(|event| {
             watch(&event, tracker);
             tracker.handle_canonical(event).unwrap();
-            true
         })
     }
     pub fn pause_boundary(&self, enabled: bool) {
@@ -95,7 +93,6 @@ impl Capture {
         let mut events = Vec::new();
         self.publications.drain(|event| {
             events.push(harmonigraph_take::CanonicalRecord::from_event(event));
-            true
         });
         events
     }

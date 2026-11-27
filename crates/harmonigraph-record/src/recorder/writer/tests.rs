@@ -71,7 +71,7 @@ fn simultaneous_recordings_own_distinct_pairs() {
         let take = harmonigraph_take::Take::read(&path).unwrap();
         assert_eq!(take.header.appearance, Some(index.to_string()));
         let wav = path.with_extension("wav");
-        assert_eq!(take.audio_file.as_deref(), wav.file_name().unwrap().to_str());
+        assert_eq!(take.header.audio_file.as_deref(), wav.file_name().unwrap().to_str());
         let samples = std::fs::read(&wav).unwrap();
         assert_eq!(samples.len(), 60);
         assert_eq!(&samples[44..48], &(index as f32).to_le_bytes());
@@ -173,93 +173,18 @@ impl Bench {
 /// it was handed.
 ///
 /// An odd `samples` is what a caller hands over the moment it sizes a block
-/// by the host's channel count instead of [`TAKE_CHANNELS`]. The tail
-/// sample has to be dropped rather than written out of phase, and counted
-/// as the hole in the recording that it is.
-///
-/// This pins the BLOCK-size half of the reservation, which is the half that
-/// does the work: the ring here is only ever written in whole frames, so
-/// its free count cannot go odd on its own. The free-space half is proved
-/// exhaustively over on `interleaved_reservation`, since driving this ring
-/// to an odd occupancy would mean reaching past the writer thread.
+/// by the host's channel count instead of [`TAKE_CHANNELS`]. No caller does;
+/// the one there is multiplies by `TAKE_CHANNELS`, so it is a debug assertion.
+/// A release build would write the block, and the writer's `WavWriter::write`,
+/// which takes whole frames only, would refuse it: the take fails with a
+/// status line.
 #[test]
-fn recorded_audio_reserves_whole_frames_and_counts_the_dropped_tail() {
+#[cfg(debug_assertions)]
+#[should_panic(expected = "a block of whole frames")]
+fn an_odd_audio_block_is_refused() {
     let Bench { mut rec, ctrl, .. } = Bench::new();
     ctrl.recording.store(true, Ordering::Relaxed);
-
-    // Even, into an empty ring: the whole block fits, nothing is dropped.
-    rec.audio(&mut std::iter::repeat_n(0.25f32, 8), 8, 48_000.0);
-    ctrl.tick(true, 0);
-    assert!(
-        !ctrl.status().contains("DROPPED"),
-        "an even block fits whole, but got: {}",
-        ctrl.status()
-    );
-
-    // Odd: the last sample is half a frame and must not reach the ring.
     rec.audio(&mut std::iter::repeat_n(0.25f32, 9), 9, 48_000.0);
-    ctrl.tick(true, 0);
-    assert!(
-        ctrl.dropped.load(Ordering::Relaxed) == 1 && ctrl.fence.failed.load(Ordering::Acquire),
-        "an odd tail must be dropped, not written out of phase; got: {}",
-        ctrl.status()
-    );
-}
-
-/// The phase-slip guard, exhaustively. A reservation that is not a whole
-/// number of frames leaves the ring one sample out of alignment, and every
-/// frame after it hands the left channel's samples to the right — for as
-/// long as the plugin runs, with nothing downstream able to tell that from
-/// the signal itself.
-#[test]
-fn a_reservation_is_always_a_whole_number_of_frames() {
-    for channels in 1..=8usize {
-        for free_slots in 0..96usize {
-            for samples in 0..24usize {
-                let want = interleaved_reservation(free_slots, samples, channels);
-                assert_eq!(
-                    want % channels,
-                    0,
-                    "{want} samples is a partial frame at {channels} channels \
-                         (free_slots={free_slots}, samples={samples})"
-                );
-                assert!(want <= free_slots, "reserved {want} of {free_slots} free slots");
-                assert!(
-                    want <= samples * channels,
-                    "reserved {want}, more than the {} this block holds",
-                    samples * channels
-                );
-            }
-        }
-    }
-}
-
-/// What the reservation does at each end: a ring with room takes the whole
-/// block, a full one drops it rather than stalling the audio thread, and a
-/// nearly-full one takes whole frames and drops the tail.
-#[test]
-fn a_full_ring_drops_the_block_rather_than_stalling() {
-    // Room to spare: the whole block, interleaved.
-    assert_eq!(interleaved_reservation(4096, 512, 2), 1024);
-    // Exactly enough.
-    assert_eq!(interleaved_reservation(1024, 512, 2), 1024);
-    // Full: nothing, and the caller skips the write entirely.
-    assert_eq!(interleaved_reservation(0, 512, 2), 0);
-    // Nearly full, with the free space a PARTIAL frame: round down, so the
-    // tail is dropped on a frame boundary rather than mid-frame.
-    assert_eq!(interleaved_reservation(7, 512, 2), 6);
-    assert_eq!(interleaved_reservation(7, 512, 4), 4);
-    // Less free space than a single frame: nothing at all.
-    assert_eq!(interleaved_reservation(3, 512, 4), 0);
-}
-
-/// Both callers gate on a positive channel count, so no live path reaches
-/// this. It is pinned because it is what lets the function be called
-/// without checking first — a total function is reusable, and reuse is how
-/// `Recorder::audio` came to share the guard.
-#[test]
-fn a_zero_channel_bus_reserves_nothing() {
-    assert_eq!(interleaved_reservation(4096, 512, 0), 0);
 }
 
 /// Loop end, from the GUI's setting to the end it reads back: the setting
@@ -298,13 +223,15 @@ fn the_guis_stop_bar_reaches_the_audio_thread_and_its_end_comes_back() {
     assert!(b.ctrl.has_ended(), "the GUI is told to stop and render");
 }
 
+/// A block is written whole or not at all: one the audio ring cannot hold
+/// writes nothing, and the take, missing that audio, fails.
 #[test]
 fn configuration_audio_exhaustion_marks_the_recording_incomplete() {
     let mut b = Bench::new();
     b.rec.audio(&mut std::iter::repeat(0.0), 1026, 48_000.0);
     assert!(b.ctrl.fence.failed.load(Ordering::Acquire));
     assert_eq!(b.ctrl.dropped.load(Ordering::Relaxed), 1);
-    assert_eq!(b.ends.audio.slots(), 1024, "the fixture must fill the actual ring");
+    assert_eq!(b.ends.audio.slots(), 0, "none of the block that did not fit was written");
 }
 
 /// Only parameters that MOVED are recorded — a full set every block would
@@ -376,12 +303,6 @@ fn reserved_audio_is_actually_written() {
     assert_eq!(b.written(), [0.25, -0.25, 0.5, -0.5]);
     assert_eq!(b.pushed(), ["audio 4"], "and the ring says where they belong");
     assert_eq!(b.ctrl.dropped.load(Ordering::Relaxed), 0);
-
-    // An odd block still writes its whole frames; only the half frame on
-    // the end is dropped.
-    b.rec.audio(&mut [1.0f32, -1.0, 0.75].into_iter(), 3, 48_000.0);
-    assert_eq!(b.written(), [1.0, -1.0], "the whole frame lands, the half frame does not");
-    assert_eq!(b.ctrl.dropped.load(Ordering::Relaxed), 1);
 }
 
 /// The take's state resets on the arming EDGE, not on the armed LEVEL.
@@ -415,27 +336,29 @@ fn re_checking_armed_mid_take_does_not_reset_the_take() {
 }
 
 /// The status line separates a take that is capturing from one that is
-/// waiting, and from one that captured something and then stopped.
+/// waiting, and from one that rolled and then stopped, by the same latch the
+/// Transport stop timer reads: an audio-only take that rolled is paused, with
+/// no events to count.
 ///
 /// It is the only feedback there is that arming while the transport is
-/// parked records nothing — "paused · 0 events" and "waiting for playback" look
-/// alike but mean opposite things about whether the take has anything in
-/// it.
+/// parked records nothing: "paused" and "waiting for playback" mean opposite
+/// things about whether the take has anything in it.
 #[test]
 fn the_status_line_separates_waiting_from_paused_from_recording() {
-    let Bench { ctrl, .. } = Bench::new();
-    ctrl.recording.store(true, Ordering::Relaxed);
+    let mut b = Bench::new();
+    b.arm();
+    b.ctrl.recording.store(true, Ordering::Relaxed);
 
-    ctrl.tick(false, 0);
-    assert_eq!(ctrl.status(), "waiting for playback");
+    b.ctrl.tick(false, 0);
+    assert_eq!(b.ctrl.status(), "waiting for playback");
 
-    ctrl.tick(true, 12);
-    assert_eq!(ctrl.status(), "recording · 12 events");
-
-    // Rolled, then stopped: what it caught is worth saying, and it is not
-    // the same as never having started.
-    ctrl.tick(false, 12);
-    assert_eq!(ctrl.status(), "paused · 12 events");
+    // A block that rolls with no notes in it, then the playhead parked.
+    assert!(b.rec.observe_transport(0.0, true, BLOCK_SECONDS).is_some());
+    b.ctrl.tick(true, 0);
+    assert_eq!(b.ctrl.status(), "recording · 0 events");
+    assert!(b.rec.observe_transport(0.0, false, BLOCK_SECONDS).is_none());
+    b.ctrl.tick(false, 0);
+    assert_eq!(b.ctrl.status(), "paused · 0 events");
 }
 
 /// The shared failure flag alone makes `tick` publish the failure, whatever
@@ -468,15 +391,12 @@ fn stopping_a_take_that_is_not_running_does_nothing() {
     b.ctrl.stop();
     assert!(b.ctrl.fence.intent().is_armed(), "not recording, so there is nothing to stop");
     assert!(b.ends.orders.try_recv().is_err(), "and no Stop reaches the writer");
-    assert!(b.rec.wants_audio(), "and nothing to stop reading the selected audio for");
 
     b.ctrl.recording.store(true, Ordering::Relaxed);
     b.ctrl.stop();
     assert!(!b.ctrl.fence.intent().is_armed(), "a running take disarms");
     assert!(!b.ctrl.is_recording());
-    assert!(b.rec.wants_audio(), "the observed callback still owns its audio");
     assert!(!b.rec.is_armed());
-    assert!(!b.rec.wants_audio(), "and the audio thread stops reading the selected audio");
 }
 
 /// The rings the plugin ships with have room in them.
@@ -632,9 +552,8 @@ fn audio_with_no_room_for_its_entry_stays_out_of_the_ring() {
 }
 
 /// A take counts as captured only the notes played once its first run opened,
-/// and never a reset. One counted before the run would let a stopped transport
-/// end a take armed ahead of the downbeat after a single note, before anything
-/// recorded.
+/// and never a reset. One counted before the run would put a note the take
+/// never recorded in the status line's tally.
 #[test]
 fn a_take_counts_only_the_notes_played_into_its_runs() {
     let mut b = Bench::new();

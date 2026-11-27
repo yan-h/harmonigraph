@@ -12,7 +12,8 @@ that consumer and its measurements below are historical too.
 The WAV reader and frame-analysis consumer remain.
 
 Issue [#734](https://github.com/yan-h/harmonigraph/issues/734) replaces whole-file encoded and decoded allocations with one concrete seekable WAV reader.
-Supported encodings remain unsigned PCM8, signed PCM16/24/32, and float32, including their existing WAVE_FORMAT_EXTENSIBLE handling.
+Supported encodings were then unsigned PCM8, signed PCM16/24/32, and float32, including WAVE_FORMAT_EXTENSIBLE;
+#1980 cut them to 32-bit float, the take's own WAV and the only one the renderer has read since `--audio` went (#983).
 No saved state or format compatibility changes are involved.
 
 ## Ownership and timing
@@ -73,7 +74,7 @@ The interposer calls `F_GETPATH` to identify inputs, so its elapsed time is deli
 Reported read bytes are application read calls, not physical disk traffic;
 OS caching was not flushed.
 
-Exports use the normal renderer, GPU and ffmpeg, at 640×360 with `--align off --playhead` (both flags below are historical: `--playhead` and separate-WAV `--audio`/`-a` replacement are retired and refused by the current CLI, per `retired_playhead_flag_is_rejected` and `separate_audio_replacement_flags_are_rejected` in `main.rs`):
+Exports use the normal renderer, GPU and ffmpeg, at 640×360 with `--align off --playhead` (both flags below are historical: `--playhead` and separate-WAV `--audio`/`-a` replacement are retired, and the current CLI refuses each as an unknown option):
 
 | Scenario | Source | Render interval | FPS | Video frames |
 | --- | --- | --- | --- | --- |

@@ -57,6 +57,13 @@ impl From<NoteDelta> for DeltaRecord {
         }
     }
 }
+/// An unsequenced direct observation: what `NoteDelta::from` makes of a
+/// `NoteEvent`, in record form.
+impl From<NoteRecord> for DeltaRecord {
+    fn from(event: NoteRecord) -> Self {
+        Self { event, ..Self::default() }
+    }
+}
 impl From<DeltaRecord> for NoteDelta {
     fn from(d: DeltaRecord) -> Self {
         Self {
@@ -200,54 +207,22 @@ impl BaselineRecord {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GapReasonRecord {
-    #[default]
-    PublicationFull,
-    InvalidRecord,
-    ProducerLost,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GapRecord {
-    pub source: Option<u64>,
     pub t: f64,
     pub through: f64,
     pub first: u64,
     pub last: u64,
-    pub reason: GapReasonRecord,
 }
 impl From<PublicationGap> for GapRecord {
     fn from(g: PublicationGap) -> Self {
-        Self {
-            source: g.source.map(|s| s.0),
-            t: g.time,
-            through: g.through,
-            first: g.first,
-            last: g.last,
-            reason: match g.reason {
-                GapReason::PublicationFull => GapReasonRecord::PublicationFull,
-                GapReason::InvalidRecord => GapReasonRecord::InvalidRecord,
-                GapReason::ProducerLost => GapReasonRecord::ProducerLost,
-            },
-        }
+        Self { t: g.time, through: g.through, first: g.first, last: g.last }
     }
 }
 impl From<GapRecord> for PublicationGap {
     fn from(g: GapRecord) -> Self {
-        Self {
-            source: g.source.map(SourceId),
-            time: g.t,
-            through: g.through,
-            first: g.first,
-            last: g.last,
-            reason: match g.reason {
-                GapReasonRecord::PublicationFull => GapReason::PublicationFull,
-                GapReasonRecord::InvalidRecord => GapReason::InvalidRecord,
-                GapReasonRecord::ProducerLost => GapReason::ProducerLost,
-            },
-        }
+        Self { time: g.t, through: g.through, first: g.first, last: g.last }
     }
 }
 
@@ -255,7 +230,6 @@ impl From<GapRecord> for PublicationGap {
 /// allocate only on this non-RT side of the publication boundary.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CanonicalRecord {
-    Note(NoteRecord),
     Delta(DeltaRecord),
     Baseline(Box<BaselineRecord>),
     Gap(GapRecord),
@@ -263,7 +237,6 @@ pub enum CanonicalRecord {
 impl CanonicalRecord {
     pub fn time(&self) -> f64 {
         match self {
-            Self::Note(n) => n.t,
             Self::Delta(d) => d.event.t,
             Self::Baseline(b) => b.t,
             Self::Gap(g) => g.t,
@@ -278,8 +251,6 @@ impl CanonicalRecord {
     }
     pub fn validate(&self) -> Result<(), InvalidCanonical> {
         match self {
-            Self::Note(n) if harmonigraph_core::NoteEvent::from(*n).has_valid_payload() => Ok(()),
-            Self::Note(_) => Err(InvalidCanonical),
             Self::Delta(d) => NoteDelta::from(*d).validate(),
             Self::Baseline(b) => b.baseline().map(|_| ()),
             Self::Gap(g) => PublicationGap::from(*g).validate(),
@@ -288,10 +259,6 @@ impl CanonicalRecord {
     pub fn apply(&self, tracker: &mut NoteTracker) -> Result<(), InvalidCanonical> {
         self.validate()?;
         match self {
-            Self::Note(n) => {
-                tracker.handle_event((*n).into());
-                Ok(())
-            }
             Self::Delta(d) => tracker.handle_canonical(CanonicalEvent::Note((*d).into())),
             Self::Baseline(b) => tracker.replace_source(&b.baseline()?),
             Self::Gap(g) => tracker.handle_canonical(CanonicalEvent::Gap((*g).into())),
@@ -303,27 +270,23 @@ impl CanonicalRecord {
         match self {
             Self::Delta(d) => order.note(SourceId(d.event.source), d.sequence),
             Self::Baseline(b) => order.baseline(SourceId(b.source), b.output_cut),
-            Self::Note(_) | Self::Gap(_) => true,
+            Self::Gap(_) => true,
         }
     }
     pub fn note(&self) -> Option<NoteRecord> {
         match self {
-            Self::Note(n) => Some(*n),
             Self::Delta(d) => Some(NoteDelta::from(*d).display_event().into()),
             _ => None,
         }
     }
 }
 
-/// An incomplete recording is different from a malformed trailing line. It
-/// remains durable even when no ordinary publication slot ever becomes free.
+/// The take failed: it lost records, lost input, or the plugin was removed
+/// mid-take. A failed recording is different from a malformed trailing line.
+/// It remains durable even when no ordinary publication slot ever becomes
+/// free. It carries nothing; an older marker's range and reason are skipped.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct IncompleteRecord {
-    pub first_publication: u64,
-    pub last_publication: u64,
-    pub reason: GapReasonRecord,
-}
+pub struct IncompleteRecord {}
 
 #[cfg(test)]
 mod tests {
