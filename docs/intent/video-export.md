@@ -101,3 +101,7 @@ Yan took the recommendations made after the audit was checked against the code (
 - A hand-run `--start` or `--end` render fits to exactly the soundtrack its frames analyze, the read before the first frame and past the last included, and to the notes up to its end, from the take's start, since the first frame's roll draws notes released before it. Yan, 2026-11-25, #1976
 - "Half a second in all" stays an absolute time rather than a share of the render's length, though leakage over the lit level adds up with length and may reopen 20-60 Hz past about four minutes; exports are normally a minute or two. Yan, 2026-11-25, #1976
 - No one-shot Fit button on the Analyzer's Frequency range bar for now: it would make the preview match the export, but has to be pressed after playing the piece, and a take's look is recorded when armed. Yan ("go with recommendations"), #1976
+
+## 2026-11-27 (take warnings, PR #1997)
+
+- An export of a take names each fact on its own line: a failed recording says the recording failed, a gap names its range, and a take with both shows both. Yan, 2026-11-27, taking the recommendation. PR #1997
