@@ -447,7 +447,7 @@ pub(super) fn draw_rolls(
     //
     // It bounds the far end and the pitch range too, which the pane's own clip
     // already did — a note is deliberately allowed to overhang the window's
-    // oldest edge and slide out under the scissor (see `note_instances`), and
+    // oldest edge and slide out under the scissor (see `source_instances`), and
     // this is the same edge in the same place.
     let (lead_px, _) =
         if leads { lead(&state.appearance.spectrum, axes, options.split) } else { (0.0, 0.0) };
@@ -541,9 +541,9 @@ impl RollMotion {
 
 /// Every visible note segment as one GPU instance, in paint order.
 ///
-/// The whole geometry of the roll, and the only place it is decided — the
-/// shader turns an instance into pixels but invents nothing. Split out from
-/// [`draw_roll`] so the geometry can be read back in tests without a GPU.
+/// The live roll's geometry, read back in tests without a GPU: a wrapper over
+/// [`source_instances`], which is where it is decided — the shader turns an
+/// instance into pixels but invents nothing — and which [`draw_rolls`] draws.
 ///
 /// Rebuilt from scratch every frame, deliberately: see the note on
 /// append-and-evict in `harmonigraph_render::roll`. It also keeps the far-edge
@@ -685,7 +685,7 @@ fn source_instances(
     //
     // A segment's ink along pitch is its own drawn pitch span, widened by the
     // ribbon's half width and the outline's reach (see the cull in
-    // [`note_instances`]'s loop, and `vs_note_cut`), and a note's segments each
+    // [`source_instances`]'s loop, and `vs_note_cut`), and a note's segments each
     // span less than the note does. Testing them one by one draws only the
     // segments of a long, bent note that are actually in range.
     //
@@ -1370,19 +1370,18 @@ mod tests {
         instance_groups(state, now).0
     }
 
-    /// One held note under a full surround reaching `reach` points, and
+    /// One held note under a full surround at its fresh reach, and
     /// the instances the roll would draw for it. `range` is the pitch span in
     /// semitones — the pane is 100 points across the pitch axis, so a wide
     /// range makes a thin ribbon, which is where the surround geometry is
     /// under the most pressure.
-    fn ribbon_with_range(reach: f32, range: f32) -> Vec<RollInstance> {
+    fn ribbon_with_range(range: f32) -> Vec<RollInstance> {
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 60.0 - range * 0.5;
         state.appearance.spectrum.high_midi = 60.0 + range * 0.5;
         state.appearance.spectrum.roll_thickness = 2.0;
         state.appearance.spectrum.note_cut = 1.0;
-        state.appearance.spectrum.note_cut_reach = reach;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         instances(&state, 0.05)
     }
@@ -1943,7 +1942,7 @@ mod tests {
     /// can still be seen at, and left alone above that.
     #[test]
     fn a_hairline_ribbon_is_floored_at_the_width_it_can_be_seen_at() {
-        let thick = ribbon_with_range(0.5, 12.0);
+        let thick = ribbon_with_range(12.0);
         let wide = one(&thick).half_extent[0];
         assert!(
             wide > MIN_RIBBON_PT * 0.5,
@@ -1951,7 +1950,7 @@ mod tests {
              comparison below is vacuous",
         );
 
-        let thin = ribbon_with_range(0.5, 600.0);
+        let thin = ribbon_with_range(600.0);
         assert_eq!(
             one(&thin).half_extent[0],
             MIN_RIBBON_PT * 0.5,

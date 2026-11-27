@@ -593,8 +593,6 @@ const EXEMPT: &[(&[&str], Held, &str)] = &[
     ),
     (
         &[
-            "appearance.view.extent_threes",
-            "appearance.view.extent_fives",
             "appearance.view.center_threes",
             "appearance.view.center_fives",
             "appearance.view.min_sevens",

@@ -255,24 +255,16 @@ fn zoom_by_scales_distance_and_clamps() {
 }
 
 #[test]
-fn the_reachs_count_matches_the_reachs_positions() {
+fn a_windows_count_matches_its_positions() {
     // `DrawnWindow::count` is a `Vec::with_capacity` hint; it must equal the
-    // number `positions` actually enumerates. A non-positive extent is in the
-    // sweep because `reach` floors each one at zero, so it collapses that axis
-    // to the center node rather than to nothing — which is the case the count
-    // has to agree with rather than the empty one it used to be.
+    // number `positions` actually enumerates: an axis collapsed to the center
+    // node included, and a reversed one, which is empty rather than a wrapped
+    // `usize`.
     for &(t, f, s) in &[(0, 0, 0), (2, 1, 0), (3, 3, 3), (1, 0, 4), (-1, 2, 0)] {
-        let view = ViewConfig {
-            extent_threes: t,
-            extent_fives: f,
-            min_sevens: -s,
-            max_sevens: s,
-            ..ViewConfig::default()
+        let window = DrawnWindow {
+            min: LatticePos::new(2 - t, -3 - f, -s),
+            max: LatticePos::new(2 + t, -3 + f, s),
         };
-        assert_eq!(
-            view.reach().count(),
-            view.reach().positions().count(),
-            "extents ({t}, {f}, {s})"
-        );
+        assert_eq!(window.count(), window.positions().count(), "extents ({t}, {f}, {s})");
     }
 }
