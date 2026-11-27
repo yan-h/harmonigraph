@@ -1034,9 +1034,9 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     });
     let duration = start.elapsed();
     // Consume outside the audio guard, then exercise payload reuse under it.
-    consumer.drain(|_| true);
+    consumer.drain(|_| ());
     nice_assert_no_alloc::assert_no_alloc(|| publisher.baseline(&baseline).unwrap());
-    consumer.drain(|_| true);
+    consumer.drain(|_| ());
     eprintln!("canonical guarded fill: {SNAPSHOT_SLOTS} complete 64-voice payloads + {} notes + Busy/Lost = {duration:?}; no allocation/deallocation", PUBLICATION_RING - 1 - SNAPSHOT_SLOTS);
 }
 

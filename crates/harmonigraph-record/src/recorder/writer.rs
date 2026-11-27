@@ -305,7 +305,6 @@ impl Pump {
             if let Some(Err(error)) = open.as_mut().map(|open| open.writer.canonical(record)) {
                 fail_with(fence, status, error.to_string());
             }
-            true
         })
     }
 }
