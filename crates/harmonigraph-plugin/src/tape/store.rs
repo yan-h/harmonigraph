@@ -58,12 +58,12 @@ pub(crate) struct Stamp {
 
 impl Stamp {
     /// Song seconds the pass had played before `frame`.
-    pub(crate) fn run_up(&self, frame: i64, rate: f32) -> f64 {
+    fn run_up(&self, frame: i64, rate: f32) -> f64 {
         (frame - self.pass_start) as f64 / f64::from(rate)
     }
 
     /// The pass started at the song's start, so all of it is exact.
-    pub(crate) fn is_from_start(&self, rate: f32) -> bool {
+    fn is_from_start(&self, rate: f32) -> bool {
         self.pass_start as f64 <= SONG_START_SECONDS * f64::from(rate)
     }
 
@@ -332,11 +332,6 @@ impl Store {
             let rendered = self.render(at, &mut out[i..]);
             at += rendered.frames.max(1) as i64;
         }
-    }
-
-    /// The recording's stamp at `frame`, if anything is recorded there.
-    pub(crate) fn stamp_at(&self, frame: i64) -> Option<Stamp> {
-        self.holding(frame).map(|c| c.stamp)
     }
 
     fn apply_seam(

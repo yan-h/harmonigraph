@@ -133,7 +133,7 @@ impl Spectrum {
         let rate = f64::from(store.rate);
         while let Some(k) = self.pending.pop_first() {
             let centre = (column_seconds(k) * rate).round() as i64;
-            if store.stamp_at(centre).is_none() {
+            if store.holding(centre).is_none() {
                 if self.tape.slab(0, k).is_some() {
                     self.tape.set_column(k, None);
                 }

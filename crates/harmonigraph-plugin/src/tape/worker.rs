@@ -829,7 +829,7 @@ impl Worker {
     /// The audio thread's events as console lines.
     pub(crate) fn report(&mut self) {
         while let Ok(event) = self.events.pop() {
-            let line = self.describe(event);
+            let line = Self::describe(event);
             self.logs.push(line);
         }
         if let Some(store) = &self.store {
@@ -843,7 +843,7 @@ impl Worker {
         }
     }
 
-    fn describe(&self, event: Event) -> String {
+    fn describe(event: Event) -> String {
         match event {
             Event::Ended { position, played, reason } => format!(
                 "tape: audition from {} stopped after {played:.2} s by {}",
