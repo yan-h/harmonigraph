@@ -1369,8 +1369,10 @@ fn the_text_groups_width_moves_a_names_shadow_and_no_other_casters() {
 fn a_marker_inherits_the_text_groups_whole_shadow() {
     use harmonigraph_scene::ShadowStyle;
 
-    // A spread on the text group alone, so the reach the marker grows its quad
-    // by is a third term the two groups disagree on.
+    // A spread on the text group alone, so the Spread the marker spends — as
+    // stops, the text group's way, growing neither its quad nor its cell (its
+    // reach is `REACH_SIGMAS` alone) — is a third term the two groups
+    // disagree on.
     let geometry = ShadowStyle { width: 0.12, spread: 0.0, depth: 0.2 };
     let text = ShadowStyle { width: 0.62, spread: 0.3, depth: 0.85 };
     let scene_of = |geometry: ShadowStyle, text: ShadowStyle| {
