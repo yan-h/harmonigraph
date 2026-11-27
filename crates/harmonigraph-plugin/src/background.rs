@@ -215,8 +215,8 @@ impl InputWorker {
 
     /// Stops the thread and waits for it, and what it handed back; `None`
     /// when it was never spawned, already joined, or ended in a panic outside
-    /// a step. Joining can wait for the current step, one [`SHUT_POLL`]
-    /// sleep at most, and the final drain in [`run`].
+    /// a step. Joining can wait for the current step and one [`SHUT_POLL`]
+    /// sleep at most.
     fn stop_and_join(&mut self) -> Option<Ended> {
         self.stop.store(true, Ordering::Relaxed);
         self.thread.take().and_then(|thread| thread.join().ok())
@@ -463,7 +463,8 @@ const MAX_PANICS_IN_A_ROW: u32 = 8;
 /// Drain, sleep, repeat, until the plugin goes away.
 ///
 /// The stop flag is read once per step. Joining waits for any current step
-/// and sleep, followed by the final drain below.
+/// and sleep; what the rings still hold then goes with the plugin, since
+/// nothing reads the picture after its destruction.
 // The test build's round counter is the eighth.
 #[cfg_attr(test, allow(clippy::too_many_arguments))]
 fn run(
@@ -510,12 +511,6 @@ fn run(
         rounds.fetch_add(1, Ordering::Release);
         std::thread::sleep(if editor_state.is_open() { POLL } else { SHUT_POLL });
     }
-    // Destruction follows host callback quiescence. Consume the final owned
-    // display payloads before the editor's bank is reclaimed off thread.
-    let mut shared = shared.lock();
-    let shared = &mut *shared;
-    let now = shared.clock.now();
-    input.drain(&mut shared.clock, &mut shared.ui.picture, &mut tape.inbox, now);
 }
 
 #[cfg(test)]

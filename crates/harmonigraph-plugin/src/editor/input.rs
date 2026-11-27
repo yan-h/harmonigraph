@@ -269,7 +269,8 @@ impl LiveInput {
     }
     /// A whole step with the lock held throughout: take, analyze, give. The
     /// input worker splits the same three around its lock; this is them in
-    /// one, for its final drain and for tests.
+    /// one, for tests.
+    #[cfg(test)]
     pub(crate) fn drain(
         &mut self,
         clock: &mut DisplayClock,
