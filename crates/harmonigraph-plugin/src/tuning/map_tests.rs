@@ -921,22 +921,29 @@ fn every_reset_returns_the_followed_strip_to_the_position() {
 }
 
 /// A loop's last release and its first strike on one sample, with Reset on
-/// loop on: the reset comes before the strike's group is read, so the A
-/// after it moves the strip against those F♯s.
+/// loop on: the release and the reset both come before the strike's group is
+/// read. An A held at 27/16 after F♯ is let go as D and a higher A are
+/// struck, and they sound a pure D–A from the Position, 10/9 and 5/3: had the
+/// A still been held, or no reset come, they would sound 9/8 and 27/16, pure
+/// against that A. Whether the release comes before the reset decides only
+/// the released memory, which the strip does not read.
 #[test]
-fn a_loop_resets_after_its_last_release_and_before_its_first_strike() {
+fn a_loops_first_strike_follows_its_reset_and_the_releases_on_its_sample() {
     let _scope = crate::test_scope::enter();
     let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
     session.policy(|policy| policy.reset_loop = true);
-    session.play(vec![note(1, 0, 60, 0, true)], vec![]);
+    for on in [true, false] {
+        session.play(f_sharps(on), vec![]);
+    }
+    session.play(vec![note(1, 0, 69, 0, true)], vec![]);
+    assert_eq!(session.voice(true, 0, 69).attack_node, Some(PYTHAGOREAN_A), "the held A");
     for seconds in [5.0, 5.0, 1.0] {
         session.everywhere(|| vec![musical_tests::at(seconds, false)]);
     }
-    let mut wrap = f_sharps(true);
-    wrap.insert(0, note(1, 0, 60, 0, false));
+    let wrap = vec![note(1, 0, 69, 0, false), note(2, 0, 62, 0, true), note(3, 0, 81, 0, true)];
     session.play(wrap, vec![]);
-    session.play(f_sharps(false), vec![]);
-    assert_eq!(session.a(), Some(PYTHAGOREAN_A), "the strike moved the strip");
+    let [d, a] = [62, 81].map(|key| session.voice(true, 0, key).attack_node.unwrap());
+    assert_eq!((d, a), (LatticePos::new(-2, 1, 0), FIVE_THREE), "D 10/9, A 5/3");
 }
 
 /// D struck over a held F major moves the strip flat, so D sounds 10/9, a
