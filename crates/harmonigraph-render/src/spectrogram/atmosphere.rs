@@ -1745,11 +1745,12 @@ impl Targets {
         let corners =
             [region.left_top(), region.right_top(), region.right_bottom(), region.left_bottom()];
         // `slab` and `t` carry the corner's PANE-RELATIVE fraction here rather
-        // than a run position, which is what `fs_velvet_tone` reads to recover
-        // the same point the composite would have read under its own pixel.
-        // The region is a sub-rect of the pane, so these need not reach 0 and 1.
-        // Nothing else reads these two on this quad: the bake and the backdrop
-        // both work off `in.position` alone.
+        // than a run position, as on `tone_vertices` below, where
+        // `fs_velvet_tone` reads them to recover the same point the composite
+        // would have read under its own pixel. The region is a sub-rect of the
+        // pane, so these need not reach 0 and 1. Nothing reads these two on
+        // this quad: the backdrop, the one pass drawn on it, works off
+        // `in.position` alone.
         let vertices = [0, 1, 2, 0, 2, 3].map(|i| {
             let fraction = (corners[i] - rect.min) / rect.size();
             SpectrogramVertex { pos: corners[i].into(), slab: fraction.x, t: fraction.y }
