@@ -31,3 +31,7 @@ Every resolution draws stars in their own pass into one image, so Uniform's larg
 That a restore into an open editor keeps it too, and that a toggle is no longer an undo entry, follow from the move; they are the implementer's reading, not Yan's answer.
 - A solo flag on a depth `Star layers` leaves out counts for nothing and comes back, lit, with its depth, however the count changes: the panel no longer clears every flag when the count moves there. #1862 (recommendation taken)
 - Only the working lattice and spectrogram panes draw the solo; the Video tab's preview draws none, as an export does, so what the preview frames is what the render produces. #1862 (recommendation taken)
+
+## 2026-11-27 (drift audit, #1994)
+
+- The lattice's Material row drops None; Material amount 0 is its off switch, as #1353 made the pattern's. A project saved with None opens at Watercolor with a Console line, and a take whose look names None refuses to export. Yan, 2026-11-27, taking the recommendation. #1994 TX2, #1993

@@ -27,3 +27,7 @@ One line per decision; the audit reads this before asking anything.
 Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
 
 - Off-pane halo owner selection moves into `harmonigraph-scene`, and the glow fade's step reads the scene's own view. Built with #1838 in PR #1882; see `lattice-notes.md`. #1861 R5
+
+## 2026-11-20 (questions from the #1861 build wave, #1893)
+
+- A light no layer draws is no light: a node whose only lit layer is not drawn gives off no halo. #1893 item 1, taking #1836 option (c); built in #1912. (Recorded 2026-11-27 by the drift audit #1994, which found it missing.)

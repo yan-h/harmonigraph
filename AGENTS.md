@@ -127,6 +127,8 @@ Yan no longer uses the Adaptive engine but keeps it in the product, so a case on
 except Adaptive with Decode fifths on, the lattice-board's strip, which is within it; Adaptive's search, with Decode fifths off, stays outside (#1896; Yan, 2026-11-23).
 The projects run at 44.1 or 48 kHz (Yan, 2026-11-14).
 Nothing in the rig sends All Notes Off or All Sound Off (CC 123 or 120), no project runs more than 16 Tunes, and Follow harmony goes unused but stays in the product, so a case only those reach lies outside the use (Yan, 2026-11-26, #1973 and #1977).
+Yan never turns on the lattice's audio ring, so a case only it reaches lies outside the use,
+and the pieces pan the lattice more than 12 fifths or 20 thirds within one Span (Yan, 2026-11-27, #1994).
 One or two personal Bitwig projects hold saved state.
 Anyone else builds from source with rough edges promised (README), and no case is handled for their sake.
 Linux is only where cloud agent sessions build and test.

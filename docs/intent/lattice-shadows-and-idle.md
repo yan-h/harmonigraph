@@ -31,4 +31,8 @@ Yan’s decisions recorded for future drift audits.
 Yan took the recommendations made after the audit was checked against the code ("go with all recommendations", 2026-11-18).
 
 - The lattice's test-only single-target draw path (`fs_main`, `fs_plus`) and the direct-draw parity test are deleted; parity stays covered by the compose, occlusion and golden tests. #1861 Q6
-- Shader modules and pipelines are built once and shared, the tests' half first through the production adopt path, with the render suite timed before and after; tests whose subject is the device keep a fresh one. To be built. #1861 R6
+- Shader modules and pipelines are built once and shared, the tests' half first through the production adopt path, with the render suite timed before and after; tests whose subject is the device keep a fresh one. To be built. #1861 R6 (Superseded 2026-11-27 by #1994 SL1, below.)
+
+## 2026-11-27 (drift audit, #1994)
+
+- #1871's closure stands: the tests' half of shared shader compiles is built (#1888), and the production half is left, measured at about 2 ms of a 38 ms build on the loading worker. Yan, 2026-11-27, taking the recommendation. #1994 SL1

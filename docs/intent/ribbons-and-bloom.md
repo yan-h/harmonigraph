@@ -6,7 +6,7 @@ One line per decision; the audit reads this before asking anything.
 ## 2026-09-30 (first trial)
 
 - A ribbon's bloom follows the opacity it is drawn at, as the lattice's does. #1289
-- One note's shadow never darkens under another note, at any opacity. Low priority. #1293 (No longer governs anything: ribbons have had no shadow since #1538, whose backdrop cut replaced it. #1739)
+- One note's shadow never darkens under another note, at any opacity. Low priority. #1293 (No longer governs anything: ribbons have had no shadow since #1538, whose backdrop cut replaced it. #1739) (Corrected 2026-11-27 by #1994 RL1, below: the rule governs the backdrop cut.)
 - Bloom halo width depends on device pixels, so display scale and export resolution change it. Worth thinking about; undecided. #1294
 - Note-name thinning should become one comprehensive placement pass across pitches. Low priority. #1295
 - The ribbon width minimum (1.5 pt, applied before Thickness) is worth revisiting. #1296
@@ -95,3 +95,8 @@ Yan took the recommendations made after the audit was checked against the code (
 - A dense hatched run paints at one depth, the onset of its first attack, even once that attack has scrolled out of the window: a voice that begins after it, between two of the run's attacks or on the same instant as a later one, paints over the whole run, its later attacks and its lead included, rather than the run switching in front of that voice at its next attack (#1431). Yan's answer to #1917 Q3, choosing the first onset, behind, 2026-11-22
 - The order still follows zoom: zoomed in far enough that the repeats separate, each repeat is its own ribbon at its own onset, so such a voice paints over the attacks before it and under those after it, and zooming across the point where they join or split changes which of them paint over it. #1917 Q3
 - An intensity step on the instant a pitch segment ends belongs to the segment after it: the segment before holds its look up to the step rather than ramping into it. Yan, #1920 review, 2026-11-22
+
+## 2026-11-27 (drift audit, #1994)
+
+- #1293's rule holds for the backdrop cut: no note's cut shows through another ribbon at any opacity, so the roll's holdout stays, as the Spiral's dots keep the same rule. Yan, 2026-11-27, taking the recommendation. #1994 RL1
+- Note names follow a pan: the naming reach is centred on the lattice's origin rather than the camera, since Yan's pieces pan beyond 12 fifths or 20 thirds within a Span. Yan, 2026-11-27. #1994 RL2, #1991

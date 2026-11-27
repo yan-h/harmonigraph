@@ -121,3 +121,8 @@ Yan asked for an audit of checkboxes against switches and a rule, and took the r
 - The look slots are removed: Yan never used them. Undo keeps one history, and the Video pane exports the current or the recorded look. Yan, 2026-11-24
 - A project saved before the removal opens the Console on its `look_slots` line at every open until an edit leads to a save; no special case quiets an empty one. Yan, 2026-11-24, on PR #1971's design pass
 - The undo shortcuts are named in `docs/settings.md` only, with no hint in the editor since the slot row's hover went. Yan, 2026-11-24, on PR #1971's design pass
+
+## 2026-11-27 (drift audit, #1994)
+
+- A bar with several parts has the widget's gesture line name them (for example "Drag an end or the middle to adjust, double-click to reset."), and the seven hand-written gesture sentences go. Yan, 2026-11-27, taking the recommendation. #1994 SH1, #1985
+- The scene entry no longer repairs the view: the load repairs it and the picture's caller debug-asserts it is repaired, as the stakes record asks of a case no producer writes. A producer bug would draw unrepaired in a release build. Yan, 2026-11-27, taking the recommendation. #1994 SS1, #1988

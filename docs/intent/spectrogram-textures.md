@@ -25,3 +25,7 @@ Yan’s decisions recorded for future drift audits.
 - The heatmap reads one shared slab pyramid, so every surface at a rung draws the same slabs: older history is no longer redrawn on a Span change or a late open, and the Video preview shows the history the dock does (#1758 Q B, yes). A future change to the stored encoding reaches old history only as it scrolls out. Each plugin instance folds its columns while its editor is shut, about 11 µs a column, and under 1 µs a silent one.
 - A history that cannot trust its own fold resets as Clear display history does: a column more than a second behind the newest, or a crash inside the fold (#1758 Q A, yes). (Superseded 2026-11-14 by #1784 S2, recorded in `spectrum-analysis.md`: the guard is reduced to its debug assertion, and a crash inside the fold no longer resets the history.)
 - The heatmap's far edge is cut one slab past the window rather than at the last column before it, so a pause drawn in a lifted silence colour reaches the edge (#1758 Q C, yes).
+
+## 2026-11-27 (drift audit, #1994)
+
+- Watercolor draws per pixel in every export: the reduced tone path, which only an export wider than 2,560 px reached (in use, 21:9 at 1440), goes, so an export matches its preview at the cost of export time and memory. Yan, 2026-11-27, taking the recommendation. #1994 TX1, #1993

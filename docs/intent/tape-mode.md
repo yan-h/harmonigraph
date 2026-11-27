@@ -43,3 +43,8 @@ Yan's picks over six rounds of prototype sheets, with his words where they decid
   a struck note's flash settles over half a second of song, so it keeps step with the music at any audition speed;
   a note held across a recording seam is struck there, as the roll draws it, so it flashes and a section can start there;
   a pitch lights the one node it is named by, even where 12-TET axes without meantone draw a thumbnail as one column of fifths.
+
+## 2026-11-27 (drift audit, #1994)
+
+- The harmony row leaves out sources hidden with Show, as the Tape roll and Fit piece do, and analyses again when Show changes. Yan, 2026-11-27, taking the recommendation. #1994 TP1, #1984
+- The Console line at the start of an audition goes; the stop line and its reason stay. #1784 kept it for the first Bitwig use, which has happened. Yan, 2026-11-27, taking the recommendation. #1994 TP2, #1984
