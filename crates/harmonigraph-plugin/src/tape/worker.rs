@@ -199,8 +199,8 @@ pub(crate) struct Worker {
     notes_dropped_reported: bool,
     book: Book,
     player: Player,
-    /// Tape mode's roll was on screen at the last exchange, so worth
-    /// building.
+    /// Tape mode's roll, or the harmony row analyzed from it, was on screen
+    /// at the last exchange, so worth building.
     visible: bool,
     /// A roll built between holds, for the next exchange to hand over; any
     /// displaced roll returns in [`DisplacedView`] to be freed off-lock.

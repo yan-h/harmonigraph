@@ -831,8 +831,8 @@ impl Placed {
 /// The recording's harmony along a row over the overview (Tape mode, with the
 /// far region open; #1974): one small lattice per section, on the overview's
 /// own song axis, lighting the nodes that sound in it. A node is a set of
-/// rings, one per pitch sounding on it, lowest in the middle, each in its
-/// note's colour. A pitch lights the node the roll names it by
+/// rings, one per octave it sounds in, lowest in the middle, each in its
+/// note's colour, the one struck last where two share a ring. A pitch lights the node the roll names it by
 /// ([`naming_node_from`](super::names::naming_node_from)): the one position of
 /// the naming reach that matches it under the live tuning, and in a
 /// temperament, where a dozen do, the one that spells most plainly. Every

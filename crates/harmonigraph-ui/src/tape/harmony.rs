@@ -6,9 +6,10 @@
 //! before it is compared with what sounds over the Span after it, pitch class
 //! by pitch class; a section starts at the attacks where that difference peaks
 //! above the Detail threshold, no two nearer than a Span. A pitch class counts
-//! as present while a note of it sounds and fades over half a Span after its
-//! release, which is what holds an arpeggio or a cloud of short notes together
-//! as one harmony: each note is still present when the next arrives.
+//! as present while a note of it sounds, and after its release decays with a
+//! time constant of half a Span, which is what holds an arpeggio or a cloud of
+//! short notes together as one harmony: each note is still present when the
+//! next arrives.
 //!
 //! Everything here depends on the notes, the tempo, Detail and Span alone, so
 //! the plugin's input worker computes it where it rebuilds the tape's roll,
