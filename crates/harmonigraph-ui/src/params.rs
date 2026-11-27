@@ -177,16 +177,9 @@ pub struct ConfigurationView {
     /// (`ResolvedConfig::drawn`), decided once with it so every control in a
     /// frame agrees about which value it shows.
     pub board: bool,
-    /// The bits below.
-    pub status: u32,
+    /// Host input was lost: a take refuses its configuration until a reset.
+    pub input_lost: bool,
     /// The configuration's revision while the audio thread has not adopted
     /// it, or `None` once it has: the request the pending label waits on.
     pub unadopted: Option<u64>,
-}
-
-impl ConfigurationView {
-    /// Host input was lost: a take refuses its configuration until a reset.
-    pub const INPUT_LOST: u32 = 2;
-    /// Learn heard more distinct classes than it reads.
-    pub const TOO_MANY_CLASSES: u32 = 16;
 }

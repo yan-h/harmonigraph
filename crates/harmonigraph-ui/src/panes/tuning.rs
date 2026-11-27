@@ -12,7 +12,7 @@
 use super::learn_pulse;
 use super::spectral::roll::note_color;
 use super::{section, subsection};
-use crate::params::{ConfigurationView, ParamBackend};
+use crate::params::ParamBackend;
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
 use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, TuningAxis};
@@ -308,22 +308,21 @@ pub(super) fn tuning_pane(
     });
 
     // Faults remain visible even when the tuning controls are folded.
-    let configuration_notice =
-        if state.runtime.configuration_status & ConfigurationView::INPUT_LOST != 0 {
-            crate::widgets::label(
-                ui,
-                egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
-            );
-            true
-        } else if state.runtime.configuration_status & ConfigurationView::TOO_MANY_CLASSES != 0 {
-            crate::widgets::label(
-                ui,
-                egui::RichText::new(too_many_pitches_notice()).color(theme::armed()),
-            );
-            true
-        } else {
-            false
-        };
+    let configuration_notice = if state.runtime.configuration_input_lost {
+        crate::widgets::label(
+            ui,
+            egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
+        );
+        true
+    } else if state.runtime.learn_too_many {
+        crate::widgets::label(
+            ui,
+            egui::RichText::new(too_many_pitches_notice()).color(theme::armed()),
+        );
+        true
+    } else {
+        false
+    };
 
     section(ui, "Note matching", |ui| {
         axis_bar(ui, state, params, TuningAxis::Tolerance);

@@ -1150,16 +1150,17 @@ fn without_an_engine_selector_the_tuning_pane_shows_no_adaptive_controls() {
 #[test]
 fn a_configuration_fault_asks_for_a_host_reset() {
     use panes::tuning::CONFIGURATION_FAULT_NOTICE as FAULT;
-    let shapes = |status| {
+    let shapes = |input_lost, too_many| {
         let mut state = fresh();
-        state.picture.runtime.configuration_status = status;
+        state.picture.runtime.configuration_input_lost = input_lost;
+        state.picture.runtime.learn_too_many = too_many;
         tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT).shapes
     };
-    assert!(text_y(&shapes(0), FAULT).is_none());
-    assert!(text_y(&shapes(2), FAULT).is_some(), "configuration fault");
+    assert!(text_y(&shapes(false, false), FAULT).is_none());
+    assert!(text_y(&shapes(true, false), FAULT).is_some(), "configuration fault");
     let too_many = &panes::tuning::too_many_pitches_notice();
-    assert!(text_y(&shapes(16), too_many).is_some(), "more pitches than Learn reads");
-    assert!(text_y(&shapes(0), too_many).is_none());
+    assert!(text_y(&shapes(false, true), too_many).is_some(), "more pitches than Learn reads");
+    assert!(text_y(&shapes(false, false), too_many).is_none());
 }
 
 /// The size a settings pane is soloed at to make it scroll: narrow enough that

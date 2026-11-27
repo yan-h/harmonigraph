@@ -84,8 +84,8 @@ pub(crate) struct Settings {
     audio: Mutex<Option<triple_buffer::Output<ResolvedConfig>>>,
     /// The document revision audio last copied, for the pending label.
     adopted: AtomicU64,
-    /// Host input was lost, until the host's reset: audio's one status bit,
-    /// [`ConfigurationView::INPUT_LOST`].
+    /// Host input was lost, until the host's reset: what audio reports about
+    /// the configuration, [`ConfigurationView::input_lost`].
     input_lost: AtomicBool,
     /// A UI or Learn edit applied, a lattice-map document edited, or an edit
     /// to what the editor saves in `ui-state` (#1813), since the host last
@@ -191,11 +191,7 @@ impl Settings {
         ConfigurationView {
             resolved,
             board: false,
-            status: if self.input_lost.load(Ordering::Acquire) {
-                ConfigurationView::INPUT_LOST
-            } else {
-                0
-            },
+            input_lost: self.input_lost.load(Ordering::Acquire),
             unadopted: (resolved.revision != adopted).then_some(resolved.revision),
         }
     }

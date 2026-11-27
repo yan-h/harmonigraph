@@ -248,7 +248,7 @@ fn backend_with(
         config: params::ConfigurationView {
             board: false,
             resolved: reducer.resolved(),
-            status: 0,
+            input_lost: false,
             unadopted: None,
         },
         host,

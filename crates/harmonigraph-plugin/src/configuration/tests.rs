@@ -528,7 +528,7 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
             let lost = vec![device.param(ParamKey::CameraDistance, 7.0, 64)];
             let (status, _) = device.run_transport(64, lost, false, None, None);
             assert_eq!(status, CLAP_PROCESS_ERROR);
-            assert_eq!(shown(&device.settings()).view.status & 2, 2);
+            assert!(shown(&device.settings()).view.input_lost);
         }
         drop(device);
     }
@@ -698,7 +698,9 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     let modes = opened.view.resolved.modes.tempered;
     assert_eq!((modes.syntonic, modes.septimal_kleisma), (false, true));
     let resaved = device.save();
-    assert!(["tuning-three", "tuning-tolerance"].iter().all(|id| !resaved.params.contains_key(*id)));
+    assert!(["tuning-three", "tuning-tolerance"]
+        .iter()
+        .all(|id| !resaved.params.contains_key(*id)));
     assert_eq!(saved(&resaved).axes, MusicalSettings::default().axes);
 }
 
