@@ -603,10 +603,11 @@ fn no_camera_asks_for_more_than_the_budget() {
     }
 }
 
-/// A camera a hand-edited blob can carry still yields a drawable window. The
-/// same door `Camera::sanitize` and `ViewConfig::sanitize` guard, one step
-/// further along: these two run on load, and a scene is derived every frame
-/// from whatever they left.
+/// A camera no producer hands it still yields a drawable window: a target far
+/// off or not finite, and a pane with no shape. `Camera::sanitize` refuses a
+/// non-finite target on load, and in the plugin `sync_camera` replaces a saved
+/// one every frame, so this holds the window's own arithmetic — its
+/// saturating offsets and its fallback — rather than a case the use reaches.
 #[test]
 fn a_nonsense_camera_still_yields_a_drawable_window() {
     let view = ViewConfig::default();

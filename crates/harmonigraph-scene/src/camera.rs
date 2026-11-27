@@ -116,16 +116,6 @@ impl Camera {
     /// The cabinet depth axis's step length: what its "Depth step scale" bar
     /// offers, and what a load holds a saved one to.
     pub const CABINET_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.1..=1.0;
-    /// How far across the sheet a loaded target may stand from the view's
-    /// centre, in cells. What a project or a gesture puts there is far
-    /// less: the host's camera pan runs ±128 cells in all (`ParamKey::CameraPanX`
-    /// in harmonigraph-take), of which [`ViewConfig::follow_camera`] leaves
-    /// the target within one, and a gesture moves it a few between two of
-    /// its calls. The two need not agree, since a target this far is one only
-    /// a hand-edited blob carries.
-    ///
-    /// [`ViewConfig::follow_camera`]: crate::ViewConfig::follow_camera
-    const TARGET_LIMIT: f32 = 128.0;
     /// Zoom clamp; CLIP_NEAR/CLIP_FAR must bracket it with margin.
     pub const MIN_DISTANCE: f32 = 2.0;
     /// The far end is what bounds the lattice, the lattice itself being
@@ -165,8 +155,9 @@ impl Camera {
     /// every zoom — a name that fits its node at the default distance is a
     /// speck on it zoomed in, and swamps it zoomed out.
     ///
-    /// Both terms are read through the range they are navigable in — see
-    /// `focus_half_height`, which is where that is done and why it has to be.
+    /// Both terms are in the range they are navigable in: the field of view
+    /// is a constant, and the distance is held to its range at load and by
+    /// every gesture, framing and host value (see `focus_half_height`).
     pub fn screen_scale(&self) -> f32 {
         Self::half_height(Self::DEFAULT_DISTANCE, Self::DEFAULT_FOV_Y) / self.focus_half_height()
     }
@@ -390,10 +381,10 @@ impl Camera {
     /// (`sync_camera`), so the saved values are not what is drawn.
     ///
     /// A bar cannot produce a nonsense value but a hand-edited blob can, and
-    /// this feeds `view_proj` every frame the camera is drawn with —
-    /// `screen_scale` already guards `distance` locally for the font-size math
-    /// it does, but that guard is local to it, and nothing stands between a
-    /// NaN in the blob and `eye`'s trig or `ortho`'s `tan`. Same
+    /// this feeds `view_proj` every frame the camera is drawn with — and
+    /// `screen_scale`'s font-size math, which reads the distance as this
+    /// leaves it — so nothing else stands between a NaN in the blob and
+    /// `eye`'s trig or `ortho`'s `tan`. Same
     /// argument as [`ViewConfig::sanitize`], and the same split: finite-only
     /// where a field has no natural bound, clamped into the working range
     /// where it does.
@@ -402,15 +393,12 @@ impl Camera {
     pub fn sanitize(&mut self) {
         let fresh = Camera::default();
 
-        // A NaN or infinity is repaired as a whole vector: `eye()` reads all
-        // three components together, and one bad component NaNs the other
-        // two through it. A finite one is held to `TARGET_LIMIT` across the
-        // sheet, so `ViewConfig::follow_camera` carries it into the view's
-        // centre in whole steps that cannot overflow it.
+        // No bound the geometry cares about — the camera can look anywhere —
+        // so only the NaN or infinity a hand-edited blob can carry gets
+        // repaired, and as a whole vector: `eye()` reads all three
+        // components together, and one bad component NaNs the other two
+        // through it.
         self.target = if self.target.is_finite() { self.target } else { fresh.target };
-        let limit = Self::TARGET_LIMIT;
-        self.target.x = self.target.x.clamp(-limit, limit);
-        self.target.y = self.target.y.clamp(-limit, limit);
 
         // Periodic (every use is a `sin`/`cos`), so any finite value draws
         // correctly — only a non-finite one, which `sin`/`cos` turn into
@@ -520,20 +508,5 @@ mod tests {
         assert_eq!(at(Camera::DEFAULT_DISTANCE), 1.0);
         // Twice as close draws twice the size.
         assert_eq!(at(Camera::DEFAULT_DISTANCE * 0.5), 2.0);
-    }
-
-    /// A loaded target is held across the sheet, which is what lets
-    /// `ViewConfig::follow_camera` carry it into the centre unguarded; its
-    /// depth is the follow's to zero, and a target in reach is kept.
-    #[test]
-    fn a_loaded_target_is_held_across_the_sheet() {
-        let loaded = |target: Vec3| {
-            let mut camera = Camera { target, ..Camera::default() };
-            camera.sanitize();
-            camera.target
-        };
-        let limit = Camera::TARGET_LIMIT;
-        assert_eq!(loaded(Vec3::new(1e30, -3e9, 7.0)), Vec3::new(limit, -limit, 7.0));
-        assert_eq!(loaded(Vec3::new(0.4, -2.5, 0.0)), Vec3::new(0.4, -2.5, 0.0));
     }
 }

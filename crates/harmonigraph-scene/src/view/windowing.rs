@@ -289,12 +289,14 @@ impl ViewConfig {
     /// offline renderer needs none because `set_camera_movement` already
     /// re-centres a replayed camera. It is idempotent on a target already inside its cell.
     pub fn follow_camera(&mut self, camera: &mut Camera) {
-        if !camera.target.is_finite() {
-            return;
-        }
-        // Whole steps of a target `Camera::sanitize` holds to a few hundred
-        // cells, onto a center `ViewConfig::sanitize` holds to `MAX_CENTER`:
-        // the sum stays far inside `i32`.
+        // Whole steps of a target within a few cells of the center: in the
+        // plugin `sync_camera` re-splits the host's absolute pan (±128 cells)
+        // into center and target every frame before a pane runs, leaving the
+        // target inside one cell, and a gesture moves it a few between two
+        // calls. A target a blob carries never reaches here, so the sum stays
+        // far inside `i32`, and a non-finite target, which no producer writes,
+        // is a `debug_assert` (#1631).
+        debug_assert!(camera.target.is_finite(), "a non-finite camera target: {:?}", camera.target);
         let (fives, threes) = (camera.target.x.round() as i32, camera.target.y.round() as i32);
         self.center_fives += fives;
         self.center_threes += threes;
