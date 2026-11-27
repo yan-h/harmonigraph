@@ -162,12 +162,12 @@ impl OctaveLayout {
     /// same width, so the walk is linear in `x` and a pitch stands at the same
     /// fraction of its own octave's wedge as it does of the octave. The
     /// shader's `oct_walk` is this, in the same operation order.
-    pub fn walk(&self, x: f32) -> f32 {
+    fn walk(&self, x: f32) -> f32 {
         TAU * x.clamp(0.0, self.span as f32) / self.span as f32
     }
 
     /// Angle of boundary `i` of `ring`, counting clockwise from its seam.
-    pub fn edge(&self, ring: Ring, i: usize) -> f32 {
+    fn edge(&self, ring: Ring, i: usize) -> f32 {
         ring.seam - self.walk(i as f32)
     }
 

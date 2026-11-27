@@ -258,12 +258,13 @@ impl Motion {
     /// Nothing held, nothing moving and nothing left to fade: `advance` would
     /// write back exactly what is here. Most visible nodes are this at once,
     /// and [`NodeMotion`] keeps no entry for one.
+    ///
+    /// No gate, no mark, nothing delayed, lit or fading, no audio pose, and
+    /// every slice retracted.
     fn at_rest(&self) -> bool {
-        self.still() && !self.audio_waiting && self.progress == [0.0; 11]
-    }
-    /// No gate, no mark, and nothing delayed, lit or fading.
-    fn still(&self) -> bool {
-        !self.gate
+        !self.audio_waiting
+            && self.progress == [0.0; 11]
+            && !self.gate
             && self.melody.target.is_none()
             && self.bass.target.is_none()
             && self.edges.is_empty()
