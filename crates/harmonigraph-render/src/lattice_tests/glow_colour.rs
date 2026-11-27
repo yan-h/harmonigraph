@@ -392,11 +392,11 @@ fn added_light(on: &[u8], off: &[u8]) -> [i64; 3] {
 
 /// The glow's colour is the node's own INK, whatever layer laid it down.
 ///
-/// Three nodes, one code path: a node wearing nothing but its audio ring lights
-/// in the ring's colour, a node wearing nothing but its octave band lights in
-/// the band's, and a node wearing both lights in a mixture that is greener than
+/// Three nodes, one code path: a node wearing nothing but its melody marks
+/// lights in the marks' colour, a node wearing nothing but its octave band
+/// lights in the band's, and a node wearing both lights in a mixture that is greener than
 /// the one and redder than the other. Nothing here names a layer — the light is
-/// `ink_at` read round the node — so the ring's hue reaching the halo and the
+/// `ink_at` read round the node — so the marks' hue reaching the halo and the
 /// band's reaching it are the same mechanism, and a layer added to a node is
 /// lit without a line of its own.
 ///
@@ -405,7 +405,7 @@ fn added_light(on: &[u8], off: &[u8]) -> [i64; 3] {
 fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
     const SIZE: [u32; 2] = [256, 256];
     const BAND: f32 = 0.16;
-    const RING: f32 = 0.16;
+    const MARKS: f32 = 0.16;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -413,31 +413,31 @@ fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
         scene.view.glow_reach = 0.0;
         scene
     };
-    // The ring alone: no key down and no octave sounding, so the band draws
-    // nothing at all and the node's whole picture is the analyzer's.
-    let ring_only = || -> Scene {
-        let mut scene = two_colour_node(BAND, RING);
+    // The marks alone: no key down and no octave sounding, so the band draws
+    // nothing at all and the node's whole picture is its marks.
+    let marks_only = || -> Scene {
+        let mut scene = two_colour_node(BAND, MARKS);
         let node = &mut scene.nodes[0];
         node.presence_with_opacity = 0.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         read_light(node);
         scene
     };
-    // The band alone: the ring's width dialled to nothing, which is the layer's
+    // The band alone: the marks' thickness dialled to nothing, which is the layer's
     // own off switch.
     let band_only = || two_colour_node(BAND, 0.0);
 
-    let ring = added_light(&shooter.shot(&ring_only()), &shooter.shot(&dark(ring_only())));
+    let marks = added_light(&shooter.shot(&marks_only()), &shooter.shot(&dark(marks_only())));
     let band = added_light(&shooter.shot(&band_only()), &shooter.shot(&dark(band_only())));
     let both = added_light(
-        &shooter.shot(&two_colour_node(BAND, RING)),
-        &shooter.shot(&dark(two_colour_node(BAND, RING))),
+        &shooter.shot(&two_colour_node(BAND, MARKS)),
+        &shooter.shot(&dark(two_colour_node(BAND, MARKS))),
     );
 
-    assert!(ring[1] > 0 && band[0] > 0, "neither fixture lit anything: {ring:?}, {band:?}");
+    assert!(marks[1] > 0 && band[0] > 0, "neither fixture lit anything: {marks:?}, {band:?}");
     assert!(
-        ring[1] > ring[0] * 4,
-        "a node wearing only its audio ring lit {ring:?} — its light is not the ring's green",
+        marks[1] > marks[0] * 4,
+        "a node wearing only its melody marks lit {marks:?} — its light is not the marks' green",
     );
     assert!(
         band[0] > band[1] * 4,
@@ -447,8 +447,8 @@ fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
     // SHARE is what moves, the three halos not being the same size.
     let share = |c: [i64; 3]| c[0] as f64 / (c[0] + c[1]).max(1) as f64;
     assert!(
-        share(ring) < share(both) && share(both) < share(band),
-        "a node wearing both lit {both:?}, which is not between {ring:?} and {band:?}",
+        share(marks) < share(both) && share(both) < share(band),
+        "a node wearing both lit {both:?}, which is not between {marks:?} and {band:?}",
     );
 }
 
@@ -476,7 +476,7 @@ fn a_silent_slice_puts_none_of_its_ground_in_the_light() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // The band alone — the ring dialled to nothing — voiced in ONE octave, so
+    // The band alone — the marks dialled to nothing — voiced in ONE octave, so
     // every other slice on the wheel is a ghost.
     let one_octave = || -> Scene {
         let mut scene = two_colour_node(BAND, 0.0);
@@ -609,17 +609,17 @@ fn a_slice_part_way_out_carries_that_much_of_the_light() {
 /// ring and its colour takes more of the halo, dial it to nothing and it takes
 /// none.
 ///
-/// The audio ring is held at one width and sits INSIDE the band, so widening
-/// the band leaves the ring's own radii exactly where they were — what changes
-/// is the share, not the other layer.
+/// The melody marks are held at one thickness. They sit outside the band, so
+/// widening it carries them outward, but a layer is weighed by its width and
+/// not its radius: what changes is the share, not the other layer.
 #[test]
 fn widening_a_layer_gives_its_colour_more_of_the_light() {
     const SIZE: [u32; 2] = [256, 256];
-    const RING: f32 = 0.16;
+    const MARKS: f32 = 0.16;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let at = |band: f32| -> Scene { two_colour_node(band, RING) };
+    let at = |band: f32| -> Scene { two_colour_node(band, MARKS) };
     let dark = |band: f32| -> Scene {
         let mut scene = at(band);
         scene.view.glow_reach = 0.0;
