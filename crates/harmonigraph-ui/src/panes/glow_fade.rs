@@ -958,6 +958,20 @@ mod tests {
         }
     }
 
+    /// A glow pass's FIRST step starts a held note's light dark too, as an
+    /// export's first frame and a fresh Video preview do: with no step before
+    /// it there is no time to attack over, and it is not an infinitely long one.
+    #[test]
+    fn a_first_step_starts_a_held_light_dark() {
+        let mut state = lit(1.0, 0.5);
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let mut fade = GlowFade::default();
+        let mut scene = scene_at(&state, 0.0);
+        fade.step_drawn(&mut scene, 0.0);
+        assert!(fade.owns(LatticePos::ORIGIN), "the held note was given no light");
+        assert_eq!(node_at(&scene, LatticePos::ORIGIN).glow.level, 0.0, "the light arrived lit");
+    }
+
     /// The attack and release over a clock that ran BACKWARDS hold the light
     /// where it is, as a frame drawn twice at one time does.
     #[test]
