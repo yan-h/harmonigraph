@@ -71,7 +71,7 @@ fn simultaneous_recordings_own_distinct_pairs() {
         let take = harmonigraph_take::Take::read(&path).unwrap();
         assert_eq!(take.header.appearance, Some(index.to_string()));
         let wav = path.with_extension("wav");
-        assert_eq!(take.audio_file.as_deref(), wav.file_name().unwrap().to_str());
+        assert_eq!(take.header.audio_file.as_deref(), wav.file_name().unwrap().to_str());
         let samples = std::fs::read(&wav).unwrap();
         assert_eq!(samples.len(), 60);
         assert_eq!(&samples[44..48], &(index as f32).to_le_bytes());

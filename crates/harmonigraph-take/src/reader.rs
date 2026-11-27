@@ -55,8 +55,7 @@ pub(crate) fn assemble(
             _ => {}
         }
     }
-    let audio_file = header.audio_file.clone();
-    let mut take = Take { header, truncated, audio_file, audio_start, ..Take::default() };
+    let mut take = Take { header, truncated, audio_start, ..Take::default() };
 
     let mut events = Vec::new();
     for (line, record) in records {

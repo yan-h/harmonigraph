@@ -430,6 +430,7 @@ fn export(args: Args) -> Result<(), String> {
 
     // The WAV the take recorded, beside the take file, if any.
     let audio_path = take
+        .header
         .audio_file
         .as_ref()
         .map(|name| {
@@ -440,12 +441,12 @@ fn export(args: Args) -> Result<(), String> {
         })
         .filter(|path| path.is_file());
 
-    if take.audio_file.is_some() && audio_path.is_none() {
+    if take.header.audio_file.is_some() && audio_path.is_none() {
         // A missing recording would otherwise produce a silent render with
         // no spectrum and no explanation.
         eprintln!(
             "{WARNING_PREFIX}take names {:?} but it is not beside the take",
-            take.audio_file.as_deref().unwrap_or_default()
+            take.header.audio_file.as_deref().unwrap_or_default()
         );
     }
     let mut audio = audio_path.as_deref().map(crate::wav::read).transpose()?;

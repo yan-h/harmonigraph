@@ -84,7 +84,7 @@ fn a_forward_seek_records_on_into_the_one_wav() {
         .map(|n| (n.note, n.t))
         .collect();
     assert_eq!(starts, [(60, 5.0), (72, 5.0 + duration)]);
-    let wav = sealed.with_file_name(take.audio_file.unwrap());
+    let wav = sealed.with_file_name(take.header.audio_file.unwrap());
     let bytes = std::fs::read(&wav).unwrap();
     assert_eq!(bytes.len() - 44, 256 * 4, "both blocks in one WAV");
     let siblings = std::fs::read_dir(file.parent().unwrap()).unwrap().count();

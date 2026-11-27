@@ -333,9 +333,7 @@ pub struct Take {
     /// the reader took the last line once, so a take with two gaps exported
     /// with a warning naming a different gap from its own marker (#895).
     pub incomplete: Option<IncompleteRecord>,
-    /// File name (not path) of the WAV recorded beside the take.
-    pub audio_file: Option<String>,
-    /// Song time of that WAV's first sample.
+    /// Song time of the first sample of the WAV the header names.
     ///
     /// Arming mid-song does not start at zero, and without it the spectrum
     /// and the muxed track would both sit at the wrong place by exactly
