@@ -32,3 +32,4 @@ foldhash = { workspace = true }
 
 [dev-dependencies]
 egui-wgpu = { workspace = true }
+harmonigraph-scene = { workspace = true, features = ["testing"] }

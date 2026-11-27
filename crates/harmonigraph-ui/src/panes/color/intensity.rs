@@ -78,10 +78,11 @@ fn target_name(target: IntensityTarget) -> &'static str {
     }
 }
 
-fn limits(settings: &IntensitySettings, target: IntensityTarget) -> (f32, f32) {
+/// The most `target` can reach: its cap.
+fn ceiling(settings: &IntensitySettings, target: IntensityTarget) -> f32 {
     match target {
-        IntensityTarget::Opacity => (settings.opacity_rest, 1.0),
-        IntensityTarget::Thickness => (settings.thickness_base, settings.thickness_max),
+        IntensityTarget::Opacity => 1.0,
+        IntensityTarget::Thickness => settings.thickness_max,
     }
 }
 
@@ -210,7 +211,7 @@ fn reach_shapes(
     sources: &[Source],
     scale: f32,
 ) -> Vec<egui::Shape> {
-    let (_, ceiling) = limits(settings, target);
+    let ceiling = ceiling(settings, target);
     let mut shapes = Vec::new();
     let height = rect.height() / sources.len() as f32;
     for (i, &source) in sources.iter().enumerate() {

@@ -123,9 +123,6 @@ pub const LATTICE_RENDER_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
 /// Shared bar and load range for [`ViewConfig::note_bloom`].
 pub const NOTE_BLOOM_RANGE: std::ops::RangeInclusive<f32> = 0.0..=2.0;
 
-/// Shared bar and load range for [`ViewConfig::spiral_bloom`].
-pub const SPIRAL_BLOOM_RANGE: std::ops::RangeInclusive<f32> = 0.0..=2.0;
-
 /// Shared bar and load range for [`ViewConfig::glow_wash`].
 pub const GLOW_WASH_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 
@@ -804,8 +801,8 @@ pub struct ViewConfig {
     /// How loud each note is drawn, and how far each display reads that
     /// (see [`crate::intensity`]). Shared by the lattice, the roll and the Spiral.
     pub intensity: crate::IntensitySettings,
-    /// Shared bloom strength for the lattice and MIDI ribbons, in × of the
-    /// reference halo. Each note's bloom follows its Opacity, so there is no
+    /// Shared bloom strength for the lattice, the MIDI ribbons and the
+    /// Spiral's dots, in × of the reference halo. Each note's bloom follows its Opacity, so there is no
     /// mapping of its own.
     pub note_bloom: f32,
     // An unlit node has no mark of its own: the marker standing at a node
@@ -925,12 +922,6 @@ pub struct ViewConfig {
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
     pub render_scale: f32,
-    /// The bloom's halo around the Spiral's note dots. The lattice and the
-    /// spectrogram's MIDI ribbons share
-    /// [`note_bloom`](Self::note_bloom)
-    /// instead. Its own value so that it sits
-    /// with the Spiral's other settings on the Analyzer tab.
-    pub spiral_bloom: f32,
     /// The node halo: how far past a node's rim its light spreads, in the quad
     /// UV units the layer sizes are in. The rim is the ring stack's outer edge,
     /// or the mark strip's whenever marks are on, whether or not this node
@@ -1474,7 +1465,6 @@ impl ViewConfig {
         self.render_scale =
             repair(self.render_scale, fresh.render_scale, LATTICE_RENDER_SCALE_RANGE);
         self.note_bloom = repair(self.note_bloom, fresh.note_bloom, NOTE_BLOOM_RANGE);
-        self.spiral_bloom = repair(self.spiral_bloom, fresh.spiral_bloom, SPIRAL_BLOOM_RANGE);
 
         // The resting marker's three lengths. The arm and its taper are a
         // reach-and-fade PAIR, held the way every such pair here is — the fade
@@ -1678,10 +1668,6 @@ impl Default for ViewConfig {
             plus_taper: 0.202_866_32,
             // A slight supersample, as captured from the DAW on 2026-10-07.
             render_scale: 1.081_869_1,
-            // The lattice's bloom strength (`bloom_strength`, retired into
-            // `note_bloom` by #1140), which the Spiral shared until it had its
-            // own (#1083).
-            spiral_bloom: 0.633_927_7,
             // A reach spanning several lattice steps turns each node's light
             // into a shared field, at a little under half strength as captured
             // from the DAW on 2026-10-07.
