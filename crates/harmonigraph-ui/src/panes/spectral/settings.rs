@@ -355,8 +355,7 @@ pub(crate) fn view_section(
         .display(hz_readout)
         .hint(
             "Visible frequency range, also used by the Spiral. \
-                     Each octave has equal width. \
-                     Drag the ends or the middle.",
+                     Each octave has equal width.",
         )
         .show(ui);
         // No choice of what the markings say. They are the analyzer-standard

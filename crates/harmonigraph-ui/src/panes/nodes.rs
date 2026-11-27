@@ -182,7 +182,7 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
     StackBar::new(view)
         .hint(
             "Node layers from the center out: empty center, audio ring, MIDI octave ring, then melody and bass marks. \
-             Drag a handle to resize its layer; zero width hides it.",
+             A layer at zero width is hidden.",
         )
         .show(ui);
     // One node-wide padding directly under the bar that draws its radial use.

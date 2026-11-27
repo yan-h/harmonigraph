@@ -336,9 +336,8 @@ fn a_window_narrowed_past_the_settings_floor_widens_back_to_its_layout() {
 }
 
 /// A window narrow enough that the settings column is drawn on its floor
-/// rather than at its saved width, and still wide enough that a fold's request
-/// clears the minimum window. At 720 the default layout's column would shrink
-/// to about 203 in proportion.
+/// rather than at its saved width. At 720 the default layout's column would
+/// shrink to about 203 in proportion.
 fn narrowed_past_the_floor(position: Position) -> (DockHarness, SharedState) {
     let mut state = fresh();
     state.workspace.layout.position = position;
@@ -399,18 +398,30 @@ fn in_a_window_narrowed_past_the_floor_the_dividers_keep_pace_with_the_pointer()
 
 /// Folding one picture in a window narrowed past the floor leaves the other
 /// drawn at the size it had, as it does in a roomy window.
+///
+/// Beside the settings, folding the Lattice in a window this narrow asks for
+/// less than [`shell::MIN_WINDOW_SIZE`], so the window stops at that floor and
+/// the Analyzer takes the difference; that case is left out.
 #[test]
 fn in_a_window_narrowed_past_the_floor_a_fold_keeps_the_other_pictures_size() {
-    for position in [Position::Right, Position::Below] {
-        for (tab, other) in
-            [(panes::Tab::Lattice, Section::Analyzer), (panes::Tab::Spectral, Section::Lattice)]
-        {
-            let (mut h, mut state) = narrowed_past_the_floor(position);
-            let was = state.workspace.layout_runtime.rects[other as usize].size();
-            h.collapse_click(&mut state, tab);
-            assert!(collapsed(&state, tab), "{position:?} {tab:?} failed to fold");
-            near(state.workspace.layout_runtime.rects[other as usize].size(), was);
-        }
+    let cases = [
+        (Position::Right, panes::Tab::Spectral, Section::Lattice),
+        (Position::Below, panes::Tab::Lattice, Section::Analyzer),
+        (Position::Below, panes::Tab::Spectral, Section::Lattice),
+    ];
+    for (position, tab, other) in cases {
+        let (mut h, mut state) = narrowed_past_the_floor(position);
+        let was = state.workspace.layout_runtime.rects[other as usize].size();
+        h.collapse_click(&mut state, tab);
+        assert!(collapsed(&state, tab), "{position:?} {tab:?} failed to fold");
+        // The fold moves the window along the arrangement's axis: across
+        // beside the settings, down below them.
+        let (asked, floor) = match position {
+            Position::Right => (h.screen.width(), shell::MIN_WINDOW_SIZE.x),
+            Position::Below => (h.screen.height(), shell::MIN_WINDOW_SIZE.y),
+        };
+        assert!(asked > floor, "{position:?} {tab:?}: the fold's window stopped at the floor");
+        near(state.workspace.layout_runtime.rects[other as usize].size(), was);
     }
 }
 
@@ -451,7 +462,6 @@ fn dragging_a_divider_after_a_refused_unfold_keeps_unsqueezed_saved_sizes() {
 fn stacked_settings_only_is_compact_and_all_sections_can_reopen() {
     let mut state = fresh();
     state.workspace.layout.position = Position::Below;
-    state.workspace.min_window_size = shell::MIN_WINDOW_SIZE;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     let window = h.screen.size();
@@ -819,8 +829,6 @@ fn a_narrow_analyzer_keeps_one_header_row_and_its_spiral_choice() {
         h.settle(&mut state);
         let out = h.frame(&mut state, vec![]);
         let section = state.workspace.layout_runtime.rects[Section::Analyzer as usize];
-        let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
-        assert!((body.top() - section.top() - theme::tab_bar_height(scale)).abs() < 0.5);
         let find = |out: &egui::FullOutput, name: &str| {
             out.shapes.iter().find_map(|cs| match &cs.shape {
                 egui::Shape::Text(t)

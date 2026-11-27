@@ -1,4 +1,4 @@
-//! Compact color, integer-band and spatial edge selectors.
+//! Compact color and spatial edge selectors.
 use super::plot::{value_bar, Plot};
 use crate::theme;
 use egui::{Color32, Ui};

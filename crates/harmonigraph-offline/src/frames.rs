@@ -23,11 +23,8 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// This is test-only; the public export interface composes both panes.
 #[cfg(test)]
 pub(crate) fn single_pane(pane: harmonigraph_ui::Pane) -> harmonigraph_ui::Layout {
-    use harmonigraph_ui::{LatticeSide, Layout, Placement};
-    Layout {
-        panes: vec![Placement { pane, rect: (0.0, 0.0, 1.0, 1.0) }],
-        ..Layout::split(LatticeSide::Left, 0.5)
-    }
+    use harmonigraph_ui::{Layout, Placement};
+    Layout { panes: vec![Placement { pane, rect: (0.0, 0.0, 1.0, 1.0) }] }
 }
 
 /// How many frames can be with the GPU at once: one drawing while the one
@@ -415,10 +412,6 @@ mod tests {
         /// Where each pane stands, in points.
         placements: Vec<(harmonigraph_ui::Pane, egui::Rect)>,
         screen: egui::Rect,
-        /// The LAYOUT's ground, which is the render pass's clear colour — not
-        /// the same thing as the ground a probe sets on its own state, and the
-        /// probes that want them to agree pass this to `set_background`.
-        background: (u8, u8, u8),
         size: [u32; 2],
         pixels_per_point: f32,
     }
@@ -440,7 +433,6 @@ mod tests {
                 context,
                 placements: layout.resolve(points),
                 screen: egui::Rect::from_min_size(egui::Pos2::ZERO, points),
-                background: layout.background,
                 size,
                 pixels_per_point,
             })
@@ -462,7 +454,9 @@ mod tests {
                 &primitives,
                 output.textures_delta,
                 self.pixels_per_point,
-                egui::Color32::from_rgb(self.background.0, self.background.1, self.background.2),
+                // The render pass's clear colour, the picture's ground — not
+                // necessarily the ground a probe sets on its own state.
+                harmonigraph_ui::theme::picture(),
             )
         }
 

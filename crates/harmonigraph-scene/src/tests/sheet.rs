@@ -56,7 +56,7 @@ fn the_marker_field_is_the_home_sheet_and_only_it() {
 }
 
 #[test]
-fn the_mark_depth_reaches_the_scene_and_is_clamped() {
+fn the_mark_depth_reaches_the_scene_and_loads_clamped() {
     // One thickness drives BOTH rings, so it lives on the scene rather
     // than per node; 0 is the off state, as it is for every layer's width.
     let view = ViewConfig { mark_thickness: 0.15, ..ViewConfig::default() };
@@ -67,9 +67,8 @@ fn the_mark_depth_reaches_the_scene_and_is_clamped() {
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &off, 0.0);
     assert_eq!(scene.view.mark_thickness, 0.0, "0 passes through as the off state");
 
-    let wild = ViewConfig { mark_thickness: 9.0, ..ViewConfig::default() };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, 0.0);
-    assert!(scene.view.mark_thickness <= 0.3, "got {}", scene.view.mark_thickness);
+    let wild = loaded(&ViewConfig { mark_thickness: 9.0, ..ViewConfig::default() });
+    assert!(wild.mark_thickness <= 0.3, "got {}", wild.mark_thickness);
 }
 
 #[test]
@@ -101,7 +100,7 @@ fn the_gap_reaches_both_axes_and_is_clamped() {
     // A hand-edited value above the bar cannot erase more of a sector than the
     // shared ceiling permits.
     let wild = ViewConfig { ring_gap: 5.0, ..sound };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(&wild), 0.0);
     assert_eq!(scene.octave_gap, GAP_MAX);
 }
 
@@ -117,7 +116,7 @@ fn a_wild_radial_gap_is_clamped_and_the_stack_stops_at_the_ring_that_fits() {
         ring_inner: RING_INNER_MAX,
         ..ViewConfig::default()
     };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(&wild), 0.0);
     // What the refused slot comes out AS, which is the whole of how a layer
     // says it is not drawn: the empty pair. An inside-out pair (the slot's own
     // inner edge twice) or one clipped back to the quad edge are both things
@@ -353,61 +352,6 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
     assert!(band_gone.is_some(), "the sweep never ran the band out of room, so it proved nothing");
 }
 
-/// Damaged size dials reach the scene with the same repair as a loaded view.
-/// Cover each stack width and the shared padding through their drawn radii.
-#[test]
-fn a_hand_edited_size_reaches_the_scene_as_the_sanitized_setting() {
-    // Every layer on, at sizes far enough apart to read the whole stack off the
-    // scene: middle 0..0.1 | audio 0.1..0.2 | gap | band 0.25..0.45 | marks.
-    let sound = ViewConfig {
-        ring_inner: 0.1,
-        spectral_ring_width: 0.1,
-        band_width: 0.2,
-        ring_gap: 0.05,
-        mark_thickness: 0.1,
-        ..ViewConfig::default()
-    };
-    // The node the scene reads out: the band's two radii, the outermost ring
-    // the marks stand off, how deep the marks are, and both uses of the gap.
-    // The radial use is read as the stand-off it BOUGHT, that being the only
-    // form it reaches the scene in — the scene carries no field for it.
-    let stack = |view: &ViewConfig| {
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, 0.0);
-        [
-            scene.outer_inner,
-            scene.outer_outer,
-            scene.rings_outer,
-            scene.mark_inner - scene.rings_outer,
-            scene.view.mark_thickness,
-            scene.octave_gap,
-        ]
-    };
-    // To a tolerance, as every case below is: the radial padding is read as a
-    // difference of two radii, so it carries whatever the sum that placed them
-    // left behind — 0.75 - 0.7 is not 0.05 in binary.
-    let close =
-        |got: [f32; 6], want: [f32; 6]| got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5);
-    assert!(
-        close(stack(&sound), [0.25, 0.45, 0.45, 0.05, 0.1, 0.05]),
-        "the sound stack is {:?}, not the one every case below is a departure from",
-        stack(&sound),
-    );
-
-    for wild in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -5.0] {
-        for view in [
-            ViewConfig { ring_inner: wild, ..sound.clone() },
-            ViewConfig { spectral_ring_width: wild, ..sound.clone() },
-            ViewConfig { band_width: wild, ..sound.clone() },
-            ViewConfig { ring_gap: wild, ..sound.clone() },
-            ViewConfig { mark_thickness: wild, ..sound.clone() },
-        ] {
-            let mut normalized = view.clone();
-            normalized.sanitize();
-            assert!(close(stack(&view), stack(&normalized)), "size {wild} disagrees with sanitize");
-        }
-    }
-}
-
 /// A padding dialled past the bar's ceiling reads back as the padding the
 /// picture draws. [`GAP_MAX`] is the ceiling the gap bar is BUILT from, so
 /// a blob written when it stood higher carries a value the bar cannot reach —
@@ -478,8 +422,8 @@ fn a_stack_width_dialled_past_its_ceiling_reads_back_as_the_layer_it_draws() {
 
 #[test]
 fn the_ring_geometry_is_sanitized_into_the_scene() {
-    // A stack dialled past the quad's own edge: each width is held to the bar's
-    // own top, and the layer the quad has no room left for is dropped rather
+    // A stack dialled past the quad's own edge: the load holds each width to
+    // the bar's own top, and the layer the quad has no room left for is dropped rather
     // than handed to the shader as a radius it would draw off the node.
     let view = ViewConfig {
         ring_inner: 0.0,
@@ -487,7 +431,7 @@ fn the_ring_geometry_is_sanitized_into_the_scene() {
         band_width: 0.9,
         ..ViewConfig::default()
     };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(&view), 0.0);
     // The audio ring reaches the center and takes its whole clamped width; the
     // band's slot starts a gap past that and ends outside the quad, so the
     // layer is off.
@@ -497,7 +441,7 @@ fn the_ring_geometry_is_sanitized_into_the_scene() {
     // The audio ring off and the gap closed: the band takes the centre itself,
     // at exactly its bar's clamped width.
     let view = ViewConfig { spectral_ring_width: 0.0, band_width: 0.9, ring_gap: 0.0, ..view };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(&view), 0.0);
     assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, RING_WIDTH_MAX));
 }
 
@@ -530,7 +474,7 @@ fn sevens_size_never_enlarges_and_never_vanishes() {
             sevens_size: size,
             ..ViewConfig::default()
         };
-        scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0)
+        scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(&view), 0.0)
     };
     let huge = scene_with(4.0);
     assert_eq!(node_at(&huge, LatticePos::new(0, 0, 4)).scale, 1.0, "clamped to no growth");

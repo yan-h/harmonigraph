@@ -125,4 +125,4 @@ Yan asked for an audit of checkboxes against switches and a rule, and took the r
 ## 2026-11-27 (drift audit, #1994)
 
 - A bar with several parts has the widget's gesture line name them (for example "Drag an end or the middle to adjust, double-click to reset."), and the seven hand-written gesture sentences go. Yan, 2026-11-27, taking the recommendation. #1994 SH1, #1985
-- The scene entry no longer repairs the view: the load repairs it and the picture's caller debug-asserts it is repaired, as the stakes record asks of a case no producer writes. A producer bug would draw unrepaired in a release build. Yan, 2026-11-27, taking the recommendation. #1994 SS1, #1988
+- The scene entry no longer repairs the view: the load repairs it and the picture's caller debug-asserts it is repaired, as the stakes record asks of a case no producer writes. A producer bug would draw unrepaired in a release build. Yan, 2026-11-27, taking the recommendation. #1994 SS1, #1988 (Since PR #2005 the scene entry, `derive_scene_with_extra`, asserts it, as Yan's #1988 instruction set; #1994 SS1.)

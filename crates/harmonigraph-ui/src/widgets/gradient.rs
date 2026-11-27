@@ -674,8 +674,9 @@ impl<'a> SpectrumBar<'a> {
         // track turns the circle under it. Off the track it says neither,
         // because a press there starts nothing — see [`SpectrumGrab::Outside`].
         // Read off the same grab the handle is lit by.
-        // Every SpectrumBar has a home, so every one resets.
-        let response = with_gestures(response, self.hint, true, false);
+        // Every SpectrumBar has a home, so every one resets. The flip button
+        // says what it does on its own hover.
+        let response = with_gestures(response, self.hint, Some(SPECTRUM_DRAG), true, false);
         match in_hand {
             Some(SpectrumGrab::Span) => {
                 response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
@@ -685,6 +686,9 @@ impl<'a> SpectrumBar<'a> {
         }
     }
 }
+
+/// A [`SpectrumBar`]'s drag clause: what its two parts move.
+const SPECTRUM_DRAG: &str = "Drag the handle to set the span, or the track to rotate it";
 
 /// The reverse mark on a [`SpectrumBar`]'s flip button: two arrows, one over
 /// the other, pointing opposite ways.
@@ -1252,7 +1256,8 @@ impl<'a> SpreadBar<'a> {
         // The cursor says which gesture a press would start before committing
         // to it: a handle opens the ramp, the middle picks the whole thing up.
         // Read off the same grab the thumbs are lit by.
-        let response = with_gestures(response, self.hint, true, false);
+        let response =
+            with_gestures(response, self.hint, Some(super::range::ENDS_AND_MIDDLE), true, false);
         match in_hand {
             Some(SpreadGrab::Middle { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),

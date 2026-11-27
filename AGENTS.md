@@ -243,7 +243,7 @@ say what breaks in the PR body and make the change.
 and never, on its own, a review finding.
 
 What it does not license is a SILENT break.
-The value on screen must still be the value the file holds, so a change of range or units carries whatever clamp or repair keeps the two agreeing (`ViewConfig::sanitize`, also applied at the scene entry).
+The value on screen must still be the value the file holds, so a change of range or units carries whatever clamp or repair keeps the two agreeing (`ViewConfig::sanitize`, which every load runs and the scene entry asserts in a debug build).
 
 The tree carries **no compat shims at all**, and that is the invariant to hold:
 no `legacy_*` fields, migration passes or serde aliases for deleted variants.

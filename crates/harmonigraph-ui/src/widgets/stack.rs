@@ -664,7 +664,7 @@ impl<'a> StackBar<'a> {
         );
 
         // A double-click puts every layer back on a fresh view's.
-        with_gestures(response, self.hint, true, false)
+        with_gestures(response, self.hint, Some("Drag a handle to adjust"), true, false)
             .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
 }
