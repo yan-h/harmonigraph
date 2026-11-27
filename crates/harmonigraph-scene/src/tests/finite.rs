@@ -7,8 +7,9 @@
 //! through — and the site that acquires one next is covered by an assertion
 //! over the scene rather than by a test somebody remembers to add beside it.
 //!
-//! Production loads normalize their view. This intentionally bypasses loading
-//! to hold scene entry to the same repair when handed damaged values.
+//! Production loads normalize their view, and the scene entry debug-asserts
+//! that it did. This holds that repair to drawing real numbers from whatever
+//! damaged values it is handed.
 
 use super::harness::*;
 use crate::*;
@@ -135,36 +136,12 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         scene.nodes.iter().any(|n| n.on_home),
         "a poisoned view left no home position, where the marker field and the ring stack stand",
     );
-    let off_sheet = scene
-        .nodes
-        .iter()
-        .find(|n| !n.on_home)
-        .expect("the fixture has sevens layers, so the sevens scale below has something to size")
-        .scale;
-    let mut normalized = poisoned_view();
-    normalized.sanitize();
-    // The requested window is independent of the view's repaired dials.
-    let mut expected = derive_scene(
-        &sounding(),
-        &Tuning::default(),
-        &normalized,
-        &poisoned_view().reach(),
-        Camera::default(),
-        None,
+    assert!(
+        scene.nodes.iter().any(|n| !n.on_home),
+        "the fixture has sevens layers, so the sevens scale has something to size"
     );
-    NodeMotion::default().step(
-        &mut expected,
-        &sounding(),
-        &Tuning::default(),
-        &RingFade::default(),
-        NOW,
-    );
-    // The claim, by name, before the comparison below: a NaN would also fail
-    // that, unnamed, and an infinity left on both sides would pass it.
     let names = broken(&scene);
     assert!(names.is_empty(), "a NaN view reached the scene at: {}", names.join(", "));
-    assert_eq!(scene, expected);
-    assert_eq!(off_sheet, normalized.sevens_size);
 
     // A nonzero arm makes the marker walk reach its geometry and ink too.
     let drawable = ViewConfig { plus_arm: 0.5, ..poisoned_view() };
@@ -176,7 +153,7 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
 
 /// An angle a hair below zero is stored as 0, not as 360: a second sanitize
 /// must leave the view alone, or the live view and its sanitized copy disagree
-/// (`panes/lattice.rs` asserts they agree in debug builds).
+/// (`derive_scene_with_extra` asserts they agree in debug builds).
 #[test]
 fn angles_just_below_zero_sanitize_once() {
     let below = -1e-6_f32;

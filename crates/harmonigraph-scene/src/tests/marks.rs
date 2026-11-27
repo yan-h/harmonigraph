@@ -14,7 +14,8 @@ fn motion_scene(
     view: &ViewConfig,
     now: f64,
 ) -> Scene {
-    let mut scene = derive_scene(tracker, tuning, view, &view.reach(), Camera::default(), None);
+    let mut scene =
+        derive_scene(tracker, tuning, &repaired(view), &view.reach(), Camera::default(), None);
     motion.step(&mut scene, tracker, tuning, &RingFade::default(), now);
     scene
 }

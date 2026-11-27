@@ -14,8 +14,13 @@ pub(super) fn animated_snapshot(
     hovered: Option<harmonigraph_core::LatticePos>,
     now: f64,
 ) -> Scene {
+    // Repaired as a load would hand it on, which the scene entry asserts: a
+    // fixture's view may hold a reach under the fresh one, for a small
+    // `window`, which stays the caller's own.
+    let mut view = view.clone();
+    view.sanitize();
     let mut scene =
-        harmonigraph_scene::derive_scene(tracker, tuning, view, window, camera, hovered);
+        harmonigraph_scene::derive_scene(tracker, tuning, &view, window, camera, hovered);
     harmonigraph_scene::NodeMotion::default().step(
         &mut scene,
         tracker,

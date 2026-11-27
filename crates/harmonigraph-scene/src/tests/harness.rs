@@ -10,9 +10,20 @@ pub(super) fn scene_of(
     view: &ViewConfig,
     now: f64,
 ) -> Scene {
-    let mut scene = derive_scene(tracker, tuning, view, &view.reach(), Camera::default(), None);
+    let mut scene =
+        derive_scene(tracker, tuning, &repaired(view), &view.reach(), Camera::default(), None);
     NodeMotion::default().step(&mut scene, tracker, tuning, &RingFade::default(), now);
     scene
+}
+
+/// `view` as a load hands it on, repaired, which is what the scene entry
+/// asserts it is handed. A fixture's view may hold what no load does — a
+/// reach under the fresh one, for a small window — and the window the tests
+/// derive stays `view`'s own.
+pub(super) fn repaired(view: &ViewConfig) -> ViewConfig {
+    let mut view = view.clone();
+    view.sanitize();
+    view
 }
 
 /// [`ViewConfig::default`] with the note envelope pinned flat: a duration of 0,

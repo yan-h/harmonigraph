@@ -565,7 +565,7 @@ fn a_hovered_position_draws_no_marker() {
     let mut scene = crate::derive_scene(
         &NoteTracker::new(),
         &Tuning::default(),
-        &view,
+        &repaired(&view),
         &view.reach(),
         crate::Camera::default(),
         Some(at),
@@ -783,8 +783,14 @@ fn a_soft_notes_name_and_cross_hold_still_at_key_up() {
             tracker.handle_event(NoteEvent::off(now, SourceId::DIRECT, 0, 60));
         }
         tracker.prune(now, &env);
-        let mut scene =
-            derive_scene(&tracker, &tuning, &view, &view.reach(), Camera::default(), None);
+        let mut scene = derive_scene(
+            &tracker,
+            &tuning,
+            &repaired(&view),
+            &view.reach(),
+            Camera::default(),
+            None,
+        );
         motion.step(&mut scene, &tracker, &tuning, &RingFade::default(), now);
         let node = *origin_node(&scene);
         let name = node.name_level(&view);

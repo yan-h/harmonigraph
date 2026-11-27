@@ -1144,8 +1144,8 @@ impl ViewConfig {
     /// `sanitize` on every door a look arrives by — the editor's load and
     /// `AppearanceDocument::parse` for a take's or a file's look — and a bar
     /// cannot set either past its range.
-    /// A view built in code skips those doors, and `derive_scene` sanitizes
-    /// its own copy.
+    /// A view built in code skips those doors, so its builder sanitizes it:
+    /// `derive_scene` asserts so in a debug build.
     ///
     /// The Note animation section's Note fade curve bar builds one of its own, and it is the single
     /// exception rather than a second assembly point: it is drawing a PICTURE
@@ -1472,8 +1472,8 @@ impl ViewConfig {
             repair(self.glow_release, fresh.glow_release, 0.0..=GLOW_BALLISTICS_MAX);
 
         // These post-process controls are stored beside the view. Renderer
-        // clamps remain wider defensive boundaries for a scene built without
-        // `derive_scene`, which runs this sanitizer on every view it carries.
+        // clamps remain wider defensive boundaries for a value built in code;
+        // every view `derive_scene` carries has been through this sanitizer.
         self.render_scale =
             repair(self.render_scale, fresh.render_scale, LATTICE_RENDER_SCALE_RANGE);
         self.note_bloom = repair(self.note_bloom, fresh.note_bloom, NOTE_BLOOM_RANGE);
