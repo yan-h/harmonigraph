@@ -1,6 +1,7 @@
 //! A minimal WAV reader: enough to get the audio a take recorded into the
-//! spectrum analyzer, and no more. It reads the take's own WAV, 32-bit float
-//! (`harmonigraph_take::WavWriter`), and refuses any other encoding.
+//! spectrum analyzer, and no more. It reads the take's own WAV in the layout
+//! `harmonigraph_take::WavWriter` writes and reads back, and refuses any
+//! other.
 //!
 //! The spectrum can't come from the plugin. Its live audio ring drops
 //! samples under backpressure by design (the right failure mode for a
@@ -10,7 +11,7 @@
 //! the video's audio comes from, so the curve and the sound can't drift
 //! apart.
 //!
-//! Hand-rolled rather than pulled from a crate: it is one chunk walk and
+//! Hand-rolled rather than pulled from a crate: it is one fixed header and
 //! one sample decoder, against a workspace that documents every dependency
 //! it takes on.
 
@@ -18,12 +19,16 @@ use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::ops::Range;
 
+use harmonigraph_take::WavWriter;
+
 // Bound storage by samples/bytes, not by a requested time range or FFT hop.
 // One unusually wide channel frame may exceed this target, but duration cannot.
 const BUFFER_BYTES: usize = 64 * 1024;
 const DECODE_SAMPLES: usize = 16 * 1024;
 /// A sample's bytes: the take's WAV is 32-bit float.
 const WIDTH: usize = 4;
+/// Where the samples start, right after the writer's header.
+const DATA_START: u64 = WavWriter::HEADER_BYTES as u64;
 
 /// Seekable uncompressed WAV input, with channels intact. Each consumer scans
 /// absolute source-frame ranges through the same reusable decoding buffers.
@@ -31,11 +36,10 @@ const WIDTH: usize = 4;
 pub struct Audio {
     pub sample_rate: f32,
     pub channels: usize,
-    /// The header was never finished, as when the plugin or the host quit
-    /// mid-take: its data runs to the end of the file, and the export says so.
+    /// The writer never finished the header, as when the plugin or the host
+    /// quit mid-take or the writer failed to: the export says so.
     pub unfinished: bool,
     reader: BufReader<File>,
-    data_start: u64,
     frames: usize,
     position: usize,
     encoded: Vec<u8>,
@@ -79,7 +83,7 @@ impl Audio {
         }
         if self.position != start {
             self.reader
-                .seek(SeekFrom::Start(self.data_start + (start * self.channels * WIDTH) as u64))
+                .seek(SeekFrom::Start(DATA_START + (start * self.channels * WIDTH) as u64))
                 .map_err(|e| format!("WAV seek at frame {start}: {e}"))?;
             self.position = start;
         }
@@ -151,79 +155,24 @@ fn float32_wav(rate: u32, samples: &[f32], channels: u16) -> Vec<u8> {
     bytes
 }
 
+/// The take's WAV at `path`: every whole frame after its header, to the end
+/// of the file, so a take whose sizes were never patched reads whole too.
 pub fn read(path: impl AsRef<std::path::Path>) -> Result<Audio, String> {
     let path = path.as_ref();
     let open = || -> Result<Audio, String> {
         let file = File::open(path).map_err(|e| e.to_string())?;
         let len = file.metadata().map_err(|e| e.to_string())?.len();
         let mut reader = BufReader::with_capacity(BUFFER_BYTES, file);
-        let mut header = [0u8; 12];
-        reader.read_exact(&mut header).map_err(|_| "not a RIFF/WAVE file")?;
-        if &header[..4] != b"RIFF" || &header[8..] != b"WAVE" {
-            return Err("not a RIFF/WAVE file".into());
-        }
-        let mut format = None;
-        let mut data = None;
-        let mut unfinished = false;
-        let mut at = 12;
-        let mut cursor = 12;
-        while at + 8 <= len {
-            reader.seek_relative(at as i64 - cursor as i64).map_err(|e| e.to_string())?;
-            let mut chunk = [0; 8];
-            reader.read_exact(&mut chunk).map_err(|e| e.to_string())?;
-            let size = u64::from(u32_at(&chunk, 4));
-            let body_at = at + 8;
-            cursor = body_at;
-            let available = size.min(len - body_at);
-            match &chunk[..4] {
-                b"fmt " if available >= 16 => {
-                    let mut body = [0u8; 16];
-                    reader.read_exact(&mut body).map_err(|e| e.to_string())?;
-                    cursor += body.len() as u64;
-                    format = Some((
-                        u16_at(&body, 0),
-                        u16_at(&body, 2),
-                        u32_at(&body, 4),
-                        u16_at(&body, 14),
-                    ));
-                }
-                // A take's WAV states its data size only when it closes
-                // (`WavWriter::finish`), so one whose process died first
-                // still says 0 and holds its audio to the end of the file,
-                // as ffmpeg reads it too. Nothing follows it to walk to.
-                b"data" if size == 0 => {
-                    unfinished = len > body_at;
-                    data = Some((body_at, len - body_at));
-                    break;
-                }
-                b"data" => data = Some((body_at, available)),
-                _ => {}
-            }
-            at = body_at + size + (size & 1);
-        }
-        let (tag, channels, rate, bits) = format.ok_or("no fmt chunk")?;
-        let (data_start, data_bytes) = data.ok_or("no data chunk")?;
-        if channels == 0 {
-            return Err("fmt chunk claims zero channels".into());
-        }
-        if (tag, bits) != (3, 32) {
-            return Err(format!(
-                "unsupported WAV encoding (format tag {tag}, {bits}-bit); \
-                 a take records 32-bit float"
-            ));
-        }
-        let channels = usize::from(channels);
-        // Declared data can exceed the physical file after an interrupted write.
-        // Read its complete-frame prefix, never a partial channel.
-        let frames = (data_bytes / (channels * WIDTH) as u64) as usize;
-        reader.seek_relative(data_start as i64 - cursor as i64).map_err(|e| e.to_string())?;
+        let mut bytes = [0u8; WavWriter::HEADER_BYTES as usize];
+        reader.read_exact(&mut bytes).map_err(|_| "not a take's WAV: shorter than its header")?;
+        let header = WavWriter::read_header(&bytes, len)?;
+        let channels = usize::from(header.channels);
         Ok(Audio {
-            sample_rate: rate as f32,
+            sample_rate: header.rate as f32,
             channels,
-            unfinished,
+            unfinished: !header.finished,
             reader,
-            data_start,
-            frames,
+            frames: header.frames as usize,
             position: 0,
             encoded: Vec::with_capacity(DECODE_SAMPLES.max(channels) * WIDTH),
             decoded: Vec::with_capacity(DECODE_SAMPLES.max(channels)),
@@ -232,13 +181,6 @@ pub fn read(path: impl AsRef<std::path::Path>) -> Result<Audio, String> {
     open().map_err(|e| format!("{}: {e}", path.display()))
 }
 
-fn u16_at(bytes: &[u8], at: usize) -> u16 {
-    u16::from_le_bytes([bytes[at], bytes[at + 1]])
-}
-
-fn u32_at(bytes: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,7 +264,7 @@ mod tests {
         let Err(err) = Audio::from_bytes(&bytes) else {
             panic!("a PCM WAV should be refused, not misread");
         };
-        assert!(err.contains("unsupported"), "{err}");
+        assert!(err.contains("not a take's WAV"), "{err}");
     }
 
     #[test]
@@ -362,40 +304,20 @@ mod tests {
         }
     }
 
-    /// An odd-sized chunk before `fmt ` is skipped with its pad byte, and a
-    /// data size past the end of the file reads the whole frames there are.
-    #[test]
-    fn a_padded_chunk_and_an_overlong_data_size_read_whole_frames() {
-        let raw: Vec<u8> =
-            [-1.0f32, 0.0, 0.5, 1.0].into_iter().flat_map(f32::to_le_bytes).collect();
-        let mut bytes = b"RIFF\0\0\0\0WAVEJUNK\x01\0\0\0x\0fmt ".to_vec();
-        bytes.extend(16u32.to_le_bytes());
-        bytes.extend(3u16.to_le_bytes());
-        bytes.extend(2u16.to_le_bytes());
-        bytes.extend(44100u32.to_le_bytes());
-        bytes.extend([0; 6]);
-        bytes.extend(32u16.to_le_bytes());
-        bytes.extend(b"data");
-        bytes.extend((raw.len() as u32 + 99).to_le_bytes());
-        bytes.extend(&raw);
-        // A trailing sample cannot become half a stereo frame.
-        bytes.extend(&raw[..4]);
-        let mut audio = Audio::from_bytes(&bytes).unwrap();
-        assert_eq!(audio.frames(), 2);
-        assert_eq!(audio.all_samples(), [-1.0, 0.0, 0.5, 1.0]);
-    }
-
     /// A take's WAV whose process died before `finish`: its header still says
-    /// it holds no data. It reads to the end of the file in whole frames and
-    /// says it was unfinished, while a finished empty one stays quiet.
+    /// it holds no data. It reads to the end of the file in whole frames at
+    /// the rate its first write stated, and says it was unfinished; so does
+    /// one that died before its first sample, while a finished empty one
+    /// stays quiet.
     #[test]
     fn a_wav_whose_writer_never_finished_reads_to_the_end_of_the_file() {
         let dir =
             std::env::temp_dir().join(format!("harmonigraph-wav-crash-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let crashed = dir.join("crashed.wav");
-        let mut writer = harmonigraph_take::WavWriter::create(&crashed, 2).unwrap();
-        writer.write(48_000.0, &[0.5, -0.5, 0.25, -0.25]).unwrap();
+        let mut writer = WavWriter::create(&crashed, 2).unwrap();
+        // Not the rate the header states before its first write.
+        writer.write(44_100.0, &[0.5, -0.5, 0.25, -0.25]).unwrap();
         // As a crash leaves it: neither `finish` nor the drop patches the sizes.
         std::mem::forget(writer);
         // And a write cut off mid-frame.
@@ -403,11 +325,17 @@ mod tests {
         std::io::Write::write_all(&mut file, &0.125f32.to_le_bytes()).unwrap();
         let mut audio = read(&crashed).unwrap();
         assert!(audio.unfinished);
-        assert_eq!(audio.sample_rate, 48_000.0);
+        assert_eq!(audio.sample_rate, 44_100.0);
         assert_eq!(audio.all_samples(), [0.5, -0.5, 0.25, -0.25], "whole frames only");
 
+        let silent = dir.join("silent.wav");
+        std::mem::forget(WavWriter::create(&silent, 2).unwrap());
+        let audio = read(&silent).unwrap();
+        assert!(audio.unfinished, "a take that crashed before its first sample");
+        assert_eq!(audio.frames(), 0);
+
         let empty = dir.join("empty.wav");
-        harmonigraph_take::WavWriter::create(&empty, 2).unwrap().finish().unwrap();
+        WavWriter::create(&empty, 2).unwrap().finish().unwrap();
         let audio = read(&empty).unwrap();
         assert!(!audio.unfinished, "a finished take with no audio is whole");
         assert_eq!(audio.frames(), 0);
