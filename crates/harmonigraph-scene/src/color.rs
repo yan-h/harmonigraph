@@ -972,11 +972,12 @@ pub fn gradient_color(t: f32, gradient: Gradient) -> Vec4 {
 /// Sample an already prepared table with the spacing it was built for: the
 /// one walk [`gradient_color`] and [`pitch_glow_color`] share.
 fn sample_lut(t: f32, lut: &[Vec4; PITCH_LUT_N], spacing: LutSpacing) -> Vec4 {
-    // A NaN takes the bottom of the range, which is [`ramp_t`]'s own answer for
-    // a non-finite RANGE and wanted here for the same reason: `clamp` hands NaN
-    // straight back, `as usize` then saturates the index to 0, and the lerp
-    // weight stays NaN — so the color would ride out as a NaN nobody sees rather
-    // than as the ramp's dark end.
+    // A NaN takes the bottom of the range: `clamp` hands NaN straight back,
+    // `as usize` then saturates the index to 0, and the lerp weight stays NaN —
+    // so the color would ride out as a NaN nobody sees rather than as the
+    // ramp's dark end. It is also where a release build lands a pitch over the
+    // non-finite or collapsed range [`ramp_t`] asserts against, whose `t` is
+    // NaN.
     //
     // NaN alone, and not every non-finite value: the INFINITIES clamp correctly
     // and mean something, `+inf` being as far past the top of the range as a
