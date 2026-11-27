@@ -21,6 +21,11 @@ use crate::theme;
 /// over its own width, which the span does not fix.
 const FADE_SEGMENTS: usize = 64;
 
+/// The parts a two-ended bar's drag takes hold of, as its hover names them
+/// (see [`gestures`](super::bar::gestures)): a [`RangeBar`]'s and a
+/// [`SpreadBar`](super::gradient::SpreadBar)'s alike.
+pub(super) const ENDS_AND_MIDDLE: &str = "an end or the middle";
+
 /// Which part of a [`RangeBar`] a drag took hold of. Decided once, at
 /// drag-start, and remembered for the gesture — otherwise dragging one end
 /// past the other would hand the drag to whichever handle is nearest now.
@@ -789,7 +794,13 @@ impl<'a> RangeBar<'a> {
         // the middle picks the whole range up and slides it. Read off the same
         // grab the thumbs are lit by, so the two never disagree.
         let hint = self.hint.unwrap_or(self.label);
-        let response = with_gestures(response, Some(hint), self.default.is_some(), false);
+        let response = with_gestures(
+            response,
+            Some(hint),
+            Some(ENDS_AND_MIDDLE),
+            self.default.is_some(),
+            false,
+        );
         match in_hand {
             Some(Grab::Span { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),

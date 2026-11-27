@@ -384,7 +384,7 @@ impl<'a> LayerStrip<'a> {
         let hint = response
             .hovered()
             .then(|| self.hint.map_or_else(|| DRAGS.to_owned(), |hint| format!("{hint} {DRAGS}")));
-        with_gestures(response, hint.as_deref(), true, false)
+        with_gestures(response, hint.as_deref(), None, true, false)
             .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
 }
@@ -734,7 +734,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let gestures = super::super::bar::gestures(&ctx, true, false);
+        let gestures = super::super::bar::gestures(&ctx, None, true, false);
         assert_eq!(shown, [format!("Which sheets. {DRAGS}\n{gestures}")]);
     }
 

@@ -113,7 +113,7 @@ impl<'a> BendPlot<'a> {
 
         // Off screen nothing below is needed; see the same line in `ValueBar`.
         if !ui.is_rect_visible(rect) {
-            return with_gestures(response, self.hint, true, false);
+            return with_gestures(response, self.hint, None, true, false);
         }
         // ---- Paint ---- read back after the write, so the handle is under the
         // pointer on the frame it moved.
@@ -147,7 +147,8 @@ impl<'a> BendPlot<'a> {
             Stroke::new(theme::LINE_WIDTH * scale, theme::panel()),
         );
 
-        with_gestures(response.on_hover_cursor(egui::CursorIcon::Crosshair), self.hint, true, false)
+        let response = response.on_hover_cursor(egui::CursorIcon::Crosshair);
+        with_gestures(response, self.hint, None, true, false)
     }
 }
 

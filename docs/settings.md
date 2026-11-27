@@ -458,7 +458,7 @@ Entry uses the displayed units:
 `25%` or `25` means 25 percent on a percentage bar, and `250 ms` or `250` means 250 milliseconds on a timing bar.
 Multi-handle bars have no typed entry and also reset to their defaults on double-click,
 except the star layers' bar (Star size and the other per-layer properties):
-its ends are read off the layers and have no default of their own, so a double-click leaves it alone;
-hover text describes what each handle moves.
+its ends are read off the layers and have no default of their own, so a double-click leaves it alone.
 Every bar's hover ends with a line naming the gestures that bar answers to,
+and on a bar with several parts the parts a drag takes hold of, such as an end or the middle,
 so a bar with no reset or no typed entry does not offer one.

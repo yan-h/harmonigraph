@@ -119,9 +119,21 @@ pub(super) fn type_gesture(ctx: &egui::Context) -> &'static str {
 /// back to, and a typed number where the bar is `typed` (a [`ValueBar`];
 /// a bar holding two numbers or more has no single one to type).
 ///
+/// A bar with several parts names them as `parts`, what its drag takes hold
+/// of ("an end or the middle"), so its caller has no gesture sentence of its
+/// own to write; a bar of one part passes `None`.
+///
 /// [`ValueBar`]: super::value::ValueBar
-pub(super) fn gestures(ctx: &egui::Context, reset: bool, typed: bool) -> String {
-    let mut text = "Drag to adjust".to_owned();
+pub(super) fn gestures(
+    ctx: &egui::Context,
+    parts: Option<&str>,
+    reset: bool,
+    typed: bool,
+) -> String {
+    let mut text = match parts {
+        Some(parts) => format!("Drag {parts} to adjust"),
+        None => "Drag to adjust".to_owned(),
+    };
     if reset {
         text.push_str(", double-click to reset");
     }
@@ -141,13 +153,14 @@ pub(super) fn gestures(ctx: &egui::Context, reset: bool, typed: bool) -> String 
 pub(super) fn with_gestures(
     response: Response,
     hint: Option<&str>,
+    parts: Option<&str>,
     reset: bool,
     typed: bool,
 ) -> Response {
     response.on_hover_ui(|ui| {
         // As `Response::on_hover_text` does, so a long hint wraps the same.
         ui.set_max_width(ui.spacing().tooltip_width);
-        let gestures = gestures(ui.ctx(), reset, typed);
+        let gestures = gestures(ui.ctx(), parts, reset, typed);
         ui.add(egui::Label::new(match hint {
             Some(hint) if !hint.is_empty() => format!("{hint}\n{gestures}"),
             _ => gestures,
@@ -503,6 +516,63 @@ mod tests {
             let lit: Vec<bool> = grips(&shapes).iter().map(|&(_, lit)| lit).collect();
             assert_eq!(lit, [false, true], "handed {handed:?}, the unlit thumb was painted on top");
         }
+    }
+
+    /// A bar of several parts names them in its one gesture line, so the
+    /// hint its caller writes says what the setting is and nothing of how to
+    /// drag it (#1994 SH1).
+    #[test]
+    fn a_bar_of_several_parts_names_them_in_its_gesture_line() {
+        use super::super::{RangeBar, SpectrumBar, SpreadBar, StackBar};
+        use crate::tests::probe::{events_into, themed};
+        use harmonigraph_scene::{Gradient, ViewConfig};
+        fn hover(mut add: impl FnMut(&mut Ui) -> Response) -> Vec<String> {
+            let ctx = themed();
+            ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+            let size = egui::vec2(300.0, 200.0);
+            let rect = Rect::from_min_size(egui::Pos2::ZERO, size);
+            let bar = std::cell::Cell::new(Rect::NOTHING);
+            let mut draw =
+                |events| events_into(&ctx, size, rect, events, |ui| bar.set(add(ui).rect));
+            draw(vec![]);
+            draw(vec![egui::Event::PointerMoved(bar.get().center())]);
+            let last = (0..3).map(|_| draw(vec![])).last().unwrap();
+            last.shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().contains("Drag") => {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+        let (mut low, mut high) = (40.0, 80.0);
+        let range = hover(|ui| {
+            RangeBar::new(&mut low, &mut high, 0.0..=127.0, "Range")
+                .default_value((30.0, 90.0))
+                .hint("A span.")
+                .show(ui)
+        });
+        assert_eq!(range, ["A span.\nDrag an end or the middle to adjust, double-click to reset."]);
+        let mut gradient = Gradient::default();
+        let spread = hover(|ui| {
+            SpreadBar::brightness(&mut gradient, Gradient::default()).hint("A ramp.").show(ui)
+        });
+        assert_eq!(
+            spread,
+            ["A ramp.\nDrag an end or the middle to adjust, double-click to reset."]
+        );
+        let spectrum = hover(|ui| {
+            SpectrumBar::new(&mut gradient, Gradient::default()).hint("An arc.").show(ui)
+        });
+        assert_eq!(
+            spectrum,
+            ["An arc.\nDrag the handle or the track to adjust, double-click to reset."]
+        );
+        let mut view = ViewConfig::default();
+        let stack = hover(|ui| StackBar::new(&mut view).hint("Layers.").show(ui));
+        assert_eq!(stack, ["Layers.\nDrag a handle to adjust, double-click to reset."]);
     }
 
     /// A bar's row is the room across its `Ui` and one row high at every

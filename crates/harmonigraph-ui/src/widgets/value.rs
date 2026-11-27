@@ -535,7 +535,7 @@ impl<'a> ValueBar<'a> {
         painter.galley(value_pos, value, text_color);
 
         let hint = self.hint.unwrap_or(self.label);
-        with_gestures(response, Some(hint), self.default.is_some(), true)
+        with_gestures(response, Some(hint), None, self.default.is_some(), true)
             .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
 }

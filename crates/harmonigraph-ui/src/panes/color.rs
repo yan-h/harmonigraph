@@ -33,8 +33,7 @@ pub(super) fn color_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument)
         .display(super::pitch_readout)
         .hint(
             "Pitches assigned the first and last gradient colors. \
-             Pitches outside this range keep the nearest end color. \
-             Drag an end to resize, or the middle to shift both.",
+             Pitches outside this range keep the nearest end color.",
         )
         .show(ui);
     });
@@ -51,8 +50,7 @@ const LEVEL_COLORS_HINT: &str =
 
 /// The tooltip both groups' curve plots carry.
 const BEND_HINT: &str = "Where along the range the selected color components spend their change. \
-                 Across is the range, up is how much of the change has happened. \
-                 Drag right to hold the change back for the top of the range, for example the loudest few dB.";
+                 Across is the range, up is how much of the change has happened.";
 
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // The gradient a fresh view opens on, which is where a double-click on any
@@ -75,17 +73,9 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // stands, the picture would spend every frame of every drag below it one
     // frame behind the bar being dragged.
     let preview = GradientPreview::reserve(ui);
-    SpectrumBar::new(&mut view.pitch_gradient, home)
-        .hint(
-            "Hue range for MIDI notes. \
-             Drag the handle to change its span, the track to rotate it, or the end button to reverse it.",
-        )
-        .show(ui);
+    SpectrumBar::new(&mut view.pitch_gradient, home).hint("Hue range for MIDI notes.").show(ui);
     SpreadBar::brightness(&mut view.pitch_gradient, home)
-        .hint(
-            "Brightness at the low and high pitches: 0% is black, 100% is white. \
-                 Drag either end; crossing them reverses the brightness ramp.",
-        )
+        .hint("Brightness at the low and high pitches: 0% is black, 100% is white.")
         .show(ui);
     SpreadBar::chroma(&mut view.pitch_gradient, home)
         .hint(
@@ -143,10 +133,7 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     // The row first, the colors last — see [`GradientPreview`].
     let preview = GradientPreview::reserve(ui);
     SpectrumBar::new(&mut cfg.spectrogram_gradient, home)
-        .hint(
-            "Hue range for audio levels. \
-             Drag the handle to change its span, the track to rotate it, or the end button to reverse it.",
-        )
+        .hint("Hue range for audio levels.")
         .show(ui);
     SpreadBar::brightness(&mut cfg.spectrogram_gradient, home)
         .hint(
