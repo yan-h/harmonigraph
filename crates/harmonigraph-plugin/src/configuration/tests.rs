@@ -512,9 +512,9 @@ fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
 #[test]
 fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
     let _scope = crate::test_scope::enter();
-    for commands in [false, true] {
+    for pending in [false, true] {
         let mut device = hub().with_retune();
-        if commands {
+        if pending {
             let settings = device.settings();
             device.load(restored(&device, 690.0));
             device.activate();

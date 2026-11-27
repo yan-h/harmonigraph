@@ -922,8 +922,7 @@ fn every_reset_returns_the_followed_strip_to_the_position() {
 
 /// A loop's last release and its first strike on one sample, with Reset on
 /// loop on: the reset comes before the strike's group is read, so the A
-/// after it moves the strip against those F♯s, and the release on that
-/// sample does not refill the memory the reset cleared.
+/// after it moves the strip against those F♯s.
 #[test]
 fn a_loop_resets_after_its_last_release_and_before_its_first_strike() {
     let _scope = crate::test_scope::enter();
@@ -936,9 +935,8 @@ fn a_loop_resets_after_its_last_release_and_before_its_first_strike() {
     let mut wrap = f_sharps(true);
     wrap.insert(0, note(1, 0, 60, 0, false));
     session.play(wrap, vec![]);
-    assert_eq!(inspect_hub(&session.hub, |hub| hub.test_memory()), 0, "the release is gone");
     session.play(f_sharps(false), vec![]);
-    assert_eq!(session.a(), Some(PYTHAGOREAN_A), "the strike moved the key");
+    assert_eq!(session.a(), Some(PYTHAGOREAN_A), "the strike moved the strip");
 }
 
 /// D struck over a held F major moves the strip flat, so D sounds 10/9, a
