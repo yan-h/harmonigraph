@@ -1034,7 +1034,7 @@ impl NodeMotion {
             }
             // The node glow is the drawn colour: the most opaque slot or mark,
             // each after its Opacity, as the bloom reads it, rather than the
-            // presence that waits on the slices (`NodeInstance::glow_target`).
+            // presence that waits on the slices (`GlowLight::level`).
             // Stateless snapshots draw it as it stands; the shell's glow pass
             // steps the level, and what the light is made of, toward it.
             let light = node.glow_light();

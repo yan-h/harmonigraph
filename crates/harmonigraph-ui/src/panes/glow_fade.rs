@@ -90,11 +90,11 @@ pub struct GlowFade {
 struct Lit {
     level: f32,
     light: GlowLight,
-    /// The node's [`glow_target`](harmonigraph_scene::NodeInstance::glow_target)
-    /// as of the last step that saw it: what the pass after the walk keeps
-    /// lights by, and what [`GlowFade::clear_released`] reads between steps.
-    /// Written on every step that sees the node, and a light a step does not
-    /// see is dropped.
+    /// The level the node's light heads for as of the last step that saw it:
+    /// its reading's, or 0 where no layer that draws holds it. What the pass
+    /// after the walk keeps lights by, and what [`GlowFade::clear_released`]
+    /// reads between steps. Written on every step that sees the node, and a
+    /// light a step does not see is dropped.
     target: f32,
     /// The step this node was last seen on (see [`GlowFade::frame`]).
     seen: u64,
@@ -148,8 +148,10 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize,
 /// The attack and release coefficients for a step from `previous` to `now`:
 /// how much of the way to its target a light rising and a light falling move.
 ///
-/// A clock that ran BACKWARDS — a host looping its transport — holds every
-/// light where it is, as a frame drawn twice at one time does. A negative step
+/// A clock that ran BACKWARDS holds every light where it is, as a frame drawn
+/// twice at one time does. The editor's display clock never does (it holds
+/// rather than rewinds, `ClockMapper::now` in harmonigraph-plugin); the guard
+/// is for a caller that steps one, which costs it nothing. A negative step
 /// is not a short one: run through the exponential it gives a coefficient below
 /// zero, which moves the light away from its target.
 fn coefficients(now: f64, previous: Option<f64>, attack: f32, release: f32) -> (f32, f32) {
@@ -923,7 +925,8 @@ mod tests {
             let mut scene = scene_at(state, now);
             apply(&mut scene, state, 0, now);
             let lit = scene.nodes.iter().filter(|n| n.glow.level > 0.0);
-            lit.map(|n| (n.lattice_pos, n.glow.level, n.glow_target() > 0.0)).collect::<Vec<_>>()
+            lit.map(|n| (n.lattice_pos, n.glow.level, n.glow_light().level() > 0.0))
+                .collect::<Vec<_>>()
         };
         levels(&mut state, 0.0);
         levels(&mut state, 1.0);
