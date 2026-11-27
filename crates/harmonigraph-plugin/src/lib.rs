@@ -153,7 +153,6 @@ pub struct Harmonigraph {
     /// close go through it.
     editor_host: Option<Arc<dyn EditorHost>>,
     sample_rate: f64,
-    samples_processed: u64,
     /// Presentation time: what the audio, the tape, notes, reset markers and
     /// the take's runs are all dated by (#1885). It runs on across a reset
     /// and an activation, so historical queued records keep their place.
@@ -189,8 +188,8 @@ impl Drop for Harmonigraph {
     }
 }
 
-/// The live shell always owns its recorder. Destruction transfers that same
-/// producer, alongside its original route owner, into bounded session retirement.
+/// The live shell owns its recorder until `destroy` drops it, which fails a
+/// take still recording: the recorder's own drop decides.
 struct RecorderSlot(Option<harmonigraph_record::Recorder>);
 impl std::ops::Deref for RecorderSlot {
     type Target = harmonigraph_record::Recorder;
@@ -593,42 +592,6 @@ impl PluginParamBackend<'_> {
 // ring left out of phase, a take stamped on the wrong clock — and exactly the
 // class a build cannot catch and a listener notices late.
 
-/// What this block's take timestamps hang off, before the recorder gets a say.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum OriginSource {
-    /// Not armed: nothing is recorded this block. The recorder has still been
-    /// consulted by then — see the `armed` argument, which only `is_armed` can
-    /// supply and which cannot be skipped on a disarmed block.
-    Idle,
-    /// The host reports a position. Only `observe_transport` can say whether it
-    /// counts, so the caller still has to ask.
-    Transport(f64),
-    /// The host reports no position at all: fall back to the plugin's own clock,
-    /// so "just record what I play" still works.
-    LocalClock(f64),
-}
-
-/// Take timestamps come from the TRANSPORT, not the plugin's own sample
-/// counter, so a take lines up with a bounce of the same song without an offset
-/// to work out. Nothing is recorded while the transport is stopped.
-///
-/// `pos_seconds` is read even when disarmed; it is a plain getter, so asking
-/// for it on a block that will not use it costs nothing.
-fn origin_source(
-    armed: bool,
-    pos_seconds: Option<f64>,
-    block_start: u64,
-    sample_rate: f64,
-) -> OriginSource {
-    if !armed {
-        OriginSource::Idle
-    } else if let Some(seconds) = pos_seconds {
-        OriginSource::Transport(seconds)
-    } else {
-        OriginSource::LocalClock(block_start as f64 / sample_rate)
-    }
-}
-
 /// The host's transport at a block's start, as the tape, a take's origin and
 /// its stop bar read it: CLAP's fields behind their flags, with the position
 /// fallbacks nice-plug's `Transport` gave them, which moved here when the
@@ -812,7 +775,6 @@ impl Default for Harmonigraph {
             editor_shared,
             editor_host: None,
             sample_rate: DEFAULT_SAMPLE_RATE,
-            samples_processed: 0,
             clock: presentation::PresentationClock::default(),
             take: RecorderSlot(Some(take)),
             tape,
@@ -829,7 +791,6 @@ impl Harmonigraph {
     /// the take, the tape and the analyzer, all on the transport at the
     /// block's start.
     fn play(&mut self, transport: &Transport, audio: Audio<'_>) {
-        let block_start = self.samples_processed;
         let block_samples = audio.main.first().map_or(0, |channel| channel.len());
         // EVERY block, armed or not. `is_armed` is an edge detector, not a
         // getter: it advances the lifecycle and clears the recorder's per-take
@@ -840,29 +801,27 @@ impl Harmonigraph {
             .configuration
             .as_ref()
             .is_some_and(|owner| self.take.is_armed_at(owner.recording_intent()));
-        let take_origin =
-            match origin_source(armed, transport.pos_seconds(), block_start, self.sample_rate) {
-                OriginSource::Idle => None,
-                // observe_transport decides whether the transport is rolling (and
-                // ends the take at a loop wrap under Loop end). It is
-                // deliberately more permissive than the host's `playing` flag —
-                // see there.
-                OriginSource::Transport(seconds) => {
-                    // The stop bar is asked FIRST: a block at or past the bar
-                    // belongs to no take, so the cut lands on a block
-                    // boundary at or before the bar rather than one after it.
-                    let stopped = self.take.observe_bar(bar_position(transport));
-                    // Where this block sits in the take's AUDIO, not the
-                    // host's position: see `observe_transport`.
-                    let origin = self.take.observe_transport(
-                        seconds,
-                        transport.playing,
-                        block_samples as f64 / self.sample_rate,
-                    );
-                    origin.filter(|_| !stopped)
-                }
-                OriginSource::LocalClock(seconds) => Some(seconds),
-            };
+        // An armed take records from the host's song position, and a block
+        // with none records nothing (Bitwig always reports one): the status
+        // line reads "waiting for playback" before the take first rolls, and
+        // afterwards what the last block with a position left it at.
+        let position = transport.pos_seconds().filter(|_| armed);
+        let take_origin = position.and_then(|seconds| {
+            // The stop bar is asked FIRST: a block at or past the bar belongs
+            // to no take, so the cut lands on a block boundary at or before
+            // the bar rather than one after it.
+            let stopped = self.take.observe_bar(bar_position(transport));
+            // observe_transport decides whether the transport is rolling (and
+            // ends the take at a loop wrap under Loop end), deliberately more
+            // permissive than the host's `playing` flag — see there. It gives
+            // where this block sits in the take's AUDIO, not the host's position.
+            let origin = self.take.observe_transport(
+                seconds,
+                transport.playing,
+                block_samples as f64 / self.sample_rate,
+            );
+            origin.filter(|_| !stopped)
+        });
 
         if let Some(owner) = self.configuration.as_mut() {
             owner.record(&mut self.take, take_origin);
@@ -920,13 +879,13 @@ impl Harmonigraph {
         if let Some(at) = recorded.map(|owner| owner.take_time()) {
             self.take.params(at, ParamKey::ALL.map(|key| self.params.camera(key)));
 
-            // The take's own audio, when asked for: the selected analysis input
-            // exactly as it arrives, so the render gets a spectrum and a
+            // The take's own audio: the selected analysis input exactly as it
+            // arrives, so the render gets a spectrum and a
             // soundtrack without a separate bounce. Sized by TAKE_CHANNELS
             // rather than the host's own channel count — the WAV is stereo
             // whatever arrives, which is what `take_right_channel` duplicates
             // a mono input for.
-            if self.take.wants_audio() && channels > 0 {
+            if channels > 0 {
                 let wanted = block_samples * TAKE_CHANNELS;
                 let mut interleaved =
                     (0..block_samples).flat_map(|frame| take_stereo_frame(planes, frame));
@@ -934,7 +893,6 @@ impl Harmonigraph {
             }
         }
 
-        self.samples_processed += block_samples as u64;
         self.clock.processed(block_samples);
         self.take.publish_clock(self.clock.end());
     }
@@ -956,8 +914,7 @@ impl Plugin for Harmonigraph {
     // Main audio passes through, untouched unless the tape is auditioning
     // with the transport stopped (see `tape`). The selected input is tapped for
     // the GUI's spectrum analyzer — INTERLEAVED, channel by channel, not as a
-    // mixdown (see `play`, and `interleaved_reservation` for what that
-    // costs). MIDI goes out through the Hub, which delays it by D and states
+    // mixdown (see `play`). MIDI goes out through the Hub, which delays it by D and states
     // each note's tuning (see `tuning`).
     const PORTS: Ports =
         Ports { main_input: 2, main_output: 2, aux_inputs: &[(2, "Visualization Input")] };
@@ -1060,12 +1017,8 @@ impl Plugin for Harmonigraph {
             // it before the plugin's state was reset. Only with an owner: a
             // plugin built outside the shell has no session to cut.
             self.aggregation.as_mut().unwrap().stop();
-            // Stop may arrive after activation but before start_processing
-            // resets this owner. Close its run before forgetting routes.
-            owner.recording.close_stopped(&mut self.take);
             owner.reset(&mut self.take);
         }
-        self.samples_processed = 0;
         self.audio_producer.reset();
         // Before anything else can render: an export may follow a reset.
         self.tape.reset();
@@ -1689,7 +1642,6 @@ mod tests {
             &expected_sidechain,
             "the live analyzer received Main instead of Sidechain",
         );
-        assert_eq!(plugin.samples_processed, expected_main_left.len() as u64);
     }
 
     /// Source selection is explicit and block-wide. Silence says nothing about
@@ -1709,27 +1661,6 @@ mod tests {
             main,
             "a missing auxiliary buffer has no safe source except Main",
         );
-    }
-
-    /// The three ways a block decides where its take timestamps start. The
-    /// middle rung is the one that matters: a take stamped on the plugin's own
-    /// clock rather than the transport's lines up with no bounce of the same
-    /// song, and nothing looks wrong until the audio is dropped underneath it.
-    #[test]
-    fn a_take_origin_prefers_the_transport_over_the_local_clock() {
-        // Disarmed: the recorder is not consulted, whatever the host reports.
-        assert_eq!(origin_source(false, Some(12.0), 22_050, 44_100.0), OriginSource::Idle);
-        assert_eq!(origin_source(false, None, 22_050, 44_100.0), OriginSource::Idle);
-
-        // Armed, and the host reports a position: that position, untouched.
-        assert_eq!(
-            origin_source(true, Some(12.0), 22_050, 44_100.0),
-            OriginSource::Transport(12.0)
-        );
-
-        // Armed, and the host reports nothing at all: the plugin's own sample
-        // counter in seconds, so "just record what I play" still works.
-        assert_eq!(origin_source(true, None, 22_050, 44_100.0), OriginSource::LocalClock(0.5));
     }
 
     /// The bar the stop trigger compares against, off each of the three shapes
@@ -1798,10 +1729,10 @@ mod tests {
     }
 
     /// One event, two clocks. The ring uses continuous presentation seconds,
-    /// which is what the editor's ClockMapper reads; the take is
-    /// stamped on the transport, which is what lets it be lined up against a
-    /// bounce later. Collapsing them into one would look right on screen and
-    /// put every recorded take at the wrong song position.
+    /// which is what the editor's ClockMapper reads; a take's runs say where
+    /// that clock sits in the song, from the transport. Collapsing them into
+    /// one would look right on screen and put every recorded take at the
+    /// wrong song position.
     ///
     /// Every constant here divides to an exact binary fraction, which is what
     /// lets `assert_eq!` compare f64 at all. Picking more realistic numbers — a
@@ -1815,13 +1746,11 @@ mod tests {
         let mut shared = shared.lock();
         let shared = &mut *shared;
         plugin.clock.set_end(11.0);
-        plugin.samples_processed = 48_000;
         plugin
             .take
             .publish_note(CoreNoteEvent::on(10.0, SourceId::DIRECT, 0, 60, 0.8).into())
             .expect_both();
         plugin.reset();
-        assert_eq!(plugin.samples_processed, 0);
         plugin.sample_rate = 96_000.0;
         let next = plugin.clock.end() + 48_000.0 / plugin.sample_rate;
         plugin

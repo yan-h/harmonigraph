@@ -80,7 +80,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
         };
         state.appearance.view.center_threes = 0;
         state.appearance.view.center_fives = 0;
-        crate::camera_movement::set_outright(ui.ctx(), &ParamKey::CAMERA);
+        crate::camera_movement::set_outright(ui.ctx(), &ParamKey::ALL);
     }
     // The window's center follows the camera, so scrolling never leaves the
     // reach the note names are chosen out of behind. Here rather than inside

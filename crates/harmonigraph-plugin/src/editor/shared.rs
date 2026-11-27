@@ -192,9 +192,9 @@ impl EditorShared {
             && self.ui.picture.appearance.render.trigger
                 == harmonigraph_ui::RenderTrigger::OnTransportStop
         {
-            // Only after something was actually captured: arming ahead of
-            // the downbeat must not immediately end the take.
-            if self.take_rolling || (!self.take.has_rolled() && count == 0) {
+            // Only after the take has rolled: arming ahead of the downbeat
+            // must not immediately end the take.
+            if self.take_rolling || !self.take.has_rolled() {
                 self.take_still_since = None;
             } else {
                 let since = *self.take_still_since.get_or_insert(now);
@@ -270,11 +270,17 @@ mod tests {
         );
         shared.take_pass(|shared| shared.ui.workspace.interaction.take.recording = true);
         assert!(shared.take.is_recording());
-        // One note captured, as the Hub publishes one into the take's first run.
+        // One note captured, as the Hub publishes one into the take's first
+        // run, and the transport stopped after it, parked back where it
+        // started as Bitwig returns it.
         recorder.is_armed();
-        recorder.record(0.0, Some(0.0));
+        let block = 64.0 / 48_000.0;
+        let origin = recorder.observe_transport(0.0, true, block);
+        recorder.record(0.0, origin);
         let on = harmonigraph_core::NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
         let _ = recorder.publish_note(on.into());
+        let parked = recorder.observe_transport(0.0, false, block);
+        recorder.record(block, parked);
         let first_still = 1.0;
         let frame = 1.0 / 144.0;
         let mut now = first_still;

@@ -10,7 +10,7 @@
 use harmonigraph_core::canonical::NoteDelta;
 use harmonigraph_core::NoteEvent;
 
-use crate::{CanonicalRecord, Header, IncompleteRecord, ReadError, Record, Take};
+use crate::{CanonicalRecord, Header, ReadError, Record, Take};
 
 /// One run, as the file states it: `[start, end)` on the presentation clock,
 /// and the offset that moves what it holds into song time.
@@ -55,15 +55,12 @@ pub(crate) fn assemble(
             _ => {}
         }
     }
-    let audio_file = header.audio_file.clone();
-    let mut take = Take { header, truncated, audio_file, audio_start, ..Take::default() };
+    let mut take = Take { header, truncated, audio_start, ..Take::default() };
 
     let mut events = Vec::new();
     for (line, record) in records {
         match record {
-            Record::Incomplete(marker) => {
-                take.incomplete.get_or_insert(marker);
-            }
+            Record::Incomplete(_) => take.failed = true,
             Record::Param(mut param) => {
                 if let Some(run) = holding(&runs, param.t) {
                     param.t += run.offset;
@@ -76,12 +73,6 @@ pub(crate) fn assemble(
                     take.configurations.push(configuration);
                 }
             }
-            Record::Note(mut note) | Record::Canonical(CanonicalRecord::Note(mut note)) => {
-                if let Some(run) = holding(&runs, note.t) {
-                    note.t += run.offset;
-                    events.push((CanonicalRecord::Note(note), line));
-                }
-            }
             Record::Canonical(CanonicalRecord::Gap(mut gap)) => {
                 // A loss warns if it overlaps what the take recorded. It is
                 // drawn inside the first run it overlaps, from no earlier than
@@ -90,11 +81,6 @@ pub(crate) fn assemble(
                 else {
                     continue;
                 };
-                take.incomplete.get_or_insert(IncompleteRecord {
-                    first_publication: gap.first,
-                    last_publication: gap.last,
-                    reason: gap.reason,
-                });
                 gap.t = gap.t.max(run.start) + run.offset;
                 gap.through = (gap.through.min(run.end) + run.offset).max(gap.t);
                 events.push((CanonicalRecord::Gap(gap), line));

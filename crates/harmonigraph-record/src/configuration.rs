@@ -90,7 +90,7 @@ impl RecordFence {
     /// generic line for one the audio thread found.
     pub fn failure_status(&self) -> String {
         let message = self.failure_message.lock().clone();
-        message.unwrap_or_else(|| crate::recorder::CONFIGURATION_FAILURE.into())
+        message.unwrap_or_else(|| crate::recorder::AUDIO_THREAD_FAILURE.into())
     }
 
     /// The next take starts with no failure: Start only, once the last take

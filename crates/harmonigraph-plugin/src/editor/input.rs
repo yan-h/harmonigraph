@@ -184,7 +184,6 @@ impl LiveInput {
             let result = runtime.tracker.handle_canonical_mapped(event, offset);
             debug_assert!(result.is_ok(), "validated canonical publication");
             recorder.record(&runtime.tracker, event.time(), marks);
-            true
         });
     }
     /// Move the audio ring's blocks out, mapped to the GUI clock with the

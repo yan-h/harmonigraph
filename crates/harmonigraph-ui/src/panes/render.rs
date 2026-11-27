@@ -471,7 +471,8 @@ fn render_controls(
                     "Fit piece",
                     "Frame what the piece fills, anywhere from 20 Hz to 20 kHz, whatever the Frequency range set on the Analyzer page: \
                      every pitch the spectrogram lights a fifth of the way up its colours for half a second in all, \
-                     and every recorded note, with a semitone to spare. Bands it leaves dark at either end are dropped. \
+                     and every note the video draws, a hidden source's left out, with a semitone to spare, \
+                     and at least two octaves. Bands it leaves dark at either end are dropped. \
                      Choose Dialled to crop by hand. The preview here keeps showing the range as set.",
                 ),
             ],
@@ -716,7 +717,7 @@ fn record_controls(
                 (
                     crate::RenderTrigger::AtLoopEnd,
                     "Loop end",
-                    "Record one loop, then render when playback wraps to its start. A forward seek records on. Without a wrap, recording continues until you turn Record take off.",
+                    "Record one loop, then render when playback wraps to its start: the first jump back after moving forward, ignoring up to 50 ms of backward movement. A forward seek records on. Without a jump back, recording continues until you turn Record take off.",
                 ),
                 (
                     crate::RenderTrigger::AtBar,

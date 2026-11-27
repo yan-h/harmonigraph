@@ -867,9 +867,14 @@ mod tests {
         // take's run — and the transport since stopped: the two conditions
         // the debounce needs before it will end a take.
         h.recorder.is_armed();
-        h.recorder.record(0.0, Some(0.0));
+        let block = 64.0 / 48_000.0;
+        let origin = h.recorder.observe_transport(0.0, true, block);
+        h.recorder.record(0.0, origin);
         let on = CoreNoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
         let _ = h.recorder.publish_note(on.into());
+        // Parked back where it started, as Bitwig returns it at a Stop.
+        let parked = h.recorder.observe_transport(0.0, false, block);
+        h.recorder.record(block, parked);
 
         h.editor_state.set_open(open);
         h.step();

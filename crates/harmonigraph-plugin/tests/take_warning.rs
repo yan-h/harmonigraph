@@ -19,24 +19,13 @@ use harmonigraph_take::{CanonicalRecord, Header, NoteKind, NoteRecord, Record};
 /// thing under test here, not the recorder that would normally produce one.
 fn take_with_a_gap(path: &std::path::Path) {
     let note = |t: f64, note: u8| {
-        Record::Note(NoteRecord {
-            t,
-            source: 1,
-            channel: 0,
-            note,
-            kind: NoteKind::On { velocity: 0.8 },
-        })
+        let event =
+            NoteRecord { t, note, kind: NoteKind::On { velocity: 0.8 }, ..Default::default() };
+        Record::Canonical(CanonicalRecord::Delta(event.into()))
     };
     let gap = Record::Canonical(CanonicalRecord::Gap(
-        harmonigraph_core::canonical::PublicationGap {
-            source: Some(harmonigraph_core::SourceId(1)),
-            time: 0.4,
-            through: 0.9,
-            first: 6,
-            last: 8,
-            reason: harmonigraph_core::canonical::GapReason::PublicationFull,
-        }
-        .into(),
+        harmonigraph_core::canonical::PublicationGap { time: 0.4, through: 0.9, first: 6, last: 8 }
+            .into(),
     ));
     let run = Record::Run(harmonigraph_take::RunRecord::default());
     // A look, as every take writer records one: without it the export refuses
@@ -80,41 +69,44 @@ fn a_take_with_a_hole_warns_before_the_command_line_is_judged() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
-/// Retired names and a readable formerly valid file all fail at the public
-/// boundary; none can silently become a combined export or a file read.
+/// A take whose WAV was never finished, as a crash mid-take leaves it, exports
+/// its audio with a warning naming the file: without one, a video with no
+/// spectrum would say nothing about why (#1980).
 #[test]
-fn retired_layout_interfaces_fail_visibly() {
-    let directory = std::env::temp_dir()
-        .join(format!("harmonigraph-offline-retired-layouts-{}", std::process::id()));
+fn a_take_whose_audio_was_never_finished_says_so() {
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-offline-crashed-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
-    let take = directory.join("take.take");
-    take_with_a_gap(&take);
-    let custom = directory.join("custom.ron");
-    std::fs::write(
-        &custom,
-        "(background:(0,0,0),margin:0.0,gap:0.0,panes:[(pane:Lattice,rect:(0.0,0.0,1.0,1.0))])",
-    )
-    .unwrap();
-    for name in
-        ["side-by-side", "stacked", "lattice", "spectral", "spiral", custom.to_str().unwrap()]
-    {
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
-            .arg(&take)
-            .args(["--layout", name])
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!output.status.success(), "{name} was accepted");
-        assert!(stderr.contains("unknown option") && stderr.contains("--layout"), "{stderr}");
-    }
+    let mut wav = harmonigraph_take::WavWriter::create(directory.join("crashed.wav"), 2).unwrap();
+    wav.write(48_000.0, &[0.25; 48_000]).unwrap();
+    // Neither `finish` nor the drop patches its sizes, as after a crash.
+    std::mem::forget(wav);
+    let take = directory.join("crashed.take");
+    let header = Header {
+        appearance: Some(harmonigraph_ui::AppearanceDocument::default().serialize()),
+        audio_file: Some("crashed.wav".into()),
+        ..Default::default()
+    };
+    let lines = [Record::Header(header), Record::Run(harmonigraph_take::RunRecord::default())];
+    let encoded =
+        lines.iter().map(|r| ron::to_string(r).unwrap()).collect::<Vec<_>>().join("\n") + "\n";
+    std::fs::write(&take, encoded).unwrap();
+
+    // An output that refuses once the audio is read, before anything is drawn.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
-        .arg("--dump-layout")
+        .arg(&take)
+        .args(["--out", "/dev/null/impossible.png"])
         .output()
         .unwrap();
-    assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unknown option") && stderr.contains("--dump-layout"), "{stderr}");
-    assert!(output.stdout.is_empty(), "the removed dump interface still emitted a layout");
+    assert!(!output.status.success(), "the unusable output refuses: {stderr}");
+    assert!(
+        stderr.lines().any(|line| line.starts_with("warning:")
+            && line.contains("crashed.wav")
+            && line.contains("never finished")
+            && line.contains("0.5 s")),
+        "{stderr}"
+    );
     std::fs::remove_dir_all(directory).unwrap();
 }
 

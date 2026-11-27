@@ -49,9 +49,11 @@ OPTIONS:
                            take was framed at, the picture is recomposed to
                            fit rather than letterboxed, and it says so.
                            [default: the take's own aspect and Output size]
-        --scale <F>        Pixels per point — the UI's zoom. Bigger means
-                           chunkier text relative to the frame.
-                           [default: sized so the UI reads like the plugin]
+        --scale <F>        Pixels per point. Text sizes with its pane, so
+                           this scales point-sized details (shadows,
+                           hairlines, insets) against the frame; --size sets
+                           the pixels.
+                           [default: 1280 points across, as the Video preview]
         --fps <N>          Frames per second.  [default: 60]
         --start <SEC>      Skip to here, as a song position — take times are
                            the take's own audio position, so 0 is the song's
@@ -249,11 +251,7 @@ fn parse_size(text: &str) -> Result<[u32; 2], String> {
 /// `harmonigraph-offline take.take` therefore reproduces what was previewed,
 /// which is what makes re-rendering a take by hand to change one unrelated flag
 /// safe: changing `--fps` on its own must not also take a 4K take back down to
-/// 1080.
-///
-/// The fallback for a take carrying no blob at all is `RenderConfig::default()`,
-/// so the resolution and the aspect fall back together rather than to a constant
-/// here that a second definition could drift from.
+/// 1080. A take with no look is refused before this (`render::appearance_for`).
 fn output_size(size: Option<[u32; 2]>, config: &harmonigraph_ui::RenderConfig) -> [u32; 2] {
     size.unwrap_or_else(|| config.frame.pixels(config.short_edge))
 }
@@ -341,7 +339,9 @@ fn build_mismatch(own: &str, plugin: Option<&str>) -> Option<String> {
     ))
 }
 
-/// What is wrong with the take itself, in the order a person should hear it.
+/// What is wrong with the take itself, one line per fact, in the order a
+/// person should hear it: a failed recording, then a hole in its note history,
+/// then a file cut off mid-record (Yan, 2026-11-27).
 ///
 /// A `Vec` of warnings and no `Result`: nothing about how the recording went
 /// refuses a take. Refusing belongs to [`Take::read`](harmonigraph_take::Take::read)
@@ -357,18 +357,24 @@ fn build_mismatch(own: &str, plugin: Option<&str>) -> Option<String> {
 /// invented to fill the hole — no fabricated notes, no guessed durations.
 fn take_warnings(take_path: &str, take: &harmonigraph_take::Take) -> Vec<String> {
     let mut warnings = Vec::new();
-    if let Some(incomplete) = take.incomplete {
+    if take.failed {
         warnings.push(format!(
-            "{WARNING_PREFIX}{take_path}: note history {}..={} is missing ({:?}) — rendering \
+            "{WARNING_PREFIX}{take_path}: the recording failed (lost records, lost input, or \
+             the plugin removed mid-take) — rendering the records that survived."
+        ));
+    }
+    if let Some(gap) = take.gap() {
+        warnings.push(format!(
+            "{WARNING_PREFIX}{take_path}: note history {}..={} is missing — rendering \
              the records that survived, so notes may be missing or drawn short. \
              Nothing is invented to fill the hole.",
-            incomplete.first_publication, incomplete.last_publication, incomplete.reason
+            gap.first, gap.last
         ));
     }
     if take.truncated {
         warnings.push(format!(
-            "{WARNING_PREFIX}{take_path} ends mid-record — the export was interrupted. \
-             Rendering the {} events that survived.",
+            "{WARNING_PREFIX}{take_path} ends mid-record — the recording was cut off \
+             mid-write, as by a crash. Rendering the {} events that survived.",
             take.notes().count()
         ));
     }
@@ -433,6 +439,7 @@ fn export(args: Args) -> Result<(), String> {
 
     // The WAV the take recorded, beside the take file, if any.
     let audio_path = take
+        .header
         .audio_file
         .as_ref()
         .map(|name| {
@@ -443,15 +450,23 @@ fn export(args: Args) -> Result<(), String> {
         })
         .filter(|path| path.is_file());
 
-    if take.audio_file.is_some() && audio_path.is_none() {
+    if take.header.audio_file.is_some() && audio_path.is_none() {
         // A missing recording would otherwise produce a silent render with
         // no spectrum and no explanation.
         eprintln!(
             "{WARNING_PREFIX}take names {:?} but it is not beside the take",
-            take.audio_file.as_deref().unwrap_or_default()
+            take.header.audio_file.as_deref().unwrap_or_default()
         );
     }
     let mut audio = audio_path.as_deref().map(crate::wav::read).transpose()?;
+    if let (Some(path), Some(audio)) = (&audio_path, audio.as_ref().filter(|a| a.unfinished)) {
+        eprintln!(
+            "{WARNING_PREFIX}{}: its header was never finished, by a quit mid-take or a \
+             finalization that failed; it holds {:.1} s of whole frames",
+            path.display(),
+            audio.seconds()
+        );
+    }
 
     let audio_start = take.audio_start.unwrap_or(0.0);
 
@@ -608,14 +623,6 @@ fn export(args: Args) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn retired_playhead_flag_is_rejected() {
-        let error = parse_args_from(["take.take", "--playhead"].map(str::to_owned))
-            .err()
-            .expect("retired flag must fail");
-        assert!(error.contains("--playhead"), "{error}");
-    }
 
     /// Through CLI parsing, files, output selection and the real render loop:
     /// replacing appearance must draw exactly what recording it would draw.
@@ -932,40 +939,28 @@ mod tests {
     /// #712's acceptance behaviour: a take that lost part of its note history
     /// is exported with a warning instead of refused.
     ///
-    /// The fixture is incomplete for the RIGHT reason. `Take::incomplete` can
-    /// be set two ways, and the one this decision is about is a `Gap` record
-    /// carrying a lost publication range — the same record the roll draws its
-    /// hole from. A fixture that reached this through a truncated last line, or
-    /// through a `Take::default()` with the field poked, would warn for a
-    /// reason the recording path does not produce.
+    /// The fixture has its hole for the RIGHT reason: a `Gap` record carrying
+    /// a lost publication range, the same record the roll draws its hole from,
+    /// and the one `Take::gap` reads. A fixture that reached this through a
+    /// truncated last line, or through a `Take::default()` with an event
+    /// poked in, would warn for a reason the recording path does not produce.
+    /// The same take failed after its gap then warns of both, failure first.
     ///
     /// Both notes are asserted present afterwards, because "render the
     /// surviving data with gaps" is the other half of the decision: not
     /// refusing is worth nothing if the surviving records are dropped too.
     #[test]
     fn a_take_missing_note_history_is_exported_with_a_warning() {
-        use harmonigraph_core::canonical::{GapReason, PublicationGap};
+        use harmonigraph_core::canonical::PublicationGap;
         use harmonigraph_take::{CanonicalRecord, Header, NoteKind, NoteRecord, Record, Take};
 
         let note = |t: f64, note: u8| {
-            Record::Note(NoteRecord {
-                t,
-                source: 1,
-                channel: 0,
-                note,
-                kind: NoteKind::On { velocity: 0.8 },
-            })
+            let event =
+                NoteRecord { t, note, kind: NoteKind::On { velocity: 0.8 }, ..Default::default() };
+            Record::Canonical(CanonicalRecord::Delta(event.into()))
         };
         let gap = Record::Canonical(CanonicalRecord::Gap(
-            PublicationGap {
-                source: Some(harmonigraph_core::SourceId(1)),
-                time: 0.4,
-                through: 0.9,
-                first: 6,
-                last: 8,
-                reason: GapReason::PublicationFull,
-            }
-            .into(),
+            PublicationGap { time: 0.4, through: 0.9, first: 6, last: 8 }.into(),
         ));
         let run = Record::Run(harmonigraph_take::RunRecord::default());
         let header = Header {
@@ -979,9 +974,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
-        let incomplete = take.incomplete.expect("a Gap record marks the take incomplete");
-        assert_eq!((incomplete.first_publication, incomplete.last_publication), (6, 8));
+        let take = Take::parse(std::io::Cursor::new(&encoded)).unwrap();
+        let gap = take.gap().expect("a Gap record is the take's hole");
+        assert_eq!((gap.first, gap.last), (6, 8));
 
         let warnings = take_warnings("take-1.take", &take);
         assert_eq!(warnings.len(), 1, "one warning, and no refusal: {warnings:?}");
@@ -989,8 +984,18 @@ mod tests {
         // warnings by: a format contract between the two binaries.
         assert!(warnings[0].starts_with(WARNING_PREFIX), "{}", warnings[0]);
         assert!(warnings[0].contains("6..=8"), "the lost range is named: {}", warnings[0]);
+        assert!(!warnings[0].contains("PublicationFull"), "{}", warnings[0]);
 
         let played: Vec<u8> = take.notes().map(|n| n.note).collect();
         assert_eq!(played, [60, 64], "the records either side of the hole still render");
+
+        // The same take failed after its gap: each fact on its own line, the
+        // failure first, rather than the gap's line standing for both.
+        let marker = ron::to_string(&Record::Incomplete(Default::default())).unwrap();
+        let failed = Take::parse(std::io::Cursor::new(format!("{encoded}\n{marker}"))).unwrap();
+        let warnings = take_warnings("take-1.take", &failed);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("the recording failed"), "{}", warnings[0]);
+        assert!(warnings[1].contains("6..=8"), "{}", warnings[1]);
     }
 }

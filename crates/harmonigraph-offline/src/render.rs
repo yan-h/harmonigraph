@@ -122,9 +122,9 @@ pub struct Settings {
     pub layout: Layout,
     /// Output size in physical pixels.
     pub size: [u32; 2],
-    /// Pixels per point — the UI's "zoom". Font sizes and paddings are
-    /// in points, so this decides how big the text is *relative to the
-    /// frame*, not just how sharp it is.
+    /// Pixels per point. Text sizes with its pane, so at a given `size` this
+    /// decides how large point-sized details (shadows, hairlines, insets) draw
+    /// relative to the frame (`harmonigraph_ui::layout::export_pixels_per_point`).
     pub pixels_per_point: f32,
     pub fps: f64,
     pub start: f64,
@@ -462,11 +462,13 @@ mod tests {
         }
         Take {
             header: recorded_header(),
-            events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
+            events: notes
+                .into_iter()
+                .map(|note| harmonigraph_take::CanonicalRecord::Delta(note.into()))
+                .collect(),
             params: Vec::new(),
             configurations: Vec::new(),
             truncated: false,
-            incomplete: None,
             ..Default::default()
         }
     }
@@ -509,20 +511,26 @@ mod tests {
         let onset = origin + 0.8;
         Take {
             events: vec![
-                harmonigraph_take::CanonicalRecord::Note(NoteRecord {
-                    source: 0,
-                    t: onset,
-                    channel: 0,
-                    note: 69,
-                    kind: NoteKind::On { velocity: 0.8 },
-                }),
-                harmonigraph_take::CanonicalRecord::Note(NoteRecord {
-                    source: 0,
-                    t: onset + 0.05,
-                    channel: 0,
-                    note: 69,
-                    kind: NoteKind::Off,
-                }),
+                harmonigraph_take::CanonicalRecord::Delta(
+                    NoteRecord {
+                        source: 0,
+                        t: onset,
+                        channel: 0,
+                        note: 69,
+                        kind: NoteKind::On { velocity: 0.8 },
+                    }
+                    .into(),
+                ),
+                harmonigraph_take::CanonicalRecord::Delta(
+                    NoteRecord {
+                        source: 0,
+                        t: onset + 0.05,
+                        channel: 0,
+                        note: 69,
+                        kind: NoteKind::Off,
+                    }
+                    .into(),
+                ),
             ],
             ..Default::default()
         }
