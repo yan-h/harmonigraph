@@ -792,11 +792,12 @@ fn the_lut_key_is_the_gradient_and_not_the_level_window() {
         let mut fresh = FoldedGrid::default();
         fresh.shades(c).lut
     };
-    // Whether the table `c` is served is a NEW one: its allocation changes
-    // only where the key does, whatever order these are asked in.
-    let mut rebuilds = |c: &SpectrumConfig| {
+    // The table `c` is served, and whether it is a NEW one: its allocation
+    // changes only where the key does, whatever order these are asked in.
+    let mut served = |c: &SpectrumConfig| {
         let before = gpu.shades(&cfg).lut;
-        !Arc::ptr_eq(&gpu.shades(c).lut, &before)
+        let after = gpu.shades(c).lut;
+        (!Arc::ptr_eq(&after, &before), after)
     };
 
     // Every knob of the gradient recolours every texel without moving a
@@ -813,10 +814,23 @@ fn the_lut_key_is_the_gradient_and_not_the_level_window() {
         |g: &mut Gradient| g.lightness_ramp -= 5.0,
         |g: &mut Gradient| g.chroma -= 0.1,
         |g: &mut Gradient| g.chroma_ramp += 0.1,
+        // The preset is straight, so a curve with any bend in it moves the key.
+        |g: &mut Gradient| {
+            g.bend = harmonigraph_scene::Bend {
+                at: 0.3,
+                share: 0.7,
+                hue: true,
+                lightness: true,
+                chroma: true,
+            }
+        },
     ] {
         let moved = edited(edit);
-        assert!(rebuilds(&moved), "a gradient knob left the old table on the GPU");
+        let (rebuilt, lut) = served(&moved);
+        assert!(rebuilt, "a gradient knob left the old table on the GPU");
         assert_ne!(table(&moved), table(&cfg), "the knob was expected to move a texel");
+        // And what is served after the edit is the moved gradient's own table.
+        assert_eq!(lut, table(&moved), "the served table is another gradient's");
     }
 
     // And the level window does NOT: the dB floor, the ceiling and the tilt
@@ -835,7 +849,7 @@ fn the_lut_key_is_the_gradient_and_not_the_level_window() {
     ] {
         let mut moved = cfg;
         edit(&mut moved);
-        assert!(!rebuilds(&moved), "a drag on this rebuilds the table on every frame");
+        assert!(!served(&moved).0, "a drag on this rebuilds the table on every frame");
     }
 }
 
