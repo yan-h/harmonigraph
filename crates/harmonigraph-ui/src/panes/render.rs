@@ -339,9 +339,9 @@ fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
         let clicked = ui
             .add_enabled(drawn, egui::Button::new("Frame notes"))
             .on_hover_text(
-                "Pan and zoom the lattice onto the notes sounding and the pitches played since Clear display history or Clear label history, the last 384 of them, and size the lattice's share of the frame to fit them. Play the piece through first.",
+                "Pan and zoom the lattice onto the notes held or fading and up to 384 distinct pitches played since Clear display history or Clear label history, each at its node nearest the camera, and size the lattice's share of the frame to fit them. Play the piece through first.",
             )
-            .on_disabled_hover_text("Play the piece through first: nothing is sounding and nothing has been played since Clear display history or Clear label history.")
+            .on_disabled_hover_text("Play the piece through first: nothing is held or fading, and nothing has been played since Clear display history or Clear label history.")
             .clicked();
         if clicked {
             let positions = crate::framing::drawn_positions(
