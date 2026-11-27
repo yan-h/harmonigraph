@@ -689,7 +689,7 @@ fn record_controls(
     // Take recording: the input half of offline video rendering. A record
     // button that doubles as its own indicator — press to arm; the dot breathes
     // while it waits for the transport, then goes solid while capturing. See
-    // record_button in widgets.rs.
+    // record_button in widgets/rows.rs.
     if !interaction.take.supported {
         return;
     }

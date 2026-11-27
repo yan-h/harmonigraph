@@ -955,8 +955,9 @@ fn the_picture_panes_do_not_scroll() {
 
 /// A separator reads against BOTH grounds a pane can paint, because the two
 /// sides of one boundary are not one surface. A picture pane fills its body with
-/// the well edge to edge — `Viewer::tab_style_override` takes its margin to zero,
-/// which is the arrangement the test above is the other half of — while a
+/// the well edge to edge — the workspace draws a picture tab with none of the
+/// settings pages' margin, which is the arrangement the test above is the other
+/// half of — while a
 /// settings pane shows the tab body's panel through. So a divider borrowed from
 /// either grey vanishes along whichever boundaries happen to be drawn in it, and
 /// the lattice against the analyzer, two picture panes in one grey, has no edge
@@ -1010,7 +1011,8 @@ fn a_separator_reads_against_both_grounds_a_pane_can_paint() {
     }
 }
 
-/// Narrow headers keep one row and put all destinations in the current-tab menu.
+/// Narrow headers keep one row: tabs that do not fit move into the overflow menu
+/// one at a time, and the current tab's title stays inside its header.
 #[test]
 fn every_settings_tab_fits_on_its_tab_bar() {
     for width in [700.0, 1000.0, 1512.0] {
