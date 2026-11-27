@@ -2,6 +2,9 @@
 //! called by hand between blocks, which is what the input worker does on its
 //! own clock.
 
+use std::collections::BTreeSet;
+
+use harmonigraph_core::SourceId;
 use harmonigraph_ui::tape::{Meter, Speed, TapeRequest, TapeView};
 use harmonigraph_ui::SpectrumConfig;
 
@@ -14,6 +17,8 @@ use crate::audio_ingress::{Block, Format, Song};
 const RATE: f64 = 1000.0;
 const FRAMES: usize = 100;
 const STEREO: Format = Format { channels: 2, sample_rate: RATE as f32, sidechain: false };
+/// No source hidden with Show.
+const SHOWN: &BTreeSet<SourceId> = &BTreeSet::new();
 
 fn pair() -> (Deck, Worker) {
     channel(Arc::new(crate::HarmonigraphParams::default()))
@@ -458,7 +463,7 @@ fn a_pass_turns_warm_where_it_has_settled_and_not_a_chunk_later() {
     assert_eq!(owner(warm(1000) - 1), 1);
     assert_eq!(owner(warm(1000)), 2, "once settled, the fresher pass wins");
     let mut view = TapeView::default();
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     let seconds = |frame: i64| frame as f64 / RATE;
     let spans: Vec<(f64, f64, bool)> = view
         .spans
@@ -511,13 +516,13 @@ fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     let mut source = 0;
     record(&mut worker, &mut source, 0, 3000);
     let mut view = TapeView::default();
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     cue(&mut deck, &mut worker, 0.0, 1.0);
     // Assembled at full speed, and not yet heard: a new speed cues it again
     // from its own spot.
     worker.play();
     view.speed = Speed::Half;
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     let (_, out) = run(&mut deck, 0.0, false, true);
     assert!(deck.sounding() && out.play == crate::audio_ingress::TapePlay::Waiting);
     worker.play();
@@ -534,7 +539,7 @@ fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     assert!((seconds - 1.05).abs() < 1e-9, "100 frames heard are 50 of song: {seconds}");
 
     view.speed = Speed::Double;
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     // The block the slowed cue fades out in, and ends in, is still that cue's.
     let (faded, _, _, _) = heard(run(&mut deck, 0.0, false, true).1);
     assert_eq!(faded, slowed, "a cue ending in a block reports its own serial");
@@ -692,7 +697,7 @@ fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram(
     at_tempo(&mut worker, &mut source, 0, 3000, 120.0);
     at_tempo(&mut worker, &mut source, 20_000, 21_000, 120.0);
     let mut view = TapeView::default();
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     let spans: Vec<(f64, f64, bool)> =
         view.spans.iter().map(|s| (s.start, s.end, s.warm)).collect();
     assert_eq!(spans, [(0.0, 3.0, true), (20.0, 21.0, false)]);
@@ -701,7 +706,7 @@ fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram(
     // A cold replay over warm audio loses every frame, but the song it heard
     // there is the newest: its meter replaces the old one.
     at_tempo(&mut worker, &mut source, 1000, 2000, 90.0);
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     let again: Vec<(f64, f64, bool)> =
         view.spans.iter().map(|s| (s.start, s.end, s.warm)).collect();
     assert_eq!(again, spans);
@@ -713,7 +718,7 @@ fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram(
     // 32 ms of the 4 s recorded, and reaches the view at the next exchange.
     assert!(view.spectrogram.is_empty());
     worker.analyze_all();
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     let columns = view.spectrogram.columns() as f64;
     assert!((columns - 4.0 / 0.032).abs() <= 2.0, "{columns} columns");
 }
@@ -787,17 +792,18 @@ fn notes_are_placed_by_song_frame_and_a_pass_opens_with_what_is_held() {
     // Not built while the roll is off.
     let _ = worker.exchange(
         &mut view,
+        SHOWN,
         &SpectrumConfig { show_roll: false, ..Default::default() },
         true,
     );
     worker.roll();
     let rolled = SpectrumConfig { show_roll: true, ..Default::default() };
-    let _ = worker.exchange(&mut view, &rolled, true);
+    let _ = worker.exchange(&mut view, SHOWN, &rolled, true);
     assert_eq!(view.notes.len(), 0, "built while the roll was off");
-    let _ = worker.exchange(&mut view, &rolled, true);
+    let _ = worker.exchange(&mut view, SHOWN, &rolled, true);
     worker.roll();
     assert_eq!(view.notes.len(), 0, "built with no lock held, handed over next time");
-    let _ = worker.exchange(&mut view, &rolled, true);
+    let _ = worker.exchange(&mut view, SHOWN, &rolled, true);
     let mut notes: Vec<(u8, f64, Option<f64>)> =
         view.notes.notes().map(|n| (n.note, n.start, n.end)).collect();
     notes.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -837,13 +843,14 @@ fn a_late_mark_from_before_a_pass_reaches_the_pass_that_opened_without_it() {
 }
 
 /// The harmony row's sections (#1974) are analyzed from the roll while the
-/// row draws, with the roll itself off, and again when Detail or Span moves.
+/// row draws, with the roll itself off, and again when Detail or Span moves
+/// or a Show switch hides a source's notes (#1994 TP1).
 #[test]
 fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_come_back() {
     use super::notes::{key, Mark, Sounding};
     let (_, mut worker) = pair();
-    let held = |note: u8| Mark::On {
-        key: key(1, note),
+    let held = |source: u64, note: u8| Mark::On {
+        key: key(source, note),
         sounding: Sounding {
             velocity: 1.0,
             pitch: f32::from(note),
@@ -853,7 +860,8 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     let mut source = 0;
     for (i, song) in (0..500).step_by(FRAMES).enumerate() {
         if i == 1 {
-            worker.inbox.push((0.25, held(60)));
+            worker.inbox.push((0.25, held(1, 60)));
+            worker.inbox.push((0.25, held(2, 64)));
         }
         let (block, samples) = ring_block(source, Some(song), STEREO);
         worker.capture(block, &samples);
@@ -864,10 +872,15 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     worker.capture(block, &samples);
 
     let unrolled = SpectrumConfig { show_roll: false, ..Default::default() };
-    let step = |worker: &mut Worker, view: &mut TapeView| {
-        let _ = worker.exchange(view, &unrolled, true);
+    let step_hiding = |worker: &mut Worker, view: &mut TapeView, hidden: &BTreeSet<SourceId>| {
+        let _ = worker.exchange(view, hidden, &unrolled, true);
         worker.roll();
-        worker.exchange(view, &unrolled, true)
+        worker.exchange(view, hidden, &unrolled, true)
+    };
+    let step = |worker: &mut Worker, view: &mut TapeView| step_hiding(worker, view, SHOWN);
+    let pitches = |view: &TapeView| -> Vec<Vec<f32>> {
+        let sections = view.harmony.sections.iter();
+        sections.map(|section| section.entries.iter().map(|entry| entry.pitch).collect()).collect()
     };
     // Not asked for: nothing is analyzed.
     let mut view = TapeView { showing: true, ..Default::default() };
@@ -877,13 +890,7 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     view.harmony_wanted = Some((0.5, 4.0));
     let displaced = step(&mut worker, &mut view);
     assert!(displaced.harmony.is_some(), "the empty one it replaced");
-    let pitches: Vec<Vec<f32>> = view
-        .harmony
-        .sections
-        .iter()
-        .map(|section| section.entries.iter().map(|entry| entry.pitch).collect())
-        .collect();
-    assert_eq!(pitches, [[60.0]]);
+    assert_eq!(pitches(&view), [[60.0, 64.0]]);
 
     // Nothing moved: the same analysis stands.
     let first = Arc::clone(&view.harmony);
@@ -894,6 +901,14 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     assert!(step(&mut worker, &mut view).harmony.is_some_and(|old| Arc::ptr_eq(&old, &first)));
     view.harmony_wanted = Some((0.75, 2.0));
     assert!(step(&mut worker, &mut view).harmony.is_some());
+    // Source 2 hidden with Show: analyzed again without its notes, then
+    // left standing, and analyzed with them once it shows again.
+    let hidden = BTreeSet::from([SourceId(2)]);
+    assert!(step_hiding(&mut worker, &mut view, &hidden).harmony.is_some());
+    assert_eq!(pitches(&view), [[60.0]]);
+    assert!(step_hiding(&mut worker, &mut view, &hidden).harmony.is_none());
+    assert!(step(&mut worker, &mut view).harmony.is_some());
+    assert_eq!(pitches(&view), [[60.0, 64.0]]);
     // The recording changed under it (a new format clears the tape): the
     // sections follow the roll.
     let new_format = Format { channels: 2, sample_rate: 2000.0, sidechain: false };
@@ -911,10 +926,10 @@ fn exchange_returns_displaced_roll_and_spectrogram_for_off_lock_drop() {
     let mut view = TapeView { showing: true, ..Default::default() };
     let rolled = SpectrumConfig { show_roll: true, ..Default::default() };
 
-    let displaced = worker.exchange(&mut view, &rolled, true);
+    let displaced = worker.exchange(&mut view, SHOWN, &rolled, true);
     assert!(displaced.roll.is_none() && displaced.spectrogram.is_none());
     worker.roll();
-    let _ = worker.exchange(&mut view, &rolled, true);
+    let _ = worker.exchange(&mut view, SHOWN, &rolled, true);
     let slab: harmonigraph_render::SpectrogramSlab =
         Arc::from([7u8; harmonigraph_core::spectrum::SPECTRUM_BINS]);
     view.spectrogram.set_column(0, Some(slab));
@@ -929,7 +944,7 @@ fn exchange_returns_displaced_roll_and_spectrogram_for_off_lock_drop() {
     worker.capture(block, &samples);
     worker.roll();
 
-    let displaced = worker.exchange(&mut view, &rolled, true);
+    let displaced = worker.exchange(&mut view, SHOWN, &rolled, true);
     assert!(displaced.roll.is_some());
     assert!(displaced.spectrogram.is_some());
     assert!(view.spectrogram.is_empty());

@@ -337,7 +337,9 @@ fn step(
         let now = shared.clock.now();
         let open = editor_state.is_open();
         let settings = &shared.ui.picture.appearance.spectrum;
-        _displaced = tape.exchange(&mut shared.ui.picture.runtime.tape, settings, open);
+        let runtime = &mut shared.ui.picture.runtime;
+        let hidden = runtime.tracker.roll().hidden_sources();
+        _displaced = tape.exchange(&mut runtime.tape, hidden, settings, open);
         let onset = newest_onset(&shared.ui.picture.runtime);
         // The drain's marks go straight to the tape, which `settle` empties
         // every step.

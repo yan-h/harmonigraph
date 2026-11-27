@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
-use harmonigraph_core::NoteRoll;
+use harmonigraph_core::{NoteRoll, SourceId};
 
 use harmonigraph_record::transport;
 use harmonigraph_ui::tape::harmony::{self, Harmony};
@@ -128,13 +128,11 @@ pub(crate) struct DisplacedView {
     pub(crate) spectrogram: Option<TapeSpectrogram>,
 }
 
-/// What the harmony row's sections were analyzed from: the roll's own key,
-/// and Detail and Span by their bits.
-#[derive(Clone, Copy, PartialEq)]
+/// What the harmony row's sections were analyzed from: the roll's own key
+/// with Detail and Span by their bits, and the sources hidden with Show.
 struct Analyzed {
-    roll: Option<(u64, u64)>,
-    detail: u32,
-    span: u32,
+    key: (Option<(u64, u64)>, u32, u32),
+    hidden: BTreeSet<SourceId>,
 }
 
 pub(crate) struct Worker {
@@ -210,6 +208,9 @@ pub(crate) struct Worker {
     latest_roll: Option<Arc<NoteRoll>>,
     /// Detail and Span as the row asked at the last exchange, while it draws.
     harmony_wanted: Option<(f32, f32)>,
+    /// The sources hidden with Show at the last exchange, whose notes the row
+    /// leaves out.
+    hidden: BTreeSet<SourceId>,
     harmony_shown: Option<Analyzed>,
     /// Sections analyzed between holds, handed over as a built roll is.
     built_harmony: Option<Arc<Harmony>>,
@@ -266,6 +267,7 @@ impl Worker {
             built_roll: None,
             latest_roll: None,
             harmony_wanted: None,
+            hidden: BTreeSet::new(),
             harmony_shown: None,
             built_harmony: None,
         }
@@ -619,13 +621,15 @@ impl Worker {
     }
 
     /// Take Tape mode's request, and show it the tape as it is now, analyzed
-    /// under the Analyzer's `settings`. `open`: the editor's window is.
+    /// under the Analyzer's `settings`, its harmony row without the sources
+    /// `hidden` with Show. `open`: the editor's window is.
     ///
     /// Returns any displaced allocations so the caller can drop them once the
     /// editor lock is released.
     pub(crate) fn exchange(
         &mut self,
         view: &mut TapeView,
+        hidden: &BTreeSet<SourceId>,
         settings: &SpectrumConfig,
         open: bool,
     ) -> DisplacedView {
@@ -661,6 +665,10 @@ impl Worker {
         view.heard = seconds(&shared.heard);
         view.bytes = self.store.as_ref().map_or(0, Store::bytes) + self.book.bytes();
         self.harmony_wanted = view.harmony_wanted.filter(|_| view.showing && open);
+        // Copied only when a Show switch moved, which is a click.
+        if self.hidden != *hidden {
+            self.hidden = hidden.clone();
+        }
         self.visible =
             view.showing && open && (settings.show_roll || self.harmony_wanted.is_some());
         let roll = self.built_roll.take().map(|roll| std::mem::replace(&mut view.notes, roll));
@@ -677,8 +685,8 @@ impl Worker {
     }
 
     /// Rebuild Tape mode's roll if the recording changed under it, and the
-    /// harmony row's sections if the roll, Detail or Span did, with no lock
-    /// held: each walks every note recorded.
+    /// harmony row's sections if the roll, Detail, Span or the sources hidden
+    /// with Show did, with no lock held: each walks every note recorded.
     pub(crate) fn roll(&mut self) {
         let built = (self.generation, self.notes_generation);
         if self.visible && self.roll_shown != Some(built) {
@@ -693,17 +701,17 @@ impl Worker {
         let Some((detail, span)) = self.harmony_wanted else { return };
         // The meters are in the roll's key too: a change of them alone moves
         // `generation`.
-        let analyzed =
-            Analyzed { roll: self.roll_shown, detail: detail.to_bits(), span: span.to_bits() };
-        if self.harmony_shown == Some(analyzed) {
+        let key = (self.roll_shown, detail.to_bits(), span.to_bits());
+        let current = |shown: &Analyzed| shown.key == key && shown.hidden == self.hidden;
+        if self.harmony_shown.as_ref().is_some_and(current) {
             return;
         }
         let Some(roll) = &self.latest_roll else { return };
-        self.harmony_shown = Some(analyzed);
+        self.harmony_shown = Some(Analyzed { key, hidden: self.hidden.clone() });
         let rate = self.store.as_ref().map_or(1.0, |store| f64::from(store.rate));
         let meters: Vec<(f64, Meter)> =
             self.meters.iter().map(|(&at, &meter)| (at as f64 / rate, meter)).collect();
-        let sections = harmony::analyze(roll, &meters, detail, span);
+        let sections = harmony::analyze(roll, &self.hidden, &meters, detail, span);
         self.built_harmony = Some(Arc::new(Harmony { sections }));
     }
 

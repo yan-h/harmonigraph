@@ -180,9 +180,10 @@ pub struct TapeView {
     /// the roll is on or the harmony row draws.
     pub notes: std::sync::Arc<harmonigraph_core::NoteRoll>,
     /// The recording's harmony, section by section (#1974): the worker's
-    /// analysis of the same notes, shared, redone after the recording, Detail
-    /// or Span changes, only while Tape mode shows, the editor is open and
-    /// the harmony row is on.
+    /// analysis of the same notes, the sources hidden with Show left out,
+    /// shared, redone after the recording, Detail, Span or a Show switch
+    /// changes, only while Tape mode shows, the editor is open and the
+    /// harmony row is on.
     pub harmony: std::sync::Arc<harmony::Harmony>,
     /// Detail (0..=1) and Span (beats) as the harmony row draws them this
     /// frame, or `None` where it does not draw: cleared as each frame lays
