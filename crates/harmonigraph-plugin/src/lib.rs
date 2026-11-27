@@ -2023,21 +2023,6 @@ mod tests {
         for (i, &(l, r)) in heard.iter().enumerate().skip(fade) {
             assert_eq!((l, r), (song(first + i, 0), song(first + i, 1)), "frame {i} after the cue");
         }
-        let lines: Vec<String> = plugin
-            .editor_shared
-            .lock()
-            .ui
-            .picture
-            .runtime
-            .console
-            .lines()
-            .filter(|l| l.starts_with("tape:"))
-            .map(str::to_owned)
-            .collect();
-        assert!(
-            lines.iter().any(|l| l.starts_with("tape: audition from 0.500 s (warm (from the song's start)")),
-            "{lines:?}",
-        );
         // The tab is shown what sounds, and where the transport stopped.
         let rounds = plugin.input_worker.completed_rounds();
         assert!(a_round_after(&plugin, rounds + 1), "the worker never ran a round");

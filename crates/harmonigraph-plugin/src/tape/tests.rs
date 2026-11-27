@@ -151,11 +151,6 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
             (recorded(1000 + i as i64, 0) * gain, recorded(1000 + i as i64, 1) * gain)
         );
     }
-    let lines = events(&mut worker);
-    assert!(
-        lines.iter().any(|l| l.contains("audition from 1.000 s (warm (from the song's start)")),
-        "{lines:?}"
-    );
 
     // The transport starts from the parked playhead: a cut, with not one
     // sample of tape in playback's first block.
@@ -194,11 +189,6 @@ fn audition_ends_at_the_edge_of_what_is_recorded_and_where_nothing_is() {
     worker.play();
     let (audio, _) = run(&mut deck, 5.0, false, true);
     assert!(!deck.sounding() && audio[0].iter().all(|&s| s == 0.0));
-    let lines = events(&mut worker);
-    assert!(
-        lines.iter().any(|l| l.contains("audition from 7.000 s (nothing recorded there)")),
-        "{lines:?}"
-    );
 }
 
 /// An export reports `playing = false` while its position climbs. It rolls,
@@ -557,8 +547,6 @@ fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     let (_, seconds, _, _) = heard(run(&mut deck, 0.0, false, true).1);
     assert!((seconds - 1.3).abs() < 1e-9, "100 frames heard are 200 of song: {seconds}");
     let lines = events(&mut worker);
-    let recued = lines.iter().filter(|l| l.contains("audition from 1.000 s (")).count();
-    assert_eq!(recued, 2, "{lines:?}");
     assert!(lines.iter().any(|l| l.contains("stopped after 0.10 s by another cue")), "{lines:?}");
 }
 
@@ -749,7 +737,6 @@ fn a_stop_cancels_a_cue_still_waiting_for_a_fade() {
     }
     assert!(!deck.sounding());
     let lines = events(&mut worker);
-    assert!(!lines.iter().any(|l| l.contains("audition from 2.000 s")), "{lines:?}");
     assert!(
         lines.iter().any(|l| l.contains("stopped after") && l.contains("by Stop")),
         "{lines:?}"

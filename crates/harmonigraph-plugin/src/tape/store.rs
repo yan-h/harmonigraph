@@ -45,8 +45,8 @@ pub(crate) const CAP_BYTES: usize = 1 << 30;
 pub(crate) struct Stamp {
     /// Which pass recorded it: chunks of one pass join without a seam.
     pub pass: u64,
-    /// When it was recorded: for the console, and the cap drops the earliest
-    /// first.
+    /// When it was recorded: Tape mode reads out its age, and the cap drops
+    /// the earliest first.
     pub when: std::time::Instant,
     /// The song frame the pass started at. Run-up and warmth are computed
     /// from it at the frame asked about, never stored per chunk: a run-up

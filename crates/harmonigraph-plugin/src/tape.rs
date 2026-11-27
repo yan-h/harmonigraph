@@ -144,9 +144,6 @@ impl Reason {
 /// Console lines from the audio thread, formatted by the worker.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Event {
-    Started {
-        position: f64,
-    },
     Ended {
         position: f64,
         played: f64,

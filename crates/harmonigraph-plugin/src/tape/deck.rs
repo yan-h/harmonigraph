@@ -166,7 +166,6 @@ impl Deck {
         self.play = Play::Cued;
         self.shared.cue_position.store(position.to_bits(), Ordering::Relaxed);
         self.shared.cue.store(self.serial, Ordering::Release);
-        self.emit(Event::Started { position });
     }
 
     /// Tape mode's newest request since the last block, if any.

@@ -833,31 +833,8 @@ impl Worker {
         }
     }
 
-    fn recording_at(&self, position: f64) -> String {
-        let Some(store) = &self.store else { return "nothing recorded yet".into() };
-        let frame = (position * f64::from(store.rate)).round() as i64;
-        match store.stamp_at(frame) {
-            None => "nothing recorded there".into(),
-            Some(stamp) => format!(
-                "{}, run-up {:.1} s, recorded {:.0} s ago",
-                if stamp.is_from_start(store.rate) {
-                    "warm (from the song's start)"
-                } else if stamp.warm(frame, store.rate) {
-                    "warm"
-                } else {
-                    "cold"
-                },
-                stamp.run_up(frame, store.rate),
-                stamp.when.elapsed().as_secs_f64(),
-            ),
-        }
-    }
-
     fn describe(&self, event: Event) -> String {
         match event {
-            Event::Started { position } => {
-                format!("tape: audition from {} ({})", at(position), self.recording_at(position))
-            }
             Event::Ended { position, played, reason } => format!(
                 "tape: audition from {} stopped after {played:.2} s by {}",
                 at(position),
