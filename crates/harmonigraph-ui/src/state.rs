@@ -898,8 +898,9 @@ impl SharedState {
 /// gate back at the price of orphaning every project that loads the plugin,
 /// which is the worse trade; the refusal is made audible instead:
 /// [`SharedState::install_document`] opens the Console on it and leaves the
-/// current content intact. A take's look is not this blob and has its own
-/// floor, `APPEARANCE_VERSION`.
+/// current content intact. The appearance this blob nests, and a take's look,
+/// are also held to `APPEARANCE_VERSION`, which must match exactly
+/// (`AppearanceDocument::normalize`).
 ///
 /// 7: camera, view, spectrum, spiral and render moved into one appearance
 /// document. Previous editor saves are refused whole, with no migration. The

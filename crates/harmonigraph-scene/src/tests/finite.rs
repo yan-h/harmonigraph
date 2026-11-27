@@ -1,5 +1,6 @@
-//! One claim over the whole picture: whatever a [`ViewConfig`] holds, the
-//! [`Scene`] derived from it is made of numbers a shader can draw.
+//! One claim over the whole picture: whatever a [`ViewConfig`] holds, once
+//! the load has repaired it the [`Scene`] derived from it is made of numbers a
+//! shader can draw.
 //!
 //! Held here as ONE assertion rather than one per clamp, because that is the
 //! shape the defect has. A bare `clamp` is no guard against a NaN — NaN

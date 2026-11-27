@@ -169,11 +169,11 @@ These indicators show configured possibilities,
 not a live note reading.
 Lowering **Thickness max** also clamps **Thickness base** to that ceiling.
 
-Old one-target-per-source routes and weights are ignored on load,
+Old one-target-per-source routes and weights are dropped on load, each with a `persist dropped` line in the Console,
 so those mappings must be added again.
 Base values are retained.
 A saved **Gain range** setting is ignored on load, with a `persist dropped` line in the Console.
-Saved opacity bases above 1 are clamped to 1.
+Saved opacity bases above 1 are clamped to 1, with a `persist repaired` line in the Console.
 Saved projects without **Thickness base** load it at its default of 0.989×.
 
 ## Layout and folding

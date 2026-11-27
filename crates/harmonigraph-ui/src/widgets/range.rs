@@ -172,7 +172,7 @@ impl Grab {
         // after a High drag to its stop can come out an ulp short, a Span
         // carries that width on, and a Low stop at `hi - min_span` can land an
         // ulp low, so the next `sanitize` moved the value and
-        // `compose_scene`'s debug assert that the view is sanitized fired
+        // the scene entry's debug assert that the view is sanitized fired
         // (#1839). One post-condition rather than a repair in each arm, so a
         // new arm cannot miss it.
         harmonigraph_scene::clamp_span(lo, hi, (min, max), min_span)
@@ -1960,7 +1960,7 @@ mod tests {
 
     /// A grab writes a pair its config's `sanitize` keeps as it is, f32
     /// rounding included, so the value on screen is the one the file holds
-    /// and `compose_scene`'s sanitized-view assert holds (#1839). The issue's
+    /// and the scene entry's sanitized-view assert holds (#1839). The issue's
     /// two cases, each written into the real config the bar edits and run
     /// through its real `sanitize`: the Pitch color range's High end dragged
     /// to its stop and the span then slid, and the Level color range's Low end
