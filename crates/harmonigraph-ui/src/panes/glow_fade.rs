@@ -151,9 +151,9 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize,
 /// A clock that ran BACKWARDS holds every light where it is, as a frame drawn
 /// twice at one time does. The editor's display clock never does (it holds
 /// rather than rewinds, `ClockMapper::now` in harmonigraph-plugin); the guard
-/// is for a caller that steps one, which costs it nothing. A negative step
-/// is not a short one: run through the exponential it gives a coefficient below
-/// zero, which moves the light away from its target.
+/// stays, as #1784 kept it. A negative step is not a short one: run through
+/// the exponential it gives a coefficient below zero, which moves the light
+/// away from its target.
 fn coefficients(now: f64, previous: Option<f64>, attack: f32, release: f32) -> (f32, f32) {
     let dt = previous.map_or(f64::INFINITY, |at| now - at);
     let alpha = |seconds: f32| {
