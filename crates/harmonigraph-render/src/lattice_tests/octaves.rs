@@ -89,8 +89,14 @@ fn the_folded_ring_reads_each_wedge_at_its_own_octave() {
 /// the picture: no audio ring and no mark rings, so the only thing drawn is the
 /// band, and a wide gap so the seams between indicators are several pixels
 /// across at the size this renders at.
+///
+/// Its silent slices on a near-black Ground of its own, darker than any lit
+/// slice: the tests below sort the lit arc from them by brightness, and say
+/// which check a ghost brighter than its slice would make fire, so the ground
+/// is theirs to name rather than the fresh look's.
 fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> Scene {
     let mut scene = single_marked_node(0, 0);
+    scene.lattice_ground = harmonigraph_scene::grey_of_lightness(6.0);
     scene.octave_layout = layout;
     scene.outer_inner = 0.30;
     scene.outer_outer = 0.95;
@@ -451,9 +457,9 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
 /// `level > 0` switch — is caught below, and knowing WHICH check catches it is
 /// worth stating. The ghost is the rings' own grey (`Scene::lattice_ground`),
 /// and here it is darker than anything this fixture paints over it: every
-/// `pitch_lut` entry adds up to 1.4 across its three channels, against the
-/// fresh Ground's grey at 0.57. So the switch's last frame is a step DOWN in
-/// light, the never-brightens loop passes the whole way, and the TAIL-SPREAD
+/// `pitch_lut` entry adds up to 1.4 across its three channels, against
+/// [`octave_wheel_scene`]'s near-black Ground. So the switch's last frame is a
+/// step DOWN in light, the never-brightens loop passes the whole way, and the TAIL-SPREAD
 /// check is the one that fires — the slice holds its pitch to the last lit
 /// frame and then makes the entire journey to the ground in one. The loop
 /// takes the fault first only where the ground is the BRIGHTER of the two,
@@ -738,12 +744,12 @@ fn a_thick_slice_swells_past_the_band() {
 /// it: a silent slice wears the grey `Scene::lattice_ground` carries, whatever
 /// that is, rather than one grey baked into the shader.
 ///
-/// Every other fixture here draws at the fresh Ground alone, and the grey that
-/// names is `vec3(0.189)` — near enough a plausible literal that a shader
-/// ignoring `u.lattice_ground` entirely, or reading the ground out of the
-/// wrong vec4 of the uniform block, would render all of them pixel for pixel.
-/// So this one draws one node four times across the bar, the fresh 20 first
-/// and then a near-black, a mid grey and a near-white.
+/// Every other fixture here draws at [`octave_wheel_scene`]'s one Ground, a
+/// grey near enough a plausible literal that a shader ignoring
+/// `u.lattice_ground` entirely, or reading the ground out of the wrong vec4 of
+/// the uniform block, would render all of them pixel for pixel. So this one
+/// draws one node four times across the bar: a dark grey, a near-black, a mid
+/// grey and a near-white.
 ///
 /// Full presence against a slot at level 0 is where the arithmetic leaves
 /// nothing to interpret: a silent slice's opacity IS the node's presence, so
