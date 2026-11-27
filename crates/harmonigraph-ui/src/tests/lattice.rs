@@ -474,12 +474,10 @@ fn the_lattice_pane_paints_the_ground_it_hands_the_scene() {
 
 /// And it paints the SHELL's ground, not the skin's.
 ///
-/// The offline renderer clears its frame to the render layout's background and
-/// hands the same color to the state, which a hand-written layout may set to
-/// something other than the skin's picture ground — so a fill that reached for
-/// the theme instead of the field would paint the skin's colour over every
-/// such frame, in the one place it is hardest to notice. This is the test that
-/// fails for that.
+/// The pane fills with the ground its state holds (`set_background`), not with
+/// the theme's picture colour. Every shell leaves that ground at the picture
+/// colour today, so the two agree in production; this holds the fill to the
+/// field, which is the test that fails if a fill reaches for the theme.
 #[test]
 fn the_pane_paints_the_shells_ground_rather_than_the_skins() {
     let mut state = fresh();
