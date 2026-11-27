@@ -180,7 +180,7 @@ including after just one accepted callback,
 and without waiting for a note.
 
 A jump while playing, back or forward, records on under every trigger but *Loop end*:
-the next block continues the take's one WAV, so the video shows a jump where you jumped.
+the next block continues the take's one WAV, so the video runs on through the jump without a gap.
 A looped take renders all its loops, one after another, as one video;
 to render only the last, give `--start`.
 Under *Loop end* a backward jump after accepted forward progress — the loop wrapping — ends the take instead.
@@ -219,7 +219,7 @@ it does not need to draw every video frame to preserve those proportions.
 |---|---|
 | Manually | you switch Record take off — predictable, and it works however the transport behaves |
 | Transport stop | the transport stays stopped for 0.4 s after something was recorded; recording disarms at the same moment. A jump records on |
-| Loop end | one arranger-loop pass, ending when the loop wraps. A forward seek records on. With looping off, it waits for a disarm |
+| Loop end | one arranger-loop pass, ending when the loop wraps, or at any other backward jump. A forward seek records on. With nothing to wrap on, it waits for a disarm |
 | At bar | the transport plays through the bar set beside it, ending there. A rewind or forward seek records on, so a scrub back and a replay renders every attempt, end to end |
 
 *Transport stop* is what makes **exporting audio produce a video with nothing further to click**:

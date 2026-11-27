@@ -26,9 +26,10 @@ pub use writer::testing;
 use configuration::{RecordFence, RecordIntent};
 use lifecycle::{Action, End, History, Observation, Policy, State};
 
-/// Record-ring capacity. Expressive voices can produce several records per
-/// audio block, multiplied by export speed. This bounded queue absorbs worker
-/// scheduling delays; the separate canonical publication lane has its own cap.
+/// Record-ring capacity. A block writes its run's edges, its configuration
+/// changes, its parameter changes and its audio's marker, multiplied by
+/// export speed; notes ride the canonical publication lane, which has its own
+/// cap. This bounded queue absorbs worker scheduling delays.
 const TAKE_RING_CAPACITY: usize = 1 << 16;
 
 const FINISHING: &str = "finishing…";
@@ -41,9 +42,9 @@ pub(crate) const AUDIO_THREAD_FAILURE: &str = "recording incomplete: the take lo
 
 /// Capacity of the audio ring, in interleaved samples. Generous on
 /// purpose: during an offline export audio arrives many times faster than
-/// realtime, and unlike the spectrum's ring — which drops by design,
-/// because a stalled meter must never stall audio — dropping here would
-/// put a silent hole in the finished video.
+/// realtime, and unlike the live analyzer's ring — which drops by design,
+/// because a stalled meter must never stall audio — a block that does not fit
+/// here fails the take.
 const AUDIO_RING_CAPACITY: usize = 1 << 20;
 
 /// A take's WAV is always stereo, whatever selected audio stream the host

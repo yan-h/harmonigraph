@@ -188,8 +188,8 @@ impl Drop for Harmonigraph {
     }
 }
 
-/// The live shell always owns its recorder. Destruction transfers that same
-/// producer, alongside its original route owner, into bounded session retirement.
+/// The live shell owns its recorder until `destroy` drops it, which fails a
+/// take still recording: the recorder's own drop decides.
 struct RecorderSlot(Option<harmonigraph_record::Recorder>);
 impl std::ops::Deref for RecorderSlot {
     type Target = harmonigraph_record::Recorder;
@@ -1727,10 +1727,10 @@ mod tests {
     }
 
     /// One event, two clocks. The ring uses continuous presentation seconds,
-    /// which is what the editor's ClockMapper reads; the take is
-    /// stamped on the transport, which is what lets it be lined up against a
-    /// bounce later. Collapsing them into one would look right on screen and
-    /// put every recorded take at the wrong song position.
+    /// which is what the editor's ClockMapper reads; a take's runs say where
+    /// that clock sits in the song, from the transport. Collapsing them into
+    /// one would look right on screen and put every recorded take at the
+    /// wrong song position.
     ///
     /// Every constant here divides to an exact binary fraction, which is what
     /// lets `assert_eq!` compare f64 at all. Picking more realistic numbers — a

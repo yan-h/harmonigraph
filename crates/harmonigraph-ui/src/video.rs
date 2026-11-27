@@ -27,8 +27,9 @@ pub enum RenderTrigger {
     /// Once the transport has stayed stopped for 0.4 s after recording
     /// something — so a play-through, or an audio export, produces a video
     /// with nothing further to click. Recording disarms itself at the same
-    /// moment. A jump while playing, back or forward, records on: the video
-    /// shows a jump where you jumped.
+    /// moment. A jump while playing, back or forward, records on, and the
+    /// video runs on through it: a take's time follows its own audio, not the
+    /// host's position.
     ///
     /// Falls back gracefully: if a host stops calling `process` while the
     /// transport rolls, no stillness is counted and the take records on until
@@ -40,10 +41,11 @@ pub enum RenderTrigger {
     /// stop by hand. Meant for looped recording, where a manual stop is always
     /// a beat or two off.
     ///
-    /// Detected by the transport wrapping, so **looping must be enabled**.
-    /// Hosts don't reliably tell a plugin where the loop markers are (Bitwig
-    /// doesn't flag its loop as active, so nih-plug's loop range is `None`), so
-    /// with looping off there is nothing to wrap on and it waits for you to
+    /// Detected as the transport jumping back after it has moved forward,
+    /// which is what a loop's wrap looks like: hosts don't reliably tell a
+    /// plugin where the loop markers are (Bitwig doesn't flag its loop as
+    /// active), so any backward jump while recording ends the take there, a
+    /// scrub back included. With nothing to wrap on it waits for you to
     /// disarm, like [`OnDisarm`](Self::OnDisarm).
     AtLoopEnd,
     /// When the transport plays THROUGH [`stop_bar`](RenderConfig::stop_bar):
