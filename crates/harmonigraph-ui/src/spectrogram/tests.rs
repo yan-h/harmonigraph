@@ -839,6 +839,61 @@ fn the_lut_key_is_the_gradient_and_not_the_level_window() {
     }
 }
 
+/// The shared colour table follows the designed curve of each gradient the
+/// fresh look draws through it, the lattice's pitch gradient and this
+/// heatmap's level gradient, within what [`PITCH_LUT_N`] entries measure on
+/// them today: 8.2/255 near MIDI 27 on the pitch gradient, and 14.5/255 near
+/// the loud end of the level gradient (`t` 0.97), whose bend packs entries
+/// where its lightness and hue turn. Yan accepted both rather than pinning an entry on
+/// the bend (#1994 CL1).
+///
+/// Here rather than beside the table in `harmonigraph-scene`, because the
+/// fresh level gradient is the UI's [`SpectrumConfig`] default; the scene's
+/// `designed_ramp` reaches this crate through its `testing` feature.
+///
+/// A fidelity to an ideal nothing draws, not an agreement between shapes,
+/// which is exact at every table size (see [`PITCH_LUT_N`]). The curve is not
+/// smooth, so the error is not monotone in the table's size: 48 entries
+/// measure 4.9 and 12.7 on these two, and 32 measure 9.8 and 21.1.
+///
+/// [`PITCH_LUT_N`]: harmonigraph_scene::PITCH_LUT_N
+#[test]
+fn the_colour_table_tracks_the_fresh_gradients_curves() {
+    let fresh = crate::AppearanceDocument::default();
+    let worst = |at: &dyn Fn(f32) -> (f32, glam::Vec4, glam::Vec4)| {
+        let mut worst = (0.0f32, 0.0f32);
+        for i in 0..=10_000 {
+            let (x, table, curve) = at(i as f32 / 10_000.0);
+            let e = (table - curve).truncate().abs().max_element() * 255.0;
+            if e > worst.0 {
+                worst = (e, x);
+            }
+        }
+        worst
+    };
+    let view = &fresh.view;
+    let (dark, bright, pitch_gradient) =
+        (view.darkest_pitch, view.brightest_pitch, view.pitch_gradient);
+    let pitch = worst(&|t| {
+        let pitch = dark + t * (bright - dark);
+        (
+            pitch,
+            harmonigraph_scene::pitch_lut_color(pitch, dark, bright, pitch_gradient),
+            harmonigraph_scene::designed_ramp(f64::from(t), pitch_gradient),
+        )
+    });
+    let level_gradient = fresh.spectrum.spectrogram_gradient;
+    let level = worst(&|t| {
+        (
+            t,
+            harmonigraph_scene::gradient_color(t, level_gradient),
+            harmonigraph_scene::designed_ramp(f64::from(t), level_gradient),
+        )
+    });
+    assert!(pitch.0 < 8.5, "the pitch table strays {:.1}/255 at MIDI {:.2}", pitch.0, pitch.1);
+    assert!(level.0 < 15.0, "the level table strays {:.1}/255 at t {:.4}", level.0, level.1);
+}
+
 /// The affine and the table the UI hands the shader stand in for the
 /// mapping they replaced, byte for byte.
 ///

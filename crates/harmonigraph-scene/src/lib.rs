@@ -273,8 +273,8 @@ pub fn clamp_span(lo: f32, hi: f32, (min, max): (f32, f32), min_span: f32) -> (f
 }
 
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
-/// melody and bass marks and the piano roll on the CPU, the octave glyphs and
-/// their glow in the shader. The shader mirrors this length, and `harmonigraph-render`
+/// piano roll and the Spiral on the CPU, the octave glyphs, the melody and bass
+/// marks and their glow in the shader. The shader mirrors this length, and `harmonigraph-render`
 /// asserts that it does.
 ///
 /// Because all of them read this one table, its size is not what makes two
@@ -289,41 +289,31 @@ pub fn clamp_span(lo: f32, hi: f32, (min, max): (f32, f32), min_span: f32) -> (f
 /// is whether a sample happens to land near one rather than how many samples
 /// there are.
 ///
-/// Sweeping the default gradient's whole range, worst channel error is 8.0/255
-/// at 16 entries, 7.5 at 32, 5.6 at 48, 3.4 at 64, 1.3 at 96 — but 2.4 at 128,
-/// and 1.4 at 192 before 0.3 at 256, four kilobytes in. The sequence is not
-/// monotone and that is the point: the worst case is set by where a sample
-/// lands relative to a CORNER of the gamut's own boundary, not by how many
-/// samples there are, so more entries can measure worse. Past 64 the spend
-/// buys a fraction of a level that no display step can show, and the curve is
-/// already tracked far closer than a viewer can see.
+/// Swept over the fresh look's two gradients, the lattice's pitch gradient and
+/// the heatmap's bent level gradient, worst channel error is 9.8/255 and 21.1
+/// at 32 entries, 4.9 and 12.7 at 48, 8.2 and 14.5 at 64, and about 6.2 and
+/// 14.9 at 96. The sequence is not monotone and that is the point: the worst
+/// case is set by where a sample lands relative to a CORNER of the gamut's own
+/// boundary, not by how many samples there are, so more entries can measure
+/// worse, and a change to a gradient's knobs moves those corners and swings
+/// the figure without anything being wrong. It is a distance from an IDEAL,
+/// not a disagreement between two shapes, which stays exact at every table
+/// size.
 ///
-/// 3.4/255 is what 64 entries buy on THIS curve, and a curve authored in
-/// CIELAB rather than Oklab would put the same table at 1.8: the arc is long
-/// in Oklab degrees and its chroma ceiling turns fast along it, so what a
-/// table of any size is chasing simply bends more. 3.4/255 is 1.3% of a
-/// channel, on a gradient whose neighbouring entries differ by more than that
-/// — and it is a distance from an IDEAL, not a disagreement between two
-/// shapes, which stays exact at every table size.
-///
-/// A gradient can be dialled to a harsher curve than the default — chroma at
-/// 1.0 rides the boundary itself, corners and all, rather than half way in —
-/// which is the case for leaving headroom here rather than trimming to what
-/// the default alone needs.
-///
-/// What that costs is measured (#1111), on UNBENT gradients swept in `t` steps
-/// of 2.5e-4. The default LEVEL gradient's chroma fraction reaches exactly 1.0
-/// at its top, where the boundary near `L*` 94 at hues about 120-130 has a
-/// sharp corner: green saturates while blue turns steep within 0.2 `L*`. The
-/// table misses it by 5.8/255 on the default, and by 30.9/255 at worst with
-/// hue start swept over 290-310 and lightness over 45-55 (worst at 296 / 48,
-/// at `t` 0.996). A brightness bend puts the corner where the table samples
-/// more coarsely, and on #1110's branch that read 36.7/255. Accepted: the miss
-/// sits in the loudest half-percent of the ramp at non-default dials. What
-/// would remove it is a table entry pinned on the corner — a second warp beside
-/// the bend's in [`LutSpacing`] and in every shader's `lut_position`, catching
-/// only the one corner the arc crosses — or a chroma fraction held under 1.0,
-/// which moves the look.
+/// The pitch gradient's 8.2/255 sits near MIDI 27, at the dark end of its
+/// range. The level gradient's 14.5 sits near the loud end (`t` 0.97): its
+/// chroma fraction reaches exactly 1.0 at its top, where the boundary near
+/// `L*` 94 at hues about 120-130 has a sharp corner (green saturates while
+/// blue turns steep within 0.2 `L*`), and its brightness bend puts the corner
+/// where the table samples more coarsely. #1143 accepted that miss at
+/// non-default dials (#1111 measured it at up to 36.7/255) a day before #1205
+/// made a bent gradient the fresh one, and Yan accepted it on the fresh look
+/// too (#1994 CL1). What would remove it is a table entry pinned on the
+/// corner — a second warp beside the bend's in [`LutSpacing`] and in every
+/// shader's `lut_position`, catching only the one corner the arc crosses — or
+/// a chroma fraction held under 1.0, which moves the look.
+/// `the_colour_table_tracks_the_fresh_gradients_curves`, in the UI crate,
+/// whose `SpectrumConfig` holds the fresh level gradient, holds both figures.
 ///
 /// Do NOT read that error as a mismatch between shapes. It is the difference
 /// between the table and an ideal nothing draws.
