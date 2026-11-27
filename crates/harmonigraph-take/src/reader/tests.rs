@@ -62,7 +62,6 @@ fn gap(first: u64, from: i64, to: i64) -> Record {
         through: presentation(to),
         first,
         last: first,
-        ..Default::default()
     }))
 }
 

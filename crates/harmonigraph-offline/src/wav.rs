@@ -257,7 +257,7 @@ mod tests {
     /// measures their energy before combining channels.
     #[test]
     fn float32_stereo_keeps_its_channels() {
-        let frames = vec![vec![1.0, 0.0], vec![-1.0, 1.0], vec![0.5, 0.5]];
+        let frames = [[1.0, 0.0], [-1.0, 1.0], [0.5, 0.5]];
         let mut audio = Audio::from_samples(48_000.0, frames.concat(), 2);
         assert_eq!(audio.sample_rate, 48_000.0);
         assert_eq!(audio.channels, 2);
