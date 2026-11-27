@@ -58,7 +58,7 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 
 ## 2026-11-22 (#1934, in chat)
 
-- Every restore line that reports a loss opens the Console, the host restore's (a field or parameter it could not read, the legacy axes (since PR #1999 the generic line for parameters this build no longer has, which still opens it), a full queue's refusal) as well as the editor door's; a line about the host only appends. Opening it is no edit, by the #1813 line above, and the next save stores Settings unfolded on the Console tab, by the #1757 rule that a save stores what the editor holds. Built in PR #1940. (The full queue's refusal is gone: no restore refuses since #1938, `docs/intent/tuning.md`.)
+- Every restore line that reports a loss opens the Console, the host restore's (a field or parameter it could not read, the legacy axes, a full queue's refusal) as well as the editor door's; a line about the host only appends. Opening it is no edit, by the #1813 line above, and the next save stores Settings unfolded on the Console tab, by the #1757 rule that a save stores what the editor holds. Built in PR #1940. (The full queue's refusal is gone: no restore refuses since #1938, `docs/intent/tuning.md`.) (The legacy axes' line is, since PR #1999, the generic line for parameters this build no longer has, which still opens the Console.)
 
 ## 2026-11-23 (#1949, in chat)
 
