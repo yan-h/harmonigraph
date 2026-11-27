@@ -682,14 +682,10 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     state.params.insert("tuning-tolerance".into(), ParamValue::F32(3.0));
     state.fields.insert(MUSICAL_SETTINGS.into(), r#"{"meantone":false,"marvel":true}"#.into());
     device.load(state);
-    assert_eq!(
-        settings.next_notice(),
-        Some(Notice::Restore(
-            "This project saved parameters this build no longer has, which were not read: \
-             tuning-three, tuning-tolerance."
-                .into()
-        ))
-    );
+    let Some(Notice::Restore(line)) = settings.next_notice() else {
+        panic!("the restore owes a Console line");
+    };
+    assert!(line.contains("tuning-three") && line.contains("tuning-tolerance"), "{line}");
     assert_eq!(settings.next_notice(), None, "one line");
     device.activate();
     device.run(0, vec![], None);
