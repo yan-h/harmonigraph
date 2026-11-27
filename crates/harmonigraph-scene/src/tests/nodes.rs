@@ -972,15 +972,14 @@ fn a_degenerate_color_range_lands_where_the_shader_lands() {
 }
 
 #[test]
-fn an_inverted_color_range_derives_the_range_its_bar_can_show() {
+fn an_inverted_color_range_loads_as_the_range_its_bar_can_show() {
     // Every color in the picture runs the gradient math, and a hand-edited
     // look can hold Darkest above Brightest, which no drag of the bar makes.
-    // The load repairs it to the pair the bar would read out, and the scene
-    // draws that: an octave apart at least, the high end above the low.
-    let view = ViewConfig { darkest_pitch: 70.0, brightest_pitch: 60.0, ..plain_view() };
-    let scene = scene_of(&held(60), &Tuning::default(), &loaded(&view), 0.0);
+    // The load repairs it to the pair the bar would read out: an octave apart
+    // at least, the high end above the low.
+    let view = loaded(&ViewConfig { darkest_pitch: 70.0, brightest_pitch: 60.0, ..plain_view() });
     assert_eq!(
-        (scene.view.darkest_pitch, scene.view.brightest_pitch),
+        (view.darkest_pitch, view.brightest_pitch),
         (70.0, 70.0 + COLOR_RANGE_MIN_SPAN),
         "the low end stands and the high end is held an octave above it",
     );

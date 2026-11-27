@@ -56,7 +56,7 @@ fn the_marker_field_is_the_home_sheet_and_only_it() {
 }
 
 #[test]
-fn the_mark_depth_reaches_the_scene_and_is_clamped() {
+fn the_mark_depth_reaches_the_scene_and_loads_clamped() {
     // One thickness drives BOTH rings, so it lives on the scene rather
     // than per node; 0 is the off state, as it is for every layer's width.
     let view = ViewConfig { mark_thickness: 0.15, ..ViewConfig::default() };
@@ -67,9 +67,8 @@ fn the_mark_depth_reaches_the_scene_and_is_clamped() {
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &off, 0.0);
     assert_eq!(scene.view.mark_thickness, 0.0, "0 passes through as the off state");
 
-    let wild = ViewConfig { mark_thickness: 9.0, ..ViewConfig::default() };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(&wild), 0.0);
-    assert!(scene.view.mark_thickness <= 0.3, "got {}", scene.view.mark_thickness);
+    let wild = loaded(&ViewConfig { mark_thickness: 9.0, ..ViewConfig::default() });
+    assert!(wild.mark_thickness <= 0.3, "got {}", wild.mark_thickness);
 }
 
 #[test]
