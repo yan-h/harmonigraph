@@ -1027,10 +1027,19 @@ impl MemoryStep {
 /// history's scroll, which is why the editor's pacing asks for its pixel too.
 pub fn cloud_drift_heights_per_second(settings: harmonigraph_scene::SpectralAtmosphere) -> f64 {
     let settings = settings.sanitized();
-    let [x, y] = harmonigraph_scene::MaterialSettings::drift_rate(
-        settings.cloud_speed,
-        settings.cloud_direction,
-    );
+    drift_heights_per_second(settings.cloud_speed, settings.cloud_direction)
+}
+
+/// How fast the lattice glow's material drifts across the pane, in pane
+/// heights a second, as [`cloud_drift_heights_per_second`] is the heatmap's:
+/// both drift through the one cloud space.
+pub fn lattice_drift_heights_per_second(settings: harmonigraph_scene::AtmosphereSettings) -> f64 {
+    let settings = settings.sanitized();
+    drift_heights_per_second(settings.material_speed, settings.material_direction)
+}
+
+fn drift_heights_per_second(speed: f32, direction: f32) -> f64 {
+    let [x, y] = harmonigraph_scene::MaterialSettings::drift_rate(speed, direction);
     x.hypot(y) / f64::from(crate::material_cells::CLOUD_UNITS)
 }
 

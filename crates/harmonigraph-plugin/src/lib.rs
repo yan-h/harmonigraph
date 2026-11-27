@@ -719,17 +719,18 @@ fn take_stereo_frame(planes: &[&[f32]], frame: usize) -> [f32; TAKE_CHANNELS] {
 
 /// One source decision for the whole process block. Both the live analyzer and
 /// the take recorder read the returned buffer, so changing the source can never
-/// put the live and offline pictures on opposite inputs. Missing auxiliary data
-/// falls back only as a defensive layout guard; an advertised but unrouted
-/// sidechain is a real zero-filled buffer and remains silence.
+/// put the live and offline pictures on opposite inputs. The host builds the
+/// declared sidechain whether or not anything is routed to it
+/// (`harmonigraph_clap::audio_setup`), so an unrouted one is a real zero-filled
+/// buffer and remains silence.
 fn selected_analysis_input<'a, T: ?Sized>(
     main: &'a T,
-    sidechain: Option<&'a T>,
+    sidechain: &'a T,
     input: AnalysisInput,
 ) -> &'a T {
     match input {
         AnalysisInput::Main => main,
-        AnalysisInput::Sidechain => sidechain.unwrap_or(main),
+        AnalysisInput::Sidechain => sidechain,
     }
 }
 
@@ -855,7 +856,7 @@ impl Harmonigraph {
             *view = plane;
         }
         let main = &main[..audio.main.len()];
-        let planes = selected_analysis_input(main, audio.aux.first().copied(), selected);
+        let planes = selected_analysis_input(main, audio.aux[0], selected);
         let channels = planes.len();
         self.audio_producer.publish(
             block_samples,
@@ -1220,6 +1221,8 @@ mod tests {
         let mut plugin = Harmonigraph::default();
         let state = plugin.params.editor_state.clone();
         state.set_open(true);
+        // Past the worker's first steps, so a pass asked below is the note's.
+        wait_for_rounds(&plugin, 2);
         state.pass_request.take();
         plugin.take.publish_clock(1.0);
         plugin
@@ -1227,13 +1230,32 @@ mod tests {
             .publish_note(CoreNoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0).into())
             .expect_both();
         let started = Instant::now();
-        while !state.pass_request.take() {
+        while plugin.editor_shared.lock().ui.picture.runtime.tracker.voices().next().is_none() {
             assert!(
                 started.elapsed() < ANALYSIS_DEADLINE,
-                "no pass asked of the editor's state in {ANALYSIS_DEADLINE:?} after a strike: \
-                 the worker asks another EguiState, or this runner never scheduled it",
+                "the note never reached the tracker in {ANALYSIS_DEADLINE:?}: this runner \
+                 never scheduled the worker",
             );
             std::thread::sleep(background::POLL);
+        }
+        // Asked once the step that drained it let go of the lock.
+        wait_for_rounds(&plugin, 1);
+        assert!(
+            state.pass_request.take(),
+            "the strike asked no pass of the editor's state: the worker asks another EguiState",
+        );
+    }
+
+    /// Wait until the input worker has completed `rounds` more of its loop.
+    fn wait_for_rounds(plugin: &Harmonigraph, rounds: u64) {
+        let from = plugin.input_worker.completed_rounds();
+        let started = Instant::now();
+        while plugin.input_worker.completed_rounds() < from + rounds {
+            assert!(
+                started.elapsed() < ANALYSIS_DEADLINE,
+                "no worker round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
+            );
+            std::thread::sleep(background::POLL / 2);
         }
     }
 
@@ -1266,8 +1288,6 @@ mod tests {
         };
 
         let mut plugin = Harmonigraph::default();
-        let state = plugin.params.editor_state.clone();
-        state.pass_request.take();
         // What the host does when it restores a project, and all it does: no
         // editor, no activation, just the field.
         restore(&plugin, &blob);
@@ -1275,17 +1295,9 @@ mod tests {
         // so the analyzer cannot come out of the drain empty.
         publish_test_audio(&mut plugin, 40_000);
         // Waited for without taking the editor lock, which would install the
-        // restore itself: the worker asks for a pass once it has given the
-        // first sound to the spectrum, and nothing else here asks for one.
-        let started = Instant::now();
-        while !state.pass_request.take() {
-            assert!(
-                started.elapsed() < ANALYSIS_DEADLINE,
-                "nothing was analyzed in {ANALYSIS_DEADLINE:?}, or this runner never \
-                 scheduled the analyzer",
-            );
-            std::thread::sleep(background::POLL / 2);
-        }
+        // restore itself: a round that began after the audio was published
+        // drained and analyzed all of it.
+        wait_for_rounds(&plugin, 2);
 
         // The analysis is the worker's own, so read it once the worker has
         // stopped and handed it back.
@@ -1646,20 +1658,15 @@ mod tests {
 
     /// Source selection is explicit and block-wide. Silence says nothing about
     /// connectivity, so Sidechain chooses the auxiliary value even when it is
-    /// zero; only a structurally missing buffer takes the defensive Main path.
+    /// zero.
     #[test]
     fn analysis_input_selection_never_falls_back_on_signal_content() {
         let (main, sidechain) = (11, 0);
-        assert_eq!(*selected_analysis_input(&main, Some(&sidechain), AnalysisInput::Main), main,);
+        assert_eq!(*selected_analysis_input(&main, &sidechain, AnalysisInput::Main), main);
         assert_eq!(
-            *selected_analysis_input(&main, Some(&sidechain), AnalysisInput::Sidechain),
+            *selected_analysis_input(&main, &sidechain, AnalysisInput::Sidechain),
             sidechain,
             "a silent sidechain fell back to the main input",
-        );
-        assert_eq!(
-            *selected_analysis_input(&main, None, AnalysisInput::Sidechain),
-            main,
-            "a missing auxiliary buffer has no safe source except Main",
         );
     }
 
@@ -1780,13 +1787,15 @@ mod tests {
         let shared = &mut *shared;
         let mut left = vec![0.5; 10_000];
         let mut right = vec![-0.5; 10_000];
+        let silence = [0.0; 10_000];
+        let sidechain = [&silence[..], &silence[..]];
         let mut transport = Transport::default();
         for (playing, position) in [(true, Some(100_000.0)), (true, Some(0.0)), (false, None)] {
             transport.playing = playing;
             transport.pos_seconds = position.map(|samples: f64| samples / 48_000.0);
             let mut main = [&mut left[..], &mut right[..]];
             plugin.clock.step(10_000, plugin.sample_rate);
-            plugin.play(&transport, Audio { main: &mut main, aux: &[] });
+            plugin.play(&transport, Audio { main: &mut main, aux: &[&sidechain] });
         }
         let columns =
             input.drain_columns(&mut shared.clock, &mut shared.ui.picture, plugin.clock.end());
@@ -1802,8 +1811,9 @@ mod tests {
         let mut left = [0.0; 384];
         let mut right = [0.0; 384];
         let mut main = [&mut left[..], &mut right[..]];
+        let sidechain = [&silence[..384], &silence[..384]];
         plugin.clock.step(384, plugin.sample_rate);
-        plugin.play(&transport, Audio { main: &mut main, aux: &[] });
+        plugin.play(&transport, Audio { main: &mut main, aux: &[&sidechain] });
         input.drain(&mut shared.clock, &mut shared.ui.picture, &mut Vec::new(), plugin.clock.end());
         assert_eq!(shared.ui.picture.runtime.spectrum.columns_taken(), before);
     }
@@ -1828,8 +1838,10 @@ mod tests {
         right: &mut [f32],
     ) {
         let transport = Transport { pos_seconds: Some(position), playing, ..Default::default() };
+        let silence = vec![0.0; left.len()];
+        let sidechain = [&silence[..], &silence[..]];
         let mut main = [left, right];
-        plugin.play(&transport, Audio { main: &mut main, aux: &[] });
+        plugin.play(&transport, Audio { main: &mut main, aux: &[&sidechain] });
     }
 
     /// Click in Tape mode, and wait until the input worker has passed the

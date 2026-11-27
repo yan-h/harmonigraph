@@ -20,7 +20,7 @@ while a source restart clears retained audio and keeps its estimator resources.
 There is no retained planner or shared plan cache.
 
 This is the minimum extraction needed to leave the reusable pitch-math crate dependency-free.
-Axis constants, Hz/MIDI conversion and spectrum history stay in core;
+Axis constants, Hz/MIDI conversion and the spectrogram's stored byte stay in core, and spectrum history in `harmonigraph-ui` (#1770);
 GUI and GPU types stay outside this crate.
 The [adoption report](../../docs/realfft-adoption.md) records numerical, picture and cost comparisons.
 

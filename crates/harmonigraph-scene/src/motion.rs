@@ -78,6 +78,9 @@ pub struct NodeMotion {
     /// Whether the last step's visible nodes are still moving if nothing new
     /// reaches them: see [`moving`](Self::moving).
     moving: bool,
+    /// When the earliest lattice off still waiting out its note's attack is
+    /// due: see [`off_due`](Self::off_due).
+    off_due: Option<f64>,
     #[cfg(test)]
     replayed_edges: usize,
     /// Keep an entry for every visible node, as the table did before it was
@@ -379,8 +382,7 @@ impl Motion {
     }
     /// Whether [`advance`](Self::advance) will still change anything this node
     /// draws, if nothing reaches it from outside: no new edge, target or pose,
-    /// each of which arrives on a frame that something else is already drawing
-    /// for.
+    /// each of which arrives on a frame drawn for it ([`NodeMotion::moving`]).
     ///
     /// Read off the same state `advance` walks, and naming that state rather
     /// than how long it takes, so a delay the motion carries is in here without
@@ -460,11 +462,18 @@ impl NodeMotion {
     /// joins the motion — a hold, a wait, a longer sweep — is in here the
     /// moment the motion carries it.
     ///
-    /// Whatever reaches a node from outside arrives on a frame something else
-    /// is already drawing for: a note keeps a voice for a fade past its off,
+    /// Whatever reaches a node from outside arrives on a frame drawn for it:
+    /// the editor's input worker asks for a pass at every edit of the tracker,
     /// and the audio ring's own state holds the loop while it is moving.
     pub fn moving(&self) -> bool {
         self.moving
+    }
+    /// When the earliest lattice off still waiting out its note's attack
+    /// (`Envelope::release_start`) is due, on the step's clock. Its departure
+    /// starts then though nothing may move before it: a node another voice
+    /// of the key lights in full holds still through the wait.
+    pub fn off_due(&self) -> Option<f64> {
+        self.off_due
     }
     /// Whether a position has carried MIDI ink or marks. Audio poses emit no light.
     pub fn owns_light(&self, pos: LatticePos) -> bool {
@@ -809,6 +818,7 @@ impl NodeMotion {
         // The released presses whose lattice off is still to come, which the
         // reconciliation below keeps held: their voices are released already.
         let mut waiting = Vec::new();
+        let mut due = f64::INFINITY;
         // One bounded roll scan per surface, never one scan per node. Only
         // edges since the checkpoint are replayed; retained old notes cannot
         // restart a finished animation when history is trimmed.
@@ -854,6 +864,7 @@ impl NodeMotion {
                 // a tuned onset is a bend at the onset itself.
                 if note.start <= now && at > now {
                     waiting.push((id, held(at, note.end_pitch())));
+                    due = due.min(at);
                 }
             }
             // observed_until is loss of observation, not a factual key-up.
@@ -943,6 +954,7 @@ impl NodeMotion {
             self.held.insert(voice.id(), Held::new(voice.on_time, voice.pitch, reading));
         }
         self.held.extend(waiting);
+        self.off_due = due.is_finite().then_some(due);
         self.gates(scene, tuning, view, env, fade, tracker, now, false, std::mem::take(&mut first));
         self.advance(0.0, env);
         self.at = Some(now);
@@ -1263,6 +1275,25 @@ mod tests {
         }
         assert_eq!(lowest(&|n| n.presence_with_opacity), 1.0, "the presence left with the colour");
         assert_eq!(origin(&frames.last().unwrap().1).slice_progress, [1.0; 11]);
+    }
+    /// A note let go inside its attack keeps its lattice off until the attack
+    /// has landed (`Envelope::release_start`). Under another voice of the same
+    /// key that already lights its node in full, nothing moves in the wait, so
+    /// the motion says when the off is due, for the editor to draw it then.
+    #[test]
+    fn a_deferred_off_is_motion_due_at_its_time() {
+        let view = ViewConfig { mark_delay: 0.0, ..view() };
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        tracker.handle_event(on(0.0, 60));
+        draw_duration(&mut motion, &mut tracker, &view, 1.0, false, 0.5);
+        tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 1, 60, 0.2));
+        tracker.handle_event(NoteEvent::off(1.05, SourceId::DIRECT, 1, 60));
+        draw_duration(&mut motion, &mut tracker, &view, 1.2, false, 0.5);
+        assert!(!motion.moving(), "the fixture's node must be still inside the wait");
+        assert_eq!(motion.off_due(), Some(1.5), "the off waiting out the attack");
+        draw_duration(&mut motion, &mut tracker, &view, 1.6, false, 0.5);
+        assert_eq!(motion.off_due(), None, "an off already taken is still due");
     }
     /// At a Fade of 0 the fade-out delay still holds the presence: the wheel
     /// stands through the wait and then steps out, rather than vanishing at

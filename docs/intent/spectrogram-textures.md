@@ -29,3 +29,4 @@ Yan’s decisions recorded for future drift audits.
 ## 2026-11-27 (drift audit, #1994)
 
 - Watercolor draws per pixel in every export: the reduced tone path, which only an export wider than 2,560 px reached (in use, 21:9 at 1440), goes, so an export matches its preview at the cost of export time and memory. Yan, 2026-11-27, taking the recommendation. #1994 TX1, #1993
+- The heatmap's colour memory eases at its own scroll or drift pace, about 65 ms a pixel in the fresh look at full size and up to 250 ms in a small pane, where it rode the 50 ms poll before; accepted with no cap. Yan, 2026-11-27, taking the recommendation. PR #1998

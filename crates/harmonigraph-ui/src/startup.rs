@@ -92,7 +92,8 @@ pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
         ));
     }
     if status != Status::Failed {
-        // About every 60 Hz refresh.
+        // 16 ms: every refresh at 60 Hz, and every third at 144 Hz, about
+        // 48 fps.
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
     }
     ui.ctx().data_mut(|data| data.insert_temp(id(), loading));

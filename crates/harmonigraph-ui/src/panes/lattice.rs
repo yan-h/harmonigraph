@@ -224,6 +224,45 @@ pub(crate) fn compose_scene(
     scene
 }
 
+/// The glow atmosphere's own motion, on the pane `height` device pixels tall:
+/// wherever a node is lit, the renderer runs its material, pattern and
+/// breathing on the glow clock (`lattice_material::prepare`), so this lattice
+/// asks for every frame while its light breathes, its pattern moves or its
+/// Stars twinkle, and for the frame its drift next crosses a device pixel
+/// where only a Watercolor or Scales drift moves, as the heatmap's atmosphere
+/// does (`spectrogram::draw_spectrogram`); a drift slower than a pixel a poll
+/// moves under a pixel between the poll's frames, which draw it. Nothing with
+/// the glow off, no node lit past a visible step, or every motion dial at 0.
+fn hold_atmosphere(scene: &harmonigraph_scene::Scene, moving: &mut crate::Animating, height: f32) {
+    use harmonigraph_scene::LatticeMaterial;
+    // Lit as the glow's own stepping judges a light seen (`VISIBLE_STEP`).
+    let strength = scene.view.glow_strength;
+    let visible = |node: &harmonigraph_scene::NodeInstance| {
+        node.glow.level * strength > super::glow_fade::VISIBLE_STEP
+    };
+    if !scene.view.glow_draws() || !scene.nodes.iter().any(visible) {
+        return;
+    }
+    let atmosphere = scene.view.atmosphere.sanitized();
+    let material = atmosphere.material_amount > 0.0;
+    let twinkles = material && atmosphere.material_style == LatticeMaterial::Stars;
+    let breathes = atmosphere.breath_amount > 0.0 && atmosphere.breath_speed > 0.0;
+    let patterned = atmosphere.texture_depth > 0.0 && atmosphere.texture_speed > 0.0;
+    if twinkles || breathes || patterned {
+        moving.hold(crate::Reason::Lattice);
+        return;
+    }
+    let displaced = matches!(
+        atmosphere.material_style,
+        LatticeMaterial::Watercolor | LatticeMaterial::VelvetScales
+    );
+    let pixels =
+        harmonigraph_render::lattice_drift_heights_per_second(atmosphere) * f64::from(height);
+    if material && displaced && pixels > 0.0 {
+        moving.hold_for(crate::Reason::Lattice, 1.0 / pixels);
+    }
+}
+
 /// The Stars solo a copy that is not the working pane draws: none.
 pub(crate) const NO_SOLO: [bool; harmonigraph_scene::star_plan::STAR_DEPTHS] =
     [false; harmonigraph_scene::star_plan::STAR_DEPTHS];
@@ -296,6 +335,8 @@ pub(crate) fn draw_lattice(
     let hovered = response.and(state.surfaces.hovered);
     let (window, scene) =
         copy_scene(state, rect, now, surface, hovered, background, point_scale, star_solo);
+    let height = rect.height() * ui.ctx().pixels_per_point();
+    hold_atmosphere(&scene, &mut state.surfaces.moving_this_frame, height);
 
     // Picking updates the *shared* hover state, one frame behind the scene
     // it was derived from (imperceptible, standard for immediate mode). Only

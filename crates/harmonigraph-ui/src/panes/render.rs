@@ -380,7 +380,8 @@ fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
 /// that starts a take.
 ///
 /// Each pane that owns an accumulation already clears its own — Labels' "Clear
-/// label history", the Spectrogram's "Clear history" — and those stay, since
+/// label history", View's "Clear history", which clears the ribbons as well as
+/// the heatmap — and those stay, since
 /// clearing what one pane draws is a real thing to want while dialing that pane
 /// in. This is for the other moment, when all four are wanted together and
 /// there is only one reason: to watch a take being recorded on an empty

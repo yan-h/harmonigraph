@@ -78,4 +78,5 @@ Yan took the recommendations made after the audit was checked against the code (
 
 ## 2026-11-27 (drift audit, #1994)
 
-- The idle poll lengthens from 50 ms to about 250 ms, its reason gone with the input worker's wake (#1786): slow scrolls ask for their own frames, and what still relies on the poll (host automation over a still picture, restores, Console lines, Tape's silent strip, the tuning rows) waits up to that long. Yan, 2026-11-27, taking the recommendation. #1994 HW1, #1983
+- The idle poll lengthens from 50 ms to about 250 ms, its reason gone with the input worker's wake (#1786): slow scrolls ask for their own frames, and what still relies on the poll (host automation over a still picture, restores, Console lines, Tape's silent strip, the tuning rows) waits up to that long. Yan, 2026-11-27, taking the recommendation. #1994 HW1, #1983 (Partly superseded 2026-11-27 by the line below: host automation.)
+- A host parameter that moves (camera, Lattice Map, any picture parameter) asks for its own pass from the input worker, so automation draws as it moves over a still picture; the rest of what HW1 lists still waits for the 250 ms poll. Yan, 2026-11-27, taking the recommendation. PR #1998
