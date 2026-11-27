@@ -215,7 +215,7 @@ except that a Hardware frame over 4096 px a side goes through x264, which the ex
 `--events` reads those instead of asking for the times by hand, across every window and opening in the log:
 each stretch where nothing asked for a frame sooner than the idle poll, so nothing on screen moved faster than the poll draws it, with how often it drew then against the rate its phases offer (the log does not say which deadline paced a still editor: the idle poll, `IDLE_REPAINT_INTERVAL` in `crates/harmonigraph-ui/src/lib.rs`, or a chrome cue's while Record waits armed or an export runs);
 a reason paced slower than every frame is logged with `~`, as `roll~` (#1911);
-the frames after each opening's first note;
+the frames after each opening's first reported motion (`lattice`, `roll` or `envelope`), which since #1983 is a note's only where nothing else moved first, since no reason names a note itself;
 and missed refreshes in each export's first 30 s against the 30 s before it.
 So all three need only one session that includes them:
 leave the transport stopped for longer than the Span plus a minute, open the editor with an empty roll and play a note, and export once per encoder while it plays.
