@@ -12,7 +12,7 @@
 use super::learn_pulse;
 use super::spectral::roll::note_color;
 use super::{section, subsection};
-use crate::params::{ConfigurationView, ParamBackend};
+use crate::params::ParamBackend;
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
 use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, TuningAxis};
@@ -27,11 +27,13 @@ mod instance_tests;
 #[path = "tuning_map_tests.rs"]
 mod map_tests;
 
-/// Configuration status bit 2: host input was lost, so a recording refuses its
-/// configuration until the host resets the plugin. Edits still apply.
+/// Host input was lost ([`ConfigurationView::input_lost`](crate::params::ConfigurationView::input_lost)),
+/// so a recording refuses its configuration until the host resets the plugin.
+/// Edits still apply.
 pub(crate) const CONFIGURATION_FAULT_NOTICE: &str =
     "Host input was lost: a take recorded now refuses its tuning until the plugin is reset. Deactivate and reactivate the plugin in the host to recover; tuning edits still apply.";
-/// Configuration status bit 16: more distinct pitches are held than Learn reads.
+/// Learn's last step heard more distinct pitches than it reads
+/// ([`VisualRuntime::learn`](crate::VisualRuntime::learn)).
 pub(crate) fn too_many_pitches_notice() -> String {
     format!(
         "Learning paused: more than {} distinct pitches are held.",
@@ -308,22 +310,22 @@ pub(super) fn tuning_pane(
     });
 
     // Faults remain visible even when the tuning controls are folded.
-    let configuration_notice =
-        if state.runtime.configuration_status & ConfigurationView::INPUT_LOST != 0 {
-            crate::widgets::label(
-                ui,
-                egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
-            );
-            true
-        } else if state.runtime.configuration_status & ConfigurationView::TOO_MANY_CLASSES != 0 {
-            crate::widgets::label(
-                ui,
-                egui::RichText::new(too_many_pitches_notice()).color(theme::armed()),
-            );
-            true
-        } else {
-            false
-        };
+    let input_lost = params.configuration().is_some_and(|view| view.input_lost);
+    let configuration_notice = if input_lost {
+        crate::widgets::label(
+            ui,
+            egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
+        );
+        true
+    } else if state.runtime.learn_too_many {
+        crate::widgets::label(
+            ui,
+            egui::RichText::new(too_many_pitches_notice()).color(theme::armed()),
+        );
+        true
+    } else {
+        false
+    };
 
     section(ui, "Note matching", |ui| {
         axis_bar(ui, state, params, TuningAxis::Tolerance);

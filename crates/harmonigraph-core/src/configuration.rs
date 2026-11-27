@@ -361,7 +361,7 @@ impl ConfigReducer {
             }
         }
         self.resolve();
-        // Display tolerance and acknowledgements are not musical changes.
+        // Display tolerance is not a musical change.
         let mut before = previous;
         before.tuning.tolerance = self.resolved.tuning.tolerance;
         if before != self.resolved {
