@@ -204,7 +204,7 @@ pub(crate) struct Worker {
     /// displaced roll returns in [`DisplacedView`] to be freed off-lock.
     built_roll: Option<Arc<NoteRoll>>,
     /// The roll last built, which the harmony row's sections (#1974) are
-    /// analyzed from again when only Detail or Span moved.
+    /// analyzed from again when only Detail, Span or a Show switch moved.
     latest_roll: Option<Arc<NoteRoll>>,
     /// Detail and Span as the row asked at the last exchange, while it draws.
     harmony_wanted: Option<(f32, f32)>,
