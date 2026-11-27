@@ -24,7 +24,8 @@ which advances only by processed frames and does not rewind with project transpo
 Queued records keep their old metadata across these changes.
 
 `LiveInput` drains only the descriptor count visible at entry,
-joining wrapped sample slices in reusable bounded scratch before analysis.
+copying each block's samples straight from the ring's one or two slices into the step's own buffer,
+so a block is copied once under the editor's lock.
 A missing source interval or a new epoch resets the streaming analyzer and its hop phase,
 requiring a complete new FFT window.
 Previously measured history remains available.
@@ -105,7 +106,8 @@ with eight callbacks per drain:
 
 The reduced raw drain cost comes from bulk copying instead of per-sample ring pops;
 copy volume itself is unchanged.
-Scratch now allocates its bounded 512 KiB eagerly instead of growing as before — additional metadata memory, not a memory saving.
+Scratch then allocated its bounded 512 KiB eagerly instead of growing as before — additional metadata memory, not a memory saving.
+That scratch has since gone: the drain hands the ring's slices to the input worker, which copies them into its own buffer (#1982).
 
 A separate probe measured the full public analyzer feed after draining (default 8192-frame window,
 stereo power combination,

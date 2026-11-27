@@ -157,7 +157,10 @@ impl LiveInput {
     #[cfg(test)]
     pub(crate) fn drain_analysis_audio_for_test(&mut self) -> Vec<f32> {
         let mut samples = Vec::new();
-        self.audio_consumer.drain(|_, chunk| samples.extend_from_slice(chunk));
+        self.audio_consumer.drain(|_, a, b| {
+            samples.extend_from_slice(a);
+            samples.extend_from_slice(b);
+        });
         samples
     }
     /// Drain note events from the audio thread into the tracker, mapping
@@ -213,17 +216,20 @@ impl LiveInput {
         let offset = clock.mapper.offset?;
         audio.config = picture.appearance.spectrum;
         audio.offset = offset;
-        self.audio_consumer.drain(|block, samples| {
+        self.audio_consumer.drain(|block, a, b| {
             let position = (block.epoch, block.first_frame);
             let restart = self.audio_position != Some(position);
             if restart {
                 self.audio_origin = block.presentation();
             }
-            audio.samples.extend_from_slice(samples);
+            // Straight from the ring, the one copy a block takes under the
+            // lock.
+            audio.samples.extend_from_slice(a);
+            audio.samples.extend_from_slice(b);
             audio.blocks.push(TakenBlock {
                 restart,
                 origin: self.audio_origin + offset,
-                len: samples.len(),
+                len: a.len() + b.len(),
                 block,
             });
             self.audio_position = Some((block.epoch, block.first_frame + block.frames as u64));
