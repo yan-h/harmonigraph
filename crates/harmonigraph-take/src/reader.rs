@@ -76,12 +76,6 @@ pub(crate) fn assemble(
                     take.configurations.push(configuration);
                 }
             }
-            Record::Note(mut note) | Record::Canonical(CanonicalRecord::Note(mut note)) => {
-                if let Some(run) = holding(&runs, note.t) {
-                    note.t += run.offset;
-                    events.push((CanonicalRecord::Note(note), line));
-                }
-            }
             Record::Canonical(CanonicalRecord::Gap(mut gap)) => {
                 // A loss warns if it overlaps what the take recorded. It is
                 // drawn inside the first run it overlaps, from no earlier than

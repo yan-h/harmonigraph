@@ -186,7 +186,10 @@ mod tests {
     fn take_with(notes: Vec<NoteRecord>, params: Vec<ParamRecord>) -> Take {
         Take {
             header: Header::default(),
-            events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
+            events: notes
+                .into_iter()
+                .map(|note| harmonigraph_take::CanonicalRecord::Delta(note.into()))
+                .collect(),
             params,
             configurations: Vec::new(),
             truncated: false,
@@ -441,7 +444,8 @@ mod tests {
         }
         // A held chord would trigger GUI learning or detection if replay
         // accidentally treated these exact records as hints.
-        for record in [Record::Note(on(0.0, 60)), Record::Note(on(0.0, 64))] {
+        for note in [on(0.0, 60), on(0.0, 64)] {
+            let record = Record::Canonical(harmonigraph_take::CanonicalRecord::Delta(note.into()));
             encoded.push('\n');
             encoded.push_str(&ron::to_string(&record).unwrap());
         }
@@ -535,9 +539,15 @@ mod tests {
         assert!((voice.activation(1.0, &env) - 0.6).abs() < 1e-6);
     }
 
+    /// Two sources as the Hub publishes them: each delta sequenced in its
+    /// source and naming its press, a cut of one source as the Hub makes it
+    /// (its held press released, then its empty snapshot), and the session's
+    /// reset as a direct observation.
     #[test]
     fn source_scopes_and_bends_round_trip_into_incremental_and_full_replay() {
+        use harmonigraph_core::canonical::{CanonicalEvent, NoteDelta, SourceBaseline};
         use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId, VoiceState};
+        use harmonigraph_take::{CanonicalRecord, Record};
         let (a, b) = (SourceId(1), SourceId(2));
         let tuning = |time, source, semitones| NoteEvent {
             time,
@@ -546,27 +556,46 @@ mod tests {
             note: 60,
             kind: NoteEventKind::Tuning { semitones },
         };
-        let events = [
-            NoteEvent::on(0.125, a, 0, 60, 0.8),
-            tuning(0.125, a, 0.25),
-            NoteEvent::on(0.25, b, 0, 60, 0.6),
-            tuning(0.25, b, -0.25),
-            NoteEvent::off(0.75, a, 0, 60),
-            NoteEvent::on(1.0, a, 0, 60, 0.8),
-            NoteEvent::on(1.25, a, 0, 60, 0.7),
-            NoteEvent::source_reset(1.5, a),
-            tuning(1.75, b, -0.5),
-            NoteEvent::on(2.0, a, 0, 60, 0.9),
-            NoteEvent::session_reset(2.25),
+        // Each event with the press it belongs to.
+        let played = [
+            (NoteEvent::on(0.125, a, 0, 60, 0.8), 1),
+            (tuning(0.125, a, 0.25), 1),
+            (NoteEvent::on(0.25, b, 0, 60, 0.6), 2),
+            (tuning(0.25, b, -0.25), 2),
+            (NoteEvent::off(0.75, a, 0, 60), 1),
+            (NoteEvent::on(1.0, a, 0, 60, 0.8), 3),
+            (NoteEvent::on(1.25, a, 0, 60, 0.7), 4),
+            // A's cut.
+            (NoteEvent::off(1.5, a, 0, 60), 4),
+            (tuning(1.75, b, -0.5), 2),
+            (NoteEvent::on(2.0, a, 0, 60, 0.9), 5),
         ];
+        let mut sequence = std::collections::BTreeMap::<SourceId, u64>::new();
+        let mut records = Vec::new();
+        for (event, lifetime) in played {
+            let next = sequence.entry(event.source).or_default();
+            *next += 1;
+            let delta = NoteDelta { sequence: *next, lifetime, ..event.into() };
+            records.push(CanonicalRecord::from_event(CanonicalEvent::Note(delta)));
+            if event.time == 1.5 {
+                let empty = SourceBaseline::new(a, 1.5, *next, true, &[]).unwrap();
+                records.push(CanonicalRecord::from_event(CanonicalEvent::Baseline(&empty)));
+            }
+        }
+        let reset = NoteDelta::from(NoteEvent::session_reset(2.25));
+        records.push(CanonicalRecord::from_event(CanonicalEvent::Note(reset)));
         let mut encoded = opened();
-        for event in events {
+        for record in records {
             encoded.push('\n');
-            encoded
-                .push_str(&ron::to_string(&harmonigraph_take::Record::Note(event.into())).unwrap());
+            encoded.push_str(&ron::to_string(&Record::Canonical(record)).unwrap());
         }
         let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
         assert!(!take.truncated);
+        let events: Vec<_> = played
+            .iter()
+            .map(|(event, _)| *event)
+            .chain([NoteEvent::session_reset(2.25)])
+            .collect();
         assert_eq!(take.notes().map(NoteEvent::from).collect::<Vec<_>>(), events);
         let mut replay = Replay::new(take);
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);

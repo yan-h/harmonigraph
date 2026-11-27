@@ -57,6 +57,12 @@ impl From<NoteDelta> for DeltaRecord {
         }
     }
 }
+/// An unsequenced direct observation, as the standalone synth records one.
+impl From<NoteRecord> for DeltaRecord {
+    fn from(event: NoteRecord) -> Self {
+        Self { event, ..Self::default() }
+    }
+}
 impl From<DeltaRecord> for NoteDelta {
     fn from(d: DeltaRecord) -> Self {
         Self {
@@ -255,7 +261,6 @@ impl From<GapRecord> for PublicationGap {
 /// allocate only on this non-RT side of the publication boundary.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CanonicalRecord {
-    Note(NoteRecord),
     Delta(DeltaRecord),
     Baseline(Box<BaselineRecord>),
     Gap(GapRecord),
@@ -263,7 +268,6 @@ pub enum CanonicalRecord {
 impl CanonicalRecord {
     pub fn time(&self) -> f64 {
         match self {
-            Self::Note(n) => n.t,
             Self::Delta(d) => d.event.t,
             Self::Baseline(b) => b.t,
             Self::Gap(g) => g.t,
@@ -278,8 +282,6 @@ impl CanonicalRecord {
     }
     pub fn validate(&self) -> Result<(), InvalidCanonical> {
         match self {
-            Self::Note(n) if harmonigraph_core::NoteEvent::from(*n).has_valid_payload() => Ok(()),
-            Self::Note(_) => Err(InvalidCanonical),
             Self::Delta(d) => NoteDelta::from(*d).validate(),
             Self::Baseline(b) => b.baseline().map(|_| ()),
             Self::Gap(g) => PublicationGap::from(*g).validate(),
@@ -288,10 +290,6 @@ impl CanonicalRecord {
     pub fn apply(&self, tracker: &mut NoteTracker) -> Result<(), InvalidCanonical> {
         self.validate()?;
         match self {
-            Self::Note(n) => {
-                tracker.handle_event((*n).into());
-                Ok(())
-            }
             Self::Delta(d) => tracker.handle_canonical(CanonicalEvent::Note((*d).into())),
             Self::Baseline(b) => tracker.replace_source(&b.baseline()?),
             Self::Gap(g) => tracker.handle_canonical(CanonicalEvent::Gap((*g).into())),
@@ -303,12 +301,11 @@ impl CanonicalRecord {
         match self {
             Self::Delta(d) => order.note(SourceId(d.event.source), d.sequence),
             Self::Baseline(b) => order.baseline(SourceId(b.source), b.output_cut),
-            Self::Note(_) | Self::Gap(_) => true,
+            Self::Gap(_) => true,
         }
     }
     pub fn note(&self) -> Option<NoteRecord> {
         match self {
-            Self::Note(n) => Some(*n),
             Self::Delta(d) => Some(NoteDelta::from(*d).display_event().into()),
             _ => None,
         }

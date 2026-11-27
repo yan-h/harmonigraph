@@ -299,7 +299,6 @@ pub struct RunEndRecord {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Record {
     Header(Header),
-    Note(NoteRecord),
     Param(ParamRecord),
     Configuration(ConfigurationRecord),
     Canonical(CanonicalRecord),
@@ -447,12 +446,6 @@ impl Take {
                     }
                     header = Some(read);
                 }
-                Record::Note(note) => {
-                    CanonicalRecord::Note(note)
-                        .validate()
-                        .map_err(|_| ReadError::InvalidCanonical(i + 1))?;
-                    records.push((i + 1, Record::Note(note)));
-                }
                 Record::Canonical(record) => {
                     record.validate().map_err(|_| ReadError::InvalidCanonical(i + 1))?;
                     records.push((i + 1, Record::Canonical(record)));
@@ -551,10 +544,6 @@ impl Writer {
         }
     }
 
-    pub fn note(&mut self, note: NoteRecord) -> std::io::Result<()> {
-        self.write(&Record::Note(note))
-    }
-
     pub fn canonical(&mut self, record: CanonicalRecord) -> std::io::Result<()> {
         record.validate().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid canonical record")
@@ -589,6 +578,11 @@ impl Drop for Writer {
 mod tests {
     use super::*;
 
+    /// A note's line as the standalone synth writes it.
+    fn delta(note: NoteRecord) -> Record {
+        Record::Canonical(CanonicalRecord::Delta(note.into()))
+    }
+
     /// Where the render starts is anchored to this, so it has to answer for a
     /// take with no notes: a passage carrying sound but no MIDI. Arming writes
     /// a full parameter snapshot regardless, so the params are what keep the
@@ -596,7 +590,7 @@ mod tests {
     #[test]
     fn first_event_survives_a_take_with_no_notes() {
         let take = |notes: Vec<NoteRecord>, params: Vec<ParamRecord>| Take {
-            events: notes.into_iter().map(CanonicalRecord::Note).collect(),
+            events: notes.into_iter().map(|note| CanonicalRecord::Delta(note.into())).collect(),
             params,
             ..Take::default()
         };
@@ -674,7 +668,7 @@ mod tests {
             let mut writer = Writer::create(&path, &header).unwrap();
             writer.write(&Record::Run(RunRecord::default())).unwrap();
             for note in &notes {
-                writer.note(*note).unwrap();
+                writer.write(&delta(*note)).unwrap();
             }
             for param in &params {
                 writer.param(param.clone()).unwrap();
@@ -708,7 +702,7 @@ mod tests {
         let mut text = opened(header);
         text.push('\n');
         for note in &notes {
-            text.push_str(&ron::to_string(&Record::Note(*note)).unwrap());
+            text.push_str(&ron::to_string(&delta(*note)).unwrap());
             text.push('\n');
         }
         // Chop mid-record, as a killed process would.
@@ -727,7 +721,7 @@ mod tests {
         let text = format!(
             "{}\n{}\n{}",
             opened(header),
-            ron::to_string(&Record::Note(notes[0])).unwrap(),
+            ron::to_string(&delta(notes[0])).unwrap(),
             &parameter[..inside_id]
         );
         let take = Take::parse(std::io::Cursor::new(text)).unwrap();
@@ -742,8 +736,8 @@ mod tests {
         let (header, notes, _) = sample();
         let mut text = ron::to_string(&Record::Header(header)).unwrap();
         text.push('\n');
-        text.push_str("Note((t:0.0,channel:  <- garbage\n");
-        text.push_str(&ron::to_string(&Record::Note(notes[0])).unwrap());
+        text.push_str("Canonical(Delta((event:(t:0.0,channel:  <- garbage\n");
+        text.push_str(&ron::to_string(&delta(notes[0])).unwrap());
         text.push('\n');
         assert!(matches!(
             Take::parse(std::io::Cursor::new(text.as_bytes())),
@@ -755,7 +749,7 @@ mod tests {
     fn an_unfinished_record_before_trailing_lines_is_corruption() {
         let header = ron::to_string(&Record::Header(Header::default())).unwrap();
         for suffix in ["\n", "# trailing comment\n"] {
-            let text = format!("{header}\nNote((t:0.0,\n{suffix}");
+            let text = format!("{header}\nCanonical(Delta((event:(t:0.0,\n{suffix}");
             assert!(matches!(Take::parse(std::io::Cursor::new(text)), Err(ReadError::Parse(2, _))));
         }
     }
@@ -771,7 +765,7 @@ mod tests {
         text.push('\n');
         for t in out_of_order {
             let note = NoteRecord { source: 0, t, channel: 0, note: 60, kind: NoteKind::Off };
-            text.push_str(&ron::to_string(&Record::Note(note)).unwrap());
+            text.push_str(&ron::to_string(&delta(note)).unwrap());
             text.push('\n');
             let param = ParamRecord { t, id: "camera-yaw".into(), value: t as f32 };
             text.push_str(&ron::to_string(&Record::Param(param)).unwrap());
@@ -794,7 +788,7 @@ mod tests {
         text.push('\n');
         for kind in [NoteKind::Off, NoteKind::On { velocity: 0.5 }] {
             let note = NoteRecord { source: 0, t: 2.0, channel: 0, note: 60, kind };
-            text.push_str(&ron::to_string(&Record::Note(note)).unwrap());
+            text.push_str(&ron::to_string(&delta(note)).unwrap());
             text.push('\n');
         }
         let take = Take::parse(std::io::Cursor::new(text.as_bytes())).unwrap();
@@ -821,7 +815,7 @@ mod tests {
     #[test]
     fn a_file_without_a_header_is_rejected() {
         let note = NoteRecord { source: 0, t: 0.0, channel: 0, note: 60, kind: NoteKind::Off };
-        let text = ron::to_string(&Record::Note(note)).unwrap();
+        let text = ron::to_string(&delta(note)).unwrap();
         assert!(matches!(
             Take::parse(std::io::Cursor::new(text.as_bytes())),
             Err(ReadError::MissingHeader)
@@ -835,7 +829,7 @@ mod tests {
     fn a_malformed_note_line_is_refused_at_its_line() {
         let header = ron::to_string(&Record::Header(Header::default())).unwrap();
         let parse = |note: NoteRecord| {
-            let line = ron::to_string(&Record::Note(note)).unwrap();
+            let line = ron::to_string(&delta(note)).unwrap();
             Take::parse(std::io::Cursor::new(format!("{header}\n{line}\n")))
         };
         let edge = NoteRecord {

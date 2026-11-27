@@ -19,13 +19,9 @@ use harmonigraph_take::{CanonicalRecord, Header, NoteKind, NoteRecord, Record};
 /// thing under test here, not the recorder that would normally produce one.
 fn take_with_a_gap(path: &std::path::Path) {
     let note = |t: f64, note: u8| {
-        Record::Note(NoteRecord {
-            t,
-            source: 1,
-            channel: 0,
-            note,
-            kind: NoteKind::On { velocity: 0.8 },
-        })
+        let event =
+            NoteRecord { t, note, kind: NoteKind::On { velocity: 0.8 }, ..Default::default() };
+        Record::Canonical(CanonicalRecord::Delta(event.into()))
     };
     let gap = Record::Canonical(CanonicalRecord::Gap(
         harmonigraph_core::canonical::PublicationGap {

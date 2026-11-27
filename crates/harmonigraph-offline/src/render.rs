@@ -469,7 +469,10 @@ mod tests {
         }
         Take {
             header: recorded_header(),
-            events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
+            events: notes
+                .into_iter()
+                .map(|note| harmonigraph_take::CanonicalRecord::Delta(note.into()))
+                .collect(),
             params: Vec::new(),
             configurations: Vec::new(),
             truncated: false,
@@ -516,20 +519,26 @@ mod tests {
         let onset = origin + 0.8;
         Take {
             events: vec![
-                harmonigraph_take::CanonicalRecord::Note(NoteRecord {
-                    source: 0,
-                    t: onset,
-                    channel: 0,
-                    note: 69,
-                    kind: NoteKind::On { velocity: 0.8 },
-                }),
-                harmonigraph_take::CanonicalRecord::Note(NoteRecord {
-                    source: 0,
-                    t: onset + 0.05,
-                    channel: 0,
-                    note: 69,
-                    kind: NoteKind::Off,
-                }),
+                harmonigraph_take::CanonicalRecord::Delta(
+                    NoteRecord {
+                        source: 0,
+                        t: onset,
+                        channel: 0,
+                        note: 69,
+                        kind: NoteKind::On { velocity: 0.8 },
+                    }
+                    .into(),
+                ),
+                harmonigraph_take::CanonicalRecord::Delta(
+                    NoteRecord {
+                        source: 0,
+                        t: onset + 0.05,
+                        channel: 0,
+                        note: 69,
+                        kind: NoteKind::Off,
+                    }
+                    .into(),
+                ),
             ],
             ..Default::default()
         }
