@@ -113,7 +113,7 @@ the guard-ledger audit (#1709) found the top tenth of the regression tests absor
 and #836, #1107, #1112 and #1714 each paid that down one test at a time.
 A neighbouring test is a model for size, not for where its inputs come from.
 
-## The stakes record: one composer on macOS in Bitwig, and three failures that are severe
+## The stakes record: one composer on macOS in Bitwig, and four failures that are severe
 
 Price a case from this section, as the global preferences say:
 how often it occurs here, and what it costs when it does.
@@ -147,6 +147,7 @@ A figure that appears only in a test or a review finding is not load:
 - A video export, or the take behind it, that is wrong with nothing saying so (PR #340).
 - Time taken from Bitwig's main thread or from the audio thread:
   a still picture once cost the main thread 280-320 ms a second (#1673).
+- A crash: a panic that takes down the plugin, or undefined behaviour; a worker that restarts after one, as the slab pyramid's fold does below, is not one (Yan, 2026-11-27, yan-h/agent-config#146).
 
 Everything else is cheap:
 a warning, a glitch for a frame, a bar dragged back after reopening a project, an old take that no longer loads.
