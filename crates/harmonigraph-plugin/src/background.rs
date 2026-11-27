@@ -372,7 +372,8 @@ thread_local! {
 /// ([`EguiState::request_pass`]): every edit of the tracker, played or from
 /// the tape, a release, a bend or a pressure change as much as a note, until
 /// the display clock has passed the latest ([`Seen::edited`]); a host
-/// parameter that moved ([`Seen::moved`]); and sound after a still stretch. A still window runs no pass until something asks,
+/// parameter that moved ([`Seen::moved`]); a change of the map the tape
+/// replays; and sound after a still stretch. A still window runs no pass until something asks,
 /// so without this an edit over a still picture was drawn at its next idle
 /// poll. Sound asks only as it starts: once a picture shows it moving, the
 /// window draws as it moves until it stops, and a picture that does not show
@@ -403,9 +404,13 @@ fn step(
         // The drain's marks go straight to the tape, which `settle` empties
         // every step.
         let taken = input.take(&mut shared.clock, &mut shared.ui.picture, &mut tape.inbox, now);
+        // The map the tape replays is drawn as the lattice's marks, and no
+        // edit of the tracker says it changed.
+        let replaying = shared.ui.picture.runtime.tape.map;
         if let Some(taken) = &taken {
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
+        let replayed = shared.ui.picture.runtime.tape.map != replaying;
         let learned =
             params.is_some_and(|params| self::learn(params, &mut shared.ui.picture.runtime));
         // A frame's duties that must not wait for one: none runs while the
@@ -415,7 +420,8 @@ fn step(
         // which leaves the window shut, would render nothing.
         let display = shared.clock.display_now(now);
         let edited = seen.edited(shared.ui.picture.runtime.tracker.edits(), display)
-            | params.is_some_and(|params| seen.moved(params));
+            | params.is_some_and(|params| seen.moved(params))
+            | replayed;
         shared.ui.picture.runtime.advance_time(display, &shared.ui.picture.appearance);
         shared.poll_take_end();
         (taken, edited, learned)
@@ -935,6 +941,30 @@ mod tests {
         assert!(asked(&h), "Adaptive's strip slid and waited for the idle poll");
         h.step();
         assert!(!asked(&h), "a strip that stayed put asked");
+    }
+
+    /// The tape's replayed lattice map changing asks for a pass, as a host
+    /// parameter's move does: the lattice marks under it, a held tape chord's
+    /// over a still picture included, with no edit of the tracker to ask.
+    /// Here a map the tape was replaying ends with a block that carries none.
+    #[test]
+    fn a_step_asks_the_window_to_draw_a_replayed_map_that_changed() {
+        let mut h = harness();
+        h.editor_state.set_open(true);
+        let asked = |h: &Harness| h.editor_state.pass_request.take();
+        h.push_audio(20_000);
+        h.step();
+        asked(&h);
+        h.push_audio(2_000);
+        h.step();
+        assert!(!asked(&h), "sound that goes on, with the map unchanged, asked");
+        let engine = harmonigraph_core::lattice_map::TuningEngine::LatticeMap;
+        let replayed = harmonigraph_ui::tape::RecordedMap { engine, map: None };
+        h.shared.lock().ui.picture.runtime.tape.map = Some(replayed);
+        h.push_audio(2_000);
+        h.step();
+        assert_eq!(h.shared.lock().ui.picture.runtime.tape.map, None, "the map must change");
+        assert!(asked(&h), "a replayed map that changed waited for the idle poll");
     }
 
     /// The worker starts from the parameters as they stand, so a project's
