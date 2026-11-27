@@ -33,6 +33,7 @@ pub const BINS_PER_SEMITONE: usize = 32;
 /// as a literal in `lattice.wgsl`, which `harmonigraph-render` asserts.
 pub const SPECTRUM_BINS: usize =
     ((SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as usize + 2;
+const _: () = assert!(SPECTRUM_BINS % 4 == 0, "a slab must be whole four-byte words");
 
 /// One power value per bucket of the axis: the array an analyzer fills, the
 /// curve draws and the spectrogram's history folds.
