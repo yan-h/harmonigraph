@@ -157,7 +157,7 @@ pub(super) fn stars(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> Opti
 }
 
 /// Bound filter work by reducing each axis only as its musical radius grows,
-/// and — where `Blur time step` asks — the time axis by the DATA's own
+/// and — where `Spectrogram time step` asks — the time axis by the DATA's own
 /// resolution as well. The scalar source averages its whole footprint before
 /// these Gaussian passes. The allocation key is this size alone; no measurement
 /// cache is invalidated.
@@ -2569,7 +2569,7 @@ mod tests {
         }
     }
 
-    /// `Blur time step` bounds the light field's TIME axis by the run's slab
+    /// `Spectrogram time step` bounds the light field's TIME axis by the run's slab
     /// count, and reaches nothing else.
     ///
     /// The fixture is the zoomed-out pane the dial exists for, and its

@@ -128,7 +128,7 @@ fn pane_of(cb: &SpectrogramCallback) -> [u32; 2] {
 /// and the slab width that goes with it.
 ///
 /// One call rather than two lines, because the two cannot disagree.
-/// `Blur time step` bounds the light field against `points_per_slab` and
+/// `Spectrogram time step` bounds the light field against `points_per_slab` and
 /// ships at a step of one, so a fixture that re-lays the quad and leaves
 /// that number where [`cloud_fixture`] set it draws its light field at the
 /// resolution of a pane it no longer has — measuring the wrong picture
@@ -835,7 +835,7 @@ fn held_newest_slab_and_zero_softness_preserve_the_field() {
     assert!((95..=97).contains(&held[(64 * 128 + 64) * 4 + 2]), "held strip became black");
     let mut raw = cloud_fixture();
     // The ridge again, on a slab a pixel: the field's time axis is then at
-    // full resolution under `Blur time step`'s data bound, and zero
+    // full resolution under `Spectrogram time step`'s data bound, and zero
     // softness is the one thing left that could take it down.
     let slabs = SIZE[0];
     relay_quad(&mut raw, slabs);
@@ -1343,7 +1343,7 @@ fn spectral_cloud_targets_survive_pitch_zoom_and_span_drags() {
             } else {
                 settings.points_per_ms = 0.04 / scale;
                 // A Span drag carries the slab's WIDTH with the window,
-                // since the rung holds through it — and `Blur time step`
+                // since the rung holds through it — and `Spectrogram time step`
                 // bounds the time axis on exactly that number, so a drag
                 // that left it behind would hold the axis at one size and
                 // exercise no churn at all.
@@ -2826,7 +2826,7 @@ fn the_tile_is_rebaked_only_when_the_walk_moves() {
     let mut cb = wash_fixture();
     // `encoded_passes` lives on the TARGETS, so it only counts across
     // frames that hold on to them — and the orientation flip below
-    // transposes the light field's size as soon as `Blur time step` bounds
+    // transposes the light field's size as soon as `Spectrogram time step` bounds
     // the time axis (12 texels one way round, 128 the other), which rebuilds
     // them and starts the counter over. The tile survives that rebuild;
     // the instrument watching it does not, so the field stays square.

@@ -181,7 +181,8 @@ mod tests {
 
     /// Each depth is read by the cheapest gather that holds its largest star
     /// whole at its cell's centre, and three quarters of it wherever
-    /// `Position variation` strays it. At the fresh dials the far four fit
+    /// `Position variation` strays it. At the type's own dials
+    /// (`StarSettings::default()`, which neither pane ships) the far four fit
     /// 2x2 at any variation (the second-nearest at 0.93 of a cell) and the
     /// nearest, at 1.2, needs 3x3.
     #[test]
