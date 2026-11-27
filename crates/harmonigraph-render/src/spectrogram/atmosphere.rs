@@ -2544,12 +2544,14 @@ mod tests {
     fn the_wash_draws_per_pixel_at_every_scale() {
         let pixels = [3360, 1081];
         for remembers in [false, true] {
-            let settings = harmonigraph_scene::SpectralAtmosphere {
+            let mut settings = harmonigraph_scene::SpectralAtmosphere {
                 cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
+                cloud_depth: 1.0,
                 color_pickup: if remembers { 0.2 } else { 0.0 },
                 color_release: if remembers { 0.2 } else { 0.0 },
                 ..Default::default()
             };
+            settings.material_settings.wash_refract = 0.5;
             assert!(settings.sanitized().effects().cloud, "the fixture draws no wash");
             assert_eq!(settings.sanitized().remembers_color(), remembers);
             let atmosphere = SpectrogramAtmosphere::fixture(settings);

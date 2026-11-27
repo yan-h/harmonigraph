@@ -597,6 +597,11 @@ fn stars_carried_material_and_resolution_transitions_match_fresh_panes() {
         scene.view.render_scale = scale;
         shooter.shot_again(&scene);
         let carried = read_glow(&shooter);
+        // Amount zero is the bypass, so the carried pane let its source go.
+        let resources = shooter.resources.get::<LatticeResources>().unwrap();
+        let offscreen = resources.panes[&shooter.pane].offscreen.as_ref().unwrap();
+        let source = offscreen.glow.as_ref().unwrap().material_source.as_ref();
+        assert_eq!(source.is_some(), amount > 0.0, "{style:?}, {amount}: the material's source");
         assert_eq!(
             carried,
             glow(&mut shooter, &scene),

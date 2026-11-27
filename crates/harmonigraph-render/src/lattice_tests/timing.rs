@@ -188,6 +188,7 @@ fn atmosphere_costs_by_polyphony() {
                 "off" => {
                     variant.view.atmosphere.texture_depth = 0.0;
                     variant.view.atmosphere.breath_amount = 0.0;
+                    variant.view.atmosphere.material_amount = 0.0;
                 }
                 "watercolor" => {
                     variant.view.atmosphere.material_style =
