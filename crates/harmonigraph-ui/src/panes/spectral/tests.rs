@@ -3751,6 +3751,18 @@ fn a_tape_playhead_asks_for_a_frame_each_device_pixel_it_crosses() {
     assert!(rolling.is_some(), "the transport idled");
 }
 
+/// A cue's first heard frame already asks for the next, rather than leaving
+/// the playhead's start to the idle poll that would see it move.
+#[test]
+fn a_cues_first_heard_frame_asks_for_the_next() {
+    let (ctx, mut state) = auditioning(1.0, true);
+    let first = playhead_frames(&ctx, &mut state, Drawn::Pane, 1, false);
+    assert!(
+        first.is_some_and(|wait| wait < 1.0 / 144.0),
+        "the cue's first frame waited: {first:?}"
+    );
+}
+
 /// The overview's playhead, drawn alone, by the same rule as the pane's: on a
 /// short recording its fitted strip moves a playhead visibly, and a recording
 /// whose end the position sets grows with it, so the mark stands still on
@@ -3861,7 +3873,7 @@ fn on_tape_in_two_sections(g_struck: f64) -> PictureState {
             entries: vec![Entry { held: true, strikes: vec![], ..c }, g],
         },
     ];
-    state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
+    state.runtime.tape.shown_harmony = std::sync::Arc::new(Harmony { sections });
     state
 }
 
@@ -3987,9 +3999,10 @@ fn under_an_advancing_playhead_a_struck_note_arrives_at_its_attack_and_asks_for_
 #[test]
 fn a_note_struck_again_in_its_section_arrives_again() {
     let mut state = on_tape_in_two_sections(22.03);
-    let mut sections = state.runtime.tape.harmony.sections.clone();
+    let mut sections = state.runtime.tape.shown_harmony.sections.clone();
     sections[1].entries[1].strikes.push(26.0);
-    state.runtime.tape.harmony = std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
+    state.runtime.tape.shown_harmony =
+        std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
     let ctx = themed();
     let settled = harmony_frame(&ctx, &mut state, vec![]);
     let pacing =
@@ -4014,7 +4027,7 @@ fn a_note_struck_again_in_its_section_arrives_again() {
 #[test]
 fn with_nothing_lit_the_sections_still_cue() {
     let mut state = on_tape_in_two_sections(20.0);
-    let mut sections = state.runtime.tape.harmony.sections.clone();
+    let mut sections = state.runtime.tape.shown_harmony.sections.clone();
     // Four cents sharp: past the just reach's half-cent tolerance of every
     // node for both the C and the G. The reach is dense enough that most
     // offsets land on some node far out (thirty cents sharp of C is within
@@ -4022,7 +4035,8 @@ fn with_nothing_lit_the_sections_still_cue() {
     for entry in sections.iter_mut().flat_map(|s| &mut s.entries) {
         entry.pitch += 0.04;
     }
-    state.runtime.tape.harmony = std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
+    state.runtime.tape.shown_harmony =
+        std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
     let ctx = themed();
     assert_eq!(harmony_frame(&ctx, &mut state, vec![]), []);
     let at = on_harmony_row(30.0);
@@ -4044,7 +4058,7 @@ fn a_pitch_off_the_lattice_does_not_blank_its_neighbour_on_it() {
     let off = Entry { pitch: 66.993_55, held: false, strikes: vec![0.0] };
     for first in [vec![off.clone()], vec![]] {
         let mut state = on_tape_in_two_sections(20.0);
-        let mut sections = state.runtime.tape.harmony.sections.clone();
+        let mut sections = state.runtime.tape.shown_harmony.sections.clone();
         // The first section holds the off G alone, or nothing but its C;
         // the second holds both Gs.
         sections[0].entries.extend(first);
@@ -4053,7 +4067,7 @@ fn a_pitch_off_the_lattice_does_not_blank_its_neighbour_on_it() {
         // lattice's tolerance of its node and nearer it than any other: the
         // same ring, not a second.
         sections[1].entries.push(Entry { pitch: 67.021_55, ..off.clone() });
-        state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
+        state.runtime.tape.shown_harmony = std::sync::Arc::new(Harmony { sections });
         let rings = harmony_frame(&themed(), &mut state, vec![]);
         assert_eq!(rings.len(), 3, "the two Cs and the just G: {rings:?}");
     }
@@ -4072,7 +4086,7 @@ fn under_a_temperament_a_pitch_lights_the_one_node_it_is_named_by() {
     let entries =
         [60.0, 65.0, 67.0].map(|pitch| Entry { pitch, held: false, strikes: vec![0.0] }).to_vec();
     let sections = vec![Section { start: 0.0, end: 40.0, strength: 1.0, entries }];
-    state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
+    state.runtime.tape.shown_harmony = std::sync::Arc::new(Harmony { sections });
     let mut rings = harmony_frame(&themed(), &mut state, vec![]);
     // F, C and G by their plain spellings: one column of fifths, a node apart.
     assert_eq!(rings.len(), 3, "{rings:?}");
@@ -4092,7 +4106,7 @@ fn the_rows_node_placement_follows_the_tuning_the_reach_and_the_analysis() {
     assert_eq!(rings(&mut state), 3);
     // Kept without the analysis itself, which the worker frees off the lock
     // once it displaces it.
-    assert_eq!(std::sync::Arc::strong_count(&state.runtime.tape.harmony), 1);
+    assert_eq!(std::sync::Arc::strong_count(&state.runtime.tape.shown_harmony), 1);
     // In 12-TET the just G is two cents from any node.
     state.runtime.tuning = harmonigraph_core::Tuning::default();
     assert_eq!(rings(&mut state), 2);
@@ -4103,11 +4117,12 @@ fn the_rows_node_placement_follows_the_tuning_the_reach_and_the_analysis() {
     // tolerance of it, lights nothing while the reach holds the home sheet
     // alone, and its node once it holds the sheet above, over the same
     // analysis.
-    let mut sections = state.runtime.tape.harmony.sections.clone();
+    let mut sections = state.runtime.tape.shown_harmony.sections.clone();
     let seventh = 60.0 + (1200.0 * 1.75f32.log2() + 0.2) / 100.0;
     let g = sections[1].entries[1].clone();
     sections[1].entries.push(crate::tape::harmony::Entry { pitch: seventh, ..g });
-    state.runtime.tape.harmony = std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
+    state.runtime.tape.shown_harmony =
+        std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
     assert_eq!(rings(&mut state), 3);
     state.appearance.view.max_sevens = 1;
     assert_eq!(rings(&mut state), 4);
@@ -4115,14 +4130,14 @@ fn the_rows_node_placement_follows_the_tuning_the_reach_and_the_analysis() {
     assert_eq!(rings(&mut state), 3);
     // A new analysis: of a recording without the G, and on a context that has
     // only ever drawn that one, of the recording with it.
-    let with_g = std::sync::Arc::clone(&state.runtime.tape.harmony);
+    let with_g = std::sync::Arc::clone(&state.runtime.tape.shown_harmony);
     let mut sections = with_g.sections.clone();
     sections[1].entries.truncate(1);
     let without_g = std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
-    state.runtime.tape.harmony = std::sync::Arc::clone(&without_g);
+    state.runtime.tape.shown_harmony = std::sync::Arc::clone(&without_g);
     assert_eq!(rings(&mut state), 2);
     let ctx = themed();
     assert_eq!(harmony_frame(&ctx, &mut state, vec![]).len(), 2);
-    state.runtime.tape.harmony = with_g;
+    state.runtime.tape.shown_harmony = with_g;
     assert_eq!(harmony_frame(&ctx, &mut state, vec![]).len(), 3);
 }

@@ -336,8 +336,6 @@ fn step(
         let shared = &mut *guard;
         let now = shared.clock.now();
         let open = editor_state.is_open();
-        let settings = &shared.ui.picture.appearance.spectrum;
-        _displaced = tape.exchange(&mut shared.ui.picture.runtime.tape, settings, open);
         let onset = newest_onset(&shared.ui.picture.runtime);
         // The drain's marks go straight to the tape, which `settle` empties
         // every step.
@@ -345,6 +343,12 @@ fn step(
         if let Some(taken) = &taken {
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
+        // After the drain, so a Show switch it carried reaches the harmony
+        // row's analysis in this step.
+        let settings = &shared.ui.picture.appearance.spectrum;
+        let runtime = &mut shared.ui.picture.runtime;
+        let hidden = runtime.tracker.roll().hidden_sources();
+        _displaced = tape.exchange(&mut runtime.tape, hidden, settings, open);
         let struck = newest_onset(&shared.ui.picture.runtime) > onset;
         let learned =
             learn.is_some_and(|params| self::learn(params, &mut shared.ui.picture.runtime));
@@ -746,6 +750,47 @@ mod tests {
         h.push_placed(2400, None, None);
         h.step();
         assert!(tape_held(&h).is_empty(), "the audition's end released the tape's note");
+    }
+
+    /// A Show switch drained in a step reaches the harmony row's analysis in
+    /// that step, so the row it is handed at the next exchange already leaves
+    /// the hidden source out (#1994 TP1).
+    #[test]
+    fn a_show_switch_reaches_the_harmony_row_from_the_step_that_drains_it() {
+        let mut h = harness();
+        h.editor_state.set_open(true);
+        {
+            let mut shared = h.shared.lock();
+            let tape = &mut shared.ui.picture.runtime.tape;
+            tape.showing = true;
+            tape.harmony_wanted = Some((0.5, 4.0));
+        }
+        h.push_placed(4800, Some(0.0), None);
+        h.push_note(0.05, 60);
+        h.step();
+        h.push_placed(4800, None, None);
+        h.step();
+        h.step();
+        let sections =
+            |h: &Harness| h.shared.lock().ui.picture.runtime.tape.shown_harmony.sections.len();
+        assert_eq!(sections(&h), 1, "the recorded note is one section");
+
+        for (shown, expected) in [(false, 0), (true, 1)] {
+            let time = h.audio_frames as f64 / 48_000.0;
+            let switch = harmonigraph_core::canonical::SourceBaseline::new(
+                SourceId::DIRECT,
+                time,
+                0,
+                shown,
+                &[],
+            )
+            .unwrap();
+            h.notes.observe_clock(time);
+            h.notes.baseline(&switch).unwrap();
+            h.step();
+            h.step();
+            assert_eq!(sections(&h), expected, "shown: {shown}");
+        }
     }
 
     /// Feeding the tracker and AGEING it are one job, and this is the drainer

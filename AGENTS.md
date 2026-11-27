@@ -233,7 +233,7 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 
 **Cases the Tape harmony row goes without** (PR #1975; Yan, #1974), each with its cost when it occurs:
 
-- A pitch off the live tuning, or outside the lattice's naming reach: it lights nothing in the row, as on the lattice, so a recorded 12-TET track under just or meantone axes is mostly unlit.
+- A pitch off the live tuning, or outside the lattice's naming reach: it lights nothing in the row, as on the lattice. A recorded 12-TET track under meantone axes is mostly unlit; under just axes 8 of its 12 pitch classes land within the half-cent match of some node in the reach and light it, taking that node's name (F and G at 0.001¢; C♯, E, F♯, A♭ and B at about 0.28¢), and only 200, 300, 900 and 1000 cents stay unlit. (Yan, #1974; corrected 2026-11-27, PR #2000.)
 
 ## Backwards compatibility is not a constraint
 

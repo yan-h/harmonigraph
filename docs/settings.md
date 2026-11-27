@@ -13,7 +13,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | --- | --- |
 | Tuning | Lattice tuning and temperaments, note matching, retuning engine and saved maps, adaptive tuning and connected tuning sources. |
 | Lattice | **View**: camera, seventh layers. Independent sections for **Note layers**, **Octave layout**, **Note animation**, **Note labels**, **Audio ring**, **Idle lattice**, **Note bloom**, **Background glow**, **Glow pattern**, **Glow material**, and **Shadows**. |
-| Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline. **Analysis**: audio input, frequency resolution, level mapping and tilt, live response. **Shadows**: the **Note surround** around MIDI ribbons and Spiral dots, and the label shadow. |
+| Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **Tape harmony**: Tape mode's row of small lattices, one per section of the song as the tracks shown play it, and the Detail and Span its sections are cut by. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline. **Analysis**: audio input, frequency resolution, level mapping and tilt, live response. **Shadows**: the **Note surround** around MIDI ribbons and Spiral dots, and the label shadow. |
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
 | System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame rate (a fraction of the display's) and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
@@ -22,7 +22,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 Settings opens on Tuning in a fresh workspace.
 Tabs that do not fit the column move, from the right, into a trailing overflow menu.
 Every section heading folds its section, and folds are remembered.
-A section whose feature can be switched off (Spectrogram, MIDI ribbons) carries the switch in front of its name;
+A section whose feature can be switched off (Spectrogram, MIDI ribbons, Tape harmony) carries the switch in front of its name;
 off, the section is its heading alone, dimmed and with no fold arrow.
 A switch turns on a feature or a mode (a section of settings, or how notes are tuned or read, or what a click does: Meantone, Learn, Decode fifths, Edit shape on lattice);
 a checkbox is every other on/off: an option inside a feature, one thing to show or include, a child option under its parent, or a column that can be mixed (Retune and Show).

@@ -795,7 +795,13 @@ impl NoteRoll {
     /// The source's notes are hidden: its Show switch is off, or for a note
     /// the tape plays, the switch of the source that played it.
     pub fn hides(&self, source: SourceId) -> bool {
-        self.hidden_sources.contains(&source) || self.hidden_sources.contains(&source.off_tape())
+        source.hidden_by(&self.hidden_sources)
+    }
+
+    /// The sources whose Show switch is off, as [`hides`](Self::hides) reads
+    /// them.
+    pub fn hidden_sources(&self) -> &BTreeSet<SourceId> {
+        &self.hidden_sources
     }
 
     /// Held presses as voices, hidden sources' included.
