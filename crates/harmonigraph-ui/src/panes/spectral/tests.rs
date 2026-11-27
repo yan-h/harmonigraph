@@ -2864,7 +2864,7 @@ fn paint(
 /// orientation, because which screen side the spectrum is on is exactly what
 /// the pane's four turns change.
 ///
-/// Driven straight at [`roll::draw_roll`] rather than through the whole pane,
+/// Driven straight at [`roll::draw_rolls`] rather than through the whole pane,
 /// so the one callback in the output is the roll's — the markings draw one of
 /// their own (`crate::text`), and theirs is allowed everywhere.
 #[test]
@@ -3851,15 +3851,18 @@ fn tape_mode_needs_a_far_region_to_draw_in() {
 const HARMONY_ROW: egui::Rect =
     egui::Rect { min: egui::pos2(10.0, 120.0), max: egui::pos2(310.0, 192.0) };
 
-/// [`on_tape`]'s recording heard as two harmonies, on a just lattice five
-/// nodes square: a C alone from the start, and from 20 s that C held with the
-/// G a just fifth over it struck at `g_struck`.
+/// [`on_tape`]'s recording heard as two harmonies, on a just lattice: a C
+/// alone from the start, and from 20 s that C held with the G a just fifth
+/// over it struck at `g_struck`.
 fn on_tape_in_two_sections(g_struck: f64) -> PictureState {
     use crate::tape::harmony::{Entry, Harmony, Section};
     let mut state = on_tape();
     state.runtime.tuning = harmonigraph_core::Tuning::just();
+    // The home sheet alone, so only a test decides when another sheet enters
+    // the reach.
     let view = &mut state.appearance.view;
-    (view.center_threes, view.center_fives, view.extent_threes, view.extent_fives) = (0, 0, 2, 2);
+    (view.center_threes, view.center_fives) = (0, 0);
+    (view.min_sevens, view.center_sevens, view.max_sevens) = (0, 0, 0);
     let c = Entry { pitch: 60.0, held: false, strikes: vec![0.0] };
     let g = Entry { pitch: 67.019_55, held: false, strikes: vec![g_struck] };
     let sections = vec![
@@ -4026,8 +4029,12 @@ fn a_note_struck_again_in_its_section_arrives_again() {
 fn with_nothing_lit_the_sections_still_cue() {
     let mut state = on_tape_in_two_sections(20.0);
     let mut sections = state.runtime.tape.shown_harmony.sections.clone();
+    // Four cents sharp: past the just reach's half-cent tolerance of every
+    // node for both the C and the G. The reach is dense enough that most
+    // offsets land on some node far out (thirty cents sharp of C is within
+    // tolerance of the node one fifth down and five thirds up).
     for entry in sections.iter_mut().flat_map(|s| &mut s.entries) {
-        entry.pitch += 0.3;
+        entry.pitch += 0.04;
     }
     state.runtime.tape.shown_harmony =
         std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
@@ -4042,23 +4049,25 @@ fn with_nothing_lit_the_sections_still_cue() {
     assert_eq!(state.runtime.tape.request, Some(crate::tape::TapeRequest::Cue(20.0)));
 }
 
-/// A recorded 12-TET track beside a part in the lattice's own tuning: the
-/// 12-TET G is 2 cents from the just one, lights no node, and must not take
-/// the just G's node away with it, whichever the row meets first.
+/// A recorded part off the lattice's tuning beside one in it: a G 2.6 cents
+/// flat of the just one lights no node in the reach, and must not take the
+/// just G's node away with it, whichever the row meets first. (A 12-TET G
+/// would light one: seven fifths and a third down is 700.001 cents.)
 #[test]
 fn a_pitch_off_the_lattice_does_not_blank_its_neighbour_on_it() {
     use crate::tape::harmony::{Entry, Harmony};
-    let tempered = Entry { pitch: 67.0, held: false, strikes: vec![0.0] };
-    for first in [vec![tempered.clone()], vec![]] {
+    let off = Entry { pitch: 66.993_55, held: false, strikes: vec![0.0] };
+    for first in [vec![off.clone()], vec![]] {
         let mut state = on_tape_in_two_sections(20.0);
         let mut sections = state.runtime.tape.shown_harmony.sections.clone();
-        // The first section holds the 12-TET G alone, or nothing but its C;
+        // The first section holds the off G alone, or nothing but its C;
         // the second holds both Gs.
         sections[0].entries.extend(first);
-        sections[1].entries.insert(1, tempered.clone());
-        // And a G four tenths of a cent sharp of the just one, within the
-        // lattice's tolerance of its node: the same ring, not a second.
-        sections[1].entries.push(Entry { pitch: 67.023_55, ..tempered.clone() });
+        sections[1].entries.insert(1, off.clone());
+        // And a G two tenths of a cent sharp of the just one, within the
+        // lattice's tolerance of its node and nearer it than any other: the
+        // same ring, not a second.
+        sections[1].entries.push(Entry { pitch: 67.021_55, ..off.clone() });
         state.runtime.tape.shown_harmony = std::sync::Arc::new(Harmony { sections });
         let rings = harmony_frame(&themed(), &mut state, vec![]);
         assert_eq!(rings.len(), 3, "the two Cs and the just G: {rings:?}");
@@ -4074,15 +4083,13 @@ fn under_a_temperament_a_pitch_lights_the_one_node_it_is_named_by() {
     let mut state = on_tape();
     state.runtime.tuning = harmonigraph_core::Tuning::default();
     let view = &mut state.appearance.view;
-    (view.center_threes, view.center_fives, view.extent_threes, view.extent_fives) = (0, 0, 12, 6);
+    (view.center_threes, view.center_fives) = (0, 0);
     let entries =
         [60.0, 65.0, 67.0].map(|pitch| Entry { pitch, held: false, strikes: vec![0.0] }).to_vec();
     let sections = vec![Section { start: 0.0, end: 40.0, strength: 1.0, entries }];
     state.runtime.tape.shown_harmony = std::sync::Arc::new(Harmony { sections });
     let mut rings = harmony_frame(&themed(), &mut state, vec![]);
     // F, C and G by their plain spellings: one column of fifths, a node apart.
-    // The first node the reach meets for F is three fifths and two thirds
-    // from the first it meets for C.
     assert_eq!(rings.len(), 3, "{rings:?}");
     rings.sort_by(|a, b| b.0.y.total_cmp(&a.0.y));
     let (f, c, g) = (rings[0].0, rings[1].0, rings[2].0);
@@ -4106,10 +4113,21 @@ fn the_rows_node_placement_follows_the_tuning_the_reach_and_the_analysis() {
     assert_eq!(rings(&mut state), 2);
     state.runtime.tuning = harmonigraph_core::Tuning::just();
     assert_eq!(rings(&mut state), 3);
-    // A reach one fifth tall holds no node a fifth up.
-    state.appearance.view.extent_threes = 0;
-    assert_eq!(rings(&mut state), 2);
-    state.appearance.view.extent_threes = 2;
+    // The reach's sheets: a septimal seventh struck with the G, two tenths of
+    // a cent sharp so that no home-sheet node is within the half-cent
+    // tolerance of it, lights nothing while the reach holds the home sheet
+    // alone, and its node once it holds the sheet above, over the same
+    // analysis.
+    let mut sections = state.runtime.tape.shown_harmony.sections.clone();
+    let seventh = 60.0 + (1200.0 * 1.75f32.log2() + 0.2) / 100.0;
+    let g = sections[1].entries[1].clone();
+    sections[1].entries.push(crate::tape::harmony::Entry { pitch: seventh, ..g });
+    state.runtime.tape.shown_harmony =
+        std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
+    assert_eq!(rings(&mut state), 3);
+    state.appearance.view.max_sevens = 1;
+    assert_eq!(rings(&mut state), 4);
+    state.appearance.view.max_sevens = 0;
     assert_eq!(rings(&mut state), 3);
     // A new analysis: of a recording without the G, and on a context that has
     // only ever drawn that one, of the recording with it.
