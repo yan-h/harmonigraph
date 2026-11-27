@@ -55,8 +55,8 @@ use harmonigraph_core::lattice_map::TuningEngine;
 use harmonigraph_core::tuning::{fifths_for_midi, nearest_fifths_key};
 use harmonigraph_core::NoteTracker;
 
-/// The editor's copy of the map playback, which names the retuning engine.
-type Playback = std::sync::Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapPlayback>>;
+/// The map playback audio last adopted, which names the retuning engine.
+type Playback = std::sync::Arc<crate::lattice_maps::AdoptedPlayback>;
 
 /// A `(channel, key)` the board reads, channel `0..=15`.
 pub(crate) type Key = (u8, u8);
@@ -300,12 +300,8 @@ impl Wire for Midi {
 /// worker holds them.
 pub(crate) struct Lights {
     settings: std::sync::Arc<crate::configuration::Settings>,
-    /// The retuning engine the audio thread last published, read with
-    /// `try_lock`, so the worker never waits for it; a copy it takes can make
-    /// that callback's own `try_lock` skip one publication, which the next
-    /// callback makes.
+    /// The map playback audio last adopted, for its retuning engine.
     playback: Playback,
-    engine: TuningEngine,
     #[cfg(target_os = "macos")]
     board: Board<Midi>,
 }
@@ -320,12 +316,7 @@ impl Lights {
         playback: Playback,
     ) -> Option<Self> {
         #[cfg(all(target_os = "macos", not(test)))]
-        return Midi::new().map(|midi| Self {
-            settings,
-            playback,
-            engine: TuningEngine::default(),
-            board: Board::new(midi),
-        });
+        return Midi::new().map(|midi| Self { settings, playback, board: Board::new(midi) });
         #[cfg(not(all(target_os = "macos", not(test))))]
         {
             let _ = (settings, playback);
@@ -350,10 +341,7 @@ impl Lights {
                 }
                 sounding(&runtime.tracker)
             };
-            if let Some(playback) = self.playback.try_lock() {
-                self.engine = playback.engine;
-            }
-            let played = self.engine == TuningEngine::Adaptive;
+            let played = self.playback.read().engine == TuningEngine::Adaptive;
             self.board.update(wanted(&pitches, &config, played), Instant::now());
         }
         #[cfg(not(target_os = "macos"))]

@@ -210,7 +210,8 @@ pub struct HarmonigraphParams {
     /// Saved in the `lattice-maps` field (`saved_fields`).
     pub(crate) maps: Arc<lattice_maps::Maps>,
     pub map_editor: Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapEditor>>,
-    pub map_playback: Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapPlayback>>,
+    /// The map playback audio last adopted, published wait-free.
+    pub(crate) map_playback: Arc<lattice_maps::AdoptedPlayback>,
     /// Where following has moved the map, packed by [`lattice_maps::pack`]:
     /// written by the Hub on audio, read by the editor.
     pub map_followed: Arc<std::sync::atomic::AtomicU64>,

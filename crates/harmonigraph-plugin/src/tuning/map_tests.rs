@@ -160,7 +160,7 @@ fn an_engine_or_follow_event_past_the_top_step_selects_the_top_step() {
     hub.activate();
     hub.run(0, vec![parameter("tuning-engine", 5.0, 0), parameter("map-follow", 4.0, 0)], None);
     let playback =
-        hub_wrapper(&hub).test_inspect_plugin(|plugin| *plugin.params.map_playback.lock());
+        hub_wrapper(&hub).test_inspect_plugin(|plugin| plugin.params.map_playback.read());
     assert_eq!(playback.engine, TuningEngine::LatticeMap);
     assert_eq!(playback.follow, harmonigraph_core::lattice_map::Follow::ThirdsAndFifths);
 }

@@ -1122,7 +1122,7 @@ fn a_fresh_hub_passes_note_pitch_through() {
     device.activate();
     device.run(0, vec![], None);
     let (param, engine) = device.wrapper().test_inspect_plugin(|plugin| {
-        (plugin.params.int(crate::Row::TuningEngine), plugin.params.map_playback.lock().engine)
+        (plugin.params.int(crate::Row::TuningEngine), plugin.params.map_playback.read().engine)
     });
     assert_eq!(param, 0);
     assert_eq!(engine, harmonigraph_core::lattice_map::TuningEngine::Off);
@@ -1192,7 +1192,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     }
     device.run(0, vec![], None);
     device.wrapper().test_inspect_plugin(|plugin| {
-        let playback = *plugin.params.map_playback.lock();
+        let playback = plugin.params.map_playback.read();
         assert_eq!(playback.engine, TuningEngine::LatticeMap);
         assert_eq!(playback.selected, 1);
         assert_eq!(playback.map, Some(map));
@@ -1247,7 +1247,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     });
     device.run(64, vec![], None);
     device.wrapper().test_inspect_plugin(|plugin| {
-        let playback = *plugin.params.map_playback.lock();
+        let playback = plugin.params.map_playback.read();
         let moved = crate::lattice_maps::offsets(&plugin.params);
         assert_eq!((moved.fine.fives, moved.extension.fives), (0, 0), "−2 + 2 is exactly zero");
         assert_eq!(playback.selected, 2, "a duplicate is selected for further edits");
@@ -1263,7 +1263,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     });
     device.run(80, vec![], None);
     device.wrapper().test_inspect_plugin(|plugin| {
-        let playback = *plugin.params.map_playback.lock();
+        let playback = plugin.params.map_playback.read();
         assert_eq!(playback.selected, 2, "deleting another map leaves the selection alone");
         let moved = crate::lattice_maps::offsets(&plugin.params).total();
         let kept = LatticeMap { position: moved, ..changed };
@@ -1274,7 +1274,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     });
     device.run(96, vec![], None);
     device.wrapper().test_inspect_plugin(|plugin| {
-        let playback = *plugin.params.map_playback.lock();
+        let playback = plugin.params.map_playback.read();
         assert_eq!(playback.selected, 1, "deleting the last map in order selects the previous");
         let moved = crate::lattice_maps::offsets(&plugin.params).total();
         let neighbour = LatticeMap { position: moved, ..changed };
@@ -1292,7 +1292,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     });
     device.run(128, vec![], None);
     device.wrapper().test_inspect_plugin(|plugin| {
-        assert_eq!(plugin.params.map_playback.lock().map, Some(map));
+        assert_eq!(plugin.params.map_playback.read().map, Some(map));
     });
     // Old or partial presets must not retain lanes from the current preset,
     // and repaired plain values must agree with host and editor readback.
@@ -1318,7 +1318,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(preview.playback.selected, 0);
         assert_eq!(preview.offsets.extension, harmonigraph_core::LatticePos::ORIGIN);
         assert_eq!(preview.playback.offset, harmonigraph_core::LatticePos::new(9, -9, -9));
-        assert_eq!(plugin.params.map_playback.lock().offset, preview.playback.offset);
+        assert_eq!(plugin.params.map_playback.read().offset, preview.playback.offset);
         assert_eq!(preview.playback.follow, harmonigraph_core::lattice_map::Follow::Thirds);
     });
     let repaired = device.save();
@@ -1360,7 +1360,7 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
         device.run(64 * round as i64, vec![], None);
         device.wrapper().test_inspect_plugin(|plugin| {
             let preview = crate::lattice_maps::view(&plugin.params);
-            let audio = *plugin.params.map_playback.lock();
+            let audio = plugin.params.map_playback.read();
             assert_eq!(plugin.params.label(crate::Row::TuningEngine), shown);
             assert_eq!(preview.playback.engine, decoded, "the editor disagrees");
             assert_eq!(audio.engine, decoded, "the audio disagrees");
