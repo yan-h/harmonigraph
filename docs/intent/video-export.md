@@ -96,7 +96,7 @@ Yan took the recommendations made after the audit was checked against the code (
 
 - An export can fit the Spectral pane's pitch range to what the piece fills, since 20-50 Hz is usually empty in Yan's pieces: the Video pane's Frequency range row, Fit piece or Dialled. Yan, 2026-11-25, #1976
 - Fit piece is the fresh choice, and a saved look or recorded take without the key loads as Fit, so re-exports of older takes fit too. Yan ("go with recommendations"), #1976
-- A pitch counts when the volume colours draw it a fifth of the way up for half a second in all, and every recorded note counts, with a semitone of margin. Yan ("go with recommendations"), #1976
+- A pitch counts when the volume colours draw it a fifth of the way up for half a second in all, and every recorded note counts, with a semitone of margin. Yan ("go with recommendations"), #1976 (Superseded 2026-11-27 by #1994 TP1, docs/intent/tape-mode.md: sources hidden with Show are left out.)
 - Fit piece frames the whole 20 Hz-20 kHz axis whatever the Analyzer's Frequency range, as Fit video ignores History duration; Dialled is the way to crop by hand. Yan, 2026-11-25, #1976
 - A hand-run `--start` or `--end` render fits to exactly the soundtrack its frames analyze, the read before the first frame and past the last included, and to the notes up to its end, from the take's start, since the first frame's roll draws notes released before it. Yan, 2026-11-25, #1976
 - "Half a second in all" stays an absolute time rather than a share of the render's length, though leakage over the lit level adds up with length and may reopen 20-60 Hz past about four minutes; exports are normally a minute or two. Yan, 2026-11-25, #1976

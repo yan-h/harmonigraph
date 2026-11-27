@@ -206,7 +206,7 @@ So does spectrogram duration under **Scrolling**;
 under **Fit video**, the fresh choice, the export spans the render's own length while the preview keeps the Analyzer's history span.
 Under **Frequency range** → **Fit piece**, also the fresh choice, the renderer analyzes the soundtrack the frames will analyze once before the first frame,
 about 0.9 s at Fast and 2.9 s at Precise for a 98 s take,
-and draws the whole video at the range the pitches it lit and the notes the take played fill, whatever the Analyzer's range,
+and draws the whole video at the range the pitches it lit and the notes the video draws fill (a source hidden with Show left out), at least two octaves, whatever the Analyzer's range,
 while the preview keeps the range as dialled.
 A render run by hand prints the range it drew, and the dialled one, before the progress line;
 the Video pane's export row keeps only warnings, and the video's frequency markings show the range.
@@ -219,7 +219,7 @@ it does not need to draw every video frame to preserve those proportions.
 |---|---|
 | Manually | you switch Record take off — predictable, and it works however the transport behaves |
 | Transport stop | the transport stays stopped for 0.4 s after something was recorded; recording disarms at the same moment. A jump records on |
-| Loop end | one arranger-loop pass, ending when the loop wraps, or at any other backward jump. A forward seek records on. With nothing to wrap on, it waits for a disarm |
+| Loop end | one arranger-loop pass, ending when the loop wraps: the first jump back after the take has moved forward, a scrub back included, with up to 50 ms of backward movement while playing ignored. A forward seek records on. With no jump back, it waits for a disarm |
 | At bar | the transport plays through the bar set beside it, ending there. A rewind or forward seek records on, so a scrub back and a replay renders every attempt, end to end |
 
 *Transport stop* is what makes **exporting audio produce a video with nothing further to click**:

@@ -721,7 +721,7 @@ fn record_controls(
                 (
                     crate::RenderTrigger::AtLoopEnd,
                     "Loop end",
-                    "Record one loop, then render when playback wraps to its start. A forward seek records on. Without a wrap, recording continues until you turn Record take off.",
+                    "Record one loop, then render when playback wraps to its start: the first jump back after moving forward, ignoring up to 50 ms of backward movement. A forward seek records on. Without a jump back, recording continues until you turn Record take off.",
                 ),
                 (
                     crate::RenderTrigger::AtBar,

@@ -44,8 +44,10 @@ pub enum RenderTrigger {
     /// Detected as the transport jumping back after it has moved forward,
     /// which is what a loop's wrap looks like: hosts don't reliably tell a
     /// plugin where the loop markers are (Bitwig doesn't flag its loop as
-    /// active), so any backward jump while recording ends the take there, a
-    /// scrub back included. With nothing to wrap on it waits for you to
+    /// active), so the first backward jump after forward motion ends the take
+    /// there, a scrub back included. Up to 50 ms of backward movement while
+    /// playing is playback's jitter and ignored
+    /// (`harmonigraph_record::transport::JITTER_SECONDS`). With nothing to wrap on it waits for you to
     /// disarm, like [`OnDisarm`](Self::OnDisarm).
     AtLoopEnd,
     /// When the transport plays THROUGH [`stop_bar`](RenderConfig::stop_bar):
