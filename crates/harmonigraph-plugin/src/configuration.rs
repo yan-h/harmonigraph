@@ -251,18 +251,18 @@ impl Settings {
     /// Settings that do not parse open at the defaults a save that lacks them
     /// opens at, with a Console line pushed onto `notes`, and the rest of the
     /// restore goes ahead (#1927).
-    fn read_saved(self: &Arc<Self>, state: &PluginState, notes: &mut Vec<String>) -> Restore {
-        let value: MusicalSettings = crate::saved_fields::parse(
+    ///
+    /// A project saved before #1756 holds its axes as host parameters, which
+    /// the parameter table skips and names in its one Console line for
+    /// parameters this build no longer has (`saved_fields`).
+    fn read_saved(state: &PluginState, notes: &mut Vec<String>) -> MusicalSettings {
+        crate::saved_fields::parse(
             state,
             MUSICAL_SETTINGS,
             "the tuning opened at its defaults",
             notes,
         )
-        .unwrap_or_default();
-        // A project saved before #1756 holds its axes as host parameters,
-        // which the parameter table skips and names in its one Console line
-        // for parameters this build no longer has (`saved_fields`).
-        Restore { settings: self.clone(), value }
+        .unwrap_or_default()
     }
 }
 
@@ -271,25 +271,15 @@ struct HubParsed {
     params: Arc<crate::HarmonigraphParams>,
     fields: crate::saved_fields::Fields,
     instance: crate::tuning::setup::Restore,
-    musical: Restore,
+    musical: MusicalSettings,
 }
 impl Parsed for HubParsed {
+    /// The tuning document takes the saved value whole, without marking the
+    /// project modified: it holds what the host just gave.
     fn install(self: Box<Self>) {
         self.fields.install(&self.params);
         self.instance.install();
-        self.musical.install();
-    }
-}
-
-struct Restore {
-    settings: Arc<Settings>,
-    value: MusicalSettings,
-}
-impl Restore {
-    /// The document takes the saved value whole, without marking the project
-    /// modified: it holds what the host just gave.
-    fn install(self) {
-        self.settings.write(|reducer| reducer.apply(self.value.mutation()));
+        self.params.settings.write(|reducer| reducer.apply(self.musical.mutation()));
     }
 }
 
@@ -311,7 +301,7 @@ impl Setup for HubSetup {
     /// so a callback between them can meet one without the others.
     fn parse(&self, state: &PluginState) -> Box<dyn Parsed> {
         let mut notes = Vec::new();
-        let musical = self.params.settings.read_saved(state, &mut notes);
+        let musical = Settings::read_saved(state, &mut notes);
         let instance = self.instance.read(state, &mut notes);
         let fields = crate::saved_fields::read(&self.params, state, notes);
         Box::new(HubParsed { params: self.params.clone(), fields, instance, musical })
