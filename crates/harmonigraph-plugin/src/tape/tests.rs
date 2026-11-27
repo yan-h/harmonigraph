@@ -857,11 +857,16 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
             expressions: harmonigraph_core::Expressions::NEUTRAL,
         },
     };
+    // Source 2's attack at 4 s, a Span or two after source 1's, starts a
+    // section of its own.
     let mut source = 0;
-    for (i, song) in (0..500).step_by(FRAMES).enumerate() {
+    for (i, song) in (0..8000).step_by(FRAMES).enumerate() {
         if i == 1 {
             worker.inbox.push((0.25, held(1, 60)));
-            worker.inbox.push((0.25, held(2, 64)));
+        }
+        if i == 39 {
+            worker.inbox.push((4.0, held(2, 64)));
+            worker.inbox.push((4.0, held(2, 67)));
         }
         let (block, samples) = ring_block(source, Some(song), STEREO);
         worker.capture(block, &samples);
@@ -882,6 +887,13 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
         let sections = view.harmony.sections.iter();
         sections.map(|section| section.entries.iter().map(|entry| entry.pitch).collect()).collect()
     };
+    let starts = |view: &TapeView| -> Vec<f64> {
+        view.harmony
+            .sections
+            .iter()
+            .map(|section| (section.start * 100.0).round() / 100.0)
+            .collect()
+    };
     // Not asked for: nothing is analyzed.
     let mut view = TapeView { showing: true, ..Default::default() };
     let _ = step(&mut worker, &mut view);
@@ -890,7 +902,8 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     view.harmony_wanted = Some((0.5, 4.0));
     let displaced = step(&mut worker, &mut view);
     assert!(displaced.harmony.is_some(), "the empty one it replaced");
-    assert_eq!(pitches(&view), [[60.0, 64.0]]);
+    assert_eq!(starts(&view), [0.25, 4.0]);
+    assert_eq!(pitches(&view), [vec![60.0], vec![60.0, 64.0, 67.0]]);
 
     // Nothing moved: the same analysis stands.
     let first = Arc::clone(&view.harmony);
@@ -901,14 +914,17 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     assert!(step(&mut worker, &mut view).harmony.is_some_and(|old| Arc::ptr_eq(&old, &first)));
     view.harmony_wanted = Some((0.75, 2.0));
     assert!(step(&mut worker, &mut view).harmony.is_some());
-    // Source 2 hidden with Show: analyzed again without its notes, then
-    // left standing, and analyzed with them once it shows again.
+    // Source 2 hidden with Show: analyzed again without its notes, the
+    // section its attack started gone with them, then left standing, and
+    // analyzed with them once it shows again.
+    let both = (starts(&view), pitches(&view));
+    assert_eq!(both.0, [0.25, 4.0]);
     let hidden = BTreeSet::from([SourceId(2)]);
     assert!(step_hiding(&mut worker, &mut view, &hidden).harmony.is_some());
-    assert_eq!(pitches(&view), [[60.0]]);
+    assert_eq!((starts(&view), pitches(&view)), (vec![0.25], vec![vec![60.0]]));
     assert!(step_hiding(&mut worker, &mut view, &hidden).harmony.is_none());
     assert!(step(&mut worker, &mut view).harmony.is_some());
-    assert_eq!(pitches(&view), [[60.0, 64.0]]);
+    assert_eq!((starts(&view), pitches(&view)), both);
     // The recording changed under it (a new format clears the tape): the
     // sections follow the roll.
     let new_format = Format { channels: 2, sample_rate: 2000.0, sidechain: false };
