@@ -1267,6 +1267,8 @@ mod tests {
         let mut plugin = Harmonigraph::default();
         let state = plugin.params.editor_state.clone();
         state.set_open(true);
+        // Past the worker's first steps, so a pass asked below is the note's.
+        wait_for_rounds(&plugin, 2);
         state.pass_request.take();
         plugin.take.publish_clock(1.0);
         plugin
@@ -1274,13 +1276,32 @@ mod tests {
             .publish_note(CoreNoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0).into())
             .expect_both();
         let started = Instant::now();
-        while !state.pass_request.take() {
+        while plugin.editor_shared.lock().ui.picture.runtime.tracker.voices().next().is_none() {
             assert!(
                 started.elapsed() < ANALYSIS_DEADLINE,
-                "no pass asked of the editor's state in {ANALYSIS_DEADLINE:?} after a strike: \
-                 the worker asks another EguiState, or this runner never scheduled it",
+                "the note never reached the tracker in {ANALYSIS_DEADLINE:?}: this runner \
+                 never scheduled the worker",
             );
             std::thread::sleep(background::POLL);
+        }
+        // Asked once the step that drained it let go of the lock.
+        wait_for_rounds(&plugin, 1);
+        assert!(
+            state.pass_request.take(),
+            "the strike asked no pass of the editor's state: the worker asks another EguiState",
+        );
+    }
+
+    /// Wait until the input worker has completed `rounds` more of its loop.
+    fn wait_for_rounds(plugin: &Harmonigraph, rounds: u64) {
+        let from = plugin.input_worker.completed_rounds();
+        let started = Instant::now();
+        while plugin.input_worker.completed_rounds() < from + rounds {
+            assert!(
+                started.elapsed() < ANALYSIS_DEADLINE,
+                "no worker round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
+            );
+            std::thread::sleep(background::POLL / 2);
         }
     }
 
@@ -1313,8 +1334,6 @@ mod tests {
         };
 
         let mut plugin = Harmonigraph::default();
-        let state = plugin.params.editor_state.clone();
-        state.pass_request.take();
         // What the host does when it restores a project, and all it does: no
         // editor, no activation, just the field.
         restore(&plugin, &blob);
@@ -1322,17 +1341,9 @@ mod tests {
         // so the analyzer cannot come out of the drain empty.
         publish_test_audio(&mut plugin, 40_000);
         // Waited for without taking the editor lock, which would install the
-        // restore itself: the worker asks for a pass once it has given the
-        // first sound to the spectrum, and nothing else here asks for one.
-        let started = Instant::now();
-        while !state.pass_request.take() {
-            assert!(
-                started.elapsed() < ANALYSIS_DEADLINE,
-                "nothing was analyzed in {ANALYSIS_DEADLINE:?}, or this runner never \
-                 scheduled the analyzer",
-            );
-            std::thread::sleep(background::POLL / 2);
-        }
+        // restore itself: a round that began after the audio was published
+        // drained and analyzed all of it.
+        wait_for_rounds(&plugin, 2);
 
         // The analysis is the worker's own, so read it once the worker has
         // stopped and handed it back.

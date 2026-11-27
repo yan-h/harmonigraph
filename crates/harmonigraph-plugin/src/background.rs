@@ -110,16 +110,39 @@ pub(crate) const POLL: Duration = Duration::from_millis(4);
 pub(crate) const SHUT_POLL: Duration = Duration::from_millis(20);
 
 /// What a step last saw: how many edits the tracker had taken and the display
-/// time the step read ([`Self::edited`]), and the host parameters' values
+/// time the step read ([`Self::edited`]), and what of the parameters draws
 /// ([`Self::moved`]).
 #[derive(Default)]
 struct Seen {
     edits: u64,
     display: f64,
-    params: [u32; crate::Row::ALL.len()],
+    params: Drawn,
+}
+
+/// What of the plugin's parameters a still picture draws: the host
+/// parameters' modulated values, and the fifths Adaptive's strip has slid.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Drawn {
+    rows: [u32; crate::Row::ALL.len()],
+    strip: i32,
+}
+
+impl Drawn {
+    fn of(params: &crate::HarmonigraphParams) -> Self {
+        Drawn {
+            rows: crate::Row::ALL.map(|row| params.table.float(row.index()).to_bits()),
+            strip: params.strip_slide.load(Ordering::Acquire),
+        }
+    }
 }
 
 impl Seen {
+    /// What the worker starts from: the parameters as they stand, so its first
+    /// step asks for no pass they did not earn.
+    fn starting(params: Option<&crate::HarmonigraphParams>) -> Self {
+        Seen { params: params.map(Drawn::of).unwrap_or_default(), ..Default::default() }
+    }
+
     /// Whether the window should draw for the tracker's `edits`, at a step
     /// that read the display clock at `display`: for any edit it took since
     /// the last step, a release, a bend or a pressure change as much as a
@@ -133,12 +156,13 @@ impl Seen {
         edits.count != count || edits.latest > before
     }
 
-    /// Whether any host parameter moved since the last step: automation or
-    /// modulation of the camera or the Lattice Map under a still picture,
-    /// which the picture draws but reports no motion for. Read from the
-    /// table's atomics here, off the audio thread, which only stores them.
+    /// Whether any parameter the picture draws moved since the last step:
+    /// automation or modulation of the camera or the Lattice Map under a still
+    /// picture, or the Hub sliding Adaptive's strip, which the picture draws
+    /// but reports no motion for. Read from atomics here, off the audio
+    /// thread, which only stores them.
     fn moved(&mut self, params: &crate::HarmonigraphParams) -> bool {
-        let now = crate::Row::ALL.map(|row| params.table.float(row.index()).to_bits());
+        let now = Drawn::of(params);
         std::mem::replace(&mut self.params, now) != now
     }
 }
@@ -513,7 +537,7 @@ fn run(
 ) {
     let mut panicked = false;
     let mut in_a_row = 0;
-    let mut seen = Seen::default();
+    let mut seen = Seen::starting(learn);
     while !stop.load(Ordering::Relaxed) {
         if guarded_step(shared, editor_state, tape, input, &mut seen, learn, &mut panicked) {
             in_a_row = 0;
@@ -905,6 +929,22 @@ mod tests {
             h.step();
             assert!(!asked(&h), "{row:?} asked again without moving");
         }
+        params.strip_slide.store(3, Ordering::Release);
+        h.step();
+        assert!(asked(&h), "Adaptive's strip slid and waited for the idle poll");
+        h.step();
+        assert!(!asked(&h), "a strip that stayed put asked");
+    }
+
+    /// The worker starts from the parameters as they stand, so a project's
+    /// own camera or map is no move, and its first step asks for no pass.
+    #[test]
+    fn a_workers_first_step_asks_nothing_of_parameters_that_have_not_moved() {
+        let params = crate::HarmonigraphParams::default();
+        params.table.set_host(crate::Row::CameraYaw.index(), 0.3);
+        params.strip_slide.store(2, Ordering::Release);
+        let mut seen = super::Seen::starting(Some(&params));
+        assert!(!seen.moved(&params), "the parameters a project opened at read as a move");
     }
 
     /// An edit dated ahead of the display clock, as a Hub's are by the Tuning
