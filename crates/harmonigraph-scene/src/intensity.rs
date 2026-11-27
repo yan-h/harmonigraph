@@ -167,6 +167,18 @@ impl IntensitySettings {
     /// What one note, played at `velocity` with its expressions standing at
     /// `expressions`, comes to on every display.
     pub fn read(&self, velocity: f32, expressions: Expressions) -> IntensityReading {
+        // Held so by the load and the bars (`sanitized`); a release build
+        // reading settings that are not would clamp to NaN or panic below.
+        debug_assert!(
+            self.thickness_max.is_finite()
+                && self.thickness_max >= 1.0
+                && [self.velocity, self.gain, self.pressure, self.timbre].iter().all(|source| {
+                    IntensityTarget::ALL.iter().all(|&target| {
+                        source.weight(target).is_none_or(|w| w.is_finite() && w >= 0.0)
+                    })
+                }),
+            "unsanitized intensity settings reached a reading: {self:?}",
+        );
         let raw = self.unclamped(velocity, expressions);
         IntensityReading {
             opacity: raw.opacity.clamp(0.0, 1.0),

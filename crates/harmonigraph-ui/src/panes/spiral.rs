@@ -364,7 +364,9 @@ impl Spiral {
         // the range bar and the gestures. A zero or negative one would divide
         // by zero below and paint NaN geometry, which egui panics on (#1631).
         debug_assert!(
-            max_midi - min_midi >= crate::PITCH_RANGE_MIN_SPAN - 1e-3,
+            min_midi.is_finite()
+                && max_midi.is_finite()
+                && max_midi - min_midi >= crate::PITCH_RANGE_MIN_SPAN - 1e-3,
             "a pitch range {min_midi}..{max_midi} under the floor reached the Spiral",
         );
         let r_out = (rect.width().min(rect.height()) * 0.5 - MARGIN_PT).max(1.0);
