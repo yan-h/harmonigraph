@@ -87,14 +87,13 @@ pub(crate) fn render_pane(
 
         // Make the render frame obvious against the pane. The letterbox padding
         // takes the panel color, so it reads as inert chrome rather than part of
-        // the shot; the aspect box takes the render's OWN frame background — the
+        // the shot; the aspect box takes the render's OWN frame ground — the
         // picture's black, which no composed layout shows through, since its panes
         // cover the frame — so the box is exactly the pixels the video will contain. Painting the
         // padding and the pane fills both `picture()` leaves no way to tell where
         // the frame ends.
-        let bg = layout.background;
         ui.painter().rect_filled(outer, 0.0, theme::panel());
-        ui.painter().rect_filled(box_rect, 0.0, egui::Color32::from_rgb(bg.0, bg.1, bg.2));
+        ui.painter().rect_filled(box_rect, 0.0, theme::picture());
         frame_chrome(ui, box_rect, pad);
 
         let placements: Vec<_> = layout
@@ -106,7 +105,7 @@ pub(crate) fn render_pane(
         preview_panes(ui, &placements, state, now, point_scale);
 
         // The seam between panes, exactly as the render bakes it.
-        layout.paint_dividers(ui.painter(), &placements);
+        Layout::paint_dividers(ui.painter(), &placements);
         let appearance = &mut state.appearance;
         preview_layout_controls(
             ui,
@@ -603,13 +602,10 @@ fn preview_lattice(
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return None;
     }
-    // The preview is a picture of the RENDER, so it stands on the render
-    // layout's background rather than on the panel this preview happens to sit
-    // on — the same colour `harmonigraph-offline` will clear to.
-    let background = harmonigraph_scene::skin::ground_color(
-        Layout::split(state.appearance.render.frame.lattice, state.appearance.render.frame.split)
-            .background,
-    );
+    // The preview is a picture of the RENDER, so it stands on the picture's
+    // ground rather than on the panel this preview happens to sit on — the
+    // same colour `harmonigraph-offline` will clear to.
+    let background = harmonigraph_scene::skin::picture_color();
     let response = ui.interact(rect, ui.scope_id().with("preview_lattice_zoom"), Sense::hover());
     if let Some((scroll, zoom)) = super::zoom_gesture(ui, &response) {
         if scroll != 0.0 {

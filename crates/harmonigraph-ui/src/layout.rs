@@ -41,25 +41,18 @@ pub struct Placement {
     pub rect: (f32, f32, f32, f32),
 }
 
+/// The panes of a composed frame, on the picture's own ground
+/// ([`harmonigraph_scene::skin::PICTURE`]), which they cover edge to edge.
+///
+/// The panes abut, with no gap between them: a gap would show the ground,
+/// which matches a pane's bed only while that pane is UNLIT. The lattice's bed
+/// carries the glow's wash, so beside a lit lattice any gap at all reads as a
+/// dark bar down the seam — several shades under the pane it borders, at the
+/// one place in the frame the eye is already looking. No fixed colour fixes
+/// that; the wash is a dial.
 #[derive(Clone, Debug)]
 pub struct Layout {
-    /// Frame background, RGB: the ground under the panes, which every layout
-    /// the plugin composes covers edge to edge.
-    ///
-    /// The panes abut, with no gap between them: a gap would fill with
-    /// `background`, which matches a pane's bed only while that pane is UNLIT.
-    /// The lattice's bed carries the glow's wash, so beside a lit lattice any
-    /// gap at all reads as a dark bar down the seam — several shades under
-    /// the pane it borders, at the one place in the frame the eye is already
-    /// looking. No fixed colour fixes that; the wash is a dial.
-    pub background: (u8, u8, u8),
     pub panes: Vec<Placement>,
-}
-
-fn default_background() -> (u8, u8, u8) {
-    // The panes' own ground: the picture's black.
-    let [r, g, b] = harmonigraph_scene::skin::PICTURE;
-    (r, g, b)
 }
 
 impl Layout {
@@ -84,7 +77,7 @@ impl Layout {
             Placement { pane: Pane::Lattice, rect: lattice },
             Placement { pane: Pane::Spectral, rect: spectral },
         ];
-        Layout { background: default_background(), panes }
+        Layout { panes }
     }
 
     /// Resolve to screen rectangles inside a frame of `size` points.
@@ -114,7 +107,7 @@ impl Layout {
     /// so two panes left to abut melt into one continuous field. Geometry
     /// only, so it can be tested without a GPU;
     /// [`paint_dividers`](Self::paint_dividers) draws it.
-    pub fn dividers(&self, placements: &[(Pane, egui::Rect)]) -> Vec<[egui::Pos2; 2]> {
+    pub fn dividers(placements: &[(Pane, egui::Rect)]) -> Vec<[egui::Pos2; 2]> {
         // Two panes meet where one's far edge is the other's near edge.
         let facing = |near: f32, far: f32| ((far - near).abs() < 1.0).then_some((near + far) * 0.5);
         let mut lines = Vec::new();
@@ -151,9 +144,9 @@ impl Layout {
     /// The live dock deliberately does NOT get these: `workspace` paints its own
     /// draggable divider between the panes, a 2-point hairline that Hide tab
     /// bars leaves in place.
-    pub fn paint_dividers(&self, painter: &egui::Painter, placements: &[(Pane, egui::Rect)]) {
+    pub fn paint_dividers(painter: &egui::Painter, placements: &[(Pane, egui::Rect)]) {
         let stroke = egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_divider());
-        for line in self.dividers(placements) {
+        for line in Self::dividers(placements) {
             painter.line_segment(line, stroke);
         }
     }
@@ -220,7 +213,7 @@ mod tests {
             // still get their seam drawn.
             if resolved.len() > 1 {
                 assert_eq!(
-                    layout.dividers(&resolved).len(),
+                    Layout::dividers(&resolved).len(),
                     resolved.len() - 1,
                     "{name}: flush panes lost their divider"
                 );
@@ -234,7 +227,7 @@ mod tests {
     fn adjacent_panes_get_one_divider_along_their_shared_edge() {
         let layout = Layout::split(LatticeSide::Left, 0.6);
         let resolved = layout.resolve(FRAME);
-        let lines = layout.dividers(&resolved);
+        let lines = Layout::dividers(&resolved);
         assert_eq!(lines.len(), 1, "two panes, one boundary");
         let [a, b] = lines[0];
         assert!((a.x - 1920.0 * 0.6).abs() < 0.01, "on the shared edge");
@@ -242,7 +235,7 @@ mod tests {
         assert_eq!((a.y, b.y), (0.0, 1080.0), "spanning the whole shared edge");
 
         let stacked = Layout::split(LatticeSide::Top, 0.6);
-        let lines = stacked.dividers(&stacked.resolve(FRAME));
+        let lines = Layout::dividers(&stacked.resolve(FRAME));
         assert_eq!(lines.len(), 1);
         let [a, b] = lines[0];
         assert!((a.y - 1080.0 * 0.6).abs() < 0.01);
@@ -299,7 +292,7 @@ mod tests {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, FRAME)),
                     ..Default::default()
                 },
-                |ui| layout.paint_dividers(ui.painter(), &placements),
+                |ui| Layout::paint_dividers(ui.painter(), &placements),
             );
             let lines: Vec<_> = output
                 .shapes
@@ -309,7 +302,7 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(lines.len(), layout.dividers(&placements).len());
+            assert_eq!(lines.len(), Layout::dividers(&placements).len());
             assert!(!lines.is_empty(), "the fixture must paint a real boundary");
             assert!(lines.iter().all(|(_, stroke)| *stroke
                 == egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_divider())));
@@ -324,20 +317,15 @@ mod tests {
     #[test]
     fn a_lone_pane_gets_no_divider() {
         for pane in [Pane::Lattice, Pane::Spectral] {
-            let layout = Layout {
-                panes: vec![Placement { pane, rect: (0.0, 0.0, 1.0, 1.0) }],
-                ..Layout::split(LatticeSide::Left, 0.6)
-            };
-            assert!(layout.dividers(&layout.resolve(FRAME)).is_empty(), "{pane:?}");
+            let layout = Layout { panes: vec![Placement { pane, rect: (0.0, 0.0, 1.0, 1.0) }] };
+            assert!(Layout::dividers(&layout.resolve(FRAME)).is_empty(), "{pane:?}");
         }
     }
 
     #[test]
     fn a_degenerate_pane_is_dropped_not_drawn() {
-        let layout = Layout {
-            background: default_background(),
-            panes: vec![Placement { pane: Pane::Lattice, rect: (0.5, 0.0, 0.5, 1.0) }],
-        };
+        let layout =
+            Layout { panes: vec![Placement { pane: Pane::Lattice, rect: (0.5, 0.0, 0.5, 1.0) }] };
         assert!(layout.resolve(FRAME).is_empty());
     }
 }
