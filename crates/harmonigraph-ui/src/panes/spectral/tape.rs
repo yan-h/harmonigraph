@@ -831,14 +831,16 @@ impl Placed {
 /// far region open; #1974): one small lattice per section, on the overview's
 /// own song axis, lighting the nodes that sound in it. A node is a set of
 /// rings, one per octave it sounds in, lowest in the middle, each in its
-/// note's colour, the one struck last where two share a ring. A pitch lights the node the roll names it by
+/// note's colour. Where two notes share a ring, the one flashing more shows,
+/// and once both have settled, as on every still row, the lower pitch. A
+/// pitch lights the node the roll names it by
 /// ([`naming_node_from`](super::names::naming_node_from)): the one position of
 /// the naming reach that matches it under the live tuning, and in a
 /// temperament, where a dozen do, the one that spells most plainly. Every
 /// match, as the lattice lights them, would make each thumbnail a wallpaper of
 /// its chord. A pitch the reach does not hold lights none.
 ///
-/// One frame holds every thumbnail, the nodes the whole recording lights, so a
+/// One frame holds every thumbnail, the nodes the shown sources light, so a
 /// harmony that moves across the lattice is a lit shape that moves in its
 /// frame. Sections too narrow to hold that frame join the one before
 /// ([`Harmony::cells`](crate::tape::harmony::Harmony::cells)).
@@ -959,7 +961,9 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
                 let octave = (above / 1200.0).round() as i32;
                 match nodes.iter_mut().find(|(at, _)| *at == pos) {
                     Some((_, rings)) => match rings.iter_mut().find(|ring| ring.0 == octave) {
-                        // Two notes on one ring: the one struck last shows.
+                        // Two notes on one ring: the one flashing more shows,
+                        // and once both have settled the lower pitch, the
+                        // entries being in pitch order.
                         Some(ring) if flash > ring.1 => *ring = (octave, flash, colour),
                         Some(_) => {}
                         None => rings.push((octave, flash, colour)),
