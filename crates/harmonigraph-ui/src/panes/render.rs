@@ -88,8 +88,8 @@ pub(crate) fn render_pane(
         // Make the render frame obvious against the pane. The letterbox padding
         // takes the panel color, so it reads as inert chrome rather than part of
         // the shot; the aspect box takes the render's OWN frame background — the
-        // picture's black, which no composed layout shows through (margin and gap
-        // are 0) — so the box is exactly the pixels the video will contain. Painting the
+        // picture's black, which no composed layout shows through, since its panes
+        // cover the frame — so the box is exactly the pixels the video will contain. Painting the
         // padding and the pane fills both `picture()` leaves no way to tell where
         // the frame ends.
         let bg = layout.background;
