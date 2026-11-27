@@ -173,10 +173,11 @@ impl Bench {
 /// it was handed.
 ///
 /// An odd `samples` is what a caller hands over the moment it sizes a block
-/// by the host's channel count instead of [`TAKE_CHANNELS`]: half a frame
-/// would put the ring out of phase for the rest of the take, swapping the
-/// WAV's channels with nothing downstream able to tell. No caller does; the
-/// one there is multiplies by `TAKE_CHANNELS`, so it is a debug assertion.
+/// by the host's channel count instead of [`TAKE_CHANNELS`]. No caller does;
+/// the one there is multiplies by `TAKE_CHANNELS`, so it is a debug assertion.
+/// A release build would write the block, and the writer's `WavWriter::write`,
+/// which takes whole frames only, would refuse it: the take fails with a
+/// status line.
 #[test]
 #[cfg(debug_assertions)]
 #[should_panic(expected = "a block of whole frames")]
