@@ -21,10 +21,16 @@ use crate::theme;
 /// over its own width, which the span does not fix.
 const FADE_SEGMENTS: usize = 64;
 
-/// The parts a two-ended bar's drag takes hold of, as its hover names them
-/// (see [`gestures`](super::bar::gestures)): a [`RangeBar`]'s and a
+/// A two-ended bar's drag clause, as its hover says it (see
+/// [`gestures`](super::bar::gestures)): a [`RangeBar`]'s and a
 /// [`SpreadBar`](super::gradient::SpreadBar)'s alike.
-pub(super) const ENDS_AND_MIDDLE: &str = "an end or the middle";
+pub(super) const ENDS_AND_MIDDLE: &str = "Drag an end or the middle to adjust";
+
+/// A [`RangeBar`]'s drag clause while its ends stand on one point, a hard edge
+/// on a [`fade_span`](RangeBar::fade_span) bar: no middle is left to take
+/// hold of, and a press left of the handle opens the pair while one on or
+/// right of it slides both ([`Grab::at`]).
+const CLOSED: &str = "Drag left of the handle to open the pair, or on or right of it to slide both";
 
 /// Which part of a [`RangeBar`] a drag took hold of. Decided once, at
 /// drag-start, and remembered for the gesture — otherwise dragging one end
@@ -384,6 +390,9 @@ pub struct RangeBar<'a> {
     default: Option<(f32, f32)>,
     display: fn(f32) -> String,
     hint: Option<&'a str>,
+    /// The hover's drag clause, where the caller's ends and middle move
+    /// something other than the pair itself (see [`RangeBar::drag`]).
+    drag: Option<&'a str>,
 }
 
 impl<'a> RangeBar<'a> {
@@ -403,7 +412,17 @@ impl<'a> RangeBar<'a> {
             default: None,
             display: |v| format!("{v:.2}"),
             hint: None,
+            drag: None,
         }
+    }
+
+    /// The drag clause the hover's gesture line opens with, for a bar whose
+    /// ends and middle move something the plain range wording does not say,
+    /// such as the star layers' spread. Without one the bar says
+    /// [`ENDS_AND_MIDDLE`], or its closed wording while the ends coincide.
+    pub fn drag(mut self, clause: &'a str) -> Self {
+        self.drag = Some(clause);
+        self
     }
 
     /// What the hover says the setting is, its full label when given none;
@@ -794,13 +813,10 @@ impl<'a> RangeBar<'a> {
         // the middle picks the whole range up and slides it. Read off the same
         // grab the thumbs are lit by, so the two never disagree.
         let hint = self.hint.unwrap_or(self.label);
-        let response = with_gestures(
-            response,
-            Some(hint),
-            Some(ENDS_AND_MIDDLE),
-            self.default.is_some(),
-            false,
-        );
+        let drag =
+            self.drag.unwrap_or(if *self.high > *self.low { ENDS_AND_MIDDLE } else { CLOSED });
+        let response =
+            with_gestures(response, Some(hint), Some(drag), self.default.is_some(), false);
         match in_hand {
             Some(Grab::Span { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),

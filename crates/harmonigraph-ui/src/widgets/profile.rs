@@ -76,13 +76,13 @@ pub(crate) fn depth(
             "Star size",
             STAR_SIZE_MIN..=STAR_SIZE_MAX,
             |octaves| format!("{:.1} px", octaves.exp2()),
-            "How big the stars are across, glow included, from the smallest layer to the largest. Drag an end to stretch every layer's size with it, or the middle to slide them all. Star spacing is a multiple of the size, so bigger stars sit farther apart.",
+            "How big the stars are across, glow included, from the smallest layer to the largest. Star spacing is a multiple of the size, so bigger stars sit farther apart.",
         ),
         Depth::Spacing => (
             "Star spacing",
             STAR_SPACING_MIN..=STAR_SPACING_MAX,
             |octaves| format!("{:.2}× size", octaves.exp2()),
-            "How far apart the stars are, as a multiple of their layer's Star size, from the closest layer to the widest. Drag an end to stretch every layer's spacing with it, or the middle to slide them all. Every place holds a star, so wider spacing is fewer stars; the closest is as close as a star can sit and still be drawn whole.",
+            "How far apart the stars are, as a multiple of their layer's Star size, from the closest layer to the widest. Every place holds a star, so wider spacing is fewer stars; the closest is as close as a star can sit and still be drawn whole.",
         ),
         Depth::Speed => (
             "Star speed",
@@ -92,15 +92,15 @@ pub(crate) fn depth(
                 StarPane::Lattice => percent,
             },
             match pane {
-                StarPane::Spectrogram => "How fast the stars drift, as a multiple of how fast the spectrogram scrolls, from the slowest layer to the fastest: at 1× a star moves as fast as the music, and zooming the Span keeps it so. Drag an end to stretch every layer's speed with it, or the middle to slide them all. A wider spread deepens the parallax; equal speeds move every layer together.",
-                StarPane::Lattice => "How fast the stars drift, from the slowest layer to the fastest. Drag an end to stretch every layer's speed with it, or the middle to slide them all. A wider spread deepens the parallax; equal speeds move every layer together.",
+                StarPane::Spectrogram => "How fast the stars drift, as a multiple of how fast the spectrogram scrolls, from the slowest layer to the fastest: at 1× a star moves as fast as the music, and zooming the Span keeps it so. A wider spread deepens the parallax; equal speeds move every layer together.",
+                StarPane::Lattice => "How fast the stars drift, from the slowest layer to the fastest. A wider spread deepens the parallax; equal speeds move every layer together.",
             },
         ),
         Depth::Solid => (
             "Solid share",
             0.0..=STAR_SOLID_MAX,
             percent,
-            "The share of each star's radius at full strength, from its centre out, from the least solid layer to the most; the rest is glow, fading to the star's edge as Glow falloff says. Drag an end to stretch every layer's share with it, or the middle to slide them all.",
+            "The share of each star's radius at full strength, from its centre out, from the least solid layer to the most; the rest is glow, fading to the star's edge as Glow falloff says.",
         ),
     };
     // Sizes and spacings run in octaves, the shares linearly, on the plot and
@@ -163,9 +163,26 @@ pub(crate) fn depth(
         );
         let (mut a, mut b) = held.map_or((small, big), |held| held.pair);
         plot.fields(ui, |ui| {
+            // What the bar's ends and middle move is every drawn layer, said
+            // once here rather than in each property's hover.
+            let drag = match kind {
+                Depth::Size => {
+                    "Drag an end to stretch every layer's size with it, or the middle to slide them all"
+                }
+                Depth::Spacing => {
+                    "Drag an end to stretch every layer's spacing with it, or the middle to slide them all"
+                }
+                Depth::Speed => {
+                    "Drag an end to stretch every layer's speed with it, or the middle to slide them all"
+                }
+                Depth::Solid => {
+                    "Drag an end to stretch every layer's share with it, or the middle to slide them all"
+                }
+            };
             let response = RangeBar::new(&mut a, &mut b, low..=high, name)
                 .display(display)
                 .hint(&format!("{hover} {PLOT}"))
+                .drag(drag)
                 .show(ui);
             // Written back only on a change: the round trip is not exact, and
             // the values key star placement. Each layer keeps its share of the

@@ -676,8 +676,7 @@ impl<'a> SpectrumBar<'a> {
         // Read off the same grab the handle is lit by.
         // Every SpectrumBar has a home, so every one resets. The flip button
         // says what it does on its own hover.
-        let response =
-            with_gestures(response, self.hint, Some("the handle or the track"), true, false);
+        let response = with_gestures(response, self.hint, Some(SPECTRUM_DRAG), true, false);
         match in_hand {
             Some(SpectrumGrab::Span) => {
                 response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
@@ -687,6 +686,9 @@ impl<'a> SpectrumBar<'a> {
         }
     }
 }
+
+/// A [`SpectrumBar`]'s drag clause: what its two parts move.
+const SPECTRUM_DRAG: &str = "Drag the handle to set the span, or the track to rotate it";
 
 /// The reverse mark on a [`SpectrumBar`]'s flip button: two arrows, one over
 /// the other, pointing opposite ways.

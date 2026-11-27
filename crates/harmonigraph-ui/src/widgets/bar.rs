@@ -114,26 +114,25 @@ pub(super) fn type_gesture(ctx: &egui::Context) -> &'static str {
     }
 }
 
-/// The gestures a bar answers to, in the one wording every bar's hover ends
-/// with: a drag always, a double-click where the bar has a `reset` to go
+/// The gestures a bar answers to, in the one line every bar's hover ends
+/// with: its drag always, a double-click where the bar has a `reset` to go
 /// back to, and a typed number where the bar is `typed` (a [`ValueBar`];
 /// a bar holding two numbers or more has no single one to type).
 ///
-/// A bar with several parts names them as `parts`, what its drag takes hold
-/// of ("an end or the middle"), so its caller has no gesture sentence of its
-/// own to write; a bar of one part passes `None`.
+/// `drag` is the drag clause, which a bar of several parts writes whole,
+/// naming its parts and what each moves where they differ ("Drag an end or
+/// the middle to adjust"), so its caller writes no gesture sentence of its
+/// own; a bar of one part passes `None` for "Drag to adjust". The reset and
+/// the typed entry follow in the shared wording.
 ///
 /// [`ValueBar`]: super::value::ValueBar
 pub(super) fn gestures(
     ctx: &egui::Context,
-    parts: Option<&str>,
+    drag: Option<&str>,
     reset: bool,
     typed: bool,
 ) -> String {
-    let mut text = match parts {
-        Some(parts) => format!("Drag {parts} to adjust"),
-        None => "Drag to adjust".to_owned(),
-    };
+    let mut text = drag.unwrap_or("Drag to adjust").to_owned();
     if reset {
         text.push_str(", double-click to reset");
     }
@@ -153,14 +152,14 @@ pub(super) fn gestures(
 pub(super) fn with_gestures(
     response: Response,
     hint: Option<&str>,
-    parts: Option<&str>,
+    drag: Option<&str>,
     reset: bool,
     typed: bool,
 ) -> Response {
     response.on_hover_ui(|ui| {
         // As `Response::on_hover_text` does, so a long hint wraps the same.
         ui.set_max_width(ui.spacing().tooltip_width);
-        let gestures = gestures(ui.ctx(), parts, reset, typed);
+        let gestures = gestures(ui.ctx(), drag, reset, typed);
         ui.add(egui::Label::new(match hint {
             Some(hint) if !hint.is_empty() => format!("{hint}\n{gestures}"),
             _ => gestures,
@@ -518,9 +517,10 @@ mod tests {
         }
     }
 
-    /// A bar of several parts names them in its one gesture line, so the
-    /// hint its caller writes says what the setting is and nothing of how to
-    /// drag it (#1994 SH1).
+    /// A bar of several parts names them, and what each moves where they
+    /// differ, in its one gesture line, so the hint its caller writes says what
+    /// the setting is and nothing of how to drag it (#1994 SH1); a range bar
+    /// says so truly with its ends together too.
     #[test]
     fn a_bar_of_several_parts_names_them_in_its_gesture_line() {
         use super::super::{RangeBar, SpectrumBar, SpreadBar, StackBar};
@@ -555,6 +555,27 @@ mod tests {
                 .show(ui)
         });
         assert_eq!(range, ["A span.\nDrag an end or the middle to adjust, double-click to reset."]);
+        // A caller whose ends move something else says what, as the star
+        // layers' bar does, and the bar still adds its own reset wording.
+        let stretch = hover(|ui| {
+            RangeBar::new(&mut low, &mut high, 0.0..=127.0, "Layers")
+                .hint("Spread.")
+                .drag("Drag an end to stretch them, or the middle to slide them")
+                .show(ui)
+        });
+        assert_eq!(stretch, ["Spread.\nDrag an end to stretch them, or the middle to slide them."]);
+        // A hard edge: both ends on one point, so no middle to take hold of.
+        let (mut reach, mut edge) = (0.3, 0.3);
+        let closed = hover(|ui| {
+            RangeBar::new(&mut reach, &mut edge, 0.0..=1.0, "Edge")
+                .fade_span()
+                .hint("An edge.")
+                .show(ui)
+        });
+        assert_eq!(
+            closed,
+            ["An edge.\nDrag left of the handle to open the pair, or on or right of it to slide both."]
+        );
         let mut gradient = Gradient::default();
         let spread = hover(|ui| {
             SpreadBar::brightness(&mut gradient, Gradient::default()).hint("A ramp.").show(ui)
@@ -568,7 +589,7 @@ mod tests {
         });
         assert_eq!(
             spectrum,
-            ["An arc.\nDrag the handle or the track to adjust, double-click to reset."]
+            ["An arc.\nDrag the handle to set the span, or the track to rotate it, double-click to reset."]
         );
         let mut view = ViewConfig::default();
         let stack = hover(|ui| StackBar::new(&mut view).hint("Layers.").show(ui));
