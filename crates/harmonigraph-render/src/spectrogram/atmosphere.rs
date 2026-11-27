@@ -831,7 +831,6 @@ fn memory_key(
     atmosphere: SpectrogramAtmosphere,
     size: [f32; 2],
     read: &SpectrogramUniforms,
-    extent: [u32; 2],
     stars: Option<StarLayout>,
     slices: &[StarSlice; STAR_SLICES],
 ) -> Vec<u32> {
@@ -932,9 +931,11 @@ fn memory_key(
         atmosphere.points_per_cent.to_bits(),
         atmosphere.history_epoch,
     ]);
-    // Different logical grids can share one allocation. DPI or sampling
-    // changes must still reset history even in the same bucket.
-    key.extend(extent);
+    // Not the history's texel grid: the wash's is the pane's pixels, so it
+    // moves with the size above but for the display's pixels per point;
+    // Scales' follows their dials and Stars' their cells, both in the key.
+    // A pane moved between a 1x and a 2x display carries its history only
+    // where both grids share one 64-texel bucket, at 31 points or less.
     if let Some(layout) = stars {
         // Stars carry by absolute cell and life across motion edits. A size
         // or spacing edit reaches the key as the cells, since the same integer
@@ -1815,14 +1816,7 @@ impl Targets {
             let frame = MemoryFrame {
                 now: atmosphere.now,
                 source_end,
-                key: memory_key(
-                    atmosphere,
-                    rect.size().into(),
-                    &read,
-                    memory.extent,
-                    stars,
-                    &slices,
-                ),
+                key: memory_key(atmosphere, rect.size().into(), &read, stars, &slices),
                 origin,
                 slices,
                 life,

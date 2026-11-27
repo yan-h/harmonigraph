@@ -119,13 +119,13 @@ GPU and submit/wait intervals also showed no added drag cost within that run,
 but all cases ran substantially slower than the earlier baseline,
 so no absolute GPU speedup is claimed across runs.
 The logical extent still sets every sampling coordinate, drift shift and memory-pass viewport.
-Logical extent also participates in the history key:
-a sampling-density change can reuse an allocation now, but must still reset history.
+It no longer participates in the history key (#1994 TX1):
+the wash's grid is the pane's pixels, so only a display's pixels per point moves it at a fixed size in points,
+and a pane carries its history across a 1x/2x move only where both grids share one bucket, at 31 points or less;
+Scales' and Stars' grids follow dials and cells the key already holds.
+The changed-sampling-density step that held the extent key went with the wash's reduced sampling.
 The GPU image test compares displayed pixels and stored texels exactly against unbucketed allocations,
-including stationary response, within-bucket resize, bucket crossings, a nonzero pane origin and changed sampling density.
-The sampling-change step asserts that pane geometry and physical allocation stay identical while logical extent changes.
-Removing the logical-extent key makes that step fail on displayed pixels,
-confirming that the fixture reaches the newly possible stale-history path.
+including stationary response, within-bucket resize, bucket crossings and a nonzero pane origin.
 
 At full material depth, the composite also skips the unused base-level lookup and palette work.
 A separate original-shader comparison of 24 memory-on frames across Mosaic/Watercolor and blur on/off,
