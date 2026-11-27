@@ -27,11 +27,13 @@ mod instance_tests;
 #[path = "tuning_map_tests.rs"]
 mod map_tests;
 
-/// Configuration status bit 2: host input was lost, so a recording refuses its
-/// configuration until the host resets the plugin. Edits still apply.
+/// Host input was lost ([`ConfigurationView::input_lost`](crate::params::ConfigurationView::input_lost)),
+/// so a recording refuses its configuration until the host resets the plugin.
+/// Edits still apply.
 pub(crate) const CONFIGURATION_FAULT_NOTICE: &str =
     "Host input was lost: a take recorded now refuses its tuning until the plugin is reset. Deactivate and reactivate the plugin in the host to recover; tuning edits still apply.";
-/// Configuration status bit 16: more distinct pitches are held than Learn reads.
+/// Learn's last step heard more distinct pitches than it reads
+/// ([`VisualRuntime::learn`](crate::VisualRuntime::learn)).
 pub(crate) fn too_many_pitches_notice() -> String {
     format!(
         "Learning paused: more than {} distinct pitches are held.",

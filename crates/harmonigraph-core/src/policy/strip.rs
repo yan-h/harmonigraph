@@ -8,9 +8,9 @@
 //! so the comma, the guess Adaptive's search kept getting wrong, is one
 //! integer the strip's place sets rather than something each chord decides.
 //! There is no candidate and no score: the same spelling in the same strip is
-//! the same node whenever it is struck. Following moves the strip a fifth at a
-//! time, only to keep a new note pure, so a passage may drift by commas (Yan,
-//! 2026-11-23, `docs/intent/tuning.md`).
+//! the same node whenever it is struck. Following moves the strip only to keep
+//! a new note pure, the fewest fifths that do, so a passage may drift by
+//! commas (Yan, 2026-11-23, `docs/intent/tuning.md`).
 //!
 //! The price is the wolf. Every fourth fifth along the chain is the one that
 //! leaves the strip's sharp edge, 40/27 rather than 3/2: with the strip on
@@ -60,8 +60,9 @@ pub fn assignment(fifths: i32, flat: i32, declared: i64, tuning: Tuning) -> (Lat
     (node, class + octaves * octave - declared)
 }
 
-/// Follows the music by moving the strip a fifth at a time, and only to keep
-/// a new note pure (§3.4; simplified on 2026-11-23, `docs/intent/tuning.md`).
+/// Follows the music by moving the strip the fewest fifths that keep a new
+/// note pure, and only then, which can be several at one attack (§3.4;
+/// simplified on 2026-11-23, `docs/intent/tuning.md`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Follower {
     /// Fifths following has slid the strip from where the Position places

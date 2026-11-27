@@ -354,6 +354,7 @@ no document closure calls the host, so a host that saves from inside a call the 
 the audio thread never takes its lock.
 Each write publishes the slots' fixed geometry through a triple buffer, and at callback adoption audio reads the latest published bank, wait-free;
 an edit still being written lands at a later callback, and audio never waits or copies names.
+The other way, audio publishes the playback it adopted through a triple buffer of its own, which the frame reads for the pending label behind a lock audio never takes.
 Each timestamped history entry captures complete geometry and effective shared tuning,
 so a later document edit cannot reinterpret an older attack.
 
