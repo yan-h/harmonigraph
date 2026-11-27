@@ -452,8 +452,8 @@ fn export(args: Args) -> Result<(), String> {
     let mut audio = audio_path.as_deref().map(crate::wav::read).transpose()?;
     if let (Some(path), Some(audio)) = (&audio_path, audio.as_ref().filter(|a| a.unfinished)) {
         eprintln!(
-            "{WARNING_PREFIX}{}: the recording was never finished, as when the plugin or the \
-             host quits mid-take; the spectrum and the soundtrack use the {:.1} s it holds",
+            "{WARNING_PREFIX}{}: its header was never finished, by a quit mid-take or a \
+             finalization that failed; it holds {:.1} s of whole frames",
             path.display(),
             audio.seconds()
         );
