@@ -249,12 +249,11 @@ pub(super) fn memory_allocation_size(extent: [u32; 2], limit: u32) -> [u32; 2] {
 /// resolution. Sharper edges increase that density; tiny cells stay native.
 /// This bounds the expensive exact body mixture without selecting/truncating
 /// contributors or changing their sampled light. Power-of-two spacings keep
-/// nearby dial values on one allocation.
+/// nearby dial values on one allocation. `settings` are already sanitized.
 pub(super) fn scales_tone_size(
     pixels: [u32; 2],
-    atmosphere: SpectrogramAtmosphere,
+    settings: harmonigraph_scene::SpectralAtmosphere,
 ) -> Option<[u32; 2]> {
-    let settings = atmosphere.settings.sanitized();
     if !settings.effects().cloud
         || settings.cloud_style != harmonigraph_scene::CloudStyle::VelvetScales
     {
@@ -1270,7 +1269,7 @@ impl Plan {
             ),
             image: star_image_size(pixels, settings.stars),
         });
-        let tone = scales_tone_size(pixels, atmosphere);
+        let tone = scales_tone_size(pixels, settings);
         // Light, tone, tile and history have separate sizing rules. A
         // scalar-field resize must not erase color memory. Scales draw their
         // tone and then remember it, on its grid; the wash remembers a texel
@@ -1298,7 +1297,6 @@ impl Plan {
 
 /// What [`Targets::encode`] draws from beyond the targets themselves.
 pub(super) struct Draw<'a> {
-    pub style: harmonigraph_scene::CloudStyle,
     /// The mesh the source pass rasterizes, and its vertex count: the measured
     /// mesh, then the light-only hold past the divider where there is one.
     pub mesh: wgpu::BufferSlice<'a>,
@@ -1543,9 +1541,9 @@ impl Targets {
     }
 
     /// Every pass the cloud owes this frame, in order: the measured source,
-    /// its blur, the material, the tile where its bake is stale, the colour
-    /// history, and the starfield or Scales' tone. The composite that reads
-    /// them is drawn in `paint`, through [`Self::composite_group`].
+    /// its blur, the material, the tile where its bake is stale, Scales' tone,
+    /// the colour history, and the starfield. The composite that reads them is
+    /// drawn in `paint`, through [`Self::composite_group`].
     pub fn encode(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1606,19 +1604,10 @@ impl Targets {
         if let Some(key) = plan.tile {
             self.bake_tile(encoder, pipelines, key);
         }
-        let velvet = draw.style == harmonigraph_scene::CloudStyle::VelvetScales;
-        // The atlas, and a Stars history laid out like it, shade only the rows
-        // the layout fills; every other history is its whole extent.
-        let star_scissor = plan.stars.as_ref().map(StarLayout::scissor);
-        if !velvet {
-            self.remember(encoder, pipelines, star_scissor);
-        }
-        if let Some(coverage) = draw.star_coverage {
-            let atlas = star_scissor.expect("star coverage comes only with a star layout");
-            self.draw_stars(encoder, pipelines, draw.pixels, coverage, atlas);
-        } else if let Some((tone_view, tone_group)) =
-            self.tone.as_ref().zip(self.tone_group.as_ref())
-        {
+        // Scales draw their tone and then remember it; the wash's history works
+        // its tone out per texel, and a Stars history goes before the starfield
+        // redraws its atlas.
+        if let Some((tone_view, tone_group)) = self.tone.as_ref().zip(self.tone_group.as_ref()) {
             #[cfg(test)]
             self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1626,15 +1615,19 @@ impl Targets {
                 color_attachments: &[Some(cleared(tone_view))],
                 ..Default::default()
             });
-            debug_assert!(velvet, "only Scales draw a tone target");
             pass.set_pipeline(&pipelines.velvet);
             pass.set_bind_group(0, &self.source_group, &[]);
             pass.set_bind_group(1, tone_group, &[]);
             pass.set_vertex_buffer(0, self.tone_vertices.slice(..));
             pass.draw(0..6, 0..1);
         }
-        if velvet {
-            self.remember(encoder, pipelines, star_scissor);
+        // The atlas, and a Stars history laid out like it, shade only the rows
+        // the layout fills; every other history is its whole extent.
+        let star_scissor = plan.stars.as_ref().map(StarLayout::scissor);
+        self.remember(encoder, pipelines, star_scissor);
+        if let Some(coverage) = draw.star_coverage {
+            let atlas = star_scissor.expect("star coverage comes only with a star layout");
+            self.draw_stars(encoder, pipelines, draw.pixels, coverage, atlas);
         }
     }
 
@@ -2439,7 +2432,7 @@ mod tests {
             ..Default::default()
         });
         let size = [1920, 1080];
-        let density = |a| scales_tone_size(size, a);
+        let density = |a: SpectrogramAtmosphere| scales_tone_size(size, a.settings.sanitized());
         assert_eq!(density(a), Some([960, 540]));
         assert_eq!(tile_key(size, a, 40), None);
         a.settings.material_settings.velvet_size = 1.01;
