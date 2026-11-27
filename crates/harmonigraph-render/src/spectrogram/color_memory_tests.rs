@@ -745,26 +745,22 @@ fn a_stars_resolution_change_carries_the_atlas() {
 }
 
 /// The fresh Watercolor under the fresh colour response (Pickup 0.20 s,
-/// Release 0.21 s), at both ends of the production cloud sample spacing, with
-/// its tide line off.
+/// Release 0.21 s), with its tide line off.
 ///
-/// The history takes the reduced tone target's place — its grid is the
-/// reduced size, and no tone target is allocated — and it is a response in
+/// The history's grid is the pane's pixels, and no tone target is allocated.
+/// It is a response in
 /// time rather than a look: held still, the picture settles on the frame drawn
 /// with no history, and sound that stops fades over Release instead of at
 /// once. Still, because under drift a history trails its colour about
 /// `Release × speed` behind the texture by design (measured at the fresh
 /// drift: a mean of 3.7/255, a quarter of this fixture's pixels past 8).
 ///
-/// Measured held still: a mean of 0.11/255 natively, 0.1% of pixels past 8;
-/// at the reduced spacing 0.77/255 and 3.2%, the band edges where the history
-/// interpolates colour and the immediate path interpolates level.
+/// Measured held still: a mean of 0.11/255, 0.1% of pixels past 8.
 ///
 /// The fresh `Edge pooling` of 4 is held at 0 because its tide line is the
 /// sharpest thing in the wash, and the history's resampled lattice softens it
-/// in the same way: with it on, held still measured 2.0/255 and 11% natively,
-/// 7.3/255 and 48% at the reduced spacing, growing with the pool's strength
-/// and hardness. The history keeps the pool itself (its frame stands 7.8/255
+/// in the same way: with it on, held still measured 2.0/255 and 11%, growing
+/// with the pool's strength and hardness. The history keeps the pool itself (its frame stands 7.8/255
 /// from a pool-free one, as the immediate frame does).
 #[test]
 fn fresh_colour_memory_under_watercolor_settles_then_fades() {
@@ -783,7 +779,7 @@ fn fresh_colour_memory_under_watercolor_settles_then_fades() {
         (f64::from(total) / (count * 3) as f64, moved as f64 / count as f64)
     };
     let style = CloudStyle::Watercolor;
-    for pixel_points in [0.5, 2.0] {
+    {
         let mut cb = refracted_fixture();
         cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));
         relay_quad(&mut cb, 12);
@@ -793,12 +789,7 @@ fn fresh_colour_memory_under_watercolor_settles_then_fades() {
         a.settings =
             harmonigraph_scene::SpectralAtmosphere { wash_pool: 0.0, ..Default::default() };
         assert_eq!(a.settings.cloud_style, style, "the fresh cloud is not {style:?}");
-        let sampling = CloudSampling { pixel_points, ..Default::default() };
-        let fresh = || {
-            let mut resources = CallbackResources::default();
-            resources.insert(sampling);
-            resources
-        };
+        let fresh = CallbackResources::default;
         let alone = |cb: &mut SpectrogramCallback,
                      turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
             let held = cb.atmosphere.unwrap().settings;
@@ -817,24 +808,22 @@ fn fresh_colour_memory_under_watercolor_settles_then_fades() {
                 .last()
                 .unwrap()
         };
-        let case = format!("{style:?} at {pixel_points} pt");
+        let case = format!("{style:?}");
         let shipped = cb.atmosphere.unwrap().settings;
         cb.atmosphere.as_mut().unwrap().settings.cloud_speed = 0.0;
         let held = hold(&mut cb, &mut fresh());
         let (mean, moved) =
             apart(&held, &alone(&mut cb, |s| (s.color_pickup, s.color_release) = (0.0, 0.0)));
-        let (mean_max, moved_max) = if pixel_points > 1.0 { (1.5, 0.06) } else { (0.25, 0.005) };
         assert!(
-            mean < mean_max && moved < moved_max,
+            mean < 0.25 && moved < 0.005,
             "{case}: held still, the history is not the picture: mean {mean:.2}, {moved:.4} moved"
         );
         cb.atmosphere.as_mut().unwrap().settings = shipped;
         let mut resources = fresh();
         hold(&mut cb, &mut resources);
         let targets = cloud(&resources);
-        let grid = if pixel_points > 1.0 { PANE / 2 } else { PANE };
-        assert_eq!(targets.memory.as_ref().map(|m| m.extent), Some([grid + 2; 2]), "{case}");
-        assert_eq!(targets.shape().tone, None, "{case}: a tone target nothing draws");
+        assert_eq!(targets.memory.as_ref().map(|m| m.extent), Some([PANE + 2; 2]), "{case}");
+        assert_eq!(targets.shape().scales_tone, None, "{case}: a tone target nothing draws");
         assert!(targets.shape().tile.is_some(), "{case}: no texture was drawn");
         cb.grid.fill(0);
         let floor = alone(&mut cb, |s| s.cloud_depth = 0.0);
@@ -871,28 +860,13 @@ fn bucketed_and_exact_memory_allocations_draw_the_same() {
     let mut prior = None;
     let mut reused = 0;
     let mut replaced = 0;
-    for (frame, (width, pixel_points)) in [
-        (100.0, 0.5),
-        (100.0, 0.5),
-        (101.0, 0.5),
-        (140.0, 0.5),
-        (140.0, 0.5),
-        (145.0, 0.5),
-        (100.0, 0.5),
-        (100.0, 1.1),
-        (100.0, 1.1),
-    ]
-    .into_iter()
-    .enumerate()
+    for (frame, width) in [100.0, 100.0, 101.0, 140.0, 140.0, 145.0, 100.0].into_iter().enumerate()
     {
         cb.rect = egui::Rect::from_min_size(egui::pos2(11.0, 7.0), egui::vec2(width, 90.0));
         let a = cb.atmosphere.as_mut().unwrap();
         a.region = cb.rect;
         a.now = 100.0 + frame as f64 / 60.0;
         cb.grid.fill(if frame % 2 == 0 { 255 } else { 0 });
-        for resources in [&mut bucketed, &mut exact] {
-            resources.insert(CloudSampling { pixel_points, ..Default::default() });
-        }
         let actual = frame_with(&device, &queue, &mut bucketed, &cb);
         EXACT_ALLOCATION.set(true);
         let expected = frame_with(&device, &queue, &mut exact, &cb);
@@ -910,12 +884,7 @@ fn bucketed_and_exact_memory_allocations_draw_the_same() {
             .zip(allocated(held))
             .all(|(&n, size)| n <= size && size - n < 64));
         let texture = held.views[0].texture().clone();
-        if let Some((old_size, old_extent, old_rect, old_texture)) = prior {
-            if frame == 7 {
-                assert_eq!(old_size, allocated(held), "sampling fixture changed physical bucket");
-                assert_eq!(old_rect, cb.rect, "sampling fixture changed pane geometry");
-                assert_ne!(old_extent, held.extent, "sampling fixture kept its logical grid");
-            }
+        if let Some((old_size, old_texture)) = prior {
             if old_size == allocated(held) {
                 assert_eq!(texture, old_texture, "same bucket replaced its allocation");
                 reused += 1;
@@ -924,7 +893,7 @@ fn bucketed_and_exact_memory_allocations_draw_the_same() {
                 replaced += 1;
             }
         }
-        prior = Some((allocated(held), held.extent, cb.rect, texture));
+        prior = Some((allocated(held), texture));
     }
     assert!(
         reused >= 4 && replaced >= 2,

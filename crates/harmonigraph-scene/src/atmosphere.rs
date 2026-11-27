@@ -862,15 +862,13 @@ impl SpectralAtmosphere {
     }
 }
 
-/// A material sampling the textured glow; None bypasses the material pass.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[repr(u32)]
+/// A material sampling the textured glow. `material_amount` 0 is its off
+/// switch, as `texture_depth` 0 is the pattern's: there is no None (#1994 TX2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LatticeMaterial {
-    #[default]
-    None = 0,
-    Watercolor = 1,
-    Stars = 3,
-    VelvetScales = 4,
+    Watercolor,
+    Stars,
+    VelvetScales,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

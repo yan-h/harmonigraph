@@ -258,10 +258,8 @@ struct Cloud {
     size: vec2<f32>,
     step: vec2<f32>,
     ppp: f32,
-    // 1 when `cloud_image` holds the reduced scalar cloud field. 0 works the
-    // texture out per pixel in the composite instead. The starfield reads its
-    // own image out of the same binding (`star_image_at`) and never this.
-    tone_baked: u32,
+    // Keeps `drift` on its vec2 boundary.
+    _pad_ppp: u32,
     // The material's sampling, decided on the CPU for both panes
     // (`material_cells::drift` and `cell`): `drift` is its offset in its own
     // cells, `cell` one cell in points. The rest are the sanitized settings.
@@ -314,8 +312,8 @@ struct Cloud {
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(2) var cloud_sampler: sampler;
 @group(1) @binding(3) var<uniform> cloud: Cloud;
-/// The cloud's scalar tone, one texel per cloud sample of pane, as `fs_cloud_tone`
-/// drew it — or, under Stars, the star image `fs_stars` drew, which
+/// Scales' scalar tone, as `fs_velvet_tone` drew it at its own reduced grid
+/// — or, under Stars, the star image `fs_stars` drew, which
 /// `star_image_at` samples. The two are never drawn together. Bound whether or
 /// not it holds anything — a pass that RENDERS into it binds a stand-in here,
 /// since wgpu validates every resource in a bound group against the
@@ -594,15 +592,9 @@ fn cloud_tone_at(pt: vec2<f32>) -> f32 {
     return wash_cloud_tone(pt);
 }
 
-// The cloud's tone reduced to a target of its own, one texel per cloud sample
-// (a fixed 0.5 pt) of pane. The coverage quad carries the pane-relative 0..1 fraction in
-// its `slab`/`t`, which is what makes this the same `pt` the composite would
-// have read under each of its own pixels.
-@fragment
-fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(cloud_tone_at(vec2<f32>(in.slab, in.t) * cloud.size), 0.0, 0.0, 1.0);
-}
-
+// Scales' tone reduced to a target of its own. The pane quad carries the
+// pane-relative 0..1 fraction in its `slab`/`t`, which is what makes this the
+// same `pt` the composite would have read under each of its own pixels.
 @fragment
 fn fs_velvet_tone(in: VertexOut) -> @location(0) vec4<f32> {
     let level = velvet_material(close_light, cloud_sampler, vec2<f32>(in.slab, in.t) * cloud.size,
@@ -760,17 +752,12 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
         let base = linear_from_gamma_rgb(palette_color(level));
         return vec4<f32>(gamma_from_linear_rgb(mix(base, held, cloud.cloud_depth)), 1.0);
     }
-    // Either the tone worked out under this pixel (a tile tap and its
-    // refraction), or one bilinear tap into what `fs_cloud_tone` already worked
-    // out. The palette lookup and the mix stay HERE whichever it was, so the
-    // base picture and the gradient are full resolution even
-    // where the texture over them is not.
-    var tone: f32;
-    if cloud.tone_baked == 1u {
-        tone = textureSampleLevel(cloud_image, cloud_sampler, pt / cloud.size, 0.0).r;
-    } else {
-        tone = cloud_tone_at(pt);
-    }
+    // The wash's tone worked out under this pixel (a tile tap and its
+    // refraction), or one bilinear tap into what `fs_velvet_tone` already
+    // worked out. The palette lookup and the mix stay HERE whichever it was,
+    // so the base picture and the gradient are full resolution even where
+    // Scales over them are not.
+    let tone = cloud_tone_at(pt);
     // Mix levels before the one shared palette lookup: `Texture mix` and
     // Watercolor's `Fine layer mix` cannot introduce RGB blends outside the
     // authored ramp.

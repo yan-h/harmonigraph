@@ -24,20 +24,23 @@ const PIGMENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Unorm;
 // Half-float feedback can stall far from the target when alpha is small.
 const MEMORY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
-/// Fixed cloud sampling: native on 1x/2x displays, with a 40-cell repeat.
-/// Forty closes every hashed lattice and makes repetition less frequent than
-/// twenty at the same steady-frame cost. Tests and the timing probe override
-/// it through a callback resource, never persisted settings; the period is
-/// never 0, because the composite has no live walk to fall back to (#1100).
+/// Fixed cloud sampling: a 40-cell repeat. Forty closes every hashed lattice
+/// and makes repetition less frequent than twenty at the same steady-frame
+/// cost. Tests and the timing probe override it through a callback resource,
+/// never persisted settings; the period is never 0, because the composite has
+/// no live walk to fall back to (#1100).
+///
+/// The wash is worked out per device pixel at every scale, an export's
+/// included: its 0.5 pt sampling, which reduced it past two pixels a point
+/// (an export over 2,560 px wide), went in #1994 TX1.
 #[derive(Clone, Copy)]
 pub(super) struct CloudSampling {
     pub tile_cells: u32,
-    pub pixel_points: f32,
 }
 
 impl Default for CloudSampling {
     fn default() -> Self {
-        Self { tile_cells: crate::material_cells::WASH_PERIOD as u32, pixel_points: 0.5 }
+        Self { tile_cells: crate::material_cells::WASH_PERIOD as u32 }
     }
 }
 
@@ -154,7 +157,7 @@ pub(super) fn stars(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> Opti
 }
 
 /// Bound filter work by reducing each axis only as its musical radius grows,
-/// and — where `Blur time step` asks — the time axis by the DATA's own
+/// and — where `Spectrogram time step` asks — the time axis by the DATA's own
 /// resolution as well. The scalar source averages its whole footprint before
 /// these Gaussian passes. The allocation key is this size alone; no measurement
 /// cache is invalidated.
@@ -238,41 +241,30 @@ pub(super) fn memory_allocation_size(extent: [u32; 2], limit: u32) -> [u32; 2] {
     extent.map(|n| n.div_ceil(64).saturating_mul(64).min(limit))
 }
 
-/// The precomposite size for a cloud texture, or `None` to work the texture
-/// out per pixel in the composite. Stars size their own image instead
+/// Scales' tone target, or `None` where Scales are not drawn. The wash works
+/// its tone out per device pixel, in the composite or, with colour memory on,
+/// per history texel in `fs_color_memory`; Stars size their own image
 /// ([`star_image_size`]).
 ///
-/// Other styles stay native at sample spacing at or under one DEVICE pixel — the fixed half point on a Retina pane and on a plain one —
-/// where a reduced target would be the pane's own resolution or larger and the
-/// extra pass would buy nothing. Above that each axis is divided by the same
-/// number of pixels per sample, so the per-pixel cost falls with its square.
-pub(super) fn tone_size(
+/// S1's broad bodies need 32 samples per cell, independent of display
+/// resolution. Sharper edges increase that density; tiny cells stay native.
+/// This bounds the expensive exact body mixture without selecting/truncating
+/// contributors or changing their sampled light. Power-of-two spacings keep
+/// nearby dial values on one allocation. `settings` are already sanitized.
+pub(super) fn scales_tone_size(
     pixels: [u32; 2],
-    ppp: f32,
-    atmosphere: SpectrogramAtmosphere,
-    pixel_points: f32,
+    settings: harmonigraph_scene::SpectralAtmosphere,
 ) -> Option<[u32; 2]> {
-    let settings = atmosphere.settings.sanitized();
-    if !settings.effects().cloud {
+    if !settings.effects().cloud
+        || settings.cloud_style != harmonigraph_scene::CloudStyle::VelvetScales
+    {
         return None;
     }
-    if settings.cloud_style == harmonigraph_scene::CloudStyle::VelvetScales {
-        // S1's broad bodies need 32 samples per cell, independent of display
-        // resolution. Sharper edges increase that density; tiny cells stay
-        // native. This bounds the expensive exact body mixture without
-        // selecting/truncating contributors or changing their sampled light.
-        // Power-of-two spacings keep nearby dial values on one allocation.
-        let material = settings.material_settings;
-        let cell = crate::material_cells::cell(true, &material, pixels[1] as f32);
-        let samples = 32.0 * (0.34 / material.velvet_edge).max(1.0);
-        let spacing = 2.0f32.powf((cell / samples).max(1.0).log2().floor());
-        return Some(pixels.map(|n| (n as f32 / spacing).ceil().max(1.0) as u32));
-    }
-    let pixel = pixel_points * ppp;
-    if pixel <= 1.0 {
-        return None;
-    }
-    Some(std::array::from_fn(|axis| ((pixels[axis] as f32 / pixel).ceil() as u32).max(1)))
+    let material = settings.material_settings;
+    let cell = crate::material_cells::cell(true, &material, pixels[1] as f32);
+    let samples = 32.0 * (0.34 / material.velvet_edge).max(1.0);
+    let spacing = 2.0f32.powf((cell / samples).max(1.0).log2().floor());
+    Some(pixels.map(|n| (n as f32 / spacing).ceil().max(1.0) as u32))
 }
 
 /// The tile's texel size: a whole number of these, and never fewer or more.
@@ -282,8 +274,7 @@ pub(super) fn tone_size(
 /// a 256-texel grain crosses a boundary a handful of times across a whole
 /// window. The ceiling is memory — two `Rgba16Float` targets and an `Rg8Unorm`
 /// one, so 2048 is 75 MB —
-/// and past it the tile is simply coarser than the pane, which is the same
-/// trade as reducing the tone target.
+/// and past it the tile is simply coarser than the pane.
 const TILE_STEP: u32 = 256;
 const TILE_MAX: u32 = 2048;
 
@@ -413,9 +404,8 @@ struct Uniforms {
     size: Float2,
     step: Float2,
     ppp: f32,
-    /// 1 when the tone target holds this frame's reduced scalar cloud field.
-    /// The starfield reads its own image and never this.
-    tone_baked: u32,
+    /// Keeps `drift` on the eight-byte boundary WGSL aligns a `vec2` to.
+    _pad_ppp: u32,
     /// The material's sampling offset in its own cells
     /// ([`crate::material_cells::drift`]), reduced from f64 on the CPU.
     ///
@@ -498,9 +488,8 @@ pub(super) fn watercolor_tile_probe_uniform(pitch_vertical: bool) -> Vec<u8> {
 pub(super) struct Pipelines {
     pub source: wgpu::RenderPipeline,
     pub bake: wgpu::RenderPipeline,
-    /// The cloud's scalar tone into its own reduced target, for the composite to
-    /// read instead of working it out (a tile tap and its refraction) per pixel.
-    pub tone: wgpu::RenderPipeline,
+    /// Scales' tone into its own reduced target, which the composite and the
+    /// history read.
     pub velvet: wgpu::RenderPipeline,
     /// One period of the cell walk into the two tile targets, for both of the
     /// above to read instead of walking the ring at all.
@@ -654,14 +643,6 @@ impl Pipelines {
                 source_layout,
                 Some(&composite_layout),
                 "fs_velvet_tone",
-            ),
-            tone: create_spectrogram_pipeline(
-                device,
-                &spectrogram,
-                FORMAT,
-                source_layout,
-                Some(&composite_layout),
-                "fs_cloud_tone",
             ),
             tile: tile_pipeline(
                 device,
@@ -851,7 +832,6 @@ fn memory_key(
     atmosphere: SpectrogramAtmosphere,
     size: [f32; 2],
     read: &SpectrogramUniforms,
-    extent: [u32; 2],
     stars: Option<StarLayout>,
     slices: &[StarSlice; STAR_SLICES],
 ) -> Vec<u32> {
@@ -952,9 +932,11 @@ fn memory_key(
         atmosphere.points_per_cent.to_bits(),
         atmosphere.history_epoch,
     ]);
-    // Different logical grids can share one allocation. DPI or sampling
-    // changes must still reset history even in the same bucket.
-    key.extend(extent);
+    // Not the history's texel grid: the wash's is the pane's pixels, so it
+    // moves with the size above but for the display's pixels per point;
+    // Scales' follows their dials and Stars' their cells, both in the key.
+    // A pane moved between a 1x and a 2x display carries its history only
+    // where both grids share one 64-texel bucket, at 31 points or less.
     if let Some(layout) = stars {
         // Stars carry by absolute cell and life across motion edits. A size
         // or spacing edit reaches the key as the cells, since the same integer
@@ -1101,7 +1083,7 @@ pub(super) struct Targets {
     shape: Shape,
     pub source_view: wgpu::TextureView,
     pub coverage_vertices: wgpu::Buffer,
-    /// The whole-pane quad for the material and reduced-tone passes.
+    /// The whole-pane quad for the material and Scales' tone passes.
     /// Final painting uses `coverage_vertices`, the atmosphere's region.
     /// Both sampled fields must be filled beyond that region: a displaced or
     /// bilinear read at the divider otherwise blends with a cleared texel and
@@ -1110,8 +1092,8 @@ pub(super) struct Targets {
     /// painted data mesh still bounds measured sound.
     tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 2],
-    /// The reduced scalar cloud tone, allocated at [`Shape::tone`].
-    tone: Option<wgpu::TextureView>,
+    /// Scales' scalar tone, allocated at [`Shape::scales_tone`].
+    scales_tone: Option<wgpu::TextureView>,
     tile: Option<Tile>,
     stars: Option<Stars>,
     source_uniform: wgpu::Buffer,
@@ -1232,9 +1214,10 @@ impl Binder<'_> {
 pub(super) struct Shape {
     /// The light field, which the blur and the material passes share.
     pub size: [u32; 2],
-    /// The reduced scalar cloud tone, for Watercolor and Scales. None works the
-    /// tone out per pixel in the composite; the starfield has its own image.
-    pub tone: Option<[u32; 2]>,
+    /// Scales' scalar tone ([`scales_tone_size`]). The wash works its tone out
+    /// per device pixel, in the composite or, with colour memory on, per
+    /// history texel in `fs_color_memory`; the starfield has its own image.
+    pub scales_tone: Option<[u32; 2]>,
     /// One side of the square tile, in texels ([`TileKey::texels`]).
     pub tile: Option<u32>,
     /// The starfield's targets; `None` unless it is drawn.
@@ -1298,24 +1281,15 @@ impl Plan {
             ),
             image: star_image_size(pixels, settings.stars),
         });
-        let reduced = stars
-            .is_none()
-            .then(|| tone_size(pixels, ppp, atmosphere, sampling.pixel_points))
-            .flatten();
-        // Light, reduced tone, tile and history have separate sizing rules.
-        // A scalar-field resize must not erase color memory.
+        let tone = scales_tone_size(pixels, settings);
+        // Light, tone, tile and history have separate sizing rules. A
+        // scalar-field resize must not erase color memory. Scales draw their
+        // tone and then remember it, on its grid; the wash remembers a texel
+        // per device pixel.
         let memory_extent = settings.remembers_color().then(|| {
             star_shape
                 .map(|stars| stars.atlas)
-                .unwrap_or_else(|| reduced.unwrap_or(pixels).map(|n| (n + 2).min(limit)))
-        });
-        // Watercolor with a history works its tone out per history texel in
-        // `fs_color_memory` and displays the history, so the reduced size is
-        // the history's grid and a tone target would be drawn into by nothing.
-        // Scales draw their tone and then remember it.
-        let tone = reduced.filter(|_| {
-            memory_extent.is_none()
-                || settings.cloud_style != harmonigraph_scene::CloudStyle::Watercolor
+                .unwrap_or_else(|| tone.unwrap_or(pixels).map(|n| (n + 2).min(limit)))
         });
         let memory = memory_extent.map(|extent| {
             if stars.is_some() {
@@ -1325,7 +1299,13 @@ impl Plan {
             }
         });
         Some(Self {
-            shape: Shape { size, tone, tile: tile.map(TileKey::texels), stars: star_shape, memory },
+            shape: Shape {
+                size,
+                scales_tone: tone,
+                tile: tile.map(TileKey::texels),
+                stars: star_shape,
+                memory,
+            },
             tile,
             stars,
             memory_extent,
@@ -1335,7 +1315,6 @@ impl Plan {
 
 /// What [`Targets::encode`] draws from beyond the targets themselves.
 pub(super) struct Draw<'a> {
-    pub style: harmonigraph_scene::CloudStyle,
     /// The mesh the source pass rasterizes, and its vertex count: the measured
     /// mesh, then the light-only hold past the divider where there is one.
     pub mesh: wgpu::BufferSlice<'a>,
@@ -1378,7 +1357,7 @@ impl Targets {
     ) -> Self {
         let Shape {
             size,
-            tone: tone_size,
+            scales_tone: tone_size,
             tile: tile_texels,
             stars: star_shape,
             memory: memory_size,
@@ -1403,7 +1382,7 @@ impl Targets {
                         .memory
                         .filter(|_| previous.shape.memory == memory_size)
                         .map(|m| (m.views, m.index, m.frame)),
-                    previous.tone.filter(|_| previous.shape.tone == tone_size),
+                    previous.scales_tone.filter(|_| previous.shape.scales_tone == tone_size),
                     (
                         atlas.filter(|_| held.is_some_and(|(was, is)| was.atlas == is.atlas)),
                         image.filter(|_| held.is_some_and(|(was, is)| was.image == is.image)),
@@ -1559,7 +1538,7 @@ impl Targets {
                 6,
             ),
             views,
-            tone,
+            scales_tone: tone,
             tile,
             stars,
             source_uniform,
@@ -1580,9 +1559,9 @@ impl Targets {
     }
 
     /// Every pass the cloud owes this frame, in order: the measured source,
-    /// its blur, the material, the tile where its bake is stale, the colour
-    /// history, and the starfield or the reduced tone. The composite that reads
-    /// them is drawn in `paint`, through [`Self::composite_group`].
+    /// its blur, the material, the tile where its bake is stale, Scales' tone,
+    /// the colour history, and the starfield. The composite that reads them is
+    /// drawn in `paint`, through [`Self::composite_group`].
     pub fn encode(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1619,10 +1598,10 @@ impl Targets {
         self.blur(encoder, pipelines);
         {
             // Once filtering is finished, the raw source texture is free to hold
-            // the soft intensity. Fill the whole pane: refraction and reduced
+            // the soft intensity. Fill the whole pane: refraction and Scales'
             // tone interpolation can read past the region divider. Clearing that
-            // part of the material makes the reduced cloud blend toward zero at
-            // its edge. Final painting still uses the region's coverage quad.
+            // part of the material makes the reduced Scales blend toward zero at
+            // their edge. Final painting still uses the region's coverage quad.
             #[cfg(test)]
             self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1643,18 +1622,11 @@ impl Targets {
         if let Some(key) = plan.tile {
             self.bake_tile(encoder, pipelines, key);
         }
-        let velvet = draw.style == harmonigraph_scene::CloudStyle::VelvetScales;
-        // The atlas, and a Stars history laid out like it, shade only the rows
-        // the layout fills; every other history is its whole extent.
-        let star_scissor = plan.stars.as_ref().map(StarLayout::scissor);
-        if !velvet {
-            self.remember(encoder, pipelines, star_scissor);
-        }
-        if let Some(coverage) = draw.star_coverage {
-            let atlas = star_scissor.expect("star coverage comes only with a star layout");
-            self.draw_stars(encoder, pipelines, draw.pixels, coverage, atlas);
-        } else if let Some((tone_view, tone_group)) =
-            self.tone.as_ref().zip(self.tone_group.as_ref())
+        // Scales draw their tone and then remember it; the wash's history works
+        // its tone out per texel, and a Stars history goes before the starfield
+        // redraws its atlas.
+        if let Some((tone_view, tone_group)) =
+            self.scales_tone.as_ref().zip(self.tone_group.as_ref())
         {
             #[cfg(test)]
             self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1663,14 +1635,19 @@ impl Targets {
                 color_attachments: &[Some(cleared(tone_view))],
                 ..Default::default()
             });
-            pass.set_pipeline(if velvet { &pipelines.velvet } else { &pipelines.tone });
+            pass.set_pipeline(&pipelines.velvet);
             pass.set_bind_group(0, &self.source_group, &[]);
             pass.set_bind_group(1, tone_group, &[]);
             pass.set_vertex_buffer(0, self.tone_vertices.slice(..));
             pass.draw(0..6, 0..1);
         }
-        if velvet {
-            self.remember(encoder, pipelines, star_scissor);
+        // The atlas, and a Stars history laid out like it, shade only the rows
+        // the layout fills; every other history is its whole extent.
+        let star_scissor = plan.stars.as_ref().map(StarLayout::scissor);
+        self.remember(encoder, pipelines, star_scissor);
+        if let Some(coverage) = draw.star_coverage {
+            let atlas = star_scissor.expect("star coverage comes only with a star layout");
+            self.draw_stars(encoder, pipelines, draw.pixels, coverage, atlas);
         }
     }
 
@@ -1781,11 +1758,12 @@ impl Targets {
         let corners =
             [region.left_top(), region.right_top(), region.right_bottom(), region.left_bottom()];
         // `slab` and `t` carry the corner's PANE-RELATIVE fraction here rather
-        // than a run position, which is what `fs_cloud_tone` reads to recover
-        // the same point the composite would have read under its own pixel.
-        // The region is a sub-rect of the pane, so these need not reach 0 and 1.
-        // Nothing else reads these two on this quad: the bake and the backdrop
-        // both work off `in.position` alone.
+        // than a run position, as on `tone_vertices` below, where
+        // `fs_velvet_tone` reads them to recover the same point the composite
+        // would have read under its own pixel. The region is a sub-rect of the
+        // pane, so these need not reach 0 and 1. Nothing reads these two on
+        // this quad: the backdrop, the one pass drawn on it, works off
+        // `in.position` alone.
         let vertices = [0, 1, 2, 0, 2, 3].map(|i| {
             let fraction = (corners[i] - rect.min) / rect.size();
             SpectrogramVertex { pos: corners[i].into(), slab: fraction.x, t: fraction.y }
@@ -1857,14 +1835,7 @@ impl Targets {
             let frame = MemoryFrame {
                 now: atmosphere.now,
                 source_end,
-                key: memory_key(
-                    atmosphere,
-                    rect.size().into(),
-                    &read,
-                    memory.extent,
-                    stars,
-                    &slices,
-                ),
+                key: memory_key(atmosphere, rect.size().into(), &read, stars, &slices),
                 origin,
                 slices,
                 life,
@@ -1900,7 +1871,7 @@ impl Targets {
             size: Float2(rect.size().into()),
             step: Float2([radius[0] / rect.width(), radius[1] / rect.height()]),
             ppp,
-            tone_baked: u32::from(self.tone.is_some()),
+            _pad_ppp: 0,
             drift: Float2(drift),
             cloud_depth: if settings.effects().cloud { settings.cloud_depth } else { 0.0 },
             cloud_style: match settings.cloud_style {
@@ -2026,8 +1997,8 @@ fn source_group(
 #[cfg(test)]
 mod tests {
     use super::{
-        drift_at, retained_size, soloed, source_size, star_layout, star_slices, tile_key,
-        tone_size, SpectrogramAtmosphere, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD, STAR_LIFE_PERIOD,
+        drift_at, retained_size, scales_tone_size, soloed, source_size, star_layout, star_slices,
+        tile_key, SpectrogramAtmosphere, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD, STAR_LIFE_PERIOD,
         STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP,
     };
 
@@ -2474,7 +2445,7 @@ mod tests {
             ..Default::default()
         });
         let size = [1920, 1080];
-        let density = |a| tone_size(size, 2.0, a, 0.5);
+        let density = |a: SpectrogramAtmosphere| scales_tone_size(size, a.settings.sanitized());
         assert_eq!(density(a), Some([960, 540]));
         assert_eq!(tile_key(size, a, 40), None);
         a.settings.material_settings.velvet_size = 1.01;
@@ -2577,42 +2548,37 @@ mod tests {
         assert_eq!(at(period, harmonigraph_scene::CLOUD_SIZE_MAX, 4320), Some(TILE_MAX));
     }
 
-    /// A reduced tone target exists only where it would be SMALLER than the
-    /// pane, and it is the pane's pixels divided by device pixels per sample.
+    /// The wash is worked out per device pixel at every scale, an export's
+    /// over 2,560 px wide included (#1994 TX1): no tone target, and a history
+    /// of one texel a pixel plus its border.
     #[test]
-    fn the_tone_target_appears_only_where_it_is_coarser_than_the_pane() {
-        let at = |cloud_pixel, cloud_depth, ppp| {
-            tone_size(
-                [1920, 1081],
-                ppp,
-                // A cloud that reduces at all: the starfield never does.
-                SpectrogramAtmosphere::fixture(harmonigraph_scene::SpectralAtmosphere {
-                    cloud_depth,
-                    cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
-                    ..Default::default()
-                }),
-                cloud_pixel,
-            )
-        };
-        // The fresh half point is one device pixel on a Retina pane and half of
-        // one on a plain pane: native on both, which is what keeps the default
-        // picture the full-resolution one.
-        let pixel = super::CloudSampling::default().pixel_points;
-        assert_eq!(pixel, 0.5);
-        assert_eq!(at(pixel, 1.0, 2.0), None);
-        assert_eq!(at(pixel, 1.0, 1.0), None);
-        assert_eq!(at(pixel, 1.0, 4.0), Some([960, 541]));
-        // One point is native at 1x and halves each axis at 2x — a quarter of
-        // the walk — and the odd axis rounds UP so the target still covers the
-        // pane.
-        assert_eq!(at(1.0, 1.0, 1.0), None);
-        assert_eq!(at(1.0, 1.0, 2.0), Some([960, 541]));
-        assert_eq!(at(4.0, 1.0, 2.0), Some([240, 136]));
-        // No cloud, nothing to reduce, whatever the sample spacing.
-        assert_eq!(at(4.0, 0.0, 2.0), None);
+    fn the_wash_draws_per_pixel_at_every_scale() {
+        let pixels = [3360, 1081];
+        for remembers in [false, true] {
+            let mut settings = harmonigraph_scene::SpectralAtmosphere {
+                cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
+                cloud_depth: 1.0,
+                color_pickup: if remembers { 0.2 } else { 0.0 },
+                color_release: if remembers { 0.2 } else { 0.0 },
+                ..Default::default()
+            };
+            settings.material_settings.wash_refract = 0.5;
+            assert!(settings.sanitized().effects().cloud, "the fixture draws no wash");
+            assert_eq!(settings.sanitized().remembers_color(), remembers);
+            let atmosphere = SpectrogramAtmosphere::fixture(settings);
+            // A Retina pane, and the 21:9 export at 1440 (3360 / 1280).
+            for ppp in [1.0, 2.0, 2.625, 4.0] {
+                let plan =
+                    super::Plan::new(pixels, ppp, atmosphere, Default::default(), None, 16384)
+                        .expect("a plan");
+                assert_eq!(plan.shape.scales_tone, None, "a wash tone target at {ppp} px/pt");
+                let extent = remembers.then_some([pixels[0] + 2, pixels[1] + 2]);
+                assert_eq!(plan.memory_extent, extent, "the history's grid at {ppp} px/pt");
+            }
+        }
     }
 
-    /// `Blur time step` bounds the light field's TIME axis by the run's slab
+    /// `Spectrogram time step` bounds the light field's TIME axis by the run's slab
     /// count, and reaches nothing else.
     ///
     /// The fixture is the zoomed-out pane the dial exists for, and its
@@ -2706,10 +2672,11 @@ mod tests {
         );
         let lut = crate::stars::image(&device, "lut", [1, 1], FORMAT);
         let stars = Some(StarShape { atlas: [96, 40], image: [64, 48] });
-        let at = |size, tone, stars| Shape { size, tone, tile: None, stars, memory: None };
+        let at =
+            |size, tone, stars| Shape { size, scales_tone: tone, tile: None, stars, memory: None };
         let kept = |targets: &Targets| {
             let stars = targets.stars.as_ref();
-            [stars.map(|s| &s.atlas), stars.map(|s| &s.image), targets.tone.as_ref()]
+            [stars.map(|s| &s.atlas), stars.map(|s| &s.image), targets.scales_tone.as_ref()]
                 .map(|view| view.map(|view| view.texture().clone()))
         };
         for (tone, stars) in [(None, stars), (Some([32, 24]), None)] {

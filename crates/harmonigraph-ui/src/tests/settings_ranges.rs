@@ -296,7 +296,7 @@ fn scenarios() -> Vec<Scenario> {
         meantone: false,
         marvel: false,
         style: crate::panes::fresh_spectrum().atmosphere.cloud_style,
-        material: harmonigraph_scene::LatticeMaterial::default(),
+        material: crate::panes::fresh_view().atmosphere.material_style,
     };
     let mut cases = Vec::new();
     for &pane in SETTINGS_PANES {

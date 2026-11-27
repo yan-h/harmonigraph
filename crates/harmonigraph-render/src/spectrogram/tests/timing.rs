@@ -37,11 +37,11 @@
 //! override a case's `turn`, so a control that works by turning a softness to
 //! zero is not one under them; `plain` still is.
 //!
-//! `PROBE_CLOUD_PIXEL` (points per cloud sample), `PROBE_CLOUD_TILE` (the
+//! `PROBE_CLOUD_TILE` (the
 //! walk's period in cells, never 0 since #1100 retired the composite's live
 //! walk) and `PROBE_BLUR_TIME_STEP`
 //! (slabs per source texel on the light field's time axis, 0 for off), each
-//! defaulting to the production values (0.5 pt, 40 cells and the saved blur
+//! defaulting to the production values (40 cells and the saved blur
 //! default), apply to EVERY case after its own `turn`, so one run reads the whole table at one setting
 //! and two runs are what that setting is worth. They are probe controls rather than
 //! cases because the question is how much each of the rows above falls, not how
@@ -170,7 +170,6 @@ fn cloud_costs_by_style_and_dial() {
         .unwrap_or_else(|| FILLS.to_vec());
     let dial =
         |name: &str| -> Option<f32> { std::env::var(name).ok().and_then(|v| v.parse().ok()) };
-    let cloud_pixel = dial("PROBE_CLOUD_PIXEL");
     let cloud_tile = dial("PROBE_CLOUD_TILE");
     let blur_time_step = dial("PROBE_BLUR_TIME_STEP");
     let pitch_softness = dial("PROBE_PITCH_SOFTNESS");
@@ -218,9 +217,6 @@ fn cloud_costs_by_style_and_dial() {
             cb.rect = rect;
             let mut resources = CallbackResources::default();
             let mut sampling = atmosphere::CloudSampling::default();
-            if let Some(pixel) = cloud_pixel {
-                sampling.pixel_points = pixel;
-            }
             if let Some(period) = cloud_tile {
                 sampling.tile_cells = period as u32;
             }

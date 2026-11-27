@@ -853,7 +853,6 @@ impl CallbackTrait for SpectrogramCallback {
                     cloud,
                     &plan,
                     atmosphere::Draw {
-                        style: settings.settings.cloud_style,
                         mesh: pane.vertex_buffer.slice(..),
                         count: source_count as u32,
                         pixels,

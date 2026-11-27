@@ -28,7 +28,8 @@ Watercolor retains color on a fixed material lattice.
 Drift splits into an integer lattice origin and a fractional display offset.
 Feedback copies exact texels with integer loads; only the final displayed color is bilinearly sampled.
 Repeated drift therefore adds no feedback blur.
-The ordinary cloud tone pass is skipped while memory supplies color.
+The history works the wash's tone out per texel, a texel per device pixel, and no tone pass is drawn:
+only Scales draw a tone target, which their history then remembers.
 
 With memory enabled, Watercolor's Texture mix blends the plain color and remembered color in linear light.
 This is bounded and preserves the zero and full-strength endpoints, but intermediate colors can leave the authored palette ramp.

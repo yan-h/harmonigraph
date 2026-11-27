@@ -16,10 +16,9 @@ lookup feathering and bleed,
 and the Layers blend between coarse and fine sampled levels.
 With color memory off, Texture mix blends original and displaced levels before the shared palette lookup;
 with it on, as it is fresh, Texture mix blends the plain and remembered colors in linear light (see [color memory](spectrogram-color-memory.md)).
-Since #1042 there is no Cloud pixel size:
-cloud sampling is fixed at 0.5 pt,
-which is native on 1x and 2x displays,
-so the displaced scalar field is reduced before that lookup only where a point spans more than two device pixels.
+Since #1042 there is no Cloud pixel size,
+and since #1994 TX1 the wash is worked out per device pixel at every scale, an export's over 2,560 px wide included,
+so the displaced scalar field is never reduced before that lookup.
 Tile geometry and the Watercolor tile rotation are unchanged.
 
 At zero Refraction with Color pickup and Color release also zero (and Watercolor Random brightness and Edge pooling at 0%) the renderer takes the ordinary texture-off path,

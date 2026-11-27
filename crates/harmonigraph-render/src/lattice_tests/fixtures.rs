@@ -181,10 +181,11 @@ pub(super) fn parity_scene() -> Scene {
             glow_blend: 0.5,
             glow_accumulation: 0.0,
             // These fixtures measure the smooth glow, with no material over
-            // it. Texture and material have their own GPU probes.
+            // it: amount 0 is the material's off switch. Texture and material
+            // have their own GPU probes, which turn the amount up.
             atmosphere: harmonigraph_scene::AtmosphereSettings {
                 texture_depth: 0.0,
-                material_style: harmonigraph_scene::LatticeMaterial::None,
+                material_amount: 0.0,
                 ..Default::default()
             },
             ..Default::default()
