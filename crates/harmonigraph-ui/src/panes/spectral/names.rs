@@ -547,26 +547,38 @@ fn anchor_edge(note: &RollNote, time: &TimeAxis, anchor: NameAnchor) -> Edge {
 /// says the pitch CLASS and nothing about which octave is sounding. What
 /// answers that is the dots on the turns, which are not the name.
 ///
-/// The REACH is asked first and the picture's own window
-/// ([`PictureState::shown`](crate::PictureState::shown)) only where the reach
-/// comes back empty, which is what keeps two things true at once. A name is
-/// stable: the reach is the same block whatever the camera is doing, so
-/// panning and zooming do not respell a note that was already named, and the
-/// walk is over a thousand positions rather than the twenty thousand a drawn
-/// window can reach — per played pitch, per frame. And a name agrees with the
-/// picture: where the lattice is drawing a node the reach cannot spell, that
-/// node names the note, instead of the pitch dropping to a spelling the
-/// lattice is visibly contradicting one pane away.
+/// The lookup, which every name reader shares:
 ///
-/// The equal-tempered fallback is what is left when NEITHER window has a node
-/// — still a [`NoteName`], so it draws identically and there is one rendering
-/// path rather than two. It is a real case, and a narrower one than the red
-/// band's: the band asks the picture alone, so a pitch the reach can spell
-/// while the pane is not drawing it wears a band and still gets its lattice
-/// name. That is the two answering the two different questions they are for —
-/// the band says what is on screen, the name says what the note is called —
-/// and a name that changed under a pan would be the worse of the two to make
-/// agree. A note with no name at all would just look like a bug.
+/// 1. The REACH ([`ViewConfig::reach`]), the block of `REACH_THREES` fifths
+///    and `REACH_FIVES` thirds about the view's center, which follows the
+///    camera. Of its nodes within the tuning's tolerance of the played pitch,
+///    the nearest names it, ties broken by spelling cost
+///    ([`naming_node_from`]).
+/// 2. Only where the reach holds no such node, the picture's own window
+///    ([`PictureState::shown`](crate::PictureState::shown)), searched the
+///    same way.
+/// 3. Where neither does, the equal-tempered spelling.
+///
+/// So a name follows what those windows hold, and nothing promises a
+/// distance. A pan can respell a note as soon as a nearer node enters the
+/// reach: a 12-TET E under just axes respells after a pan of seven fifths. A
+/// note the reach cannot name follows the drawn window, which a zoom changes
+/// too. Pinning the reach to the lattice's origin instead named far just notes
+/// after unrelated nodes near the origin (#1994 RL2, PR #1996).
+///
+/// What the reach buys is a walk over a thousand positions rather than the
+/// twenty thousand a drawn window can reach — per played pitch, per frame —
+/// and a name that does not follow every zoom. A node the lattice draws names
+/// the note only where the reach has no match for its pitch; where the reach
+/// has one, such as the note's comma twin, the reach's wins.
+///
+/// The equal-tempered fallback is still a [`NoteName`], so it draws
+/// identically and there is one rendering path rather than two. It is a real
+/// case, and a narrower one than the red band's: the band asks the picture
+/// alone, so a pitch the reach can name while the pane is not drawing it
+/// wears a band and still gets its lattice name. The band says what is on
+/// screen, the name says what the note is called, and the two need not agree.
+/// A note with no name at all would just look like a bug.
 pub(crate) struct Namer {
     reach: DrawnWindow,
     shown: DrawnWindow,
@@ -1209,18 +1221,15 @@ mod tests {
         assert!(rect.max.x < axes.at(0.5, 0.8).x, "growing back into the note, not past it");
     }
 
-    /// The same claim as
-    /// [`the_letter_lines_up_with_or_without_an_accidental`], but read off
-    /// the glyphs [`draw`] actually queues through a real `egui::Context`, so
-    /// it is about the letters a reader sees rather than about the boxes they
-    /// were chosen in.
+    /// A letter lines up with or without an accidental, read off the glyphs
+    /// [`draw`] actually queues through a real `egui::Context`, so it is about
+    /// the letters a reader sees rather than about the boxes they were chosen
+    /// in.
     ///
     /// What it holds is that the mark column cannot reach the letter's
     /// placement: the two names differ by a comma sign, and the drawn letter
-    /// does not move. The former arithmetic-only test asked it of an estimate, where
-    /// the extent is what decides it; here nothing consults the extent at all
-    /// — the lead is a point and [`marks::NameLead::Letter`] measures the glyph
-    /// — so the two are the same sentence proved of two different mechanisms.
+    /// does not move. Nothing here consults the extent: the lead is a point
+    /// and [`marks::NameLead::Letter`] measures the glyph.
     #[test]
     fn the_drawn_letter_lines_up_across_notes_in_right_orientation() {
         let cfg =

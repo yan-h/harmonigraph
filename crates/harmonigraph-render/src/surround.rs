@@ -39,8 +39,10 @@ pub(crate) fn composite_source() -> String {
 /// Where two notes' cuts meet, the stronger is what lands, with its color, so a
 /// crowd of notes is no more cut between them than one note is.
 ///
-/// `amount` is a 0..1 share; [`SurroundCut::sanitized`] clamps
-/// every field, and the panes hand these over as the user dialled them.
+/// `amount` is a 0..1 share, and every field arrives inside its range:
+/// `SpectrumConfig::sanitize` holds the dials to those ranges on load and the
+/// bars offer no more, so a cut outside them, which no producer makes, is a
+/// `debug_assert` rather than a repair (#1631).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurroundCut {
     /// How much of the picture the cut takes at a note's edge. 0 is no
@@ -93,23 +95,16 @@ pub fn surround_fade(shape: f32, x: f32) -> f32 {
 }
 
 impl SurroundCut {
-    /// No surround, its other fields at representative values: what a
-    /// non-finite field falls back to, and what the timing probe dials a full
-    /// amount into.
+    /// No surround, its other fields at representative values: what the
+    /// timing probe dials a full amount into.
     pub const OFF: Self = Self { amount: 0.0, reach: 15.0, shape: 0.0, tint_fade: 3.0 };
 
-    /// Every field in its range, a non-finite one taken as [`Self::OFF`]'s.
-    pub fn sanitized(self) -> Self {
-        let off = Self::OFF;
-        let within = |v: f32, off: f32, range: std::ops::RangeInclusive<f32>| {
-            if v.is_finite() { v } else { off }.clamp(*range.start(), *range.end())
-        };
-        Self {
-            amount: within(self.amount, off.amount, 0.0..=1.0),
-            reach: within(self.reach, off.reach, SURROUND_REACH_RANGE),
-            shape: within(self.shape, off.shape, SURROUND_SHAPE_RANGE),
-            tint_fade: within(self.tint_fade, off.tint_fade, SURROUND_TINT_FADE_RANGE),
-        }
+    /// Every field inside its range, as every producer hands it over.
+    fn in_range(self) -> bool {
+        (0.0..=1.0).contains(&self.amount)
+            && SURROUND_REACH_RANGE.contains(&self.reach)
+            && SURROUND_SHAPE_RANGE.contains(&self.shape)
+            && SURROUND_TINT_FADE_RANGE.contains(&self.tint_fade)
     }
 
     /// How far the surround paints past a note's edge, in points of a picture
@@ -117,9 +112,9 @@ impl SurroundCut {
     /// quads are grown by, and what the roll's culls keep a leaving note alive
     /// for.
     pub fn reach_points(self, point_scale: f32) -> f32 {
-        let cut = self.sanitized();
-        if cut.amount > 0.0 {
-            cut.reach * point_scale.max(0.0)
+        debug_assert!(self.in_range(), "a cut out of its ranges: {self:?}");
+        if self.amount > 0.0 {
+            self.reach * point_scale.max(0.0)
         } else {
             0.0
         }
@@ -128,13 +123,12 @@ impl SurroundCut {
     /// The cut as surround.wgsl reads it, at `point_scale`: all 0 while it
     /// draws nothing.
     pub(crate) fn uniform(self, point_scale: f32) -> SurroundUniform {
-        let cut = self.sanitized();
-        let reach = cut.reach_points(point_scale);
+        let reach = self.reach_points(point_scale);
         if reach <= 0.0 {
             return SurroundUniform { cut: Float4([0.0; 4]) };
         }
-        let sooner = cut.tint_fade - 1.0;
-        SurroundUniform { cut: Float4([cut.amount, reach, shape_bias(cut.shape), sooner]) }
+        let sooner = self.tint_fade - 1.0;
+        SurroundUniform { cut: Float4([self.amount, reach, shape_bias(self.shape), sooner]) }
     }
 }
 

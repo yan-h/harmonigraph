@@ -11,11 +11,11 @@ use harmonigraph_scene::framing;
 
 use crate::{AppearanceDocument, RenderFrame};
 
-/// The nodes lit by everything the lattice has drawn since its history was
-/// last cleared (Clear display history): the remembered pitches the label
-/// trail draws, and the voices still sounding or fading. Each is the copy
-/// nearest where `appearance`'s camera stands (see
-/// [`framing::lit_positions`]), under the tuning in force now.
+/// The nodes lit by the voices held or fading and by the tracker's
+/// remembered pitches, which either Clear display history or Clear label
+/// history empties. Each is the copy nearest where `appearance`'s camera
+/// stands within the reach about the camera (see [`framing::lit_positions`]),
+/// under the tuning in force now.
 ///
 /// The history keeps the most recent
 /// [`NoteHistory::MAX_VISITS`](harmonigraph_core::NoteHistory::MAX_VISITS)

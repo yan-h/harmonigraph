@@ -155,8 +155,9 @@ impl Camera {
     /// every zoom — a name that fits its node at the default distance is a
     /// speck on it zoomed in, and swamps it zoomed out.
     ///
-    /// Both terms are read through the range they are navigable in — see
-    /// `focus_half_height`, which is where that is done and why it has to be.
+    /// Both terms are in the range they are navigable in: the field of view
+    /// is a constant, and the distance is held to its range at load and by
+    /// every gesture, framing and host value (see `focus_half_height`).
     pub fn screen_scale(&self) -> f32 {
         Self::half_height(Self::DEFAULT_DISTANCE, Self::DEFAULT_FOV_Y) / self.focus_half_height()
     }
@@ -179,21 +180,13 @@ impl Camera {
         height.max(0.0) / (2.0 * self.focus_half_height())
     }
 
-    /// The world-space half-height of the window at the focus plane, with
-    /// `distance` read through the range it is navigable in rather than
-    /// trusted.
+    /// The world-space half-height of the window at the focus plane.
     ///
-    /// Nothing the UI does can put it outside that range; a hand-edited
-    /// persisted blob can, and this scales a FONT SIZE — where a zero distance
-    /// divides to infinity. What egui does with a size like that is quietly
-    /// draw nothing: the glyph is rasterized at a width that saturates to zero
-    /// and every label vanishes, which reads as a broken plugin rather than as
-    /// a bad number. The field of view was the other half of this guard until
-    /// #964 made it a constant, which is a value no blob can reach.
+    /// `distance` is in its navigable range here, and needs no repair: the
+    /// load holds a saved one to it ([`sanitize`](Self::sanitize)), and every
+    /// gesture, framing and host value clamps to it.
     fn focus_half_height(&self) -> f32 {
-        let distance =
-            repair(self.distance, Self::DEFAULT_DISTANCE, Self::MIN_DISTANCE..=Self::MAX_DISTANCE);
-        Self::half_height(distance, Self::DEFAULT_FOV_Y)
+        Self::half_height(self.distance, Self::DEFAULT_FOV_Y)
     }
 
     fn half_height(distance: f32, fov_y: f32) -> f32 {
@@ -388,10 +381,10 @@ impl Camera {
     /// (`sync_camera`), so the saved values are not what is drawn.
     ///
     /// A bar cannot produce a nonsense value but a hand-edited blob can, and
-    /// this feeds `view_proj` every frame the camera is drawn with —
-    /// `screen_scale` already guards `distance` locally for the font-size math
-    /// it does, but that guard is local to it, and nothing stands between a
-    /// NaN in the blob and `eye`'s trig or `ortho`'s `tan`. Same
+    /// this feeds `view_proj` every frame the camera is drawn with — and
+    /// `screen_scale`'s font-size math, which reads the distance as this
+    /// leaves it — so nothing else stands between a NaN in the blob and
+    /// `eye`'s trig or `ortho`'s `tan`. Same
     /// argument as [`ViewConfig::sanitize`], and the same split: finite-only
     /// where a field has no natural bound, clamped into the working range
     /// where it does.
@@ -506,29 +499,14 @@ impl Scene {
 mod tests {
     use super::*;
 
-    /// The zoom factor labels are sized by is finite and positive for anything
-    /// a persisted blob can carry.
-    ///
-    /// Nothing in the UI writes a bad camera — `zoom`, `zoom_by` and `Default`
-    /// all clamp — so the only route in is a hand-edited or corrupted blob,
-    /// which is the route this codebase guards every other divisor against
-    /// (see `SpectrumConfig::sanitize`). It matters here because the
-    /// factor multiplies a font size, and egui answers a nonsense one by
-    /// rasterizing nothing: the labels do not draw wrong, they disappear.
+    /// The zoom factor labels are sized by is the zoom against the framing a
+    /// fresh view opens at.
     #[test]
-    fn a_hand_edited_camera_still_yields_a_usable_label_scale() {
+    fn the_label_scale_is_the_zoom_against_the_fresh_framing() {
         let at = |distance: f32| Camera { distance, ..Default::default() }.screen_scale();
         // The framing a fresh view opens at is the identity, by construction.
         assert_eq!(at(Camera::DEFAULT_DISTANCE), 1.0);
-        // Twice as close draws twice the size; the working range is bounded at
-        // both ends, so the factor is too.
+        // Twice as close draws twice the size.
         assert_eq!(at(Camera::DEFAULT_DISTANCE * 0.5), 2.0);
-        // Finite and positive is the whole of what is owed here: what a label
-        // may finally be SIZED at is bounded downstream, by `text::snap_scale`.
-        let inside = |scale: f32| scale.is_finite() && scale > 0.0 && scale < 100.0;
-        for distance in [0.0, -1.0, f32::NAN, f32::INFINITY, 1e30, -1e30] {
-            let scale = at(distance);
-            assert!(inside(scale), "distance {distance} gave a scale of {scale}");
-        }
     }
 }
