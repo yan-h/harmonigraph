@@ -649,44 +649,6 @@ fn no_camera_asks_for_more_than_the_budget() {
     }
 }
 
-/// A target no gesture can reach still leaves both windows usable, and walks
-/// back to somewhere the picture is.
-///
-/// `Camera::sanitize` deliberately leaves the target unbounded ("No bound the
-/// geometry cares about"), so this is a value that really does arrive from a
-/// blob — and `follow_camera` is the function on the far side of that door
-/// that WRITES persisted state from it. Carrying the step into the center
-/// without bounding it pinned the center at `i32::MAX` while the target went
-/// on stepping, and `center + extent` in `reach` then wrapped:
-/// the reach came out EMPTY, so every note read as off the lattice, with no
-/// analyzer names and an empty Notes column, and it never recovered.
-#[test]
-fn a_target_no_gesture_can_reach_still_names_and_draws() {
-    for x in [1e9f32, 3e9, 1e30, -1e30, f32::MAX] {
-        let mut view = ViewConfig::default();
-        let mut camera = Camera { target: Vec3::new(x, -x, x), ..Camera::default() };
-        // A few frames, because an absurd target is walked back rather than
-        // teleported — one bound's worth of steps per frame.
-        for _ in 0..8 {
-            view.follow_camera(&mut camera);
-        }
-        assert!(
-            view.reach().positions().count() > 0,
-            "target {x:e} left the naming reach empty at center {:?}",
-            view.center(),
-        );
-        // The sum `reach` builds its ranges from, which is what wrapped. In
-        // debug this test would panic on the overflow instead.
-        assert!(
-            view.center_fives.checked_add(view.extent_fives).is_some()
-                && view.center_threes.checked_add(view.extent_threes).is_some(),
-            "target {x:e} left a center that overflows its own extent: {:?}",
-            view.center(),
-        );
-        assert!(view.scrolled(&camera, 1.5).count() > 0);
-    }
-}
-
 /// A camera a hand-edited blob can carry still yields a drawable window. The
 /// same door `Camera::sanitize` and `ViewConfig::sanitize` guard, one step
 /// further along: these two run on load, and a scene is derived every frame

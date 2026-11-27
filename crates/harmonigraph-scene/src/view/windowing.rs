@@ -280,29 +280,12 @@ impl ViewConfig {
         if !camera.target.is_finite() {
             return;
         }
-        // Bounded well inside `i32`, because the center is added to an extent
-        // (`reach`) and that sum must not overflow. Saturating the center
-        // instead leaves a target that cannot be reduced — it keeps
-        // stepping and the center cannot take the step — so the two stop
-        // agreeing and the reach comes out EMPTY, which reads as every note
-        // being off the lattice, permanently. Clamping the step keeps them in
-        // step: an absurd target walks back a bound's worth per frame and
-        // arrives.
-        let steps = |world: f32| {
-            if world.is_finite() {
-                world.round().clamp(-(MAX_CENTER as f32), MAX_CENTER as f32) as i32
-            } else {
-                0
-            }
-        };
-        let (fives, threes) = (steps(camera.target.x), steps(camera.target.y));
-        // Saturating BEFORE the clamp, not after: a center already at the
-        // bound plus a step of the bound is `2^31`, one past what an `i32`
-        // holds, so the clamp would be handed a number that had already
-        // wrapped negative.
-        self.center_fives = self.center_fives.saturating_add(fives).clamp(-MAX_CENTER, MAX_CENTER);
-        self.center_threes =
-            self.center_threes.saturating_add(threes).clamp(-MAX_CENTER, MAX_CENTER);
+        // Whole steps of a target `Camera::sanitize` holds to a few hundred
+        // cells, onto a center `ViewConfig::sanitize` holds to `MAX_CENTER`:
+        // the sum stays far inside `i32`.
+        let (fives, threes) = (camera.target.x.round() as i32, camera.target.y.round() as i32);
+        self.center_fives += fives;
+        self.center_threes += threes;
         camera.target.x -= fives as f32;
         camera.target.y -= threes as f32;
         camera.target.z = 0.0;

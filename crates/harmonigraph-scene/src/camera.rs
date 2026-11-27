@@ -116,6 +116,16 @@ impl Camera {
     /// The cabinet depth axis's step length: what its "Depth step scale" bar
     /// offers, and what a load holds a saved one to.
     pub const CABINET_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.1..=1.0;
+    /// How far across the sheet a loaded target may stand from the view's
+    /// centre, in cells. What a project or a gesture puts there is far
+    /// less: the host's camera pan runs ±128 cells in all (`ParamKey::CameraPanX`
+    /// in harmonigraph-take), of which [`ViewConfig::follow_camera`] leaves
+    /// the target within one, and a gesture moves it a few between two of
+    /// its calls. The two need not agree, since a target this far is one only
+    /// a hand-edited blob carries.
+    ///
+    /// [`ViewConfig::follow_camera`]: crate::ViewConfig::follow_camera
+    const TARGET_LIMIT: f32 = 128.0;
     /// Zoom clamp; CLIP_NEAR/CLIP_FAR must bracket it with margin.
     pub const MIN_DISTANCE: f32 = 2.0;
     /// The far end is what bounds the lattice, the lattice itself being
@@ -179,21 +189,13 @@ impl Camera {
         height.max(0.0) / (2.0 * self.focus_half_height())
     }
 
-    /// The world-space half-height of the window at the focus plane, with
-    /// `distance` read through the range it is navigable in rather than
-    /// trusted.
+    /// The world-space half-height of the window at the focus plane.
     ///
-    /// Nothing the UI does can put it outside that range; a hand-edited
-    /// persisted blob can, and this scales a FONT SIZE — where a zero distance
-    /// divides to infinity. What egui does with a size like that is quietly
-    /// draw nothing: the glyph is rasterized at a width that saturates to zero
-    /// and every label vanishes, which reads as a broken plugin rather than as
-    /// a bad number. The field of view was the other half of this guard until
-    /// #964 made it a constant, which is a value no blob can reach.
+    /// `distance` is in its navigable range here, and needs no repair: the
+    /// load holds a saved one to it ([`sanitize`](Self::sanitize)), and every
+    /// gesture, framing and host value clamps to it.
     fn focus_half_height(&self) -> f32 {
-        let distance =
-            repair(self.distance, Self::DEFAULT_DISTANCE, Self::MIN_DISTANCE..=Self::MAX_DISTANCE);
-        Self::half_height(distance, Self::DEFAULT_FOV_Y)
+        Self::half_height(self.distance, Self::DEFAULT_FOV_Y)
     }
 
     fn half_height(distance: f32, fov_y: f32) -> f32 {
@@ -400,12 +402,15 @@ impl Camera {
     pub fn sanitize(&mut self) {
         let fresh = Camera::default();
 
-        // No bound the geometry cares about — the camera can look anywhere —
-        // so only the NaN or infinity a hand-edited blob can carry gets
-        // repaired, and as a whole vector: `eye()` reads all three
-        // components together, and one bad component NaNs the other two
-        // through it.
+        // A NaN or infinity is repaired as a whole vector: `eye()` reads all
+        // three components together, and one bad component NaNs the other
+        // two through it. A finite one is held to `TARGET_LIMIT` across the
+        // sheet, so `ViewConfig::follow_camera` carries it into the view's
+        // centre in whole steps that cannot overflow it.
         self.target = if self.target.is_finite() { self.target } else { fresh.target };
+        let limit = Self::TARGET_LIMIT;
+        self.target.x = self.target.x.clamp(-limit, limit);
+        self.target.y = self.target.y.clamp(-limit, limit);
 
         // Periodic (every use is a `sin`/`cos`), so any finite value draws
         // correctly — only a non-finite one, which `sin`/`cos` turn into
@@ -506,29 +511,29 @@ impl Scene {
 mod tests {
     use super::*;
 
-    /// The zoom factor labels are sized by is finite and positive for anything
-    /// a persisted blob can carry.
-    ///
-    /// Nothing in the UI writes a bad camera — `zoom`, `zoom_by` and `Default`
-    /// all clamp — so the only route in is a hand-edited or corrupted blob,
-    /// which is the route this codebase guards every other divisor against
-    /// (see `SpectrumConfig::sanitize`). It matters here because the
-    /// factor multiplies a font size, and egui answers a nonsense one by
-    /// rasterizing nothing: the labels do not draw wrong, they disappear.
+    /// The zoom factor labels are sized by is the zoom against the framing a
+    /// fresh view opens at.
     #[test]
-    fn a_hand_edited_camera_still_yields_a_usable_label_scale() {
+    fn the_label_scale_is_the_zoom_against_the_fresh_framing() {
         let at = |distance: f32| Camera { distance, ..Default::default() }.screen_scale();
         // The framing a fresh view opens at is the identity, by construction.
         assert_eq!(at(Camera::DEFAULT_DISTANCE), 1.0);
-        // Twice as close draws twice the size; the working range is bounded at
-        // both ends, so the factor is too.
+        // Twice as close draws twice the size.
         assert_eq!(at(Camera::DEFAULT_DISTANCE * 0.5), 2.0);
-        // Finite and positive is the whole of what is owed here: what a label
-        // may finally be SIZED at is bounded downstream, by `text::snap_scale`.
-        let inside = |scale: f32| scale.is_finite() && scale > 0.0 && scale < 100.0;
-        for distance in [0.0, -1.0, f32::NAN, f32::INFINITY, 1e30, -1e30] {
-            let scale = at(distance);
-            assert!(inside(scale), "distance {distance} gave a scale of {scale}");
-        }
+    }
+
+    /// A loaded target is held across the sheet, which is what lets
+    /// `ViewConfig::follow_camera` carry it into the centre unguarded; its
+    /// depth is the follow's to zero, and a target in reach is kept.
+    #[test]
+    fn a_loaded_target_is_held_across_the_sheet() {
+        let loaded = |target: Vec3| {
+            let mut camera = Camera { target, ..Camera::default() };
+            camera.sanitize();
+            camera.target
+        };
+        let limit = Camera::TARGET_LIMIT;
+        assert_eq!(loaded(Vec3::new(1e30, -3e9, 7.0)), Vec3::new(limit, -limit, 7.0));
+        assert_eq!(loaded(Vec3::new(0.4, -2.5, 0.0)), Vec3::new(0.4, -2.5, 0.0));
     }
 }
