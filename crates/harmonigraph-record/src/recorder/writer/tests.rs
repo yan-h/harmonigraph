@@ -335,27 +335,29 @@ fn re_checking_armed_mid_take_does_not_reset_the_take() {
 }
 
 /// The status line separates a take that is capturing from one that is
-/// waiting, and from one that captured something and then stopped.
+/// waiting, and from one that rolled and then stopped, by the same latch the
+/// Transport stop timer reads: an audio-only take that rolled is paused, with
+/// no events to count.
 ///
 /// It is the only feedback there is that arming while the transport is
-/// parked records nothing — "paused · 0 events" and "waiting for playback" look
-/// alike but mean opposite things about whether the take has anything in
-/// it.
+/// parked records nothing: "paused" and "waiting for playback" mean opposite
+/// things about whether the take has anything in it.
 #[test]
 fn the_status_line_separates_waiting_from_paused_from_recording() {
-    let Bench { ctrl, .. } = Bench::new();
-    ctrl.recording.store(true, Ordering::Relaxed);
+    let mut b = Bench::new();
+    b.arm();
+    b.ctrl.recording.store(true, Ordering::Relaxed);
 
-    ctrl.tick(false, 0);
-    assert_eq!(ctrl.status(), "waiting for playback");
+    b.ctrl.tick(false, 0);
+    assert_eq!(b.ctrl.status(), "waiting for playback");
 
-    ctrl.tick(true, 12);
-    assert_eq!(ctrl.status(), "recording · 12 events");
-
-    // Rolled, then stopped: what it caught is worth saying, and it is not
-    // the same as never having started.
-    ctrl.tick(false, 12);
-    assert_eq!(ctrl.status(), "paused · 12 events");
+    // A block that rolls with no notes in it, then the playhead parked.
+    assert!(b.rec.observe_transport(0.0, true, BLOCK_SECONDS).is_some());
+    b.ctrl.tick(true, 0);
+    assert_eq!(b.ctrl.status(), "recording · 0 events");
+    assert!(b.rec.observe_transport(0.0, false, BLOCK_SECONDS).is_none());
+    b.ctrl.tick(false, 0);
+    assert_eq!(b.ctrl.status(), "paused · 0 events");
 }
 
 /// The shared failure flag alone makes `tick` publish the failure, whatever

@@ -67,9 +67,9 @@
 //! up with a separate bounce of the same song; the take's own WAV replaced
 //! that bounce (#903, #972, #1196, #1342).
 //!
-//! A host that reports no song position records nothing, the status line
-//! waiting for playback, as with the transport stopped: Bitwig always reports
-//! one.
+//! A block with no song position records nothing (Bitwig always reports
+//! one): the status line reads "waiting for playback" before the take first
+//! rolls, and afterwards what the last block with a position left it at.
 //!
 //! # Threading
 //!

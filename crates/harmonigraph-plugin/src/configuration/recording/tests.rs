@@ -1115,9 +1115,8 @@ fn a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take(
     }
 }
 
-/// A block with no song position records nothing into an armed take, which
-/// waits for playback as with the transport stopped (Bitwig always reports
-/// one); the same take records once the transport rolls.
+/// A block with no song position records nothing into an armed take (Bitwig
+/// always reports one), and the same take records once the transport rolls.
 #[test]
 fn an_armed_take_records_nothing_from_a_block_with_no_song_position() {
     let _scope = crate::test_scope::enter();

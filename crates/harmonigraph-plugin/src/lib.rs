@@ -801,8 +801,9 @@ impl Harmonigraph {
             .as_ref()
             .is_some_and(|owner| self.take.is_armed_at(owner.recording_intent()));
         // An armed take records from the host's song position, and a block
-        // with none records nothing, its status line waiting for playback:
-        // Bitwig always reports one.
+        // with none records nothing (Bitwig always reports one): the status
+        // line reads "waiting for playback" before the take first rolls, and
+        // afterwards what the last block with a position left it at.
         let position = transport.pos_seconds().filter(|_| armed);
         let take_origin = position.and_then(|seconds| {
             // The stop bar is asked FIRST: a block at or past the bar belongs

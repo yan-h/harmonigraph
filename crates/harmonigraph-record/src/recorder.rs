@@ -871,7 +871,9 @@ impl Control {
     }
 
     /// Called each GUI frame while recording, so the status line reflects
-    /// what the audio thread is actually doing.
+    /// what the audio thread is actually doing. Paused and waiting are told
+    /// apart by whether the take has rolled, the latch the Transport stop
+    /// timer reads, and `events` is the tally.
     pub fn tick(&self, rolling: bool, events: u64) {
         if !self.is_recording() {
             return;
@@ -883,7 +885,7 @@ impl Control {
             format!("RECORDS DROPPED ({dropped}) — the take is incomplete")
         } else if rolling {
             format!("recording · {events} events")
-        } else if events > 0 {
+        } else if self.has_rolled() {
             format!("paused · {events} events")
         } else {
             "waiting for playback".into()
