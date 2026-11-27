@@ -2267,6 +2267,37 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
     assert_eq!(bands(0.5), 1, "half a semitone sharp has none");
 }
 
+/// The band asks for frames while its note's envelope moves, its arrival and
+/// its fade after the key comes up, and holds nothing once a held note has
+/// arrived: the lattice draws nothing for such a note, so nothing else would
+/// draw the band in.
+#[test]
+fn an_off_lattice_band_asks_for_frames_while_its_envelope_moves() {
+    let mut state = fresh();
+    state.appearance.spectrum.orientation = SpectralOrientation::Left;
+    state.appearance.spectrum.low_midi = 55.0;
+    state.appearance.spectrum.high_midi = 67.0;
+    state.appearance.view.fade_time = 0.5;
+    let quarter = NoteEventKind::Tuning { semitones: 0.5 };
+    let bent = NoteEvent { kind: quarter, ..NoteEvent::off(0.0, SourceId::DIRECT, 0, 60) };
+    state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+    state.runtime.tracker.handle_event(bent);
+    let asks = |state: &mut PictureState, now: f64| {
+        state.surfaces.moving_this_frame = Default::default();
+        let env = state.appearance.view.envelope();
+        let voice = state.runtime.tracker.voices().next().expect("the fixture's note sounds");
+        let want = theme::picture_off_scale().gamma_multiply(0.3 * voice.activation(now, &env));
+        let out = painted_pane(WIDE, state, now);
+        let banded =
+            out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want));
+        (banded, state.surfaces.moving_this_frame.asks_for(crate::Reason::Envelope))
+    };
+    assert_eq!(asks(&mut state, 0.2), (true, true), "an arriving band asked for nothing");
+    assert_eq!(asks(&mut state, 0.6), (true, false), "a band that has arrived held the loop");
+    state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+    assert_eq!(asks(&mut state, 1.2), (true, true), "a fading band asked for nothing");
+}
+
 /// A note the lattice is LIGHTING is never flagged as off it, however far out
 /// the node sits.
 ///
@@ -3738,11 +3769,12 @@ fn a_tape_playhead_asks_for_a_frame_each_device_pixel_it_crosses() {
         "a quarter-speed cue paced at {slow} s, not 4 x {zoomed}"
     );
 
-    // Across the whole song it crosses a pixel less often than the idle poll
-    // draws, which then draws it.
+    // Across the whole song it crosses a pixel less often than the 50 ms poll
+    // it rode until #1994 HW1, and asks for the frame each pixel falls on.
     let (ctx, mut state) = auditioning(1.0, false);
-    let crawl = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
-    assert_eq!(crawl, None, "a playhead crawling over the whole song held the loop");
+    let crawl = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true)
+        .expect("a playhead crawling over the whole song left its pixels to the idle poll");
+    assert!(crawl > 0.05, "the fixture's playhead must crawl: {crawl} s a pixel");
 
     let (ctx, mut state) = auditioning(1.0, true);
     state.runtime.tape.heard = None;

@@ -388,12 +388,16 @@ def report_silence(run, evs, t0):
 
 def report_first_note(run, evs, t0):
     stretches = timeline(evs, run[-1]['t'], 'animating')
-    note = next((start for start, _, reasons in stretches if 'voices' in reasons), None)
+    # A note asks no reason of its own since #1983: it shows as the pictures
+    # it moves, its lattice node arriving, its ribbon or its envelope.
+    notes = ('releasing', 'roll', 'envelope')
+    note = next((start for start, _, reasons in stretches
+                 if any(r in reasons for r in notes)), None)
     if note is None:
         print('  first note: none played while open')
         return
     at_open = stretches[0][2] if stretches else []
-    warm = [r for r in at_open if r in ('voices', 'roll', 'releasing')]
+    warm = [r for r in at_open if r in notes]
     print(f'  first note at {note - t0:.2f} s, {note - run[0]["t"]:.1f} s after opening'
           + (f'; opened with {" ".join(warm)} already animating, so not a cold first note'
              if warm else ''))

@@ -529,7 +529,8 @@ pub(crate) fn spiral_pane(
     state.surfaces.moving_this_frame.hold_if(crate::Reason::Audible, moving);
     seam(&painter, &spiral);
     rays(&painter, &spiral);
-    let lit = sounding(&spiral, state, now);
+    let (lit, envelopes) = sounding(&spiral, state, now);
+    state.surfaces.moving_this_frame.hold_if(crate::Reason::Envelope, envelopes);
     let (marks, cut) = dots(&spiral, state, &lit);
     // The roll's own backdrop cut, round every dot, before the discs land on
     // it. Whenever there are dots, as for the halo below: its buffers stand
@@ -809,7 +810,11 @@ struct Sounding {
 /// A voice outside the displayed pitch range is dropped rather than pinned to
 /// the nearest end — the disc has no place for it, and drawing it at the rim
 /// would put a mark on a pitch nothing is playing.
-fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
+///
+/// And whether the envelope of any voice the disc can show still moves
+/// ([`Voice::envelope_moving`](harmonigraph_core::Voice::envelope_moving)),
+/// one still arriving at nothing included: what the editor draws for.
+fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> (Vec<Sounding>, bool) {
     let mut voices: Vec<harmonigraph_core::Voice> = state.runtime.tracker.voices().collect();
     voices.sort_unstable_by(|a, b| a.pitch.total_cmp(&b.pitch).then(a.key().cmp(&b.key())));
     // One envelope for the whole pane, as every other caller takes it: it is a
@@ -817,16 +822,18 @@ fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
     // could vary between them.
     let env = state.appearance.view.envelope();
     let intensity = state.appearance.view.intensity.sanitized();
-    voices
+    voices.retain(|v| v.pitch >= spiral.min_midi && v.pitch <= spiral.max_midi);
+    let moving = voices.iter().any(|v| v.envelope_moving(now, &env));
+    let lit = voices
         .into_iter()
-        .filter(|v| v.pitch >= spiral.min_midi && v.pitch <= spiral.max_midi)
         .map(|v| Sounding {
             pitch: v.pitch,
             strength: v.activation(now, &env),
             opacity: intensity.read(v.velocity, v.expressions).opacity,
         })
         .filter(|v| v.strength > 0.0)
-        .collect()
+        .collect();
+    (lit, moving)
 }
 
 /// The sounding MIDI notes, each a dot on the track at its pitch.
@@ -1127,7 +1134,7 @@ mod tests {
         let spiral = Spiral::new(rect, &state.appearance.spectrum);
         let mut batch = crate::text::TextBatch::default();
         let _ = painted_into(SCREEN, rect, |ui| {
-            let lit = sounding(&spiral, state, now);
+            let lit = sounding(&spiral, state, now).0;
             names(ui.painter(), &spiral, state, &lit, &mut batch);
         });
         (batch, spiral)
@@ -1440,7 +1447,7 @@ mod tests {
             state.appearance.spectrum.high_midi = 84.0;
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
             let spiral = Spiral::new(PANE, &state.appearance.spectrum);
-            dots(&spiral, &state, &sounding(&spiral, &state, 0.1)).0.len()
+            dots(&spiral, &state, &sounding(&spiral, &state, 0.1).0).0.len()
         };
         assert_eq!(marks(60), 1, "a note inside the range is marked once");
         assert_eq!(marks(24), 0, "a note below the range is not marked");
@@ -1459,13 +1466,39 @@ mod tests {
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
         let spiral = Spiral::new(PANE, &state.appearance.spectrum);
-        let lit = sounding(&spiral, &state, 0.1);
+        let lit = sounding(&spiral, &state, 0.1).0;
         let (marks, _) = dots(&spiral, &state, &lit);
         assert_eq!(marks.len(), 4, "the fixture's four notes are four coloured discs");
         let radius = spiral.dot();
         assert!(marks.iter().all(|mark| mark.half_extent == [radius; 2]));
         assert!(marks.iter().all(|mark| mark.rounding == radius), "a dot is not round");
         assert!(marks.iter().all(|mark| mark.core[3] > 0));
+    }
+
+    /// A dot asks for frames while its envelope moves, its arrival and its
+    /// fade after the key comes up, and holds nothing once a held note has
+    /// arrived: what changes it then is an edit, which the input worker asks a
+    /// pass for. A note off the disc's range draws nothing and holds nothing.
+    #[test]
+    fn a_dot_asks_for_frames_while_its_envelope_moves() {
+        let mut state = fresh();
+        state.appearance.view.fade_time = 0.5;
+        let asks = |state: &mut PictureState, now: f64| {
+            state.surfaces.moving_this_frame = Default::default();
+            painted(state, SpiralView::default(), now);
+            state.surfaces.moving_this_frame.asks_for(crate::Reason::Envelope)
+        };
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        assert!(asks(&mut state, 0.2), "an arriving dot asked for nothing");
+        assert!(!asks(&mut state, 0.6), "a held dot that has arrived held the loop");
+        state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+        assert!(asks(&mut state, 1.2), "a fading dot asked for nothing");
+
+        let mut off = fresh();
+        off.appearance.view.fade_time = 0.5;
+        let above = off.appearance.spectrum.high_midi.ceil() as u8 + 12;
+        off.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, above, 1.0));
+        assert!(!asks(&mut off, 0.2), "a note off the disc held the loop");
     }
 
     /// Each dot's surround cuts as strongly as the dot is opaque, and fills
@@ -1484,7 +1517,7 @@ mod tests {
         intensity.opacity_rest = 0.0;
         intensity.velocity.opacity = Some(1.0);
         let spiral = Spiral::new(PANE, &state.appearance.spectrum);
-        let lit = sounding(&spiral, &state, 0.1);
+        let lit = sounding(&spiral, &state, 0.1).0;
         let (marks, cuts) = dots(&spiral, &state, &lit);
         assert_eq!(cuts.len(), 2, "the fixture's two notes are two surrounds");
         for ((cut, mark), voice) in cuts.iter().zip(&marks).zip(&lit) {
@@ -1506,17 +1539,17 @@ mod tests {
         intensity.opacity_rest = 0.0;
         intensity.velocity.opacity = Some(1.0);
         intensity.gain.opacity = None;
-        let mapped = sounding(&spiral, &state, 1.0);
+        let mapped = sounding(&spiral, &state, 1.0).0;
         let (dim, _) = dots(&spiral, &state, &mapped);
         assert_eq!(dim.len(), 1);
         state.appearance.view.intensity.opacity_rest = 1.0;
-        let full = sounding(&spiral, &state, 1.0);
+        let full = sounding(&spiral, &state, 1.0).0;
         let (bright, _) = dots(&spiral, &state, &full);
         assert_eq!(mapped[0].strength, full[0].strength, "rim-name envelope is independent");
         assert!(dim[0].core[3] > 0 && dim[0].core[3] < bright[0].core[3]);
         state.appearance.view.intensity.opacity_rest = 0.0;
         state.appearance.view.intensity.velocity.opacity = None;
-        let hidden = sounding(&spiral, &state, 1.0);
+        let hidden = sounding(&spiral, &state, 1.0).0;
         assert_eq!(hidden[0].strength, full[0].strength);
         assert!(dots(&spiral, &state, &hidden).0.is_empty(), "no invisible dot or halo remains");
     }
@@ -1750,7 +1783,7 @@ mod tests {
             kind: NoteEventKind::Tuning { semitones: -0.04 },
         });
         let spiral = Spiral::new(PANE, &state.appearance.spectrum);
-        let lit = sounding(&spiral, &state, 0.1);
+        let lit = sounding(&spiral, &state, 0.1).0;
         // Both are on the disc, so one name is a name they SHARE rather than
         // one of them having been dropped on the way in.
         assert_eq!(lit.len(), 2, "both notes sound: {lit:?}");

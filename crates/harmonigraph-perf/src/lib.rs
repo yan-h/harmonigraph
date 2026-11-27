@@ -240,7 +240,7 @@ pub struct Workload {
     /// changing each frame, or scrolling a device pixel a frame or faster)
     /// rather than idling or pacing. The FPS number means different things in
     /// each: an idle or paced editor draws only what asks for a frame, at the
-    /// 50 ms poll, a chrome cue's 33 ms (the armed Record button, an export's
+    /// 250 ms poll, a chrome cue's 33 ms (the armed Record button, an export's
     /// stripes, #1872) or a slow scroll's next device pixel (#1911), so a low
     /// rate there is not a problem.
     ///

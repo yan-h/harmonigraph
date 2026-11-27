@@ -181,7 +181,7 @@ impl GlowFade {
     /// A node lights only where some layer that draws holds part of its light.
     ///
     /// Answers whether some light still moves a pixel on its own after the
-    /// step: the larger of its level's distance above its target and its
+    /// step: the larger of its level's distance from its target and its
     /// colour's still to move ([`easing`]), times the glow gain, is over
     /// [`VISIBLE_STEP`]. What the frame loop stays awake for (`releasing` in
     /// `lib.rs`), asked on the step's own draw.
@@ -201,11 +201,13 @@ impl GlowFade {
         scene.glow_clock = Some(now);
         self.at = Some(now);
         self.frame += 1;
-        // What moves on its own is a level above its target, and a colour still
-        // easing toward its reading — a handoff, an octave joining, a look —
-        // at any level. A level rising belongs to a note being played, and a light
-        // settled at its reading is still, so a mark held with no key down
-        // never keeps the loop awake.
+        // What moves on its own is a level off its target, rising on the
+        // attack or falling on the release, and a colour still easing toward
+        // its reading — a handoff, an octave joining, a look — at any level. A
+        // held note's own motion is over long before a slow Glow attack is,
+        // so the light answers for its rise itself. A light settled at its
+        // reading is still, so a mark held with no key down keeps the loop
+        // awake only while its light first rises.
         let strength = view.glow_strength;
         // A light no layer draws is no light at all (#1836). The renderer lays
         // a slot's weight on the octave band and a mark's on the mark strip,
@@ -273,7 +275,7 @@ impl GlowFade {
                     }
                     // Asked after the end is said, so the step that ends a
                     // light asks for no frame after it.
-                    let seen = (lit.level - target).max(easing(lit.level, &lit.light, &goal));
+                    let seen = (lit.level - target).abs().max(easing(lit.level, &lit.light, &goal));
                     moving |= seen * strength > VISIBLE_STEP;
                     GlowStep { level: lit.level, light: lit.light }
                 }
@@ -283,6 +285,7 @@ impl GlowFade {
                 None if target <= 0.0 || lights >= MAX_LIGHTS => GlowStep::default(),
                 None => {
                     let level = target * seed;
+                    moving |= (target - level) * strength > VISIBLE_STEP;
                     lights += 1;
                     self.nodes.insert(
                         node.lattice_pos,
@@ -551,6 +554,28 @@ mod tests {
             assert!(awake, "the halo's colour was still easing at {now}s and asked for nothing");
         }
         assert!(!level_at(&state, 6.0).1, "the colour arrived and the loop stayed awake");
+    }
+
+    /// A light rising on its Glow attack asks for frames until it has
+    /// arrived, its first step included, though the held note under it has
+    /// long since landed (a Fade of nothing here) and asks for none: no
+    /// voice holds the loop for it.
+    #[test]
+    fn a_light_rising_on_its_attack_asks_for_repaints_until_it_arrives() {
+        let mut state = lit(0.5, 0.5);
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let mut fade = GlowFade::default();
+        let mut level_at = |state: &PictureState, now: f64| {
+            let mut scene = scene_at(state, now);
+            let moving = fade.step_drawn(&mut scene, now);
+            (node_at(&scene, LatticePos::ORIGIN).glow.level, moving)
+        };
+        assert!(level_at(&state, 0.0).1, "a new light starting dark asked for nothing");
+        let (rising, awake) = level_at(&state, 0.5);
+        assert!(rising > 0.0 && rising < 0.9, "the fixture's light must still be rising: {rising}");
+        assert!(awake, "a rising light asked for nothing");
+        let (arrived, awake) = level_at(&state, 20.0);
+        assert!(arrived > 0.99 && !awake, "a light at {arrived} kept the loop awake");
     }
 
     /// A note joining a node already lit at full level brings its colour in

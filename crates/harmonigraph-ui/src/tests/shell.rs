@@ -842,22 +842,21 @@ fn the_chrome_cues_animate_at_about_30_hz_while_in_view() {
     assert!(delay(1000.0, &mut stripes) > chrome, "stripes out of view asked for frames");
 }
 
-/// A note arriving in an idle editor paints on the next tick, not at the idle
-/// poll: it makes a voice, and a voice is what `root_ui` paces by. The input
-/// worker's drain no longer reports an arrival, so this is what tells an idle
-/// editor one came.
-///
-/// The roll and the release fade also keep a fresh note animating, so the voice
-/// is isolated by clearing the roll before the frame (Clear display history on
-/// a held note), leaving the voice as the only thing in motion.
+/// An idle editor waits the whole idle poll (#1673), and a note held over a
+/// still lattice leaves it there once the note has arrived: a voice holds
+/// nothing of its own, since the input worker asks for a pass at each edit
+/// of the tracker (#1983), and each picture answers for its own motion, the
+/// lattice for the note's arrival.
 #[test]
-fn a_voice_in_an_idle_editor_asks_for_the_next_tick() {
+fn a_held_note_over_a_still_lattice_asks_for_nothing_once_it_has_arrived() {
     use harmonigraph_core::{NoteEvent, SourceId};
 
     let delay = |output: &egui::FullOutput| {
         output.viewport_output.values().map(|viewport| viewport.repaint_delay).min().unwrap()
     };
     let mut state = fresh();
+    state.workspace.layout = workspace::Layout::solo(panes::Tab::Lattice);
+    state.picture.appearance.view.fade_time = 0.2;
     let mut harness = DockHarness::new();
     // Settled: the opening frames lay the dock out and ask to be redrawn.
     let mut idle = harness.frame(&mut state, vec![]);
@@ -869,10 +868,19 @@ fn a_voice_in_an_idle_editor_asks_for_the_next_tick() {
 
     let at = harness.next_time();
     state.picture.runtime.tracker.handle_event(NoteEvent::on(at, SourceId::DIRECT, 0, 60, 1.0));
-    state.picture.runtime.tracker.clear_roll();
-    assert!(state.picture.runtime.tracker.voices().next().is_some(), "the note still sounds");
-    let sounding = harness.frame(&mut state, vec![]);
-    assert_eq!(delay(&sounding), std::time::Duration::ZERO, "a voice repaints at once");
+    let arriving = harness.frame(&mut state, vec![]);
+    assert_eq!(delay(&arriving), std::time::Duration::ZERO, "the note's arrival waited");
+    let mut frames = 0;
+    while Animating::of(&state).asks() {
+        assert!(frames < 60 * 10, "something held the loop for 10 s: {}", Animating::of(&state));
+        harness.frame(&mut state, vec![]);
+        frames += 1;
+    }
+    // The frame after the one that settled, which egui redraws for its own
+    // layout's sake.
+    let still = harness.frame(&mut state, vec![]);
+    assert!(state.picture.runtime.tracker.held_count() == 1, "the note must still be held");
+    assert_eq!(delay(&still), crate::IDLE_REPAINT_INTERVAL, "a held note held the loop");
 }
 
 /// Tab with a modifier is not the chrome toggle and moves no focus. In the
@@ -1095,29 +1103,46 @@ fn an_opaque_line_ends_round_and_a_translucent_one_square() {
 /// A released note left scrolling through the roll, with nothing else in
 /// motion, has the editor ask for the frame where the roll next crosses a
 /// device pixel rather than for every frame the shell offers, or the idle
-/// poll (#1911).
+/// poll (#1911): on a short Span, where a pixel takes a few milliseconds, and
+/// on a long one, where it takes longer than the 50 ms poll that slow scrolls
+/// rode until #1994 HW1, as at the fresh Span in a full-size editor, and
+/// shorter than the poll's quarter second now.
 #[test]
 fn a_roll_left_scrolling_asks_the_shell_for_its_next_pixel() {
+    let short = left_scrolling(2.0, 4.0);
+    assert!(short < 0.01, "a short Span on fine pixels paced at {short} s");
+    let slow = left_scrolling(40.0, 4.0);
+    assert!(
+        slow > 0.05 && slow < crate::IDLE_REPAINT_INTERVAL.as_secs_f64(),
+        "the fixture's slow scroll must pace between the old poll and the new: {slow} s"
+    );
+}
+
+/// The pace the shell is asked for once a released note is left scrolling a
+/// roll of `span` seconds on `ppp` device pixels a point, with nothing else in
+/// motion, checked against the roll's own ask.
+fn left_scrolling(span: f32, ppp: f32) -> f64 {
     use harmonigraph_core::{NoteEvent, SourceId};
 
     let delay = |output: &egui::FullOutput| {
         output.viewport_output.values().map(|viewport| viewport.repaint_delay).min().unwrap()
     };
     let mut state = fresh();
-    // A short Span on fine pixels, so the scroll crosses a device pixel
-    // sooner than the idle poll would draw it; a short Lead release and note
-    // Fade, so the note settles well inside the Span; and no Background glow,
-    // whose colour eases on for longer than the Span.
-    state.picture.appearance.spectrum.roll_seconds = 2.0;
+    // A short Lead release and note Fade, so the note settles well inside the
+    // Span, and no Background glow, whose colour eases on for longer than a
+    // short Span.
+    state.picture.appearance.spectrum.roll_seconds = span;
     state.picture.appearance.spectrum.roll_lead_release = 0.25;
     state.picture.appearance.view.fade_time = 0.1;
     state.picture.appearance.view.glow_strength = 0.0;
     let mut harness = DockHarness::new();
-    harness.ctx.set_pixels_per_point(4.0);
+    harness.ctx.set_pixels_per_point(ppp);
     let at = harness.next_time();
     let tracker = &mut state.picture.runtime.tracker;
+    // A fortieth of the Span, so the ribbon is drawn at any Span.
+    let length = f64::from(span) / 40.0;
     tracker.handle_event(NoteEvent::on(at, SourceId::DIRECT, 0, 72, 1.0));
-    tracker.handle_event(NoteEvent::off(at + 0.05, SourceId::DIRECT, 0, 72));
+    tracker.handle_event(NoteEvent::off(at + length, SourceId::DIRECT, 0, 72));
     let mut last = harness.frame(&mut state, vec![]);
     let mut frames = 0;
     // Until the note's voice, its Lead and the lattice's departure settle.
@@ -1138,4 +1163,5 @@ fn a_roll_left_scrolling_asks_the_shell_for_its_next_pixel() {
         (asked - roll).abs() < 1e-6,
         "the shell was asked for {asked} s, not the roll's {roll}"
     );
+    roll
 }

@@ -392,8 +392,7 @@ impl Motion {
     }
     /// Whether [`advance`](Self::advance) will still change anything this node
     /// draws, if nothing reaches it from outside: no new edge, target or pose,
-    /// each of which arrives on a frame that something else is already drawing
-    /// for.
+    /// each of which arrives on a frame drawn for it ([`NodeMotion::moving`]).
     ///
     /// Read off the same state `advance` walks, and naming that state rather
     /// than how long it takes, so a delay the motion carries is in here without
@@ -473,8 +472,8 @@ impl NodeMotion {
     /// joins the motion — a hold, a wait, a longer sweep — is in here the
     /// moment the motion carries it.
     ///
-    /// Whatever reaches a node from outside arrives on a frame something else
-    /// is already drawing for: a note keeps a voice for a fade past its off,
+    /// Whatever reaches a node from outside arrives on a frame drawn for it:
+    /// the editor's input worker asks for a pass at every edit of the tracker,
     /// and the audio ring's own state holds the loop while it is moving.
     pub fn moving(&self) -> bool {
         self.moving

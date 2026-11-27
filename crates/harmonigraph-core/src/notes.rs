@@ -610,6 +610,15 @@ impl Voice {
     pub fn activation(&self, now: Time, env: &Envelope) -> f32 {
         env.attack(now, self.on_time) * self.release_level(now, env)
     }
+
+    /// Whether [`activation`](Self::activation) still changes after `now`
+    /// with no edit reaching the voice: its arrival has not landed, which
+    /// includes an onset still ahead, or its key is up and its fade runs
+    /// until [`prune`](NoteTracker::prune) ends it. A held voice whose arrival
+    /// has landed draws the same until an edit reaches it.
+    pub fn envelope_moving(&self, now: Time, env: &Envelope) -> bool {
+        matches!(self.state, VoiceState::Released { .. }) || env.attack(now, self.on_time) < 1.0
+    }
 }
 
 /// The display octave containing MIDI note `midi`, in Bitwig's convention
@@ -638,6 +647,32 @@ pub struct NoteTracker {
     roll: NoteRoll,
     history: NoteHistory,
     canonical: CanonicalOrder,
+    edits: Edits,
+}
+
+/// What a [`NoteTracker`] has taken in: how many events and baselines, and
+/// the latest time any of them was dated. A shell that draws only when asked
+/// reads it to ask: an edit changes what the voices draw, and one dated
+/// ahead of the shell's clock changes it again when the clock gets there,
+/// as a Hub's notes are, a Tuning delay ahead of the block that publishes
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Edits {
+    pub count: u64,
+    pub latest: Time,
+}
+
+impl Default for Edits {
+    fn default() -> Self {
+        Edits { count: 0, latest: Time::NEG_INFINITY }
+    }
+}
+
+impl Edits {
+    fn take(&mut self, time: Time) {
+        self.count += 1;
+        self.latest = self.latest.max(time);
+    }
 }
 
 impl NoteTracker {
@@ -724,12 +759,14 @@ impl NoteTracker {
         mapped.validate()?;
         let ordered = self.canonical.baseline(frame.source, frame.output_cut);
         debug_assert!(ordered, "a snapshot cut below a delta it should cover: {frame:?}");
+        self.edits.take(mapped.time);
         self.roll.set_shown(frame.source, frame.shown);
         self.roll.replace_source(frame.source, frame.voices(), mapped.time, offset);
         Ok(())
     }
 
     pub fn handle_event(&mut self, event: NoteEvent) {
+        self.edits.take(event.time);
         let key = event.key();
         match event.kind {
             // Control event: applies regardless of the event's channel.
@@ -775,6 +812,11 @@ impl NoteTracker {
     pub fn prune(&mut self, now: Time, env: &Envelope) {
         let history = &mut self.history;
         self.roll.prune(now, env, |voice| history.record(voice, now));
+    }
+
+    /// What it has taken in so far ([`Edits`]).
+    pub fn edits(&self) -> Edits {
+        self.edits
     }
 
     /// Every pitch played so far, for the trail (see [`NoteHistory`]).

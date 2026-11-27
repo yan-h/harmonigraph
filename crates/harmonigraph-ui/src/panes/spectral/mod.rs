@@ -500,9 +500,14 @@ pub(crate) fn spectral_pane(
         // is a property of the view, and rebuilding it per voice
         // would read as if it could vary between them.
         let env = state.appearance.view.envelope();
+        let mut moving = false;
         for voice in voices {
+            if !scale.contains(voice.pitch) {
+                continue;
+            }
+            moving |= voice.envelope_moving(now, &env);
             let strength = voice.activation(now, &env);
-            if strength <= 0.0 || !scale.contains(voice.pitch) {
+            if strength <= 0.0 {
                 continue;
             }
             let t = scale.t_of(voice.pitch);
@@ -513,6 +518,7 @@ pub(crate) fn spectral_pane(
                 theme::picture_off_scale().gamma_multiply(0.3 * strength),
             );
         }
+        state.surfaces.moving_this_frame.hold_if(crate::Reason::Envelope, moving);
     }
 
     // The roll. Its ribbons occupy the far side of the split and the spectrum

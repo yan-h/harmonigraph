@@ -108,6 +108,28 @@ pub(crate) const POLL: Duration = Duration::from_millis(4);
 /// the two numbers in that relation.
 pub(crate) const SHUT_POLL: Duration = Duration::from_millis(20);
 
+/// What a step last saw of the tracker: how many edits it had taken, and the
+/// display time the step read ([`Self::edited`]).
+#[derive(Default)]
+struct Seen {
+    edits: u64,
+    display: f64,
+}
+
+impl Seen {
+    /// Whether the window should draw for the tracker's `edits`, at a step
+    /// that read the display clock at `display`: for any edit it took since
+    /// the last step, a release, a bend or a pressure change as much as a
+    /// note, and for as long as the latest is dated at or past the display
+    /// time the last step read: so an edit dated ahead of the clock, as a
+    /// Hub's are by the Tuning delay, keeps asking until the step whose clock
+    /// has passed it, whose pass draws it.
+    fn edited(&mut self, edits: harmonigraph_core::Edits, display: f64) -> bool {
+        let before = std::mem::replace(self, Seen { edits: edits.count, display });
+        edits.count != before.edits || edits.latest > before.display
+    }
+}
+
 /// The input worker's thread, and the flag that ends it.
 ///
 /// Held by the plugin to stop it: `Plugin::destroy` stops and joins it, so no
@@ -308,20 +330,22 @@ thread_local! {
 /// taken carried into the tracker there, on their audio's clock; its console
 /// lines wait for the second.
 ///
-/// **A still window is asked to draw what a step started**
-/// ([`EguiState::request_pass`]): any note it struck, played or from the
-/// tape, and sound after a still stretch. A still window runs no pass until
-/// something asks, so without this the first note after silence was drawn at
-/// its next idle poll, up to about 56 ms at 144 Hz. Sound asks only as it
-/// starts: once a picture shows it moving, the window draws every refresh
-/// until it stops, and a picture that does not show it has nothing new to
-/// draw. What else a step changes (the tape's view, a Console line) is drawn
-/// at the idle poll.
+/// **A still window is asked to draw what a step changed**
+/// ([`EguiState::request_pass`]): every edit of the tracker, played or from
+/// the tape, a release, a bend or a pressure change as much as a note, until
+/// the display clock has passed the latest ([`LiveInput::edited`]), and sound
+/// after a still stretch. A still window runs no pass until something asks,
+/// so without this an edit over a still picture was drawn at its next idle
+/// poll. Sound asks only as it starts: once a picture shows it moving, the
+/// window draws as it moves until it stops, and a picture that does not show
+/// it has nothing new to draw. What else a step changes (the tape's view, a
+/// Console line) is drawn at the idle poll.
 fn step(
     shared: &EditorLock,
     editor_state: &EguiState,
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
+    seen: &mut Seen,
     learn: Option<&crate::HarmonigraphParams>,
 ) {
     // What the exchange displaced from the view, freed at the end of the step:
@@ -331,21 +355,19 @@ fn step(
     // format change clears a 25-minute tape, can delay the next step's drain,
     // though never under the lock.
     let _displaced;
-    let (taken, struck, learned) = {
+    let (taken, edited, learned) = {
         let mut guard = shared.lock();
         let shared = &mut *guard;
         let now = shared.clock.now();
         let open = editor_state.is_open();
         let settings = &shared.ui.picture.appearance.spectrum;
         _displaced = tape.exchange(&mut shared.ui.picture.runtime.tape, settings, open);
-        let onset = newest_onset(&shared.ui.picture.runtime);
         // The drain's marks go straight to the tape, which `settle` empties
         // every step.
         let taken = input.take(&mut shared.clock, &mut shared.ui.picture, &mut tape.inbox, now);
         if let Some(taken) = &taken {
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
-        let struck = newest_onset(&shared.ui.picture.runtime) > onset;
         let learned =
             learn.is_some_and(|params| self::learn(params, &mut shared.ui.picture.runtime));
         // A frame's duties that must not wait for one: none runs while the
@@ -354,16 +376,17 @@ fn step(
         // run to whenever a frame next noticed, and a Bitwig audio export,
         // which leaves the window shut, would render nothing.
         let display = shared.clock.display_now(now);
+        let edited = seen.edited(shared.ui.picture.runtime.tracker.edits(), display);
         shared.ui.picture.runtime.advance_time(display, &shared.ui.picture.appearance);
         shared.poll_take_end();
-        (taken, struck, learned)
+        (taken, edited, learned)
     };
     // Out of the editor lock: the host's wake must not run under it (#1924 C).
     if let Some(params) = learn.filter(|_| learned) {
         params.settings.changed();
     }
     // Asked once the lock is let go, so the pass it runs does not wait on it.
-    if struck {
+    if edited {
         editor_state.request_pass();
     }
     if let Some(taken) = &taken {
@@ -399,13 +422,6 @@ fn step(
     }
 }
 
-/// When the newest voice the tracker draws was struck, `None` while it draws
-/// none: a step that moves it on struck a note, a retrigger of a held key
-/// included, since that starts a voice of its own.
-fn newest_onset(runtime: &harmonigraph_ui::VisualRuntime) -> Option<f64> {
-    runtime.tracker.voices().map(|voice| voice.on_time).reduce(f64::max)
-}
-
 /// A [`step`] that survives its own panic. One would otherwise end the
 /// thread with nothing draining either ring, which freezes the picture and
 /// every duty of a step for the session with nothing said. Handing the drain
@@ -415,16 +431,18 @@ fn newest_onset(runtime: &harmonigraph_ui::VisualRuntime) -> Option<f64> {
 /// console says so once, and the next step carries on.
 ///
 /// Whether the step completed.
+#[allow(clippy::too_many_arguments)]
 fn guarded_step(
     shared: &EditorLock,
     editor_state: &EguiState,
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
+    seen: &mut Seen,
     learn: Option<&crate::HarmonigraphParams>,
     panicked: &mut bool,
 ) -> bool {
     let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        step(shared, editor_state, tape, input, learn)
+        step(shared, editor_state, tape, input, seen, learn)
     }));
     if stepped.is_err() {
         input.restart_analysis();
@@ -479,8 +497,9 @@ fn run(
 ) {
     let mut panicked = false;
     let mut in_a_row = 0;
+    let mut seen = Seen::default();
     while !stop.load(Ordering::Relaxed) {
-        if guarded_step(shared, editor_state, tape, input, learn, &mut panicked) {
+        if guarded_step(shared, editor_state, tape, input, &mut seen, learn, &mut panicked) {
             in_a_row = 0;
         } else {
             in_a_row += 1;
@@ -534,8 +553,9 @@ mod tests {
         audio_frames: u64,
         editor_state: Arc<EguiState>,
         tape: crate::tape::Worker,
-        /// The input the thread would own.
+        /// The input the thread would own, and what its steps saw.
         input: LiveInput,
+        seen: super::Seen,
         /// The plugin whose tuning Learn writes, when a test has it learn.
         learn: Option<Arc<crate::HarmonigraphParams>>,
     }
@@ -558,6 +578,7 @@ mod tests {
             editor_state: EguiState::from_size(800, 600),
             tape: tape(),
             input: LiveInput::new(note_consumer, audio_consumer),
+            seen: Default::default(),
             learn: None,
         }
     }
@@ -579,6 +600,7 @@ mod tests {
                 &self.editor_state,
                 &mut self.tape,
                 &mut self.input,
+                &mut self.seen,
                 self.learn.as_deref(),
             );
         }
@@ -795,30 +817,98 @@ mod tests {
         assert_eq!(h.voices(), 1, "the worker left the notes to a frame");
     }
 
-    /// A step that starts something asks the open window to draw it on its
-    /// next frame: any note it strikes, a note joining a held one included,
-    /// and the first sound after silence. A release, and sound that goes on,
+    /// A step that changes the tracker asks the open window to draw it on its
+    /// next frame, since no voice holds the loop over a still picture: a note,
+    /// one joining a held one, and over the held chord a bend, a pressure
+    /// change and a release, each dated where the clock the last step read
+    /// already stands, as a block's events often are; and the first sound
+    /// after silence. A step that brings nothing new, and sound that goes on,
     /// ask nothing.
     #[test]
-    fn a_step_asks_the_window_to_draw_what_it_starts() {
+    fn a_step_asks_the_window_to_draw_what_it_changes() {
+        use harmonigraph_core::Expression;
+
         let mut h = harness();
         h.editor_state.set_open(true);
         let asked = |h: &Harness| h.editor_state.pass_request.take();
+        let voice = |h: &Harness, note: u8| {
+            let shared = h.shared.lock();
+            let voice = shared.ui.picture.runtime.tracker.voices().find(|v| v.note == note);
+            voice.expect("the fixture's note sounds")
+        };
         h.push_note(1.0, 60);
         h.step();
         assert!(asked(&h), "the first note waited for the idle poll");
+        h.step();
+        assert!(!asked(&h), "a step that brought nothing asked");
         h.push_note(1.5, 64);
         h.step();
         assert!(asked(&h), "a note joining a held one waited for the idle poll");
-        h.push_note_off(1.6, 64);
+        h.push_kind(1.5, 64, NoteEventKind::Tuning { semitones: 0.3 });
         h.step();
-        assert!(!asked(&h), "a release");
+        assert!((voice(&h, 64).pitch - 64.3).abs() < 1e-6, "the fixture's bend must arrive");
+        assert!(asked(&h), "a bend waited for the idle poll");
+        let pressure = NoteEventKind::Expression { expression: Expression::Pressure, value: 0.7 };
+        h.push_kind(1.5, 64, pressure);
+        h.step();
+        assert_eq!(voice(&h, 64).expressions.pressure, 0.7, "the fixture's pressure must arrive");
+        assert!(asked(&h), "a pressure change waited for the idle poll");
+        h.push_note_off(1.5, 64);
+        h.step();
+        let released =
+            matches!(voice(&h, 64).state, harmonigraph_core::VoiceState::Released { .. });
+        assert!(released, "the fixture's release must arrive");
+        assert!(asked(&h), "a release waited for the idle poll");
         h.push_audio(20_000);
         h.step();
         assert!(asked(&h), "the first sound waited for the idle poll");
         h.push_audio(20_000);
         h.step();
         assert!(!asked(&h), "sound that goes on");
+    }
+
+    /// An edit dated ahead of the display clock, as a Hub's are by the Tuning
+    /// delay, draws nothing new in the pass asked for at its drain, so the
+    /// worker goes on asking until the step whose clock has passed it, and
+    /// stops after.
+    #[test]
+    fn an_edit_dated_ahead_asks_until_the_clock_has_passed_it() {
+        let mut h = harness();
+        h.editor_state.set_open(true);
+        let asked = |h: &Harness| h.editor_state.pass_request.take();
+        h.push_note(1.0, 60);
+        h.step();
+        assert!(asked(&h));
+        // Published at the clock's 1.0 s, to sound a tenth of a second later.
+        let ahead = CoreNoteEvent::on(1.1, SourceId::DIRECT, 0, 64, 1.0);
+        h.notes.note(ahead.into()).expect("the ring is sized for this");
+        h.step();
+        assert!(asked(&h), "the edit's own step asked nothing");
+        let (due, mut display) = {
+            let mut shared = h.shared.lock();
+            let tracker = &shared.ui.picture.runtime.tracker;
+            let due = tracker.voices().find(|v| v.note == 64).expect("the edit arrived").on_time;
+            let now = shared.clock.now();
+            (due, shared.clock.display_now(now))
+        };
+        assert!(due > display + 0.05, "the fixture's edit must be dated ahead: {due} at {display}");
+        let mut steps = 0;
+        while display < due {
+            std::thread::sleep(POLL);
+            h.step();
+            assert!(asked(&h), "a step before the clock passed the edit asked nothing");
+            let mut shared = h.shared.lock();
+            let now = shared.clock.now();
+            display = shared.clock.display_now(now);
+            steps += 1;
+        }
+        assert!(steps > 5, "the fixture's clock passed the edit in {steps} steps");
+        // The step whose own reading passed it asks once more, and may be the
+        // last of those above or the next.
+        h.step();
+        asked(&h);
+        h.step();
+        assert!(!asked(&h), "the worker went on asking after the clock passed the edit");
     }
 
     /// A take ends itself with no frame running: with the window SHUT, which
@@ -937,6 +1027,7 @@ mod tests {
                 &h.editor_state,
                 &mut h.tape,
                 &mut h.input,
+                &mut h.seen,
                 None,
                 &mut panicked,
             );
