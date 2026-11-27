@@ -328,7 +328,7 @@ pub(super) struct RollSource<'a> {
     /// The region's near edge is the now-line, so the window scrolls with the
     /// clock and a sounding note carries past it ([`lead`]). Off in Tape mode,
     /// whose song axis stands still: its notes draw no lead and move nothing
-    /// ([`Reason::RollInSpan`](crate::Reason::RollInSpan)).
+    /// ([`Reason::RollOnScreen`](crate::Reason::RollOnScreen)).
     pub(super) now_line: bool,
     /// Only the notes played live from the first time until the second,
     /// none of the tape's own: what was played over an audition, which the
@@ -399,7 +399,7 @@ pub(super) fn draw_live_roll(
 /// Draw `sources` as one roll, in order, through one paint callback.
 ///
 /// Answers how what it drew still moves
-/// ([`Reason::RollInSpan`](crate::Reason::RollInSpan)): a ribbon whose note
+/// ([`Reason::RollOnScreen`](crate::Reason::RollOnScreen)): a ribbon whose note
 /// has not yet scrolled past the far edge scrolls, and a Lead, which stands
 /// only while its note sounds or its release fades it, fades. Each asks of its
 /// own note, so an older note's overhang sliding off the far edge is not held
@@ -509,14 +509,15 @@ pub(super) fn draw_rolls(
 }
 
 /// How what a roll drew still moves, for
-/// [`Reason::RollInSpan`](crate::Reason::RollInSpan).
+/// [`Reason::RollOnScreen`](crate::Reason::RollOnScreen).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct RollMotion {
     /// A Lead its release is still fading in place, a change every frame. A
     /// held one stands still.
     pub(super) fading: bool,
-    /// A ribbon or a name still inside its Span: it only scrolls, so it
-    /// changes on screen once a device pixel's worth of time has passed.
+    /// A ribbon or a name drawn on the live roll, an overhang included: it
+    /// only scrolls, so it changes on screen once a device pixel's worth of
+    /// time has passed.
     pub(super) scrolling: bool,
 }
 
@@ -532,9 +533,9 @@ impl RollMotion {
     /// the scroll's `pixel`, the seconds it takes to cross a device pixel.
     pub(super) fn hold(self, moving: &mut crate::Animating, pixel: f64) {
         if self.fading {
-            moving.hold(crate::Reason::RollInSpan);
+            moving.hold(crate::Reason::RollOnScreen);
         } else if self.scrolling {
-            moving.hold_for(crate::Reason::RollInSpan, pixel);
+            moving.hold_for(crate::Reason::RollOnScreen, pixel);
         }
     }
 }
@@ -961,10 +962,10 @@ fn source_instances(
                 }
             }
         }
-        // Drawn, and its newest note's body not yet past the far edge: what
-        // is left of it is an overhang, which finishes at the idle poll.
-        motion.scrolling |=
-            source.now_line && instances.len() > first_instance && note.stop(now) >= oldest;
+        // Drawn on the live roll at all, its body inside the Span or what is
+        // left of it an overhang sliding off the far edge: either moves with
+        // the scroll.
+        motion.scrolling |= source.now_line && instances.len() > first_instance;
     }
     RollInk { notes: instances, tongues, motion }
 }

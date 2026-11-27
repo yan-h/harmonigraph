@@ -677,7 +677,7 @@ pub(crate) fn spectral_pane(
         state.surfaces.note_names.insert(surface, thinning);
         names::draw(&painter, &note_names, text.names.label, &mut labels);
         // A name only scrolls with its note.
-        roll_motion.scrolling |= note_names.iter().any(|label| label.in_span);
+        roll_motion.scrolling |= note_names.iter().any(|label| label.scrolls);
     } else {
         state.surfaces.note_names.remove(&surface);
     }

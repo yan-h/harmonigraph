@@ -22,43 +22,41 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     // A roll that is not drawn holds nothing, though its note is in its window.
     draw_panes(&ctx, &mut state, 1.5, &[]);
     assert!(
-        !Animating::of(&state).asks_for(Reason::RollInSpan),
+        !Animating::of(&state).asks_for(Reason::RollOnScreen),
         "an undrawn roll held the loop awake"
     );
     draw_panes(&ctx, &mut state, 1.6, &[Pane::Spectral]);
     assert!(
-        Animating::of(&state).asks_for(Reason::RollInSpan),
+        Animating::of(&state).asks_for(Reason::RollOnScreen),
         "the extension past the window idled"
     );
     draw_panes(&ctx, &mut state, 2.2, &[Pane::Spectral]);
     assert!(
-        !Animating::of(&state).asks_for(Reason::RollInSpan),
+        !Animating::of(&state).asks_for(Reason::RollOnScreen),
         "the roll held the loop past its extension"
     );
 }
 
-/// The roll holds the loop for a note it draws that is still inside its own
-/// Span, and for nothing else (#1835): not a note off the pitch zoom, which
-/// draws nothing, and not an older note's overhang sliding off the far edge
-/// because a newer, undrawn note is still inside the Span. The lone on-zoom
+/// The roll asks for frames for a note it draws, and for nothing else (#1835):
+/// not a note off the pitch zoom, which draws nothing. An older note's
+/// overhang still sliding off the far edge asks for its next pixel as its
+/// ribbon did inside the Span, since it moves with the scroll and the idle
+/// poll would step it a quarter second at a time (#1983). The lone on-zoom
 /// note is the control.
 #[test]
-fn the_roll_holds_the_loop_only_for_a_drawn_note_inside_its_span() {
-    let held = |notes, now| {
-        let (after, drawn) = roll_frame(notes, now, 10.0, 4.0);
-        (after.is_some(), drawn)
-    };
+fn the_roll_asks_for_frames_only_for_a_drawn_note() {
+    let held = |notes, now| roll_frame(notes, now, 10.0, 4.0);
     // Long after each note's own fade, so the roll is the only thing that
     // could still be moving.
-    let (held_, drawn) = held(&[(72, 0.0, 0.1)], 5.0);
-    assert!(drawn > 0 && held_, "a note scrolling on the zoom idled");
-    let (held_, drawn) = held(&[(36, 0.0, 0.1)], 5.0);
-    assert!(drawn == 0 && !held_, "a note off the zoom held a still roll awake");
+    let (inside, drawn) = held(&[(72, 0.0, 0.1)], 5.0);
+    assert!(drawn > 0 && inside.is_some(), "a note scrolling on the zoom idled");
+    let (off, drawn) = held(&[(36, 0.0, 0.1)], 5.0);
+    assert!(drawn == 0 && off.is_none(), "a note off the zoom held a still roll awake");
     // The older note's body left the Span at 10.1 s; its outline still slides
     // off the far edge. The newer note is inside the Span, off the zoom.
-    let (held_, drawn) = held(&[(72, 0.0, 0.1), (36, 5.0, 5.1)], 10.15);
+    let (overhang, drawn) = held(&[(72, 0.0, 0.1), (36, 5.0, 5.1)], 10.15);
     assert!(drawn > 0, "the fixture's older note must still overhang the far edge");
-    assert!(!held_, "an undrawn newer note held the older note's overhang at full rate");
+    assert_eq!(overhang, inside, "the overhang did not ask for its next pixel as its ribbon did");
 }
 
 /// A ribbon that only scrolls asks for the frame where the Span's scroll next
@@ -129,7 +127,7 @@ fn roll_frame(notes: &[(u8, f64, f64)], now: f64, span: f32, ppp: f32) -> (Optio
     draw_panes(&ctx, &mut state, now, &[Pane::Spectral]);
     let drawn =
         crate::panes::spectral::roll::take_roll_draw_probe().map_or(0, |probe| probe.note_count);
-    (Animating::of(&state).after(Reason::RollInSpan), drawn)
+    (Animating::of(&state).after(Reason::RollOnScreen), drawn)
 }
 
 /// A paced reason asks for its own frame and the sooner of two asks wins; one
@@ -142,7 +140,7 @@ fn the_soonest_ask_wins_and_one_past_the_poll_holds_nothing() {
     assert_eq!(held.next_change(), None);
     held.hold_for(Reason::Playhead, 0.02);
     held.hold_for(Reason::Playhead, 0.03);
-    held.hold_for(Reason::RollInSpan, 0.01);
+    held.hold_for(Reason::RollOnScreen, 0.01);
     assert_eq!(held.after(Reason::Playhead), Some(0.02), "a later ask replaced a sooner one");
     assert_eq!(held.next_change(), Some(0.01));
     assert!(!held.every_frame(Some(144.0)), "a 10 ms pace was judged against 144 Hz");
@@ -239,7 +237,7 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
             }
         } else if t >= 3.0 {
             assert!(
-                !Animating::of(&state).asks_for(Reason::RollInSpan),
+                !Animating::of(&state).asks_for(Reason::RollOnScreen),
                 "the roll must not be what keeps this awake"
             );
             let visible = level * gain > 0.5 / 255.0;
@@ -1170,7 +1168,7 @@ fn left_scrolling(span: f32, ppp: f32) -> f64 {
         last = harness.frame(&mut state, vec![]);
     }
     let held = Animating::of(&state);
-    let roll = held.after(Reason::RollInSpan).expect("the roll stopped scrolling first");
+    let roll = held.after(Reason::RollOnScreen).expect("the roll stopped scrolling first");
     assert_eq!(held.next_change(), Some(roll), "something else asked sooner: {held}");
     let asked = delay(&last).as_secs_f64();
     assert!(

@@ -591,15 +591,14 @@ reasons! {
     /// the Record button's breath, so it asks for frames at the chrome's
     /// [`CHROME_REPAINT_INTERVAL`] rather than every refresh (Yan, #1911).
     LearnPulse => "learn",
-    /// A note the live roll draws, as a ribbon, a name or a Lead, still inside
-    /// its own Span: its body has not yet scrolled past the far edge, or its
-    /// Lead is still fading through its release. A Lead fading holds every
-    /// frame; a ribbon or a name only scrolls, so it asks for the frame where
-    /// the roll next crosses a device pixel (#1911). One off the pitch zoom
-    /// draws nothing and so holds nothing, and an overhang still sliding off
-    /// the far edge finishes at the idle poll (Yan, #1861 on #1835). Tape
-    /// mode's roll holds nothing: its song axis does not scroll.
-    RollInSpan => "roll",
+    /// A note the live roll draws, as a ribbon, a name or a Lead: a Lead
+    /// still fading through its release holds every frame, and a ribbon or a
+    /// name, an overhang still sliding off the far edge included, only
+    /// scrolls, so it asks for the frame where the roll next crosses a device
+    /// pixel (#1911). One off the pitch zoom draws nothing and so holds
+    /// nothing, and so does a held Lead, which stands still. Tape mode's roll
+    /// holds nothing: its song axis does not scroll.
+    RollOnScreen => "roll",
     /// A lattice node still moving
     /// ([`NodeMotion::moving`](harmonigraph_scene::NodeMotion::moving): an
     /// arrival, or a departure's Fade-out delay, its stagger and the presence
