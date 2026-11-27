@@ -28,6 +28,9 @@ const DECODE_SAMPLES: usize = 16 * 1024;
 pub struct Audio {
     pub sample_rate: f32,
     pub channels: usize,
+    /// The header was never finished, as when the plugin or the host quit
+    /// mid-take: its data runs to the end of the file, and the export says so.
+    pub unfinished: bool,
     reader: BufReader<File>,
     data_start: u64,
     frames: usize,
@@ -154,6 +157,7 @@ pub fn read(path: impl AsRef<std::path::Path>) -> Result<Audio, String> {
         }
         let mut format = None;
         let mut data = None;
+        let mut unfinished = false;
         let mut at = 12;
         let mut cursor = 12;
         while at + 8 <= len {
@@ -173,6 +177,15 @@ pub fn read(path: impl AsRef<std::path::Path>) -> Result<Audio, String> {
                     let tag = u16_at(&body, 0);
                     let tag = if tag == 0xFFFE && count >= 26 { u16_at(&body, 24) } else { tag };
                     format = Some((tag, u16_at(&body, 2), u32_at(&body, 4), u16_at(&body, 14)));
+                }
+                // A take's WAV states its data size only when it closes
+                // (`WavWriter::finish`), so one whose process died first
+                // still says 0 and holds its audio to the end of the file,
+                // as ffmpeg reads it too. Nothing follows it to walk to.
+                b"data" if size == 0 => {
+                    unfinished = len > body_at;
+                    data = Some((body_at, len - body_at));
+                    break;
                 }
                 b"data" => data = Some((body_at, available)),
                 _ => {}
@@ -201,6 +214,7 @@ pub fn read(path: impl AsRef<std::path::Path>) -> Result<Audio, String> {
         Ok(Audio {
             sample_rate: rate as f32,
             channels,
+            unfinished,
             reader,
             data_start,
             frames,
@@ -462,6 +476,35 @@ mod tests {
                 assert_eq!(audio.all_samples(), expected, "{tag}/{bits}, extensible={extensible}");
             }
         }
+    }
+
+    /// A take's WAV whose process died before `finish`: its header still says
+    /// it holds no data. It reads to the end of the file in whole frames and
+    /// says it was unfinished, while a finished empty one stays quiet.
+    #[test]
+    fn a_wav_whose_writer_never_finished_reads_to_the_end_of_the_file() {
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-wav-crash-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let crashed = dir.join("crashed.wav");
+        let mut writer = harmonigraph_take::WavWriter::create(&crashed, 2).unwrap();
+        writer.write(48_000.0, &[0.5, -0.5, 0.25, -0.25]).unwrap();
+        // As a crash leaves it: neither `finish` nor the drop patches the sizes.
+        std::mem::forget(writer);
+        // And a write cut off mid-frame.
+        let mut file = std::fs::OpenOptions::new().append(true).open(&crashed).unwrap();
+        std::io::Write::write_all(&mut file, &0.125f32.to_le_bytes()).unwrap();
+        let mut audio = read(&crashed).unwrap();
+        assert!(audio.unfinished);
+        assert_eq!(audio.sample_rate, 48_000.0);
+        assert_eq!(audio.all_samples(), [0.5, -0.5, 0.25, -0.25], "whole frames only");
+
+        let empty = dir.join("empty.wav");
+        harmonigraph_take::WavWriter::create(&empty, 2).unwrap().finish().unwrap();
+        let audio = read(&empty).unwrap();
+        assert!(!audio.unfinished, "a finished take with no audio is whole");
+        assert_eq!(audio.frames(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
