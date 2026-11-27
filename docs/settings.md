@@ -13,7 +13,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | --- | --- |
 | Tuning | Lattice tuning and temperaments, note matching, retuning engine and saved maps, adaptive tuning and connected tuning sources. |
 | Lattice | **View**: camera, seventh layers. Independent sections for **Note layers**, **Octave layout**, **Note animation**, **Note labels**, **Audio ring**, **Idle lattice**, **Note bloom**, **Background glow**, **Glow pattern**, **Glow material**, and **Shadows**. |
-| Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline. **Analysis**: audio input, frequency resolution, level mapping and tilt, live response. **Spiral** bloom. **Shadows**: the **Note surround** around MIDI ribbons and Spiral dots, and the label shadow. |
+| Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline. **Analysis**: audio input, frequency resolution, level mapping and tilt, live response. **Shadows**: the **Note surround** around MIDI ribbons and Spiral dots, and the label shadow. |
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
 | System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame rate (a fraction of the display's) and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
@@ -110,10 +110,9 @@ and a saved setting is ignored.
 ## Note bloom
 
 **Note bloom** is one shared control in **Lattice → Note bloom** and **Analyzer → MIDI ribbons**.
-Changing either slider changes both pictures.
+Changing either slider changes all three pictures it lights: the lattice, the MIDI ribbons and the Spiral's dots.
 It runs from 0 (off) to 2×,
 with 1× as the reference halo.
-It lights the Spiral's dots as well.
 Bloom has no mapping of its own;
 each note's bloom follows its Opacity.
 
