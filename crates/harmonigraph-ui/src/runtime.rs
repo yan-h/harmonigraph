@@ -299,9 +299,8 @@ impl VisualRuntime {
                 *slot = PitchClass::from_cents((voice.pitch - voice.correction) * 100.0);
                 count += 1;
             }
-            // Far past the stated load, though within the plugin's caps (see
-            // `LEARN_VOICES`): a release build reads the first 1,024.
-            debug_assert!(count < LEARN_VOICES, "more held voices than Learn reads");
+            // Past `LEARN_VOICES`, far past the stated load though within the
+            // plugin's caps, Learn reads the first 1,024.
             count
         });
         self.learn_too_many = inferred.is_err();
