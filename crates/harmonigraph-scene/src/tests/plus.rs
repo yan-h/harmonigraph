@@ -55,11 +55,11 @@ fn pluses_of(view: &ViewConfig) -> Vec<PlusInstance> {
 }
 
 fn pluses_of_with(view: &ViewConfig, tracker: &NoteTracker) -> Vec<PlusInstance> {
-    scene_of(tracker, &Tuning::default(), view, 0.0).pluses
+    scene_of(tracker, &Tuning::default(), &loaded(view), 0.0).pluses
 }
 
 fn unit_of(view: &ViewConfig) -> f32 {
-    scene_of(&NoteTracker::new(), &Tuning::default(), view, 0.0).marker_unit
+    scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(view), 0.0).marker_unit
 }
 
 /// `marker_unit` converts the marker field between the world its draws are in
@@ -180,7 +180,7 @@ fn the_arm_bar_sets_how_far_a_marker_reaches_and_0_takes_it_away() {
     // what reaches the scene is a WORLD length — the conversion is spent once,
     // here, so nothing downstream carries a second copy of the convention.
     let view = ViewConfig { plus_arm: 0.5, ..plus_view() };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(&view), 0.0);
     let want = scene.node_radius * 1.8 * 0.5;
     assert!(
         (scene.pluses[0].radius - want).abs() < 1e-5,
@@ -189,15 +189,14 @@ fn the_arm_bar_sets_how_far_a_marker_reaches_and_0_takes_it_away() {
     );
 }
 
-/// An unreadable arm uses the same fresh setting at load and picture entry.
+/// An unreadable arm loads at the fresh one, and draws its field.
 #[test]
 fn a_nonfinite_marker_arm_draws_the_sanitized_field() {
+    let fresh = ViewConfig { plus_arm: ViewConfig::default().plus_arm, ..plus_view() };
+    let expected = scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(&fresh), 0.0);
     for arm in [f32::NAN, f32::NEG_INFINITY] {
         let view = ViewConfig { plus_arm: arm, ..plus_view() };
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
-        let mut normalized = view.clone();
-        normalized.sanitize();
-        let expected = scene_of(&NoteTracker::new(), &Tuning::default(), &normalized, 0.0);
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(&view), 0.0);
         assert!(!scene.pluses.is_empty(), "the repaired arm must draw markers");
         assert!(scene.pluses.iter().all(|p| p.radius == expected.pluses[0].radius));
     }
@@ -246,7 +245,7 @@ fn the_taper_reaches_the_scene_as_a_share_of_the_arm() {
         (0.0, 0.5, 0.999),
     ] {
         let view = ViewConfig { plus_arm: size, plus_taper: taper, ..plus_view() };
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(&view), 0.0);
         assert!(
             (scene.plus_taper_start - want).abs() < 1e-5,
             "a {taper} taper on a {size} arm starts at {}, wanted {want}",
@@ -565,7 +564,7 @@ fn a_hovered_position_draws_no_marker() {
     let mut scene = crate::derive_scene(
         &NoteTracker::new(),
         &Tuning::default(),
-        &repaired(&view),
+        &reach_lifted(&view),
         &view.reach(),
         crate::Camera::default(),
         Some(at),
@@ -786,7 +785,7 @@ fn a_soft_notes_name_and_cross_hold_still_at_key_up() {
         let mut scene = derive_scene(
             &tracker,
             &tuning,
-            &repaired(&view),
+            &reach_lifted(&view),
             &view.reach(),
             Camera::default(),
             None,

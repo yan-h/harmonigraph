@@ -32,14 +32,15 @@ fn a_non_finite_shadow_field_repairs_to_its_groups_fresh_value() {
     }
 }
 
-/// The blob door and the picture door hold every Shadow GROUP to the same
-/// endpoints, so a saved value never reads out differently from what is drawn.
+/// The load holds every Shadow GROUP to its bar's endpoints, and the picture
+/// draws what it holds, so a saved value never reads out differently from what
+/// is drawn.
 ///
 /// Swept over the groups rather than named one at a time
 /// ([`ShadowSettings::groups`]): a group added to the struct without a clamp is
 /// invisible at its declaration, and this is what sees it.
 #[test]
-fn the_shadow_controls_keep_one_range_at_both_doors() {
+fn the_shadow_controls_load_and_draw_inside_one_range() {
     for (asked_width, widths, asked_spread, spread, asked_depth, depth) in [
         (-1.0, [0.0; 3], -0.5, 0.0, -0.5, 0.0),
         (2.0, [1.0, 1.0, 2.0], 0.17, 0.17, 0.8, 0.8),
@@ -48,7 +49,7 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
     ] {
         let asked = ShadowStyle { width: asked_width, spread: asked_spread, depth: asked_depth };
         let want = widths.map(|width| ShadowStyle { width, spread, depth });
-        let mut view = ViewConfig {
+        let view = ViewConfig {
             shadow: ShadowSettings {
                 lattice_geometry: asked,
                 lattice_text: asked,
@@ -56,14 +57,9 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
             },
             ..ViewConfig::default()
         };
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(&view), 0.0);
         for (group, drawn) in scene.view.shadow.groups().into_iter().enumerate() {
             assert_eq!(drawn, want[group], "the picture drew group {group} at {asked:?}");
-        }
-
-        view.sanitize();
-        for (group, kept) in view.shadow.groups().into_iter().enumerate() {
-            assert_eq!(kept, want[group], "the bar kept group {group} at {asked:?}");
         }
     }
 }

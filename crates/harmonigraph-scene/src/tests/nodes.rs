@@ -171,7 +171,7 @@ fn drawable(c: glam::Vec4) -> bool {
 /// The ring ground and resting marker colours, each resolved from its own bar.
 /// Sweep one bar at a time while the other stays at a distinct drawable grey.
 fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>) {
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &loaded(view), 0.0);
     let lines: Vec<Vec4> = scene.pluses.iter().map(|d| d.color).collect();
     assert!(
         scene.pluses.iter().any(|d| d.strength > 0.0),
@@ -184,8 +184,8 @@ fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>) {
 /// A ground that is not a number still draws the lattice a grey, all the way
 /// out to what the instance buffer carries.
 ///
-/// Scene entry normalizes these values before the color conversion. The
-/// scene and marker checks ensure neither consumer bypasses that one repair.
+/// The load normalizes these values before the color conversion. The scene
+/// and marker checks ensure neither consumer bypasses that one repair.
 ///
 /// Both bars, one at a time, with the other parked at a grey well away from the
 /// fresh `L*` — see [`ground_of`] for why poisoning them together would prove
@@ -972,10 +972,10 @@ fn a_degenerate_color_range_lands_where_the_shader_lands() {
 fn an_inverted_color_range_derives_the_range_its_bar_can_show() {
     // Every color in the picture runs the gradient math, and a hand-edited
     // look can hold Darkest above Brightest, which no drag of the bar makes.
-    // The scene draws the pair the bar would read out: an octave apart at
-    // least, the high end above the low.
+    // The load repairs it to the pair the bar would read out, and the scene
+    // draws that: an octave apart at least, the high end above the low.
     let view = ViewConfig { darkest_pitch: 70.0, brightest_pitch: 60.0, ..plain_view() };
-    let scene = scene_of(&held(60), &Tuning::default(), &view, 0.0);
+    let scene = scene_of(&held(60), &Tuning::default(), &loaded(&view), 0.0);
     assert_eq!(
         (scene.view.darkest_pitch, scene.view.brightest_pitch),
         (70.0, 70.0 + COLOR_RANGE_MIN_SPAN),

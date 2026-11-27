@@ -127,7 +127,7 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
     const NOW: f64 = 1.0;
     let real = floats_where(&poisoned_view(), f64::is_finite);
     assert!(real.is_empty(), "the poisoned view still holds real floats: {}", real.join(", "));
-    let scene = scene_of(&sounding(), &Tuning::default(), &poisoned_view(), NOW);
+    let scene = scene_of(&sounding(), &Tuning::default(), &loaded(&poisoned_view()), NOW);
 
     // The fixture has to ARRIVE, or the sweep below passes over an empty
     // picture and reads as coverage while measuring nothing.
@@ -145,7 +145,7 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
 
     // A nonzero arm makes the marker walk reach its geometry and ink too.
     let drawable = ViewConfig { plus_arm: 0.5, ..poisoned_view() };
-    let scene = scene_of(&sounding(), &Tuning::default(), &drawable, NOW);
+    let scene = scene_of(&sounding(), &Tuning::default(), &loaded(&drawable), NOW);
     assert!(!scene.pluses.is_empty(), "a real arm still shipped no marker field");
     let names = broken(&scene);
     assert!(names.is_empty(), "a NaN view reached the marked scene at: {}", names.join(", "));

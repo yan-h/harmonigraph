@@ -11,16 +11,27 @@ pub(super) fn scene_of(
     now: f64,
 ) -> Scene {
     let mut scene =
-        derive_scene(tracker, tuning, &repaired(view), &view.reach(), Camera::default(), None);
+        derive_scene(tracker, tuning, &reach_lifted(view), &view.reach(), Camera::default(), None);
     NodeMotion::default().step(&mut scene, tracker, tuning, &RingFade::default(), now);
     scene
 }
 
-/// `view` as a load hands it on, repaired, which is what the scene entry
-/// asserts it is handed. A fixture's view may hold what no load does — a
-/// reach under the fresh one, for a small window — and the window the tests
-/// derive stays `view`'s own.
-pub(super) fn repaired(view: &ViewConfig) -> ViewConfig {
+/// `view` with its reach raised to the fresh one, the floor a load holds it
+/// to. A fixture asks for a reach under it to get a small window, and the
+/// window the tests derive stays `view`'s own; anything else a load would
+/// repair still trips the scene entry's assertion, so a test about a damaged
+/// value says so by handing in [`loaded`].
+pub(super) fn reach_lifted(view: &ViewConfig) -> ViewConfig {
+    let fresh = ViewConfig::default();
+    ViewConfig {
+        extent_threes: view.extent_threes.max(fresh.extent_threes),
+        extent_fives: view.extent_fives.max(fresh.extent_fives),
+        ..view.clone()
+    }
+}
+
+/// `view` as a load hands it on: repaired by [`ViewConfig::sanitize`].
+pub(super) fn loaded(view: &ViewConfig) -> ViewConfig {
     let mut view = view.clone();
     view.sanitize();
     view
