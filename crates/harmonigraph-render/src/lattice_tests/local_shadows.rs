@@ -178,6 +178,8 @@ fn foreground_ink_restores_local_shadow_transmittance() {
 
 #[test]
 fn spread_strengthens_node_label_and_marker_shadows_without_moving_ink() {
+    // A five-hundredth of the bar: a shadow at most half a code value deep.
+    const FAINT: f32 = 1.0 / 512.0;
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     shooter.clear = wgpu::Color { r: 0.8, g: 0.8, b: 0.8, a: 1.0 };
     for group in 0..3 {
@@ -208,13 +210,16 @@ fn spread_strengthens_node_label_and_marker_shadows_without_moving_ink() {
             }
         }
         let ink = shooter.shot_with(&scene, labels(&scene));
+        // The ink, at a Darkness that packs the cells Spread grows and grows
+        // the quads by its reach, as Darkness 0 does neither: faint enough
+        // that the shadow itself, landing on the node, moves no pixel by more
+        // than a code value.
+        style(&mut scene, group).depth = FAINT;
+        let narrow = shooter.shot_with(&scene, labels(&scene));
         style(&mut scene, group).spread = 0.5;
-        let spread_ink = shooter.shot_with(&scene, labels(&scene));
-        assert!(
-            ink == spread_ink,
-            "group {group}: spread moved {} visible ink pixels",
-            differing_pixels(&ink, &spread_ink)
-        );
+        let wide = shooter.shot_with(&scene, labels(&scene));
+        let moved = narrow.iter().zip(&wide).filter(|(a, b)| a.abs_diff(**b) > 1).count();
+        assert_eq!(moved, 0, "group {group}: spread moved {moved} ink channels");
         style(&mut scene, group).depth = 1.0;
         style(&mut scene, group).spread = 0.0;
         let ordinary = shooter.shot_with(&scene, labels(&scene));
