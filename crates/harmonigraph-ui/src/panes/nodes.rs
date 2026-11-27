@@ -244,7 +244,7 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 .default_value(super::fresh_view().note_animation.stagger_spread)
                 .unit(100.0, "%")
                 .hint(
-                    "Time between the first and last slice starts, as a percentage of Note fade. Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring; the slices a note lights appear first and leave in their turn, and a released note starts losing its colour at once. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer. A note pressed again before it has gone keeps the same sweep, each slice following it in its turn. Zero starts every slice together.",
+                    "Time between the first and last slice starts, as a percentage of Note fade. Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring; the slices a note lights appear first and leave in their turn. A released note finishes arriving, then starts losing its colour. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer. A note pressed again before it has gone keeps the same sweep, each slice following it in its turn. Zero starts every slice together.",
                 )
                 .show(ui);
     ValueBar::new(&mut view.note_animation.fade_out_delay, FADE_OUT_DELAY_RANGE, "Fade-out delay")

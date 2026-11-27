@@ -1692,9 +1692,8 @@ mod tests {
         tracks(Camera::DEFAULT_DISTANCE * 0.5, dialled * 2.0);
         tracks(Camera::DEFAULT_DISTANCE * 2.0, dialled * 0.5);
         // The factor-of-four rung is taken zoomed IN rather than out: the far
-        // end of the zoom is `MAX_DISTANCE`, twice the default framing, and a
-        // distance past it is not a smaller label but the same one — the scale
-        // is read through the range the camera is navigable in.
+        // end of the zoom is `MAX_DISTANCE`, twice the default framing, so a
+        // label a quarter the size is at a distance the camera never reaches.
         tracks(Camera::DEFAULT_DISTANCE * 0.25, dialled * 4.0);
         // And the ladder is really there: a walk of nudges each too small to
         // see costs a handful of sizes to rasterize rather than one apiece.

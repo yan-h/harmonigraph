@@ -119,8 +119,8 @@ fn draw_bloomed_resourced(
 /// eighth of its blue (16 against 128) and one a point and a half off
 /// three eighths (48), while every pixel wholly past the reach — from four
 /// and a half points out — reads the background exactly. Inside
-/// [`crate::SURROUND_REACH_RANGE`], which starts at 3.75, so the cut's
-/// `sanitized` hands it over as it is.
+/// [`crate::SURROUND_REACH_RANGE`], which starts at 3.75, as every cut a
+/// producer hands over is.
 const HARNESS_REACH: f32 = 4.0;
 
 /// The cut [`draw`] and its kin draw under: whole at the edge, a straight
@@ -170,16 +170,16 @@ fn draw_callback(
     (readback(device, queue, &texture, SIZE), resources)
 }
 
-fn draw_with_clipped_tail(
+fn draw_with_tail_start(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     instances: Vec<RollInstance>,
-    clipped_start: u32,
+    tail_start: usize,
     clear: wgpu::Color,
 ) -> Vec<u8> {
     let rect = surface_rect();
     let cb = RollCallback {
-        clip: RollClip { head: rect, tail_start: clipped_start as usize, tail: rect },
+        clip: RollClip { head: rect, tail_start, tail: rect },
         ..callback(instances, HARNESS_CUT)
     };
     draw_callback(device, queue, cb, clear).0
@@ -880,16 +880,14 @@ fn the_cut_runs_the_whole_length_of_its_note() {
 }
 
 /// A leading fade takes the ribbon out gradually toward its tip, and takes
-/// the cut's cap with it: the tip dissolves rather than ending, and
-/// nothing is left standing around where it went.
+/// the cut beside it along: the tip dissolves rather than ending.
 ///
-/// Both layers is the half that a body-only fade would miss, and it is not
-/// a refinement — the cut wraps the ENDS as much as the flanks, so a
-/// body faded on its own leaves an opaque black cap hanging in front of a
-/// ribbon that has already gone. That is the shape the spectral pane's lead
-/// is drawn with (`panes::spectral::roll::lead`), where the tip lands in the
-/// middle of the spectrum and a ring of black there is the loudest thing on
-/// the pane.
+/// Both layers is the half that a body-only fade would miss: a cut that kept
+/// its full strength beside a faded body would ring the fading tip in the
+/// cut a solid ribbon wears. That is the shape the spectral pane's lead is
+/// drawn with (`panes::spectral::roll::lead`). Past the tip the pane draws
+/// nothing, since it scissors the leads to their own stretch (#1787), so
+/// nothing here reads beyond it.
 ///
 /// The OTHER end is untouched, which is what makes this a leading fade
 /// rather than a softening of the whole lead: the leading end is the low
@@ -926,20 +924,6 @@ fn a_lead_fade_takes_the_ribbon_out_toward_its_tip() {
     // And a fade at one end is not a fade at the other: the trailing end
     // keeps its own edge whatever the leading one is doing.
     assert!(cov(20.0, 185) > 0.97, "the leading fade reached the trailing end too");
-
-    // The cut's cap goes with it. Row 66 is a point and a half past the
-    // tip, inside the harness cut's reach, and that is exactly where a
-    // body-only fade leaves a black ring standing in front of nothing.
-    let capped = |fade: f32| {
-        let frame = draw(&device, &queue, vec![led_note(fade, 1.0)], bg_color());
-        pixel(&frame, 128, 66)
-    };
-    assert!(darkened(capped(0.0)), "a square-ended ribbon lost its cap: {:?}", capped(0.0));
-    assert!(
-        near(capped(20.0), BG),
-        "the cut still caps a tip that has faded out: {:?}",
-        capped(20.0),
-    );
 
     // And the surround along the fading stretch goes with the ribbon
     // beside it. Half a point off the flank at y = 73, where the ribbon
@@ -1068,7 +1052,7 @@ fn the_cut_does_not_paint_over_a_hairline_note() {
         return;
     };
     // 1.5 points across pitch: what `panes::spectral::roll` floors a ribbon too thin
-    // to see to (MIN_RIBBON_PX). Narrower than a pixel is wide, so no
+    // to see to (MIN_RIBBON_PT). Narrower than a pixel is wide, so no
     // sample here is purely one thing — what matters is that the middle
     // still reads as the NOTE rather than as the cut having flooded it.
     // Its own coverage there is 0.75, so a red channel anywhere near that
@@ -1633,7 +1617,7 @@ fn a_thin_ribbon_glows_in_proportion_to_the_ink_it_has() {
     // handed rather than saturated whatever it is.
     //
     // Three points across, which is what the spectral pane's own width
-    // floor (`MIN_RIBBON_PX`, 1.5 points) comes to on the 2x display this
+    // floor (`MIN_RIBBON_PT`, 1.5 points) comes to on the 2x display this
     // is looked at on — the notes are rendered at half the roll's device
     // size, so what decides this is the ribbon's width in DEVICE pixels.
     let thin = RollInstance {
@@ -1768,7 +1752,7 @@ fn a_cut_never_covers_another_notes_body() {
     let early = butted(98.0, RED); // y 68..128
     let late = butted(158.0, GREEN); // y 128..188
     let frame = draw(&device, &queue, vec![early, late], bg_color());
-    let grouped = draw_with_clipped_tail(&device, &queue, vec![early, late], 1, bg_color());
+    let grouped = draw_with_tail_start(&device, &queue, vec![early, late], 1, bg_color());
     assert_eq!(
         grouped, frame,
         "putting the later note in the clipped tail changed global layer ordering"
