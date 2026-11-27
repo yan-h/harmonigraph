@@ -1046,10 +1046,10 @@ impl PictureState {
     /// outside it, so a lit node could wear a red band down the spectrum.
     ///
     /// The name readers ask differently on purpose — the reach first,
-    /// this only where the reach comes up empty — so a name does not move
-    /// under a pan of less than the reach (12 fifths, 20 thirds). The two answers are allowed to differ, and where they do
-    /// the picture is what wears the band: a pitch the reach can spell but the
-    /// pane is not drawing is named and banded at once.
+    /// this only where the reach comes up empty; `Namer` in the note names
+    /// says the whole lookup. The two answers are allowed to differ, and where
+    /// they do the picture is what wears the band: a pitch the reach can spell
+    /// but the pane is not drawing is named and banded at once.
     ///
     /// The reach is the fallback rather than the answer, for the frame before
     /// the docked lattice first draws and for a frame after one where it was

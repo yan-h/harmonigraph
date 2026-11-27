@@ -207,19 +207,18 @@ impl ViewConfig {
     }
 
     /// How far out a played pitch is hunted for a spelling and a node, as a
-    /// block — the naming REACH: `REACH_THREES` (12) fifths and `REACH_FIVES`
-    /// (20) thirds either side of the view's center, which follows the camera,
-    /// on every sheet the view draws.
+    /// block — the naming REACH: `REACH_THREES` fifths and `REACH_FIVES`
+    /// thirds either side of the view's center, which follows the camera, on
+    /// every sheet the view draws.
     ///
     /// Not what is drawn; [`scrolled`](Self::scrolled) is. This is one answer
-    /// the whole UI shares, so that a zoom does not change a name, and it is
-    /// the fallback for the readers that want the picture's window on a frame
-    /// where no lattice pane drew one. A pan can: once the camera's center
-    /// moves more than 12 fifths or 20 thirds from a note's node, the reach no
-    /// longer holds it. Pinned to the lattice's origin instead, a far just
-    /// note was named after an unrelated node near the origin within the
-    /// half-cent match, so the reach stays with the camera (Yan, #1994 RL2,
-    /// PR #1996).
+    /// the whole UI shares, sized by constants rather than by any pane, and it
+    /// is the fallback for the readers that want the picture's window on a
+    /// frame where no lattice pane drew one. A pan moves it, and so can change
+    /// a name: `Namer` in the UI's note names says how names are looked up.
+    /// It stays with the camera rather than the lattice's origin, where far
+    /// just notes were named after unrelated nodes near the origin (Yan,
+    /// #1994 RL2, PR #1996).
     pub fn reach(&self) -> DrawnWindow {
         let center = self.center();
         let extent = LatticePos::new(REACH_THREES, REACH_FIVES, 0);
