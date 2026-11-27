@@ -38,7 +38,7 @@ Yan's picks over six rounds of prototype sheets, with his words where they decid
   new notes arrive in the thumbnail under the playhead as they are struck, and stopped, nothing marks them;
   a click on a thumbnail cues the audition from its section's first attack;
   Span is in beats at the tape's recorded tempo, 4 beats fresh.
-- A pitch off the live tuning lights nothing in the row, as on the lattice, so a recorded 12-TET track under just or meantone axes is mostly unlit; this is a documented limit, with no snapping of tempered pitches to a node (Yan, "Document it", 2026-11-25).
+- A pitch off the live tuning lights nothing in the row, as on the lattice, so a recorded 12-TET track under just or meantone axes is mostly unlit; this is a documented limit, with no snapping of tempered pitches to a node (Yan, "Document it", 2026-11-25). (Corrected 2026-11-27 by the line below.)
 - From PR #1975's review questions (Yan, "Go with recommendations", 2026-11-25):
   a struck note's flash settles over half a second of song, so it keeps step with the music at any audition speed;
   a note held across a recording seam is struck there, as the roll draws it, so it flashes and a section can start there;
@@ -48,3 +48,4 @@ Yan's picks over six rounds of prototype sheets, with his words where they decid
 
 - The harmony row leaves out sources hidden with Show, as the Tape roll and Fit piece do, and analyses again when Show changes. Yan, 2026-11-27, taking the recommendation. #1994 TP1, #1984
 - The Console line at the start of an audition goes; the stop line and its reason stay. #1784 kept it for the first Bitwig use, which has happened. Yan, 2026-11-27, taking the recommendation. #1994 TP2, #1984
+- Correcting the 2026-11-25 line on a 12-TET track: under meantone axes it is mostly unlit, but under just axes 8 of its 12 pitch classes land within the half-cent match of some node in the reach and light it, taking that node's name (F and G at 0.001¢; C♯, E, F♯, A♭ and B at about 0.28¢), and only 200, 300, 900 and 1000 cents stay unlit. Yan, 2026-11-27, taking the recommendation. PR #2000

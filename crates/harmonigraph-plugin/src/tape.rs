@@ -17,8 +17,9 @@
 //!   cue; the worker assembles audio from the store into a ring; the audio
 //!   thread adds that ring to the main buffer. The audio thread stays trivial
 //!   and real-time safe, at the cost of a few tens of ms after a click.
-//!   Below full speed the worker stretches what it assembles with the pitch
-//!   held ([`stretch`]), and each piece says how much song a frame of it is.
+//!   At any speed other than 1× the worker stretches what it assembles with
+//!   the pitch held ([`stretch`]), and each piece says how much song a frame
+//!   of it is.
 //! - **The spectrogram** Tape mode draws is analyzed from the store itself
 //!   ([`spectrum`]), so it shows what an audition would play.
 //! - **The notes** follow the audition into the display: the lattice and the
@@ -143,9 +144,6 @@ impl Reason {
 /// Console lines from the audio thread, formatted by the worker.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Event {
-    Started {
-        position: f64,
-    },
     Ended {
         position: f64,
         played: f64,

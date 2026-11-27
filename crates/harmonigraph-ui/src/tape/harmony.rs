@@ -6,18 +6,20 @@
 //! before it is compared with what sounds over the Span after it, pitch class
 //! by pitch class; a section starts at the attacks where that difference peaks
 //! above the Detail threshold, no two nearer than a Span. A pitch class counts
-//! as present while a note of it sounds and fades over half a Span after its
-//! release, which is what holds an arpeggio or a cloud of short notes together
-//! as one harmony: each note is still present when the next arrives.
+//! as present while a note of it sounds, and after its release decays with a
+//! time constant of half a Span, which is what holds an arpeggio or a cloud of
+//! short notes together as one harmony: each note is still present when the
+//! next arrives.
 //!
-//! Everything here depends on the notes, the tempo, Detail and Span alone, so
-//! the plugin's input worker computes it where it rebuilds the tape's roll,
-//! off the editor's lock and off the main thread. What depends on the picture
-//! (which node a pitch lights, how many thumbnails fit) is the pane's.
+//! Everything here depends on the notes of the sources shown, the tempo,
+//! Detail and Span alone, so the plugin's input worker computes it where it
+//! rebuilds the tape's roll, off the editor's lock and off the main thread.
+//! What depends on the picture (which node a pitch lights, how many
+//! thumbnails fit) is the pane's.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use harmonigraph_core::NoteRoll;
+use harmonigraph_core::{NoteRoll, SourceId};
 
 use super::Meter;
 
@@ -215,11 +217,18 @@ fn presence(notes: &[Note], meters: &[(f64, Meter)], span: f32, end: f64) -> Pre
 }
 
 /// The sections of `roll`, a whole recording in song seconds, under the
-/// tape's `meters`. `detail` is 0..=1 and `span` is in beats.
-pub fn analyze(roll: &NoteRoll, meters: &[(f64, Meter)], detail: f32, span: f32) -> Vec<Section> {
-    let last = roll.notes().map(|n| n.stop(n.start)).fold(0.0, f64::max);
-    let mut notes: Vec<Note> = roll
-        .notes()
+/// tape's `meters`, leaving out the notes of the sources `hidden` with Show,
+/// as the roll beside the row does. `detail` is 0..=1 and `span` is in beats.
+pub fn analyze(
+    roll: &NoteRoll,
+    hidden: &BTreeSet<SourceId>,
+    meters: &[(f64, Meter)],
+    detail: f32,
+    span: f32,
+) -> Vec<Section> {
+    let shown = || roll.notes().filter(|n| !n.source.hidden_by(hidden));
+    let last = shown().map(|n| n.stop(n.start)).fold(0.0, f64::max);
+    let mut notes: Vec<Note> = shown()
         .filter(|n| n.start.is_finite() && n.start >= 0.0)
         .map(|n| Note { start: n.start, end: n.stop(last), pitch: n.settled_pitch() })
         .collect();
@@ -387,6 +396,8 @@ mod tests {
     /// two-second Span.
     const DETAIL: f32 = 0.5;
     const SPAN: f32 = 4.0;
+    /// No source hidden with Show.
+    const SHOWN: &BTreeSet<SourceId> = &BTreeSet::new();
 
     /// Four chords of a progression, six seconds each, over a held bass note.
     const CHORDS: [[f32; 3]; 4] =
@@ -417,7 +428,7 @@ mod tests {
         }
 
         fn starts(&self) -> Vec<f64> {
-            analyze(&self.roll, &[], DETAIL, SPAN).iter().map(|s| s.start).collect()
+            analyze(&self.roll, SHOWN, &[], DETAIL, SPAN).iter().map(|s| s.start).collect()
         }
     }
 
@@ -491,7 +502,7 @@ mod tests {
             song.note(pitch, 0.0, 25.0);
             song.note(pitch, 37.0, 55.0);
         }
-        let sections = analyze(&song.roll, &[], DETAIL, SPAN);
+        let sections = analyze(&song.roll, SHOWN, &[], DETAIL, SPAN);
         let spans: Vec<(f64, f64)> = sections.iter().map(|s| (s.start, s.end)).collect();
         assert_eq!(spans, [(0.0, 25.0), (37.0, 55.0)]);
     }
@@ -506,14 +517,14 @@ mod tests {
             song.note(pitch, 0.0, 6.0);
             song.note(pitch, 9.15, 15.0);
         }
-        let sections = analyze(&song.roll, &[], DETAIL, SPAN);
+        let sections = analyze(&song.roll, SHOWN, &[], DETAIL, SPAN);
         let spans: Vec<(f64, f64)> = sections.iter().map(|s| (s.start, s.end)).collect();
         assert_eq!(spans, [(0.0, 6.0), (9.15, 15.0)]);
     }
 
     #[test]
     fn a_section_says_which_notes_it_struck_and_which_it_was_handed() {
-        let sections = analyze(&plain().roll, &[], DETAIL, SPAN);
+        let sections = analyze(&plain().roll, SHOWN, &[], DETAIL, SPAN);
         let second = &sections[1];
         // The bass was struck with the first chord and still sounds.
         assert_eq!(second.entries[0], Entry { pitch: 36.0, held: true, strikes: vec![] });
@@ -527,7 +538,7 @@ mod tests {
                 song.note(pitch, from, from + CHORD_SECONDS + 0.03);
             }
         });
-        let sections = analyze(&legato.roll, &[], DETAIL, SPAN);
+        let sections = analyze(&legato.roll, SHOWN, &[], DETAIL, SPAN);
         let held: Vec<f32> =
             sections[1].entries.iter().filter(|e| e.held).map(|e| e.pitch).collect();
         assert_eq!((held, sections[1].entries.len()), (vec![36.0], 4));
@@ -535,13 +546,13 @@ mod tests {
         // A note shorter than the slack, struck as its section starts, is in it.
         let mut song = Song::new();
         song.note(60.0, 0.0, 0.05);
-        assert_eq!(analyze(&song.roll, &[], DETAIL, SPAN)[0].entries.len(), 1);
+        assert_eq!(analyze(&song.roll, SHOWN, &[], DETAIL, SPAN)[0].entries.len(), 1);
 
         // A note struck again in its section keeps both attacks.
         let mut song = Song::new();
         song.note(60.0, 0.0, 1.0);
         song.note(60.0, 1.5, 3.0);
-        let sections = analyze(&song.roll, &[], DETAIL, SPAN);
+        let sections = analyze(&song.roll, SHOWN, &[], DETAIL, SPAN);
         assert_eq!(
             sections[0].entries,
             [Entry { pitch: 60.0, held: false, strikes: vec![0.0, 1.5] }]
@@ -557,7 +568,7 @@ mod tests {
                 song.note(pitch + 12.0, 24.0 + i as f64, 25.0 + i as f64);
             }
         }
-        let count = |detail, span| analyze(&song.roll, &[], detail, span).len();
+        let count = |detail, span| analyze(&song.roll, SHOWN, &[], detail, span).len();
         assert!(count(0.0, SPAN) <= count(0.5, SPAN) && count(0.5, SPAN) <= count(1.0, SPAN));
         // One note of five changing is a section only with enough Detail.
         let mut subtle = Song::new();
@@ -566,7 +577,7 @@ mod tests {
         }
         subtle.note(74.0, 0.0, 6.0);
         subtle.note(77.0, 6.0, 12.0);
-        let starts = |detail| analyze(&subtle.roll, &[], detail, SPAN).len();
+        let starts = |detail| analyze(&subtle.roll, SHOWN, &[], detail, SPAN).len();
         assert_eq!((starts(0.0), starts(0.5)), (1, 2));
         // A one-second Span follows every change; an eight-second one cannot.
         assert!(count(DETAIL, 2.0) >= 11, "{}", count(DETAIL, 2.0));
@@ -592,15 +603,15 @@ mod tests {
                 song.note(pitch, i as f64, 1.0 + i as f64);
             }
         }
-        let fast = analyze(&song.roll, &[(0.0, meter)], DETAIL, SPAN).len();
-        let slow = analyze(&song.roll, &[], DETAIL, SPAN).len();
+        let fast = analyze(&song.roll, SHOWN, &[(0.0, meter)], DETAIL, SPAN).len();
+        let slow = analyze(&song.roll, SHOWN, &[], DETAIL, SPAN).len();
         assert_eq!(fast, 8);
         assert!(slow < fast, "{slow}");
     }
 
     #[test]
     fn cells_too_narrow_to_draw_join_the_one_before_and_keep_every_note() {
-        let harmony = Harmony { sections: analyze(&plain().roll, &[], DETAIL, SPAN) };
+        let harmony = Harmony { sections: analyze(&plain().roll, SHOWN, &[], DETAIL, SPAN) };
         let all = harmony.cells(0.0, 24.0);
         assert_eq!(all.len(), 4);
         // Twelve seconds apart at the nearest: the song's start, and whichever

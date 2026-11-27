@@ -2,6 +2,9 @@
 //! called by hand between blocks, which is what the input worker does on its
 //! own clock.
 
+use std::collections::BTreeSet;
+
+use harmonigraph_core::SourceId;
 use harmonigraph_ui::tape::{Meter, Speed, TapeRequest, TapeView};
 use harmonigraph_ui::SpectrumConfig;
 
@@ -14,6 +17,8 @@ use crate::audio_ingress::{Block, Format, Song};
 const RATE: f64 = 1000.0;
 const FRAMES: usize = 100;
 const STEREO: Format = Format { channels: 2, sample_rate: RATE as f32, sidechain: false };
+/// No source hidden with Show.
+const SHOWN: &BTreeSet<SourceId> = &BTreeSet::new();
 
 fn pair() -> (Deck, Worker) {
     channel(Arc::new(crate::HarmonigraphParams::default()))
@@ -151,11 +156,6 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
             (recorded(1000 + i as i64, 0) * gain, recorded(1000 + i as i64, 1) * gain)
         );
     }
-    let lines = events(&mut worker);
-    assert!(
-        lines.iter().any(|l| l.contains("audition from 1.000 s (warm (from the song's start)")),
-        "{lines:?}"
-    );
 
     // The transport starts from the parked playhead: a cut, with not one
     // sample of tape in playback's first block.
@@ -194,11 +194,6 @@ fn audition_ends_at_the_edge_of_what_is_recorded_and_where_nothing_is() {
     worker.play();
     let (audio, _) = run(&mut deck, 5.0, false, true);
     assert!(!deck.sounding() && audio[0].iter().all(|&s| s == 0.0));
-    let lines = events(&mut worker);
-    assert!(
-        lines.iter().any(|l| l.contains("audition from 7.000 s (nothing recorded there)")),
-        "{lines:?}"
-    );
 }
 
 /// An export reports `playing = false` while its position climbs. It rolls,
@@ -352,7 +347,8 @@ fn passes_split_at_jumps_and_stops_and_a_dropped_stretch_leaves_a_gap() {
 /// silence only where sound follows it, and sound after a silence too long to
 /// hold continues the pass, warm, past a gap. The music before a silence is
 /// committed while the silence is held, and a dropped silence still clears
-/// what it beats.
+/// what it beats: the silence held, and each block past the hold, which holds
+/// nothing more until sound returns.
 #[test]
 fn a_pass_records_its_silence_only_where_sound_follows_it() {
     use super::worker::{QUIET_SECONDS, SILENCE};
@@ -381,29 +377,43 @@ fn a_pass_records_its_silence_only_where_sound_follows_it() {
     play(&mut worker, source, 800, Some(1000), true);
     play(&mut worker, source, 1000, Some(1500), false);
     play(&mut worker, source, 0, None, false);
-    // A jump to a second pass, whose silence outlasts the hold before sound
-    // comes back.
-    let resumed = 5200 + (QUIET_SECONDS * RATE) as i64;
+    // An older take, pass 2, under the next pass's silence.
+    play(&mut worker, source, 5000, Some(40000), true);
+    play(&mut worker, source, 0, None, false);
+    // A jump to a new pass, whose silence outlasts the hold, and goes on a
+    // block past it, before sound comes back.
+    let overflow = 5100 + (QUIET_SECONDS * RATE) as i64;
+    let resumed = overflow + 2 * FRAMES as i64;
     play(&mut worker, source, 5000, Some(5100), true);
     play(&mut worker, source, 5100, Some(5200), false);
-    let held = worker.store().unwrap().chunks().last().map(|c| (c.start, c.end));
+    let held = worker.store().unwrap().chunks().filter(|c| c.stamp.pass == 3).last();
+    let held = held.map(|c| (c.start, c.end));
     assert_eq!(held, Some((5000, 5100)), "the music before a held silence is committed");
     play(&mut worker, source, 5200, Some(resumed), false);
     play(&mut worker, source, resumed, Some(resumed + 100), true);
     play(&mut worker, source, 0, None, false);
 
     let store = worker.store().unwrap();
-    let chunks: Vec<_> =
-        store.chunks().map(|c| (c.start, c.end, c.stamp.pass, c.stamp.pass_start)).collect();
+    let chunks: Vec<_> = store
+        .chunks()
+        .filter(|c| c.stamp.pass != 2)
+        .map(|c| (c.start, c.end, c.stamp.pass, c.stamp.pass_start))
+        .collect();
     assert_eq!(
         chunks,
         [
             (0, 500, 1, 0),
             (500, 1000, 1, 0),
-            (5000, 5100, 2, 5000),
-            (resumed, resumed + 100, 2, 5000)
+            (5000, 5100, 3, 5000),
+            (resumed, resumed + 100, 3, 5000)
         ]
     );
+    // The silence held clears the older take under it, and so does every
+    // block past the hold, which holds no more: nothing is covered from the
+    // music before the silence until the sound after it.
+    let pass_at = |frame: i64| store.holding(frame).map(|c| c.stamp.pass);
+    let probes = [5150, overflow - 50, overflow + 50, resumed - 50, resumed + 50, resumed + 150];
+    assert_eq!(probes.map(pass_at), [None, None, None, None, Some(3), Some(2)]);
     let mut rest = [0.0; 2];
     store.read(600, &mut rest);
     assert_eq!(rest, [SILENCE * 0.9; 2], "the rest is recorded as played");
@@ -413,9 +423,14 @@ fn a_pass_records_its_silence_only_where_sound_follows_it() {
     play(&mut worker, source, 0, Some(500), true);
     play(&mut worker, source, 500, Some(1500), false);
     play(&mut worker, source, 0, None, false);
-    let starts: Vec<_> =
-        worker.store().unwrap().chunks().map(|c| (c.start, c.end, c.stamp.pass)).collect();
-    assert_eq!(starts, [(0, 500, 3), (5000, 5100, 2), (resumed, resumed + 100, 2)]);
+    let starts: Vec<_> = worker
+        .store()
+        .unwrap()
+        .chunks()
+        .filter(|c| c.stamp.pass != 2)
+        .map(|c| (c.start, c.end, c.stamp.pass))
+        .collect();
+    assert_eq!(starts, [(0, 500, 4), (5000, 5100, 3), (resumed, resumed + 100, 3)]);
 }
 
 /// A pass is cold until it has settled and warm after, and the chunk being
@@ -448,7 +463,7 @@ fn a_pass_turns_warm_where_it_has_settled_and_not_a_chunk_later() {
     assert_eq!(owner(warm(1000) - 1), 1);
     assert_eq!(owner(warm(1000)), 2, "once settled, the fresher pass wins");
     let mut view = TapeView::default();
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     let seconds = |frame: i64| frame as f64 / RATE;
     let spans: Vec<(f64, f64, bool)> = view
         .spans
@@ -501,13 +516,13 @@ fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     let mut source = 0;
     record(&mut worker, &mut source, 0, 3000);
     let mut view = TapeView::default();
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     cue(&mut deck, &mut worker, 0.0, 1.0);
     // Assembled at full speed, and not yet heard: a new speed cues it again
     // from its own spot.
     worker.play();
     view.speed = Speed::Half;
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     let (_, out) = run(&mut deck, 0.0, false, true);
     assert!(deck.sounding() && out.play == crate::audio_ingress::TapePlay::Waiting);
     worker.play();
@@ -524,7 +539,7 @@ fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     assert!((seconds - 1.05).abs() < 1e-9, "100 frames heard are 50 of song: {seconds}");
 
     view.speed = Speed::Double;
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     // The block the slowed cue fades out in, and ends in, is still that cue's.
     let (faded, _, _, _) = heard(run(&mut deck, 0.0, false, true).1);
     assert_eq!(faded, slowed, "a cue ending in a block reports its own serial");
@@ -537,8 +552,6 @@ fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     let (_, seconds, _, _) = heard(run(&mut deck, 0.0, false, true).1);
     assert!((seconds - 1.3).abs() < 1e-9, "100 frames heard are 200 of song: {seconds}");
     let lines = events(&mut worker);
-    let recued = lines.iter().filter(|l| l.contains("audition from 1.000 s (")).count();
-    assert_eq!(recued, 2, "{lines:?}");
     assert!(lines.iter().any(|l| l.contains("stopped after 0.10 s by another cue")), "{lines:?}");
 }
 
@@ -684,7 +697,7 @@ fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram(
     at_tempo(&mut worker, &mut source, 0, 3000, 120.0);
     at_tempo(&mut worker, &mut source, 20_000, 21_000, 120.0);
     let mut view = TapeView::default();
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     let spans: Vec<(f64, f64, bool)> =
         view.spans.iter().map(|s| (s.start, s.end, s.warm)).collect();
     assert_eq!(spans, [(0.0, 3.0, true), (20.0, 21.0, false)]);
@@ -693,7 +706,7 @@ fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram(
     // A cold replay over warm audio loses every frame, but the song it heard
     // there is the newest: its meter replaces the old one.
     at_tempo(&mut worker, &mut source, 1000, 2000, 90.0);
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     let again: Vec<(f64, f64, bool)> =
         view.spans.iter().map(|s| (s.start, s.end, s.warm)).collect();
     assert_eq!(again, spans);
@@ -705,7 +718,7 @@ fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram(
     // 32 ms of the 4 s recorded, and reaches the view at the next exchange.
     assert!(view.spectrogram.is_empty());
     worker.analyze_all();
-    let _ = worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let _ = worker.exchange(&mut view, SHOWN, &SpectrumConfig::default(), true);
     let columns = view.spectrogram.columns() as f64;
     assert!((columns - 4.0 / 0.032).abs() <= 2.0, "{columns} columns");
 }
@@ -729,7 +742,6 @@ fn a_stop_cancels_a_cue_still_waiting_for_a_fade() {
     }
     assert!(!deck.sounding());
     let lines = events(&mut worker);
-    assert!(!lines.iter().any(|l| l.contains("audition from 2.000 s")), "{lines:?}");
     assert!(
         lines.iter().any(|l| l.contains("stopped after") && l.contains("by Stop")),
         "{lines:?}"
@@ -780,17 +792,18 @@ fn notes_are_placed_by_song_frame_and_a_pass_opens_with_what_is_held() {
     // Not built while the roll is off.
     let _ = worker.exchange(
         &mut view,
+        SHOWN,
         &SpectrumConfig { show_roll: false, ..Default::default() },
         true,
     );
     worker.roll();
     let rolled = SpectrumConfig { show_roll: true, ..Default::default() };
-    let _ = worker.exchange(&mut view, &rolled, true);
+    let _ = worker.exchange(&mut view, SHOWN, &rolled, true);
     assert_eq!(view.notes.len(), 0, "built while the roll was off");
-    let _ = worker.exchange(&mut view, &rolled, true);
+    let _ = worker.exchange(&mut view, SHOWN, &rolled, true);
     worker.roll();
     assert_eq!(view.notes.len(), 0, "built with no lock held, handed over next time");
-    let _ = worker.exchange(&mut view, &rolled, true);
+    let _ = worker.exchange(&mut view, SHOWN, &rolled, true);
     let mut notes: Vec<(u8, f64, Option<f64>)> =
         view.notes.notes().map(|n| (n.note, n.start, n.end)).collect();
     notes.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -830,23 +843,30 @@ fn a_late_mark_from_before_a_pass_reaches_the_pass_that_opened_without_it() {
 }
 
 /// The harmony row's sections (#1974) are analyzed from the roll while the
-/// row draws, with the roll itself off, and again when Detail or Span moves.
+/// row draws, with the roll itself off, and again when Detail or Span moves
+/// or a Show switch hides a source's notes (#1994 TP1).
 #[test]
 fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_come_back() {
     use super::notes::{key, Mark, Sounding};
     let (_, mut worker) = pair();
-    let held = |note: u8| Mark::On {
-        key: key(1, note),
+    let held = |source: u64, note: u8| Mark::On {
+        key: key(source, note),
         sounding: Sounding {
             velocity: 1.0,
             pitch: f32::from(note),
             expressions: harmonigraph_core::Expressions::NEUTRAL,
         },
     };
+    // Source 2's attack at 4 s, a Span or two after source 1's, starts a
+    // section of its own.
     let mut source = 0;
-    for (i, song) in (0..500).step_by(FRAMES).enumerate() {
+    for (i, song) in (0..8000).step_by(FRAMES).enumerate() {
         if i == 1 {
-            worker.inbox.push((0.25, held(60)));
+            worker.inbox.push((0.25, held(1, 60)));
+        }
+        if i == 39 {
+            worker.inbox.push((4.0, held(2, 64)));
+            worker.inbox.push((4.0, held(2, 67)));
         }
         let (block, samples) = ring_block(source, Some(song), STEREO);
         worker.capture(block, &samples);
@@ -857,43 +877,61 @@ fn the_harmony_rows_sections_follow_what_the_row_asks_and_the_displaced_ones_com
     worker.capture(block, &samples);
 
     let unrolled = SpectrumConfig { show_roll: false, ..Default::default() };
-    let step = |worker: &mut Worker, view: &mut TapeView| {
-        let _ = worker.exchange(view, &unrolled, true);
+    let step_hiding = |worker: &mut Worker, view: &mut TapeView, hidden: &BTreeSet<SourceId>| {
+        let _ = worker.exchange(view, hidden, &unrolled, true);
         worker.roll();
-        worker.exchange(view, &unrolled, true)
+        worker.exchange(view, hidden, &unrolled, true)
+    };
+    let step = |worker: &mut Worker, view: &mut TapeView| step_hiding(worker, view, SHOWN);
+    let pitches = |view: &TapeView| -> Vec<Vec<f32>> {
+        let sections = view.shown_harmony.sections.iter();
+        sections.map(|section| section.entries.iter().map(|entry| entry.pitch).collect()).collect()
+    };
+    let starts = |view: &TapeView| -> Vec<f64> {
+        view.shown_harmony
+            .sections
+            .iter()
+            .map(|section| (section.start * 100.0).round() / 100.0)
+            .collect()
     };
     // Not asked for: nothing is analyzed.
     let mut view = TapeView { showing: true, ..Default::default() };
     let _ = step(&mut worker, &mut view);
-    assert!(view.harmony.sections.is_empty());
+    assert!(view.shown_harmony.sections.is_empty());
 
     view.harmony_wanted = Some((0.5, 4.0));
     let displaced = step(&mut worker, &mut view);
     assert!(displaced.harmony.is_some(), "the empty one it replaced");
-    let pitches: Vec<Vec<f32>> = view
-        .harmony
-        .sections
-        .iter()
-        .map(|section| section.entries.iter().map(|entry| entry.pitch).collect())
-        .collect();
-    assert_eq!(pitches, [[60.0]]);
+    assert_eq!(starts(&view), [0.25, 4.0]);
+    assert_eq!(pitches(&view), [vec![60.0], vec![60.0, 64.0, 67.0]]);
 
     // Nothing moved: the same analysis stands.
-    let first = Arc::clone(&view.harmony);
+    let first = Arc::clone(&view.shown_harmony);
     assert!(step(&mut worker, &mut view).harmony.is_none());
-    assert!(Arc::ptr_eq(&first, &view.harmony));
+    assert!(Arc::ptr_eq(&first, &view.shown_harmony));
     // Span moved: analyzed again, the old one handed back to drop off-lock.
     view.harmony_wanted = Some((0.5, 2.0));
     assert!(step(&mut worker, &mut view).harmony.is_some_and(|old| Arc::ptr_eq(&old, &first)));
     view.harmony_wanted = Some((0.75, 2.0));
     assert!(step(&mut worker, &mut view).harmony.is_some());
+    // Source 2 hidden with Show: analyzed again without its notes, the
+    // section its attack started gone with them, then left standing, and
+    // analyzed with them once it shows again.
+    let both = (starts(&view), pitches(&view));
+    assert_eq!(both.0, [0.25, 4.0]);
+    let hidden = BTreeSet::from([SourceId(2)]);
+    assert!(step_hiding(&mut worker, &mut view, &hidden).harmony.is_some());
+    assert_eq!((starts(&view), pitches(&view)), (vec![0.25], vec![vec![60.0]]));
+    assert!(step_hiding(&mut worker, &mut view, &hidden).harmony.is_none());
+    assert!(step(&mut worker, &mut view).harmony.is_some());
+    assert_eq!((starts(&view), pitches(&view)), both);
     // The recording changed under it (a new format clears the tape): the
     // sections follow the roll.
     let new_format = Format { channels: 2, sample_rate: 2000.0, sidechain: false };
     let (block, samples) = ring_block(source, None, new_format);
     worker.capture(block, &samples);
     let _ = step(&mut worker, &mut view);
-    assert!(view.harmony.sections.is_empty());
+    assert!(view.shown_harmony.sections.is_empty());
 }
 
 #[test]
@@ -904,20 +942,16 @@ fn exchange_returns_displaced_roll_and_spectrogram_for_off_lock_drop() {
     let mut view = TapeView { showing: true, ..Default::default() };
     let rolled = SpectrumConfig { show_roll: true, ..Default::default() };
 
-    let displaced = worker.exchange(&mut view, &rolled, true);
+    let displaced = worker.exchange(&mut view, SHOWN, &rolled, true);
     assert!(displaced.roll.is_none() && displaced.spectrogram.is_none());
     worker.roll();
-    let _ = worker.exchange(&mut view, &rolled, true);
+    let _ = worker.exchange(&mut view, SHOWN, &rolled, true);
     let slab: harmonigraph_render::SpectrogramSlab =
         Arc::from([7u8; harmonigraph_core::spectrum::SPECTRUM_BINS]);
     view.spectrogram.set_column(0, Some(slab));
 
     let roll_probe = view.notes.clone();
     let slab_probe = view.spectrogram.slab(0, 0).expect("column 0 populated").clone();
-    // The view's, this probe, and the worker's own, which the harmony row's
-    // sections are analyzed from; the worker lets go of its own as it builds
-    // the next, with no lock held.
-    assert_eq!(Arc::strong_count(&roll_probe), 3);
     assert_eq!(Arc::strong_count(&slab_probe), 2);
 
     // Format change clears the spectrum and bumps generation so roll rebuilds.
@@ -926,7 +960,7 @@ fn exchange_returns_displaced_roll_and_spectrogram_for_off_lock_drop() {
     worker.capture(block, &samples);
     worker.roll();
 
-    let displaced = worker.exchange(&mut view, &rolled, true);
+    let displaced = worker.exchange(&mut view, SHOWN, &rolled, true);
     assert!(displaced.roll.is_some());
     assert!(displaced.spectrogram.is_some());
     assert!(view.spectrogram.is_empty());

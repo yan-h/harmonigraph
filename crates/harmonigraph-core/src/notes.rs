@@ -50,6 +50,13 @@ impl SourceId {
     pub fn off_tape(self) -> SourceId {
         SourceId(self.0 & !Self::TAPE)
     }
+
+    /// `hidden`, the sources whose Show switch is off, hides this source's
+    /// notes: its own switch, or for a note the tape plays, the switch of the
+    /// source that played it.
+    pub fn hidden_by(self, hidden: &std::collections::BTreeSet<SourceId>) -> bool {
+        hidden.contains(&self) || hidden.contains(&self.off_tape())
+    }
 }
 
 /// One held address. Same-source retriggers replace this address; host note
