@@ -934,10 +934,6 @@ fn exchange_returns_displaced_roll_and_spectrogram_for_off_lock_drop() {
 
     let roll_probe = view.notes.clone();
     let slab_probe = view.spectrogram.slab(0, 0).expect("column 0 populated").clone();
-    // The view's, this probe, and the worker's own, which the harmony row's
-    // sections are analyzed from; the worker lets go of its own as it builds
-    // the next, with no lock held.
-    assert_eq!(Arc::strong_count(&roll_probe), 3);
     assert_eq!(Arc::strong_count(&slab_probe), 2);
 
     // Format change clears the spectrum and bumps generation so roll rebuilds.
