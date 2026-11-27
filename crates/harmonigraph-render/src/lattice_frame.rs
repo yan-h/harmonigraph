@@ -88,8 +88,10 @@ impl LatticeCallback {
             walk: Walk { order, plus_of, glyphs_of },
         } = vecs;
         let aspect = size_points.x / size_points.y.max(1.0);
-        let render_scale =
-            scene.view.render_scale.clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
+        let render_scale = scene.view.render_scale.clamp(
+            *harmonigraph_scene::LATTICE_RENDER_SCALE_RANGE.start(),
+            *harmonigraph_scene::LATTICE_RENDER_SCALE_RANGE.end(),
+        );
         let camera = scene.camera;
         let atmosphere = scene.view.atmosphere.sanitized();
         let view_proj = camera.view_proj(aspect);

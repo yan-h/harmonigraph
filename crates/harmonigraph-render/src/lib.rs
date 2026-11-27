@@ -342,9 +342,6 @@ pub fn bloom_strength(raw: f32) -> f32 {
 /// [`LatticeCallback::paint`].
 const LATTICE_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
-/// Clamp on the render-scale view setting, over whatever the UI offers.
-const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
-
 /// The two modules a reload rebuilds, each already carrying the common half
 /// it was read beside.
 #[cfg(any(test, feature = "hot-reload"))]
@@ -936,7 +933,8 @@ struct LatticeCallback {
     /// screen's pixels-per-point and `render_scale` to size the offscreen
     /// target.
     size_points: [f32; 2],
-    /// From the scene (a view setting), clamped to [`RENDER_SCALE_RANGE`].
+    /// From the scene (a view setting), clamped to the bar's own range,
+    /// [`harmonigraph_scene::LATTICE_RENDER_SCALE_RANGE`].
     render_scale: f32,
     /// Where to publish this pane's own measurements.
     stats: Option<std::sync::Arc<LatticeStats>>,
