@@ -248,84 +248,48 @@ fn a_marked_slice_the_note_has_left_keeps_the_whole_light() {
     );
 }
 
-/// A node wearing NOTHING BUT AN AUDIO RING gives off no light at all,
-/// whatever its ring is reading.
+/// A light on a slot the wheel no longer draws gives off none (#1893 item 1).
 ///
-/// A halo says something is being PLAYED at this position; the analyzer's ring
-/// says something is being heard in the room. One is the node's own voice and
-/// the other a reading it wears, so the ring is drawn and never shone — it is
-/// the one layer left out of both halves of the light, the level
-/// (`panes::glow_fade` in harmonigraph-ui) and the colour (`ink_at`).
+/// Dragging Octaves narrower under a held or fading note takes its slot off
+/// every node's wheel while the node's light, read off its slots and marks,
+/// still holds it: the glow pass asks whether a light's LAYER draws
+/// (`GlowFade::step_drawn` in harmonigraph-ui), not which slots the wheel
+/// shows. What keeps the halo off is the light's colour, which `ink_at` reads
+/// only off the slots on the ring, skipping a mark the ring has no room for,
+/// and the glow's check that it found some.
 ///
-/// Byte-identical with the Reach off, which is the whole claim: the light's
-/// draw runs over this node, writes nothing into its target, and the composite
-/// lays exactly nothing over the picture. Shot at a loud partial as well as at
-/// silence, because those are the two ways a ring could have held a light on —
-/// what is IN it, and merely that it is showing.
-///
-/// Non-vacuity is what the rest of the fixture is for: the ring has to be on
-/// screen, and its silent end has to be a grey the eye can see, or "no light"
-/// would be a claim about a frame with no ring in it.
+/// The note and its mark both on that slot, byte-identical with the Reach
+/// off, against the same node on a wheel that still draws the slot, which
+/// lights.
 #[test]
-fn a_node_wearing_only_an_audio_ring_gives_off_no_light() {
+fn a_light_on_a_slot_the_wheel_no_longer_draws_gives_off_none() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // [`ringing_node`] with no key down and no octave sounding: the band draws
-    // nothing at all and the node's whole picture is the analyzer's.
-    let at = |sounding: Option<f32>, reach: f32| -> Scene {
-        let mut scene = ringing_node(None, sounding, PROBE_RANGE);
-        // The app's ramp rather than the fixture's: its silent end PINNED to
-        // the ground, which is what makes an empty wedge a grey the eye reads
-        // as a ring rather than the black the probe's own ramp starts at
-        // (`harmonigraph_scene::ring_gradient`).
-        let ground = scene.lattice_ground;
-        scene.spectral.lut = std::array::from_fn(|k| {
-            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
-            ground.lerp(glam::Vec4::ONE, t)
-        });
+    let wide = probe_octave_layout();
+    let narrow = harmonigraph_scene::octave_layout(wide.span - 2, wide.center);
+    let top = wide.slots(0.0).1;
+    assert!(top > narrow.slots(0.0).1, "the narrower wheel still draws slot {top}");
+    let mut shot = |layout, reach| {
+        let mut scene = single_marked_node(1 << top, 0);
+        scene.octave_layout = layout;
         let node = &mut scene.nodes[0];
-        // Silence at the node, and the analyzer still reading: no key down, no
-        // octave sounding, no mark at either end — and the ring at full, which
-        // is the view's Gate answered for this node.
-        node.presence_with_opacity = 0.0;
-        node.melody_level = 0.0;
-        node.bass_level = 0.0;
-        node.melody_slots = 0;
-        node.bass_slots = 0;
-        node.audio_ring = 1.0;
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.octaves[top as usize] = 1.0;
         read_light(node);
         scene.view.glow_reach = reach;
         scene.view.glow_strength = 1.5;
-        scene
+        shooter.shot(&scene)
     };
-    const PARTIAL: f32 = harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0;
-
-    // Non-vacuous: the ring is ON SCREEN. Against the layer's own off switch
-    // rather than against `total_light`, which the node's other layers alone
-    // would satisfy — and safe as a one-layer diff only because this node draws
-    // nothing else: no key, no octave, no mark, so there is no layer outside
-    // the ring for its width to slide inward (the stack packs outward from the
-    // centre).
-    let loud_off = shooter.shot(&at(Some(PARTIAL), 0.0));
-    let mut ringless = at(Some(PARTIAL), 0.0);
-    (ringless.spectral.inner, ringless.spectral.outer) = (0.0, 0.0);
+    assert!(shot(wide, 0.8) != shot(wide, 0.0), "the note lit nothing where its slot is drawn");
+    let (on, off) = (shot(narrow, 0.8), shot(narrow, 0.0));
     assert!(
-        loud_off != shooter.shot(&ringless),
-        "the fixture drew no audio ring, so it cannot say a ring gives off nothing",
+        on == off,
+        "a light on an undrawn slot lit {} against {} with the glow off",
+        total_light(&on),
+        total_light(&off),
     );
-
-    for (what, sounding) in [("a partial", Some(PARTIAL)), ("silence", None)] {
-        let off = shooter.shot(&at(sounding, 0.0));
-        let on = shooter.shot(&at(sounding, 0.8));
-        assert!(
-            on == off,
-            "a ring reading {what} lit {} against {} with the glow off",
-            total_light(&on),
-            total_light(&off),
-        );
-    }
 }
 
 /// One node lit in TWO colours no mixing of the other's table can reach: the
