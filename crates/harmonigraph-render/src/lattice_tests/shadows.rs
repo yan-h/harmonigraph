@@ -1548,7 +1548,9 @@ fn a_disappearing_slice_fades_its_shadow_in_proportion_to_its_ink() {
 
 /// A held slice must not raise a fading neighbor's shadow ceiling where its
 /// own blur contributes almost nothing. This reaches staggered slice motion,
-/// rather than fading every layer of a node together.
+/// rather than fading every layer of a node together: a Stagger spread above 0
+/// with the radial move off is what draws the slices one by one
+/// (`animated_slice_ink`); at a spread of 0 the fading shot casts nothing here.
 #[test]
 fn a_held_slice_does_not_pin_a_neighbors_shadow_outside_its_own_blur() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
@@ -1556,6 +1558,7 @@ fn a_held_slice_does_not_pin_a_neighbors_shadow_outside_its_own_blur() {
     for level in [0.75, 0.25, 0.05] {
         let mut scene = on_ground(0.6, 1.0);
         scene.view.shadow.lattice_geometry.spread = 0.8;
+        scene.view.note_animation.stagger_spread = 0.5;
         scene.view.note_animation.radial_start = 0.0;
         scene.spectral.outer = 0.0;
         scene.nodes[0].audio_ring = 0.0;
