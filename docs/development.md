@@ -228,7 +228,7 @@ the rendering and music layers do not depend on plugin plumbing.
 ```text
 harmonigraph-core        Dependency-free pitch and tuning logic; lattice
                          coordinates; live and historical note state; shared
-                         pitch axis.
+                         pitch axis and the spectrogram's stored byte.
 
 harmonigraph-analysis    Rolling audio analysis shared by live and offline UI.
 
