@@ -168,21 +168,29 @@ fn tune_and_hub_diagnostics_publish_once_per_audio_interval() {
     }
 }
 
-/// A Hub whose blocks carry nothing, transport stopped or rolling, publishes
-/// nothing its display's tracker takes as an edit, long past the snapshots a
-/// played note owes, once a stop's cut is in: the input worker asks a still
-/// editor for a pass at every edit, so one here would hold it at the display
-/// rate for good.
+/// A Hub whose blocks carry nothing, transport stopped or rolling, a note held
+/// or none, publishes nothing its display's tracker takes as an edit, long past
+/// the snapshots a played note owes, once a stop's cut is in: the input worker
+/// asks a still editor for a pass at every edit, so one here would hold it at
+/// the display rate for good.
 #[test]
 fn an_idle_hub_edits_nothing_its_display_draws() {
     let _scope = crate::test_scope::enter();
     let mut device = hub();
     device.activate_format(48_000.0, 64);
     let lock = device.editor_lock();
+    let rounds =
+        || device.wrapper().test_inspect_plugin(|plugin| plugin.input_worker.completed_rounds());
     let edits = || {
-        // Past the input worker's next step with the editor shut.
-        std::thread::sleep(crate::background::SHUT_POLL * 5);
-        lock.lock().ui.picture.runtime.tracker.edits().count
+        // Two rounds that began after the last block, so both drained it.
+        let (from, started) = (rounds(), std::time::Instant::now());
+        while rounds() < from + 2 {
+            assert!(started.elapsed().as_secs() < 10, "the worker stopped stepping");
+            std::thread::sleep(crate::background::POLL);
+        }
+        let shared = lock.lock();
+        let tracker = &shared.ui.picture.runtime.tracker;
+        (tracker.edits().count, tracker.held_count())
     };
     let mut raw = 0;
     let mut block = |events: Vec<Input>, rolling: bool| {
@@ -191,19 +199,23 @@ fn an_idle_hub_edits_nothing_its_display_draws() {
         raw += 64;
     };
     block(vec![note(1, 0, 60, 0, true)], true);
-    block(vec![note(1, 0, 60, 0, false)], true);
     for _ in 0..1600 {
         block(vec![], true);
     }
-    let mut settled = edits();
-    assert!(settled > 0, "the fixture's note never reached the display");
+    let (settled, held) = edits();
+    assert!(settled > 0 && held == 1, "the fixture's note must be held on the display");
+    for _ in 0..1600 {
+        block(vec![], true);
+    }
+    assert_eq!(edits(), (settled, 1), "an idle Hub edited the display under a held note");
+    block(vec![note(1, 0, 60, 0, false)], true);
     for rolling in [true, false] {
         // The transport's stop is an edit of its own, once: the cut that ends
         // what was held, a callback after the stop.
         for _ in 0..4 {
             block(vec![], rolling);
         }
-        settled = edits();
+        let settled = edits();
         for _ in 0..1600 {
             block(vec![], rolling);
         }
