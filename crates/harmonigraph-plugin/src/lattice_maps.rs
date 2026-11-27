@@ -133,7 +133,7 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
 
 fn view_of(params: &crate::HarmonigraphParams, document: &MapDocument) -> MapView {
     let mut editor = params.map_editor.lock();
-    let adopted = *params.map_playback.lock();
+    let adopted = params.map_playback.read();
     let offsets = offsets(params);
     let requested = MapSelection::requested(params);
     let selected = requested.slot;
@@ -352,8 +352,31 @@ impl Maps {
     }
 }
 
+/// The map playback audio last adopted, which the frame's pending label
+/// compares with the request. Audio publishes it wait-free as each
+/// observation resolves it, as the document publishes to audio (#1938), here
+/// the other way: audio writes, and the output sits behind a lock audio never
+/// takes.
+pub struct AdoptedPlayback {
+    /// Taken once, by the audio owner.
+    audio: Mutex<Option<triple_buffer::Input<MapPlayback>>>,
+    readers: Mutex<triple_buffer::Output<MapPlayback>>,
+}
+impl Default for AdoptedPlayback {
+    fn default() -> Self {
+        let (audio, output) = triple_buffer::triple_buffer(&MapPlayback::default());
+        Self { audio: Mutex::new(Some(audio)), readers: Mutex::new(output) }
+    }
+}
+impl AdoptedPlayback {
+    /// The latest playback audio published, off audio: a frame, or a test.
+    pub fn read(&self) -> MapPlayback {
+        *self.readers.lock().read()
+    }
+}
+
 pub struct AudioMaps {
-    published: Arc<Mutex<MapPlayback>>,
+    published: triple_buffer::Input<MapPlayback>,
     followed: Arc<std::sync::atomic::AtomicU64>,
     strip: Arc<std::sync::atomic::AtomicI32>,
     /// The geometry the document last published, brought up to date once a
@@ -372,7 +395,7 @@ pub struct AudioMaps {
 impl AudioMaps {
     pub fn new(params: &crate::HarmonigraphParams) -> Self {
         Self {
-            published: params.map_playback.clone(),
+            published: params.map_playback.audio.lock().take().expect("one audio owner"),
             followed: params.map_followed.clone(),
             strip: params.strip_slide.clone(),
             bank: params.maps.audio.lock().take().expect("one audio owner"),
@@ -435,9 +458,8 @@ impl AudioMaps {
     fn resolve(&mut self) {
         self.playback.map = self.bank.peek_output_buffer()[self.playback.selected]
             .map(|shape| translated(shape, self.playback.offset));
-        if let Some(mut published) = self.published.try_lock() {
-            *published = self.playback;
-        }
+        // Wait-free, no lock: a reader holding its copy skips nothing.
+        self.published.write(self.playback);
     }
     /// An automation event at its own sample, decoded by the parameter table
     /// as the shell decodes the same event into the table: the timeline and
@@ -584,6 +606,22 @@ mod tests {
         let bank = adopted(&mut maps);
         assert_eq!(bank[0], None, "a delete must reach the audio thread's bank");
         assert_eq!(bank[1], Some(second));
+    }
+
+    /// What audio adopts reaches the readers even when one of them held its
+    /// copy through the adoption: audio publishes without waiting for them or
+    /// skipping the publication.
+    #[test]
+    fn audio_publishes_what_it_adopts_while_a_reader_holds_its_copy() {
+        let params = crate::HarmonigraphParams::default();
+        let mut maps = AudioMaps::new(&params);
+        let config = ConfigReducer::default().resolved();
+        params.set(Row::TuningEngine, TuningEngine::LatticeMap.index() as f32);
+        assert_ne!(params.map_playback.read().engine, TuningEngine::LatticeMap, "nothing adopted");
+        let held = params.map_playback.readers.lock();
+        maps.adopt(config, Seed::read(&params));
+        drop(held);
+        assert_eq!(params.map_playback.read().engine, TuningEngine::LatticeMap);
     }
 
     /// An automation value a hair below a half step selects the slot the

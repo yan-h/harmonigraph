@@ -160,7 +160,7 @@ fn an_engine_or_follow_event_past_the_top_step_selects_the_top_step() {
     hub.activate();
     hub.run(0, vec![parameter("tuning-engine", 5.0, 0), parameter("map-follow", 4.0, 0)], None);
     let playback =
-        hub_wrapper(&hub).test_inspect_plugin(|plugin| *plugin.params.map_playback.lock());
+        hub_wrapper(&hub).test_inspect_plugin(|plugin| plugin.params.map_playback.read());
     assert_eq!(playback.engine, TuningEngine::LatticeMap);
     assert_eq!(playback.follow, harmonigraph_core::lattice_map::Follow::ThirdsAndFifths);
 }
@@ -877,35 +877,37 @@ const PYTHAGOREAN_A: LatticePos = LatticePos::new(3, 0, 0);
 fn every_reset_returns_the_followed_strip_to_the_position() {
     let _scope = crate::test_scope::enter();
     type Reset = fn(&mut Decoding);
-    let resets: [(&str, Reset); 5] = [
-        ("engine", |session| {
+    // Each arm's Silence reset, in ms: off but in the silence arm, so every
+    // other arm returns the strip by its own reset.
+    let resets: [(&str, u32, Reset); 5] = [
+        ("engine", 0, |session| {
             session.everywhere(|| vec![parameter("tuning-engine", 0.0, 0)]);
             session.everywhere(|| vec![parameter("tuning-engine", 1.0, 0)]);
         }),
-        ("Reset all voices", |session| {
+        ("Reset all voices", 0, |session| {
             crate::tuning::session::session().request_reset();
             session.everywhere(Vec::new);
         }),
-        ("Stop", |session| {
+        ("Stop", 0, |session| {
             session.everywhere(|| vec![transport(0, 120.0)]);
             session.everywhere(|| vec![musical_tests::at(0.0, false)]);
         }),
-        ("loop", |session| {
+        ("loop", 0, |session| {
             for seconds in [5.0, 5.0, 1.0] {
                 session.everywhere(|| vec![musical_tests::at(seconds, false)]);
             }
         }),
-        ("silence", |session| (0..8).for_each(|_| session.everywhere(Vec::new))),
+        ("silence", 10, |session| (0..8).for_each(|_| session.everywhere(Vec::new))),
     ];
-    for (name, reset) in resets {
+    for (name, silence_ms, reset) in resets {
         let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
         session.policy(|policy| {
-            (policy.reset_stop, policy.reset_loop, policy.silence_ms) = (true, true, 10);
+            (policy.reset_stop, policy.reset_loop, policy.silence_ms) = (true, true, silence_ms);
         });
         for on in [true, false] {
             session.play(f_sharps(on), vec![]);
         }
-        // Struck at once after the F♯, before silence's 10 ms.
+        // Struck at once after the F♯, before the silence arm's 10 ms.
         assert_eq!(session.a(), Some(PYTHAGOREAN_A), "{name}: moved to C G D A");
         reset(&mut session);
         assert_eq!(session.a(), Some(FIVE_THREE), "{name}: back at the Position");
@@ -919,24 +921,29 @@ fn every_reset_returns_the_followed_strip_to_the_position() {
 }
 
 /// A loop's last release and its first strike on one sample, with Reset on
-/// loop on: the reset comes before the strike's group is read, so the A
-/// after it moves the strip against those F♯s, and the release on that
-/// sample does not refill the memory the reset cleared.
+/// loop on: the release and the reset both come before the strike's group is
+/// read. An A held at 27/16 after F♯ is let go as D and a higher A are
+/// struck, and they sound a pure D–A from the Position, 10/9 and 5/3: had the
+/// A still been held, or no reset come, they would sound 9/8 and 27/16, pure
+/// against that A. Whether the release comes before the reset decides only
+/// the released memory, which the strip does not read.
 #[test]
-fn a_loop_resets_after_its_last_release_and_before_its_first_strike() {
+fn a_loops_first_strike_follows_its_reset_and_the_releases_on_its_sample() {
     let _scope = crate::test_scope::enter();
     let mut session = Decoding::new(1.0, Tuning::just(), 696_578_428);
     session.policy(|policy| policy.reset_loop = true);
-    session.play(vec![note(1, 0, 60, 0, true)], vec![]);
+    for on in [true, false] {
+        session.play(f_sharps(on), vec![]);
+    }
+    session.play(vec![note(1, 0, 69, 0, true)], vec![]);
+    assert_eq!(session.voice(true, 0, 69).attack_node, Some(PYTHAGOREAN_A), "the held A");
     for seconds in [5.0, 5.0, 1.0] {
         session.everywhere(|| vec![musical_tests::at(seconds, false)]);
     }
-    let mut wrap = f_sharps(true);
-    wrap.insert(0, note(1, 0, 60, 0, false));
+    let wrap = vec![note(1, 0, 69, 0, false), note(2, 0, 62, 0, true), note(3, 0, 81, 0, true)];
     session.play(wrap, vec![]);
-    assert_eq!(inspect_hub(&session.hub, |hub| hub.test_memory()), 0, "the release is gone");
-    session.play(f_sharps(false), vec![]);
-    assert_eq!(session.a(), Some(PYTHAGOREAN_A), "the strike moved the key");
+    let [d, a] = [62, 81].map(|key| session.voice(true, 0, key).attack_node.unwrap());
+    assert_eq!((d, a), (LatticePos::new(-2, 1, 0), FIVE_THREE), "D 10/9, A 5/3");
 }
 
 /// D struck over a held F major moves the strip flat, so D sounds 10/9, a

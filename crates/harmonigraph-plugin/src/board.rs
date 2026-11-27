@@ -51,12 +51,8 @@ use std::ops::RangeInclusive;
 use std::time::{Duration, Instant};
 
 use harmonigraph_core::configuration::ResolvedConfig;
-use harmonigraph_core::lattice_map::TuningEngine;
 use harmonigraph_core::tuning::{fifths_for_midi, nearest_fifths_key};
 use harmonigraph_core::NoteTracker;
-
-/// The editor's copy of the map playback, which names the retuning engine.
-type Playback = std::sync::Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapPlayback>>;
 
 /// A `(channel, key)` the board reads, channel `0..=15`.
 pub(crate) type Key = (u8, u8);
@@ -299,13 +295,9 @@ impl Wire for Midi {
 /// The board and the configuration that decides what it shows, as the input
 /// worker holds them.
 pub(crate) struct Lights {
-    settings: std::sync::Arc<crate::configuration::Settings>,
-    /// The retuning engine the audio thread last published, read with
-    /// `try_lock`, so the worker never waits for it; a copy it takes can make
-    /// that callback's own `try_lock` skip one publication, which the next
-    /// callback makes.
-    playback: Playback,
-    engine: TuningEngine,
+    /// The configuration through its door, and the retuning engine the
+    /// parameters select.
+    params: std::sync::Arc<crate::HarmonigraphParams>,
     #[cfg(target_os = "macos")]
     board: Board<Midi>,
 }
@@ -315,20 +307,12 @@ impl Lights {
     /// CoreMIDI clients there. `None` off macOS, the one platform the plugin
     /// runs on; when CoreMIDI makes no client; and in tests, which must not
     /// reach a board plugged into the machine running them.
-    pub(crate) fn live(
-        settings: std::sync::Arc<crate::configuration::Settings>,
-        playback: Playback,
-    ) -> Option<Self> {
+    pub(crate) fn live(params: std::sync::Arc<crate::HarmonigraphParams>) -> Option<Self> {
         #[cfg(all(target_os = "macos", not(test)))]
-        return Midi::new().map(|midi| Self {
-            settings,
-            playback,
-            engine: TuningEngine::default(),
-            board: Board::new(midi),
-        });
+        return Midi::new().map(|midi| Self { params, board: Board::new(midi) });
         #[cfg(not(all(target_os = "macos", not(test))))]
         {
-            let _ = (settings, playback);
+            let _ = params;
             None
         }
     }
@@ -336,7 +320,7 @@ impl Lights {
     /// One poll: the pitches under the lock, the keys and messages without
     /// it. With decoding off and the board idle it does not take the lock.
     pub(crate) fn poll(&mut self, shared: &crate::editor::EditorLock) {
-        let config = self.settings.resolved();
+        let config = self.params.settings.resolved();
         #[cfg(target_os = "macos")]
         {
             if !config.policy.decode_fifths && self.board.idle() {
@@ -350,10 +334,9 @@ impl Lights {
                 }
                 sounding(&runtime.tracker)
             };
-            if let Some(playback) = self.playback.try_lock() {
-                self.engine = playback.engine;
-            }
-            let played = self.engine == TuningEngine::Adaptive;
+            use harmonigraph_core::lattice_map::TuningEngine;
+            let engine = TuningEngine::from_index(self.params.int(crate::Row::TuningEngine));
+            let played = engine == TuningEngine::Adaptive;
             self.board.update(wanted(&pitches, &config, played), Instant::now());
         }
         #[cfg(not(target_os = "macos"))]

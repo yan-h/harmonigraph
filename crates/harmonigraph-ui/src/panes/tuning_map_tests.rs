@@ -1,6 +1,6 @@
 use super::*;
 use crate::lattice_maps::{MapDocument, MapEdit, MapPlayback, MapView};
-use crate::params::ParamKey;
+use crate::params::{ConfigurationView, ParamKey};
 use crate::tests::probe::{events_into, fresh_picture, press, themed};
 use harmonigraph_core::lattice_map::{Follow, TuningEngine};
 use std::cell::RefCell;
@@ -171,7 +171,8 @@ fn the_decoding_controls_send_the_shown_policy_under_pass_through() {
     // on: the toggle's edit must not carry the bar's.
     let mut resolved = harmonigraph_core::configuration::ConfigReducer::default().resolved();
     resolved.policy = shown;
-    params.owner = Some(ConfigurationView { resolved, board: false, status: 0, unadopted: None });
+    params.owner =
+        Some(ConfigurationView { resolved, board: false, input_lost: false, unadopted: None });
     let size = egui::vec2(420.0, 2000.0);
     let mut frame = |events| {
         events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {
