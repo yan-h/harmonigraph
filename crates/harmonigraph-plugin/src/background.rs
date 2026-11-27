@@ -97,14 +97,14 @@ pub(crate) const POLL: Duration = Duration::from_millis(4);
 /// analyzes, so it need not wake as often; the ageing and the take's poll
 /// (see [`step`]) are content with any cadence this bound allows.
 ///
-/// Bounded above by the ring itself, and tightly: it holds
+/// Bounded above by the ring itself: it holds
 /// [`AUDIO_RING_CAPACITY`](crate::AUDIO_RING_CAPACITY) interleaved samples,
-/// which is 1.37 s of stereo at 48 kHz but only 0.34 s at 192 kHz — and a poll
-/// that ever slipped past that span would drop audio silently and for good,
-/// reintroduced by this thread's own pacing. 20 ms, the longest it sleeps,
-/// leaves 17x margin at the worst rate a host can hand us, so the scheduler
-/// has to lose this thread for a third of a second before anything is lost.
-/// `the_ring_holds_many_polls_of_audio_at_any_rate_a_host_offers` is what keeps
+/// which is 1.37 s of stereo at 48 kHz, the fastest rate the projects run at
+/// — and a poll that ever slipped past that span would drop audio silently
+/// and for good, reintroduced by this thread's own pacing. 20 ms, the longest
+/// it sleeps, leaves 68x margin there, so the scheduler has to lose this
+/// thread for over a second before anything is lost.
+/// `the_ring_holds_many_polls_of_audio_at_the_projects_rates` is what keeps
 /// the two numbers in that relation.
 pub(crate) const SHUT_POLL: Duration = Duration::from_millis(20);
 
@@ -1003,15 +1003,16 @@ mod tests {
         assert!((h.analyzed_lag() - lag_of(second)).abs() < 1e-9, "the next step missed the edit");
     }
 
-    /// [`POLL`] against the ring it is pacing itself to. A poll slower than the
-    /// ring's span drops audio silently and permanently — the exact failure
-    /// this module removes, reintroduced by its own pacing — and nothing about
-    /// either constant's declaration hints at the other.
+    /// [`SHUT_POLL`], the longest the worker sleeps, against the ring it is
+    /// pacing itself to. A poll slower than the ring's span drops audio
+    /// silently and permanently — the exact failure this module removes,
+    /// reintroduced by its own pacing — and nothing about either constant's
+    /// declaration hints at the other.
     #[test]
-    fn the_ring_holds_many_polls_of_audio_at_any_rate_a_host_offers() {
-        // The worst case the plugin's layout allows: the fastest rate a host
-        // offers against the most channels `Plugin::PORTS` declares.
-        const FASTEST_RATE: f64 = 192_000.0;
+    fn the_ring_holds_many_polls_of_audio_at_the_projects_rates() {
+        // The worst case within the use: the fastest rate the projects run at
+        // against the most channels `Plugin::PORTS` declares.
+        const FASTEST_RATE: f64 = 48_000.0;
         const CHANNELS: f64 = 2.0;
         let span = crate::AUDIO_RING_CAPACITY as f64 / CHANNELS / FASTEST_RATE;
         assert!(
