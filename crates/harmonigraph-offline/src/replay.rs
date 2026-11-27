@@ -537,8 +537,9 @@ mod tests {
 
     /// Two sources as the Hub publishes them: each delta sequenced in its
     /// source and naming its press, a cut of one source as the Hub makes it
-    /// (its held press released, then its empty snapshot), and the session's
-    /// reset as a direct observation.
+    /// (`Hub::adopt`: its empty snapshot, with no release before it), and the
+    /// session's reset as a direct observation. The snapshot ends A's held
+    /// press as a history gap: observed until the cut, with no release.
     #[test]
     fn source_scopes_and_bends_round_trip_into_incremental_and_full_replay() {
         use harmonigraph_core::canonical::{CanonicalEvent, NoteDelta, SourceBaseline};
@@ -561,22 +562,22 @@ mod tests {
             (NoteEvent::off(0.75, a, 0, 60), 1),
             (NoteEvent::on(1.0, a, 0, 60, 0.8), 3),
             (NoteEvent::on(1.25, a, 0, 60, 0.7), 4),
-            // A's cut.
-            (NoteEvent::off(1.5, a, 0, 60), 4),
             (tuning(1.75, b, -0.5), 2),
             (NoteEvent::on(2.0, a, 0, 60, 0.9), 5),
         ];
         let mut sequence = std::collections::BTreeMap::<SourceId, u64>::new();
         let mut records = Vec::new();
+        // A's cut at 1.5, between its retrigger and its last press.
+        let mut cut = Some(1.5);
         for (event, lifetime) in played {
+            if let Some(at) = cut.take_if(|at| event.time > *at) {
+                let empty = SourceBaseline::new(a, at, sequence[&a], true, &[]).unwrap();
+                records.push(CanonicalRecord::from_event(CanonicalEvent::Baseline(&empty)));
+            }
             let next = sequence.entry(event.source).or_default();
             *next += 1;
             let delta = NoteDelta { sequence: *next, lifetime, ..event.into() };
             records.push(CanonicalRecord::from_event(CanonicalEvent::Note(delta)));
-            if event.time == 1.5 {
-                let empty = SourceBaseline::new(a, 1.5, *next, true, &[]).unwrap();
-                records.push(CanonicalRecord::from_event(CanonicalEvent::Baseline(&empty)));
-            }
         }
         let reset = NoteDelta::from(NoteEvent::session_reset(2.25));
         records.push(CanonicalRecord::from_event(CanonicalEvent::Note(reset)));
@@ -609,17 +610,19 @@ mod tests {
         assert!(replay.is_spent());
 
         for roll in [state.runtime.tracker.roll(), &roll_from_all_events(replay.take())] {
-            let mut notes: Vec<_> =
-                roll.notes().map(|n| (n.source, n.start, n.end, n.end_pitch())).collect();
+            let mut notes: Vec<_> = roll
+                .notes()
+                .map(|n| (n.source, n.start, n.end, n.observed_until, n.end_pitch()))
+                .collect();
             notes.sort_by(|x, y| x.partial_cmp(y).unwrap());
             assert_eq!(
                 notes,
                 vec![
-                    (a, 0.125, Some(0.75), 60.25),
-                    (a, 1.0, Some(1.25), 60.0),
-                    (a, 1.25, Some(1.5), 60.0),
-                    (a, 2.0, Some(2.25), 60.0),
-                    (b, 0.25, Some(2.25), 59.5),
+                    (a, 0.125, Some(0.75), None, 60.25),
+                    (a, 1.0, Some(1.25), None, 60.0),
+                    (a, 1.25, None, Some(1.5), 60.0),
+                    (a, 2.0, Some(2.25), None, 60.0),
+                    (b, 0.25, Some(2.25), None, 59.5),
                 ]
             );
             let note_b = roll.notes().find(|n| n.source == b).unwrap();
