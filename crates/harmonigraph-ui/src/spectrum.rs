@@ -58,6 +58,7 @@ pub struct AudioSpectrum {
 /// the frame zero its feeder states. It never reads what it has produced, so
 /// it runs where the spectrum is not (#1559): the plugin's input worker owns its
 /// own and analyzes off the editor's lock.
+#[derive(Default)]
 pub struct SpectrumAnalysis {
     /// One analyzer per input channel, combined in the power domain — see
     /// [`ChannelBank`](harmonigraph_analysis::ChannelBank). Built at the first
@@ -208,12 +209,6 @@ impl AnalyzedColumn {
     /// Raw power per pitch bucket, as analyzed.
     pub fn power(&self) -> &[f32] {
         &self.power
-    }
-}
-
-impl Default for SpectrumAnalysis {
-    fn default() -> Self {
-        SpectrumAnalysis { analyzer: None, frames_seen: 0, next_hop: 0 }
     }
 }
 

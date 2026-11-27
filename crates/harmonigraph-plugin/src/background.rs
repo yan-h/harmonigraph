@@ -335,7 +335,7 @@ thread_local! {
 /// **A still window is asked to draw what a step changed**
 /// ([`EguiState::request_pass`]): every edit of the tracker, played or from
 /// the tape, a release, a bend or a pressure change as much as a note, until
-/// the display clock has passed the latest ([`LiveInput::edited`]), and sound
+/// the display clock has passed the latest ([`Seen::edited`]), and sound
 /// after a still stretch. A still window runs no pass until something asks,
 /// so without this an edit over a still picture was drawn at its next idle
 /// poll. Sound asks only as it starts: once a picture shows it moving, the
