@@ -1083,7 +1083,7 @@ pub(super) struct Targets {
     /// painted data mesh still bounds measured sound.
     tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 2],
-    /// Scales' scalar tone, allocated at [`Shape::tone`].
+    /// Scales' scalar tone, allocated at [`Shape::scales_tone`].
     scales_tone: Option<wgpu::TextureView>,
     tile: Option<Tile>,
     stars: Option<Stars>,
