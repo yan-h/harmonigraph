@@ -195,8 +195,7 @@ mod tests {
 
     /// Channels come through INTACT — the analyzer combines them in the power
     /// domain and cannot do that with an average it never saw
-    /// (`ChannelBank` in `harmonigraph-analysis`). Alignment also
-    /// measures their energy before combining channels.
+    /// (`ChannelBank` in `harmonigraph-analysis`).
     #[test]
     fn float32_stereo_keeps_its_channels() {
         let frames = [[1.0, 0.0], [-1.0, 1.0], [0.5, 0.5]];

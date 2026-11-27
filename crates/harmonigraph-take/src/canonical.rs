@@ -57,7 +57,8 @@ impl From<NoteDelta> for DeltaRecord {
         }
     }
 }
-/// An unsequenced direct observation, as the standalone synth records one.
+/// An unsequenced direct observation: what `NoteDelta::from` makes of a
+/// `NoteEvent`, in record form.
 impl From<NoteRecord> for DeltaRecord {
     fn from(event: NoteRecord) -> Self {
         Self { event, ..Self::default() }

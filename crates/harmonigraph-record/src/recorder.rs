@@ -182,7 +182,7 @@ impl TakeLatches {
 
     /// Clear what the previous take left behind, so its end reason cannot end
     /// this one before the transport even rolls — nor its note count, which
-    /// would read as this take being under way.
+    /// would open this take's tally on the status line.
     ///
     /// The stop BAR itself is not here: it is the GUI's setting for the take
     /// about to run, written every frame, and clearing it would disarm the
@@ -243,8 +243,8 @@ pub struct Recorder {
     /// records. See [`Recorder::record`].
     open: Option<OpenRun>,
     /// Whether this take has opened a run, so its notes count from there: the
-    /// On transport stop countdown reads the count, and a note played before
-    /// playback must not start it.
+    /// status line's tally counts what the take recorded, not a note played
+    /// before playback.
     run_opened: bool,
     /// Set by the GUI under `AtLoopEnd`, whose take is over the moment the
     /// loop wraps: a backward jump after forward motion ends it there rather
@@ -368,7 +368,7 @@ impl Recorder {
     /// A hole in the note history is NOT a recording failure (#712): the take
     /// keeps capturing, finalises normally and exports with a warning, and the
     /// gap the lane queued on its reserved cell is what carries that warning
-    /// into the file as an `IncompleteRecord`. Refusal is left to failures
+    /// into the file, as a `Gap` record the reader warns of. Refusal is left to failures
     /// that are actually fatal to the recording — audio, ownership and I/O,
     /// which reach the fence through [`Recorder::fail_configuration`] and the
     /// writer's paths — plus `Invalid` here, which is the one publication

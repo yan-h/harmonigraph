@@ -74,7 +74,7 @@ The interposer calls `F_GETPATH` to identify inputs, so its elapsed time is deli
 Reported read bytes are application read calls, not physical disk traffic;
 OS caching was not flushed.
 
-Exports use the normal renderer, GPU and ffmpeg, at 640×360 with `--align off --playhead` (both flags below are historical: `--playhead` and separate-WAV `--audio`/`-a` replacement are retired and refused by the current CLI as unknown options, per `separate_audio_replacement_flags_are_rejected` in `crates/harmonigraph-offline/src/lib.rs`):
+Exports use the normal renderer, GPU and ffmpeg, at 640×360 with `--align off --playhead` (both flags below are historical: `--playhead` and separate-WAV `--audio`/`-a` replacement are retired, and the current CLI refuses each as an unknown option):
 
 | Scenario | Source | Render interval | FPS | Video frames |
 | --- | --- | --- | --- | --- |

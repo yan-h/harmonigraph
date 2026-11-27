@@ -551,9 +551,8 @@ fn audio_with_no_room_for_its_entry_stays_out_of_the_ring() {
 }
 
 /// A take counts as captured only the notes played once its first run opened,
-/// and never a reset. One counted before the run would let a stopped transport
-/// end a take armed ahead of the downbeat after a single note, before anything
-/// recorded.
+/// and never a reset. One counted before the run would put a note the take
+/// never recorded in the status line's tally.
 #[test]
 fn a_take_counts_only_the_notes_played_into_its_runs() {
     let mut b = Bench::new();
