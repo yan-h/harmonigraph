@@ -279,6 +279,20 @@ fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
     assert!((spectrum.newest_column().unwrap() - expected).abs() < 1e-9);
 }
 
+/// An analysis builds its analyzer at its first feed, at the settings and
+/// channels that feed brings, rather than a default one the feed would throw
+/// away: a bank costs the main thread about 0.68 ms per plugin instance.
+#[test]
+fn an_analysis_builds_its_analyzer_at_the_first_feed() {
+    let mut analysis = SpectrumAnalysis::default();
+    analysis.restart();
+    assert!(analysis.analyzer.is_none(), "an analysis fed nothing built a bank");
+    let config = SpectrumConfig { window: SpectrumWindow::Precise, ..SpectrumConfig::default() };
+    analysis.feed_source(&[0.0; 64], 2, 96_000.0, 0.0, &config, |_| {});
+    assert_eq!(analysis.analyzer.as_ref().map(|bank| bank.channels()), Some(2));
+    assert!((analysis.lag() - config.column_lag(96_000.0)).abs() < 1e-12);
+}
+
 /// The live pane and the offline render must analyze stereo IDENTICALLY, or a
 /// video would differ from the look it was dialed in against — and only for
 /// stereo-wide material, which is the hardest kind of difference to attribute to
