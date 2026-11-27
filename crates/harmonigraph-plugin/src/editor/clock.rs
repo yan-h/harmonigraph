@@ -33,20 +33,17 @@ pub(crate) struct ClockMapper {
 /// Recent, not ever: a lead the audio no longer supports — a short dropout
 /// that lost audio time, or a sample clock running slow against the wall —
 /// ages out of the window, and `shown` then holds until the audio catches up.
-/// Kept as two buckets so the window costs nothing to slide; it spans between
-/// one and three of them.
+/// Kept as two buckets of [`Lead::BUCKET_SECONDS`] so the window costs nothing
+/// to slide; it spans between one and three of them.
 ///
-/// A bucket is as long as it takes to see a heartbeat that met its drain
-/// almost at once, which depends on the drain and block lengths together:
-/// the waits spread over the shorter of the two, and one heartbeat arrives
-/// per the longer, so a window of `T` seconds finds a best wait within about
-/// `drain * block / T`. At the worker's 4 ms that is a quarter second below
-/// 1,500-sample blocks and 0.68 s at 4096. It was sized from the frame
-/// length while frames drained, when a fixed quarter second held only three
-/// 4096-sample blocks and each rollover stepped a 66.7 ms frame by up to
-/// 10.7 ms; at 4 ms even that fixed quarter second steps one by about 1.3 ms,
-/// and the sizing mostly serves the frame drains left when the worker fails
-/// to spawn (a shut window draws nothing for its 20 ms drains to step).
+/// A window of `T` seconds finds a best wait within about `drain * block / T`:
+/// the waits spread over the shorter of the drain and block lengths, and one
+/// heartbeat arrives per the longer. At the input worker's 4 ms steps, a
+/// quarter second leaves a rollover stepping the drawn time by under half a
+/// millisecond at 512-sample blocks and 1.8 ms at 4096 (at 44.1 kHz; 1.3 ms
+/// at 48). The bucket was once sized from the drain and block lengths, when
+/// frames drained and a rollover stepped a 66.7 ms frame by up to 10.7 ms; at
+/// the worker's steps that sizing was worth 0.45 ms at 4096-sample blocks.
 ///
 /// And never more than its own wait for its drain, plus delivery jitter, past
 /// the latest lead, which is all that wait can explain. A source running
@@ -61,28 +58,11 @@ struct Lead {
     /// The highest lead the latest heartbeat's wait can explain.
     ceiling: f64,
     since: f64,
-    /// How long the current bucket runs, set when it opens.
-    bucket: f64,
 }
 
 impl Lead {
-    /// Below a quarter second the window would gain nothing: the best of a
-    /// few dozen 512-sample blocks already met its drain almost at once.
-    const MIN_BUCKET_SECONDS: f64 = 0.25;
-
-    /// The longest a lead the audio dropped is held for, at up to three
-    /// buckets. With the window open, at 4 ms drains, a drain must find over
-    /// 0.375 s of audio to reach it — a hitch, which also lengthens the gap,
-    /// or a bounce running far faster than realtime, whose advance overstates
-    /// the block. With it shut, at 20 ms, blocks over about 3,500 samples
-    /// reach it as well.
-    /// Without it a bounce's advance would hold a dropped lead for minutes
-    /// (`a_bounce_holds_a_dropped_lead_for_seconds_not_minutes`).
-    const MAX_BUCKET_SECONDS: f64 = 3.0;
-
-    /// How close to the best possible wait the window's best one should be.
-    /// Losing that much at a rollover is a step of that much.
-    const RESOLUTION_SECONDS: f64 = 0.0005;
+    /// How long each of the window's two buckets runs.
+    const BUCKET_SECONDS: f64 = 0.25;
 
     /// The longest drain gap taken as a heartbeat's wait for its drain. The
     /// input worker drains every 4 ms with the window open and every 20 ms
@@ -96,34 +76,24 @@ impl Lead {
     /// stepped a 144 Hz picture by 25 ms when one in ten came 20–50 ms late.
     const JITTER_SECONDS: f64 = 0.045;
 
-    /// A heartbeat of `lead`, drained `gap` after the drain before it and
-    /// `advance` of audio past the heartbeat before it.
-    fn new(lead: f64, wall: f64, gap: f64, advance: f64) -> Self {
+    /// A heartbeat of `lead`, drained `gap` after the drain before it.
+    fn new(lead: f64, wall: f64, gap: f64) -> Self {
         Lead {
             previous: lead,
             current: lead,
             ceiling: lead + gap + Self::JITTER_SECONDS,
             since: wall,
-            bucket: Self::bucket(gap, advance),
         }
     }
 
-    /// The advance stands in for the block length, which it equals unless a
-    /// drain found several blocks, and then overstates.
-    fn bucket(gap: f64, advance: f64) -> f64 {
-        (gap * advance / Self::RESOLUTION_SECONDS)
-            .clamp(Self::MIN_BUCKET_SECONDS, Self::MAX_BUCKET_SECONDS)
-    }
-
-    fn push(&mut self, lead: f64, wall: f64, gap: f64, advance: f64) {
+    fn push(&mut self, lead: f64, wall: f64, gap: f64) {
         let age = wall - self.since;
-        if age >= 2.0 * self.bucket {
-            *self = Lead::new(lead, wall, gap, advance);
+        if age >= 2.0 * Self::BUCKET_SECONDS {
+            *self = Lead::new(lead, wall, gap);
             return;
         }
-        if age >= self.bucket {
+        if age >= Self::BUCKET_SECONDS {
             (self.previous, self.current, self.since) = (self.current, lead, wall);
-            self.bucket = Self::bucket(gap, advance);
         } else {
             self.current = self.current.max(lead);
         }
@@ -160,7 +130,6 @@ impl ClockMapper {
         if self.observed_audio == Some(newest_audio_time) {
             return;
         }
-        let advance = self.observed_audio.map_or(0.0, |previous| newest_audio_time - previous);
         let candidate = self.shown.max(gui_now) - newest_audio_time;
         let offset = match (self.offset, self.observed_audio) {
             (Some(offset), Some(previous)) if newest_audio_time >= previous => {
@@ -186,8 +155,8 @@ impl ClockMapper {
         self.observed_wall = gui_now;
         let lead = newest_audio_time + offset - gui_now;
         match &mut self.lead {
-            Some(window) => window.push(lead, gui_now, gap, advance),
-            None => self.lead = Some(Lead::new(lead, gui_now, gap, advance)),
+            Some(window) => window.push(lead, gui_now, gap),
+            None => self.lead = Some(Lead::new(lead, gui_now, gap)),
         }
     }
 
@@ -200,15 +169,6 @@ impl ClockMapper {
         // already pruned.
         self.shown = self.shown.max(now);
         self.shown
-    }
-
-    /// Map an audio timestamp to GUI time (clamped: never in the future).
-    #[cfg(test)]
-    pub fn map(&self, audio_time: f64, gui_now: f64) -> f64 {
-        match self.offset {
-            Some(offset) => (audio_time + offset).min(gui_now),
-            None => gui_now,
-        }
     }
 }
 
@@ -282,28 +242,30 @@ mod tests {
     /// the drawn time advanced 10.7, 6.9 and 3.7 ms on successive 6.9 ms
     /// frames — the picture running at half and one and a half speed by turns.
     /// What is left is the window letting go of its best phase now and then, a
-    /// few tenths of a millisecond for 512-sample blocks and about a
-    /// millisecond for 4096, at every frame rate a display link runs at.
-    /// Twelve seconds roll the longest window over several times. The frames
+    /// few tenths of a millisecond for 512-sample blocks and under two
+    /// milliseconds for 4096, at every frame rate a display link runs at.
+    /// Twelve seconds roll the window over many times. The frames
     /// of the first second are skipped, while the window first fills.
     ///
     /// Drained as the input worker drains with the window open: every
     /// [`DRAIN`], whatever the frame rate. A worker shut with the window
     /// drains at its own slower cadence, but then no frame is drawn to step,
-    /// so that pairing is not a row.
+    /// so that pairing is not a row. At both rates the projects run at.
     #[test]
     fn block_delivery_does_not_step_the_drawn_time() {
-        for (samples, limit) in [(512.0, 5e-4), (4096.0, 1.5e-3)] {
-            let block = samples / 48_000.0;
-            for frame in [FRAME, 1.0 / 60.0, 1.0 / 15.0] {
-                let every = DRAIN;
-                let frames = frames_at(frame, block, 12.0, every, on_time(block));
-                let worst = worst_step(&frames[(0.5 / frame) as usize..], frame);
-                assert!(
-                    worst < limit,
-                    "{samples} samples drained every {every:.4} s at {frame:.4} s a frame \
-                     advanced {worst:.4} s away from it"
-                );
+        for rate in [44_100.0, 48_000.0] {
+            for (samples, limit) in [(512.0, 5e-4), (4096.0, 2e-3)] {
+                let block = samples / rate;
+                for frame in [FRAME, 1.0 / 60.0, 1.0 / 15.0] {
+                    let every = DRAIN;
+                    let frames = frames_at(frame, block, 12.0, every, on_time(block));
+                    let worst = worst_step(&frames[(0.5 / frame) as usize..], frame);
+                    assert!(
+                        worst < limit,
+                        "{samples} samples at {rate} Hz drained every {every:.4} s at \
+                         {frame:.4} s a frame advanced {worst:.4} s away from it"
+                    );
+                }
             }
         }
     }
@@ -319,22 +281,6 @@ mod tests {
         assert!(ahead < 0.015, "drawn {ahead:.3} s past the newest audio");
     }
 
-    /// A drain that finds a second of audio — a bounce at a few hundred times
-    /// realtime, or a hitch — opens a bucket sized from that advance, and a
-    /// lead the audio then drops is held as long as the bucket runs. The
-    /// ceiling on a bucket keeps that to seconds: sized from the advance alone,
-    /// this one would hold 20 ms past the audio for eight.
-    #[test]
-    fn a_bounce_holds_a_dropped_lead_for_seconds_not_minutes() {
-        let mut lead = super::Lead::new(0.02, 0.0, DRAIN, 1.0);
-        let mut wall = 0.0;
-        while wall < 4.0 {
-            wall += DRAIN;
-            lead.push(0.0, wall, DRAIN, BLOCK);
-        }
-        assert!(lead.get() < 0.001, "drawn {:.3} s past the audio after {wall:.1} s", lead.get());
-    }
-
     /// A source running at half speed — an overloaded engine, a slow export —
     /// supports a lower lead with every block. Holding the best one ran the
     /// picture at wall speed and froze it by turns, with new columns and notes
@@ -348,23 +294,6 @@ mod tests {
     }
 
     #[test]
-    fn preserves_intra_batch_spacing() {
-        let mut clock = ClockMapper::new();
-        // Audio clock at ~100s, GUI clock at ~7s.
-        clock.observe(100.0, 7.0);
-        let a = clock.map(99.950, 7.0);
-        let b = clock.map(99.995, 7.0);
-        assert!((b - a - 0.045).abs() < 1e-9, "spacing lost: {a} {b}");
-    }
-
-    #[test]
-    fn never_maps_into_the_future() {
-        let mut clock = ClockMapper::new();
-        clock.observe(100.0, 7.0);
-        assert!(clock.map(120.0, 7.0) <= 7.0);
-    }
-
-    #[test]
     fn source_rewind_preserves_the_display_clock() {
         let mut clock = ClockMapper::new();
         clock.observe(0.0, 0.0);
@@ -375,7 +304,7 @@ mod tests {
         clock.observe(0.1, 2.0);
         let now = clock.now(2.0);
         assert_eq!(now, 10.0);
-        assert_eq!(clock.map(0.1, now), now);
+        assert_eq!(0.1 + clock.offset.unwrap(), now, "the rewound audio maps to the line");
     }
 
     #[test]
@@ -383,8 +312,7 @@ mod tests {
         let mut clock = ClockMapper::new();
         clock.observe(100.0, 7.0); // offset -93
         clock.observe(101.0, 8.1); // candidate -92.9: jitter, not a reset
-        let mapped = clock.map(101.0, 9.0);
-        assert_eq!(mapped, 8.0, "delivery jitter must not move already-stamped history");
+        assert_eq!(clock.offset, Some(-93.0), "delivery jitter must not move stamped history");
         assert_eq!(clock.now(8.1), 8.0);
     }
 

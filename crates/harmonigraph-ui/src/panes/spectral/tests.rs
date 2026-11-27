@@ -2267,6 +2267,37 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
     assert_eq!(bands(0.5), 1, "half a semitone sharp has none");
 }
 
+/// The band asks for frames while its note's envelope moves, its arrival and
+/// its fade after the key comes up, and holds nothing once a held note has
+/// arrived: the lattice draws nothing for such a note, so nothing else would
+/// draw the band in.
+#[test]
+fn an_off_lattice_band_asks_for_frames_while_its_envelope_moves() {
+    let mut state = fresh();
+    state.appearance.spectrum.orientation = SpectralOrientation::Left;
+    state.appearance.spectrum.low_midi = 55.0;
+    state.appearance.spectrum.high_midi = 67.0;
+    state.appearance.view.fade_time = 0.5;
+    let quarter = NoteEventKind::Tuning { semitones: 0.5 };
+    let bent = NoteEvent { kind: quarter, ..NoteEvent::off(0.0, SourceId::DIRECT, 0, 60) };
+    state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+    state.runtime.tracker.handle_event(bent);
+    let asks = |state: &mut PictureState, now: f64| {
+        state.surfaces.moving_this_frame = Default::default();
+        let env = state.appearance.view.envelope();
+        let voice = state.runtime.tracker.voices().next().expect("the fixture's note sounds");
+        let want = theme::picture_off_scale().gamma_multiply(0.3 * voice.activation(now, &env));
+        let out = painted_pane(WIDE, state, now);
+        let banded =
+            out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want));
+        (banded, state.surfaces.moving_this_frame.asks_for(crate::Reason::Envelope))
+    };
+    assert_eq!(asks(&mut state, 0.2), (true, true), "an arriving band asked for nothing");
+    assert_eq!(asks(&mut state, 0.6), (true, false), "a band that has arrived held the loop");
+    state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+    assert_eq!(asks(&mut state, 1.2), (true, true), "a fading band asked for nothing");
+}
+
 /// A note the lattice is LIGHTING is never flagged as off it, however far out
 /// the node sits.
 ///
@@ -3365,7 +3396,7 @@ fn tape_modes_roll_holds_nothing_once_its_notes_are_drawn() {
     tape_frames(&mut state, Navigation::Docked, vec![vec![]]);
     let drawn = super::roll::take_roll_draw_probe().map(|probe| probe.note_count);
     assert_eq!(drawn, Some(2), "the fixture draws the recorded note and the one played over it");
-    assert!(!state.surfaces.moving_this_frame.asks_for(crate::Reason::RollInSpan));
+    assert!(!state.surfaces.moving_this_frame.asks_for(crate::Reason::RollOnScreen));
 }
 
 /// Tape mode names the notes it rolls (#1728): the recording's in the window,
@@ -3737,11 +3768,12 @@ fn a_tape_playhead_asks_for_a_frame_each_device_pixel_it_crosses() {
         "a quarter-speed cue paced at {slow} s, not 4 x {zoomed}"
     );
 
-    // Across the whole song it crosses a pixel less often than the idle poll
-    // draws, which then draws it.
+    // Across the whole song it crosses a pixel less often than the 50 ms poll
+    // it rode until #1994 HW1, and asks for the frame each pixel falls on.
     let (ctx, mut state) = auditioning(1.0, false);
-    let crawl = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
-    assert_eq!(crawl, None, "a playhead crawling over the whole song held the loop");
+    let crawl = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true)
+        .expect("a playhead crawling over the whole song left its pixels to the idle poll");
+    assert!(crawl > 0.05, "the fixture's playhead must crawl: {crawl} s a pixel");
 
     let (ctx, mut state) = auditioning(1.0, true);
     state.runtime.tape.heard = None;
@@ -3761,6 +3793,34 @@ fn a_cues_first_heard_frame_asks_for_the_next() {
         first.is_some_and(|wait| wait < 1.0 / 144.0),
         "the cue's first frame waited: {first:?}"
     );
+}
+
+/// A live note struck over an audition and still held once it has stopped
+/// grows along the song axis at the audition's speed with no playhead left
+/// to ask for frames, so the overlay asks for its own, a device pixel at a
+/// time; released, it stands still and asks nothing.
+#[test]
+fn a_live_note_held_over_a_stopped_audition_asks_for_its_pixels() {
+    let (ctx, mut state) = auditioning(1.0, false);
+    // The pane draws at the display time 100 s: the audition began from
+    // song 1 s at 99 s and stopped at 99.5 s, the note struck at 99.2 s.
+    state.runtime.tape.audition =
+        Some(crate::tape::Audition { clock: 99.0, song: 1.0, speed: 1.0, until: Some(99.5) });
+    state.runtime.tape.heard = None;
+    state.appearance.spectrum.show_roll = true;
+    state.runtime.tracker.handle_event(NoteEvent::on(99.2, SourceId::DIRECT, 0, 60, 1.0));
+    let held = |state: &mut PictureState| {
+        playhead_frames(&ctx, state, Drawn::Pane, 1, false);
+        let drawn = crate::panes::spectral::roll::take_roll_draw_probe();
+        (drawn.map_or(0, |probe| probe.note_count), state.surfaces.moving_this_frame)
+    };
+    let (drawn, asked) = held(&mut state);
+    assert!(drawn > 0, "the fixture's live note must be drawn over the song");
+    let pace = asked.after(crate::Reason::RollOnScreen).expect("the growing note idled");
+    assert!(pace > 0.0, "a growing note asked for every frame: {pace} s");
+    state.runtime.tracker.handle_event(NoteEvent::off(99.8, SourceId::DIRECT, 0, 60));
+    let (_, asked) = held(&mut state);
+    assert!(!asked.asks_for(crate::Reason::RollOnScreen), "a released overlay asked");
 }
 
 /// The overview's playhead, drawn alone, by the same rule as the pane's: on a

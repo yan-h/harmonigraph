@@ -22,43 +22,41 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     // A roll that is not drawn holds nothing, though its note is in its window.
     draw_panes(&ctx, &mut state, 1.5, &[]);
     assert!(
-        !Animating::of(&state).asks_for(Reason::RollInSpan),
+        !Animating::of(&state).asks_for(Reason::RollOnScreen),
         "an undrawn roll held the loop awake"
     );
     draw_panes(&ctx, &mut state, 1.6, &[Pane::Spectral]);
     assert!(
-        Animating::of(&state).asks_for(Reason::RollInSpan),
+        Animating::of(&state).asks_for(Reason::RollOnScreen),
         "the extension past the window idled"
     );
     draw_panes(&ctx, &mut state, 2.2, &[Pane::Spectral]);
     assert!(
-        !Animating::of(&state).asks_for(Reason::RollInSpan),
+        !Animating::of(&state).asks_for(Reason::RollOnScreen),
         "the roll held the loop past its extension"
     );
 }
 
-/// The roll holds the loop for a note it draws that is still inside its own
-/// Span, and for nothing else (#1835): not a note off the pitch zoom, which
-/// draws nothing, and not an older note's overhang sliding off the far edge
-/// because a newer, undrawn note is still inside the Span. The lone on-zoom
+/// The roll asks for frames for a note it draws, and for nothing else (#1835):
+/// not a note off the pitch zoom, which draws nothing. An older note's
+/// overhang still sliding off the far edge asks for its next pixel as its
+/// ribbon did inside the Span, since it moves with the scroll and the idle
+/// poll would step it a quarter second at a time (#1983). The lone on-zoom
 /// note is the control.
 #[test]
-fn the_roll_holds_the_loop_only_for_a_drawn_note_inside_its_span() {
-    let held = |notes, now| {
-        let (after, drawn) = roll_frame(notes, now, 10.0, 4.0);
-        (after.is_some(), drawn)
-    };
+fn the_roll_asks_for_frames_only_for_a_drawn_note() {
+    let held = |notes, now| roll_frame(notes, now, 10.0, 4.0);
     // Long after each note's own fade, so the roll is the only thing that
     // could still be moving.
-    let (held_, drawn) = held(&[(72, 0.0, 0.1)], 5.0);
-    assert!(drawn > 0 && held_, "a note scrolling on the zoom idled");
-    let (held_, drawn) = held(&[(36, 0.0, 0.1)], 5.0);
-    assert!(drawn == 0 && !held_, "a note off the zoom held a still roll awake");
+    let (inside, drawn) = held(&[(72, 0.0, 0.1)], 5.0);
+    assert!(drawn > 0 && inside.is_some(), "a note scrolling on the zoom idled");
+    let (off, drawn) = held(&[(36, 0.0, 0.1)], 5.0);
+    assert!(drawn == 0 && off.is_none(), "a note off the zoom held a still roll awake");
     // The older note's body left the Span at 10.1 s; its outline still slides
     // off the far edge. The newer note is inside the Span, off the zoom.
-    let (held_, drawn) = held(&[(72, 0.0, 0.1), (36, 5.0, 5.1)], 10.15);
+    let (overhang, drawn) = held(&[(72, 0.0, 0.1), (36, 5.0, 5.1)], 10.15);
     assert!(drawn > 0, "the fixture's older note must still overhang the far edge");
-    assert!(!held_, "an undrawn newer note held the older note's overhang at full rate");
+    assert_eq!(overhang, inside, "the overhang did not ask for its next pixel as its ribbon did");
 }
 
 /// A ribbon that only scrolls asks for the frame where the Span's scroll next
@@ -83,10 +81,25 @@ fn a_scrolling_roll_asks_for_its_next_pixel_and_a_fading_lead_for_every_frame() 
     // Inside the Lead's 0.25 s release.
     let (fading, _) = roll_frame(&note, 0.2, 10.0, 4.0);
     assert_eq!(fading, Some(0.0), "a fading Lead was paced as a scroll");
+    // Released at the very frame drawn, its fade not yet begun.
+    let (released, _) = roll_frame(&[(72, 0.0, 5.0)], 5.0, 10.0, 4.0);
+    assert_eq!(released, Some(0.0), "a Lead released this instant was paced as a scroll");
+}
+
+/// A held note's Lead stands still at the now-line, its ribbon only scrolling
+/// behind it, so the live roll asks for the frame where the ribbon next
+/// crosses a device pixel rather than for every frame: a chord held over a
+/// still picture costs the main thread its scroll, not the display rate.
+#[test]
+fn a_held_notes_lead_asks_for_no_frame_of_its_own() {
+    let (held, drawn) = roll_frame(&[(72, 0.0, f64::INFINITY)], 5.0, 10.0, 4.0);
+    let held = held.expect("a held note's ribbon idled");
+    assert!(drawn > 0 && held > 0.0, "a held Lead asked for every frame: {held} s");
 }
 
 /// One frame of the Spectral pane at `now`, with `notes` (key, on, off) played
-/// into a roll of `span` seconds at `ppp` device pixels a point: fine ones,
+/// into a roll of `span` seconds at `ppp` device pixels a point (an infinite
+/// off leaves its note held): fine ones,
 /// as the Retina display's, make its scroll cross a device pixel sooner than
 /// the idle poll would draw it:
 /// when the roll asked for its next frame, and how many instances it drew.
@@ -105,7 +118,9 @@ fn roll_frame(notes: &[(u8, f64, f64)], now: f64, span: f32, ppp: f32) -> (Optio
     let tracker = &mut state.picture.runtime.tracker;
     for &(key, on, off) in notes {
         tracker.handle_event(NoteEvent::on(on, SourceId::DIRECT, 0, key, 1.0));
-        tracker.handle_event(NoteEvent::off(off, SourceId::DIRECT, 0, key));
+        if off.is_finite() {
+            tracker.handle_event(NoteEvent::off(off, SourceId::DIRECT, 0, key));
+        }
     }
     let ctx = super::probe::themed_at(ppp);
     // egui lays out the first pass after a change of scale in its default
@@ -115,7 +130,7 @@ fn roll_frame(notes: &[(u8, f64, f64)], now: f64, span: f32, ppp: f32) -> (Optio
     draw_panes(&ctx, &mut state, now, &[Pane::Spectral]);
     let drawn =
         crate::panes::spectral::roll::take_roll_draw_probe().map_or(0, |probe| probe.note_count);
-    (Animating::of(&state).after(Reason::RollInSpan), drawn)
+    (Animating::of(&state).after(Reason::RollOnScreen), drawn)
 }
 
 /// A paced reason asks for its own frame and the sooner of two asks wins; one
@@ -128,19 +143,19 @@ fn the_soonest_ask_wins_and_one_past_the_poll_holds_nothing() {
     assert_eq!(held.next_change(), None);
     held.hold_for(Reason::Playhead, 0.02);
     held.hold_for(Reason::Playhead, 0.03);
-    held.hold_for(Reason::RollInSpan, 0.01);
+    held.hold_for(Reason::RollOnScreen, 0.01);
     assert_eq!(held.after(Reason::Playhead), Some(0.02), "a later ask replaced a sooner one");
     assert_eq!(held.next_change(), Some(0.01));
     assert!(!held.every_frame(Some(144.0)), "a 10 ms pace was judged against 144 Hz");
     assert!(held.every_frame(Some(60.0)), "a pace under one 60 Hz frame was not judged");
-    held.hold(Reason::Releasing);
+    held.hold(Reason::Lattice);
     assert_eq!(held.next_change(), Some(0.0));
 
     let mut still = Animating::default();
     still.hold_for(Reason::Audible, crate::IDLE_REPAINT_INTERVAL.as_secs_f64());
     assert!(!still.asks(), "a pace at the idle poll held the loop");
     assert_eq!(still.to_string(), "");
-    assert_eq!(held.to_string(), "roll~ releasing playhead~");
+    assert_eq!(held.to_string(), "roll~ lattice playhead~");
 }
 
 /// Run one frame of `panes` at `t`, each filling a pass of its own, as a shell
@@ -225,12 +240,12 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
             }
         } else if t >= 3.0 {
             assert!(
-                !Animating::of(&state).asks_for(Reason::RollInSpan),
+                !Animating::of(&state).asks_for(Reason::RollOnScreen),
                 "the roll must not be what keeps this awake"
             );
             let visible = level * gain > 0.5 / 255.0;
             assert_eq!(
-                Animating::of(&state).asks_for(Reason::Releasing),
+                Animating::of(&state).asks_for(Reason::Lattice),
                 visible,
                 "at {t} s the light is {level} at gain {gain}"
             );
@@ -273,20 +288,102 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
         draw(&mut abandoned, t);
     }
     assert!(
-        Animating::of(&abandoned).asks_for(Reason::Releasing),
+        Animating::of(&abandoned).asks_for(Reason::Lattice),
         "the tail was over before the surface hid"
     );
     draw_panes(&ctx, &mut abandoned, 4.05, &[]);
     assert!(
-        !Animating::of(&abandoned).asks_for(Reason::Releasing),
+        !Animating::of(&abandoned).asks_for(Reason::Lattice),
         "an undrawn surface held the loop awake"
     );
 
     state.picture.appearance.view.glow_strength = 0.0;
     draw(&mut state, 60.0);
     assert!(
-        !Animating::of(&state).asks_for(Reason::Releasing),
+        !Animating::of(&state).asks_for(Reason::Lattice),
         "a glow that does not draw held the loop awake"
+    );
+}
+
+/// A lit lattice's glow atmosphere moves on its own clock under a held chord
+/// whose light has settled: every frame while it breathes, its pattern moves
+/// or its Stars twinkle, and at the pace its drift crosses a device pixel
+/// where only the drift moves. Nothing while every motion dial is at 0, the
+/// glow is off, no node is lit or the lattice is not drawn.
+#[test]
+fn a_lit_lattices_atmosphere_asks_for_its_own_frames() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+    use harmonigraph_scene::LatticeMaterial;
+
+    let ctx = super::probe::themed();
+    let asked = |look: &dyn Fn(&mut SharedState), lit: bool, panes: &[Pane]| {
+        let mut state = fresh();
+        state.picture.appearance.view.fade_time = 0.0;
+        look(&mut state);
+        if lit {
+            let note = NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
+            state.picture.runtime.tracker.handle_event(note);
+        }
+        // Long enough for the light to settle on its attack.
+        for k in 0..=40 {
+            draw_panes(&ctx, &mut state, f64::from(k) * 0.25, &[Pane::Lattice]);
+        }
+        draw_panes(&ctx, &mut state, 10.25, panes);
+        Animating::of(&state).after(Reason::Lattice)
+    };
+    let fresh_look = |_: &mut SharedState| {};
+    assert_eq!(asked(&fresh_look, true, &[Pane::Lattice]), Some(0.0), "the fresh look's breath");
+    let still_but = |style: LatticeMaterial, speed: f32| {
+        move |state: &mut SharedState| {
+            let atmosphere = &mut state.picture.appearance.view.atmosphere;
+            atmosphere.breath_amount = 0.0;
+            atmosphere.texture_depth = 0.0;
+            atmosphere.material_style = style;
+            atmosphere.material_speed = speed;
+        }
+    };
+    // At the fastest drift, under a pixel a poll even on this small pane.
+    let drift = asked(&still_but(LatticeMaterial::Watercolor, 20.0), true, &[Pane::Lattice]);
+    assert!(drift.is_some_and(|pace| pace > 0.0), "a drift alone paced at {drift:?}");
+    let stars = asked(&still_but(LatticeMaterial::Stars, 0.0), true, &[Pane::Lattice]);
+    assert_eq!(stars, Some(0.0), "twinkling Stars");
+    let still = still_but(LatticeMaterial::Watercolor, 0.0);
+    assert_eq!(asked(&still, true, &[Pane::Lattice]), None, "every motion dial at 0");
+    assert_eq!(asked(&fresh_look, false, &[Pane::Lattice]), None, "no node lit");
+    assert_eq!(asked(&fresh_look, true, &[]), None, "the lattice not drawn");
+    let dark = |state: &mut SharedState| state.picture.appearance.view.glow_strength = 0.0;
+    assert_eq!(asked(&dark, true, &[Pane::Lattice]), None, "the glow off");
+}
+
+/// A note let go inside its attack, under another voice of its key that
+/// already lights the node in full, has the lattice ask for the frame its
+/// deferred off is due at, though nothing on the node moves before it.
+#[test]
+fn a_deferred_off_asks_for_the_frame_it_is_due_at() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    let mut state = fresh();
+    let view = &mut state.picture.appearance.view;
+    view.fade_time = 0.5;
+    view.mark_delay = 0.0;
+    view.glow_strength = 0.0;
+    let ctx = super::probe::themed();
+    let tracker = &mut state.picture.runtime.tracker;
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+    for k in 0..=20 {
+        draw_panes(&ctx, &mut state, f64::from(k) * 0.05, &[Pane::Lattice]);
+    }
+    let tracker = &mut state.picture.runtime.tracker;
+    tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 1, 60, 1.0));
+    tracker.handle_event(NoteEvent::off(1.05, SourceId::DIRECT, 1, 60));
+    draw_panes(&ctx, &mut state, 1.05, &[Pane::Lattice]);
+    // Inside the idle poll of it: an ask further out is the poll's to draw,
+    // whose frame then asks for what is left.
+    draw_panes(&ctx, &mut state, 1.35, &[Pane::Lattice]);
+    let due = Animating::of(&state).after(Reason::Lattice);
+    assert!(
+        due.is_some_and(|after| (after - 0.15).abs() < 1e-9),
+        "the off due at 1.5 s asked for {due:?} at 1.35 s"
     );
 }
 
@@ -325,10 +422,10 @@ fn a_released_note_keeps_repainting_through_its_staggered_departure() {
     // starting half a fade later: 1.15 s past the off.
     draw_panes(&ctx, &mut state, 1.0 + 1.1, &[Pane::Lattice]);
     assert!(state.picture.runtime.tracker.voices().next().is_none(), "the voice outlasted 1 s");
-    assert!(Animating::of(&state).asks_for(Reason::Releasing), "the departure was cut short");
+    assert!(Animating::of(&state).asks_for(Reason::Lattice), "the departure was cut short");
     draw_panes(&ctx, &mut state, 1.0 + 1.2, &[Pane::Lattice]);
     assert!(
-        !Animating::of(&state).asks_for(Reason::Releasing),
+        !Animating::of(&state).asks_for(Reason::Lattice),
         "the loop stayed awake past the departure"
     );
 }
@@ -842,22 +939,25 @@ fn the_chrome_cues_animate_at_about_30_hz_while_in_view() {
     assert!(delay(1000.0, &mut stripes) > chrome, "stripes out of view asked for frames");
 }
 
-/// A note arriving in an idle editor paints on the next tick, not at the idle
-/// poll: it makes a voice, and a voice is what `root_ui` paces by. The input
-/// worker's drain no longer reports an arrival, so this is what tells an idle
-/// editor one came.
-///
-/// The roll and the release fade also keep a fresh note animating, so the voice
-/// is isolated by clearing the roll before the frame (Clear display history on
-/// a held note), leaving the voice as the only thing in motion.
+/// An idle editor waits the whole idle poll (#1673), and a note held over a
+/// still lattice leaves it there once the note has arrived: a voice holds
+/// nothing of its own, since the input worker asks for a pass at each edit
+/// of the tracker (#1983), and each picture answers for its own motion, the
+/// lattice for the note's arrival.
 #[test]
-fn a_voice_in_an_idle_editor_asks_for_the_next_tick() {
+fn a_held_note_over_a_still_lattice_asks_for_nothing_once_it_has_arrived() {
     use harmonigraph_core::{NoteEvent, SourceId};
 
     let delay = |output: &egui::FullOutput| {
         output.viewport_output.values().map(|viewport| viewport.repaint_delay).min().unwrap()
     };
     let mut state = fresh();
+    state.workspace.layout = workspace::Layout::solo(panes::Tab::Lattice);
+    state.picture.appearance.view.fade_time = 0.2;
+    // A still atmosphere: no breathing, pattern or drift of its own.
+    let atmosphere = &mut state.picture.appearance.view.atmosphere;
+    (atmosphere.breath_amount, atmosphere.texture_depth, atmosphere.material_speed) =
+        (0.0, 0.0, 0.0);
     let mut harness = DockHarness::new();
     // Settled: the opening frames lay the dock out and ask to be redrawn.
     let mut idle = harness.frame(&mut state, vec![]);
@@ -869,10 +969,19 @@ fn a_voice_in_an_idle_editor_asks_for_the_next_tick() {
 
     let at = harness.next_time();
     state.picture.runtime.tracker.handle_event(NoteEvent::on(at, SourceId::DIRECT, 0, 60, 1.0));
-    state.picture.runtime.tracker.clear_roll();
-    assert!(state.picture.runtime.tracker.voices().next().is_some(), "the note still sounds");
-    let sounding = harness.frame(&mut state, vec![]);
-    assert_eq!(delay(&sounding), std::time::Duration::ZERO, "a voice repaints at once");
+    let arriving = harness.frame(&mut state, vec![]);
+    assert_eq!(delay(&arriving), std::time::Duration::ZERO, "the note's arrival waited");
+    let mut frames = 0;
+    while Animating::of(&state).asks() {
+        assert!(frames < 60 * 10, "something held the loop for 10 s: {}", Animating::of(&state));
+        harness.frame(&mut state, vec![]);
+        frames += 1;
+    }
+    // The frame after the one that settled, which egui redraws for its own
+    // layout's sake.
+    let still = harness.frame(&mut state, vec![]);
+    assert!(state.picture.runtime.tracker.held_count() == 1, "the note must still be held");
+    assert_eq!(delay(&still), crate::IDLE_REPAINT_INTERVAL, "a held note held the loop");
 }
 
 /// Tab with a modifier is not the chrome toggle and moves no focus. In the
@@ -1095,29 +1204,46 @@ fn an_opaque_line_ends_round_and_a_translucent_one_square() {
 /// A released note left scrolling through the roll, with nothing else in
 /// motion, has the editor ask for the frame where the roll next crosses a
 /// device pixel rather than for every frame the shell offers, or the idle
-/// poll (#1911).
+/// poll (#1911): on a short Span, where a pixel takes a few milliseconds, and
+/// on a long one, where it takes longer than the 50 ms poll that slow scrolls
+/// rode until #1994 HW1, as at the fresh Span in a full-size editor, and
+/// shorter than the poll's quarter second now.
 #[test]
 fn a_roll_left_scrolling_asks_the_shell_for_its_next_pixel() {
+    let short = left_scrolling(2.0, 4.0);
+    assert!(short < 0.01, "a short Span on fine pixels paced at {short} s");
+    let slow = left_scrolling(40.0, 4.0);
+    assert!(
+        slow > 0.05 && slow < crate::IDLE_REPAINT_INTERVAL.as_secs_f64(),
+        "the fixture's slow scroll must pace between the old poll and the new: {slow} s"
+    );
+}
+
+/// The pace the shell is asked for once a released note is left scrolling a
+/// roll of `span` seconds on `ppp` device pixels a point, with nothing else in
+/// motion, checked against the roll's own ask.
+fn left_scrolling(span: f32, ppp: f32) -> f64 {
     use harmonigraph_core::{NoteEvent, SourceId};
 
     let delay = |output: &egui::FullOutput| {
         output.viewport_output.values().map(|viewport| viewport.repaint_delay).min().unwrap()
     };
     let mut state = fresh();
-    // A short Span on fine pixels, so the scroll crosses a device pixel
-    // sooner than the idle poll would draw it; a short Lead release and note
-    // Fade, so the note settles well inside the Span; and no Background glow,
-    // whose colour eases on for longer than the Span.
-    state.picture.appearance.spectrum.roll_seconds = 2.0;
+    // A short Lead release and note Fade, so the note settles well inside the
+    // Span, and no Background glow, whose colour eases on for longer than a
+    // short Span.
+    state.picture.appearance.spectrum.roll_seconds = span;
     state.picture.appearance.spectrum.roll_lead_release = 0.25;
     state.picture.appearance.view.fade_time = 0.1;
     state.picture.appearance.view.glow_strength = 0.0;
     let mut harness = DockHarness::new();
-    harness.ctx.set_pixels_per_point(4.0);
+    harness.ctx.set_pixels_per_point(ppp);
     let at = harness.next_time();
     let tracker = &mut state.picture.runtime.tracker;
+    // A fortieth of the Span, so the ribbon is drawn at any Span.
+    let length = f64::from(span) / 40.0;
     tracker.handle_event(NoteEvent::on(at, SourceId::DIRECT, 0, 72, 1.0));
-    tracker.handle_event(NoteEvent::off(at + 0.05, SourceId::DIRECT, 0, 72));
+    tracker.handle_event(NoteEvent::off(at + length, SourceId::DIRECT, 0, 72));
     let mut last = harness.frame(&mut state, vec![]);
     let mut frames = 0;
     // Until the note's voice, its Lead and the lattice's departure settle.
@@ -1131,11 +1257,12 @@ fn a_roll_left_scrolling_asks_the_shell_for_its_next_pixel() {
         last = harness.frame(&mut state, vec![]);
     }
     let held = Animating::of(&state);
-    let roll = held.after(Reason::RollInSpan).expect("the roll stopped scrolling first");
+    let roll = held.after(Reason::RollOnScreen).expect("the roll stopped scrolling first");
     assert_eq!(held.next_change(), Some(roll), "something else asked sooner: {held}");
     let asked = delay(&last).as_secs_f64();
     assert!(
         (asked - roll).abs() < 1e-6,
         "the shell was asked for {asked} s, not the roll's {roll}"
     );
+    roll
 }

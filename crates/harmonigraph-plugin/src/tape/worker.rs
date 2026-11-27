@@ -290,7 +290,7 @@ impl Worker {
         let rate = block.format.sample_rate;
         let channels = block.format.channels;
         let main = !block.format.sidechain && channels > 0;
-        let presentation = block.presentation();
+        let presentation = block.start;
         self.drained_through = presentation + block.frames as f64 / f64::from(rate);
         // Before the rolling test: a stopped block at a new rate must clear
         // the tape too, or a cue before the transport next rolls would play

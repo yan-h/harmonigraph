@@ -285,12 +285,17 @@ pub(super) fn draw(
     let axis = SongAxis::new(axes, split, window);
     heatmap(painter, axes, scale, state, &axis, surface, TapeStrip::Region);
     if state.appearance.spectrum.show_roll {
-        // Through the live roll's own rule, which holds nothing for a song
-        // axis: it stands still, and a live note played over the audition
-        // moves only while it sounds, which its voice holds. Both sources are
-        // built without a now line, which alone scrolls a roll or grows a lead.
+        // Through the live roll's own rule (`roll::RollMotion`), under which a
+        // song axis, built without a now line, stands still; what grows on it
+        // is `growing`'s.
+        let now = frame.now;
         let motion = notes(painter, axes, scale, state, &axis, surface, frame);
         motion.hold(&mut state.surfaces.moving_this_frame, 0.0);
+        // A live note struck over the audition grows along the song at the
+        // audition's speed while it sounds, its playhead stopped or not.
+        if let Some(pixel) = growing(painter, state, scale, &axis, now) {
+            state.surfaces.moving_this_frame.hold_for(crate::Reason::RollOnScreen, pixel);
+        }
     }
     let view = &mut state.runtime.tape;
     coverage(painter, axes, view, &axis);
@@ -521,6 +526,34 @@ fn notes(
         point_scale: frame.point_scale,
     };
     roll::draw_rolls(painter, axes, scale, frame.width, state, &options, &sources)
+}
+
+/// The seconds until a live note played over the audition and still sounding
+/// grows by a device pixel along the song shown, if one does: its end is the
+/// song the audition would have reached by `now`, which moves at the
+/// audition's speed whether its playhead still runs or not.
+fn growing(
+    painter: &egui::Painter,
+    state: &PictureState,
+    scale: &PitchScale,
+    axis: &SongAxis,
+    now: f64,
+) -> Option<f64> {
+    let view = &state.runtime.tape;
+    let audition = view.audition?;
+    let until = audition.until.unwrap_or(f64::INFINITY);
+    let roll = state.roll();
+    let sounding = roll.notes().any(|note| {
+        !note.source.is_tape()
+            && !roll.hides(note.source)
+            && (audition.clock..until).contains(&note.start)
+            && note.stop(now) >= now
+            && scale.contains(note.end_pitch())
+    });
+    let tip = audition.song + (now - audition.clock) * audition.speed;
+    let ppp = painter.ctx().pixels_per_point();
+    let speed = screen_speed(view, axis, tip, audition.speed, ppp);
+    (sounding && axis.shows(tip) && speed > 0.0).then(|| 1.0 / speed)
 }
 
 /// The rolls Tape mode draws and names over `window`: the recording's notes,

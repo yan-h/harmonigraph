@@ -9,8 +9,8 @@ use crate::{HarmonigraphParams, PluginParamBackend};
 use super::lock::EditorLock;
 use super::persist::EguiState;
 
-/// The plugin's per-frame GUI work: take the frame's lock, close out the note
-/// frame — and then hand the state the input worker has fed to
+/// The plugin's per-frame GUI work: take the frame's lock, then hand the state
+/// the input worker has fed to
 /// [`harmonigraph_ui::shell::Frame`], which draws it and answers with
 /// whatever the folds it settled leave the window needing, with the take
 /// reconciled around it ([`EditorShared::take_pass`](super::EditorShared::take_pass)).
@@ -67,14 +67,9 @@ pub(super) fn frame(
     let wall = shared.clock.frame_wall(timing, now);
     let now = shared.clock.display_now(wall);
     state.params.settings.deliver_notices(&mut shared.ui);
-    // Snapshot current host movement before arming or queuing a render.
+    // The host's camera reaches the look in `begin_frame`, at the top of the
+    // UI pass.
     let configuration = state.params.configuration_view();
-    shared.ui.picture.appearance.sync_camera(&PluginParamBackend {
-        params: &state.params,
-        host: context,
-        gestures: &shared.gestures,
-        configuration,
-    });
     // Last frame's costs that the shell measures and the UI cannot: they
     // happen after `root_ui` returns.
     //

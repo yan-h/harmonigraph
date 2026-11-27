@@ -10,7 +10,7 @@ pure `std`.
 - `configuration` and `policy` — resolved musical settings and the bounded adaptive-tuning scorer.
 - `canonical` and `confirmed` — the source-aware publication boundary and its current-pitch state.
 - `spectrum` — the shared pitch axis and Hz/MIDI conversions.
-- `spectrogram` — quantized, age-tiered spectrum history.
+- `spectrogram` — the byte a spectrogram slab stores, which the UI's slab pyramid and the shader share; the history itself is the UI's (#1770).
 
 ## License
 

@@ -47,8 +47,11 @@ submitted after the target anyway) or late GPU.
   last sound has scrolled out of the Span, since silence does not count as
   audible audio. A reason asking for a later frame than the next is logged
   with `~`, as `roll~`;
-- first note: the frames in the second and a half after the first note of
-  each opening, with any stall and the costliest frames;
+- first reported motion: the frames in the second and a half after the first
+  stretch in each opening whose `animating` row names a picture a note moves
+  (the lattice, the roll, an envelope), with any stall and the costliest
+  frames. No reason names a note itself since #1983, so a glow, a drift or a
+  scroll with no note starts one too;
 - exports: missed refreshes in each export's first 30 s against the 30 s
   before it.
 
@@ -73,7 +76,7 @@ SILENCE_MIN = 60.0
 NOTE_AFTER = 1.5
 # How much of an export, and of the time before it, is compared.
 EXPORT_COMPARE = 30.0
-# A shown editor draws at least its 50 ms idle poll, so a longer gap between
+# A shown editor draws at least its 250 ms idle poll, so a longer gap between
 # drawn frames is a window that could not present: covered, or minimized.
 UNSHOWN_GAP = 1.0
 RATES = {1: 'Display', 2: 'Half', 3: 'Third', 4: 'Quarter'}
@@ -388,14 +391,19 @@ def report_silence(run, evs, t0):
 
 def report_first_note(run, evs, t0):
     stretches = timeline(evs, run[-1]['t'], 'animating')
-    note = next((start for start, _, reasons in stretches if 'voices' in reasons), None)
+    # A note asks no reason of its own since #1983: it shows as the pictures
+    # it moves, which other motion reports under too, so this is the first
+    # reported motion, a note's or not.
+    notes = ('lattice', 'roll', 'envelope')
+    note = next((start for start, _, reasons in stretches
+                 if any(r in reasons for r in notes)), None)
     if note is None:
-        print('  first note: none played while open')
+        print('  first reported motion: none while open')
         return
     at_open = stretches[0][2] if stretches else []
-    warm = [r for r in at_open if r in ('voices', 'roll', 'releasing')]
-    print(f'  first note at {note - t0:.2f} s, {note - run[0]["t"]:.1f} s after opening'
-          + (f'; opened with {" ".join(warm)} already animating, so not a cold first note'
+    warm = [r for r in at_open if r in notes]
+    print(f'  first reported motion at {note - t0:.2f} s, {note - run[0]["t"]:.1f} s after '
+          'opening' + (f'; opened with {" ".join(warm)} already animating, so not a cold start'
              if warm else ''))
     s = stretch(run, note, note + NOTE_AFTER)
     for fr, glass, why in s['stalls']:
@@ -470,7 +478,7 @@ def main():
     parser.add_argument('--to', dest='end', type=float, default=float('inf'))
     parser.add_argument('--misses', action='store_true', help='list every stall')
     parser.add_argument('--events', action='store_true',
-                        help='report on silence, first notes and exports instead')
+                        help='report on silence, first reported motion and exports instead')
     args = parser.parse_args()
 
     path = args.log or newest_log()

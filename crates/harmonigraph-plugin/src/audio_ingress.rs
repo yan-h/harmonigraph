@@ -6,7 +6,7 @@
 //! Source frames count from an epoch's first callback, including dropped frames.
 //! An explicit plugin reset or format/input change starts a new epoch. Each
 //! block carries its first frame's time on the plugin's one presentation clock
-//! (`presentation`), not seekable project transport time: loops, stops and
+//! (`start`), not seekable project transport time: loops, stops and
 //! seeks do not rewind it, and samples nobody processed take none of it.
 //! LiveInput converts it to GUI seconds with the current shared ClockMapper
 //! offset once per drain; no separate analyzer clock estimate is maintained.
@@ -36,13 +36,6 @@ pub(crate) struct Block {
     /// What the tape did in this block: what its notes are played into the
     /// picture by, on the same clock as the audio they sound in.
     pub tape: TapePlay,
-}
-
-impl Block {
-    /// The presentation time of the block's first frame.
-    pub(crate) fn presentation(&self) -> f64 {
-        self.start
-    }
 }
 
 /// The tape in one block, as the deck left it.
@@ -93,8 +86,6 @@ pub(crate) struct Producer {
 pub(crate) struct Consumer {
     samples: rtrb::Consumer<f32>,
     blocks: rtrb::Consumer<Block>,
-    /// Reused, bounded scratch also joins ring wraps that split a channel frame.
-    scratch: Vec<f32>,
 }
 
 pub(crate) fn channel(samples: usize) -> (Producer, Consumer) {
@@ -102,7 +93,7 @@ pub(crate) fn channel(samples: usize) -> (Producer, Consumer) {
     let (block_tx, block_rx) = rtrb::RingBuffer::new(DESCRIPTORS);
     (
         Producer { samples: sample_tx, blocks: block_tx, epoch: 0, frame: 0, format: None },
-        Consumer { samples: sample_rx, blocks: block_rx, scratch: Vec::with_capacity(samples) },
+        Consumer { samples: sample_rx, blocks: block_rx },
     )
 }
 
@@ -155,7 +146,11 @@ impl Producer {
 }
 
 impl Consumer {
-    pub fn drain(&mut self, mut feed: impl FnMut(Block, &[f32])) {
+    /// Hand each block to `feed` with its samples as the ring holds them: two
+    /// slices, the second empty unless the block wraps the ring's end, which
+    /// can split a channel frame between them. The caller copies them where
+    /// it keeps them, so a block is copied once.
+    pub fn drain(&mut self, mut feed: impl FnMut(Block, &[f32], &[f32])) {
         // Bound a tick to its initial descriptor snapshot even if callbacks
         // continue publishing while analysis is catching up.
         let available = self.blocks.slots();
@@ -163,11 +158,8 @@ impl Consumer {
             let block = self.blocks.pop().unwrap();
             let chunk = self.samples.read_chunk(block.frames * block.format.channels).unwrap();
             let (a, b) = chunk.as_slices();
-            self.scratch.clear();
-            self.scratch.extend_from_slice(a);
-            self.scratch.extend_from_slice(b);
+            feed(block, a, b);
             chunk.commit_all();
-            feed(block, &self.scratch);
         }
     }
 }
@@ -208,7 +200,7 @@ mod tests {
             std::iter::repeat(99.0),
         );
         let mut blocks = Vec::new();
-        rx.drain(|b, s| blocks.push((b, s.to_vec())));
+        rx.drain(|b, s, t| blocks.push((b, [s, t].concat())));
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].1, [1.0, 2.0]);
         assert_eq!(blocks[0].0.format, MONO);
@@ -227,10 +219,11 @@ mod tests {
             crate::audio_ingress::TapePlay::Idle,
             (20..26).map(|v| v as f32),
         );
-        rx.drain(|b, s| {
+        rx.drain(|b, s, t| {
             assert_eq!(b.first_frame, 7);
             assert_eq!(b.start, 13.0);
-            assert_eq!(s, [20.0, 21.0, 22.0, 23.0, 24.0, 25.0]);
+            assert!(!t.is_empty(), "the block did not wrap the ring");
+            assert_eq!([s, t].concat(), [20.0, 21.0, 22.0, 23.0, 24.0, 25.0]);
         });
         tx.reset();
         tx.publish(
@@ -241,7 +234,7 @@ mod tests {
             crate::audio_ingress::TapePlay::Idle,
             [30.0, 31.0].into_iter(),
         );
-        rx.drain(|b, _| {
+        rx.drain(|b, _, _| {
             assert_ne!(b.epoch, blocks[1].0.epoch);
             assert_eq!(b.first_frame, 0);
             assert_eq!(b.start, 14.0);
@@ -260,16 +253,16 @@ mod tests {
             );
         }
         let mut count = 0;
-        rx.drain(|b, s| {
+        rx.drain(|b, s, t| {
             assert_eq!(b.first_frame, count);
-            assert_eq!(s, [count as f32]);
+            assert_eq!([s, t].concat(), [count as f32]);
             count += 1;
         });
         assert_eq!(count, DESCRIPTORS as u64);
         tx.publish(1, MONO, 1.0, None, crate::audio_ingress::TapePlay::Idle, std::iter::once(42.0));
-        rx.drain(|b, s| {
+        rx.drain(|b, s, t| {
             assert_eq!(b.first_frame, DESCRIPTORS as u64 + 2);
-            assert_eq!(s, [42.0]);
+            assert_eq!([s, t].concat(), [42.0]);
         });
     }
 }

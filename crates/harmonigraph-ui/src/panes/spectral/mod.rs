@@ -500,9 +500,14 @@ pub(crate) fn spectral_pane(
         // is a property of the view, and rebuilding it per voice
         // would read as if it could vary between them.
         let env = state.appearance.view.envelope();
+        let mut moving = false;
         for voice in voices {
+            if !scale.contains(voice.pitch) {
+                continue;
+            }
+            moving |= voice.envelope_moving(now, &env);
             let strength = voice.activation(now, &env);
-            if strength <= 0.0 || !scale.contains(voice.pitch) {
+            if strength <= 0.0 {
                 continue;
             }
             let t = scale.t_of(voice.pitch);
@@ -513,6 +518,7 @@ pub(crate) fn spectral_pane(
                 theme::picture_off_scale().gamma_multiply(0.3 * strength),
             );
         }
+        state.surfaces.moving_this_frame.hold_if(crate::Reason::Envelope, moving);
     }
 
     // The roll. Its ribbons occupy the far side of the split and the spectrum
@@ -670,16 +676,13 @@ pub(crate) fn spectral_pane(
         );
         state.surfaces.note_names.insert(surface, thinning);
         names::draw(&painter, &note_names, text.names.label, &mut labels);
-        // A name only scrolls with its note.
-        roll_motion.scrolling |= note_names.iter().any(|label| label.in_span);
+        // A name drawn on the live roll scrolls with its note.
+        roll_motion.scrolling |= song.is_none() && !note_names.is_empty();
     } else {
         state.surfaces.note_names.remove(&surface);
     }
-    // The roll moves while a note it draws, as a ribbon, a Lead or a name, is
-    // still inside its own Span: one off the zoom, or too thin to draw, or an
-    // overhang past the far edge, leaves a still picture to the idle poll
-    // (#1835). A ribbon or a name moves on screen only when the Span's scroll
-    // crosses a device pixel (#1911).
+    // How what the roll drew moves is its own to say (`RollMotion::hold`,
+    // `Reason::RollOnScreen`), paced by the Span's device pixel.
     let pixel = axes::TimeAxis::new(state, split, now)
         .seconds_per_pixel(&axes, crate::spectrogram::pane_ppp(painter.ctx()));
     roll_motion.hold(&mut state.surfaces.moving_this_frame, pixel);

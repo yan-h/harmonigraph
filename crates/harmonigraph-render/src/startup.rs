@@ -105,15 +105,18 @@ impl CallbackTrait for LoadingCallback {
         resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         #[cfg(not(feature = "hot-reload"))]
-        let status = if let Some(instance) = resources.get::<wgpu::Instance>().cloned() {
-            let status = self.cache.poll_startup(&instance, device, self.format);
-            if matches!(status, Status::Ready { .. }) {
-                self.cache.install(&instance, device, queue, self.format, resources);
-            }
-            status
-        } else {
-            // Other shells have not opted into the retained-device contract.
-            Status::Ready { built: false }
+        let status = {
+            // Only the plugin's editor draws a loading screen, and it publishes
+            // the instance its device came from before the first frame.
+            let instance = resources.get::<wgpu::Instance>().cloned();
+            debug_assert!(instance.is_some(), "a loading screen in a shell with no instance");
+            instance.map_or(Status::Ready { built: false }, |instance| {
+                let status = self.cache.poll_startup(&instance, device, self.format);
+                if matches!(status, Status::Ready { .. }) {
+                    self.cache.install(&instance, device, queue, self.format, resources);
+                }
+                status
+            })
         };
         #[cfg(feature = "hot-reload")]
         let status = {

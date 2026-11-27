@@ -617,6 +617,15 @@ impl Voice {
     pub fn activation(&self, now: Time, env: &Envelope) -> f32 {
         env.attack(now, self.on_time) * self.release_level(now, env)
     }
+
+    /// Whether [`activation`](Self::activation) still changes after `now`
+    /// with no edit reaching the voice: its arrival has not landed, which
+    /// includes an onset still ahead, or its key is up and its fade runs
+    /// until [`prune`](NoteTracker::prune) ends it. A held voice whose arrival
+    /// has landed draws the same until an edit reaches it.
+    pub fn envelope_moving(&self, now: Time, env: &Envelope) -> bool {
+        matches!(self.state, VoiceState::Released { .. }) || env.attack(now, self.on_time) < 1.0
+    }
 }
 
 /// The display octave containing MIDI note `midi`, in Bitwig's convention
@@ -645,6 +654,33 @@ pub struct NoteTracker {
     roll: NoteRoll,
     history: NoteHistory,
     canonical: CanonicalOrder,
+    edits: Edits,
+}
+
+/// What a [`NoteTracker`] has taken in that changes what it draws: how many
+/// events and baselines of sources it shows, or that change a source's Show
+/// switch, and the latest time any of them was dated. A shell that draws only when asked
+/// reads it to ask: an edit changes what the voices draw, and one dated
+/// ahead of the shell's clock changes it again when the clock gets there,
+/// as a Hub's notes are, a Tuning delay ahead of the block that publishes
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Edits {
+    pub count: u64,
+    pub latest: Time,
+}
+
+impl Default for Edits {
+    fn default() -> Self {
+        Edits { count: 0, latest: Time::NEG_INFINITY }
+    }
+}
+
+impl Edits {
+    fn take(&mut self, time: Time) {
+        self.count += 1;
+        self.latest = self.latest.max(time);
+    }
 }
 
 impl NoteTracker {
@@ -731,12 +767,21 @@ impl NoteTracker {
         mapped.validate()?;
         let ordered = self.canonical.baseline(frame.source, frame.output_cut);
         debug_assert!(ordered, "a snapshot cut below a delta it should cover: {frame:?}");
+        // Drawn either way only when it shows or its Show switch changes.
+        if frame.shown || !self.hides(frame.source) {
+            self.edits.take(mapped.time);
+        }
         self.roll.set_shown(frame.source, frame.shown);
         self.roll.replace_source(frame.source, frame.voices(), mapped.time, offset);
         Ok(())
     }
 
     pub fn handle_event(&mut self, event: NoteEvent) {
+        // A hidden source's playing is drawn nowhere. A session reset ends
+        // every source's notes, shown ones included.
+        if matches!(event.kind, NoteEventKind::SessionReset) || !self.hides(event.source) {
+            self.edits.take(event.time);
+        }
         let key = event.key();
         match event.kind {
             // Control event: applies regardless of the event's channel.
@@ -782,6 +827,11 @@ impl NoteTracker {
     pub fn prune(&mut self, now: Time, env: &Envelope) {
         let history = &mut self.history;
         self.roll.prune(now, env, |voice| history.record(voice, now));
+    }
+
+    /// What it has taken in so far ([`Edits`]).
+    pub fn edits(&self) -> Edits {
+        self.edits
     }
 
     /// Every pitch played so far, for the trail (see [`NoteHistory`]).
@@ -1558,6 +1608,32 @@ mod tests {
         tracker.roll.set_shown(source, false);
         assert_eq!((tracker.voices().count(), tracker.roll().notes().count()), (0, 0));
         assert!(!tracker.hides(SourceId(4).on_tape()), "another source's tape notes still show");
+    }
+
+    /// What a hidden source plays is drawn nowhere, so it is no edit: a bend
+    /// on a hidden track over a still picture wakes nothing. A baseline that
+    /// changes the Show switch is one, once, either way.
+    #[test]
+    fn a_hidden_sources_events_are_no_edit_and_a_show_change_is_one() {
+        use crate::canonical::SourceBaseline;
+        let source = SourceId(2);
+        let mut tracker = NoteTracker::new();
+        let show = |tracker: &mut NoteTracker, at: Time, cut: u64, shown: bool| {
+            let baseline = SourceBaseline::new(source, at, cut, shown, &[]).unwrap();
+            tracker.replace_source(&baseline).unwrap();
+        };
+        show(&mut tracker, 0.0, 0, false);
+        let hidden = tracker.edits().count;
+        assert_eq!(hidden, 1, "hiding a shown source is an edit");
+        tracker.handle_event(NoteEvent::on(1.0, source, 0, 60, 1.0));
+        let bend = NoteEventKind::Tuning { semitones: 0.3 };
+        tracker.handle_event(NoteEvent { kind: bend, ..NoteEvent::off(1.1, source, 0, 60) });
+        show(&mut tracker, 1.2, 0, false);
+        assert_eq!(tracker.edits().count, hidden, "a hidden source's playing was an edit");
+        show(&mut tracker, 1.3, 0, true);
+        assert_eq!(tracker.edits().count, hidden + 1, "showing it again was not one edit");
+        tracker.handle_event(NoteEvent { kind: bend, ..NoteEvent::off(1.4, source, 0, 60) });
+        assert_eq!(tracker.edits().count, hidden + 2, "a shown source's bend was no edit");
     }
 
     /// A session reset ends what was published, not what the tape plays: its

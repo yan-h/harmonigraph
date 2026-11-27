@@ -76,9 +76,9 @@ impl Opening<'_> {
 pub struct Frame<'a> {
     /// The window-filling `Ui` the shell's windowing stack hands the frame.
     pub ui: &'a mut egui::Ui,
-    /// The state to draw. This frame's MIDI is already in its tracker and this
-    /// frame's audio in its analyzer — see [`root_ui`](crate::root_ui), which
-    /// is also where the reason that feed cannot move in here lives.
+    /// The state to draw, with the notes and audio the shell has heard
+    /// already in its tracker and spectrum — see [`root_ui`](crate::root_ui),
+    /// which is also where the reason that feed cannot move in here lives.
     pub state: &'a mut SharedState,
     /// Where the automatable parameters live for this shell.
     pub params: &'a dyn ParamBackend,
