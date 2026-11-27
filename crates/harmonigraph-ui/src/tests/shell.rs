@@ -1019,9 +1019,7 @@ fn every_settings_tab_fits_on_its_tab_bar() {
         harness.settle(&mut state);
         let output = harness.frame(&mut state, vec![]);
         let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
-        let body = state.workspace.layout_runtime.body(panes::Tab::Tuning).unwrap();
-        let rail = theme::tab_bar_height(1.0);
-        assert!((body.top() - leaf.top() - rail).abs() < 0.5);
+        let body = pane_body(&state, &panes::Tab::Tuning).unwrap();
         let title = output
             .shapes
             .iter()

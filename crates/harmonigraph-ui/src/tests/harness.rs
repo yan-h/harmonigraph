@@ -15,13 +15,26 @@ pub(super) use super::probe::{fresh, press};
 /// A docked tab's drawn surface, or `None` when it is not on screen — which
 /// is how a suite aims a gesture at a pane it can only name.
 ///
-/// `viewport` is the tab BODY; the picture panes drop their margin, so it is
-/// exactly the drawn surface. `Rect::NOTHING` until the dock has laid out once
-/// (a first frame, or a freshly loaded layout) — and STALE while the leaf is
-/// collapsed, which is why the flag is checked rather than the rect: a folded
-/// leaf keeps the viewport it had when it was open.
+/// The tab BODY: its section's rect as the last frame laid it out, below the
+/// header rail. The picture panes drop their margin, so it is exactly the
+/// drawn surface. Read off the layout as it stands, so after a click that
+/// folds a section or switches its tab it describes the next frame, not the
+/// one that took the click.
 pub(super) fn pane_body(state: &SharedState, tab: &panes::Tab) -> Option<egui::Rect> {
-    state.workspace.layout_runtime.body(*tab)
+    let section = workspace::Section::of(*tab);
+    let workspace = &state.workspace;
+    if workspace.layout.folded[section as usize] || workspace.layout.tab(section) != *tab {
+        return None;
+    }
+    let prefs = &workspace.interaction.prefs;
+    let rail = if prefs.frameless {
+        0.0
+    } else {
+        theme::tab_bar_height(theme::sane_ui_scale(prefs.ui_scale))
+    };
+    let rect = workspace.layout_runtime.rects[section as usize];
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + rail), rect.max);
+    body.is_positive().then_some(body)
 }
 
 #[derive(Default)]
