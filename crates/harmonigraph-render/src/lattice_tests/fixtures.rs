@@ -14,18 +14,8 @@ pub(super) fn animated_snapshot(
     hovered: Option<harmonigraph_core::LatticePos>,
     now: f64,
 ) -> Scene {
-    // The reach raised to the fresh one, the floor a load holds it to, which
-    // the scene entry asserts: a fixture asks for a reach under it to get a
-    // small `window`, which stays the caller's own. Anything else a load would
-    // repair still trips the assertion.
-    let fresh = harmonigraph_scene::ViewConfig::default();
-    let view = harmonigraph_scene::ViewConfig {
-        extent_threes: view.extent_threes.max(fresh.extent_threes),
-        extent_fives: view.extent_fives.max(fresh.extent_fives),
-        ..view.clone()
-    };
     let mut scene =
-        harmonigraph_scene::derive_scene(tracker, tuning, &view, window, camera, hovered);
+        harmonigraph_scene::derive_scene(tracker, tuning, view, window, camera, hovered);
     harmonigraph_scene::NodeMotion::default().step(
         &mut scene,
         tracker,

@@ -9,8 +9,6 @@ use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
 fn home_sheet_nodes_are_flagged_for_the_blank_ring() {
     // Follows the panned window center, not sevens == 0.
     let view = ViewConfig {
-        extent_threes: 0,
-        extent_fives: 0,
         // A stack that does not straddle zero, so `on_home` following the
         // window's center rather than `sevens == 0` is what the assertion
         // below can see. The ends are absolute sheets, so they move with the
@@ -20,7 +18,8 @@ fn home_sheet_nodes_are_flagged_for_the_blank_ring() {
         center_sevens: 2,
         ..ViewConfig::default()
     };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
+    let window = block(&view, 0, 0);
+    let scene = scene_in(&NoteTracker::new(), &Tuning::default(), &view, &window, 0.0);
     for n in &scene.nodes {
         assert_eq!(n.on_home, n.lattice_pos.sevens == 2, "{:?}", n.lattice_pos);
     }
@@ -33,17 +32,12 @@ fn the_marker_field_is_the_home_sheet_and_only_it() {
     // also why it is not hoverable. Nothing the music does changes that — an
     // off-sheet note floats over the field at the size its sheet gives it,
     // with nothing drawn between it and home.
-    let view = ViewConfig {
-        extent_threes: 1,
-        extent_fives: 0,
-        min_sevens: -2,
-        max_sevens: 2,
-        ..plain_view()
-    };
+    let view = ViewConfig { min_sevens: -2, max_sevens: 2, ..plain_view() };
     let home_count = |scene: &Scene| scene.nodes.iter().filter(|n| n.on_home).count();
 
+    let window = block(&view, 1, 0);
     // Idle: a marker at every home position, and no mark anywhere off it.
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
+    let scene = scene_in(&NoteTracker::new(), &Tuning::default(), &view, &window, 0.0);
     assert_eq!(scene.pluses.len(), home_count(&scene));
     assert!(scene.pluses.iter().all(|d| d.pos.z.abs() < 1e-5), "{:?}", scene.pluses);
 
@@ -52,7 +46,7 @@ fn the_marker_field_is_the_home_sheet_and_only_it() {
     // (0,0,2) only, and the field under it is untouched.
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 68, 1.0));
-    let played = scene_of(&tracker, &Tuning::default(), &view, 0.0);
+    let played = scene_in(&tracker, &Tuning::default(), &view, &window, 0.0);
     assert!(
         played.nodes.iter().any(|n| !n.on_home && n.presence_with_opacity > 0.0),
         "the off-sheet note has to be lit for this to mean anything",

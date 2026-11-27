@@ -47,7 +47,7 @@ impl NoteAnimationConfig {
         self
     }
     /// Fixed delays of complete displayed sectors; shared by live/export and
-    /// renderer fixtures, including wheels with unequal outer sectors.
+    /// renderer fixtures.
     ///
     /// Both ends start at the seam where the highest and lowest pitch meet and
     /// sweep toward each other across the ring.
@@ -61,28 +61,18 @@ impl NoteAnimationConfig {
     /// last one snapping in over what little time the spread had left it.
     pub fn delays(self, layout: &crate::OctaveLayout, duration: f32) -> [f32; 11] {
         let span = layout.span as usize;
-        let mut ranks = [0.0f32; 11];
-        for (i, rank) in ranks.iter_mut().enumerate().take(span) {
-            // Slice zero is the lowest displayed pitch and `i` walks upward.
-            // The walk is measured from the seam, not from a fixed screen
-            // angle. Mirror the index before measuring so each opposing pair
-            // has exactly one rank; independently measuring both sides lets
-            // f32 roundoff turn a two-slice tie into the whole normalized
-            // spread.
-            let from_seam = i.min(span - 1 - i);
-            *rank = (layout.walk(from_seam as f32) + layout.walk(from_seam as f32 + 1.0)) * 0.5
-                / std::f32::consts::PI;
+        // Slice zero is the lowest displayed pitch and `i` walks upward. Every
+        // slice is the same width, so a slice's place in the sweep is how many
+        // slices it stands from the nearer end of the seam, over the most any
+        // slice stands; counted in whole slices, each opposing pair has
+        // exactly one.
+        let farthest = ((span - 1) / 2).max(1) as f32;
+        let mut delays = [0.0f32; 11];
+        for (i, delay) in delays.iter_mut().enumerate().take(span) {
+            let from_seam = i.min(span - 1 - i) as f32;
+            *delay = from_seam / farthest * self.stagger_spread * duration;
         }
-        let min = ranks[..span].iter().copied().fold(f32::INFINITY, f32::min);
-        let max = ranks[..span].iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        for rank in &mut ranks[..span] {
-            *rank = if max > min {
-                (*rank - min) / (max - min) * self.stagger_spread * duration
-            } else {
-                0.0
-            };
-        }
-        ranks
+        delays
     }
     /// Seconds a node takes to leave once its last note has gone, for a Fade
     /// of `fade_time`: the fade-out delay, then the [`delays`](Self::delays)

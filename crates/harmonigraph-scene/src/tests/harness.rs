@@ -10,24 +10,32 @@ pub(super) fn scene_of(
     view: &ViewConfig,
     now: f64,
 ) -> Scene {
-    let mut scene =
-        derive_scene(tracker, tuning, &reach_lifted(view), &view.reach(), Camera::default(), None);
-    NodeMotion::default().step(&mut scene, tracker, tuning, &RingFade::default(), now);
-    scene
+    scene_in(tracker, tuning, view, &view.reach(), now)
 }
 
-/// `view` with its reach raised to the fresh one, the floor a load holds it
-/// to. A fixture asks for a reach under it to get a small window, and the
-/// window the tests derive stays `view`'s own; anything else a load would
-/// repair still trips the scene entry's assertion, so a test about a damaged
-/// value says so by handing in [`loaded`].
-pub(super) fn reach_lifted(view: &ViewConfig) -> ViewConfig {
-    let fresh = ViewConfig::default();
-    ViewConfig {
-        extent_threes: view.extent_threes.max(fresh.extent_threes),
-        extent_fives: view.extent_fives.max(fresh.extent_fives),
-        ..view.clone()
+/// `threes` fifths and `fives` thirds either side of `view`'s center, on every
+/// sheet it draws: the reach's shape at a smaller size, for a suite that wants
+/// few nodes.
+pub(super) fn block(view: &ViewConfig, threes: i32, fives: i32) -> DrawnWindow {
+    let (center, (low, high)) = (view.center(), view.sevens_window());
+    DrawnWindow {
+        min: LatticePos::new(center.threes - threes, center.fives - fives, low),
+        max: LatticePos::new(center.threes + threes, center.fives + fives, high),
     }
+}
+
+/// [`scene_of`] over `window` rather than the view's reach: for a suite that
+/// wants a few nodes, or ones the reach does not hold.
+pub(super) fn scene_in(
+    tracker: &NoteTracker,
+    tuning: &Tuning,
+    view: &ViewConfig,
+    window: &DrawnWindow,
+    now: f64,
+) -> Scene {
+    let mut scene = derive_scene(tracker, tuning, view, window, Camera::default(), None);
+    NodeMotion::default().step(&mut scene, tracker, tuning, &RingFade::default(), now);
+    scene
 }
 
 /// `view` as a load hands it on: repaired by [`ViewConfig::sanitize`].
