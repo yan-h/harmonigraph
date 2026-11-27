@@ -3846,8 +3846,11 @@ fn on_tape_in_two_sections(g_struck: f64) -> PictureState {
     use crate::tape::harmony::{Entry, Harmony, Section};
     let mut state = on_tape();
     state.runtime.tuning = harmonigraph_core::Tuning::just();
+    // The home sheet alone, so only a test decides when another sheet enters
+    // the reach.
     let view = &mut state.appearance.view;
     (view.center_threes, view.center_fives) = (0, 0);
+    (view.min_sevens, view.center_sevens, view.max_sevens) = (0, 0, 0);
     let c = Entry { pitch: 60.0, held: false, strikes: vec![0.0] };
     let g = Entry { pitch: 67.019_55, held: false, strikes: vec![g_struck] };
     let sections = vec![

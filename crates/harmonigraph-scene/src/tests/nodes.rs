@@ -762,7 +762,10 @@ fn window_center_pans_which_nodes_display() {
     let window = view.reach();
     assert_eq!(
         (window.min, window.max),
-        (LatticePos::new(5 - 12, -20, 0), LatticePos::new(5 + 12, 20, 0)),
+        (
+            LatticePos::new(5 - crate::view::REACH_THREES, -crate::view::REACH_FIVES, 0),
+            LatticePos::new(5 + crate::view::REACH_THREES, crate::view::REACH_FIVES, 0),
+        ),
         "the reach did not follow the center",
     );
 
