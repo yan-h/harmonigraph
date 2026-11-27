@@ -35,6 +35,8 @@ pub(super) struct RecordingBackend {
     pub(super) instances: Vec<params::TuningInstance>,
     /// The live analysis input, or `None` for a shell with no choice of one.
     pub(super) input: Option<params::AnalysisInput>,
+    /// The plugin's configuration, or `None` for a shell whose UI owns it.
+    pub(super) configuration: Option<params::ConfigurationView>,
 }
 
 impl ParamBackend for RecordingBackend {
@@ -52,6 +54,9 @@ impl ParamBackend for RecordingBackend {
     }
     fn analysis_input(&self) -> Option<params::AnalysisInput> {
         self.input
+    }
+    fn configuration(&self) -> Option<params::ConfigurationView> {
+        self.configuration
     }
 }
 
@@ -621,6 +626,18 @@ pub(super) fn adaptive_tab_body(
         ..Default::default()
     };
     tab_body_with(&super::probe::themed(), state, tab, (width, height), 0.0, &backend, vec![])
+}
+
+/// The same through `backend`, for a fixture that draws what a backend
+/// reports.
+pub(super) fn backed_tab_body(
+    state: &mut SharedState,
+    tab: panes::Tab,
+    width: f32,
+    height: f32,
+    backend: &RecordingBackend,
+) -> egui::FullOutput {
+    tab_body_with(&super::probe::themed(), state, tab, (width, height), 0.0, backend, vec![])
 }
 
 /// The same on a caller's context and clock — for a fixture that drives many

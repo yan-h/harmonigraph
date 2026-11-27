@@ -162,12 +162,12 @@ impl OctaveLayout {
     /// same width, so the walk is linear in `x` and a pitch stands at the same
     /// fraction of its own octave's wedge as it does of the octave. The
     /// shader's `oct_walk` is this, in the same operation order.
-    pub fn walk(&self, x: f32) -> f32 {
+    fn walk(&self, x: f32) -> f32 {
         TAU * x.clamp(0.0, self.span as f32) / self.span as f32
     }
 
     /// Angle of boundary `i` of `ring`, counting clockwise from its seam.
-    pub fn edge(&self, ring: Ring, i: usize) -> f32 {
+    fn edge(&self, ring: Ring, i: usize) -> f32 {
         ring.seam - self.walk(i as f32)
     }
 
@@ -206,7 +206,12 @@ impl OctaveLayout {
     /// Outside the ring it CLAMPS, at either end — an indicator never reaches past the seam,
     /// and continuing round instead would land at the wrong pitch, since one
     /// turn comes back to a pitch a whole span of octaves away.
-    pub fn angle(&self, pitch: f32, cents: f32) -> f32 {
+    ///
+    /// Only the tests below read it, as the statement of where a pitch
+    /// stands that [`ring`](Self::ring) and [`walk`](Self::walk) are checked
+    /// against; nothing draws through it.
+    #[cfg(test)]
+    fn angle(&self, pitch: f32, cents: f32) -> f32 {
         let ring = self.ring(cents);
         // In slices from the ring's low edge, which is half an octave under
         // its lowest slot's own pitch.

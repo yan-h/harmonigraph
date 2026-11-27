@@ -15,3 +15,4 @@
 ## 2026-11-27 (drift audit, #1994)
 
 - The Spiral's dots bloom at Note bloom, as the lattice and the ribbons do, and the Spiral bloom bar and its saved key retire; a saved Spiral bloom is dropped with a Console line. Both reasons for a separate value had gone: it sat alone in its section, and #1314 Colors Q2 made intensity drive the dots. Yan, 2026-11-27, taking the recommendation. #1994 SP1, #1987
+- With the MIDI ribbons section switched off the Analyzer page has no bloom bar; the Spiral's halo is set from Lattice → Note bloom, the one shared value. Yan, 2026-11-27, taking the recommendation. PR #2004

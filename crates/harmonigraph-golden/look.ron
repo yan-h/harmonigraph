@@ -12,8 +12,6 @@
         cabinet_scale: 0.6,
     ),
     view: (
-        extent_threes: 12,
-        extent_fives: 20,
         min_sevens: 0,
         max_sevens: 0,
         center_threes: 0,
@@ -91,7 +89,6 @@
         plus_arm: 0.31286633,
         plus_taper: 0.20286632,
         render_scale: 1.0818691,
-        spiral_bloom: 0.6339277,
         glow_reach: 6.513377,
         atmosphere: (
             material_style: Watercolor,

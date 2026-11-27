@@ -1,7 +1,8 @@
-//! Light and shadow for each picture: the lattice's bloom, background glow and shadows in
-//! separate Lattice sections, and the Spiral's bloom and the Analyzer
-//! and Spiral shadows on the Analyzer page. Note bloom sits with the MIDI
-//! ribbons it lights.
+//! Light and shadow for each picture: Note bloom, the lattice's background
+//! glow and shadows in separate Lattice sections, and the Analyzer and Spiral
+//! shadows on the Analyzer page. Note bloom lights the lattice, the MIDI
+//! ribbons and the Spiral's dots, and sits with the ribbons on the Analyzer
+//! page as well.
 
 use super::section;
 use crate::widgets::ValueBar;
@@ -13,8 +14,7 @@ use harmonigraph_scene::{
     GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SPECTRAL_SHADOW_MAX,
 };
 use harmonigraph_scene::{
-    GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, HIDE_BEHIND_RANGE,
-    NOTE_BLOOM_RANGE, SPIRAL_BLOOM_RANGE,
+    GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, HIDE_BEHIND_RANGE, NOTE_BLOOM_RANGE,
 };
 
 /// The shadows under the lattice's ink, in their own section. They stay
@@ -43,20 +43,9 @@ pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
     );
 }
 
-/// The Analyzer page's lighting: the Spiral's bloom, then the shadows, which
-/// fall in the Analyzer and the Spiral alike.
-pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
-    section(ui, "Spiral", |ui| {
-        ValueBar::new(&mut appearance.view.spiral_bloom, SPIRAL_BLOOM_RANGE, "Spiral bloom")
-            .default_value(super::fresh_view().spiral_bloom)
-            .unit(1.0, "×")
-            .hint(
-                "Soft halos around bright MIDI notes in the Spiral. \
-                 0 turns bloom off; \
-                 1× is the reference strength.",
-            )
-            .show(ui);
-    });
+/// The Analyzer page's shadows, which fall in the Analyzer and the Spiral
+/// alike.
+pub(super) fn analyzer_shadows(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     let shadow = &mut appearance.view.shadow;
     section(ui, "Shadows", |ui| {
         note_surround(ui, &mut appearance.spectrum);
@@ -144,14 +133,16 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
     .on_hover_text("MIDI ribbons and Spiral note dots");
 }
 
-/// The same global note bloom is editable beside either picture it affects.
+/// The one global note bloom, lighting the lattice, the MIDI ribbons and the
+/// Spiral's dots: editable on the Lattice page and beside the ribbons.
 pub(crate) fn note_bloom(ui: &mut egui::Ui, strength: &mut f32) {
     ValueBar::new(strength, NOTE_BLOOM_RANGE, "Note bloom")
         .unit(1.0, "×")
         .default_value(super::fresh_view().note_bloom)
         .hint(
-            "Soft halos around bright notes. Shared by the Lattice and MIDI ribbons in the Analyzer. \
-             Changing this control updates both pictures. 0 turns bloom off; 1× is the reference strength.",
+            "Soft halos around bright notes. Shared by the Lattice, the MIDI ribbons in the Analyzer \
+             and the Spiral's dots. Changing this control updates all three pictures. \
+             0 turns bloom off; 1× is the reference strength.",
         )
         .show(ui);
 }

@@ -99,4 +99,5 @@ Yan took the recommendations made after the audit was checked against the code (
 ## 2026-11-27 (drift audit, #1994)
 
 - #1293's rule holds for the backdrop cut: no note's cut shows through another ribbon at any opacity, so the roll's holdout stays, as the Spiral's dots keep the same rule. Yan, 2026-11-27, taking the recommendation. #1994 RL1
-- Note names follow a pan: the naming reach is centred on the lattice's origin rather than the camera, since Yan's pieces pan beyond 12 fifths or 20 thirds within a Span. Yan, 2026-11-27. #1994 RL2, #1991
+- Note names follow a pan: the naming reach is centred on the lattice's origin rather than the camera, since Yan's pieces pan beyond 12 fifths or 20 thirds within a Span. Yan, 2026-11-27. #1994 RL2, #1991 (Superseded 2026-11-27 by the line below.)
+- The naming reach stays centred on the camera, LN1's constants alone: centred on the lattice's origin it named far just notes after unrelated nodes near the origin within the half-cent match (measured in PR #1996: the node at 36 fifths, G♯5 on the lattice, named A♭10+14), so a name can respell once the camera moves more than 12 fifths or 20 thirds from its node. Yan, 2026-11-27, answer (a) in chat. #1994 RL2, #1991, PR #1996

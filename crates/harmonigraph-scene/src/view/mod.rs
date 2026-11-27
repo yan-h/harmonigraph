@@ -59,6 +59,28 @@ const MAX_DRAWN_EXTENT: i32 = 4096;
 /// [`MAX_DRAWN_EXTENT`] allows.
 const MAX_CENTER: i32 = 1 << 30;
 
+/// How far the naming reach runs along the fifths axis either side of the
+/// view's center ([`ViewConfig::reach`]), in steps.
+///
+/// The reach is oblong, like the panes it was sized to cover:
+/// `lattice_to_world` puts the THIRDS axis (`fives`) on world x, so that is the
+/// one running across the screen and the one [`REACH_FIVES`] spends the width
+/// on. The two hold the whole of what a CABINET pane shows, at every zoom, up
+/// to a 16:9 frame — the projection this matters under and the shape a
+/// render is. They do NOT hold what the other two draw: a flat 16:9
+/// perspective pane at the zoom limit draws 3825 nodes against this block's
+/// 1025. Covering it would mean naming a pitch sixty fifths out, which is a
+/// spelling nobody wants, on a walk this wide per
+/// played pitch per frame; the readers that describe the PICTURE ask the
+/// picture's own window instead (`PictureState::shown`).
+///
+/// Constants since #1994 LN1: the pair were saved fields with no bar since
+/// #357, and every value ever saved loaded floored at these since #360.
+pub(crate) const REACH_THREES: i32 = 12;
+/// How far the naming reach runs along the thirds axis either side of the
+/// view's center; see [`REACH_THREES`].
+pub(crate) const REACH_FIVES: i32 = 20;
+
 /// How far from C a septimal sheet may sit — the axis the layer strip offers,
 /// and so the only sheets a sanitized view holds.
 ///
@@ -100,9 +122,6 @@ pub const LATTICE_RENDER_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
 
 /// Shared bar and load range for [`ViewConfig::note_bloom`].
 pub const NOTE_BLOOM_RANGE: std::ops::RangeInclusive<f32> = 0.0..=2.0;
-
-/// Shared bar and load range for [`ViewConfig::spiral_bloom`].
-pub const SPIRAL_BLOOM_RANGE: std::ops::RangeInclusive<f32> = 0.0..=2.0;
 
 /// Shared bar and load range for [`ViewConfig::glow_wash`].
 pub const GLOW_WASH_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
@@ -285,24 +304,13 @@ pub const GLOW_BALLISTICS_MAX: f32 = 6.0;
 // the camera, the dock and every other setting — down with it.
 #[serde(default)]
 pub struct ViewConfig {
-    /// How far out along the fifths and thirds axes a played pitch is looked
-    /// for a name and a node — the REACH, not a boundary, and not what is
-    /// drawn: see [`reach`](Self::reach) for who reads them, and
-    /// [`scrolled`](Self::scrolled) for the window the picture uses instead.
-    /// The lattice itself has no end along these two.
-    ///
-    /// No bars: the drawn window answers to the camera now, so a bar here
-    /// would look like it sets how much lattice there is while setting only
-    /// how hard a spelling is hunted for. They stay generous, which is the
-    /// whole of what the search wants.
-    pub extent_threes: i32,
-    pub extent_fives: i32,
     /// The lowest and highest sheet the lattice draws, in the same units
     /// [`center_sevens`](Self::center_sevens) is counted in: steps from the
-    /// sheet containing C. Unlike the two extents above this IS the drawn
-    /// window, and it keeps its bar: how deep the lattice runs is a question
-    /// about the music, where how wide it runs is a question about the pane,
-    /// and only the pane can be read off the screen.
+    /// sheet containing C. Unlike the fifths and thirds, which the camera
+    /// spans, this IS the drawn window, and it keeps its bar: how deep the
+    /// lattice runs is a question about the music, where how wide it runs is
+    /// a question about the pane, and only the pane can be read off the
+    /// screen.
     ///
     /// Absolute ends rather than a count each side of home, which is what the
     /// pair before them was. A count each side cannot say *two sheets above
@@ -323,9 +331,9 @@ pub struct ViewConfig {
     /// walk the content away from the camera.
     ///
     /// The fifths and thirds centers are driven by the camera rather than by a
-    /// bar ([`follow_camera`](Self::follow_camera)): they are where the reach
-    /// above is centered, and it has to stay under what is on screen. The
-    /// sevens center is the home sheet, which is a choice, and keeps a control
+    /// bar ([`follow_camera`](Self::follow_camera)): they are where the
+    /// [`reach`](Self::reach) is centered, and it has to stay under what is on
+    /// screen. The sevens center is the home sheet, which is a choice, and keeps a control
     /// — the middle handle of the strip whose ends are
     /// [`min_sevens`](Self::min_sevens) and [`max_sevens`](Self::max_sevens),
     /// since which sheet is home is only meaningful among the sheets drawn.
@@ -793,8 +801,8 @@ pub struct ViewConfig {
     /// How loud each note is drawn, and how far each display reads that
     /// (see [`crate::intensity`]). Shared by the lattice, the roll and the Spiral.
     pub intensity: crate::IntensitySettings,
-    /// Shared bloom strength for the lattice and MIDI ribbons, in × of the
-    /// reference halo. Each note's bloom follows its Opacity, so there is no
+    /// Shared bloom strength for the lattice, the MIDI ribbons and the
+    /// Spiral's dots, in × of the reference halo. Each note's bloom follows its Opacity, so there is no
     /// mapping of its own.
     pub note_bloom: f32,
     // An unlit node has no mark of its own: the marker standing at a node
@@ -914,12 +922,6 @@ pub struct ViewConfig {
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
     pub render_scale: f32,
-    /// The bloom's halo around the Spiral's note dots. The lattice and the
-    /// spectrogram's MIDI ribbons share
-    /// [`note_bloom`](Self::note_bloom)
-    /// instead. Its own value so that it sits
-    /// with the Spiral's other settings on the Analyzer tab.
-    pub spiral_bloom: f32,
     /// The node halo: how far past a node's rim its light spreads, in the quad
     /// UV units the layer sizes are in. The rim is the ring stack's outer edge,
     /// or the mark strip's whenever marks are on, whether or not this node
@@ -1281,16 +1283,6 @@ impl ViewConfig {
         // than at the edge of it. The sevens ends are held to what their strip
         // offers.
         //
-        // The other two are the naming REACH, and they are floored at the
-        // fresh sizing rather than at zero. Nothing structural keeps the reach
-        // and the drawn window in step — one is a setting, the other the
-        // camera's — so a reach from a build that sized it smaller makes every
-        // pitch out past it fall to the slower of the two naming paths, and in
-        // a tuning that collapses, to a spelling chosen out of a window it was
-        // never tuned for. No bar sets these, so there is no dialled-down
-        // value to respect and no readout for a floor to contradict: raising
-        // it is free. `a_loaded_view_never_draws_a_node_its_reach_cannot_name`
-        // holds the cabinet case, which is the one the sizing is FOR.
         // The two ends onto the strip's axis, low end first so an INVERTED
         // pair comes out closed rather than silently swapped: a blob holding
         // `max < min` is one nobody dragged, and the sheet it agrees to draw
@@ -1299,10 +1291,6 @@ impl ViewConfig {
         self.min_sevens = repair(self.min_sevens, fresh.min_sevens, sheets);
         self.max_sevens =
             repair(self.max_sevens, fresh.max_sevens, self.min_sevens..=SEVENS_LAYER_LIMIT);
-        self.extent_threes =
-            repair(self.extent_threes, fresh.extent_threes, fresh.extent_threes..=MAX_DRAWN_EXTENT);
-        self.extent_fives =
-            repair(self.extent_fives, fresh.extent_fives, fresh.extent_fives..=MAX_DRAWN_EXTENT);
         // The seventh center is the one center exposed as a setting, and it
         // names a sheet the picture DRAWS — so it is held inside the pair
         // above rather than merely on the same axis. A home sheet outside the
@@ -1477,7 +1465,6 @@ impl ViewConfig {
         self.render_scale =
             repair(self.render_scale, fresh.render_scale, LATTICE_RENDER_SCALE_RANGE);
         self.note_bloom = repair(self.note_bloom, fresh.note_bloom, NOTE_BLOOM_RANGE);
-        self.spiral_bloom = repair(self.spiral_bloom, fresh.spiral_bloom, SPIRAL_BLOOM_RANGE);
 
         // The resting marker's three lengths. The arm and its taper are a
         // reach-and-fade PAIR, held the way every such pair here is — the fade
@@ -1513,24 +1500,6 @@ const DEFAULT_MARKER_INK: f32 = 19.0;
 impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
-            // The naming reach: how far out a played pitch is hunted for a
-            // spelling before it counts as off the lattice. Oblong, like the
-            // panes it has to cover — `lattice_to_world` puts the THIRDS axis
-            // (`fives`) on world x, so that is the one running across the
-            // screen and the one the width is spent on.
-            //
-            // Sized to hold the whole of what a CABINET pane shows, at every
-            // zoom, up to a 16:9 frame — which is the projection this matters
-            // under and the shape a render is. It does NOT hold what the other
-            // two draw: a flat 16:9 perspective pane at the zoom limit draws
-            // 3825 nodes against this window's 1025, so most of that picture
-            // is out here. Covering it would mean naming a pitch sixty fifths
-            // out, which is a spelling nobody wants, on a walk this wide per
-            // played pitch per frame. So the reach stays a reach, and the
-            // readers that describe the PICTURE ask the picture's own window
-            // instead — see `SharedState::shown`.
-            extent_threes: 12,
-            extent_fives: 20,
             // The home sevens sheet alone — the strip closed on its one cell.
             // A sheet either side shows the septimal axis without anyone
             // having to go find it; the tradeoff is that nothing tells the eye
@@ -1699,10 +1668,6 @@ impl Default for ViewConfig {
             plus_taper: 0.202_866_32,
             // A slight supersample, as captured from the DAW on 2026-10-07.
             render_scale: 1.081_869_1,
-            // The lattice's bloom strength (`bloom_strength`, retired into
-            // `note_bloom` by #1140), which the Spiral shared until it had its
-            // own (#1083).
-            spiral_bloom: 0.633_927_7,
             // A reach spanning several lattice steps turns each node's light
             // into a shared field, at a little under half strength as captured
             // from the DAW on 2026-10-07.
