@@ -606,7 +606,9 @@ reasons! {
     /// still moving on a layer that draws it: its level rising or falling, or
     /// its colour still easing toward its reading
     /// ([`GlowFade::step_drawn`](panes::glow_fade::GlowFade::step_drawn)),
-    /// which can outlast the slices by many seconds.
+    /// which can outlast the slices by many seconds; or a lit lattice's glow
+    /// atmosphere, breathing, its pattern moving, its Stars twinkling or its
+    /// material drifting (`hold_atmosphere` in `panes/lattice.rs`).
     Lattice => "lattice",
     /// A picture drawn from audio above silence. Samples arriving are not
     /// enough, because a host streams silence with its transport stopped and

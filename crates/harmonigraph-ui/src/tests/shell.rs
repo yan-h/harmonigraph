@@ -305,6 +305,56 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
     );
 }
 
+/// A lit lattice's glow atmosphere moves on its own clock under a held chord
+/// whose light has settled: every frame while it breathes, its pattern moves
+/// or its Stars twinkle, and at the pace its drift crosses a device pixel
+/// where only the drift moves. Nothing while every motion dial is at 0, the
+/// glow is off, no node is lit or the lattice is not drawn.
+#[test]
+fn a_lit_lattices_atmosphere_asks_for_its_own_frames() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+    use harmonigraph_scene::LatticeMaterial;
+
+    let ctx = super::probe::themed();
+    let asked = |look: &dyn Fn(&mut SharedState), lit: bool, panes: &[Pane]| {
+        let mut state = fresh();
+        state.picture.appearance.view.fade_time = 0.0;
+        look(&mut state);
+        if lit {
+            let note = NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
+            state.picture.runtime.tracker.handle_event(note);
+        }
+        // Long enough for the light to settle on its attack.
+        for k in 0..=40 {
+            draw_panes(&ctx, &mut state, f64::from(k) * 0.25, &[Pane::Lattice]);
+        }
+        draw_panes(&ctx, &mut state, 10.25, panes);
+        Animating::of(&state).after(Reason::Lattice)
+    };
+    let fresh_look = |_: &mut SharedState| {};
+    assert_eq!(asked(&fresh_look, true, &[Pane::Lattice]), Some(0.0), "the fresh look's breath");
+    let still_but = |style: LatticeMaterial, speed: f32| {
+        move |state: &mut SharedState| {
+            let atmosphere = &mut state.picture.appearance.view.atmosphere;
+            atmosphere.breath_amount = 0.0;
+            atmosphere.texture_depth = 0.0;
+            atmosphere.material_style = style;
+            atmosphere.material_speed = speed;
+        }
+    };
+    // At the fastest drift, under a pixel a poll even on this small pane.
+    let drift = asked(&still_but(LatticeMaterial::Watercolor, 20.0), true, &[Pane::Lattice]);
+    assert!(drift.is_some_and(|pace| pace > 0.0), "a drift alone paced at {drift:?}");
+    let stars = asked(&still_but(LatticeMaterial::Stars, 0.0), true, &[Pane::Lattice]);
+    assert_eq!(stars, Some(0.0), "twinkling Stars");
+    let still = still_but(LatticeMaterial::Watercolor, 0.0);
+    assert_eq!(asked(&still, true, &[Pane::Lattice]), None, "every motion dial at 0");
+    assert_eq!(asked(&fresh_look, false, &[Pane::Lattice]), None, "no node lit");
+    assert_eq!(asked(&fresh_look, true, &[]), None, "the lattice not drawn");
+    let dark = |state: &mut SharedState| state.picture.appearance.view.glow_strength = 0.0;
+    assert_eq!(asked(&dark, true, &[Pane::Lattice]), None, "the glow off");
+}
+
 /// A released note keeps the loop awake for its whole departure, the
 /// fade-out delay and then the stagger's sweep, and not past it. The span is
 /// written out here as numbers, so a departure that loses either term is
@@ -872,6 +922,10 @@ fn a_held_note_over_a_still_lattice_asks_for_nothing_once_it_has_arrived() {
     let mut state = fresh();
     state.workspace.layout = workspace::Layout::solo(panes::Tab::Lattice);
     state.picture.appearance.view.fade_time = 0.2;
+    // A still atmosphere: no breathing, pattern or drift of its own.
+    let atmosphere = &mut state.picture.appearance.view.atmosphere;
+    (atmosphere.breath_amount, atmosphere.texture_depth, atmosphere.material_speed) =
+        (0.0, 0.0, 0.0);
     let mut harness = DockHarness::new();
     // Settled: the opening frames lay the dock out and ask to be redrawn.
     let mut idle = harness.frame(&mut state, vec![]);

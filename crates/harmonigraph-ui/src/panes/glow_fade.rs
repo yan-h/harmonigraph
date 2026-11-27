@@ -63,7 +63,7 @@ const GONE: f32 = 0.002;
 /// Measured as level times the Background glow gain, which is the shader's
 /// peak without its `GLOW_BASE` of 0.8, so the window errs toward staying
 /// awake a little long rather than stopping on a visible step.
-const VISIBLE_STEP: f32 = 0.5 / 255.0;
+pub(crate) const VISIBLE_STEP: f32 = 0.5 / 255.0;
 
 /// Where every node's light has got to.
 ///
