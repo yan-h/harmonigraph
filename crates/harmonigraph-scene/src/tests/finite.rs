@@ -23,12 +23,6 @@ use harmonigraph_core::Tuning;
 /// out, so one added anywhere in the view, a nested group or a gradient knob
 /// included, is poisoned without an edit here; the test below holds that the
 /// fixture leaves no real float behind.
-/// The window every scene here is built in: three steps either way about
-/// [`poisoned_view`]'s center, on its three sheets.
-fn window() -> DrawnWindow {
-    block(&poisoned_view(), 3, 3)
-}
-
 fn poisoned_view() -> ViewConfig {
     let mut base = ViewConfig {
         min_sevens: -1,
@@ -51,6 +45,12 @@ fn poisoned_view() -> ViewConfig {
     }
     let text = ron::to_string(&base).expect("a view serializes");
     ron::from_str(&nan_floats(&text)).expect("a poisoned view parses")
+}
+
+/// The window every scene here is built in: three steps either way about
+/// [`poisoned_view`]'s center, on its three sheets.
+fn window() -> DrawnWindow {
+    block(&poisoned_view(), 3, 3)
 }
 
 /// `text` with every float literal in it made `NaN`: RON writes a float with a

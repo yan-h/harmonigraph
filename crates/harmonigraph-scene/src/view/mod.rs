@@ -67,9 +67,10 @@ const MAX_CENTER: i32 = 1 << 30;
 /// one running across the screen and the one [`REACH_FIVES`] spends the width
 /// on. The two hold the whole of what a CABINET pane shows, at every zoom, up
 /// to a 16:9 frame — the projection this matters under and the shape a
-/// render is. They do NOT hold what the other two draw: a flat 16:9 perspective pane at the zoom limit draws 3825 nodes
-/// against this block's 1025. Covering it would mean naming a pitch sixty
-/// fifths out, which is a spelling nobody wants, on a walk this wide per
+/// render is. They do NOT hold what the other two draw: a flat 16:9
+/// perspective pane at the zoom limit draws 3825 nodes against this block's
+/// 1025. Covering it would mean naming a pitch sixty fifths out, which is a
+/// spelling nobody wants, on a walk this wide per
 /// played pitch per frame; the readers that describe the PICTURE ask the
 /// picture's own window instead (`PictureState::shown`).
 ///
@@ -1286,10 +1287,10 @@ impl ViewConfig {
         // The window's own integers, which are the one group here that is not
         // a float. `DrawnWindow::count` multiplies the three spans together
         // and `reach` adds each center to its extent, so a blob carrying a
-        // billion sheets overflows both — and the derived window
-        // now counts nodes on every draw, which puts that arithmetic in the
-        // frame rather than at the edge of it. The sevens ends are held to
-        // what their strip offers.
+        // billion sheets overflows both — and the derived window now counts
+        // nodes on every draw, which puts that arithmetic in the frame rather
+        // than at the edge of it. The sevens ends are held to what their strip
+        // offers.
         //
         // The two ends onto the strip's axis, low end first so an INVERTED
         // pair comes out closed rather than silently swapped: a blob holding
