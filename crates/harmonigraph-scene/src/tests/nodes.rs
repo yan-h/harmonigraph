@@ -942,33 +942,6 @@ fn each_node_draws_its_own_octaves_nearest_the_center() {
 }
 
 #[test]
-fn a_degenerate_color_range_lands_where_the_shader_lands() {
-    // The two ends of the gradient are independent params over 0..120 (the
-    // 12-semitone ordering is the range bar's, not the param's), so a host
-    // reaches ranges the UI cannot draw: inverted, and collapsed to a point.
-    // The shader takes both without complaint — it clamps the RATIO
-    // (`pitch_lut_color`, lattice.wgsl) — so the CPU has to land where it
-    // lands, or a mark is painted one end of the ramp while the very glyph it
-    // extends is painted the other.
-    let shader_t = |pitch: f32, dark: f32, bright: f32| {
-        ((pitch - dark) / (bright - dark).max(0.01)).clamp(0.0, 1.0)
-    };
-    for (dark, bright) in [(24.0f32, 108.0f32), (60.0, 60.0), (110.0, 108.0), (108.0, 24.0)] {
-        for pitch in [0.0f32, 36.0, 60.0, 72.0, 108.0, 120.0] {
-            let lut = pitch_ramp_lut(Gradient::default());
-            let f = shader_t(pitch, dark, bright) * (PITCH_LUT_N - 1) as f32;
-            let i0 = f.floor() as usize;
-            let want = lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor());
-            assert_eq!(
-                pitch_lut_color(pitch, dark, bright, Gradient::default()),
-                want,
-                "pitch {pitch} over range {dark}..{bright}"
-            );
-        }
-    }
-}
-
-#[test]
 fn an_inverted_color_range_derives_the_range_its_bar_can_show() {
     // Every color in the picture runs the gradient math, and a hand-edited
     // look can hold Darkest above Brightest, which no drag of the bar makes.

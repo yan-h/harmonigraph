@@ -247,13 +247,13 @@ impl Width {
         let floor = MIN_RIBBON_PT * point_scale.max(0.0) * 0.5 / half_pitch;
         // How each note's playing reads on every display, shared with the
         // lattice, and what that comes to on this roll.
-        let intensity = state.appearance.view.intensity.sanitized();
+        let intensity = state.appearance.view.intensity;
         // The widest any note can swell to: what the pitch culls reach by, so
         // a swelled note is kept while any of it can be on screen. Each
         // segment's box grows to its own widest point alone (see
         // [`push_pieces`]).
         let widest = if intensity.routes_to(IntensityTarget::Thickness) {
-            intensity.thickness_max.max(1.0)
+            intensity.thickness_max
         } else {
             intensity.thickness_base.max(1.0)
         }
@@ -1080,8 +1080,7 @@ fn intensity_points(
     scratch.keep[last] = true;
     // Each display's whole range, in a `Look`'s own units: opacity's 0..1,
     // and the width's Thickness max.
-    let tolerance =
-        [1.0, intensity.thickness_max.max(1.0)].map(|range| INTENSITY_TOLERANCE * range);
+    let tolerance = [1.0, intensity.thickness_max].map(|range| INTENSITY_TOLERANCE * range);
     // A zero/positive boundary and a step are exact decisions, even when the
     // ordinary approximation tolerance could otherwise erase them.
     for i in 1..scratch.floored.len() {

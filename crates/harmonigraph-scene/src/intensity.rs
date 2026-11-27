@@ -170,7 +170,7 @@ impl IntensitySettings {
         let raw = self.unclamped(velocity, expressions);
         IntensityReading {
             opacity: raw.opacity.clamp(0.0, 1.0),
-            thickness: raw.thickness.clamp(0.0, self.thickness_max.max(1.0)),
+            thickness: raw.thickness.clamp(0.0, self.thickness_max),
         }
     }
 
@@ -195,17 +195,13 @@ impl IntensitySettings {
             (self.pressure, repair(expressions.pressure, 0.0, 0.0..=1.0)),
             (self.timbre, 2.0 * repair(expressions.timbre, 0.5, 0.0..=1.0) - 1.0),
         ];
-        // Invalid inputs contribute nothing without erasing other sources.
-        // Saturate overflow from extreme finite gain before returning a
-        // reading; each target then clamps the base plus the whole sum.
+        // Invalid inputs contribute nothing without erasing other sources;
+        // each target then clamps the base plus the whole sum.
         let sum = |target: IntensityTarget| {
             sources
                 .iter()
-                .filter_map(|(source, value)| source.weight(target).map(|weight| (weight, value)))
-                .filter(|(weight, _)| *weight != 0.0)
-                .map(|(weight, value)| weight * value)
+                .filter_map(|(source, value)| source.weight(target).map(|weight| weight * value))
                 .sum::<f32>()
-                .clamp(-f32::MAX, f32::MAX)
         };
         IntensityReading {
             opacity: self.opacity_rest + sum(IntensityTarget::Opacity),

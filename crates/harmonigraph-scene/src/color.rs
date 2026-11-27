@@ -26,24 +26,20 @@ use glam::Vec4;
 /// `darkest_pitch`, 1 at `brightest_pitch` (both MIDI note numbers).
 ///
 /// The RATIO is what gets clamped, which is the shader's own form
-/// (`pitch_lut_color` in `lattice.wgsl`) and the reason anything can be
-/// colored to match what the shader draws. Clamping the PITCH into
-/// `darkest..brightest` instead reads the same over every range the Pitch
-/// color range bar can dial, and comes apart at the two the bar cannot: the ends are
-/// independent params over 0..120, ordered only by the range bar's min span,
-/// so a host reaches an inverted pair — where `f32::clamp` panics on
-/// `min > max` — and a collapsed one, where clamping the pitch first pins
-/// every note to the dark end while the shader takes the bright one.
+/// (`pitch_lut_color` in `lattice.wgsl`), so a pitch past either end takes
+/// that end's color in both.
 ///
-/// Non-finite ends yield the darkest color rather than a NaN that would ride
-/// into the instance buffer unnoticed.
+/// The range is finite and at least [`COLOR_RANGE_MIN_SPAN`](crate::COLOR_RANGE_MIN_SPAN)
+/// wide: it is a look setting since #1790, which the load orders with
+/// [`clamp_span`](crate::clamp_span) and whose bar holds the span, and the
+/// editor's `compose_scene` asserts the view it draws is sanitized. A pair no producer
+/// writes is asserted here in debug builds rather than repaired (#1631).
 pub(crate) fn ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
-    if !darkest_pitch.is_finite() || !brightest_pitch.is_finite() {
-        return 0.0;
-    }
-    f64::from(
-        ((pitch - darkest_pitch) / (brightest_pitch - darkest_pitch).max(0.01)).clamp(0.0, 1.0),
-    )
+    debug_assert!(
+        darkest_pitch.is_finite() && brightest_pitch.is_finite() && darkest_pitch < brightest_pitch,
+        "an unsanitized color range {darkest_pitch}..{brightest_pitch}",
+    );
+    f64::from(((pitch - darkest_pitch) / (brightest_pitch - darkest_pitch)).clamp(0.0, 1.0))
 }
 
 /// The luminance one `L*` names, CIE's own piecewise inverse.

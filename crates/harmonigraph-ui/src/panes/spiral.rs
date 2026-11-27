@@ -816,7 +816,7 @@ fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
     // property of the view, and rebuilding it per voice would read as if it
     // could vary between them.
     let env = state.appearance.view.envelope();
-    let intensity = state.appearance.view.intensity.sanitized();
+    let intensity = state.appearance.view.intensity;
     voices
         .into_iter()
         .filter(|v| v.pitch >= spiral.min_midi && v.pitch <= spiral.max_midi)
