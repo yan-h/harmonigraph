@@ -41,32 +41,18 @@ pub struct Placement {
     pub rect: (f32, f32, f32, f32),
 }
 
+/// The panes of a composed frame, on the picture's own ground
+/// ([`harmonigraph_scene::skin::PICTURE`]), which they cover edge to edge.
+///
+/// The panes abut, with no gap between them: a gap would show the ground,
+/// which matches a pane's bed only while that pane is UNLIT. The lattice's bed
+/// carries the glow's wash, so beside a lit lattice any gap at all reads as a
+/// dark bar down the seam — several shades under the pane it borders, at the
+/// one place in the frame the eye is already looking. No fixed colour fixes
+/// that; the wash is a dial.
 #[derive(Clone, Debug)]
 pub struct Layout {
-    /// Frame background, RGB. Shows through the margin and the gaps.
-    pub background: (u8, u8, u8),
-    /// Inset of the whole picture from the frame edge, in points.
-    pub margin: f32,
-    /// Space between panes, in points. Applied as a half-gap inset on
-    /// every pane edge that isn't already on the picture's boundary —
-    /// which is close enough, and means adjacent panes get one gap
-    /// between them rather than two.
-    ///
-    /// Zero in every layout the plugin composes. A gap fills with `background`, and
-    /// `background` matches a pane's bed only while that pane is UNLIT. The
-    /// lattice's bed carries the glow's wash, so beside a lit lattice any
-    /// gap at all reads as a dark bar down the seam — several shades under
-    /// the pane it borders, at the one place in the frame the eye is already
-    /// looking. No fixed colour fixes that; the wash is a dial.
-    pub gap: f32,
     pub panes: Vec<Placement>,
-}
-
-fn default_background() -> (u8, u8, u8) {
-    // The panes' own ground, so a margin or a gap reads as more of the
-    // picture's black rather than as a mat of another colour around it.
-    let [r, g, b] = harmonigraph_scene::skin::PICTURE;
-    (r, g, b)
 }
 
 impl Layout {
@@ -91,15 +77,14 @@ impl Layout {
             Placement { pane: Pane::Lattice, rect: lattice },
             Placement { pane: Pane::Spectral, rect: spectral },
         ];
-        Layout { background: default_background(), margin: 0.0, gap: 0.0, panes }
+        Layout { panes }
     }
 
     /// Resolve to screen rectangles inside a frame of `size` points.
-    /// Panes that come out empty (a zero-width slice, or a gap wider than
-    /// the pane) are dropped rather than drawn degenerate.
+    /// Panes that come out empty (a zero-width slice) are dropped rather than
+    /// drawn degenerate.
     pub fn resolve(&self, size: egui::Vec2) -> Vec<(Pane, egui::Rect)> {
-        let frame = egui::Rect::from_min_size(egui::Pos2::ZERO, size).shrink(self.margin);
-        let half_gap = self.gap * 0.5;
+        let frame = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
         self.panes
             .iter()
             .filter_map(|placement| {
@@ -107,45 +92,24 @@ impl Layout {
                 let at = |fx: f32, fy: f32| {
                     egui::pos2(frame.left() + frame.width() * fx, frame.top() + frame.height() * fy)
                 };
-                let mut rect = egui::Rect::from_two_pos(at(x0, y0), at(x1, y1));
-                // Half a gap on every edge that meets another pane, and
-                // nothing on the edges that sit on the picture's own
-                // boundary — so neighbours get exactly one gap between
-                // them and the outside border stays the margin.
-                if rect.left() > frame.left() + 0.5 {
-                    rect.min.x += half_gap;
-                }
-                if rect.right() < frame.right() - 0.5 {
-                    rect.max.x -= half_gap;
-                }
-                if rect.top() > frame.top() + 0.5 {
-                    rect.min.y += half_gap;
-                }
-                if rect.bottom() < frame.bottom() - 0.5 {
-                    rect.max.y -= half_gap;
-                }
+                let rect = egui::Rect::from_two_pos(at(x0, y0), at(x1, y1));
                 (rect.width() > 1.0 && rect.height() > 1.0).then_some((placement.pane, rect))
             })
             .collect()
     }
 
-    /// The line segments that separate adjacent panes: one down the middle of
-    /// every gap [`resolve`](Self::resolve) opened between two panes, spanning
-    /// exactly the edge they share. At a [`gap`](Self::gap) of zero that
-    /// middle is the shared edge itself, and the line is the whole seam.
+    /// The line segments that separate adjacent panes: one along every edge
+    /// two of [`resolve`](Self::resolve)'s panes share, spanning exactly that
+    /// edge.
     ///
     /// The seam has to be DRAWN, because the alternative carries no boundary
     /// of its own: an unlit lattice paints its bed at exactly `background`,
     /// so two panes left to abut melt into one continuous field. Geometry
     /// only, so it can be tested without a GPU;
     /// [`paint_dividers`](Self::paint_dividers) draws it.
-    pub fn dividers(&self, placements: &[(Pane, egui::Rect)]) -> Vec<[egui::Pos2; 2]> {
-        // A gap is where `resolve` put one — exactly `gap` points wide (or
-        // zero, panes flush). Anything wider is two panes that simply aren't
-        // neighbours, and gets no line.
-        let facing = |near: f32, far: f32| {
-            ((far - near - self.gap).abs() < 1.0).then_some((near + far) * 0.5)
-        };
+    pub fn dividers(placements: &[(Pane, egui::Rect)]) -> Vec<[egui::Pos2; 2]> {
+        // Two panes meet where one's far edge is the other's near edge.
+        let facing = |near: f32, far: f32| ((far - near).abs() < 1.0).then_some((near + far) * 0.5);
         let mut lines = Vec::new();
         for (i, (_, a)) in placements.iter().enumerate() {
             for (_, b) in &placements[i + 1..] {
@@ -180,9 +144,9 @@ impl Layout {
     /// The live dock deliberately does NOT get these: `workspace` paints its own
     /// draggable divider between the panes, a 2-point hairline that Hide tab
     /// bars leaves in place.
-    pub fn paint_dividers(&self, painter: &egui::Painter, placements: &[(Pane, egui::Rect)]) {
+    pub fn paint_dividers(painter: &egui::Painter, placements: &[(Pane, egui::Rect)]) {
         let stroke = egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_divider());
-        for line in self.dividers(placements) {
+        for line in Self::dividers(placements) {
             painter.line_segment(line, stroke);
         }
     }
@@ -213,20 +177,6 @@ mod tests {
         }
     }
 
-    /// A gap goes *between* panes; the picture still reaches its margin
-    /// on the outside, or every render would come out with an uneven
-    /// border.
-    #[test]
-    fn gaps_are_only_inserted_between_panes() {
-        let layout = Layout { gap: 20.0, margin: 0.0, ..Layout::split(LatticeSide::Left, 0.68) };
-        let resolved = layout.resolve(FRAME);
-        let (_, left) = resolved[0];
-        let (_, right) = resolved[1];
-        assert_eq!(left.left(), 0.0, "the outer edge keeps the margin, not a half-gap");
-        assert_eq!(right.right(), 1920.0);
-        assert!((right.left() - left.right() - 20.0).abs() < 0.01, "one gap between them");
-    }
-
     /// No strip of frame background between two panes, in any layout the
     /// plugin composes for itself — the seam is the hairline and nothing
     /// else. A gap there fills with `background`, which is the lattice's bed
@@ -234,10 +184,9 @@ mod tests {
     /// flanking the divider, which is what the divider is supposed to be
     /// instead of.
     ///
-    /// Sweeps every constructed layout rather than pinning `gap`, because
-    /// the number is not the claim — two panes touching is, and a `resolve`
-    /// that inset them for some other reason would pass a check on the
-    /// field.
+    /// Sweeps every constructed layout and measures the resolved panes,
+    /// because two panes touching is the claim, and a `resolve` that inset
+    /// them for any reason must fail it.
     #[test]
     fn no_layout_the_plugin_composes_shows_ground_between_two_panes() {
         let split =
@@ -261,11 +210,10 @@ mod tests {
                 }
             }
             // Non-vacuous where there is a boundary at all: touching panes
-            // still get their seam drawn. A gap of zero is exactly the case
-            // `dividers`'s tolerance could round the wrong way.
+            // still get their seam drawn.
             if resolved.len() > 1 {
                 assert_eq!(
-                    layout.dividers(&resolved).len(),
+                    Layout::dividers(&resolved).len(),
                     resolved.len() - 1,
                     "{name}: flush panes lost their divider"
                 );
@@ -273,21 +221,21 @@ mod tests {
         }
     }
 
-    /// The line goes down the middle of the gap and spans the shared edge —
-    /// whichever way the two panes are arranged.
+    /// The line runs along the shared edge and spans it — whichever way the
+    /// two panes are arranged.
     #[test]
-    fn adjacent_panes_get_one_divider_centered_in_their_gap() {
-        let layout = Layout { gap: 20.0, ..Layout::split(LatticeSide::Left, 0.6) };
+    fn adjacent_panes_get_one_divider_along_their_shared_edge() {
+        let layout = Layout::split(LatticeSide::Left, 0.6);
         let resolved = layout.resolve(FRAME);
-        let lines = layout.dividers(&resolved);
+        let lines = Layout::dividers(&resolved);
         assert_eq!(lines.len(), 1, "two panes, one boundary");
         let [a, b] = lines[0];
-        assert!((a.x - 1920.0 * 0.6).abs() < 0.01, "centered in the gap, not on a pane edge");
+        assert!((a.x - 1920.0 * 0.6).abs() < 0.01, "on the shared edge");
         assert_eq!(a.x, b.x, "side by side means a vertical line");
         assert_eq!((a.y, b.y), (0.0, 1080.0), "spanning the whole shared edge");
 
-        let stacked = Layout { gap: 20.0, ..Layout::split(LatticeSide::Top, 0.6) };
-        let lines = stacked.dividers(&stacked.resolve(FRAME));
+        let stacked = Layout::split(LatticeSide::Top, 0.6);
+        let lines = Layout::dividers(&stacked.resolve(FRAME));
         assert_eq!(lines.len(), 1);
         let [a, b] = lines[0];
         assert!((a.y - 1080.0 * 0.6).abs() < 0.01);
@@ -299,7 +247,7 @@ mod tests {
     #[test]
     fn the_lattice_takes_the_side_it_names_and_the_same_share_of_it() {
         for side in LatticeSide::ALL {
-            let layout = Layout { gap: 0.0, ..Layout::split(side, 0.6) };
+            let layout = Layout::split(side, 0.6);
             let resolved = layout.resolve(FRAME);
             let find = |want: Pane| {
                 resolved.iter().find(|(p, _)| *p == want).map(|(_, r)| *r).expect("both panes")
@@ -344,7 +292,7 @@ mod tests {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, FRAME)),
                     ..Default::default()
                 },
-                |ui| layout.paint_dividers(ui.painter(), &placements),
+                |ui| Layout::paint_dividers(ui.painter(), &placements),
             );
             let lines: Vec<_> = output
                 .shapes
@@ -354,7 +302,7 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(lines.len(), layout.dividers(&placements).len());
+            assert_eq!(lines.len(), Layout::dividers(&placements).len());
             assert!(!lines.is_empty(), "the fixture must paint a real boundary");
             assert!(lines.iter().all(|(_, stroke)| *stroke
                 == egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_divider())));
@@ -365,39 +313,19 @@ mod tests {
         assert_eq!(strokes[0], strokes[1], "the shared preview/export seam follows the skin");
     }
 
-    /// Nothing to delineate: one pane has no neighbour, and panes that don't
-    /// face each other across a gap aren't neighbours either.
+    /// Nothing to delineate: one pane has no neighbour.
     #[test]
-    fn only_neighbours_get_a_divider() {
+    fn a_lone_pane_gets_no_divider() {
         for pane in [Pane::Lattice, Pane::Spectral] {
-            let layout = Layout {
-                panes: vec![Placement { pane, rect: (0.0, 0.0, 1.0, 1.0) }],
-                ..Layout::split(LatticeSide::Left, 0.6)
-            };
-            assert!(layout.dividers(&layout.resolve(FRAME)).is_empty(), "{pane:?}");
+            let layout = Layout { panes: vec![Placement { pane, rect: (0.0, 0.0, 1.0, 1.0) }] };
+            assert!(Layout::dividers(&layout.resolve(FRAME)).is_empty(), "{pane:?}");
         }
-        // Two panes with a quarter of the frame between them: a gap that wide
-        // is a composition choice, not a seam.
-        let apart = Layout {
-            background: default_background(),
-            margin: 0.0,
-            gap: 8.0,
-            panes: vec![
-                Placement { pane: Pane::Lattice, rect: (0.0, 0.0, 0.25, 1.0) },
-                Placement { pane: Pane::Spectral, rect: (0.5, 0.0, 1.0, 1.0) },
-            ],
-        };
-        assert!(apart.dividers(&apart.resolve(FRAME)).is_empty());
     }
 
     #[test]
     fn a_degenerate_pane_is_dropped_not_drawn() {
-        let layout = Layout {
-            background: default_background(),
-            margin: 0.0,
-            gap: 0.0,
-            panes: vec![Placement { pane: Pane::Lattice, rect: (0.5, 0.0, 0.5, 1.0) }],
-        };
+        let layout =
+            Layout { panes: vec![Placement { pane: Pane::Lattice, rect: (0.5, 0.0, 0.5, 1.0) }] };
         assert!(layout.resolve(FRAME).is_empty());
     }
 }

@@ -38,6 +38,13 @@ pub(super) fn scene_in(
     scene
 }
 
+/// `view` as a load hands it on: repaired by [`ViewConfig::sanitize`].
+pub(super) fn loaded(view: &ViewConfig) -> ViewConfig {
+    let mut view = view.clone();
+    view.sanitize();
+    view
+}
+
 /// [`ViewConfig::default`] with the note envelope pinned flat: a duration of 0,
 /// so a note is fully lit on the frame it sounds and gone on the frame it is
 /// released; a straight-line curve, so half a duration in reads half way

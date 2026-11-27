@@ -374,7 +374,6 @@ pub(crate) struct Runtime {
     area: Option<Vec2>,
     requested: Option<u64>,
     pub rects: [Rect; 3],
-    pub bodies: [Option<(Tab, Rect)>; 3],
     grip: Option<Grip>,
 }
 
@@ -388,22 +387,7 @@ struct Grip {
 
 impl Default for Runtime {
     fn default() -> Self {
-        Self {
-            area: None,
-            requested: None,
-            rects: [Rect::NOTHING; 3],
-            bodies: [None; 3],
-            grip: None,
-        }
-    }
-}
-
-impl Runtime {
-    #[cfg(test)]
-    pub(crate) fn body(&self, tab: Tab) -> Option<Rect> {
-        self.bodies[Section::of(tab) as usize]
-            .filter(|(active, _)| *active == tab)
-            .map(|(_, rect)| rect)
+        Self { area: None, requested: None, rects: [Rect::NOTHING; 3], grip: None }
     }
 }
 
@@ -456,7 +440,6 @@ pub(crate) fn show(
     let mut drawn = layout.clone();
     drawn.fit(area.size(), rail, gap);
     runtime.rects = drawn.rects(area, rail, gap, floor);
-    runtime.bodies = [None; 3];
     let before = layout.clone();
     // The dock is set on the Analyzer settings page, which draws through the
     // viewer rather than the layout; it reads and writes this copy.
@@ -467,8 +450,7 @@ pub(crate) fn show(
     for section in Section::ALL {
         let rect = runtime.rects[section as usize].intersect(area);
         if rect.is_positive() {
-            runtime.bodies[section as usize] =
-                section_ui(ui, section, rect, layout, viewer, rail, drawn.compact());
+            section_ui(ui, section, rect, layout, viewer, rail, drawn.compact());
         }
     }
     layout.position = viewer.interaction.dock;
@@ -507,7 +489,7 @@ fn section_ui(
     viewer: &mut Viewer<'_>,
     rail: f32,
     compact: bool,
-) -> Option<(Tab, Rect)> {
+) {
     let index = section as usize;
     let folded = layout.folded[index];
     let vertical_rail =
@@ -531,7 +513,7 @@ fn section_ui(
                 layout.folded[index] = false;
             }
         }
-        return None;
+        return;
     }
     let mut top = rect.top();
     if rail > 0.0 {
@@ -600,7 +582,7 @@ fn section_ui(
     }
     let body = Rect::from_min_max(pos2(rect.left(), top), rect.max);
     if !body.is_positive() {
-        return None;
+        return;
     }
     if section != Section::Settings {
         settings_link(&pane, rect, tab, &mut viewer.interaction.open_settings);
@@ -622,7 +604,6 @@ fn section_ui(
                 egui::Frame::new().inner_margin(margin).show(ui, |ui| viewer.ui(ui, &mut tab));
             });
     }
-    Some((tab, body))
 }
 
 /// A right-click anywhere on a picture section, header included, offers the

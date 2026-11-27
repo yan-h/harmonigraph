@@ -321,8 +321,8 @@ mod reload {
 ///
 /// One function rather than a bound at each place a strength is read, because
 /// the lattice, the piano roll and the spiral's dots all read the one
-/// control they share (`note_bloom`) through it. Load and scene entry already
-/// sanitize it to 0..2 (#1421, #1422), so this wider limit is a backstop for
+/// control they share (`note_bloom`) through it. The load already sanitizes
+/// it to 0..2 (#1421, #1422), so this wider limit is a backstop for
 /// a strength built in code and not a guard: `f32::clamp` hands NaN straight
 /// back, so it is not a NaN guard either.
 pub fn bloom_strength(raw: f32) -> f32 {

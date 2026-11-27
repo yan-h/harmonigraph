@@ -106,6 +106,7 @@ its spread and motion settings are kept.
 There is no Lit slices first switch either:
 the slices a note lights always appear first and leave in their turn,
 and a saved setting is ignored.
+Each of these saved keys opens the Console on a `persist dropped` line naming it.
 
 ## Note bloom
 
@@ -167,11 +168,11 @@ These indicators show configured possibilities,
 not a live note reading.
 Lowering **Thickness max** also clamps **Thickness base** to that ceiling.
 
-Old one-target-per-source routes and weights are ignored on load,
+Old one-target-per-source routes and weights are dropped on load, each with a `persist dropped` line in the Console,
 so those mappings must be added again.
 Base values are retained.
-A saved **Gain range** setting is ignored on load.
-Saved opacity bases above 1 are clamped to 1.
+A saved **Gain range** setting is ignored on load, with a `persist dropped` line in the Console.
+Saved opacity bases above 1 are clamped to 1, with a `persist repaired` line in the Console.
 Saved projects without **Thickness base** load it at its default of 0.989×.
 
 ## Layout and folding
@@ -457,7 +458,8 @@ Entry uses the displayed units:
 `25%` or `25` means 25 percent on a percentage bar, and `250 ms` or `250` means 250 milliseconds on a timing bar.
 Multi-handle bars have no typed entry and also reset to their defaults on double-click,
 except the star layers' bar (Star size and the other per-layer properties):
-its ends are read off the layers and have no default of their own, so a double-click leaves it alone;
-hover text describes what each handle moves.
-Every bar's hover ends with a line naming the gestures that bar answers to,
+its ends are read off the layers and have no default of their own, so a double-click leaves it alone.
+Every bar's hover ends with one line naming the gestures that bar answers to and nothing else,
 so a bar with no reset or no typed entry does not offer one.
+On a bar with several parts that line names the parts,
+and where they move different things, hover text describes what each handle moves.

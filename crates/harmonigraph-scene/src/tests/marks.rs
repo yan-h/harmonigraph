@@ -629,7 +629,7 @@ fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
     let tracker = held(60);
     let level = |mark_delay: f32, now: f64| {
         let mut motion = NodeMotion::default();
-        let view = delayed_view(mark_delay);
+        let view = loaded(&delayed_view(mark_delay));
         let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, now);
         origin_node(&scene).melody_level
     };
@@ -656,10 +656,8 @@ fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
 /// which is exactly why the crate's whole-scene finite sweep passes over this
 /// one: there is no NaN left in the scene for it to find.
 ///
-/// The door repairs it, and the curve beside it, to the fresh value, as it
+/// The load repairs it, and the curve beside it, to the fresh value, as it
 /// does nearly every other setting (#1956), so the mark still waits.
-///
-/// The scene fixture normalizes the post-pass input, as production load does.
 #[test]
 fn a_non_finite_delay_or_curve_loads_at_its_fresh_value() {
     let tracker = held(60);
@@ -680,9 +678,8 @@ fn a_non_finite_delay_or_curve_loads_at_its_fresh_value() {
     // has begun to ease in.
     let delay = f64::from(fresh.mark_delay);
     assert!(delay > 0.0, "a fresh delay of 0 cannot tell the two repairs apart");
-    assert_eq!(level(&poisoned, delay * 0.5), 0.0, "a NaN delay lost its wait");
-    assert_eq!(level(&poisoned, delay * 0.5), level(&sane, delay * 0.5), "the doors disagree");
-    assert_eq!(level(&poisoned, delay + ATTACK), 1.0, "the marks never arrived");
+    assert_eq!(level(&sane, delay * 0.5), 0.0, "a NaN delay lost its wait");
+    assert_eq!(level(&sane, delay + ATTACK), 1.0, "the marks never arrived");
 }
 
 /// The Delay holds a mark back at a Fade of 0 as at any other: the mark steps

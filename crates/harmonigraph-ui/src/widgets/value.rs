@@ -175,17 +175,14 @@ impl<'a> ValueBar<'a> {
 
     /// Pull edits to `target` while they land within `tolerance` of it, so
     /// the bar holds the target exactly until a drag pulls clear of the
-    /// window — the meantone third, held to four perfect fifths until it is
-    /// dragged off them.
+    /// window — a curve bar's straight line at its middle, as the cut's Cut
+    /// shape holds 0% and the glow's Falloff curve holds 0.
     ///
     /// Applied where the value is DECIDED, ahead of the paint, which is the
     /// whole point: a caller correcting the value afterwards would have to
     /// let the bar draw one frame at the pointer first, and a bar that
     /// follows the pointer for a frame and snaps back on the next is a bar
     /// that visibly does not snap while you drag it slowly.
-    ///
-    /// The value the caller gets back is snapped too, so "did this edit
-    /// escape the magnet" is the same question as "did the value change".
     pub fn magnet(mut self, target: f32, tolerance: f32) -> Self {
         self.magnet = Some((target, tolerance));
         self
@@ -538,7 +535,7 @@ impl<'a> ValueBar<'a> {
         painter.galley(value_pos, value, text_color);
 
         let hint = self.hint.unwrap_or(self.label);
-        with_gestures(response, Some(hint), self.default.is_some(), true)
+        with_gestures(response, Some(hint), None, self.default.is_some(), true)
             .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
 }
@@ -1426,23 +1423,23 @@ mod tests {
     }
 
     /// The magnet holds the bar at its target until an edit pulls clear of
-    /// the window, and hands back an escaped value untouched. Both halves
-    /// matter to the caller: inside the window the value it gets back is the
-    /// target, which is what makes "did this edit escape" the same question
-    /// as "did the value change".
+    /// the window, and leaves an escaped value untouched: the Falloff curve's
+    /// bar, held to its even falloff at 0.
     #[test]
     fn a_magnet_holds_the_bar_until_an_edit_pulls_clear() {
-        let mut value = 400.0;
-        let bar = ValueBar::new(&mut value, 380.0..=420.0, "Major third (¢)").magnet(400.0, 5.0);
-        for v in [400.0f32, 396.0, 404.5, 395.0, 405.0] {
-            assert_eq!(bar.snapped(v), 400.0, "{v} is inside the window");
+        use harmonigraph_scene::{GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN};
+        let range = GLOW_CURVE_SHAPE_MIN..=GLOW_CURVE_SHAPE_MAX;
+        let mut value = 0.0;
+        let bar = ValueBar::new(&mut value, range.clone(), "Falloff curve").magnet(0.0, 0.15);
+        for v in [0.0f32, 0.1, -0.1, 0.15, -0.15] {
+            assert_eq!(bar.snapped(v), 0.0, "{v} is inside the window");
         }
-        for v in [394.9f32, 405.1, 380.0, 420.0] {
+        for v in [0.16f32, -0.16, GLOW_CURVE_SHAPE_MIN, GLOW_CURVE_SHAPE_MAX] {
             assert_eq!(bar.snapped(v), v, "{v} is past the window");
         }
-        let mut value = 400.0;
-        let plain = ValueBar::new(&mut value, 380.0..=420.0, "Major third (¢)");
-        assert_eq!(plain.snapped(396.0), 396.0, "no magnet, no pull");
+        let mut value = 0.0;
+        let plain = ValueBar::new(&mut value, range, "Falloff curve");
+        assert_eq!(plain.snapped(0.1), 0.1, "no magnet, no pull");
     }
 
     #[test]
