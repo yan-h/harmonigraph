@@ -250,17 +250,19 @@ fn a_marked_slice_the_note_has_left_keeps_the_whole_light() {
 
 /// A light on a slot the wheel no longer draws gives off none (#1893 item 1).
 ///
-/// Dragging Octaves narrower under a held or fading note takes its slot off
-/// every node's wheel while the node's light, read off its slots and marks,
-/// still holds it: the glow pass asks whether a light's LAYER draws
-/// (`GlowFade::step_drawn` in harmonigraph-ui), not which slots the wheel
-/// shows. What keeps the halo off is the light's colour, which `ink_at` reads
-/// only off the slots on the ring, skipping a mark the ring has no room for,
-/// and the glow's check that it found some.
+/// Dragging Octaves narrower takes a slot off every node's wheel. A note held
+/// there moves onto the nearest slot still drawn (`slot_of` in
+/// harmonigraph-scene's motion), but the old slot's reading, and its mark,
+/// fade out from where they were, and the node's light, read off its slots
+/// and marks, fades with them: the glow pass asks whether a light's LAYER
+/// draws (`GlowFade::step_drawn` in harmonigraph-ui), not which slots the
+/// wheel shows. What keeps the halo off is the light's colour, which `ink_at`
+/// reads only off the slots on the ring, skipping a mark the ring has no room
+/// for, and the glow's check that it found some.
 ///
-/// The note and its mark both on that slot, byte-identical with the Reach
-/// off, against the same node on a wheel that still draws the slot, which
-/// lights.
+/// The note and its mark both fading on that slot, as `NodeMotion` writes
+/// them, byte-identical with the Reach off, against the same node on a wheel
+/// that still draws the slot, which lights.
 #[test]
 fn a_light_on_a_slot_the_wheel_no_longer_draws_gives_off_none() {
     const SIZE: [u32; 2] = [256, 256];
@@ -276,8 +278,10 @@ fn a_light_on_a_slot_the_wheel_no_longer_draws_gives_off_none() {
         scene.octave_layout = layout;
         let node = &mut scene.nodes[0];
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
-        node.octaves[top as usize] = 1.0;
-        read_light(node);
+        node.octaves[top as usize] = 0.5;
+        node.melody_level = 0.5;
+        let light = node.glow_light();
+        node.glow = harmonigraph_scene::GlowStep { level: light.level(), light };
         scene.view.glow_reach = reach;
         scene.view.glow_strength = 1.5;
         shooter.shot(&scene)
