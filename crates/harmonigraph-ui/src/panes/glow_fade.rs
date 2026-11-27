@@ -63,7 +63,7 @@ const GONE: f32 = 0.002;
 /// Measured as level times the Background glow gain, which is the shader's
 /// peak without its `GLOW_BASE` of 0.8, so the window errs toward staying
 /// awake a little long rather than stopping on a visible step.
-const VISIBLE_STEP: f32 = 0.5 / 255.0;
+pub(crate) const VISIBLE_STEP: f32 = 0.5 / 255.0;
 
 /// Where every node's light has got to.
 ///
@@ -90,11 +90,11 @@ pub struct GlowFade {
 struct Lit {
     level: f32,
     light: GlowLight,
-    /// The node's [`glow_target`](harmonigraph_scene::NodeInstance::glow_target)
-    /// as of the last step that saw it: what the pass after the walk keeps
-    /// lights by, and what [`GlowFade::clear_released`] reads between steps.
-    /// Written on every step that sees the node, and a light a step does not
-    /// see is dropped.
+    /// The level the node's light heads for as of the last step that saw it:
+    /// its reading's, or 0 where no layer that draws holds it. What the pass
+    /// after the walk keeps lights by, and what [`GlowFade::clear_released`]
+    /// reads between steps. Written on every step that sees the node, and a
+    /// light a step does not see is dropped.
     target: f32,
     /// The step this node was last seen on (see [`GlowFade::frame`]).
     seen: u64,
@@ -142,18 +142,23 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize,
     }
     let glow = state.surfaces.glow_fade.entry(surface).or_default();
     let moving = glow.step_drawn(scene, now);
-    state.surfaces.moving_this_frame.hold_if(crate::Reason::Releasing, moving);
+    state.surfaces.moving_this_frame.hold_if(crate::Reason::Lattice, moving);
 }
 
 /// The attack and release coefficients for a step from `previous` to `now`:
 /// how much of the way to its target a light rising and a light falling move.
 ///
-/// A clock that ran BACKWARDS — a host looping its transport — holds every
-/// light where it is, as a frame drawn twice at one time does. A negative step
-/// is not a short one: run through the exponential it gives a coefficient below
-/// zero, which moves the light away from its target.
+/// A clock that ran BACKWARDS holds every light where it is, as a frame drawn
+/// twice at one time does. The editor's display clock never does (it holds
+/// rather than rewinds, `ClockMapper::now` in harmonigraph-plugin); the guard
+/// stays, as #1784 kept it. A negative step is not a short one: run through
+/// the exponential it gives a coefficient below zero, which moves the light
+/// away from its target.
+///
+/// A FIRST step has no time behind it either, so it moves nothing: a light it
+/// starts starts dark, as on an export's first frame or a fresh Video preview.
 fn coefficients(now: f64, previous: Option<f64>, attack: f32, release: f32) -> (f32, f32) {
-    let dt = previous.map_or(f64::INFINITY, |at| now - at);
+    let dt = previous.map_or(0.0, |at| now - at);
     let alpha = |seconds: f32| {
         if dt.is_nan() || dt <= 0.0 {
             0.0
@@ -181,9 +186,9 @@ impl GlowFade {
     /// A node lights only where some layer that draws holds part of its light.
     ///
     /// Answers whether some light still moves a pixel on its own after the
-    /// step: the larger of its level's distance above its target and its
+    /// step: the larger of its level's distance from its target and its
     /// colour's still to move ([`easing`]), times the glow gain, is over
-    /// [`VISIBLE_STEP`]. What the frame loop stays awake for (`releasing` in
+    /// [`VISIBLE_STEP`]. What the frame loop stays awake for (`lattice` in
     /// `lib.rs`), asked on the step's own draw.
     ///
     /// Stepped on the Glow times of the scene's own view, the look it was
@@ -191,21 +196,17 @@ impl GlowFade {
     fn step_drawn(&mut self, scene: &mut Scene, now: f64) -> bool {
         let view = &scene.view;
         let (up, down) = coefficients(now, self.at, view.glow_attack, view.glow_release);
-        let seed = if view.glow_attack <= 0.0 {
-            1.0
-        } else if self.at.is_none() {
-            0.0
-        } else {
-            up
-        };
+        let seed = if view.glow_attack <= 0.0 { 1.0 } else { up };
         scene.glow_clock = Some(now);
         self.at = Some(now);
         self.frame += 1;
-        // What moves on its own is a level above its target, and a colour still
-        // easing toward its reading — a handoff, an octave joining, a look —
-        // at any level. A level rising belongs to a note being played, and a light
-        // settled at its reading is still, so a mark held with no key down
-        // never keeps the loop awake.
+        // What moves on its own is a level off its target, rising on the
+        // attack or falling on the release, and a colour still easing toward
+        // its reading — a handoff, an octave joining, a look — at any level. A
+        // held note's own motion is over long before a slow Glow attack is,
+        // so the light answers for its rise itself. A light settled at its
+        // reading is still, so a mark held with no key down keeps the loop
+        // awake only while its light first rises.
         let strength = view.glow_strength;
         // A light no layer draws is no light at all (#1836). The renderer lays
         // a slot's weight on the octave band and a mark's on the mark strip,
@@ -249,8 +250,9 @@ impl GlowFade {
             // that itself (`NodeInstance::glow_light`), marks included, each
             // layer read after the Opacity mapping — not
             // `presence_with_opacity`, the presence that holds through a
-            // release — and the level is read off the same weights, so the two
-            // halves of one light cannot come to disagree about what lit it.
+            // release — and the level is read off the same weights. The colour
+            // takes only the weights the ring draws, so a light whose weights
+            // all sit off the ring has a level and no colour, and draws nothing.
             let goal = Some(node.glow_light()).filter(shines).unwrap_or_default();
             let target = goal.level();
             node.glow = match self.nodes.get_mut(&node.lattice_pos) {
@@ -273,7 +275,7 @@ impl GlowFade {
                     }
                     // Asked after the end is said, so the step that ends a
                     // light asks for no frame after it.
-                    let seen = (lit.level - target).max(easing(lit.level, &lit.light, &goal));
+                    let seen = (lit.level - target).abs().max(easing(lit.level, &lit.light, &goal));
                     moving |= seen * strength > VISIBLE_STEP;
                     GlowStep { level: lit.level, light: lit.light }
                 }
@@ -283,6 +285,7 @@ impl GlowFade {
                 None if target <= 0.0 || lights >= MAX_LIGHTS => GlowStep::default(),
                 None => {
                     let level = target * seed;
+                    moving |= (target - level) * strength > VISIBLE_STEP;
                     lights += 1;
                     self.nodes.insert(
                         node.lattice_pos,
@@ -551,6 +554,28 @@ mod tests {
             assert!(awake, "the halo's colour was still easing at {now}s and asked for nothing");
         }
         assert!(!level_at(&state, 6.0).1, "the colour arrived and the loop stayed awake");
+    }
+
+    /// A light rising on its Glow attack asks for frames until it has
+    /// arrived, its first step included, though the held note under it has
+    /// long since landed (a Fade of nothing here) and asks for none: no
+    /// voice holds the loop for it.
+    #[test]
+    fn a_light_rising_on_its_attack_asks_for_repaints_until_it_arrives() {
+        let mut state = lit(0.5, 0.5);
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let mut fade = GlowFade::default();
+        let mut level_at = |state: &PictureState, now: f64| {
+            let mut scene = scene_at(state, now);
+            let moving = fade.step_drawn(&mut scene, now);
+            (node_at(&scene, LatticePos::ORIGIN).glow.level, moving)
+        };
+        assert!(level_at(&state, 0.0).1, "a new light starting dark asked for nothing");
+        let (rising, awake) = level_at(&state, 0.5);
+        assert!(rising > 0.0 && rising < 0.9, "the fixture's light must still be rising: {rising}");
+        assert!(awake, "a rising light asked for nothing");
+        let (arrived, awake) = level_at(&state, 20.0);
+        assert!(arrived > 0.99 && !awake, "a light at {arrived} kept the loop awake");
     }
 
     /// A note joining a node already lit at full level brings its colour in
@@ -923,7 +948,8 @@ mod tests {
             let mut scene = scene_at(state, now);
             apply(&mut scene, state, 0, now);
             let lit = scene.nodes.iter().filter(|n| n.glow.level > 0.0);
-            lit.map(|n| (n.lattice_pos, n.glow.level, n.glow_target() > 0.0)).collect::<Vec<_>>()
+            lit.map(|n| (n.lattice_pos, n.glow.level, n.glow_light().level() > 0.0))
+                .collect::<Vec<_>>()
         };
         levels(&mut state, 0.0);
         levels(&mut state, 1.0);
@@ -956,6 +982,24 @@ mod tests {
             assert!((node.glow.level - expected).abs() < 0.001, "attack at {time}: {node:?}");
             assert_eq!(node.glow.light, node.glow_light(), "the light was not seeded whole");
         }
+    }
+
+    /// A glow pass's FIRST step starts a held note's light dark too, as an
+    /// export's first frame and a fresh Video preview do: with no step before
+    /// it there is no time to attack over, and it is not an infinitely long one.
+    #[test]
+    fn a_first_step_starts_a_held_light_dark() {
+        let mut state = lit(1.0, 0.5);
+        // A band that draws, so the note's light shines on a drawn layer
+        // whatever the fresh look's widths are.
+        state.appearance.view.band_width = 0.2;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let mut fade = GlowFade::default();
+        let mut scene = scene_at(&state, 0.0);
+        assert!(scene.outer_outer > scene.outer_inner, "the fixture's band draws nothing");
+        fade.step_drawn(&mut scene, 0.0);
+        assert!(fade.owns(LatticePos::ORIGIN), "the held note was given no light");
+        assert_eq!(node_at(&scene, LatticePos::ORIGIN).glow.level, 0.0, "the light arrived lit");
     }
 
     /// The attack and release over a clock that ran BACKWARDS hold the light

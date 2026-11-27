@@ -67,9 +67,9 @@
 //! up with a separate bounce of the same song; the take's own WAV replaced
 //! that bounce (#903, #972, #1196, #1342).
 //!
-//! Hosts that report no transport fall back to a plugin-local sample
-//! count, so the standalone-style "just record what you play" case still
-//! works; the take then starts at zero whenever recording was armed.
+//! A block with no song position records nothing (Bitwig always reports
+//! one): the status line reads "waiting for playback" before the take first
+//! rolls, and afterwards what the last block with a position left it at.
 //!
 //! # Threading
 //!
@@ -93,6 +93,5 @@ pub mod transport;
 #[doc(hidden)]
 pub use recorder::testing;
 pub use recorder::{
-    channel, default_renderer_path, header_for, interleaved_reservation, take_dir, Control, Entry,
-    Recorder, TAKE_CHANNELS,
+    channel, default_renderer_path, header_for, take_dir, Control, Entry, Recorder, TAKE_CHANNELS,
 };

@@ -80,7 +80,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
         };
         state.appearance.view.center_threes = 0;
         state.appearance.view.center_fives = 0;
-        crate::camera_movement::set_outright(ui.ctx(), &ParamKey::CAMERA);
+        crate::camera_movement::set_outright(ui.ctx(), &ParamKey::ALL);
     }
     // The window's center follows the camera, so scrolling never leaves the
     // reach the note names are chosen out of behind. Here rather than inside
@@ -193,12 +193,6 @@ pub(crate) fn compose_scene(
     surface: usize,
     now: f64,
 ) -> harmonigraph_scene::Scene {
-    #[cfg(debug_assertions)]
-    {
-        let mut normalized = state.appearance.view.clone();
-        normalized.sanitize();
-        debug_assert_eq!(state.appearance.view, normalized, "unsanitized view reached the picture");
-    }
     let extra = super::selective_halo::owners(state, window, aspect, surface, now);
     let mut scene = derive_scene_with_extra(
         &state.runtime.tracker,
@@ -228,6 +222,45 @@ pub(crate) fn compose_scene(
     // lights of the window it draws.
     super::glow_fade::apply(&mut scene, state, surface, now);
     scene
+}
+
+/// The glow atmosphere's own motion, on the pane `height` device pixels tall:
+/// wherever a node is lit, the renderer runs its material, pattern and
+/// breathing on the glow clock (`lattice_material::prepare`), so this lattice
+/// asks for every frame while its light breathes, its pattern moves or its
+/// Stars twinkle, and for the frame its drift next crosses a device pixel
+/// where only a Watercolor or Scales drift moves, as the heatmap's atmosphere
+/// does (`spectrogram::draw_spectrogram`); a drift slower than a pixel a poll
+/// moves under a pixel between the poll's frames, which draw it. Nothing with
+/// the glow off, no node lit past a visible step, or every motion dial at 0.
+fn hold_atmosphere(scene: &harmonigraph_scene::Scene, moving: &mut crate::Animating, height: f32) {
+    use harmonigraph_scene::LatticeMaterial;
+    // Lit as the glow's own stepping judges a light seen (`VISIBLE_STEP`).
+    let strength = scene.view.glow_strength;
+    let visible = |node: &harmonigraph_scene::NodeInstance| {
+        node.glow.level * strength > super::glow_fade::VISIBLE_STEP
+    };
+    if !scene.view.glow_draws() || !scene.nodes.iter().any(visible) {
+        return;
+    }
+    let atmosphere = scene.view.atmosphere.sanitized();
+    let material = atmosphere.material_amount > 0.0;
+    let twinkles = material && atmosphere.material_style == LatticeMaterial::Stars;
+    let breathes = atmosphere.breath_amount > 0.0 && atmosphere.breath_speed > 0.0;
+    let patterned = atmosphere.texture_depth > 0.0 && atmosphere.texture_speed > 0.0;
+    if twinkles || breathes || patterned {
+        moving.hold(crate::Reason::Lattice);
+        return;
+    }
+    let displaced = matches!(
+        atmosphere.material_style,
+        LatticeMaterial::Watercolor | LatticeMaterial::VelvetScales
+    );
+    let pixels =
+        harmonigraph_render::lattice_drift_heights_per_second(atmosphere) * f64::from(height);
+    if material && displaced && pixels > 0.0 {
+        moving.hold_for(crate::Reason::Lattice, 1.0 / pixels);
+    }
 }
 
 /// The Stars solo a copy that is not the working pane draws: none.
@@ -302,6 +335,8 @@ pub(crate) fn draw_lattice(
     let hovered = response.and(state.surfaces.hovered);
     let (window, scene) =
         copy_scene(state, rect, now, surface, hovered, background, point_scale, star_solo);
+    let height = rect.height() * ui.ctx().pixels_per_point();
+    hold_atmosphere(&scene, &mut state.surfaces.moving_this_frame, height);
 
     // Picking updates the *shared* hover state, one frame behind the scene
     // it was derived from (imperceptible, standard for immediate mode). Only

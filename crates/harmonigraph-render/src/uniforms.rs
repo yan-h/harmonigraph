@@ -146,10 +146,8 @@ uniform_group! {
         span: f32,
         curve: f32,
         wash: f32,
-        /// Whether this frame has any lit halo instances.
-        lit: f32,
         accumulation: f32,
-        padding_end: f32,
+        padding_end: Float2,
     }
 }
 uniform_group! {

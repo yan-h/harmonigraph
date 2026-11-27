@@ -446,7 +446,6 @@ pub struct Workspace {
     pub(crate) layout_runtime: workspace::Runtime,
     /// One-shot change to the outer window, consumed by its shell.
     pub(crate) window_size_change: egui::Vec2,
-    pub min_window_size: egui::Vec2,
 }
 
 impl Default for Workspace {
@@ -456,7 +455,6 @@ impl Default for Workspace {
             layout: workspace::Layout::default(),
             layout_runtime: workspace::Runtime::default(),
             window_size_change: egui::Vec2::ZERO,
-            min_window_size: egui::Vec2::ZERO,
         }
     }
 }
@@ -554,10 +552,12 @@ impl Default for Instruments {
 /// How often the editor draws, as a fraction of the display's refresh rate.
 ///
 /// A fraction rather than a number of frames per second because the plugin's
-/// frames come from the display, one per refresh, and can only land on one.
-/// macOS takes a preferred rate as a hint and rounds it to a divisor of the
-/// panel's rate: measured on a 144 Hz panel, 120 ran at 144, and 90 and 60 at
-/// 72 (#1551). A fraction is the rate the editor will actually run at.
+/// frames come from the display, one per refresh, and can only land on one:
+/// the window draws on every Nth refresh, paced on the display link's
+/// timestamps (`set_frame_divisor`, #1553). A preferred rate, which macOS takes
+/// as a hint, rounded to a divisor of the panel's rate anyway: measured on a
+/// 144 Hz panel, 120 ran at 144, and 90 and 60 at 72 (#1551). A fraction is the
+/// rate the editor will actually run at.
 ///
 /// Read by the plugin to pace its window, never by any drawing code: the
 /// offline renderer steps its own clock and never reaches the editor, so a
@@ -898,9 +898,11 @@ impl SharedState {
 /// arrives — but NOTHING gates a blob one bump behind, which is what a project
 /// saved by the previous build carries. Changing the ids again would buy that
 /// gate back at the price of orphaning every project that loads the plugin,
-/// which is the worse trade; the refusal is made audible instead. See
-/// [`SharedState::install_document`], which sets out both halves and which of its
-/// callers each covers.
+/// which is the worse trade; the refusal is made audible instead:
+/// [`SharedState::install_document`] opens the Console on it and leaves the
+/// current content intact. The appearance this blob nests, and a take's look,
+/// are also held to `APPEARANCE_VERSION`, which must match exactly
+/// (`AppearanceDocument::normalize`).
 ///
 /// 7: camera, view, spectrum, spiral and render moved into one appearance
 /// document. Previous editor saves are refused whole, with no migration. The

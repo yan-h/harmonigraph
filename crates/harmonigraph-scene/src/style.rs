@@ -676,12 +676,7 @@ pub struct ShadowStyle {
 }
 
 impl Default for ShadowStyle {
-    /// The style a bare `ShadowStyle` opens on: a fixture, or the renderer's
-    /// fallback for a caster handed no style. Not what a fresh VIEW draws —
-    /// its three groups are [`ShadowSettings::default`], and each of them
-    /// differs from this.
-    ///
-    /// It is ALSO what a group a blob carries with one FIELD missing fills that
+    /// What a group a blob carries with one FIELD missing fills that
     /// field from, where a blob missing the whole GROUP fills it from
     /// [`ShadowSettings::default`]'s matching group: serde resolves a missing
     /// field against the container it sits in, and both containers carry a
@@ -690,11 +685,13 @@ impl Default for ShadowStyle {
     /// the two answers are under no obligation to draw the same fresh picture.
     /// `a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest` in the UI
     /// persist tests holds it, with each group named in its `nested_defaults`.
+    ///
+    /// Not what a fresh VIEW draws — its three groups are
+    /// [`ShadowSettings::default`], and each of them differs from this — and no
+    /// fallback in the renderer: a caster handed no style casts nothing.
     fn default() -> ShadowStyle {
         ShadowStyle {
-            // Numbers first chosen for contour shadows (removed in #1499),
-            // kept so the fixtures built on this default measure the widths
-            // they were written against.
+            // Numbers first chosen for contour shadows (removed in #1499).
             width: 0.418_517_17,
             spread: 0.0,
             // Just under half depth leaves the shadow legible without cutting

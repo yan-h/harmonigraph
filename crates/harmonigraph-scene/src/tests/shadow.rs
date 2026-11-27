@@ -2,7 +2,6 @@
 
 use super::harness::*;
 use crate::*;
-use harmonigraph_core::{NoteTracker, Tuning};
 
 /// A non-finite Shadow field repairs to its own group's fresh value, as the
 /// recorded rule for nested groups has it (#1677 area 5 Q2): every field of
@@ -32,14 +31,14 @@ fn a_non_finite_shadow_field_repairs_to_its_groups_fresh_value() {
     }
 }
 
-/// The blob door and the picture door hold every Shadow GROUP to the same
-/// endpoints, so a saved value never reads out differently from what is drawn.
+/// The load holds every Shadow GROUP to its bar's endpoints, so a saved value
+/// never reads out differently from what the bar can set.
 ///
 /// Swept over the groups rather than named one at a time
 /// ([`ShadowSettings::groups`]): a group added to the struct without a clamp is
 /// invisible at its declaration, and this is what sees it.
 #[test]
-fn the_shadow_controls_keep_one_range_at_both_doors() {
+fn the_shadow_controls_load_inside_their_bars() {
     for (asked_width, widths, asked_spread, spread, asked_depth, depth) in [
         (-1.0, [0.0; 3], -0.5, 0.0, -0.5, 0.0),
         (2.0, [1.0, 1.0, 2.0], 0.17, 0.17, 0.8, 0.8),
@@ -48,7 +47,7 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
     ] {
         let asked = ShadowStyle { width: asked_width, spread: asked_spread, depth: asked_depth };
         let want = widths.map(|width| ShadowStyle { width, spread, depth });
-        let mut view = ViewConfig {
+        let view = ViewConfig {
             shadow: ShadowSettings {
                 lattice_geometry: asked,
                 lattice_text: asked,
@@ -56,14 +55,8 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
             },
             ..ViewConfig::default()
         };
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
-        for (group, drawn) in scene.view.shadow.groups().into_iter().enumerate() {
-            assert_eq!(drawn, want[group], "the picture drew group {group} at {asked:?}");
-        }
-
-        view.sanitize();
-        for (group, kept) in view.shadow.groups().into_iter().enumerate() {
-            assert_eq!(kept, want[group], "the bar kept group {group} at {asked:?}");
+        for (group, kept) in loaded(&view).shadow.groups().into_iter().enumerate() {
+            assert_eq!(kept, want[group], "the load kept group {group} at {asked:?}");
         }
     }
 }
@@ -100,9 +93,11 @@ fn the_endpoint_has_exactly_three_explicit_shadow_groups() {
 /// Either bar at its bottom is the whole of a group's shadow gone, and the two
 /// are separate switches.
 ///
-/// The claim the renderer's early-out rests on: `pack_into` reads this to decide
-/// whether a caster takes a cell at all, so a group that reads as casting with
-/// one bar shut would allocate atlas and rasterize ink for a shadow the picture
+/// The claim the renderer's early-out rests on: the lattice hands a group's
+/// width to its visible shadow only while it casts (the node group still packs
+/// its cells for Hide behind), and a text pane's names take cells only then
+/// (`lattice_frame.rs`, `text.rs`), so a group that reads as casting with one
+/// bar shut would allocate atlas and rasterize ink for a shadow the picture
 /// never spends.
 #[test]
 fn a_group_with_either_bar_at_its_bottom_casts_nothing() {

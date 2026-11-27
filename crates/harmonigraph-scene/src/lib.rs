@@ -368,7 +368,13 @@ pub struct GlowLight {
 
 impl GlowLight {
     /// How lit the node is, as far as its light is concerned: its most opaque
-    /// slot or mark (see [`NodeInstance::glow_target`]).
+    /// octave slot or mark as drawn, each after the Opacity mapping, in 0..=1 —
+    /// so a soft note's halo is as faint as its ink and one faded to nothing
+    /// has none. Not [`NodeInstance::presence_with_opacity`], the presence that
+    /// holds through a release. Read off the same weights the colour is
+    /// (#1304, #1339), though the colour takes only those the ring draws: a
+    /// light whose weights all sit off the ring has a level and no colour, and
+    /// draws nothing.
     pub fn level(&self) -> f32 {
         self.l.iter().chain(&self.m).copied().fold(0.0, f32::max).clamp(0.0, 1.0)
     }
@@ -402,10 +408,11 @@ impl GlowLight {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GlowStep {
     /// How lit this node's light is drawn. Out of [`NodeMotion::step`] it is
-    /// the node's [`glow_target`](NodeInstance::glow_target) itself; the
-    /// shell's pass replaces it with where that target has got to on the Glow
-    /// attack and release, so it can be above zero on a node whose every layer
-    /// has gone silent — which is the whole of what makes a halo linger.
+    /// the [`level`](GlowLight::level) of the node's own reading; the
+    /// shell's pass replaces it with where it has got to on the Glow attack and
+    /// release toward its goal — the reading's level, or 0 where no drawn layer
+    /// holds the light — so it can be above zero on a node whose every layer
+    /// has gone silent, which is the whole of what makes a halo linger.
     pub level: f32,
     /// What the light is made of. Out of [`NodeMotion::step`] it is the node's
     /// own [`glow_light`](NodeInstance::glow_light); the shell's pass replaces
@@ -570,10 +577,10 @@ pub struct NodeInstance {
     /// The node's own light, as far as the light is concerned: how bright it
     /// is, and what it is made of (see [`GlowStep`]).
     ///
-    /// [`NodeMotion::step`] writes the current glow target and no carried
-    /// light. The shell's pass (`panes::glow_fade` in harmonigraph-ui) is what
-    /// replaces both with where they have got to on the Glow attack and
-    /// release.
+    /// [`NodeMotion::step`] writes the node's reading as it stands, its level
+    /// and its light ([`glow_light`](Self::glow_light)). The shell's pass
+    /// (`panes::glow_fade` in harmonigraph-ui) is what replaces both with where
+    /// they have got to on the Glow attack and release.
     pub glow: GlowStep,
     /// Whether the music is remembered here (see [`trail`]): 0 where it has
     /// never been, 1 where it has. A memory never fades, so those are the
@@ -744,25 +751,12 @@ impl NodeInstance {
     /// included, which leaves at the release rather than waiting out a Fade-out
     /// delay as [`presence_with_opacity`](Self::presence_with_opacity) does.
     ///
-    /// The one spelling of "the drawn colour" for everything that follows it:
-    /// the [`glow_target`](Self::glow_target) (which adds the marks) and the
-    /// name's ink, so a name, a halo and the colour they follow cannot
-    /// disagree about whether the node is going dark.
+    /// What the name's ink follows (`label_ink` in harmonigraph-ui); a node's
+    /// light reads the same slots, marks added ([`glow_light`](Self::glow_light)),
+    /// so a name and a halo cannot disagree about whether the node is going
+    /// dark.
     pub fn drawn_level(&self) -> f32 {
         self.octaves.iter().copied().fold(0.0, f32::max)
-    }
-
-    /// Where this node's light is heading: its most opaque octave slot or mark
-    /// as drawn, each after the Opacity mapping, in 0..=1 — so a soft note's
-    /// halo is as faint as its ink and one faded to nothing has none. Not
-    /// [`presence_with_opacity`](Self::presence_with_opacity), the presence
-    /// that holds through a release.
-    ///
-    /// Read off the node's [`glow_light`](Self::glow_light), so the level a
-    /// light heads for and the weights its colour is read from are one reading
-    /// and cannot disagree about what lit it (#1304, #1339).
-    pub fn glow_target(&self) -> f32 {
-        self.glow_light().level()
     }
 
     /// What this node's light is made of as it stands: every slot's light and

@@ -113,7 +113,7 @@ the guard-ledger audit (#1709) found the top tenth of the regression tests absor
 and #836, #1107, #1112 and #1714 each paid that down one test at a time.
 A neighbouring test is a model for size, not for where its inputs come from.
 
-## The stakes record: one composer on macOS in Bitwig, and three failures that are severe
+## The stakes record: one composer on macOS in Bitwig, and four failures that are severe
 
 Price a case from this section, as the global preferences say:
 how often it occurs here, and what it costs when it does.
@@ -147,6 +147,7 @@ A figure that appears only in a test or a review finding is not load:
 - A video export, or the take behind it, that is wrong with nothing saying so (PR #340).
 - Time taken from Bitwig's main thread or from the audio thread:
   a still picture once cost the main thread 280-320 ms a second (#1673).
+- A crash: a panic that takes down the plugin, or undefined behaviour; a worker that restarts after one, as the slab pyramid's fold does below, is not one (Yan, 2026-11-27, yan-h/agent-config#146).
 
 Everything else is cheap:
 a warning, a glitch for a frame, a bar dragged back after reopening a project, an old take that no longer loads.
@@ -232,7 +233,7 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 
 **Cases the Tape harmony row goes without** (PR #1975; Yan, #1974), each with its cost when it occurs:
 
-- A pitch off the live tuning, or outside the lattice's naming reach: it lights nothing in the row, as on the lattice, so a recorded 12-TET track under just or meantone axes is mostly unlit.
+- A pitch off the live tuning, or outside the lattice's naming reach: it lights nothing in the row, as on the lattice. A recorded 12-TET track under meantone axes is mostly unlit; under just axes 8 of its 12 pitch classes land within the half-cent match of some node in the reach and light it, taking that node's name (F and G at 0.001¢; C♯, E, F♯, A♭ and B at about 0.28¢), and only 200, 300, 900 and 1000 cents stay unlit. (Yan, #1974; corrected 2026-11-27, PR #2000.)
 
 ## Backwards compatibility is not a constraint
 
@@ -243,7 +244,7 @@ say what breaks in the PR body and make the change.
 and never, on its own, a review finding.
 
 What it does not license is a SILENT break.
-The value on screen must still be the value the file holds, so a change of range or units carries whatever clamp or repair keeps the two agreeing (`ViewConfig::sanitize`, also applied at the scene entry).
+The value on screen must still be the value the file holds, so a change of range or units carries whatever clamp or repair keeps the two agreeing (`ViewConfig::sanitize`, which every load runs and the scene entry asserts in a debug build).
 
 The tree carries **no compat shims at all**, and that is the invariant to hold:
 no `legacy_*` fields, migration passes or serde aliases for deleted variants.

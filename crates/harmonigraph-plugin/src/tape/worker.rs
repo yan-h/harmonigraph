@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
-use harmonigraph_core::NoteRoll;
+use harmonigraph_core::{NoteRoll, SourceId};
 
 use harmonigraph_record::transport;
 use harmonigraph_ui::tape::harmony::{self, Harmony};
@@ -129,12 +129,12 @@ pub(crate) struct DisplacedView {
 }
 
 /// What the harmony row's sections were analyzed from: the roll's own key,
-/// and Detail and Span by their bits.
-#[derive(Clone, Copy, PartialEq)]
+/// Detail and Span by their bits, and the sources hidden with Show.
 struct Analyzed {
     roll: Option<(u64, u64)>,
     detail: u32,
     span: u32,
+    hidden: BTreeSet<SourceId>,
 }
 
 pub(crate) struct Worker {
@@ -199,17 +199,20 @@ pub(crate) struct Worker {
     notes_dropped_reported: bool,
     book: Book,
     player: Player,
-    /// Tape mode's roll was on screen at the last exchange, so worth
-    /// building.
+    /// Tape mode's roll, or the harmony row analyzed from it, was on screen
+    /// at the last exchange, so worth building.
     visible: bool,
     /// A roll built between holds, for the next exchange to hand over; any
     /// displaced roll returns in [`DisplacedView`] to be freed off-lock.
     built_roll: Option<Arc<NoteRoll>>,
     /// The roll last built, which the harmony row's sections (#1974) are
-    /// analyzed from again when only Detail or Span moved.
+    /// analyzed from again when only Detail, Span or a Show switch moved.
     latest_roll: Option<Arc<NoteRoll>>,
     /// Detail and Span as the row asked at the last exchange, while it draws.
     harmony_wanted: Option<(f32, f32)>,
+    /// The sources hidden with Show at the last exchange, whose notes the row
+    /// leaves out.
+    hidden: BTreeSet<SourceId>,
     harmony_shown: Option<Analyzed>,
     /// Sections analyzed between holds, handed over as a built roll is.
     built_harmony: Option<Arc<Harmony>>,
@@ -266,6 +269,7 @@ impl Worker {
             built_roll: None,
             latest_roll: None,
             harmony_wanted: None,
+            hidden: BTreeSet::new(),
             harmony_shown: None,
             built_harmony: None,
         }
@@ -286,7 +290,7 @@ impl Worker {
         let rate = block.format.sample_rate;
         let channels = block.format.channels;
         let main = !block.format.sidechain && channels > 0;
-        let presentation = block.presentation();
+        let presentation = block.start;
         self.drained_through = presentation + block.frames as f64 / f64::from(rate);
         // Before the rolling test: a stopped block at a new rate must clear
         // the tape too, or a cue before the transport next rolls would play
@@ -619,13 +623,15 @@ impl Worker {
     }
 
     /// Take Tape mode's request, and show it the tape as it is now, analyzed
-    /// under the Analyzer's `settings`. `open`: the editor's window is.
+    /// under the Analyzer's `settings`, its harmony row without the sources
+    /// `hidden` with Show. `open`: the editor's window is.
     ///
     /// Returns any displaced allocations so the caller can drop them once the
     /// editor lock is released.
     pub(crate) fn exchange(
         &mut self,
         view: &mut TapeView,
+        hidden: &BTreeSet<SourceId>,
         settings: &SpectrumConfig,
         open: bool,
     ) -> DisplacedView {
@@ -661,11 +667,17 @@ impl Worker {
         view.heard = seconds(&shared.heard);
         view.bytes = self.store.as_ref().map_or(0, Store::bytes) + self.book.bytes();
         self.harmony_wanted = view.harmony_wanted.filter(|_| view.showing && open);
+        // Copied only when a Show switch moved, which is a click.
+        if self.hidden != *hidden {
+            self.hidden = hidden.clone();
+        }
         self.visible =
             view.showing && open && (settings.show_roll || self.harmony_wanted.is_some());
         let roll = self.built_roll.take().map(|roll| std::mem::replace(&mut view.notes, roll));
-        let harmony =
-            self.built_harmony.take().map(|built| std::mem::replace(&mut view.harmony, built));
+        let harmony = self
+            .built_harmony
+            .take()
+            .map(|built| std::mem::replace(&mut view.shown_harmony, built));
         if self.shown != Some(self.generation) {
             self.shown = Some(self.generation);
             view.spans = self.store.as_ref().map_or_else(Vec::new, spans);
@@ -677,8 +689,8 @@ impl Worker {
     }
 
     /// Rebuild Tape mode's roll if the recording changed under it, and the
-    /// harmony row's sections if the roll, Detail or Span did, with no lock
-    /// held: each walks every note recorded.
+    /// harmony row's sections if the roll, Detail, Span or the sources hidden
+    /// with Show did, with no lock held: each walks every note recorded.
     pub(crate) fn roll(&mut self) {
         let built = (self.generation, self.notes_generation);
         if self.visible && self.roll_shown != Some(built) {
@@ -693,17 +705,26 @@ impl Worker {
         let Some((detail, span)) = self.harmony_wanted else { return };
         // The meters are in the roll's key too: a change of them alone moves
         // `generation`.
-        let analyzed =
-            Analyzed { roll: self.roll_shown, detail: detail.to_bits(), span: span.to_bits() };
-        if self.harmony_shown == Some(analyzed) {
+        let current = self.harmony_shown.as_ref().is_some_and(|shown| {
+            shown.roll == self.roll_shown
+                && shown.detail == detail.to_bits()
+                && shown.span == span.to_bits()
+                && shown.hidden == self.hidden
+        });
+        if current {
             return;
         }
-        let Some(roll) = &self.latest_roll else { return };
-        self.harmony_shown = Some(analyzed);
+        let Some(latest) = &self.latest_roll else { return };
+        self.harmony_shown = Some(Analyzed {
+            roll: self.roll_shown,
+            detail: detail.to_bits(),
+            span: span.to_bits(),
+            hidden: self.hidden.clone(),
+        });
         let rate = self.store.as_ref().map_or(1.0, |store| f64::from(store.rate));
         let meters: Vec<(f64, Meter)> =
             self.meters.iter().map(|(&at, &meter)| (at as f64 / rate, meter)).collect();
-        let sections = harmony::analyze(roll, &meters, detail, span);
+        let sections = harmony::analyze(latest, &self.hidden, &meters, detail, span);
         self.built_harmony = Some(Arc::new(Harmony { sections }));
     }
 
@@ -819,7 +840,7 @@ impl Worker {
     /// The audio thread's events as console lines.
     pub(crate) fn report(&mut self) {
         while let Ok(event) = self.events.pop() {
-            let line = self.describe(event);
+            let line = Self::describe(event);
             self.logs.push(line);
         }
         if let Some(store) = &self.store {
@@ -833,31 +854,8 @@ impl Worker {
         }
     }
 
-    fn recording_at(&self, position: f64) -> String {
-        let Some(store) = &self.store else { return "nothing recorded yet".into() };
-        let frame = (position * f64::from(store.rate)).round() as i64;
-        match store.stamp_at(frame) {
-            None => "nothing recorded there".into(),
-            Some(stamp) => format!(
-                "{}, run-up {:.1} s, recorded {:.0} s ago",
-                if stamp.is_from_start(store.rate) {
-                    "warm (from the song's start)"
-                } else if stamp.warm(frame, store.rate) {
-                    "warm"
-                } else {
-                    "cold"
-                },
-                stamp.run_up(frame, store.rate),
-                stamp.when.elapsed().as_secs_f64(),
-            ),
-        }
-    }
-
-    fn describe(&self, event: Event) -> String {
+    fn describe(event: Event) -> String {
         match event {
-            Event::Started { position } => {
-                format!("tape: audition from {} ({})", at(position), self.recording_at(position))
-            }
             Event::Ended { position, played, reason } => format!(
                 "tape: audition from {} stopped after {played:.2} s by {}",
                 at(position),

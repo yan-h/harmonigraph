@@ -58,10 +58,14 @@ pub struct AudioSpectrum {
 /// the frame zero its feeder states. It never reads what it has produced, so
 /// it runs where the spectrum is not (#1559): the plugin's input worker owns its
 /// own and analyzes off the editor's lock.
+#[derive(Default)]
 pub struct SpectrumAnalysis {
     /// One analyzer per input channel, combined in the power domain — see
-    /// [`ChannelBank`](harmonigraph_analysis::ChannelBank).
-    pub(crate) analyzer: harmonigraph_analysis::ChannelBank,
+    /// [`ChannelBank`](harmonigraph_analysis::ChannelBank). Built at the first
+    /// feed, at the settings and format it brings, rather than at a default
+    /// the feed would throw away: a bank's kernels cost the main thread about
+    /// 0.68 ms per instance.
+    pub(crate) analyzer: Option<harmonigraph_analysis::ChannelBank>,
     /// FRAMES pushed since this run started, and the count at which the
     /// next FFT falls due. The column grid is a function of these two and
     /// nothing else — see [`feed_source`](Self::feed_source).
@@ -208,16 +212,6 @@ impl AnalyzedColumn {
     }
 }
 
-impl Default for SpectrumAnalysis {
-    fn default() -> Self {
-        SpectrumAnalysis {
-            analyzer: harmonigraph_analysis::ChannelBank::new(Default::default(), 1),
-            frames_seen: 0,
-            next_hop: 0,
-        }
-    }
-}
-
 impl Default for AudioSpectrum {
     fn default() -> Self {
         AudioSpectrum {
@@ -284,12 +278,21 @@ impl SpectrumAnalysis {
         // until they have refilled; a changed frame carries what the new one
         // can use, so only a longer one waits, for the rest of it. The hop grid
         // keeps its phase across any gap rather than restarting on it.
-        self.analyzer.configure(config.analyzer(sample_rate), channels);
+        let settings = config.analyzer(sample_rate);
+        let analyzer = match &mut self.analyzer {
+            Some(analyzer) => {
+                analyzer.configure(settings, channels);
+                analyzer
+            }
+            None => {
+                self.analyzer.insert(harmonigraph_analysis::ChannelBank::new(settings, channels))
+            }
+        };
 
         // FRAMES throughout: `samples` is interleaved, and a hop is an amount of
         // time. A partial frame at the end is left out, so the de-interleaving
         // in `push_frames` can never slip a channel.
-        let channels = self.analyzer.channels();
+        let channels = analyzer.channels();
         let batch = samples.len() / channels;
         if batch == 0 {
             return;
@@ -314,14 +317,14 @@ impl SpectrumAnalysis {
             // boundary behind us; the next line puts the grid back on its feet.
             let want = self.next_hop.saturating_sub(self.frames_seen).max(1) as usize;
             let take = want.min(batch - fed);
-            self.analyzer.push_frames(&samples[fed * channels..(fed + take) * channels]);
+            analyzer.push_frames(&samples[fed * channels..(fed + take) * channels]);
             self.frames_seen += take as u64;
             fed += take;
             if self.frames_seen < self.next_hop {
                 break; // The batch ran out before the boundary.
             }
             self.next_hop = self.frames_seen + hop;
-            let Some(fresh) = self.analyzer.power_sum() else { continue };
+            let Some(fresh) = analyzer.power_sum() else { continue };
 
             // Stamped where the window it measured is centred, not at the
             // boundary itself — see `window_center_offset`. This is what lets a
@@ -330,7 +333,7 @@ impl SpectrumAnalysis {
             // the newest frame fed so far sits on the run's grid, so
             // consecutive columns are exactly `hop` frames apart.
             let boundary = origin + self.frames_seen.saturating_sub(1) as f64 / sr;
-            let center = boundary - self.analyzer.window_center_offset();
+            let center = boundary - analyzer.window_center_offset();
             let column = AnalyzedColumn { time: center, power: fresh, step: hop as f64 / sr };
             deliver(Delivery::Column(Box::new(column)));
         }
@@ -341,13 +344,15 @@ impl SpectrumAnalysis {
     /// it analyzed under; a frame reads [`SpectrumConfig::live_lag`].
     #[cfg(any(test, feature = "testing"))]
     pub fn lag(&self) -> f64 {
-        self.analyzer.window_center_offset()
+        self.analyzer.as_ref().expect("the lag of an analysis fed nothing").window_center_offset()
     }
 
     /// Forget the retained run: the analyzer's window and the hop grid. The
     /// spectrum's half is a [`Delivery::Restart`].
     pub fn restart(&mut self) {
-        self.analyzer.restart();
+        if let Some(analyzer) = &mut self.analyzer {
+            analyzer.restart();
+        }
         self.frames_seen = 0;
         self.next_hop = 0;
     }

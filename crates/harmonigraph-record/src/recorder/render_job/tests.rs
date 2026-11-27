@@ -83,8 +83,9 @@ fn a_failed_renders_last_word_is_kept_over_the_counters() {
 /// which is the whole reason warnings are carried separately.
 #[test]
 fn a_render_that_warned_carries_each_warning_onto_the_detail_it_succeeded_with() {
-    let gap = "warning: take-1.take: note history 6..=8 is missing \
-                       (PublicationFull) — rendering the records that survived.";
+    let gap = "warning: take-1.take: note history 6..=8 is missing — rendering the \
+               records that survived, so notes may be missing or drawn short. Nothing is \
+               invented to fill the hole.";
     let x264 = "warning: the hardware encoder takes at most 4096 px a side; \
                 exported 5040x2160 through x264";
     let muxed = "video:512kB audio:0kB subtitle:0kB muxing overhead: 1.234567%";
@@ -130,7 +131,7 @@ fn an_unterminated_last_counter_still_counts() {
 }
 
 #[test]
-fn the_default_renderer_path_is_where_update_plugin_installs_it() {
+fn the_default_renderer_path_is_where_load_plugin_installs_it() {
     let path = default_renderer_path();
     assert!(path.ends_with("Harmonigraph/harmonigraph-offline"), "{path:?}");
 }
@@ -139,7 +140,7 @@ fn the_default_renderer_path_is_where_update_plugin_installs_it() {
 /// error is.
 ///
 /// `Interrupted` means a signal landed — and one does, every time
-/// `cancel_in_flight` kills a child — not that the renderer stopped
+/// `cancel_job` kills a child — not that the renderer stopped
 /// talking. Treating it as the end would freeze the bar partway and leave
 /// the job's detail holding whatever had arrived before the signal, for a
 /// render still going perfectly well. Treating a REAL error as a signal is

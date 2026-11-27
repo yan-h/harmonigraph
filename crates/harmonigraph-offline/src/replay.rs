@@ -186,11 +186,13 @@ mod tests {
     fn take_with(notes: Vec<NoteRecord>, params: Vec<ParamRecord>) -> Take {
         Take {
             header: Header::default(),
-            events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
+            events: notes
+                .into_iter()
+                .map(|note| harmonigraph_take::CanonicalRecord::Delta(note.into()))
+                .collect(),
             params,
             configurations: Vec::new(),
             truncated: false,
-            incomplete: None,
             ..Default::default()
         }
     }
@@ -221,12 +223,10 @@ mod tests {
             )),
             // The Off for key 60 never reaches the file: it is inside the gap.
             CanonicalRecord::from_event(CanonicalEvent::Gap(PublicationGap {
-                source: None,
                 time: 2.0,
                 through: 2.0,
                 first: 2,
                 last: 2,
-                reason: GapReason::PublicationFull,
             })),
             CanonicalRecord::from_event(CanonicalEvent::Baseline(&silent)),
         ] {
@@ -354,19 +354,17 @@ mod tests {
             ),
             CanonicalRecord::from_event(CanonicalEvent::Baseline(&held)),
             CanonicalRecord::from_event(CanonicalEvent::Gap(PublicationGap {
-                source: Some(source),
                 time: 0.2,
                 through: 0.29,
                 first: 6,
                 last: 8,
-                reason: GapReason::PublicationFull,
             })),
             CanonicalRecord::from_event(CanonicalEvent::Baseline(&recovered)),
             delta(NoteEvent::off(0.4, source, 0, 60), 9),
         ];
         let encoded = one_run(events);
         let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
-        assert!(take.incomplete.is_some());
+        assert!(take.gap().is_some());
         let roll_snapshot = |roll: &harmonigraph_core::NoteRoll| {
             roll.notes()
                 .map(|n| {
@@ -441,7 +439,8 @@ mod tests {
         }
         // A held chord would trigger GUI learning or detection if replay
         // accidentally treated these exact records as hints.
-        for record in [Record::Note(on(0.0, 60)), Record::Note(on(0.0, 64))] {
+        for note in [on(0.0, 60), on(0.0, 64)] {
+            let record = Record::Canonical(harmonigraph_take::CanonicalRecord::Delta(note.into()));
             encoded.push('\n');
             encoded.push_str(&ron::to_string(&record).unwrap());
         }
@@ -535,9 +534,16 @@ mod tests {
         assert!((voice.activation(1.0, &env) - 0.6).abs() < 1e-6);
     }
 
+    /// Two sources as the Hub publishes them: each delta sequenced in its
+    /// source and naming its press, a cut of one source as the Hub makes it
+    /// (`Hub::adopt`: its empty snapshot, with no release before it), and the
+    /// session's reset as a direct observation. The snapshot ends A's held
+    /// press as a history gap: observed until the cut, with no release.
     #[test]
     fn source_scopes_and_bends_round_trip_into_incremental_and_full_replay() {
+        use harmonigraph_core::canonical::{CanonicalEvent, NoteDelta, SourceBaseline};
         use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId, VoiceState};
+        use harmonigraph_take::{CanonicalRecord, Record};
         let (a, b) = (SourceId(1), SourceId(2));
         let tuning = |time, source, semitones| NoteEvent {
             time,
@@ -546,27 +552,46 @@ mod tests {
             note: 60,
             kind: NoteEventKind::Tuning { semitones },
         };
-        let events = [
-            NoteEvent::on(0.125, a, 0, 60, 0.8),
-            tuning(0.125, a, 0.25),
-            NoteEvent::on(0.25, b, 0, 60, 0.6),
-            tuning(0.25, b, -0.25),
-            NoteEvent::off(0.75, a, 0, 60),
-            NoteEvent::on(1.0, a, 0, 60, 0.8),
-            NoteEvent::on(1.25, a, 0, 60, 0.7),
-            NoteEvent::source_reset(1.5, a),
-            tuning(1.75, b, -0.5),
-            NoteEvent::on(2.0, a, 0, 60, 0.9),
-            NoteEvent::session_reset(2.25),
+        // Each event with the press it belongs to.
+        let played = [
+            (NoteEvent::on(0.125, a, 0, 60, 0.8), 1),
+            (tuning(0.125, a, 0.25), 1),
+            (NoteEvent::on(0.25, b, 0, 60, 0.6), 2),
+            (tuning(0.25, b, -0.25), 2),
+            (NoteEvent::off(0.75, a, 0, 60), 1),
+            (NoteEvent::on(1.0, a, 0, 60, 0.8), 3),
+            (NoteEvent::on(1.25, a, 0, 60, 0.7), 4),
+            (tuning(1.75, b, -0.5), 2),
+            (NoteEvent::on(2.0, a, 0, 60, 0.9), 5),
         ];
+        let mut sequence = std::collections::BTreeMap::<SourceId, u64>::new();
+        let mut records = Vec::new();
+        // A's cut at 1.5, between its retrigger and its last press.
+        let mut cut = Some(1.5);
+        for (event, lifetime) in played {
+            if let Some(at) = cut.take_if(|at| event.time > *at) {
+                let empty = SourceBaseline::new(a, at, sequence[&a], true, &[]).unwrap();
+                records.push(CanonicalRecord::from_event(CanonicalEvent::Baseline(&empty)));
+            }
+            let next = sequence.entry(event.source).or_default();
+            *next += 1;
+            let delta = NoteDelta { sequence: *next, lifetime, ..event.into() };
+            records.push(CanonicalRecord::from_event(CanonicalEvent::Note(delta)));
+        }
+        let reset = NoteDelta::from(NoteEvent::session_reset(2.25));
+        records.push(CanonicalRecord::from_event(CanonicalEvent::Note(reset)));
         let mut encoded = opened();
-        for event in events {
+        for record in records {
             encoded.push('\n');
-            encoded
-                .push_str(&ron::to_string(&harmonigraph_take::Record::Note(event.into())).unwrap());
+            encoded.push_str(&ron::to_string(&Record::Canonical(record)).unwrap());
         }
         let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
         assert!(!take.truncated);
+        let events: Vec<_> = played
+            .iter()
+            .map(|(event, _)| *event)
+            .chain([NoteEvent::session_reset(2.25)])
+            .collect();
         assert_eq!(take.notes().map(NoteEvent::from).collect::<Vec<_>>(), events);
         let mut replay = Replay::new(take);
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
@@ -584,17 +609,19 @@ mod tests {
         assert!(replay.is_spent());
 
         for roll in [state.runtime.tracker.roll(), &roll_from_all_events(replay.take())] {
-            let mut notes: Vec<_> =
-                roll.notes().map(|n| (n.source, n.start, n.end, n.end_pitch())).collect();
+            let mut notes: Vec<_> = roll
+                .notes()
+                .map(|n| (n.source, n.start, n.end, n.observed_until, n.end_pitch()))
+                .collect();
             notes.sort_by(|x, y| x.partial_cmp(y).unwrap());
             assert_eq!(
                 notes,
                 vec![
-                    (a, 0.125, Some(0.75), 60.25),
-                    (a, 1.0, Some(1.25), 60.0),
-                    (a, 1.25, Some(1.5), 60.0),
-                    (a, 2.0, Some(2.25), 60.0),
-                    (b, 0.25, Some(2.25), 59.5),
+                    (a, 0.125, Some(0.75), None, 60.25),
+                    (a, 1.0, Some(1.25), None, 60.0),
+                    (a, 1.25, None, Some(1.5), 60.0),
+                    (a, 2.0, Some(2.25), None, 60.0),
+                    (b, 0.25, Some(2.25), None, 59.5),
                 ]
             );
             let note_b = roll.notes().find(|n| n.source == b).unwrap();

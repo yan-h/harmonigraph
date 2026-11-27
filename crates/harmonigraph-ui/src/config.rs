@@ -29,8 +29,9 @@ pub enum SpectrumWindow {
     /// As sharp as a 16,384-sample Hann window (172 ms behind the sound).
     ///
     /// A fourth setting, Sweep, glided the listen with pitch, long in the bass
-    /// and short in the treble. It was removed (#1600), so a blob naming it
-    /// fails to parse and the editor opens at defaults.
+    /// and short in the treble. It was removed (#1600). A project naming it
+    /// opens with this one key at its default and a Console line (#1764); a
+    /// take whose look names it refuses to export (#1757 Q5).
     Precise,
 }
 

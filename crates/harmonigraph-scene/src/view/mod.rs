@@ -521,9 +521,8 @@ pub struct ViewConfig {
     /// brightness, the same units [`Gradient::lightness`](crate::Gradient) is
     /// authored in, so a ground and a gradient can be compared by their
     /// numbers. There is no off position and it needs none — each ring has a
-    /// width. What the bottom of the bar reaches is black, which against this
-    /// skin's panel reads as holes punched through the lattice; a little above
-    /// it, at the panel's own `L*` (8.8 on the fresh skin), a quiet node
+    /// width. What the bottom of the bar reaches is black, the picture's own
+    /// ground the lattice is drawn on (`skin::PICTURE`), where a quiet node
     /// vanishes into the pane and only sounding ones draw.
     pub lattice_ground: f32,
     /// The resting MARKERS, as an `L*` 0..100 on the same axis as
@@ -1146,8 +1145,8 @@ impl ViewConfig {
     /// `sanitize` on every door a look arrives by — the editor's load and
     /// `AppearanceDocument::parse` for a take's or a file's look — and a bar
     /// cannot set either past its range.
-    /// A view built in code skips those doors, and `derive_scene` sanitizes
-    /// its own copy.
+    /// A view built in code skips those doors, so its builder sanitizes it:
+    /// `derive_scene` asserts so in a debug build.
     ///
     /// The Note animation section's Note fade curve bar builds one of its own, and it is the single
     /// exception rather than a second assembly point: it is drawing a PICTURE
@@ -1459,9 +1458,10 @@ impl ViewConfig {
         self.glow_release =
             repair(self.glow_release, fresh.glow_release, 0.0..=GLOW_BALLISTICS_MAX);
 
-        // These post-process controls are stored beside the view. Renderer
-        // clamps remain wider defensive boundaries for a scene built without
-        // `derive_scene`, which runs this sanitizer on every view it carries.
+        // These post-process controls are stored beside the view, and the
+        // renderer reads them as this leaves them, the bloom's backstop
+        // (`bloom_strength`) aside: every view `derive_scene` carries has been
+        // through this sanitizer.
         self.render_scale =
             repair(self.render_scale, fresh.render_scale, LATTICE_RENDER_SCALE_RANGE);
         self.note_bloom = repair(self.note_bloom, fresh.note_bloom, NOTE_BLOOM_RANGE);

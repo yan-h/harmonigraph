@@ -2267,6 +2267,37 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
     assert_eq!(bands(0.5), 1, "half a semitone sharp has none");
 }
 
+/// The band asks for frames while its note's envelope moves, its arrival and
+/// its fade after the key comes up, and holds nothing once a held note has
+/// arrived: the lattice draws nothing for such a note, so nothing else would
+/// draw the band in.
+#[test]
+fn an_off_lattice_band_asks_for_frames_while_its_envelope_moves() {
+    let mut state = fresh();
+    state.appearance.spectrum.orientation = SpectralOrientation::Left;
+    state.appearance.spectrum.low_midi = 55.0;
+    state.appearance.spectrum.high_midi = 67.0;
+    state.appearance.view.fade_time = 0.5;
+    let quarter = NoteEventKind::Tuning { semitones: 0.5 };
+    let bent = NoteEvent { kind: quarter, ..NoteEvent::off(0.0, SourceId::DIRECT, 0, 60) };
+    state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+    state.runtime.tracker.handle_event(bent);
+    let asks = |state: &mut PictureState, now: f64| {
+        state.surfaces.moving_this_frame = Default::default();
+        let env = state.appearance.view.envelope();
+        let voice = state.runtime.tracker.voices().next().expect("the fixture's note sounds");
+        let want = theme::picture_off_scale().gamma_multiply(0.3 * voice.activation(now, &env));
+        let out = painted_pane(WIDE, state, now);
+        let banded =
+            out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want));
+        (banded, state.surfaces.moving_this_frame.asks_for(crate::Reason::Envelope))
+    };
+    assert_eq!(asks(&mut state, 0.2), (true, true), "an arriving band asked for nothing");
+    assert_eq!(asks(&mut state, 0.6), (true, false), "a band that has arrived held the loop");
+    state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+    assert_eq!(asks(&mut state, 1.2), (true, true), "a fading band asked for nothing");
+}
+
 /// A note the lattice is LIGHTING is never flagged as off it, however far out
 /// the node sits.
 ///
@@ -3129,8 +3160,7 @@ fn resizing_the_editors_pane_leaves_the_exported_split_alone() {
 /// the curve's columns become `footprint_mean_db`'s span — and a floor claims
 /// more pixels than the device has, so each sample integrates a fraction of
 /// the buckets it covers. Only a render BELOW 1x separates them, which
-/// `--scale` reaches with no clamp and `docs/offline-rendering.md` recommends
-/// for fitting more lattice in.
+/// `--scale` reaches with no clamp.
 #[test]
 fn both_spectral_pictures_size_themselves_from_one_raw_reading_of_the_density() {
     let heatmap = include_str!("spectrogram.rs");
@@ -3366,7 +3396,7 @@ fn tape_modes_roll_holds_nothing_once_its_notes_are_drawn() {
     tape_frames(&mut state, Navigation::Docked, vec![vec![]]);
     let drawn = super::roll::take_roll_draw_probe().map(|probe| probe.note_count);
     assert_eq!(drawn, Some(2), "the fixture draws the recorded note and the one played over it");
-    assert!(!state.surfaces.moving_this_frame.asks_for(crate::Reason::RollInSpan));
+    assert!(!state.surfaces.moving_this_frame.asks_for(crate::Reason::RollOnScreen));
 }
 
 /// Tape mode names the notes it rolls (#1728): the recording's in the window,
@@ -3738,11 +3768,12 @@ fn a_tape_playhead_asks_for_a_frame_each_device_pixel_it_crosses() {
         "a quarter-speed cue paced at {slow} s, not 4 x {zoomed}"
     );
 
-    // Across the whole song it crosses a pixel less often than the idle poll
-    // draws, which then draws it.
+    // Across the whole song it crosses a pixel less often than the 50 ms poll
+    // it rode until #1994 HW1, and asks for the frame each pixel falls on.
     let (ctx, mut state) = auditioning(1.0, false);
-    let crawl = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
-    assert_eq!(crawl, None, "a playhead crawling over the whole song held the loop");
+    let crawl = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true)
+        .expect("a playhead crawling over the whole song left its pixels to the idle poll");
+    assert!(crawl > 0.05, "the fixture's playhead must crawl: {crawl} s a pixel");
 
     let (ctx, mut state) = auditioning(1.0, true);
     state.runtime.tape.heard = None;
@@ -3750,6 +3781,46 @@ fn a_tape_playhead_asks_for_a_frame_each_device_pixel_it_crosses() {
     state.runtime.tape.position = Some(1.0);
     let rolling = playhead_frames(&ctx, &mut state, Drawn::Pane, 5, true);
     assert!(rolling.is_some(), "the transport idled");
+}
+
+/// A cue's first heard frame already asks for the next, rather than leaving
+/// the playhead's start to the idle poll that would see it move.
+#[test]
+fn a_cues_first_heard_frame_asks_for_the_next() {
+    let (ctx, mut state) = auditioning(1.0, true);
+    let first = playhead_frames(&ctx, &mut state, Drawn::Pane, 1, false);
+    assert!(
+        first.is_some_and(|wait| wait < 1.0 / 144.0),
+        "the cue's first frame waited: {first:?}"
+    );
+}
+
+/// A live note struck over an audition and still held once it has stopped
+/// grows along the song axis at the audition's speed with no playhead left
+/// to ask for frames, so the overlay asks for its own, a device pixel at a
+/// time; released, it stands still and asks nothing.
+#[test]
+fn a_live_note_held_over_a_stopped_audition_asks_for_its_pixels() {
+    let (ctx, mut state) = auditioning(1.0, false);
+    // The pane draws at the display time 100 s: the audition began from
+    // song 1 s at 99 s and stopped at 99.5 s, the note struck at 99.2 s.
+    state.runtime.tape.audition =
+        Some(crate::tape::Audition { clock: 99.0, song: 1.0, speed: 1.0, until: Some(99.5) });
+    state.runtime.tape.heard = None;
+    state.appearance.spectrum.show_roll = true;
+    state.runtime.tracker.handle_event(NoteEvent::on(99.2, SourceId::DIRECT, 0, 60, 1.0));
+    let held = |state: &mut PictureState| {
+        playhead_frames(&ctx, state, Drawn::Pane, 1, false);
+        let drawn = crate::panes::spectral::roll::take_roll_draw_probe();
+        (drawn.map_or(0, |probe| probe.note_count), state.surfaces.moving_this_frame)
+    };
+    let (drawn, asked) = held(&mut state);
+    assert!(drawn > 0, "the fixture's live note must be drawn over the song");
+    let pace = asked.after(crate::Reason::RollOnScreen).expect("the growing note idled");
+    assert!(pace > 0.0, "a growing note asked for every frame: {pace} s");
+    state.runtime.tracker.handle_event(NoteEvent::off(99.8, SourceId::DIRECT, 0, 60));
+    let (_, asked) = held(&mut state);
+    assert!(!asked.asks_for(crate::Reason::RollOnScreen), "a released overlay asked");
 }
 
 /// The overview's playhead, drawn alone, by the same rule as the pane's: on a
@@ -3862,7 +3933,7 @@ fn on_tape_in_two_sections(g_struck: f64) -> PictureState {
             entries: vec![Entry { held: true, strikes: vec![], ..c }, g],
         },
     ];
-    state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
+    state.runtime.tape.shown_harmony = std::sync::Arc::new(Harmony { sections });
     state
 }
 
@@ -3988,9 +4059,10 @@ fn under_an_advancing_playhead_a_struck_note_arrives_at_its_attack_and_asks_for_
 #[test]
 fn a_note_struck_again_in_its_section_arrives_again() {
     let mut state = on_tape_in_two_sections(22.03);
-    let mut sections = state.runtime.tape.harmony.sections.clone();
+    let mut sections = state.runtime.tape.shown_harmony.sections.clone();
     sections[1].entries[1].strikes.push(26.0);
-    state.runtime.tape.harmony = std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
+    state.runtime.tape.shown_harmony =
+        std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
     let ctx = themed();
     let settled = harmony_frame(&ctx, &mut state, vec![]);
     let pacing =
@@ -4015,7 +4087,7 @@ fn a_note_struck_again_in_its_section_arrives_again() {
 #[test]
 fn with_nothing_lit_the_sections_still_cue() {
     let mut state = on_tape_in_two_sections(20.0);
-    let mut sections = state.runtime.tape.harmony.sections.clone();
+    let mut sections = state.runtime.tape.shown_harmony.sections.clone();
     // Four cents sharp: past the just reach's half-cent tolerance of every
     // node for both the C and the G. The reach is dense enough that most
     // offsets land on some node far out (thirty cents sharp of C is within
@@ -4023,7 +4095,8 @@ fn with_nothing_lit_the_sections_still_cue() {
     for entry in sections.iter_mut().flat_map(|s| &mut s.entries) {
         entry.pitch += 0.04;
     }
-    state.runtime.tape.harmony = std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
+    state.runtime.tape.shown_harmony =
+        std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
     let ctx = themed();
     assert_eq!(harmony_frame(&ctx, &mut state, vec![]), []);
     let at = on_harmony_row(30.0);
@@ -4045,7 +4118,7 @@ fn a_pitch_off_the_lattice_does_not_blank_its_neighbour_on_it() {
     let off = Entry { pitch: 66.993_55, held: false, strikes: vec![0.0] };
     for first in [vec![off.clone()], vec![]] {
         let mut state = on_tape_in_two_sections(20.0);
-        let mut sections = state.runtime.tape.harmony.sections.clone();
+        let mut sections = state.runtime.tape.shown_harmony.sections.clone();
         // The first section holds the off G alone, or nothing but its C;
         // the second holds both Gs.
         sections[0].entries.extend(first);
@@ -4054,7 +4127,7 @@ fn a_pitch_off_the_lattice_does_not_blank_its_neighbour_on_it() {
         // lattice's tolerance of its node and nearer it than any other: the
         // same ring, not a second.
         sections[1].entries.push(Entry { pitch: 67.021_55, ..off.clone() });
-        state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
+        state.runtime.tape.shown_harmony = std::sync::Arc::new(Harmony { sections });
         let rings = harmony_frame(&themed(), &mut state, vec![]);
         assert_eq!(rings.len(), 3, "the two Cs and the just G: {rings:?}");
     }
@@ -4073,7 +4146,7 @@ fn under_a_temperament_a_pitch_lights_the_one_node_it_is_named_by() {
     let entries =
         [60.0, 65.0, 67.0].map(|pitch| Entry { pitch, held: false, strikes: vec![0.0] }).to_vec();
     let sections = vec![Section { start: 0.0, end: 40.0, strength: 1.0, entries }];
-    state.runtime.tape.harmony = std::sync::Arc::new(Harmony { sections });
+    state.runtime.tape.shown_harmony = std::sync::Arc::new(Harmony { sections });
     let mut rings = harmony_frame(&themed(), &mut state, vec![]);
     // F, C and G by their plain spellings: one column of fifths, a node apart.
     assert_eq!(rings.len(), 3, "{rings:?}");
@@ -4093,7 +4166,7 @@ fn the_rows_node_placement_follows_the_tuning_the_reach_and_the_analysis() {
     assert_eq!(rings(&mut state), 3);
     // Kept without the analysis itself, which the worker frees off the lock
     // once it displaces it.
-    assert_eq!(std::sync::Arc::strong_count(&state.runtime.tape.harmony), 1);
+    assert_eq!(std::sync::Arc::strong_count(&state.runtime.tape.shown_harmony), 1);
     // In 12-TET the just G is two cents from any node.
     state.runtime.tuning = harmonigraph_core::Tuning::default();
     assert_eq!(rings(&mut state), 2);
@@ -4104,11 +4177,12 @@ fn the_rows_node_placement_follows_the_tuning_the_reach_and_the_analysis() {
     // tolerance of it, lights nothing while the reach holds the home sheet
     // alone, and its node once it holds the sheet above, over the same
     // analysis.
-    let mut sections = state.runtime.tape.harmony.sections.clone();
+    let mut sections = state.runtime.tape.shown_harmony.sections.clone();
     let seventh = 60.0 + (1200.0 * 1.75f32.log2() + 0.2) / 100.0;
     let g = sections[1].entries[1].clone();
     sections[1].entries.push(crate::tape::harmony::Entry { pitch: seventh, ..g });
-    state.runtime.tape.harmony = std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
+    state.runtime.tape.shown_harmony =
+        std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
     assert_eq!(rings(&mut state), 3);
     state.appearance.view.max_sevens = 1;
     assert_eq!(rings(&mut state), 4);
@@ -4116,14 +4190,14 @@ fn the_rows_node_placement_follows_the_tuning_the_reach_and_the_analysis() {
     assert_eq!(rings(&mut state), 3);
     // A new analysis: of a recording without the G, and on a context that has
     // only ever drawn that one, of the recording with it.
-    let with_g = std::sync::Arc::clone(&state.runtime.tape.harmony);
+    let with_g = std::sync::Arc::clone(&state.runtime.tape.shown_harmony);
     let mut sections = with_g.sections.clone();
     sections[1].entries.truncate(1);
     let without_g = std::sync::Arc::new(crate::tape::harmony::Harmony { sections });
-    state.runtime.tape.harmony = std::sync::Arc::clone(&without_g);
+    state.runtime.tape.shown_harmony = std::sync::Arc::clone(&without_g);
     assert_eq!(rings(&mut state), 2);
     let ctx = themed();
     assert_eq!(harmony_frame(&ctx, &mut state, vec![]).len(), 2);
-    state.runtime.tape.harmony = with_g;
+    state.runtime.tape.shown_harmony = with_g;
     assert_eq!(harmony_frame(&ctx, &mut state, vec![]).len(), 3);
 }

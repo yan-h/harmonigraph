@@ -114,14 +114,25 @@ pub(super) fn type_gesture(ctx: &egui::Context) -> &'static str {
     }
 }
 
-/// The gestures a bar answers to, in the one wording every bar's hover ends
-/// with: a drag always, a double-click where the bar has a `reset` to go
+/// The gestures a bar answers to, in the one line every bar's hover ends
+/// with: its drag always, a double-click where the bar has a `reset` to go
 /// back to, and a typed number where the bar is `typed` (a [`ValueBar`];
 /// a bar holding two numbers or more has no single one to type).
 ///
+/// `drag` is the drag clause, which a bar of several parts writes whole,
+/// naming its parts and what each moves where they differ ("Drag an end or
+/// the middle to adjust"), so its caller writes no gesture sentence of its
+/// own; a bar of one part passes `None` for "Drag to adjust". The reset and
+/// the typed entry follow in the shared wording.
+///
 /// [`ValueBar`]: super::value::ValueBar
-pub(super) fn gestures(ctx: &egui::Context, reset: bool, typed: bool) -> String {
-    let mut text = "Drag to adjust".to_owned();
+pub(super) fn gestures(
+    ctx: &egui::Context,
+    drag: Option<&str>,
+    reset: bool,
+    typed: bool,
+) -> String {
+    let mut text = drag.unwrap_or("Drag to adjust").to_owned();
     if reset {
         text.push_str(", double-click to reset");
     }
@@ -141,13 +152,14 @@ pub(super) fn gestures(ctx: &egui::Context, reset: bool, typed: bool) -> String 
 pub(super) fn with_gestures(
     response: Response,
     hint: Option<&str>,
+    drag: Option<&str>,
     reset: bool,
     typed: bool,
 ) -> Response {
     response.on_hover_ui(|ui| {
         // As `Response::on_hover_text` does, so a long hint wraps the same.
         ui.set_max_width(ui.spacing().tooltip_width);
-        let gestures = gestures(ui.ctx(), reset, typed);
+        let gestures = gestures(ui.ctx(), drag, reset, typed);
         ui.add(egui::Label::new(match hint {
             Some(hint) if !hint.is_empty() => format!("{hint}\n{gestures}"),
             _ => gestures,
@@ -503,6 +515,85 @@ mod tests {
             let lit: Vec<bool> = grips(&shapes).iter().map(|&(_, lit)| lit).collect();
             assert_eq!(lit, [false, true], "handed {handed:?}, the unlit thumb was painted on top");
         }
+    }
+
+    /// A bar of several parts names them, and what each moves where they
+    /// differ, in its one gesture line, so the hint its caller writes says what
+    /// the setting is and nothing of how to drag it (#1994 SH1); a range bar
+    /// says so truly with its ends together too.
+    #[test]
+    fn a_bar_of_several_parts_names_them_in_its_gesture_line() {
+        use super::super::{RangeBar, SpectrumBar, SpreadBar, StackBar};
+        use crate::tests::probe::{events_into, themed};
+        use harmonigraph_scene::{Gradient, ViewConfig};
+        fn hover(mut add: impl FnMut(&mut Ui) -> Response) -> Vec<String> {
+            let ctx = themed();
+            ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+            let size = egui::vec2(300.0, 200.0);
+            let rect = Rect::from_min_size(egui::Pos2::ZERO, size);
+            let bar = std::cell::Cell::new(Rect::NOTHING);
+            let mut draw =
+                |events| events_into(&ctx, size, rect, events, |ui| bar.set(add(ui).rect));
+            draw(vec![]);
+            draw(vec![egui::Event::PointerMoved(bar.get().center())]);
+            let last = (0..3).map(|_| draw(vec![])).last().unwrap();
+            last.shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().contains("Drag") => {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+        let (mut low, mut high) = (40.0, 80.0);
+        let range = hover(|ui| {
+            RangeBar::new(&mut low, &mut high, 0.0..=127.0, "Range")
+                .default_value((30.0, 90.0))
+                .hint("A span.")
+                .show(ui)
+        });
+        assert_eq!(range, ["A span.\nDrag an end or the middle to adjust, double-click to reset."]);
+        // A caller whose ends move something else says what, as the star
+        // layers' bar does, and the bar still adds its own reset wording.
+        let stretch = hover(|ui| {
+            RangeBar::new(&mut low, &mut high, 0.0..=127.0, "Layers")
+                .hint("Spread.")
+                .drag("Drag an end to stretch them, or the middle to slide them")
+                .show(ui)
+        });
+        assert_eq!(stretch, ["Spread.\nDrag an end to stretch them, or the middle to slide them."]);
+        // A hard edge: both ends on one point, so no middle to take hold of.
+        let (mut reach, mut edge) = (0.3, 0.3);
+        let closed = hover(|ui| {
+            RangeBar::new(&mut reach, &mut edge, 0.0..=1.0, "Edge")
+                .fade_span()
+                .hint("An edge.")
+                .show(ui)
+        });
+        assert_eq!(
+            closed,
+            ["An edge.\nDrag left of the handle to open the pair, or on or right of it to slide both."]
+        );
+        let mut gradient = Gradient::default();
+        let spread = hover(|ui| {
+            SpreadBar::brightness(&mut gradient, Gradient::default()).hint("A ramp.").show(ui)
+        });
+        assert_eq!(
+            spread,
+            ["A ramp.\nDrag an end or the middle to adjust, double-click to reset."]
+        );
+        let spectrum = hover(|ui| {
+            SpectrumBar::new(&mut gradient, Gradient::default()).hint("An arc.").show(ui)
+        });
+        assert_eq!(
+            spectrum,
+            ["An arc.\nDrag the handle to set the span, or the track to rotate it, double-click to reset."]
+        );
+        let mut view = ViewConfig::default();
+        let stack = hover(|ui| StackBar::new(&mut view).hint("Layers.").show(ui));
+        assert_eq!(stack, ["Layers.\nDrag a handle to adjust, double-click to reset."]);
     }
 
     /// A bar's row is the room across its `Ui` and one row high at every

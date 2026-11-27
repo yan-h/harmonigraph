@@ -16,7 +16,7 @@ The three editor fields that `crates/harmonigraph-plugin/src/saved_fields.rs` ow
 one that does not parse is skipped with a Console line and the rest of the restore goes ahead,
 and one the save lacks keeps what the instance holds.
 Every restore line that reports a loss, at the editor's door or from the host restore, opens the Console on it: one spelling, `SharedState::report_loss` (Yan, 2026-11-22, `docs/intent/editor-shell.md`).
-`SavedWindow` (the `editor-state` field) has no container-level default, so a window missing a key is that field skipped.
+`SavedWindow` (the `editor-state` field) has no container-level default, so a window missing its `size` is that field skipped; a missing `docked` has a field-level default and loads as `false`.
 The tuning's two fields, the Hub's `musical-settings` (`crates/harmonigraph-plugin/src/configuration.rs`) and every instance's `tuning-instance` (`crates/harmonigraph-plugin/src/tuning/setup.rs`),
 open at their defaults both when the save lacks them and when they do not parse;
 one that does not parse also writes a line in the log and, in a Hub, one in the Console naming it, which opens on it, and the rest of the restore goes ahead.

@@ -248,84 +248,62 @@ fn a_marked_slice_the_note_has_left_keeps_the_whole_light() {
     );
 }
 
-/// A node wearing NOTHING BUT AN AUDIO RING gives off no light at all,
-/// whatever its ring is reading.
+/// A light on a slot the wheel no longer draws gives off none (#1893 item 1).
 ///
-/// A halo says something is being PLAYED at this position; the analyzer's ring
-/// says something is being heard in the room. One is the node's own voice and
-/// the other a reading it wears, so the ring is drawn and never shone — it is
-/// the one layer left out of both halves of the light, the level
-/// (`panes::glow_fade` in harmonigraph-ui) and the colour (`ink_at`).
+/// Dragging Octaves narrower takes a slot off every node's wheel. A note held
+/// there moves onto the nearest slot still drawn (`slot_of` in
+/// harmonigraph-scene's motion), but the old slot's reading, and its mark,
+/// fade out from where they were, and the node's light, read off its slots
+/// and marks, fades with them: the glow pass asks whether a light's LAYER
+/// draws (`GlowFade::step_drawn` in harmonigraph-ui), not which slots the
+/// wheel shows. What keeps the halo off is the renderer, twice: `ink_at` finds
+/// the light no colour, since it reads the band only off the slots on the ring
+/// and skips a mark the ring has no room for, and `glow_layer` writes nothing
+/// where it found none, where a halo with no colour would still write its
+/// coverage.
 ///
-/// Byte-identical with the Reach off, which is the whole claim: the light's
-/// draw runs over this node, writes nothing into its target, and the composite
-/// lays exactly nothing over the picture. Shot at a loud partial as well as at
-/// silence, because those are the two ways a ring could have held a light on —
-/// what is IN it, and merely that it is showing.
-///
-/// Non-vacuity is what the rest of the fixture is for: the ring has to be on
-/// screen, and its silent end has to be a grey the eye can see, or "no light"
-/// would be a claim about a frame with no ring in it.
+/// The note and its mark both fading on that slot, as `NodeMotion` writes
+/// them: byte-identical with the Reach off, and the glow target transparent,
+/// against the same node on a wheel that still draws the slot, which lights.
 #[test]
-fn a_node_wearing_only_an_audio_ring_gives_off_no_light() {
+fn a_light_on_a_slot_the_wheel_no_longer_draws_gives_off_none() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // [`ringing_node`] with no key down and no octave sounding: the band draws
-    // nothing at all and the node's whole picture is the analyzer's.
-    let at = |sounding: Option<f32>, reach: f32| -> Scene {
-        let mut scene = ringing_node(None, sounding, PROBE_RANGE);
-        // The app's ramp rather than the fixture's: its silent end PINNED to
-        // the ground, which is what makes an empty wedge a grey the eye reads
-        // as a ring rather than the black the probe's own ramp starts at
-        // (`harmonigraph_scene::ring_gradient`).
-        let ground = scene.lattice_ground;
-        scene.spectral.lut = std::array::from_fn(|k| {
-            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
-            ground.lerp(glam::Vec4::ONE, t)
-        });
+    let wide = probe_octave_layout();
+    let narrow = harmonigraph_scene::octave_layout(wide.span - 2, wide.center);
+    let top = wide.slots(0.0).1;
+    assert!(top > narrow.slots(0.0).1, "the narrower wheel still draws slot {top}");
+    let mut shot = |layout, reach| {
+        let mut scene = single_marked_node(1 << top, 0);
+        scene.octave_layout = layout;
         let node = &mut scene.nodes[0];
-        // Silence at the node, and the analyzer still reading: no key down, no
-        // octave sounding, no mark at either end — and the ring at full, which
-        // is the view's Gate answered for this node.
-        node.presence_with_opacity = 0.0;
-        node.melody_level = 0.0;
-        node.bass_level = 0.0;
-        node.melody_slots = 0;
-        node.bass_slots = 0;
-        node.audio_ring = 1.0;
-        read_light(node);
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.octaves[top as usize] = 0.5;
+        node.melody_level = 0.5;
+        let light = node.glow_light();
+        node.glow = harmonigraph_scene::GlowStep { level: light.level(), light };
         scene.view.glow_reach = reach;
         scene.view.glow_strength = 1.5;
-        scene
+        let frame = shooter.shot(&scene);
+        (frame, super::glow_overlap::read_glow(&shooter))
     };
-    const PARTIAL: f32 = harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0;
-
-    // Non-vacuous: the ring is ON SCREEN. Against the layer's own off switch
-    // rather than against `total_light`, which the node's other layers alone
-    // would satisfy — and safe as a one-layer diff only because this node draws
-    // nothing else: no key, no octave, no mark, so there is no layer outside
-    // the ring for its width to slide inward (the stack packs outward from the
-    // centre).
-    let loud_off = shooter.shot(&at(Some(PARTIAL), 0.0));
-    let mut ringless = at(Some(PARTIAL), 0.0);
-    (ringless.spectral.inner, ringless.spectral.outer) = (0.0, 0.0);
+    let (lit, lit_glow) = shot(wide, 0.8);
+    assert!(lit != shot(wide, 0.0).0, "the note lit nothing where its slot is drawn");
+    assert!(lit_glow.iter().any(|&b| b > 0), "the drawn slot's light reached no glow texel");
+    let ((on, glow), (off, _)) = (shot(narrow, 0.8), shot(narrow, 0.0));
     assert!(
-        loud_off != shooter.shot(&ringless),
-        "the fixture drew no audio ring, so it cannot say a ring gives off nothing",
+        on == off,
+        "a light on an undrawn slot lit {} against {} with the glow off",
+        total_light(&on),
+        total_light(&off),
     );
-
-    for (what, sounding) in [("a partial", Some(PARTIAL)), ("silence", None)] {
-        let off = shooter.shot(&at(sounding, 0.0));
-        let on = shooter.shot(&at(sounding, 0.8));
-        assert!(
-            on == off,
-            "a ring reading {what} lit {} against {} with the glow off",
-            total_light(&on),
-            total_light(&off),
-        );
-    }
+    // And nothing in the glow's own target, which a halo with no colour would
+    // still fill with coverage: premultiplied black that darkens whatever it
+    // lands on that is not black.
+    let written = glow.iter().filter(|&&b| b > 0).count();
+    assert_eq!(written, 0, "a light on an undrawn slot wrote {written} glow channels");
 }
 
 /// One node lit in TWO colours no mixing of the other's table can reach: the
@@ -428,11 +406,11 @@ fn added_light(on: &[u8], off: &[u8]) -> [i64; 3] {
 
 /// The glow's colour is the node's own INK, whatever layer laid it down.
 ///
-/// Three nodes, one code path: a node wearing nothing but its audio ring lights
-/// in the ring's colour, a node wearing nothing but its octave band lights in
-/// the band's, and a node wearing both lights in a mixture that is greener than
+/// Three nodes, one code path: a node wearing nothing but its melody marks
+/// lights in the marks' colour, a node wearing nothing but its octave band
+/// lights in the band's, and a node wearing both lights in a mixture that is greener than
 /// the one and redder than the other. Nothing here names a layer — the light is
-/// `ink_at` read round the node — so the ring's hue reaching the halo and the
+/// `ink_at` read round the node — so the marks' hue reaching the halo and the
 /// band's reaching it are the same mechanism, and a layer added to a node is
 /// lit without a line of its own.
 ///
@@ -441,7 +419,7 @@ fn added_light(on: &[u8], off: &[u8]) -> [i64; 3] {
 fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
     const SIZE: [u32; 2] = [256, 256];
     const BAND: f32 = 0.16;
-    const RING: f32 = 0.16;
+    const MARKS: f32 = 0.16;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -449,31 +427,31 @@ fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
         scene.view.glow_reach = 0.0;
         scene
     };
-    // The ring alone: no key down and no octave sounding, so the band draws
-    // nothing at all and the node's whole picture is the analyzer's.
-    let ring_only = || -> Scene {
-        let mut scene = two_colour_node(BAND, RING);
+    // The marks alone: no key down and no octave sounding, so the band draws
+    // nothing at all and the node's whole picture is its marks.
+    let marks_only = || -> Scene {
+        let mut scene = two_colour_node(BAND, MARKS);
         let node = &mut scene.nodes[0];
         node.presence_with_opacity = 0.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         read_light(node);
         scene
     };
-    // The band alone: the ring's width dialled to nothing, which is the layer's
+    // The band alone: the marks' thickness dialled to nothing, which is the layer's
     // own off switch.
     let band_only = || two_colour_node(BAND, 0.0);
 
-    let ring = added_light(&shooter.shot(&ring_only()), &shooter.shot(&dark(ring_only())));
+    let marks = added_light(&shooter.shot(&marks_only()), &shooter.shot(&dark(marks_only())));
     let band = added_light(&shooter.shot(&band_only()), &shooter.shot(&dark(band_only())));
     let both = added_light(
-        &shooter.shot(&two_colour_node(BAND, RING)),
-        &shooter.shot(&dark(two_colour_node(BAND, RING))),
+        &shooter.shot(&two_colour_node(BAND, MARKS)),
+        &shooter.shot(&dark(two_colour_node(BAND, MARKS))),
     );
 
-    assert!(ring[1] > 0 && band[0] > 0, "neither fixture lit anything: {ring:?}, {band:?}");
+    assert!(marks[1] > 0 && band[0] > 0, "neither fixture lit anything: {marks:?}, {band:?}");
     assert!(
-        ring[1] > ring[0] * 4,
-        "a node wearing only its audio ring lit {ring:?} — its light is not the ring's green",
+        marks[1] > marks[0] * 4,
+        "a node wearing only its melody marks lit {marks:?} — its light is not the marks' green",
     );
     assert!(
         band[0] > band[1] * 4,
@@ -483,8 +461,8 @@ fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
     // SHARE is what moves, the three halos not being the same size.
     let share = |c: [i64; 3]| c[0] as f64 / (c[0] + c[1]).max(1) as f64;
     assert!(
-        share(ring) < share(both) && share(both) < share(band),
-        "a node wearing both lit {both:?}, which is not between {ring:?} and {band:?}",
+        share(marks) < share(both) && share(both) < share(band),
+        "a node wearing both lit {both:?}, which is not between {marks:?} and {band:?}",
     );
 }
 
@@ -512,7 +490,7 @@ fn a_silent_slice_puts_none_of_its_ground_in_the_light() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // The band alone — the ring dialled to nothing — voiced in ONE octave, so
+    // The band alone — the marks dialled to nothing — voiced in ONE octave, so
     // every other slice on the wheel is a ghost.
     let one_octave = || -> Scene {
         let mut scene = two_colour_node(BAND, 0.0);
@@ -645,17 +623,17 @@ fn a_slice_part_way_out_carries_that_much_of_the_light() {
 /// ring and its colour takes more of the halo, dial it to nothing and it takes
 /// none.
 ///
-/// The audio ring is held at one width and sits INSIDE the band, so widening
-/// the band leaves the ring's own radii exactly where they were — what changes
-/// is the share, not the other layer.
+/// The melody marks are held at one thickness. They sit outside the band, so
+/// widening it carries them outward, but a layer is weighed by its width and
+/// not its radius: what changes is the share, not the other layer.
 #[test]
 fn widening_a_layer_gives_its_colour_more_of_the_light() {
     const SIZE: [u32; 2] = [256, 256];
-    const RING: f32 = 0.16;
+    const MARKS: f32 = 0.16;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let at = |band: f32| -> Scene { two_colour_node(band, RING) };
+    let at = |band: f32| -> Scene { two_colour_node(band, MARKS) };
     let dark = |band: f32| -> Scene {
         let mut scene = at(band);
         scene.view.glow_reach = 0.0;

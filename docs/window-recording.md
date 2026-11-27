@@ -58,7 +58,7 @@ which contains a ready-made capture texture + readback buffer + blit (upstream `
 
 Frame pacing.
 The plugin repaints **on demand**, not at a fixed rate:
-continuously only while voices are sounding or decaying, otherwise a 50 ms poll (`IDLE_REPAINT_INTERVAL` in `crates/harmonigraph-ui/src/lib.rs`), on top of frames driven by the view's display link on macOS (one per refresh, `baseview/src/platform/macos/view.rs` in egui-plugin-window, of which a still editor's run its UI and draw only when the poll comes due or something asks; `pass_due` in `egui-baseview/src/window.rs`) and a Fifo swapchain.
+when a picture it draws next changes on screen (`Animating` in `crates/harmonigraph-ui/src/lib.rs`), when the input worker asks after a change it sees (`step` in `crates/harmonigraph-plugin/src/background.rs`), and otherwise at the idle poll (`IDLE_REPAINT_INTERVAL`), on top of frames driven by the view's display link on macOS (one per refresh, `baseview/src/platform/macos/view.rs` in egui-plugin-window, of which a still editor's run its UI and draw only when the poll comes due or something asks; `pass_due` in `egui-baseview/src/window.rs`) and a Fifo swapchain.
 Presents are also skipped outright on Occluded/Outdated/Lost (`Renderer::render`).
 The editor logs gaps between the display link's frames (`STALL_GAP` in `editor/frame.rs`),
 not skipped presents;
@@ -93,7 +93,7 @@ Step `now` by exactly 1/60 s and you get a perfect constant-frame-rate sequence 
 `crates/harmonigraph-ui/src/panes/system.rs`) hides chrome for a continuous live picture; it is an editor preference and does not affect takes or offline export.
 - **The host transport is now read and used for exactly this.** `nice-plug-core` exposes
 `playing`/`pos_seconds`/`tempo`;
-`process()` (in `crates/harmonigraph-plugin/src/lib.rs`) reads `pos_seconds` in `origin_source` to stamp a recording's take timestamps against the transport rather than the plugin's own sample counter, and nothing records while the transport is stopped.
+`play()` (in `crates/harmonigraph-plugin/src/lib.rs`) reads `pos_seconds` to place a take in the song: its records are timed on the presentation clock, each run says where that clock sits in the take's audio from the transport's position, and nothing records while the transport is stopped or reports no position.
 At the time this investigation was written, it was unused.
 
 Against that:

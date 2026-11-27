@@ -153,7 +153,8 @@ impl Recorder {
     }
 
     fn note(&mut self, event: &NoteEvent) {
-        let _ = self.writer.note((*event).into());
+        let note = harmonigraph_core::canonical::NoteDelta::from(*event).into();
+        let _ = self.writer.canonical(harmonigraph_take::CanonicalRecord::Delta(note));
     }
 
     /// Write any parameter that moved since the last frame.

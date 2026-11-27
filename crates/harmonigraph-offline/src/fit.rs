@@ -118,15 +118,15 @@ mod tests {
         let take = Take {
             events: vec![
                 shown(2.1, false),
-                CanonicalRecord::Note(note(2.2, 27, true)),
-                CanonicalRecord::Note(note(2.3, 27, false)),
+                CanonicalRecord::Delta(note(2.2, 27, true).into()),
+                CanonicalRecord::Delta(note(2.3, 27, false).into()),
                 shown(2.4, true),
                 CanonicalRecord::Delta(DeltaRecord {
                     event: note(2.5, 50, true),
                     pitch_microcents: Some(3_000_000_000),
                     ..Default::default()
                 }),
-                CanonicalRecord::Note(note(4.5, 22, true)),
+                CanonicalRecord::Delta(note(4.5, 22, true).into()),
             ],
             ..Default::default()
         };
@@ -161,8 +161,8 @@ mod tests {
         earlier.events.splice(
             0..0,
             [
-                CanonicalRecord::Note(note(0.2, 25, true)),
-                CanonicalRecord::Note(note(0.3, 25, false)),
+                CanonicalRecord::Delta(note(0.2, 25, true).into()),
+                CanonicalRecord::Delta(note(0.3, 25, false).into()),
             ],
         );
         let (low, _) =
@@ -174,12 +174,15 @@ mod tests {
     #[test]
     fn only_fit_piece_replaces_the_dialled_range() {
         let take = Take {
-            events: vec![CanonicalRecord::Note(NoteRecord {
-                t: 2.5,
-                note: 60,
-                kind: NoteKind::On { velocity: 0.8 },
-                ..Default::default()
-            })],
+            events: vec![CanonicalRecord::Delta(
+                NoteRecord {
+                    t: 2.5,
+                    note: 60,
+                    kind: NoteKind::On { velocity: 0.8 },
+                    ..Default::default()
+                }
+                .into(),
+            )],
             ..Default::default()
         };
         let settings = Settings {

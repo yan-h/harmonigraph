@@ -89,7 +89,7 @@ impl Taken<'_> {
     ) -> impl Iterator<Item = (crate::audio_ingress::Block, f64)> + '_ {
         let scratch = &self.input.scratch;
         let offset = scratch.offset;
-        scratch.blocks.iter().map(move |taken| (taken.block, taken.block.presentation() + offset))
+        scratch.blocks.iter().map(move |taken| (taken.block, taken.block.start + offset))
     }
     /// Whether this step found audio, and has analyzed none of it yet.
     #[cfg(test)]
@@ -157,7 +157,10 @@ impl LiveInput {
     #[cfg(test)]
     pub(crate) fn drain_analysis_audio_for_test(&mut self) -> Vec<f32> {
         let mut samples = Vec::new();
-        self.audio_consumer.drain(|_, chunk| samples.extend_from_slice(chunk));
+        self.audio_consumer.drain(|_, a, b| {
+            samples.extend_from_slice(a);
+            samples.extend_from_slice(b);
+        });
         samples
     }
     /// Drain note events from the audio thread into the tracker, mapping
@@ -184,7 +187,6 @@ impl LiveInput {
             let result = runtime.tracker.handle_canonical_mapped(event, offset);
             debug_assert!(result.is_ok(), "validated canonical publication");
             recorder.record(&runtime.tracker, event.time(), marks);
-            true
         });
     }
     /// Move the audio ring's blocks out, mapped to the GUI clock with the
@@ -213,17 +215,20 @@ impl LiveInput {
         let offset = clock.mapper.offset?;
         audio.config = picture.appearance.spectrum;
         audio.offset = offset;
-        self.audio_consumer.drain(|block, samples| {
+        self.audio_consumer.drain(|block, a, b| {
             let position = (block.epoch, block.first_frame);
             let restart = self.audio_position != Some(position);
             if restart {
-                self.audio_origin = block.presentation();
+                self.audio_origin = block.start;
             }
-            audio.samples.extend_from_slice(samples);
+            // Straight from the ring, the one copy a block takes under the
+            // lock.
+            audio.samples.extend_from_slice(a);
+            audio.samples.extend_from_slice(b);
             audio.blocks.push(TakenBlock {
                 restart,
                 origin: self.audio_origin + offset,
-                len: samples.len(),
+                len: a.len() + b.len(),
                 block,
             });
             self.audio_position = Some((block.epoch, block.first_frame + block.frames as u64));
@@ -249,8 +254,8 @@ impl LiveInput {
     /// The locked half of a step: the notes into the tracker and their
     /// marks into `marks` ([`Self::drain_into_tracker`]), then the audio out
     /// of its ring, for [`Taken::analyze`] then [`Taken::give`].
-    /// Input feeding does not prune: its callers age the picture after it,
-    /// the input worker in the same hold and a frame in `begin_frame`.
+    /// Input feeding does not prune: the input worker ages the picture after
+    /// it in the same hold, as a frame does in `begin_frame`.
     pub(crate) fn take(
         &mut self,
         clock: &mut DisplayClock,
@@ -263,7 +268,8 @@ impl LiveInput {
     }
     /// A whole step with the lock held throughout: take, analyze, give. The
     /// input worker splits the same three around its lock; this is them in
-    /// one, for its final drain and for tests.
+    /// one, for tests.
+    #[cfg(test)]
     pub(crate) fn drain(
         &mut self,
         clock: &mut DisplayClock,

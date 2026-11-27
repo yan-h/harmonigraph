@@ -10,15 +10,12 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use harmonigraph_core::canonical::{
-    CanonicalEvent, GapReason, NoteDelta, PublicationGap, SourceBaseline,
-};
+use harmonigraph_core::canonical::{CanonicalEvent, NoteDelta, PublicationGap, SourceBaseline};
 
 pub const PUBLICATION_RING: usize = 4096;
 /// A snapshot frame is two orders of magnitude larger than an item, so it
 /// rides its own FIFO rather than widening every ring cell to hold one. Depth
-/// covers a frame for each of the 17 sources in one pass, plus the one a
-/// drainer that declined an item is still holding.
+/// covers a frame for each of the 17 sources in one pass, with room to spare.
 pub const SNAPSHOT_SLOTS: usize = 20;
 /// Ordinary history may never take the last cell. That reservation is what
 /// makes an outage observable when the host never calls the audio thread
@@ -145,10 +142,6 @@ pub struct Consumer {
     ring: rtrb::Consumer<Item>,
     snapshots: rtrb::Consumer<SourceBaseline>,
     clock: Arc<AtomicU64>,
-    pending: Option<Item>,
-    /// A frame popped for a drainer that then declined its item. Popping is
-    /// what frees the producer's cell, so it cannot be given back.
-    held: Option<SourceBaseline>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,7 +169,7 @@ pub fn channel() -> (Publisher, Consumer) {
             serial: 0,
             outage: None,
         },
-        Consumer { ring: consumer, snapshots: staged, clock, pending: None, held: None },
+        Consumer { ring: consumer, snapshots: staged, clock },
     )
 }
 
@@ -206,14 +199,7 @@ impl Publisher {
             Some(old) => {
                 PublicationGap { last: self.serial, through: old.through.max(time), ..old }
             }
-            None => PublicationGap {
-                source: None,
-                time,
-                through: time,
-                first: self.serial,
-                last: self.serial,
-                reason: GapReason::PublicationFull,
-            },
+            None => PublicationGap { time, through: time, first: self.serial, last: self.serial },
         };
         self.outage = Some(gap);
         self.flush_outage();
@@ -272,10 +258,10 @@ impl Publisher {
 }
 
 impl Consumer {
-    /// Items waiting now, a declined one included: what a drain bounded by
-    /// this count will reach and nothing published after.
+    /// Items waiting now: what a drain bounded by this count will reach and
+    /// nothing published after.
     pub fn ready(&self) -> usize {
-        self.ring.slots() + usize::from(self.pending.is_some())
+        self.ring.slots()
     }
 
     pub fn clock(&self) -> Option<f64> {
@@ -285,7 +271,7 @@ impl Consumer {
     /// One bounded drain of the actual selected ring capacity. The borrowed
     /// snapshot cannot escape the call; deferred consumers must make an owned
     /// copy BEFORE this returns and permits reuse.
-    pub fn drain(&mut self, consume: impl FnMut(CanonicalEvent<'_>) -> bool) -> usize {
+    pub fn drain(&mut self, consume: impl FnMut(CanonicalEvent<'_>)) -> usize {
         self.drain_up_to(PUBLICATION_RING, consume)
     }
 
@@ -293,30 +279,18 @@ impl Consumer {
     pub fn drain_up_to(
         &mut self,
         limit: usize,
-        mut consume: impl FnMut(CanonicalEvent<'_>) -> bool,
+        mut consume: impl FnMut(CanonicalEvent<'_>),
     ) -> usize {
         let mut count = 0;
         for _ in 0..limit.min(PUBLICATION_RING) {
-            let Some(item) = self.pending.take().or_else(|| self.ring.pop().ok()) else { break };
-            let consumed = match item.value {
+            let Ok(item) = self.ring.pop() else { break };
+            match item.value {
                 Value::Note(note) => consume(CanonicalEvent::Note(note)),
                 Value::Gap(gap) => consume(CanonicalEvent::Gap(gap)),
-                Value::Snapshot => {
-                    let Some(frame) = self.held.take().or_else(|| self.snapshots.pop().ok()) else {
-                        debug_assert!(false, "a snapshot marker always follows its frame");
-                        count += 1;
-                        continue;
-                    };
-                    let consumed = consume(CanonicalEvent::Baseline(&frame));
-                    if !consumed {
-                        self.held = Some(frame);
-                    }
-                    consumed
-                }
-            };
-            if !consumed {
-                self.pending = Some(item);
-                break;
+                Value::Snapshot => match self.snapshots.pop() {
+                    Ok(frame) => consume(CanonicalEvent::Baseline(&frame)),
+                    Err(_) => debug_assert!(false, "a snapshot marker always follows its frame"),
+                },
             }
             count += 1;
         }
@@ -375,7 +349,6 @@ mod tests {
                 if let CanonicalEvent::Gap(gap) = event {
                     gaps.push(gap);
                 }
-                true
             });
         };
         drain(&mut consumer);
@@ -421,7 +394,6 @@ mod tests {
                 gaps += 1;
             }
             tracker.handle_canonical(event).unwrap();
-            true
         });
         assert_eq!(drained, PUBLICATION_RING, "the reserved cell carried the gap");
         assert_eq!(gaps, 1);
@@ -433,7 +405,6 @@ mod tests {
         publisher.baseline(&frame(9001.0, &[held(72, 0.0, 7_200_000_000)])).unwrap();
         consumer.drain(|event| {
             tracker.handle_canonical(event).unwrap();
-            true
         });
         assert_eq!(tracker.held_count(), 1);
         let pressed: Vec<_> = tracker.roll().notes().filter(|n| n.note == 72).collect();
@@ -443,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn a_declined_snapshot_stays_owned_and_refuses_the_next_without_losing_history() {
+    fn a_full_snapshot_fifo_refuses_the_next_without_losing_history() {
         let (mut publisher, mut consumer) = channel();
         let voices: Vec<_> =
             (0..64).map(|note| held(note, 0.0, i64::from(note) * 100_000_000)).collect();
@@ -456,12 +427,10 @@ mod tests {
             Err(PublishError::Busy),
             "a full snapshot FIFO refuses rather than reporting lost history"
         );
-        assert_eq!(consumer.drain(|_| false), 0, "a declining drainer retains the frame");
         let mut seen = Vec::new();
         consumer.drain(|event| {
             let CanonicalEvent::Baseline(frame) = event else { panic!() };
             seen.push(frame.time);
-            true
         });
         assert_eq!(seen, (1..=SNAPSHOT_SLOTS).map(|slot| slot as f64).collect::<Vec<_>>());
         publisher.baseline(&frame(99.0, &voices)).unwrap();

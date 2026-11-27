@@ -76,7 +76,7 @@ It reuses that measurement across frames while the smoothed spectrum and normali
 Time gates availability before cache lookup;
 it is not part of the key.
 Audio changes at the same time increment the revision;
-replacing the analyzer drops the measurement with its source identity.
+a source restart drops the measurement with the curve it measured.
 Availability is checked before looking up the measurement,
 so stale audio cannot keep a cached ring alive.
 Camera, palette, viewport dimensions, node count, and other appearance controls are absent from the key because they do not feed the Fold calculation.

@@ -25,12 +25,15 @@ pub const BINS_PER_SEMITONE: usize = 32;
 /// of semitones, so truncating it drops the partial bucket at the top, which
 /// the first `+ 1` restores. The second is a bucket centred just past 20 kHz,
 /// read like any other. Its old job is gone — the peak-only fill that wrote a
-/// partial into `b0 + 1` was replaced by resampling every bucket — and it stays
-/// because the count is mirrored as a literal in `lattice.wgsl` and asserted
-/// in `harmonigraph-render`, so dropping it is a shader change that moves
-/// nothing anyone can see.
+/// partial into `b0 + 1` was replaced by resampling every bucket — and what it
+/// does now is make the count a multiple of four: a spectrogram slab is then
+/// a whole number of the four-byte words `write_buffer` takes, so a frame
+/// uploads each changed slab straight from the grid rather than through a
+/// padded copy (`slab_stride` in `harmonigraph-render`). The count is mirrored
+/// as a literal in `lattice.wgsl`, which `harmonigraph-render` asserts.
 pub const SPECTRUM_BINS: usize =
     ((SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as usize + 2;
+const _: () = assert!(SPECTRUM_BINS.is_multiple_of(4), "a slab must be whole four-byte words");
 
 /// One power value per bucket of the axis: the array an analyzer fills, the
 /// curve draws and the spectrogram's history folds.

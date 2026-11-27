@@ -26,10 +26,10 @@ use glam::Vec4;
 #[derive(Clone, Copy, Debug)]
 pub struct Skin {
     // ---- UI chrome (sRGB bytes; converted to egui colors in theme) ----
-    // CHROME only. What the lattice is drawn AT REST in — its markers, both of
-    // a node's rings where nothing is lit — is a view setting rather than a
-    // skin color (`ViewConfig::lattice_ground`), because it is a thing to be
-    // dialled while a picture is being read.
+    // CHROME only. What the lattice is drawn AT REST in — both of a node's
+    // rings where nothing is lit, and its markers — is view settings rather
+    // than skin colors (`ViewConfig::lattice_ground`, `ViewConfig::marker_ink`),
+    // because they are things to be dialled while a picture is being read.
     /// Window/panel background: the settings page, and every popup.
     pub panel: [u8; 3],
     /// Pane headers and folded rails, one step above `panel`.
@@ -402,10 +402,8 @@ pub const PICTURE_OFF_SCALE: [u8; 3] = [236, 142, 132];
 /// the chrome, only further: this is not the `well` the chrome's own tracks
 /// and meters sit in.
 ///
-/// `Layout`'s default `background` is this same colour, so a margin or a gap
-/// in an export reads as the panes' own ground; an export stands the lattice
-/// on the layout's colour rather than on this one, because a pane paints the
-/// ground its shell hands it rather than this one
+/// An export clears its frame to this same colour and stands the lattice on
+/// it, by way of the ground its shell hands the pane rather than this one
 /// (`the_pane_paints_the_shells_ground_rather_than_the_skins`).
 pub fn picture_color() -> Vec4 {
     let [r, g, b] = PICTURE;

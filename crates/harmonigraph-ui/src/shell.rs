@@ -4,9 +4,8 @@
 //! other's windowing stack — the plugin editor runs on egui-baseview inside a
 //! host's window, the dev harness on eframe in one of its own. What they can
 //! share is everything AROUND the drawing, which is the same steps in the same
-//! order: a freshly built context has to be themed, the fold floor has to
-//! reach the state and the last window's leftovers have to leave it before
-//! the first frame, and the state
+//! order: a freshly built context has to be themed and the last window's
+//! leftovers have to leave the state before the first frame, and the state
 //! has to be drawn before the folds it settles can be spent on the window.
 //!
 //! Kept by hand in two places that sequence is a doc comment, and a doc
@@ -58,12 +57,10 @@ pub struct Opening<'a> {
 }
 
 impl Opening<'_> {
-    /// Theme the context, tell the layout its floor, then start the window
-    /// session.
+    /// Theme the context, then start the window session.
     ///
-    /// All three every time a context is built, which is the part a hand-kept
-    /// copy loses one of: skip the floor and the first fold asks for a window
-    /// narrower than the shell will ever grant.
+    /// Both every time a context is built, which is the part a hand-kept copy
+    /// loses one of.
     ///
     /// Nothing saved is read here. The state outlives every window, so it
     /// already holds the settings the last window left; a saved document
@@ -71,7 +68,6 @@ impl Opening<'_> {
     /// restore or the standalone harness's start.
     pub fn open(self) {
         crate::theme::apply_theme(self.ctx);
-        self.state.workspace.min_window_size = MIN_WINDOW_SIZE;
         self.state.start_window_session();
     }
 }
@@ -80,9 +76,9 @@ impl Opening<'_> {
 pub struct Frame<'a> {
     /// The window-filling `Ui` the shell's windowing stack hands the frame.
     pub ui: &'a mut egui::Ui,
-    /// The state to draw. This frame's MIDI is already in its tracker and this
-    /// frame's audio in its analyzer — see [`root_ui`](crate::root_ui), which
-    /// is also where the reason that feed cannot move in here lives.
+    /// The state to draw, with the notes and audio the shell has heard
+    /// already in its tracker and spectrum — see [`root_ui`](crate::root_ui),
+    /// which is also where the reason that feed cannot move in here lives.
     pub state: &'a mut SharedState,
     /// Where the automatable parameters live for this shell.
     pub params: &'a dyn ParamBackend,
@@ -101,7 +97,7 @@ impl Frame<'_> {
     pub fn draw(self) -> Option<egui::Vec2> {
         crate::root_ui(self.ui, self.state, self.params, self.now, self.build_tag);
         let change = self.state.workspace.take_window_size_change()?;
-        Some((self.window_size + change).max(self.state.workspace.min_window_size))
+        Some((self.window_size + change).max(MIN_WINDOW_SIZE))
     }
 }
 
@@ -159,7 +155,6 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = fresh();
         Opening { ctx: &ctx, state: &mut state }.open();
-        assert_eq!(state.workspace.min_window_size, MIN_WINDOW_SIZE);
         assert_eq!(frame(&ctx, &mut state, SIZE), None);
         state.workspace.window_size_change = egui::vec2(-120.0, -220.0);
         assert_eq!(frame(&ctx, &mut state, SIZE), Some(egui::vec2(880.0, 580.0)));
@@ -186,7 +181,6 @@ mod tests {
         assert_eq!(reopened.workspace.interaction.prefs.skin_dials.accent_hue, 120.0);
         assert_eq!(reopened.workspace.layout.position, crate::workspace::Position::Below);
         assert!(reopened.workspace.layout.folded[0]);
-        assert_eq!(reopened.workspace.min_window_size, MIN_WINDOW_SIZE);
     }
 
     /// An edit to what a save stores is told once, at the end of the gesture

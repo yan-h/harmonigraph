@@ -239,18 +239,17 @@ pub(crate) fn gesture_open(ctx: &egui::Context) -> bool {
 /// spending what a fold leaves the window needing — is [`shell`], which both
 /// shells call rather than keep in step by hand.
 ///
-/// The one step still owed by the caller: before calling this, feed the
-/// frame's MIDI into `state.picture.runtime.tracker` and its audio samples into
-/// `state.picture.runtime.spectrum`. `now` is seconds on the shell's clock, and must be the
-/// SAME clock that timestamped those `NoteEvent`s — envelopes are derived from
-/// the difference.
+/// The one step still owed by the shell: the notes and audio it has heard
+/// are in `state.picture.runtime.tracker` and `state.picture.runtime.spectrum`
+/// before this runs. The plugin's input worker drains its rings into them
+/// between frames; the standalone harness feeds its MIDI and synthesized audio
+/// at the top of each frame. `now` is seconds on the shell's clock, and must be
+/// the SAME clock that timestamped those `NoteEvent`s — envelopes are derived
+/// from the difference.
 ///
-/// That step cannot move into [`shell::Frame`] with the others, and the reason
-/// is a borrow rather than taste: a shell's rings and the parameters it draws
-/// from live in ONE struct — the plugin's `PluginParamBackend` reads a field of
-/// the same `EditorShared` its drain writes through — so a helper that ran the
-/// feed while holding the state would be holding the backend's own borrow.
-/// Both shells therefore feed first and hand over what they fed.
+/// That feed cannot move into [`shell::Frame`] with the others: the plugin's
+/// is not a frame's at all, and the standalone's reads the harness's own MIDI
+/// source and synth, which [`shell::Frame`] has no part of.
 /// `build_tag` is the identity stamped into that shell's binary; it reaches
 /// only the interactive performance overlay.
 pub fn root_ui(
@@ -340,15 +339,12 @@ pub fn root_ui(
     camera_movement::finish_edits(&mut state.picture.appearance, before_camera, params, ui.ctx());
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
 
-    // Each picture drawn says when it next changes on screen (#1911): at once
-    // while a value still fades (sounding or decaying voices, a release, a
-    // glow, the smoothed spectrum), or when a scroll next crosses a device
-    // pixel (the roll and the heatmap after the sound, a Tape playhead). The
-    // earliest wins, and with nothing sooner than one poll the idle poll
-    // draws, which bounds how stale a change that animates nothing gets: an automated
-    // parameter, the console, a take's status. egui repaints on input events
-    // by itself, so interaction never waits on this, and a note repaints
-    // itself, since it makes a voice.
+    // Each picture drawn says when it next changes on screen, and the
+    // earliest wins ([`Animating`], each [`Reason`] naming what reports it);
+    // with nothing sooner, the idle poll draws ([`IDLE_REPAINT_INTERVAL`]
+    // says what waits for it). egui repaints on input events by itself, and
+    // the plugin's input worker asks for a pass on what it sees change
+    // (`background::step`).
     //
     // Audio that merely arrives does not count: a host streams silence with
     // its transport stopped (#1670 Q2).
@@ -526,9 +522,14 @@ pub fn draw_panes(
     }
 }
 
-/// Repaint cadence while nothing animates: newly arriving MIDI shows up
-/// within one poll even without an input event.
-const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+/// Repaint cadence while nothing in view moves: how long what changes with no
+/// picture or worker asking for a frame can wait to be drawn — a restore, a
+/// Console line, Tape's silent strip, the tuning rows (Yan, #1994 HW1). The
+/// one owner of that list. Nothing that moves rides it: each picture asks for
+/// its own frames as it moves ([`Animating::hold_for`]; a pace at or past
+/// this moves at most one device pixel between the poll's frames), and the
+/// plugin's input worker asks for what it sees change (`background::step`).
+const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Repaint cadence of the chrome's own cues, about 30 Hz: the armed Record
 /// button's breath and a running export's progress stripes. Each asks for its
@@ -570,9 +571,15 @@ macro_rules! reasons {
 }
 
 reasons! {
-    /// A voice the tracker still holds, sounding or fading. The one reason
-    /// read rather than reported: [`Animating::of`] asks the tracker.
-    Voices => "voices",
+    /// A voice drawn by its envelope
+    /// ([`Voice::activation`](harmonigraph_core::Voice::activation)) while that
+    /// envelope still moves: arriving, or fading after its key is up
+    /// ([`Voice::envelope_moving`](harmonigraph_core::Voice::envelope_moving)).
+    /// The Spiral's sounding pitches and the Spectral pane's band for a note
+    /// the lattice has no node for, each for the voices it draws. A held
+    /// voice whose arrival has landed holds nothing: what changes it next is
+    /// an edit, for which the input worker asks a pass.
+    Envelope => "envelope",
     /// Learn's armed pulse, drawn where it can be seen: the lattice's badge
     /// and border, or the Tuning pane's ring round its switch. Learn armed
     /// where neither draws — Lattice Map, which suspends it, or both out of
@@ -580,23 +587,25 @@ reasons! {
     /// the Record button's breath, so it asks for frames at the chrome's
     /// [`CHROME_REPAINT_INTERVAL`] rather than every refresh (Yan, #1911).
     LearnPulse => "learn",
-    /// A note the live roll draws, as a ribbon, a name or a Lead, still inside
-    /// its own Span: its body has not yet scrolled past the far edge, or its
-    /// Lead is still fading through its release. A Lead fading holds every
-    /// frame; a ribbon or a name only scrolls, so it asks for the frame where
-    /// the roll next crosses a device pixel (#1911). One off the pitch zoom
-    /// draws nothing and so holds nothing, and an overhang still sliding off
-    /// the far edge finishes at the idle poll (Yan, #1861 on #1835). Tape
-    /// mode's roll holds nothing: its song axis does not scroll.
-    RollInSpan => "roll",
-    /// A lattice node still moving after its voice was pruned
-    /// ([`NodeMotion::moving`](harmonigraph_scene::NodeMotion::moving): a
-    /// departure's Fade-out delay, its stagger and the presence it holds for
-    /// them), or a node's Background glow still moving on a layer that draws
-    /// it: its level falling, or its colour still easing toward its reading
+    /// A note the live roll draws, as a ribbon, a name or a Lead: a Lead
+    /// still fading through its release holds every frame, and a ribbon or a
+    /// name, an overhang still sliding off the far edge included, only
+    /// scrolls, so it asks for the frame where the roll next crosses a device
+    /// pixel (#1911). One off the pitch zoom draws nothing and so holds
+    /// nothing, and so does a held Lead, which stands still. Tape mode's roll
+    /// holds nothing: its song axis does not scroll.
+    RollOnScreen => "roll",
+    /// A lattice node still moving
+    /// ([`NodeMotion::moving`](harmonigraph_scene::NodeMotion::moving): an
+    /// arrival, or a departure's Fade-out delay, its stagger and the presence
+    /// it holds for them, which outlast the voice), or a node's Background glow
+    /// still moving on a layer that draws it: its level rising or falling, or
+    /// its colour still easing toward its reading
     /// ([`GlowFade::step_drawn`](panes::glow_fade::GlowFade::step_drawn)),
-    /// which can outlast the slices by many seconds.
-    Releasing => "releasing",
+    /// which can outlast the slices by many seconds; or a lit lattice's glow
+    /// atmosphere, breathing, its pattern moving, its Stars twinkling or its
+    /// material drifting (`hold_atmosphere` in `panes/lattice.rs`).
+    Lattice => "lattice",
     /// A picture drawn from audio above silence. Samples arriving are not
     /// enough, because a host streams silence with its transport stopped and
     /// drawing that at full rate cost Bitwig's main thread about 30% for a
@@ -618,7 +627,7 @@ reasons! {
     ///   wedge is drawn, on the note Fade
     ///   ([`RingFade`](harmonigraph_scene::RingFade)). That fade is the whole of
     ///   a ring-posed node's leaving: the pose itself snaps back behind a
-    ///   presence already at zero, so nothing in `Releasing` moves for it.
+    ///   presence already at zero, so nothing in `Lattice` moves for it.
     ///
     /// A stage downstream of another answers only for its own state: while the
     /// stage it reads is still moving, that stage holds the loop, and each
@@ -662,11 +671,9 @@ impl Default for Animating {
 }
 
 impl Animating {
-    /// What the pictures drawn this frame reported, and the tracker's voices.
+    /// What the pictures drawn this frame reported.
     pub fn of(state: &SharedState) -> Self {
-        let mut held = state.picture.surfaces.moving_this_frame;
-        held.hold_if(Reason::Voices, state.picture.runtime.tracker.voices().next().is_some());
-        held
+        state.picture.surfaces.moving_this_frame
     }
 
     /// Hold the loop for `reason` at every frame the shell offers.

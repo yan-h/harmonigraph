@@ -79,9 +79,9 @@ pub use surround::{
 /// palette change is a uniform.
 mod spectrogram;
 pub use spectrogram::{
-    cloud_drift_heights_per_second, spectrogram_paint_callback, SpectrogramAtmosphere,
-    SpectrogramGrid, SpectrogramHeadless, SpectrogramRead, SpectrogramShades, SpectrogramSlab,
-    SpectrogramVertex,
+    cloud_drift_heights_per_second, lattice_drift_heights_per_second, spectrogram_paint_callback,
+    SpectrogramAtmosphere, SpectrogramGrid, SpectrogramHeadless, SpectrogramRead,
+    SpectrogramShades, SpectrogramSlab, SpectrogramVertex,
 };
 
 #[cfg(test)]
@@ -321,8 +321,8 @@ mod reload {
 ///
 /// One function rather than a bound at each place a strength is read, because
 /// the lattice, the piano roll and the spiral's dots all read the one
-/// control they share (`note_bloom`) through it. Load and scene entry already
-/// sanitize it to 0..2 (#1421, #1422), so this wider limit is a backstop for
+/// control they share (`note_bloom`) through it. The load already sanitizes
+/// it to 0..2 (#1421, #1422), so this wider limit is a backstop for
 /// a strength built in code and not a guard: `f32::clamp` hands NaN straight
 /// back, so it is not a NaN guard either.
 pub fn bloom_strength(raw: f32) -> f32 {
@@ -340,9 +340,6 @@ pub fn bloom_strength(raw: f32) -> f32 {
 /// continuous until `fs_composite` dithers the one unavoidable 8-bit write in
 /// [`LatticeCallback::paint`].
 const LATTICE_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-
-/// Clamp on the render-scale view setting, over whatever the UI offers.
-const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 
 /// The two modules a reload rebuilds, each already carrying the common half
 /// it was read beside.
@@ -932,11 +929,9 @@ struct LatticeCallback {
     target_format: wgpu::TextureFormat,
     pane_id: u64,
     /// The callback rect's size in egui points; `prepare` multiplies by the
-    /// screen's pixels-per-point and `render_scale` to size the offscreen
-    /// target.
+    /// screen's pixels-per-point and the view's render scale
+    /// ([`LatticeCallback::render_scale`]) to size the offscreen target.
     size_points: [f32; 2],
-    /// From the scene (a view setting), clamped to [`RENDER_SCALE_RANGE`].
-    render_scale: f32,
     /// Where to publish this pane's own measurements.
     stats: Option<std::sync::Arc<LatticeStats>>,
     /// Where this frame's vectors go back to once it is dropped, and the
@@ -1008,6 +1003,12 @@ enum Draw {
 }
 
 impl LatticeCallback {
+    /// The view's render scale, as the sanitizer left it: the copy the
+    /// composite reads, so the target is sized on the same number.
+    pub(crate) fn render_scale(&self) -> f32 {
+        self.uniforms.composite.render_scale
+    }
+
     /// Whether this callback may drive the shared [`GpuTimer`] — true only for
     /// the one carrying a stats sink, i.e. the pane that publishes the reading.
     ///
@@ -1792,8 +1793,8 @@ struct PaneTargets {
     /// The node light, which Background glow reach or gain at 0 switches off
     /// (`Offscreen::ensure_glow`).
     glow: bool,
-    /// The names' shadow atlas, at the size this frame's cells pack to, or
-    /// none where no name casts one (`Offscreen::ensure_shadow`).
+    /// The shadow atlas, at the size this frame's cells pack to, or none
+    /// where no caster takes a cell (`Offscreen::ensure_shadow`).
     shadow: Option<[u32; 2]>,
     /// How many nodes this frame lights: the rows its light table and ink
     /// strip have to hold.

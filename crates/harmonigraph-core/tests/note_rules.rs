@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use harmonigraph_core::canonical::{
-    CanonicalEvent, GapReason, NoteDelta, PublicationGap, SourceBaseline, VoiceBaseline,
+    CanonicalEvent, NoteDelta, PublicationGap, SourceBaseline, VoiceBaseline,
 };
 use harmonigraph_core::{
     Envelope, Expression, Expressions, NoteEvent, NoteEventKind, NoteTracker, PressId, RollNote,
@@ -434,18 +434,11 @@ impl Run<'_> {
         assert_eq!(rows(&after.roll), rows(&before.roll));
     }
 
-    /// A gap over one published source or the whole stream changes nothing.
+    /// A gap over the stream changes nothing.
     fn gap(&mut self, before: &Snap) {
-        let scope = self.rng.pick(&[Some(A), Some(B), None]);
         let at = self.clock;
-        let gap = PublicationGap {
-            source: scope,
-            time: at - self.offset,
-            through: at - self.offset,
-            first: 1,
-            last: 1,
-            reason: GapReason::PublicationFull,
-        };
+        let gap =
+            PublicationGap { time: at - self.offset, through: at - self.offset, first: 1, last: 1 };
         let accepted = self.tracker.handle_canonical_mapped(CanonicalEvent::Gap(gap), self.offset);
         assert_eq!(accepted, Ok(()));
         let after = snap(&self.tracker);

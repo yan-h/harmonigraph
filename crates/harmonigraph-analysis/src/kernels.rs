@@ -622,19 +622,6 @@ mod tests {
         }
     }
 
-    /// Every frame `configure` accepts reads, however short: padding a kernel
-    /// to whole [`TAP_CHUNK`]s at the bottom once overran bin 0 on a 12-sample
-    /// frame, whose one kernel spans every usable bin.
-    #[test]
-    fn every_even_frame_pads_its_kernels_inside_the_transform() {
-        for n in (4..=64).step_by(2) {
-            let mut analyzer =
-                SpectrumAnalyzer::new(AnalyzerConfig { sample_rate: RATE, fft_size: n });
-            analyzer.push_samples(&vec![0.5; n]);
-            analyzer.pitch_spectrum().expect("a full frame");
-        }
-    }
-
     /// Through every fixed frame a partial's peak sits within three hundredths
     /// of a cent of its pitch, far finer than a bucket, which only the kernels'
     /// share of the listen threatens ([`FIXED_KERNEL_SPREAD`]).

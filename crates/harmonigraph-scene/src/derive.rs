@@ -69,6 +69,13 @@ pub(crate) fn sheet_scale(view: &ViewConfig, centered: LatticePos) -> f32 {
 /// `nodes` is emptied and the scene's nodes laid out in it: hand back the
 /// last frame's, and a window at the node cap reuses its five megabytes
 /// rather than allocating them again.
+///
+/// `view` arrives repaired: every door a look comes in by runs
+/// [`ViewConfig::sanitize`] (the editor's restore and
+/// `AppearanceDocument::parse` for a take's or a file's look), and a bar
+/// cannot set a value past its range. No producer hands over another, so a
+/// debug build asserts it and a release build draws what it is given (#1631,
+/// #1994 SS1).
 #[allow(clippy::too_many_arguments)]
 pub fn derive_scene_with_extra(
     tracker: &NoteTracker,
@@ -80,9 +87,12 @@ pub fn derive_scene_with_extra(
     hovered: Option<LatticePos>,
     mut nodes: Vec<NodeInstance>,
 ) -> Scene {
-    let mut normalized = view.clone();
-    normalized.sanitize();
-    let view = &normalized;
+    #[cfg(debug_assertions)]
+    {
+        let mut normalized = view.clone();
+        normalized.sanitize();
+        debug_assert_eq!(*view, normalized, "unsanitized view reached the scene");
+    }
     nodes.clear();
     nodes.reserve(window.count() + extra.len());
     // Kept parallel to `nodes` for the trail, which matches remembered
@@ -174,7 +184,7 @@ pub fn derive_scene_with_extra(
         marker_unit: marker_world(1.0),
         glow_clock: None,
         star_solo: Default::default(),
-        view: normalized,
+        view: view.clone(),
     }
 }
 

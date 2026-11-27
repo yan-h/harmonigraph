@@ -272,23 +272,15 @@ impl SourceBaseline {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GapReason {
-    PublicationFull,
-    InvalidRecord,
-    ProducerLost,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
+/// Publication lost over the whole canonical stream: its one producer is a
+/// full publication lane (`harmonigraph_record::publication`).
 pub struct PublicationGap {
-    /// None affects the whole canonical stream; Some scopes a known source.
-    pub source: Option<SourceId>,
     pub time: Time,
     pub through: Time,
     /// Inclusive publication sequence range, distinct from a source output cut.
     pub first: u64,
     pub last: u64,
-    pub reason: GapReason,
 }
 
 impl PublicationGap {
@@ -428,14 +420,7 @@ mod tests {
             assert_eq!(bad.validate(), Err(InvalidCanonical), "{what}");
         }
 
-        let gap = PublicationGap {
-            source: Some(SourceId(1)),
-            time: 1.0,
-            through: 1.0,
-            first: 2,
-            last: 2,
-            reason: GapReason::PublicationFull,
-        };
+        let gap = PublicationGap { time: 1.0, through: 1.0, first: 2, last: 2 };
         assert_eq!(gap.validate(), Ok(()));
         for (what, bad) in [
             ("time", PublicationGap { time: f64::NAN, ..gap }),

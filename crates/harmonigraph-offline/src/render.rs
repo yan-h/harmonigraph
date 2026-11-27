@@ -122,9 +122,9 @@ pub struct Settings {
     pub layout: Layout,
     /// Output size in physical pixels.
     pub size: [u32; 2],
-    /// Pixels per point — the UI's "zoom". Font sizes and paddings are
-    /// in points, so this decides how big the text is *relative to the
-    /// frame*, not just how sharp it is.
+    /// Pixels per point. Text sizes with its pane, so at a given `size` this
+    /// decides how large point-sized details (shadows, hairlines, insets) draw
+    /// relative to the frame (`harmonigraph_ui::layout::export_pixels_per_point`).
     pub pixels_per_point: f32,
     pub fps: f64,
     pub start: f64,
@@ -242,17 +242,10 @@ pub fn render(
     if placements.is_empty() {
         return Err("the layout resolved to no panes".into());
     }
-    let background = egui::Color32::from_rgb(
-        settings.layout.background.0,
-        settings.layout.background.1,
-        settings.layout.background.2,
-    );
-    // The same colour the lattice pane stands on. Offline clears to the
-    // layout's background and paints the panes over it, rather than onto the
-    // dock's panel — so without this the pane would paint a panel-coloured
-    // rectangle several shades too light, and only in exported video, which is
-    // the worst place to find out.
-    state.set_background(settings.layout.background);
+    // The picture's ground, the same colour the lattice pane stands on by
+    // default (`PictureState`'s `background`): offline clears to it and paints
+    // the panes over it, rather than onto the dock's panel.
+    let background = harmonigraph_ui::theme::picture();
 
     let frames = settings.frame_count();
     // Timers only: nothing between here and the end of the loop reads a clock
@@ -277,7 +270,7 @@ pub fn render(
             draw_panes(ui, &placements, &mut state, now);
             // Last, over the gaps the panes left: the seam that keeps the
             // lattice and the spectral pane from reading as one field.
-            settings.layout.paint_dividers(ui.painter(), &placements);
+            harmonigraph_ui::Layout::paint_dividers(ui.painter(), &placements);
         });
 
         let primitives = context.tessellate(output.shapes, settings.pixels_per_point);
@@ -469,11 +462,13 @@ mod tests {
         }
         Take {
             header: recorded_header(),
-            events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
+            events: notes
+                .into_iter()
+                .map(|note| harmonigraph_take::CanonicalRecord::Delta(note.into()))
+                .collect(),
             params: Vec::new(),
             configurations: Vec::new(),
             truncated: false,
-            incomplete: None,
             ..Default::default()
         }
     }
@@ -516,20 +511,26 @@ mod tests {
         let onset = origin + 0.8;
         Take {
             events: vec![
-                harmonigraph_take::CanonicalRecord::Note(NoteRecord {
-                    source: 0,
-                    t: onset,
-                    channel: 0,
-                    note: 69,
-                    kind: NoteKind::On { velocity: 0.8 },
-                }),
-                harmonigraph_take::CanonicalRecord::Note(NoteRecord {
-                    source: 0,
-                    t: onset + 0.05,
-                    channel: 0,
-                    note: 69,
-                    kind: NoteKind::Off,
-                }),
+                harmonigraph_take::CanonicalRecord::Delta(
+                    NoteRecord {
+                        source: 0,
+                        t: onset,
+                        channel: 0,
+                        note: 69,
+                        kind: NoteKind::On { velocity: 0.8 },
+                    }
+                    .into(),
+                ),
+                harmonigraph_take::CanonicalRecord::Delta(
+                    NoteRecord {
+                        source: 0,
+                        t: onset + 0.05,
+                        channel: 0,
+                        note: 69,
+                        kind: NoteKind::Off,
+                    }
+                    .into(),
+                ),
             ],
             ..Default::default()
         }

@@ -1369,8 +1369,10 @@ fn the_text_groups_width_moves_a_names_shadow_and_no_other_casters() {
 fn a_marker_inherits_the_text_groups_whole_shadow() {
     use harmonigraph_scene::ShadowStyle;
 
-    // A spread on the text group alone, so the reach the marker grows its quad
-    // by is a third term the two groups disagree on.
+    // A spread on the text group alone, so the Spread the marker spends — as
+    // stops, the text group's way, growing neither its quad nor its cell (its
+    // reach is `REACH_SIGMAS` alone) — is a third term the two groups
+    // disagree on.
     let geometry = ShadowStyle { width: 0.12, spread: 0.0, depth: 0.2 };
     let text = ShadowStyle { width: 0.62, spread: 0.3, depth: 0.85 };
     let scene_of = |geometry: ShadowStyle, text: ShadowStyle| {
@@ -1548,7 +1550,11 @@ fn a_disappearing_slice_fades_its_shadow_in_proportion_to_its_ink() {
 
 /// A held slice must not raise a fading neighbor's shadow ceiling where its
 /// own blur contributes almost nothing. This reaches staggered slice motion,
-/// rather than fading every layer of a node together.
+/// rather than fading every layer of a node together: a Stagger spread above 0
+/// with the radial move off is what draws the slices one by one
+/// (`animated_slice_ink`). At a spread of 0 the settled node draws and casts
+/// instead, and none of its shadow lands where this test reads the fading
+/// slice's.
 #[test]
 fn a_held_slice_does_not_pin_a_neighbors_shadow_outside_its_own_blur() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
@@ -1556,6 +1562,7 @@ fn a_held_slice_does_not_pin_a_neighbors_shadow_outside_its_own_blur() {
     for level in [0.75, 0.25, 0.05] {
         let mut scene = on_ground(0.6, 1.0);
         scene.view.shadow.lattice_geometry.spread = 0.8;
+        scene.view.note_animation.stagger_spread = 0.5;
         scene.view.note_animation.radial_start = 0.0;
         scene.spectral.outer = 0.0;
         scene.nodes[0].audio_ring = 0.0;

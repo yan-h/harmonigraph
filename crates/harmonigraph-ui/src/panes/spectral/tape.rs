@@ -285,12 +285,17 @@ pub(super) fn draw(
     let axis = SongAxis::new(axes, split, window);
     heatmap(painter, axes, scale, state, &axis, surface, TapeStrip::Region);
     if state.appearance.spectrum.show_roll {
-        // Through the live roll's own rule, which holds nothing for a song
-        // axis: it stands still, and a live note played over the audition
-        // moves only while it sounds, which its voice holds. Both sources are
-        // built without a now line, which alone scrolls a roll or grows a lead.
+        // Through the live roll's own rule (`roll::RollMotion`), under which a
+        // song axis, built without a now line, stands still; what grows on it
+        // is `growing`'s.
+        let now = frame.now;
         let motion = notes(painter, axes, scale, state, &axis, surface, frame);
         motion.hold(&mut state.surfaces.moving_this_frame, 0.0);
+        // A live note struck over the audition grows along the song at the
+        // audition's speed while it sounds, its playhead stopped or not.
+        if let Some(pixel) = growing(painter, state, scale, &axis, now) {
+            state.surfaces.moving_this_frame.hold_for(crate::Reason::RollOnScreen, pixel);
+        }
     }
     let view = &mut state.runtime.tape;
     coverage(painter, axes, view, &axis);
@@ -387,23 +392,14 @@ fn marks(
     let (position_rate, heard_rate) = rates(view);
     let mut pixel = None::<f64>;
     let mut mark = |at: Option<f64>, rate: Option<f64>, last: &mut Option<(f64, f64)>, stroke| {
-        let Some(at) = at else {
-            *last = None;
-            return;
-        };
-        // First seen, it has not been seen to move.
-        let changed = match *last {
-            Some((value, since)) if value == at => since,
-            Some(_) => clock,
-            None => f64::NEG_INFINITY,
-        };
-        *last = Some((at, changed));
+        let moving = advancing(last, at, clock);
+        let Some(at) = at else { return };
         if !axis.shows(at) {
             return;
         }
         painter.line_segment(axes.across_pitch(axis.depth_of(at)), stroke);
         let speed = rate.map_or(0.0, |rate| screen_speed(view, axis, at, rate, ppp));
-        if clock - changed <= PLAYHEAD_STALL_SECONDS && speed > 0.0 {
+        if moving && speed > 0.0 {
             pixel = Some(pixel.map_or(1.0 / speed, |sooner| sooner.min(1.0 / speed)));
         }
     };
@@ -413,6 +409,24 @@ fn marks(
     mark(view.heard, Some(heard_rate), &mut last.heard, accent);
     ctx.data_mut(|d| d.insert_temp(seen, last));
     pixel
+}
+
+/// A playhead at `at` is still advancing: its value changed within
+/// [`PLAYHEAD_STALL_SECONDS`] of `clock`. `last` keeps its value and when that
+/// last changed. A value seen for the first time counts as just changed, so a
+/// cue's first frame already asks for the next one. Forgotten with the
+/// playhead, so one that comes back on the value it left on is seen afresh.
+fn advancing(last: &mut Option<(f64, f64)>, at: Option<f64>, clock: f64) -> bool {
+    let Some(at) = at else {
+        *last = None;
+        return false;
+    };
+    let changed = match *last {
+        Some((value, since)) if value == at => since,
+        _ => clock,
+    };
+    *last = Some((at, changed));
+    clock - changed <= PLAYHEAD_STALL_SECONDS
 }
 
 /// How fast a mark at song seconds `at`, running at `rate`, crosses the
@@ -512,6 +526,34 @@ fn notes(
         point_scale: frame.point_scale,
     };
     roll::draw_rolls(painter, axes, scale, frame.width, state, &options, &sources)
+}
+
+/// The seconds until a live note played over the audition and still sounding
+/// grows by a device pixel along the song shown, if one does: its end is the
+/// song the audition would have reached by `now`, which moves at the
+/// audition's speed whether its playhead still runs or not.
+fn growing(
+    painter: &egui::Painter,
+    state: &PictureState,
+    scale: &PitchScale,
+    axis: &SongAxis,
+    now: f64,
+) -> Option<f64> {
+    let view = &state.runtime.tape;
+    let audition = view.audition?;
+    let until = audition.until.unwrap_or(f64::INFINITY);
+    let roll = state.roll();
+    let sounding = roll.notes().any(|note| {
+        !note.source.is_tape()
+            && !roll.hides(note.source)
+            && (audition.clock..until).contains(&note.start)
+            && note.stop(now) >= now
+            && scale.contains(note.end_pitch())
+    });
+    let tip = audition.song + (now - audition.clock) * audition.speed;
+    let ppp = painter.ctx().pixels_per_point();
+    let speed = screen_speed(view, axis, tip, audition.speed, ppp);
+    (sounding && axis.shows(tip) && speed > 0.0).then(|| 1.0 / speed)
 }
 
 /// The rolls Tape mode draws and names over `window`: the recording's notes,
@@ -821,15 +863,17 @@ impl Placed {
 /// The recording's harmony along a row over the overview (Tape mode, with the
 /// far region open; #1974): one small lattice per section, on the overview's
 /// own song axis, lighting the nodes that sound in it. A node is a set of
-/// rings, one per pitch sounding on it, lowest in the middle, each in its
-/// note's colour. A pitch lights the node the roll names it by
+/// rings, one per octave it sounds in, lowest in the middle, each in its
+/// note's colour. Where two notes share a ring, the one flashing more shows,
+/// and once both have settled, as on every still row, the lower pitch. A
+/// pitch lights the node the roll names it by
 /// ([`naming_node_from`](super::names::naming_node_from)): the one position of
 /// the naming reach that matches it under the live tuning, and in a
 /// temperament, where a dozen do, the one that spells most plainly. Every
 /// match, as the lattice lights them, would make each thumbnail a wallpaper of
 /// its chord. A pitch the reach does not hold lights none.
 ///
-/// One frame holds every thumbnail, the nodes the whole recording lights, so a
+/// One frame holds every thumbnail, the nodes the shown sources light, so a
 /// harmony that moves across the lattice is a lit shape that moves in its
 /// frame. Sections too narrow to hold that frame join the one before
 /// ([`Harmony::cells`](crate::tape::harmony::Harmony::cells)).
@@ -851,7 +895,7 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
     painter.rect_filled(rect, 0.0, theme::picture());
     let x_of = |seconds: f64| axes.across_pitch(axis.depth_of(seconds))[0].x;
 
-    let harmony = std::sync::Arc::clone(&state.runtime.tape.harmony);
+    let harmony = std::sync::Arc::clone(&state.runtime.tape.shown_harmony);
     let tuning = state.runtime.tuning;
     let class_of = |pitch: f32| PitchClass::from_cents(pitch * 100.0);
     let placed = Placed::of(ui.ctx(), id.with("placed"), &harmony, state);
@@ -882,26 +926,9 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
     // (`marks`): its value changed within the stall allowance.
     let under = view.heard.map(|at| (at, heard_rate)).or(view.position.zip(position_rate));
     let clock = ui.input(|i| i.time);
-    let seen = ui.data(|d| d.get_temp::<(f64, f64)>(id));
-    let changed = match (seen, under) {
-        (Some((value, since)), Some((at, _))) if value == at => since,
-        // First seen counts as moving, unlike `marks`, which waits to see it
-        // move before asking for frames: a cue's first frame must already
-        // hide what the section has not yet struck.
-        (_, Some(_)) => clock,
-        (_, None) => f64::NEG_INFINITY,
-    };
-    // Forgotten with the playhead, so one that comes back on the value it
-    // left on is seen afresh.
-    match under {
-        Some((at, _)) => ui.data_mut(|d| {
-            d.insert_temp(id, (at, changed));
-        }),
-        None => ui.data_mut(|d| {
-            d.remove_temp::<(f64, f64)>(id);
-        }),
-    }
-    let advancing = clock - changed <= PLAYHEAD_STALL_SECONDS;
+    // A cue's first frame already hides what the section has not yet struck.
+    let moving =
+        ui.data_mut(|d| advancing(d.get_temp_mut_or_default(id), under.map(|(at, _)| at), clock));
     let mut next_change = None::<f64>;
 
     let white = egui::Color32::WHITE;
@@ -934,7 +961,7 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
             }
         }
         // Under an advancing playhead, only what has been struck by now.
-        let now = under.filter(|&(at, _)| advancing && (cell.start..next).contains(&at));
+        let now = under.filter(|&(at, _)| moving && (cell.start..next).contains(&at));
         // A node's rings: each the octave it sounds in, how far its flash has
         // to settle, and its colour.
         type Ring = (i32, f32, egui::Color32);
@@ -967,7 +994,9 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
                 let octave = (above / 1200.0).round() as i32;
                 match nodes.iter_mut().find(|(at, _)| *at == pos) {
                     Some((_, rings)) => match rings.iter_mut().find(|ring| ring.0 == octave) {
-                        // Two notes on one ring: the one struck last shows.
+                        // Two notes on one ring: the one flashing more shows,
+                        // and once both have settled the lower pitch, the
+                        // entries being in pitch order.
                         Some(ring) if flash > ring.1 => *ring = (octave, flash, colour),
                         Some(_) => {}
                         None => rings.push((octave, flash, colour)),

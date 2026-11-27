@@ -58,6 +58,8 @@ struct Phrase {
     hub: Device,
     sources: [Device; 3],
     raw: i64,
+    /// The Hub's transport rolls with each step, as a take needs to record.
+    rolling: bool,
 }
 
 impl Phrase {
@@ -70,7 +72,7 @@ impl Phrase {
             source.activate_format(44100.0, 512);
             source
         });
-        let mut phrase = Self { hub, sources, raw: 0 };
+        let mut phrase = Self { hub, sources, raw: 0, rolling: false };
         // Neutral CC64/66/69 first, which is harmless rather than needed:
         // nothing reads pedal state before emitting a note — `Tune::pedals`
         // is read only by the cut — so an unseen pedal counts as up and these
@@ -102,7 +104,14 @@ impl Phrase {
             );
             output[index] = sink.values;
         }
-        self.hub.run_format(self.raw, vec![], None, None, 512);
+        // The process's own transport, which a take reads its song position from.
+        let transport = self.rolling.then(|| {
+            let Input::Transport(value) = at(self.raw as f64 / 44_100.0, true) else {
+                unreachable!()
+            };
+            value
+        });
+        self.hub.run_callback(self.raw, vec![], (None, None), (512, false), transport);
         self.raw += 512;
         output
     }
@@ -806,6 +815,7 @@ fn a_take_lane_gap_owes_every_source_its_own_snapshot() {
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
     crate::test_device::inject_recorder(recorder);
     let mut phrase = Phrase::new();
+    phrase.rolling = true;
     capture.arm();
     let directory =
         std::env::temp_dir().join(format!("harmonigraph-take-gap-{}", std::process::id()));
@@ -877,6 +887,7 @@ fn a_take_armed_between_an_onset_and_its_sound_opens_with_that_voice() {
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
     crate::test_device::inject_recorder(recorder);
     let mut phrase = Phrase::new();
+    phrase.rolling = true;
     phrase.step([vec![note(1, 0, 60, 400, true)], vec![], vec![]], [0, 1, 2]);
     capture.arm();
     let directory =
@@ -958,6 +969,7 @@ fn a_snapshot_one_lane_refused_still_reaches_the_other_lane() {
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
     crate::test_device::inject_recorder(recorder);
     let mut phrase = Phrase::new();
+    phrase.rolling = true;
     capture.arm();
     let directory =
         std::env::temp_dir().join(format!("harmonigraph-partial-frame-{}", std::process::id()));

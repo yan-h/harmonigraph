@@ -87,14 +87,13 @@ pub(crate) fn render_pane(
 
         // Make the render frame obvious against the pane. The letterbox padding
         // takes the panel color, so it reads as inert chrome rather than part of
-        // the shot; the aspect box takes the render's OWN frame background — the
-        // picture's black, which no composed layout shows through (margin and gap
-        // are 0) — so the box is exactly the pixels the video will contain. Painting the
+        // the shot; the aspect box takes the render's OWN frame ground — the
+        // picture's black, which no composed layout shows through, since its panes
+        // cover the frame — so the box is exactly the pixels the video will contain. Painting the
         // padding and the pane fills both `picture()` leaves no way to tell where
         // the frame ends.
-        let bg = layout.background;
         ui.painter().rect_filled(outer, 0.0, theme::panel());
-        ui.painter().rect_filled(box_rect, 0.0, egui::Color32::from_rgb(bg.0, bg.1, bg.2));
+        ui.painter().rect_filled(box_rect, 0.0, theme::picture());
         frame_chrome(ui, box_rect, pad);
 
         let placements: Vec<_> = layout
@@ -106,7 +105,7 @@ pub(crate) fn render_pane(
         preview_panes(ui, &placements, state, now, point_scale);
 
         // The seam between panes, exactly as the render bakes it.
-        layout.paint_dividers(ui.painter(), &placements);
+        Layout::paint_dividers(ui.painter(), &placements);
         let appearance = &mut state.appearance;
         preview_layout_controls(
             ui,
@@ -381,7 +380,8 @@ fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
 /// that starts a take.
 ///
 /// Each pane that owns an accumulation already clears its own — Labels' "Clear
-/// label history", the Spectrogram's "Clear history" — and those stay, since
+/// label history", View's "Clear history", which clears the ribbons as well as
+/// the heatmap — and those stay, since
 /// clearing what one pane draws is a real thing to want while dialing that pane
 /// in. This is for the other moment, when all four are wanted together and
 /// there is only one reason: to watch a take being recorded on an empty
@@ -472,7 +472,8 @@ fn render_controls(
                     "Fit piece",
                     "Frame what the piece fills, anywhere from 20 Hz to 20 kHz, whatever the Frequency range set on the Analyzer page: \
                      every pitch the spectrogram lights a fifth of the way up its colours for half a second in all, \
-                     and every recorded note, with a semitone to spare. Bands it leaves dark at either end are dropped. \
+                     and every note the video draws, a hidden source's left out, with a semitone to spare, \
+                     and at least two octaves. Bands it leaves dark at either end are dropped. \
                      Choose Dialled to crop by hand. The preview here keeps showing the range as set.",
                 ),
             ],
@@ -603,13 +604,10 @@ fn preview_lattice(
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return None;
     }
-    // The preview is a picture of the RENDER, so it stands on the render
-    // layout's background rather than on the panel this preview happens to sit
-    // on — the same colour `harmonigraph-offline` will clear to.
-    let background = harmonigraph_scene::skin::ground_color(
-        Layout::split(state.appearance.render.frame.lattice, state.appearance.render.frame.split)
-            .background,
-    );
+    // The preview is a picture of the RENDER, so it stands on the picture's
+    // ground rather than on the panel this preview happens to sit on — the
+    // same colour `harmonigraph-offline` will clear to.
+    let background = harmonigraph_scene::skin::picture_color();
     let response = ui.interact(rect, ui.scope_id().with("preview_lattice_zoom"), Sense::hover());
     if let Some((scroll, zoom)) = super::zoom_gesture(ui, &response) {
         if scroll != 0.0 {
@@ -689,7 +687,7 @@ fn record_controls(
     // Take recording: the input half of offline video rendering. A record
     // button that doubles as its own indicator — press to arm; the dot breathes
     // while it waits for the transport, then goes solid while capturing. See
-    // record_button in widgets.rs.
+    // record_button in widgets/rows.rs.
     if !interaction.take.supported {
         return;
     }
@@ -720,7 +718,7 @@ fn record_controls(
                 (
                     crate::RenderTrigger::AtLoopEnd,
                     "Loop end",
-                    "Record one loop, then render when playback wraps to its start. A forward seek records on. Without a wrap, recording continues until you turn Record take off.",
+                    "Record one loop, then render when playback wraps to its start: the first jump back after moving forward, ignoring up to 50 ms of backward movement. A forward seek records on. Without a jump back, recording continues until you turn Record take off.",
                 ),
                 (
                     crate::RenderTrigger::AtBar,
