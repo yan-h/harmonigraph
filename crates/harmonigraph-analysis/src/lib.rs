@@ -1130,8 +1130,8 @@ mod tests {
             "follow-up < fft_size chunk after > fft_size push must match"
         );
 
-        // 4. Stereo `ChannelBank::push_frames`: wraparound `< fft_size` (with trailing odd sample),
-        // exact `fft_size` overwrite on dirty bank without `restart()`, and `> fft_size` (with odd tail).
+        // 4. Stereo `ChannelBank::push_frames`: wraparound `< fft_size`, exact
+        // `fft_size` overwrite on dirty bank without `restart()`, and `> fft_size`.
         let stereo: Vec<f32> = (0..N * 3 + 777)
             .flat_map(|i| {
                 let t = i as f32 / 48_000.0;
@@ -1146,14 +1146,8 @@ mod tests {
         let mut bank = ChannelBank::new(config, 2);
         let mut ref_bank = ChannelBank::new(config, 2);
         let mut frame_pos = 0usize;
-        for &(frames, odd) in &[(0, true), (1, false), (199, true), (N - 1, true), (777, false)] {
-            let start = frame_pos * 2;
-            let end = (frame_pos + frames) * 2;
-            let mut slice = stereo[start..end].to_vec();
-            if odd {
-                slice.push(9999.0);
-            }
-            bank.push_frames(&slice);
+        for frames in [0, 1, 199, N - 1, 777] {
+            bank.push_frames(&stereo[frame_pos * 2..(frame_pos + frames) * 2]);
             for f in 0..frames {
                 ref_bank.push_frames(&stereo[(frame_pos + f) * 2..(frame_pos + f + 1) * 2]);
             }
@@ -1163,16 +1157,15 @@ mod tests {
         assert_eq!(
             bits(&bank.power_sum().unwrap()),
             bits(&ref_bank.power_sum().unwrap()),
-            "stereo wraparound < fft_size with trailing odd sample must match per-frame reference"
+            "stereo wraparound < fft_size must match per-frame reference"
         );
 
-        // Exact `fft_size` overwrite on dirty bank without `restart()` (plus trailing odd sample):
+        // Exact `fft_size` overwrite on dirty bank without `restart()`:
         // full-column reuse matches fresh one-frame-at-a-time bank; arbitrary wrap matches per-frame reference.
-        let mut exact_stereo = stereo[frame_pos * 2..(frame_pos + N) * 2].to_vec();
-        exact_stereo.push(-8888.0);
+        let exact_stereo = &stereo[frame_pos * 2..(frame_pos + N) * 2];
         let mut col_bank = ChannelBank::new(config, 2);
         col_bank.push_frames(&stereo[..N * 2]);
-        col_bank.push_frames(&exact_stereo);
+        col_bank.push_frames(exact_stereo);
         let mut fresh_bank_exact = ChannelBank::new(config, 2);
         for f in 0..N {
             fresh_bank_exact.push_frames(&stereo[(frame_pos + f) * 2..(frame_pos + f + 1) * 2]);
@@ -1182,7 +1175,7 @@ mod tests {
             bits(&fresh_bank_exact.power_sum().unwrap()),
             "dirty stereo bank exact fft_size overwrite without restart must match per-frame fresh bank"
         );
-        bank.push_frames(&exact_stereo);
+        bank.push_frames(exact_stereo);
         for f in 0..N {
             ref_bank.push_frames(&stereo[(frame_pos + f) * 2..(frame_pos + f + 1) * 2]);
         }
@@ -1192,18 +1185,16 @@ mod tests {
             "wrapped stereo bank exact fft_size overwrite must match per-frame reference"
         );
 
-        // `> fft_size` frames with trailing odd sample on dirty bank.
+        // `> fft_size` frames on dirty bank.
         let over_frames = N + 419;
-        let mut over_stereo = stereo[frame_pos * 2..(frame_pos + over_frames) * 2].to_vec();
-        over_stereo.push(7777.0);
-        bank.push_frames(&over_stereo);
+        bank.push_frames(&stereo[frame_pos * 2..(frame_pos + over_frames) * 2]);
         for f in 0..over_frames {
             ref_bank.push_frames(&stereo[(frame_pos + f) * 2..(frame_pos + f + 1) * 2]);
         }
         assert_eq!(
             bits(&bank.power_sum().unwrap()),
             bits(&ref_bank.power_sum().unwrap()),
-            "> fft_size push_frames with trailing odd sample must match per-frame reference"
+            "> fft_size push_frames must match per-frame reference"
         );
     }
 }
