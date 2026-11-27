@@ -68,8 +68,8 @@ const SHADOW_KEEP_FLOOR: f32 = 1.0 / 1024.0;
 /// the depth for the lattice, and in stops down to [`SHADOW_KEEP_FLOOR`] for
 /// the spectral panes. Arguments in the shader's order.
 ///
-/// `local_shadow_transmittance` and `shadow_transmittance` in common.wgsl at a
-/// level of 1, for the Shadow preview to draw with on the CPU;
+/// `local_shadow_transmittance` at a level of 1 and `shadow_transmittance` in
+/// common.wgsl, for the Shadow preview to draw with on the CPU;
 /// `shadow_darkness_is_the_shaders_law` runs both on the GPU and holds this to
 /// them.
 pub fn shadow_darkness(full: f32, depth: f32, lattice: bool) -> f32 {
@@ -1092,8 +1092,8 @@ pub(crate) mod tests {
         assert_eq!(shadow_darkness(0.5, 1.5, false), shadow_darkness(0.5, 1.0, false));
     }
 
-    /// `shadow_darkness` is the shader's law: `local_shadow_transmittance` and
-    /// `shadow_transmittance` from common.wgsl, run on the GPU at full level
+    /// `shadow_darkness` is the shader's law: `local_shadow_transmittance` at
+    /// full level and `shadow_transmittance` from common.wgsl, run on the GPU
     /// over a grid of coverage and depth that reaches past both ends of each.
     #[test]
     fn shadow_darkness_is_the_shaders_law() {
@@ -1112,7 +1112,7 @@ fn cs_shadow_law() {{
         for (var j = 0u; j < {N}u; j++) {{
             law[i * {N}u + j] = vec2<f32>(
                 local_shadow_transmittance(samples[i], samples[j], 1.0),
-                shadow_transmittance(samples[i], samples[j], 1.0),
+                shadow_transmittance(samples[i], samples[j]),
             );
         }}
     }}
