@@ -109,12 +109,14 @@ pub(crate) const POLL: Duration = Duration::from_millis(4);
 /// the two numbers in that relation.
 pub(crate) const SHUT_POLL: Duration = Duration::from_millis(20);
 
-/// What a step last saw of the tracker: how many edits it had taken, and the
-/// display time the step read ([`Self::edited`]).
+/// What a step last saw: how many edits the tracker had taken and the display
+/// time the step read ([`Self::edited`]), and the host parameters' values
+/// ([`Self::moved`]).
 #[derive(Default)]
 struct Seen {
     edits: u64,
     display: f64,
+    params: [u32; crate::Row::ALL.len()],
 }
 
 impl Seen {
@@ -126,8 +128,18 @@ impl Seen {
     /// Hub's are by the Tuning delay, keeps asking until the step whose clock
     /// has passed it, whose pass draws it.
     fn edited(&mut self, edits: harmonigraph_core::Edits, display: f64) -> bool {
-        let before = std::mem::replace(self, Seen { edits: edits.count, display });
-        edits.count != before.edits || edits.latest > before.display
+        let (count, before) = (self.edits, self.display);
+        (self.edits, self.display) = (edits.count, display);
+        edits.count != count || edits.latest > before
+    }
+
+    /// Whether any host parameter moved since the last step: automation or
+    /// modulation of the camera or the Lattice Map under a still picture,
+    /// which the picture draws but reports no motion for. Read from the
+    /// table's atomics here, off the audio thread, which only stores them.
+    fn moved(&mut self, params: &crate::HarmonigraphParams) -> bool {
+        let now = crate::Row::ALL.map(|row| params.table.float(row.index()).to_bits());
+        std::mem::replace(&mut self.params, now) != now
     }
 }
 
@@ -335,8 +347,8 @@ thread_local! {
 /// **A still window is asked to draw what a step changed**
 /// ([`EguiState::request_pass`]): every edit of the tracker, played or from
 /// the tape, a release, a bend or a pressure change as much as a note, until
-/// the display clock has passed the latest ([`Seen::edited`]), and sound
-/// after a still stretch. A still window runs no pass until something asks,
+/// the display clock has passed the latest ([`Seen::edited`]); a host
+/// parameter that moved ([`Seen::moved`]); and sound after a still stretch. A still window runs no pass until something asks,
 /// so without this an edit over a still picture was drawn at its next idle
 /// poll. Sound asks only as it starts: once a picture shows it moving, the
 /// window draws as it moves until it stops, and a picture that does not show
@@ -378,7 +390,8 @@ fn step(
         // run to whenever a frame next noticed, and a Bitwig audio export,
         // which leaves the window shut, would render nothing.
         let display = shared.clock.display_now(now);
-        let edited = seen.edited(shared.ui.picture.runtime.tracker.edits(), display);
+        let edited = seen.edited(shared.ui.picture.runtime.tracker.edits(), display)
+            | learn.is_some_and(|params| seen.moved(params));
         shared.ui.picture.runtime.advance_time(display, &shared.ui.picture.appearance);
         shared.poll_take_end();
         (taken, edited, learned)
@@ -388,7 +401,8 @@ fn step(
         params.settings.changed();
     }
     // Asked once the lock is let go, so the pass it runs does not wait on it.
-    if edited {
+    // A tuning Learn changed draws as a host parameter's move does.
+    if edited || learned {
         editor_state.request_pass();
     }
     if let Some(taken) = &taken {
@@ -867,6 +881,30 @@ mod tests {
         h.push_audio(20_000);
         h.step();
         assert!(!asked(&h), "sound that goes on");
+    }
+
+    /// A host parameter that moves, automation of the camera or the Lattice
+    /// Map under a held chord, asks the window for a pass at the next step,
+    /// since the picture draws it but no picture reports it as motion; one
+    /// that stays put asks nothing.
+    #[test]
+    fn a_step_asks_the_window_to_draw_a_host_parameter_that_moved() {
+        let mut h = harness();
+        let params = Arc::new(crate::HarmonigraphParams::default());
+        h.learn = Some(params.clone());
+        h.editor_state.set_open(true);
+        let asked = |h: &Harness| h.editor_state.pass_request.take();
+        h.step();
+        asked(&h);
+        h.step();
+        assert!(!asked(&h), "parameters that stayed put asked");
+        for (row, host) in [(crate::Row::CameraYaw, 0.3), (crate::Row::LatticeMap, 2.0)] {
+            params.table.set_host(row.index(), host);
+            h.step();
+            assert!(asked(&h), "{row:?} moved and waited for the idle poll");
+            h.step();
+            assert!(!asked(&h), "{row:?} asked again without moving");
+        }
     }
 
     /// An edit dated ahead of the display clock, as a Hub's are by the Tuning
