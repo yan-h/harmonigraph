@@ -81,6 +81,9 @@ fn a_scrolling_roll_asks_for_its_next_pixel_and_a_fading_lead_for_every_frame() 
     // Inside the Lead's 0.25 s release.
     let (fading, _) = roll_frame(&note, 0.2, 10.0, 4.0);
     assert_eq!(fading, Some(0.0), "a fading Lead was paced as a scroll");
+    // Released at the very frame drawn, its fade not yet begun.
+    let (released, _) = roll_frame(&[(72, 0.0, 5.0)], 5.0, 10.0, 4.0);
+    assert_eq!(released, Some(0.0), "a Lead released this instant was paced as a scroll");
 }
 
 /// A held note's Lead stands still at the now-line, its ribbon only scrolling

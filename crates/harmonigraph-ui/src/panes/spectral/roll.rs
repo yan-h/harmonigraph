@@ -806,11 +806,12 @@ fn source_instances(
         // Painted in its ribbon's order among the tongues, as the ribbon is
         // among the history, so two overlapping held notes keep one order
         // across the line.
-        // Only a Lead its release is fading changes on its own: a held one
-        // stands still at the line, and what changes it next is an edit.
+        // Only a released Lead changes on its own, its release fading it from
+        // the off on, the off's own frame included: a held one stands still at
+        // the line, and what changes it next is an edit.
         if let Some(tongue) = tongue {
             tongues.push(tongue);
-            motion.fading |= standing < 1.0;
+            motion.fading |= note.end.is_some();
         }
         let dense = ribbon.dense();
         let first_instance = instances.len();
