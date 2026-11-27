@@ -527,7 +527,7 @@ pub fn draw_panes(
 /// Console line, Tape's silent strip, the tuning rows (Yan, #1994 HW1). The
 /// one owner of that list. Nothing that moves rides it: each picture asks for
 /// its own frames as it moves ([`Animating::hold_for`]; a pace at or past
-/// this moves under a device pixel between the poll's frames), and the
+/// this moves at most one device pixel between the poll's frames), and the
 /// plugin's input worker asks for what it sees change (`background::step`).
 const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 

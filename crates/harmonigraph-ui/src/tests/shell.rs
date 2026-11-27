@@ -355,6 +355,38 @@ fn a_lit_lattices_atmosphere_asks_for_its_own_frames() {
     assert_eq!(asked(&dark, true, &[Pane::Lattice]), None, "the glow off");
 }
 
+/// A note let go inside its attack, under another voice of its key that
+/// already lights the node in full, has the lattice ask for the frame its
+/// deferred off is due at, though nothing on the node moves before it.
+#[test]
+fn a_deferred_off_asks_for_the_frame_it_is_due_at() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    let mut state = fresh();
+    let view = &mut state.picture.appearance.view;
+    view.fade_time = 0.5;
+    view.mark_delay = 0.0;
+    view.glow_strength = 0.0;
+    let ctx = super::probe::themed();
+    let tracker = &mut state.picture.runtime.tracker;
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+    for k in 0..=20 {
+        draw_panes(&ctx, &mut state, f64::from(k) * 0.05, &[Pane::Lattice]);
+    }
+    let tracker = &mut state.picture.runtime.tracker;
+    tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 1, 60, 1.0));
+    tracker.handle_event(NoteEvent::off(1.05, SourceId::DIRECT, 1, 60));
+    draw_panes(&ctx, &mut state, 1.05, &[Pane::Lattice]);
+    // Inside the idle poll of it: an ask further out is the poll's to draw,
+    // whose frame then asks for what is left.
+    draw_panes(&ctx, &mut state, 1.35, &[Pane::Lattice]);
+    let due = Animating::of(&state).after(Reason::Lattice);
+    assert!(
+        due.is_some_and(|after| (after - 0.15).abs() < 1e-9),
+        "the off due at 1.5 s asked for {due:?} at 1.35 s"
+    );
+}
+
 /// A released note keeps the loop awake for its whole departure, the
 /// fade-out delay and then the stagger's sweep, and not past it. The span is
 /// written out here as numbers, so a departure that loses either term is
