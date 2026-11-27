@@ -135,8 +135,9 @@ const SEAM_SEGMENT_PT: f32 = 6.0;
 /// pane the extent fills the turn it sits on — and what it keeps is the half of
 /// the argument that cannot be given up: the drawn body, which sits inside the
 /// extent ([`DOT_CLEARANCE_PT`]), does not cross into the turns either side to
-/// say which turn it is on. Without it the floor's body, 1.75 points across
-/// whatever the track, would cross them below a pane of about 115 points, and
+/// say which turn it is on. Without it the floor's body, 1.75 points in radius
+/// (3.5 across) whatever the track, would cross them below a pane of about 115
+/// points, where half the track falls under 1.75, and
 /// the smallest pane is 104. `a_notes_dot_sits_inside_its_own_turn` is what
 /// holds this.
 const DOT: (f32, f32) = (0.7, 3.0);
@@ -1399,7 +1400,7 @@ mod tests {
             let fill = s.dot();
             assert!(
                 fill <= s.half(),
-                "a {side}pt pane draws a dot {} across on a {} track",
+                "a {side}pt pane draws a dot {} across on a track {} across",
                 2.0 * fill,
                 s.dr,
             );
