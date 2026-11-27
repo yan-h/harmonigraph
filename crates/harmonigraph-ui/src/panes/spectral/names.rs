@@ -554,12 +554,17 @@ fn anchor_edge(note: &RollNote, time: &TimeAxis, anchor: NameAnchor) -> Edge {
 /// about the lattice's origin whatever the camera is doing, so panning and
 /// zooming never respell it, and the walk is over a thousand positions rather
 /// than the twenty thousand a drawn window can reach — per played pitch, per
-/// frame. And a name agrees with the picture: where the lattice is drawing a
-/// node the reach cannot spell, a pitch more than 12 fifths or 20 thirds from
-/// the origin in a just tuning, that node names the note, instead of the
+/// frame. And where the lattice is drawing a node for a pitch no node of the
+/// reach is within tolerance of, that node names the note, instead of the
 /// pitch dropping to a spelling the lattice is visibly contradicting one pane
-/// away. Such a pitch is the one a pan can still respell: it keeps the
-/// picture's name only while the picture draws its node.
+/// away; such a pitch keeps the picture's name only while the picture draws
+/// its node.
+///
+/// A just pitch more than 12 fifths or 20 thirds from the origin is seldom
+/// that pitch: the reach is dense enough that about 70% of the octave lies
+/// within the half-cent tolerance of one of its nodes, so such a pitch is
+/// usually named by that nearby coincidence rather than by its own node,
+/// even on screen (PR #1996).
 ///
 /// The equal-tempered fallback is what is left when NEITHER window has a node
 /// — still a [`NoteName`], so it draws identically and there is one rendering
