@@ -955,8 +955,7 @@ impl Plugin for Harmonigraph {
     // Main audio passes through, untouched unless the tape is auditioning
     // with the transport stopped (see `tape`). The selected input is tapped for
     // the GUI's spectrum analyzer — INTERLEAVED, channel by channel, not as a
-    // mixdown (see `play`, and `interleaved_reservation` for what that
-    // costs). MIDI goes out through the Hub, which delays it by D and states
+    // mixdown (see `play`). MIDI goes out through the Hub, which delays it by D and states
     // each note's tuning (see `tuning`).
     const PORTS: Ports =
         Ports { main_input: 2, main_output: 2, aux_inputs: &[(2, "Visualization Input")] };

@@ -93,6 +93,5 @@ pub mod transport;
 #[doc(hidden)]
 pub use recorder::testing;
 pub use recorder::{
-    channel, default_renderer_path, header_for, interleaved_reservation, take_dir, Control, Entry,
-    Recorder, TAKE_CHANNELS,
+    channel, default_renderer_path, header_for, take_dir, Control, Entry, Recorder, TAKE_CHANNELS,
 };

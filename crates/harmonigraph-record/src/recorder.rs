@@ -53,7 +53,8 @@ const AUDIO_RING_CAPACITY: usize = 1 << 20;
 /// not have, and nothing downstream checks.
 pub const TAKE_CHANNELS: usize = 2;
 
-/// How much of a block fits in an interleaved audio ring, in SAMPLES, rounded
+/// How much of a block of `samples` interleaved [`TAKE_CHANNELS`] samples
+/// fits in the take's audio ring with `free_slots` free, in SAMPLES, rounded
 /// DOWN to whole frames.
 ///
 /// The rounding is the one thing here that must not be wrong. A tail dropped
@@ -62,21 +63,9 @@ pub const TAKE_CHANNELS: usize = 2;
 /// silently, because nothing downstream can tell a phase slip from the signal.
 /// Bounding by free space is what makes a near-full ring (a stalled or closed
 /// consumer) drop the block's tail rather than stall the audio thread.
-///
-/// Shared by [`Recorder::audio`] and the plugin's own spectrum ring, which is
-/// why it is public: one guard, so the two cannot disagree about what a whole
-/// frame is.
-///
-/// The zero-channel arm is not a live path — both callers gate on a positive
-/// channel count. It is handled so the function carries no precondition a
-/// caller can violate, which is what makes it safe to reuse; it does not move
-/// the division off the audio thread, and does not pretend to.
-pub fn interleaved_reservation(free_slots: usize, samples: usize, channels: usize) -> usize {
-    if channels == 0 {
-        return 0;
-    }
-    let free = free_slots / channels * channels;
-    (samples * channels).min(free)
+fn whole_frames_reserved(free_slots: usize, samples: usize) -> usize {
+    let whole = |count: usize| count / TAKE_CHANNELS * TAKE_CHANNELS;
+    whole(samples).min(whole(free_slots))
 }
 
 /// One recorded thing, in a form the audio thread can push without
@@ -495,10 +484,9 @@ impl Recorder {
     /// second. A short reservation means the ring filled, which is a
     /// hole in the recording, so it is counted like any dropped record.
     ///
-    /// Rounded down to whole FRAMES, for the reason `interleaved_reservation`
-    /// gives — and it matters more here than on the spectrum's ring. This one
-    /// lands in a WAV, so half a frame swaps that file's channels from there
-    /// on, permanently, and the writer cannot notice: it derives its frame
+    /// Rounded down to whole FRAMES, for the reason `whole_frames_reserved`
+    /// gives: this ring lands in a WAV, so half a frame swaps that file's
+    /// channels from there on, permanently, and the writer cannot notice: it derives its frame
     /// count by dividing the bytes it was handed. The callers happen to keep
     /// the free count even today (even capacity, even `samples`, and a drain
     /// that commits everything), but nothing declares that, and an odd
@@ -520,8 +508,7 @@ impl Recorder {
             self.fence.fail();
             return;
         }
-        let room =
-            interleaved_reservation(self.audio.slots(), samples / TAKE_CHANNELS, TAKE_CHANNELS);
+        let room = whole_frames_reserved(self.audio.slots(), samples);
         if room < samples {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             self.fence.fail();

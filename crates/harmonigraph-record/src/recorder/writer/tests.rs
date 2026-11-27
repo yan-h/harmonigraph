@@ -180,7 +180,7 @@ impl Bench {
 /// This pins the BLOCK-size half of the reservation, which is the half that
 /// does the work: the ring here is only ever written in whole frames, so
 /// its free count cannot go odd on its own. The free-space half is proved
-/// exhaustively over on `interleaved_reservation`, since driving this ring
+/// exhaustively over on `whole_frames_reserved`, since driving this ring
 /// to an odd occupancy would mean reaching past the writer thread.
 #[test]
 fn recorded_audio_reserves_whole_frames_and_counts_the_dropped_tail() {
@@ -213,23 +213,16 @@ fn recorded_audio_reserves_whole_frames_and_counts_the_dropped_tail() {
 /// the signal itself.
 #[test]
 fn a_reservation_is_always_a_whole_number_of_frames() {
-    for channels in 1..=8usize {
-        for free_slots in 0..96usize {
-            for samples in 0..24usize {
-                let want = interleaved_reservation(free_slots, samples, channels);
-                assert_eq!(
-                    want % channels,
-                    0,
-                    "{want} samples is a partial frame at {channels} channels \
-                         (free_slots={free_slots}, samples={samples})"
-                );
-                assert!(want <= free_slots, "reserved {want} of {free_slots} free slots");
-                assert!(
-                    want <= samples * channels,
-                    "reserved {want}, more than the {} this block holds",
-                    samples * channels
-                );
-            }
+    for free_slots in 0..96usize {
+        for samples in 0..48usize {
+            let want = whole_frames_reserved(free_slots, samples);
+            assert_eq!(
+                want % TAKE_CHANNELS,
+                0,
+                "{want} samples is a partial frame (free_slots={free_slots}, samples={samples})"
+            );
+            assert!(want <= free_slots, "reserved {want} of {free_slots} free slots");
+            assert!(want <= samples, "reserved {want}, more than the {samples} this block holds");
         }
     }
 }
@@ -239,27 +232,17 @@ fn a_reservation_is_always_a_whole_number_of_frames() {
 /// nearly-full one takes whole frames and drops the tail.
 #[test]
 fn a_full_ring_drops_the_block_rather_than_stalling() {
-    // Room to spare: the whole block, interleaved.
-    assert_eq!(interleaved_reservation(4096, 512, 2), 1024);
+    // Room to spare: the whole block of 512 stereo frames.
+    assert_eq!(whole_frames_reserved(4096, 1024), 1024);
     // Exactly enough.
-    assert_eq!(interleaved_reservation(1024, 512, 2), 1024);
+    assert_eq!(whole_frames_reserved(1024, 1024), 1024);
     // Full: nothing, and the caller skips the write entirely.
-    assert_eq!(interleaved_reservation(0, 512, 2), 0);
+    assert_eq!(whole_frames_reserved(0, 1024), 0);
     // Nearly full, with the free space a PARTIAL frame: round down, so the
     // tail is dropped on a frame boundary rather than mid-frame.
-    assert_eq!(interleaved_reservation(7, 512, 2), 6);
-    assert_eq!(interleaved_reservation(7, 512, 4), 4);
+    assert_eq!(whole_frames_reserved(7, 1024), 6);
     // Less free space than a single frame: nothing at all.
-    assert_eq!(interleaved_reservation(3, 512, 4), 0);
-}
-
-/// Both callers gate on a positive channel count, so no live path reaches
-/// this. It is pinned because it is what lets the function be called
-/// without checking first — a total function is reusable, and reuse is how
-/// `Recorder::audio` came to share the guard.
-#[test]
-fn a_zero_channel_bus_reserves_nothing() {
-    assert_eq!(interleaved_reservation(4096, 512, 0), 0);
+    assert_eq!(whole_frames_reserved(1, 1024), 0);
 }
 
 /// Loop end, from the GUI's setting to the end it reads back: the setting
