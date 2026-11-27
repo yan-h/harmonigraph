@@ -554,10 +554,12 @@ impl Default for Instruments {
 /// How often the editor draws, as a fraction of the display's refresh rate.
 ///
 /// A fraction rather than a number of frames per second because the plugin's
-/// frames come from the display, one per refresh, and can only land on one.
-/// macOS takes a preferred rate as a hint and rounds it to a divisor of the
-/// panel's rate: measured on a 144 Hz panel, 120 ran at 144, and 90 and 60 at
-/// 72 (#1551). A fraction is the rate the editor will actually run at.
+/// frames come from the display, one per refresh, and can only land on one:
+/// the window draws on every Nth refresh, paced on the display link's
+/// timestamps (`set_frame_divisor`, #1553). A preferred rate, which macOS takes
+/// as a hint, rounded to a divisor of the panel's rate anyway: measured on a
+/// 144 Hz panel, 120 ran at 144, and 90 and 60 at 72 (#1551). A fraction is the
+/// rate the editor will actually run at.
 ///
 /// Read by the plugin to pace its window, never by any drawing code: the
 /// offline renderer steps its own clock and never reaches the editor, so a

@@ -239,18 +239,17 @@ pub(crate) fn gesture_open(ctx: &egui::Context) -> bool {
 /// spending what a fold leaves the window needing — is [`shell`], which both
 /// shells call rather than keep in step by hand.
 ///
-/// The one step still owed by the caller: before calling this, feed the
-/// frame's MIDI into `state.picture.runtime.tracker` and its audio samples into
-/// `state.picture.runtime.spectrum`. `now` is seconds on the shell's clock, and must be the
-/// SAME clock that timestamped those `NoteEvent`s — envelopes are derived from
-/// the difference.
+/// The one step still owed by the shell: the notes and audio it has heard
+/// are in `state.picture.runtime.tracker` and `state.picture.runtime.spectrum`
+/// before this runs. The plugin's input worker drains its rings into them
+/// between frames; the standalone harness feeds its MIDI and synthesized audio
+/// at the top of each frame. `now` is seconds on the shell's clock, and must be
+/// the SAME clock that timestamped those `NoteEvent`s — envelopes are derived
+/// from the difference.
 ///
-/// That step cannot move into [`shell::Frame`] with the others, and the reason
-/// is a borrow rather than taste: a shell's rings and the parameters it draws
-/// from live in ONE struct — the plugin's `PluginParamBackend` reads a field of
-/// the same `EditorShared` its drain writes through — so a helper that ran the
-/// feed while holding the state would be holding the backend's own borrow.
-/// Both shells therefore feed first and hand over what they fed.
+/// That feed cannot move into [`shell::Frame`] with the others: the plugin's
+/// is not a frame's at all, and the standalone's reads the harness's own MIDI
+/// source and synth, which [`shell::Frame`] has no part of.
 /// `build_tag` is the identity stamped into that shell's binary; it reaches
 /// only the interactive performance overlay.
 pub fn root_ui(

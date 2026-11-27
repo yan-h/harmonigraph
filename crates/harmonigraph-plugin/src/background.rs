@@ -54,11 +54,12 @@
 //! A frame runs only while the editor can be seen, so an open editor that is
 //! covered, minimized or on another Space runs none; were these a frame's
 //! alone, the released voices would pile up and an OnTransportStop take would
-//! record on past its stop. Frames still make both calls too, which is
-//! harmless: both run under the editor lock, ageing on one monotone clock
-//! and removing only voices whose fade is over, and the take's debounce
-//! counts seconds. This completion poll is separate from the GUI's recording
-//! commands; `a_take_ends_itself_with_no_frame_running` covers it.
+//! record on past its stop. Frames age the picture too, in `begin_frame`,
+//! which is harmless: both run under the editor lock, ageing on one monotone
+//! clock and removing only voices whose fade is over. The take's end is polled
+//! here alone, its debounce counted in seconds. This completion poll is
+//! separate from the GUI's recording commands;
+//! `a_take_ends_itself_with_no_frame_running` covers it.
 //!
 //! **The project's own settings arrive here too**, for the same reason: this
 //! is the only thing running before the editor's window exists. A host
@@ -144,8 +145,9 @@ pub(crate) struct InputWorker {
     #[cfg(test)]
     rounds: Arc<AtomicU64>,
     /// `None` when the thread could not be spawned. Nothing else reads the
-    /// rings, ages the picture or ends a take, so the editor then shows no
-    /// input until the plug-in is reloaded: a case outside the use, with a
+    /// rings or ends a take, and only a frame, which runs while the editor can
+    /// be seen, ages the picture, so the editor then shows no input until the
+    /// plug-in is reloaded: a case outside the use, with a
     /// Console line rather than a fallback that would run the analysis on
     /// the host's main thread. The thread owns the input.
     thread: Option<JoinHandle<Ended>>,

@@ -255,8 +255,8 @@ impl LiveInput {
     /// The locked half of a step: the notes into the tracker and their
     /// marks into `marks` ([`Self::drain_into_tracker`]), then the audio out
     /// of its ring, for [`Taken::analyze`] then [`Taken::give`].
-    /// Input feeding does not prune: its callers age the picture after it,
-    /// the input worker in the same hold and a frame in `begin_frame`.
+    /// Input feeding does not prune: the input worker ages the picture after
+    /// it in the same hold, as a frame does in `begin_frame`.
     pub(crate) fn take(
         &mut self,
         clock: &mut DisplayClock,

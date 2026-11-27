@@ -238,8 +238,9 @@ impl Editor for LatticeEditor {
 
     // Hosts with proper resize support (Bitwig at least) provide a native
     // window border on this hint. An in-window drag-corner fallback for
-    // hosts that ignore it existed until mid-2026 — recover it from git
-    // history (`resize_corner` in this file) if such a host turns up.
+    // hosts that ignore it existed until July 2026 — recover it from git
+    // history (`resize_corner`, in `midi_lattice_3d/src/editor.rs` until
+    // 28ce5912) if such a host turns up.
     fn resizable(&self) -> bool {
         true
     }
