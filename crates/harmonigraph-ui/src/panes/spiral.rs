@@ -545,12 +545,12 @@ pub(crate) fn spiral_pane(
     }
     // The discs and their bloom, through the roll's renderer, whenever there
     // are dots: a dot is the same note a ribbon is, drawn somewhere else, so
-    // it lights through the same chain at the Spiral's own strength. Its own
-    // cut is off, the dots' being the one above. The chain stands for as long
+    // it lights through the same chain at the same strength, Note bloom. Its
+    // own cut is off, the dots' being the one above. The chain stands for as long
     // as the renderer does, so a silent frame has nothing to ask of it, and a
     // strength of 0 is the callback's to decline without allocating.
     if !marks.is_empty() {
-        let bloom = harmonigraph_render::bloom_strength(state.appearance.view.spiral_bloom);
+        let bloom = harmonigraph_render::bloom_strength(state.appearance.view.note_bloom);
         painter.add(harmonigraph_render::dots_paint_callback(
             rect,
             marks,
@@ -1535,13 +1535,13 @@ mod tests {
     /// callback, which carries their shadow too, and the others are all the same
     /// shape from here.
     #[test]
-    fn the_halo_and_surround_are_asked_for_on_every_frame_with_a_dot() {
+    fn the_dots_and_their_surround_are_asked_for_on_every_frame_with_a_dot() {
         // `visible` false sounds the note with its dot faded to nothing, which
         // keeps its name (the rim name follows the note's envelope, not the
         // dot's opacity) and removes only what the dot itself asks for.
         let callbacks = |bloom: f32, sounding: bool, visible: bool| {
             let mut state = fresh();
-            state.appearance.view.spiral_bloom = bloom;
+            state.appearance.view.note_bloom = bloom;
             if sounding {
                 state.runtime.tracker.handle_event(NoteEvent::on(
                     0.0,

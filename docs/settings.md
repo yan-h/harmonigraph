@@ -113,7 +113,7 @@ and a saved setting is ignored.
 Changing either slider changes both pictures.
 It runs from 0 (off) to 2×,
 with 1× as the reference halo.
-The Spiral keeps its separate **Spiral bloom** control.
+It lights the Spiral's dots as well.
 Bloom has no mapping of its own;
 each note's bloom follows its Opacity.
 

@@ -7,7 +7,7 @@
 //! colors, and how a note's playing draws it) are the exception, shared by
 //! every picture, and keep a tab of their own.
 
-use super::lighting::analyzer_lighting;
+use super::lighting::analyzer_shadows;
 use super::plus::plus_pane;
 use super::spectral::{analysis_section, ribbons_section, spectrogram_section, view_section};
 use super::{labels, lattice_atmosphere, lighting, nodes, section, view};
@@ -44,8 +44,8 @@ pub(super) fn lattice_settings_pane(
 
 /// The Analyzer page, most dialled first: the spectrogram's look and the MIDI
 /// ribbons over it, then the analyzer's layout and its two axes, the audio
-/// analysis every audio view shares, and last the Spiral's bloom and the
-/// shadows the Analyzer and Spiral cast. Sorted as the Lattice page is.
+/// analysis every audio view shares, and last the shadows the Analyzer and
+/// Spiral cast. Sorted as the Lattice page is.
 pub(super) fn analyzer_settings_pane(
     ui: &mut egui::Ui,
     state: &mut PictureState,
@@ -61,5 +61,5 @@ pub(super) fn analyzer_settings_pane(
     super::spectral::settings::harmony_section(ui, &mut interaction.prefs.harmony);
     view_section(ui, state, &mut interaction.dock);
     analysis_section(ui, &mut state.appearance.spectrum, params);
-    analyzer_lighting(ui, &mut state.appearance);
+    analyzer_shadows(ui, &mut state.appearance);
 }
