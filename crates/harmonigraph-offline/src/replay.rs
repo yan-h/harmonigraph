@@ -193,7 +193,6 @@ mod tests {
             params,
             configurations: Vec::new(),
             truncated: false,
-            incomplete: None,
             ..Default::default()
         }
     }
@@ -365,7 +364,7 @@ mod tests {
         ];
         let encoded = one_run(events);
         let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
-        assert!(take.incomplete.is_some());
+        assert!(take.gap().is_some());
         let roll_snapshot = |roll: &harmonigraph_core::NoteRoll| {
             roll.notes()
                 .map(|n| {

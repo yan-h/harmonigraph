@@ -302,7 +302,7 @@ fn a_paused_take_reads_whole_with_every_note_drawn() {
         writer.drain(&mut capture);
         assert!(!writer.failed(), "{name}");
         let take = harmonigraph_take::Take::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert!(take.incomplete.is_none(), "{name}: nothing was lost");
+        assert!(!take.failed && take.gap().is_none(), "{name}: nothing was lost");
         let soundtrack = take.audio_start.unwrap();
         for &(key, count, released) in expected {
             let notes = drawn(&take, key);
@@ -415,7 +415,7 @@ fn a_host_reset_right_after_a_loop_wrap_keeps_the_take_whole() {
     assert!(!writer.failed());
     assert!(writer.finished.is_some());
     let take = harmonigraph_take::Take::read(&path).unwrap();
-    assert!(take.incomplete.is_none());
+    assert!(!take.failed && take.gap().is_none());
     for key in [60, 64] {
         let notes = drawn(&take, key);
         assert!(notes.len() == 1 && notes[0].1.is_some(), "{key}: {notes:?}");
@@ -641,7 +641,7 @@ fn a_playhead_moved_back_before_the_take_rolls_lets_stop_finish_one_file() {
     assert!(!writer.failed());
     assert!(writer.finished.is_some(), "Stop must not wait on a run that never rolled");
     let take = harmonigraph_take::Take::read(writer.finished.as_ref().unwrap()).unwrap();
-    assert!(take.incomplete.is_none());
+    assert!(!take.failed && take.gap().is_none());
     drop(writer);
     device.finish_notes(256, &[(10, 60)]);
     drop(device);
@@ -864,7 +864,7 @@ fn destruction_closes_a_stopped_take_without_another_process_callback() {
             .collect();
         assert_eq!(paths.len(), 1);
         let take = harmonigraph_take::Take::read(&paths[0]).unwrap();
-        assert_eq!(take.incomplete.is_none(), complete);
+        assert_eq!(!take.failed && take.gap().is_none(), complete);
         assert_eq!(take.audio_start, Some(5.0));
         assert_eq!(take.configurations.len(), 1);
         let wav = std::fs::read(paths[0].with_extension("wav")).unwrap();
@@ -984,7 +984,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         };
         assert!(!probe.failed());
         let take = harmonigraph_take::Take::read(&path).unwrap();
-        assert!(take.incomplete.is_none());
+        assert!(!take.failed && take.gap().is_none());
         assert_eq!(take.audio_start, Some(5.0));
         assert_eq!(take.configurations.len(), 1);
         let expected: Vec<u8> = left
@@ -1451,6 +1451,6 @@ fn a_rate_change_after_a_take_recorded_audio_fails_it() {
         across.status,
     );
     assert!(!across.sealed, "a failed take is never handed to the renderer");
-    assert!(across.take.incomplete.is_some(), "the take file is marked incomplete");
+    assert!(across.take.failed, "the take file is marked failed");
     assert_eq!((across.wav_rate, across.frames), (44_100, 64 * before as u32));
 }

@@ -325,14 +325,9 @@ pub struct Take {
     /// and usable; callers should say so rather than pretend the take is
     /// whole.
     pub truncated: bool,
-    /// The hole in the note history the take carries, if it has one: the
-    /// FIRST the file names, whether as a `Gap` that overlaps one of its runs
-    /// or an `Incomplete` marker.
-    ///
-    /// First rather than last because a later gap adds nothing to the warning:
-    /// the reader took the last line once, so a take with two gaps exported
-    /// with a warning naming a different gap from its own marker (#895).
-    pub incomplete: Option<IncompleteRecord>,
+    /// The recording failed: the file holds an `Incomplete` marker. Whatever
+    /// note history it also lost is [`Take::gap`].
+    pub failed: bool,
     /// Song time of the first sample of the WAV the header names.
     ///
     /// Arming mid-song does not start at zero, and without it the spectrum
@@ -497,6 +492,15 @@ impl Take {
             .reduce(f64::min)
     }
 
+    /// The first hole in the note history the take carries: the earliest
+    /// `Gap` that overlaps one of its runs, the only ones the reader keeps.
+    pub fn gap(&self) -> Option<&canonical::GapRecord> {
+        self.events.iter().find_map(|event| match event {
+            CanonicalRecord::Gap(gap) => Some(gap),
+            _ => None,
+        })
+    }
+
     /// Derived note-only inspection. Replay consumes `events`, including every
     /// baseline/gap in its original equal-time order.
     pub fn notes(&self) -> impl Iterator<Item = NoteRecord> + '_ {
@@ -549,8 +553,9 @@ impl Writer {
         self.write(&Record::Canonical(record))
     }
 
-    pub fn incomplete(&mut self, record: IncompleteRecord) -> std::io::Result<()> {
-        self.write(&Record::Incomplete(record))
+    /// Mark the take failed.
+    pub fn incomplete(&mut self) -> std::io::Result<()> {
+        self.write(&Record::Incomplete(IncompleteRecord {}))
     }
 
     pub fn configuration(&mut self, config: ConfigurationRecord) -> std::io::Result<()> {

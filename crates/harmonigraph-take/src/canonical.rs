@@ -207,13 +207,6 @@ impl BaselineRecord {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GapReasonRecord {
-    #[default]
-    PublicationFull,
-    ProducerLost,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GapRecord {
@@ -288,15 +281,12 @@ impl CanonicalRecord {
     }
 }
 
-/// An incomplete recording is different from a malformed trailing line. It
-/// remains durable even when no ordinary publication slot ever becomes free.
+/// The take failed: it lost records, lost input, or the plugin was removed
+/// mid-take. A failed recording is different from a malformed trailing line.
+/// It remains durable even when no ordinary publication slot ever becomes
+/// free. It carries nothing; an older marker's range and reason are skipped.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct IncompleteRecord {
-    pub first_publication: u64,
-    pub last_publication: u64,
-    pub reason: GapReasonRecord,
-}
+pub struct IncompleteRecord {}
 
 #[cfg(test)]
 mod tests {

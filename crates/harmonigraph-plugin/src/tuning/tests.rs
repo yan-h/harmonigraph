@@ -1791,7 +1791,7 @@ fn a_paused_take_reads_whole_with_a_tunes_records_sounding_in_the_pause() {
         writer.drain(&mut capture);
         assert!(!writer.failed(), "{name}");
         let take = harmonigraph_take::Take::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert!(take.incomplete.is_none(), "{name}: nothing was lost");
+        assert!(!take.failed && take.gap().is_none(), "{name}: nothing was lost");
         let soundtrack = take.audio_start.unwrap();
         for &(key, count, released) in expected {
             let notes = drawn(&take, key);

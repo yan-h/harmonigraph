@@ -298,7 +298,6 @@ impl Shot {
             params: Vec::new(),
             configurations: Vec::new(),
             truncated: false,
-            incomplete: None,
             ..Default::default()
         }
     }
@@ -519,7 +518,6 @@ fn spectral_shadows_draw_the_frame_on_record() {
         params: Vec::new(),
         configurations: Vec::new(),
         truncated: false,
-        incomplete: None,
         ..Default::default()
     };
     check_take("spectrogram-spectral-shadows", shot, take);

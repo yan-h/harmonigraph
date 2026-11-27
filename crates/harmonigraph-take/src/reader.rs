@@ -10,7 +10,7 @@
 use harmonigraph_core::canonical::NoteDelta;
 use harmonigraph_core::NoteEvent;
 
-use crate::{CanonicalRecord, Header, IncompleteRecord, ReadError, Record, Take};
+use crate::{CanonicalRecord, Header, ReadError, Record, Take};
 
 /// One run, as the file states it: `[start, end)` on the presentation clock,
 /// and the offset that moves what it holds into song time.
@@ -60,9 +60,7 @@ pub(crate) fn assemble(
     let mut events = Vec::new();
     for (line, record) in records {
         match record {
-            Record::Incomplete(marker) => {
-                take.incomplete.get_or_insert(marker);
-            }
+            Record::Incomplete(_) => take.failed = true,
             Record::Param(mut param) => {
                 if let Some(run) = holding(&runs, param.t) {
                     param.t += run.offset;
@@ -83,11 +81,6 @@ pub(crate) fn assemble(
                 else {
                     continue;
                 };
-                take.incomplete.get_or_insert(IncompleteRecord {
-                    first_publication: gap.first,
-                    last_publication: gap.last,
-                    reason: crate::canonical::GapReasonRecord::PublicationFull,
-                });
                 gap.t = gap.t.max(run.start) + run.offset;
                 gap.through = (gap.through.min(run.end) + run.offset).max(gap.t);
                 events.push((CanonicalRecord::Gap(gap), line));

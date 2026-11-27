@@ -451,20 +451,15 @@ impl Recording {
 
     /// Write the take's failure marker, once.
     fn mark_incomplete(&mut self) -> std::io::Result<()> {
-        let record = harmonigraph_take::IncompleteRecord {
-            reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
-            ..Default::default()
-        };
         if self.marked {
             return Ok(());
         }
-        let result =
-            self.writer.incomplete(record).and_then(|_| self.writer.flush()).map_err(|error| {
-                std::io::Error::new(
-                    error.kind(),
-                    format!("cannot write incomplete marker {}: {error}", self.path.display()),
-                )
-            });
+        let result = self.writer.incomplete().and_then(|_| self.writer.flush()).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("cannot write incomplete marker {}: {error}", self.path.display()),
+            )
+        });
         if result.is_ok() {
             self.marked = true;
         }

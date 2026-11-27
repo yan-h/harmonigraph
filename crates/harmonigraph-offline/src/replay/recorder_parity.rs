@@ -95,7 +95,7 @@ fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
 
     let take = Take::read(&path).unwrap();
     assert!(!take.truncated);
-    assert!(take.incomplete.is_none());
+    assert!(!take.failed && take.gap().is_none());
     assert_eq!(take.events.len(), live_events.len());
     let mut replay = Replay::new(take);
     let mut state = PictureState::new(TextureFormat::Bgra8Unorm);
@@ -236,7 +236,7 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     assert_eq!(take.configurations[0].resolved(), configuration);
     let event_times: Vec<_> = take.events.iter().map(|event| event.time()).collect();
     assert_eq!(event_times, [0.125, 0.25, 0.375, 0.5, 0.625, 0.75]);
-    assert!(take.incomplete.is_some(), "the induced publication gap survives disk");
+    assert!(take.gap().is_some(), "the induced publication gap survives disk");
     let mut replay = Replay::new(take);
     let mut state = PictureState::new(TextureFormat::Bgra8Unorm);
     replay.advance_to(&mut state.runtime, 1.0);

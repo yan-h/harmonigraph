@@ -339,7 +339,9 @@ fn build_mismatch(own: &str, plugin: Option<&str>) -> Option<String> {
     ))
 }
 
-/// What is wrong with the take itself, in the order a person should hear it.
+/// What is wrong with the take itself, one line per fact, in the order a
+/// person should hear it: a failed recording, then a hole in its note history,
+/// then a file cut off mid-record (Yan, 2026-11-27).
 ///
 /// A `Vec` of warnings and no `Result`: nothing about how the recording went
 /// refuses a take. Refusing belongs to [`Take::read`](harmonigraph_take::Take::read)
@@ -355,18 +357,24 @@ fn build_mismatch(own: &str, plugin: Option<&str>) -> Option<String> {
 /// invented to fill the hole — no fabricated notes, no guessed durations.
 fn take_warnings(take_path: &str, take: &harmonigraph_take::Take) -> Vec<String> {
     let mut warnings = Vec::new();
-    if let Some(incomplete) = take.incomplete {
+    if take.failed {
         warnings.push(format!(
-            "{WARNING_PREFIX}{take_path}: note history {}..={} is missing ({:?}) — rendering \
+            "{WARNING_PREFIX}{take_path}: the recording failed (lost records, lost input, or \
+             the plugin removed mid-take) — rendering the records that survived."
+        ));
+    }
+    if let Some(gap) = take.gap() {
+        warnings.push(format!(
+            "{WARNING_PREFIX}{take_path}: note history {}..={} is missing — rendering \
              the records that survived, so notes may be missing or drawn short. \
              Nothing is invented to fill the hole.",
-            incomplete.first_publication, incomplete.last_publication, incomplete.reason
+            gap.first, gap.last
         ));
     }
     if take.truncated {
         warnings.push(format!(
-            "{WARNING_PREFIX}{take_path} ends mid-record — the export was interrupted. \
-             Rendering the {} events that survived.",
+            "{WARNING_PREFIX}{take_path} ends mid-record — the recording was cut off \
+             mid-write, as by a crash. Rendering the {} events that survived.",
             take.notes().count()
         ));
     }
@@ -966,9 +974,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
-        let incomplete = take.incomplete.expect("a Gap record marks the take incomplete");
-        assert_eq!((incomplete.first_publication, incomplete.last_publication), (6, 8));
+        let take = Take::parse(std::io::Cursor::new(&encoded)).unwrap();
+        let gap = take.gap().expect("a Gap record is the take's hole");
+        assert_eq!((gap.first, gap.last), (6, 8));
 
         let warnings = take_warnings("take-1.take", &take);
         assert_eq!(warnings.len(), 1, "one warning, and no refusal: {warnings:?}");
@@ -976,8 +984,18 @@ mod tests {
         // warnings by: a format contract between the two binaries.
         assert!(warnings[0].starts_with(WARNING_PREFIX), "{}", warnings[0]);
         assert!(warnings[0].contains("6..=8"), "the lost range is named: {}", warnings[0]);
+        assert!(!warnings[0].contains("PublicationFull"), "{}", warnings[0]);
 
         let played: Vec<u8> = take.notes().map(|n| n.note).collect();
         assert_eq!(played, [60, 64], "the records either side of the hole still render");
+
+        // The same take failed after its gap: each fact on its own line, the
+        // failure first, rather than the gap's line standing for both.
+        let marker = ron::to_string(&Record::Incomplete(Default::default())).unwrap();
+        let failed = Take::parse(std::io::Cursor::new(format!("{encoded}\n{marker}"))).unwrap();
+        let warnings = take_warnings("take-1.take", &failed);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("the recording failed"), "{}", warnings[0]);
+        assert!(warnings[1].contains("6..=8"), "{}", warnings[1]);
     }
 }

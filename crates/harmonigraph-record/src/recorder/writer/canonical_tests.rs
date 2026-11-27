@@ -118,8 +118,9 @@ fn a_lost_publication_is_a_gap_on_the_file() {
     writer.stop();
     writer.drain(&mut capture);
     let take = harmonigraph_take::Take::read(writer.finished.as_ref().unwrap()).unwrap();
-    let incomplete = take.incomplete.unwrap();
-    assert_eq!((incomplete.first_publication, incomplete.last_publication), (4096, 4096));
+    let gap = take.gap().unwrap();
+    assert_eq!((gap.first, gap.last), (4096, 4096));
+    assert!(!take.failed);
     // Every onset published reached the file. The release that was lost left
     // the key held at the take's end, where the reader releases it (#1803).
     let onsets = take.notes().filter(|n| matches!(n.kind, harmonigraph_take::NoteKind::On { .. }));
@@ -142,7 +143,7 @@ fn a_failed_take_is_marked_and_sealed_unrendered() {
     recorder.run_end(2.0);
     writer.drain(&mut capture);
     assert!(writer.failed());
-    assert!(harmonigraph_take::Take::read(&file).unwrap().incomplete.is_some());
+    assert!(harmonigraph_take::Take::read(&file).unwrap().failed);
     capture.stop();
     writer.stop();
     writer.drain(&mut capture);
@@ -203,7 +204,7 @@ fn the_real_worker_seals_a_stopped_take_and_renders_it() {
     assert_eq!(control.last_take(), file());
     until(|| could_not_run(&control));
     let take = harmonigraph_take::Take::read(file().unwrap()).unwrap();
-    assert!(take.incomplete.is_none());
+    assert!(!take.failed && take.gap().is_none());
     assert_eq!(take.notes().count(), 2);
     drop(recorder);
     drop(control);

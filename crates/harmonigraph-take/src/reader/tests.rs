@@ -121,7 +121,7 @@ fn a_take_holds_its_runs_on_its_audio_and_drops_its_pause() {
     // 64 began in the pause: it starts with the run that restates it.
     let sixty_four = notes_of(&take, 64);
     assert!(sixty_four.len() == 1 && near(sixty_four[0].0, resumed), "{sixty_four:?}");
-    assert!(take.incomplete.is_none());
+    assert!(!take.failed && take.gap().is_none());
 }
 
 /// The take's end is the end of what it observed. A note still held there is
@@ -183,7 +183,9 @@ fn a_record_sounding_into_the_next_run_lands_before_its_snapshot() {
 }
 
 /// A gap warns if it overlaps a run and is drawn inside it; one wholly in a
-/// pause warns nothing. A failure marker always warns.
+/// pause warns nothing. A failure marker always marks the take failed, an
+/// older one with its range and reason too, and a gap ahead of it hides
+/// neither.
 #[test]
 fn a_gap_warns_where_it_overlaps_a_run_and_a_failure_always_does() {
     let runs = [run(0, 2.0), end(128), run(256, 2.0 + 128.0 / RATE)];
@@ -193,20 +195,22 @@ fn a_gap_warns_where_it_overlaps_a_run_and_a_failure_always_does() {
         read(&records).unwrap()
     };
     let paused = read_with(gap(1, 140, 200));
-    assert!(paused.incomplete.is_none());
+    assert!(paused.gap().is_none() && !paused.failed);
     let crossing = read_with(gap(1, 100, 300));
-    assert!(crossing.incomplete.is_some());
+    assert!(crossing.gap().is_some() && !crossing.failed);
     let span = crossing.events.iter().find_map(|e| match e {
         CanonicalRecord::Gap(g) => Some((g.t, g.through)),
         _ => None,
     });
     let (t, through) = span.unwrap();
     assert!((t - song(100, 0, 2.0)).abs() < 1e-9 && (through - song(128, 0, 2.0)).abs() < 1e-9);
-    let failed = read_with(Record::Incomplete(IncompleteRecord {
-        reason: canonical::GapReasonRecord::ProducerLost,
-        ..Default::default()
-    }));
-    assert!(failed.incomplete.is_some());
+    let older = "Incomplete((first_publication:0,last_publication:0,reason:ProducerLost))";
+    let failed = read_with(ron::from_str(older).unwrap());
+    assert!(failed.failed && failed.gap().is_none());
+    let mut both = runs.to_vec();
+    both.extend([gap(1, 100, 300), Record::Incomplete(IncompleteRecord::default())]);
+    let both = read(&both).unwrap();
+    assert!(both.failed && both.gap().is_some(), "the gap first hides no failure");
 }
 
 /// A voice whose onset the take's lane lost is drawn from the snapshot that

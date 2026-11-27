@@ -476,7 +476,6 @@ mod tests {
             params: Vec::new(),
             configurations: Vec::new(),
             truncated: false,
-            incomplete: None,
             ..Default::default()
         }
     }
