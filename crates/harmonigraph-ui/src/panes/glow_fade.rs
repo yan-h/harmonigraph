@@ -154,8 +154,11 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize,
 /// stays, as #1784 kept it. A negative step is not a short one: run through
 /// the exponential it gives a coefficient below zero, which moves the light
 /// away from its target.
+///
+/// A FIRST step has no time behind it either, so it moves nothing: a light it
+/// starts starts dark, as on an export's first frame or a fresh Video preview.
 fn coefficients(now: f64, previous: Option<f64>, attack: f32, release: f32) -> (f32, f32) {
-    let dt = previous.map_or(f64::INFINITY, |at| now - at);
+    let dt = previous.map_or(0.0, |at| now - at);
     let alpha = |seconds: f32| {
         if dt.is_nan() || dt <= 0.0 {
             0.0
@@ -193,13 +196,7 @@ impl GlowFade {
     fn step_drawn(&mut self, scene: &mut Scene, now: f64) -> bool {
         let view = &scene.view;
         let (up, down) = coefficients(now, self.at, view.glow_attack, view.glow_release);
-        let seed = if view.glow_attack <= 0.0 {
-            1.0
-        } else if self.at.is_none() {
-            0.0
-        } else {
-            up
-        };
+        let seed = if view.glow_attack <= 0.0 { 1.0 } else { up };
         scene.glow_clock = Some(now);
         self.at = Some(now);
         self.frame += 1;
@@ -967,9 +964,13 @@ mod tests {
     #[test]
     fn a_first_step_starts_a_held_light_dark() {
         let mut state = lit(1.0, 0.5);
+        // A band that draws, so the note's light shines on a drawn layer
+        // whatever the fresh look's widths are.
+        state.appearance.view.band_width = 0.2;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
         let mut scene = scene_at(&state, 0.0);
+        assert!(scene.outer_outer > scene.outer_inner, "the fixture's band draws nothing");
         fade.step_drawn(&mut scene, 0.0);
         assert!(fade.owns(LatticePos::ORIGIN), "the held note was given no light");
         assert_eq!(node_at(&scene, LatticePos::ORIGIN).glow.level, 0.0, "the light arrived lit");
