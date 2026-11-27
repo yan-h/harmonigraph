@@ -36,8 +36,8 @@ const FINISHING_PREVIOUS: &str = "finishing the previous take…";
 /// What the status line says of a failed take whose cause carries no message:
 /// one the audio thread found (a full ring, a refused publication into an
 /// armed take, lost input).
-pub(crate) const CONFIGURATION_FAILURE: &str =
-    "recording incomplete: configuration/audio ownership failed; no render started";
+pub(crate) const AUDIO_THREAD_FAILURE: &str = "recording incomplete: the take lost records \
+     (a full ring, a refused note or lost input); no render started";
 
 /// Capacity of the audio ring, in interleaved samples. Generous on
 /// purpose: during an offline export audio arrives many times faster than
