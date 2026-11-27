@@ -103,11 +103,10 @@ fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> S
     scene.rings_outer = 0.95;
     scene.octave_gap = 0.10;
     scene.view.mark_thickness = 0.0;
-    // Every octave the wheel draws for THIS pitch class, and only those: a
-    // level on a slot no sector draws is a state `derive_scene` cannot reach,
-    // and the glow would still take a color from it. Slots outside the packing
-    // are what a ring near the pitch limits reaches for, and no note can light
-    // one.
+    // Every octave the wheel draws for THIS pitch class, and only those: the
+    // wheel's geometry is what these tests read, and a slot no sector draws
+    // adds nothing to it. Slots outside the packing are what a ring near the
+    // pitch limits reaches for, and no note can light one.
     let (low, high) = layout.slots(cents);
     let node = &mut scene.nodes[0];
     node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
@@ -744,12 +743,12 @@ fn a_thick_slice_swells_past_the_band() {
 /// it: a silent slice wears the grey `Scene::lattice_ground` carries, whatever
 /// that is, rather than one grey baked into the shader.
 ///
-/// Every other fixture here draws at [`octave_wheel_scene`]'s one Ground, a
-/// grey near enough a plausible literal that a shader ignoring
-/// `u.lattice_ground` entirely, or reading the ground out of the wrong vec4 of
-/// the uniform block, would render all of them pixel for pixel. So this one
-/// draws one node four times across the bar: a dark grey, a near-black, a mid
-/// grey and a near-white.
+/// The other wheel fixtures here ([`octave_wheel_scene`]) draw at one Ground,
+/// and the rest at the fresh look's: greys near enough a plausible literal
+/// that a shader ignoring `u.lattice_ground` entirely, or reading the ground
+/// out of the wrong vec4 of the uniform block, would render all of them pixel
+/// for pixel. So this one draws one node four times across the bar: a dark
+/// grey, a near-black, a mid grey and a near-white.
 ///
 /// Full presence against a slot at level 0 is where the arithmetic leaves
 /// nothing to interpret: a silent slice's opacity IS the node's presence, so

@@ -377,8 +377,10 @@ impl GlowLight {
     /// octave slot or mark as drawn, each after the Opacity mapping, in 0..=1 —
     /// so a soft note's halo is as faint as its ink and one faded to nothing
     /// has none. Not [`NodeInstance::presence_with_opacity`], the presence that
-    /// holds through a release. Read off the same weights the colour is, so the
-    /// two cannot disagree about what lit the node (#1304, #1339).
+    /// holds through a release. Read off the same weights the colour is
+    /// (#1304, #1339), though the colour takes only those the ring draws: a
+    /// light whose weights all sit off the ring has a level and no colour, and
+    /// draws nothing.
     pub fn level(&self) -> f32 {
         self.l.iter().chain(&self.m).copied().fold(0.0, f32::max).clamp(0.0, 1.0)
     }
@@ -413,9 +415,10 @@ impl GlowLight {
 pub struct GlowStep {
     /// How lit this node's light is drawn. Out of [`NodeMotion::step`] it is
     /// the [`level`](GlowLight::level) of the node's own reading; the
-    /// shell's pass replaces it with where that level has got to on the Glow
-    /// attack and release, so it can be above zero on a node whose every layer
-    /// has gone silent — which is the whole of what makes a halo linger.
+    /// shell's pass replaces it with where it has got to on the Glow attack and
+    /// release toward its goal — the reading's level, or 0 where no drawn layer
+    /// holds the light — so it can be above zero on a node whose every layer
+    /// has gone silent, which is the whole of what makes a halo linger.
     pub level: f32,
     /// What the light is made of. Out of [`NodeMotion::step`] it is the node's
     /// own [`glow_light`](NodeInstance::glow_light); the shell's pass replaces

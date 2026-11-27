@@ -355,8 +355,8 @@ impl Offscreen {
     /// function of its frame (`shadow::pack_into`), so the texture's size decides
     /// nothing drawn, and a smaller one rebuilt on every frame a caster leaves
     /// would be an allocation per frame of a fade. Nothing is carried across a
-    /// rebuild the way a glow's ink strip is: the atlas is rewritten from the
-    /// ink up every frame it is used.
+    /// rebuild, as a glow's lights are (on the CPU, by `GlowFade`): the atlas is
+    /// rewritten from the ink up every frame it is used.
     pub(super) fn ensure_shadow(
         &mut self,
         device: &wgpu::Device,

@@ -100,8 +100,9 @@ fn the_endpoint_has_exactly_three_explicit_shadow_groups() {
 /// Either bar at its bottom is the whole of a group's shadow gone, and the two
 /// are separate switches.
 ///
-/// The claim the renderer's early-out rests on: the lattice packs a group's
-/// width only while it casts, and a pane's names take cells only then
+/// The claim the renderer's early-out rests on: the lattice hands a group's
+/// width to its visible shadow only while it casts (the node group still packs
+/// its cells for Hide behind), and a text pane's names take cells only then
 /// (`lattice_frame.rs`, `text.rs`), so a group that reads as casting with one
 /// bar shut would allocate atlas and rasterize ink for a shadow the picture
 /// never spends.

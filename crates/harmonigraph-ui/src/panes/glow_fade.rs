@@ -248,8 +248,9 @@ impl GlowFade {
             // that itself (`NodeInstance::glow_light`), marks included, each
             // layer read after the Opacity mapping — not
             // `presence_with_opacity`, the presence that holds through a
-            // release — and the level is read off the same weights, so the two
-            // halves of one light cannot come to disagree about what lit it.
+            // release — and the level is read off the same weights. The colour
+            // takes only the weights the ring draws, so a light whose weights
+            // all sit off the ring has a level and no colour, and draws nothing.
             let goal = Some(node.glow_light()).filter(shines).unwrap_or_default();
             let target = goal.level();
             node.glow = match self.nodes.get_mut(&node.lattice_pos) {

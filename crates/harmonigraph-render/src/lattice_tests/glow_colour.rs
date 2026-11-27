@@ -256,9 +256,11 @@ fn a_marked_slice_the_note_has_left_keeps_the_whole_light() {
 /// fade out from where they were, and the node's light, read off its slots
 /// and marks, fades with them: the glow pass asks whether a light's LAYER
 /// draws (`GlowFade::step_drawn` in harmonigraph-ui), not which slots the
-/// wheel shows. What keeps the halo off is the light's colour, which `ink_at`
-/// reads only off the slots on the ring, skipping a mark the ring has no room
-/// for, and the glow's check that it found some.
+/// wheel shows. What keeps the halo off is the renderer, twice: `ink_at` finds
+/// the light no colour, since it reads the band only off the slots on the ring
+/// and skips a mark the ring has no room for, and `glow_layer` writes nothing
+/// where it found none, where a halo with no colour would still write its
+/// coverage.
 ///
 /// The note and its mark both fading on that slot, as `NodeMotion` writes
 /// them: byte-identical with the Reach off, and the glow target transparent,

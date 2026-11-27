@@ -1550,7 +1550,9 @@ fn a_disappearing_slice_fades_its_shadow_in_proportion_to_its_ink() {
 /// own blur contributes almost nothing. This reaches staggered slice motion,
 /// rather than fading every layer of a node together: a Stagger spread above 0
 /// with the radial move off is what draws the slices one by one
-/// (`animated_slice_ink`); at a spread of 0 the fading shot casts nothing here.
+/// (`animated_slice_ink`). At a spread of 0 the settled node draws and casts
+/// instead, and none of its shadow lands where this test reads the fading
+/// slice's.
 #[test]
 fn a_held_slice_does_not_pin_a_neighbors_shadow_outside_its_own_blur() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
