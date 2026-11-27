@@ -1427,7 +1427,7 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
         events.extend(device.run(frame * 64, vec![], None).attempts);
     }
     for _ in 0..2 {
-        for key in ParamKey::CAMERA {
+        for key in ParamKey::ALL {
             backend.end_set(key);
         }
     }

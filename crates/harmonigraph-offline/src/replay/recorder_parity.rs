@@ -285,7 +285,7 @@ fn camera_records_override_replacement_and_replay_at_any_frame_cadence() {
     for (t, values) in
         [(12.0, [0.4, 0.3, 12.0, 1.0, 0.0]), (12.125, [0.8, -0.3, 8.0, 12.25, -7.375])]
     {
-        for (key, value) in ParamKey::CAMERA.into_iter().zip(values) {
+        for (key, value) in ParamKey::ALL.into_iter().zip(values) {
             writer
                 .write(&harmonigraph_take::Record::Param(harmonigraph_take::ParamRecord {
                     t,

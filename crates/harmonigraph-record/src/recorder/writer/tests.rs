@@ -451,15 +451,12 @@ fn stopping_a_take_that_is_not_running_does_nothing() {
     b.ctrl.stop();
     assert!(b.ctrl.fence.intent().is_armed(), "not recording, so there is nothing to stop");
     assert!(b.ends.orders.try_recv().is_err(), "and no Stop reaches the writer");
-    assert!(b.rec.wants_audio(), "and nothing to stop reading the selected audio for");
 
     b.ctrl.recording.store(true, Ordering::Relaxed);
     b.ctrl.stop();
     assert!(!b.ctrl.fence.intent().is_armed(), "a running take disarms");
     assert!(!b.ctrl.is_recording());
-    assert!(b.rec.wants_audio(), "the observed callback still owns its audio");
     assert!(!b.rec.is_armed());
-    assert!(!b.rec.wants_audio(), "and the audio thread stops reading the selected audio");
 }
 
 /// The rings the plugin ships with have room in them.

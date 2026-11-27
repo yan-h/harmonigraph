@@ -109,7 +109,6 @@ impl Worker {
                 && !self.fence.finishing.load(Ordering::Acquire)
         });
         assert!(self.fence.failed.load(Ordering::Acquire));
-        assert!(!self.recorder.as_ref().unwrap().wants_audio());
         let message = control.status();
         assert!(
             message.contains(cause)

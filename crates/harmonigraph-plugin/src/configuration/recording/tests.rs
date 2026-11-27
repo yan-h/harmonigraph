@@ -1285,13 +1285,13 @@ fn camera_automation_is_captured_mid_song() {
     let mut device = hub().with_retune();
     let initial = [0.7, -0.2, 9.0, 12.25, -7.375];
     let mut saved = device.save();
-    for (key, value) in ParamKey::CAMERA.into_iter().zip(initial) {
+    for (key, value) in ParamKey::ALL.into_iter().zip(initial) {
         saved.params.insert(key.id().into(), ParamValue::F32(value));
     }
     device.load(saved);
     device.activate();
     let restored = device.save();
-    for (key, value) in ParamKey::CAMERA.into_iter().zip(initial) {
+    for (key, value) in ParamKey::ALL.into_iter().zip(initial) {
         assert!((plain(&restored, key) - value).abs() < 1e-5);
     }
     let shared = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone());
@@ -1341,7 +1341,7 @@ fn camera_automation_is_captured_mid_song() {
     let take = harmonigraph_take::Take::read(&path).unwrap();
     let origin = take.audio_start.unwrap();
     assert_eq!(origin, 12.0, "the take starts where the transport was");
-    for (key, value) in ParamKey::CAMERA.into_iter().zip(initial) {
+    for (key, value) in ParamKey::ALL.into_iter().zip(initial) {
         let record = take.params.iter().find(|p| p.id == key.id()).unwrap();
         assert!((record.value - value).abs() < 1e-5, "{key:?}");
         assert!((record.t - origin).abs() < 1e-8, "camera baseline at the take's start");

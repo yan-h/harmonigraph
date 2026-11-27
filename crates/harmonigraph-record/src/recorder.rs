@@ -471,11 +471,6 @@ impl Recorder {
         }
     }
 
-    /// Every armed take records audio, until the take has failed.
-    pub fn wants_audio(&self) -> bool {
-        self.lifecycle.armed() && !self.fence.failed.load(Ordering::Acquire)
-    }
-
     /// Append one block of interleaved input samples.
     ///
     /// Reserves the whole block at once rather than pushing per sample:

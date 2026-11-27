@@ -54,7 +54,7 @@ impl AppearanceDocument {
     pub fn sync_camera(&mut self, params: &dyn ParamBackend) {
         let mut movement = self.camera_movement();
         let mut supplied = false;
-        for (index, key) in ParamKey::CAMERA.into_iter().enumerate() {
+        for (index, key) in ParamKey::ALL.into_iter().enumerate() {
             if let Some(value) = params.camera_value(key) {
                 movement[index] = bounded(key, value);
                 supplied = true;
@@ -87,7 +87,7 @@ pub(crate) fn set_outright(ctx: &egui::Context, keys: &[ParamKey]) {
     ctx.data_mut(|data| {
         let marked = data.get_temp_mut_or_default::<[bool; 5]>(outright_id());
         for key in keys {
-            if let Some(index) = ParamKey::CAMERA.iter().position(|k| k == key) {
+            if let Some(index) = ParamKey::ALL.iter().position(|k| k == key) {
                 marked[index] = true;
             }
         }
@@ -116,7 +116,7 @@ pub(crate) fn finish_edits(
     let outright = outright.unwrap_or_default();
     let mut after = appearance.camera_movement();
     let mut changed = false;
-    for (index, key) in ParamKey::CAMERA.into_iter().enumerate() {
+    for (index, key) in ParamKey::ALL.into_iter().enumerate() {
         let edited = after[index] != before[index];
         let Some(base) = params.camera_base(key).filter(|_| edited || outright[index]) else {
             continue;
@@ -157,13 +157,13 @@ mod tests {
     struct Backend(RefCell<[f32; 5]>);
     impl ParamBackend for Backend {
         fn get(&self, key: ParamKey) -> f32 {
-            ParamKey::CAMERA
+            ParamKey::ALL
                 .iter()
                 .position(|k| *k == key)
                 .map_or(key.default_value(), |i| self.0.borrow()[i])
         }
         fn set(&self, key: ParamKey, value: f32) {
-            let i = ParamKey::CAMERA.iter().position(|k| *k == key).unwrap();
+            let i = ParamKey::ALL.iter().position(|k| *k == key).unwrap();
             self.0.borrow_mut()[i] = value;
         }
         fn camera_value(&self, key: ParamKey) -> Option<f32> {

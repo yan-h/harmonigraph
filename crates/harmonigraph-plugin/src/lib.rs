@@ -877,13 +877,13 @@ impl Harmonigraph {
         if let Some(at) = recorded.map(|owner| owner.take_time()) {
             self.take.params(at, ParamKey::ALL.map(|key| self.params.camera(key)));
 
-            // The take's own audio, when asked for: the selected analysis input
-            // exactly as it arrives, so the render gets a spectrum and a
+            // The take's own audio: the selected analysis input exactly as it
+            // arrives, so the render gets a spectrum and a
             // soundtrack without a separate bounce. Sized by TAKE_CHANNELS
             // rather than the host's own channel count — the WAV is stereo
             // whatever arrives, which is what `take_right_channel` duplicates
             // a mono input for.
-            if self.take.wants_audio() && channels > 0 {
+            if channels > 0 {
                 let wanted = block_samples * TAKE_CHANNELS;
                 let mut interleaved =
                     (0..block_samples).flat_map(|frame| take_stereo_frame(planes, frame));
@@ -1015,9 +1015,6 @@ impl Plugin for Harmonigraph {
             // it before the plugin's state was reset. Only with an owner: a
             // plugin built outside the shell has no session to cut.
             self.aggregation.as_mut().unwrap().stop();
-            // Stop may arrive after activation but before start_processing
-            // resets this owner. Close its run before forgetting routes.
-            owner.recording.close_stopped(&mut self.take);
             owner.reset(&mut self.take);
         }
         self.audio_producer.reset();

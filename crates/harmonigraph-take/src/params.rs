@@ -48,8 +48,6 @@ impl ParamKey {
         [CameraYaw, CameraPitch, CameraDistance, CameraPanX, CameraPanY]
     };
 
-    pub const CAMERA: [ParamKey; 5] = Self::ALL;
-
     pub fn label(self) -> &'static str {
         match self {
             ParamKey::CameraYaw => "Horizontal angle",
