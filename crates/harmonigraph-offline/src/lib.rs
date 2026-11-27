@@ -939,12 +939,12 @@ mod tests {
     /// #712's acceptance behaviour: a take that lost part of its note history
     /// is exported with a warning instead of refused.
     ///
-    /// The fixture is incomplete for the RIGHT reason. `Take::incomplete` can
-    /// be set two ways, and the one this decision is about is a `Gap` record
-    /// carrying a lost publication range — the same record the roll draws its
-    /// hole from. A fixture that reached this through a truncated last line, or
-    /// through a `Take::default()` with the field poked, would warn for a
-    /// reason the recording path does not produce.
+    /// The fixture has its hole for the RIGHT reason: a `Gap` record carrying
+    /// a lost publication range, the same record the roll draws its hole from,
+    /// and the one `Take::gap` reads. A fixture that reached this through a
+    /// truncated last line, or through a `Take::default()` with an event
+    /// poked in, would warn for a reason the recording path does not produce.
+    /// The same take failed after its gap then warns of both, failure first.
     ///
     /// Both notes are asserted present afterwards, because "render the
     /// surviving data with gaps" is the other half of the decision: not
