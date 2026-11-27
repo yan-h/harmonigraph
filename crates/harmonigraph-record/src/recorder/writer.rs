@@ -330,8 +330,6 @@ pub mod testing;
 struct Recording {
     path: std::path::PathBuf,
     writer: harmonigraph_take::Writer,
-    /// The WAV's file name, which the header names.
-    audio_file: Option<String>,
     /// The WAV itself, until it is finalized or a write to it fails.
     audio: Option<harmonigraph_take::WavWriter>,
     /// Whether the file holds a `Run` no `RunEnd` has followed yet: a stopped
@@ -401,7 +399,6 @@ impl Recording {
                 }
             };
             return Ok(Recording {
-                audio_file: header.audio_file.clone(),
                 path,
                 writer,
                 audio: Some(audio),
@@ -435,8 +432,9 @@ impl Recording {
         notes.and(audio).map(|_| self.path.clone())
     }
 
+    /// The WAV beside the take, which its header names.
     fn wav_path(&self) -> std::path::PathBuf {
-        self.path.with_file_name(self.audio_file.as_deref().unwrap_or_default())
+        self.path.with_extension("wav")
     }
 
     fn finish_audio(&mut self) -> std::io::Result<()> {
