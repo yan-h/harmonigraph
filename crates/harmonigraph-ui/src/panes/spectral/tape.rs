@@ -392,18 +392,13 @@ fn marks(
             return;
         };
         // First seen, it has not been seen to move.
-        let changed = match *last {
-            Some((value, since)) if value == at => since,
-            Some(_) => clock,
-            None => f64::NEG_INFINITY,
-        };
-        *last = Some((at, changed));
+        let advancing = advancing(last, at, clock, false);
         if !axis.shows(at) {
             return;
         }
         painter.line_segment(axes.across_pitch(axis.depth_of(at)), stroke);
         let speed = rate.map_or(0.0, |rate| screen_speed(view, axis, at, rate, ppp));
-        if clock - changed <= PLAYHEAD_STALL_SECONDS && speed > 0.0 {
+        if advancing && speed > 0.0 {
             pixel = Some(pixel.map_or(1.0 / speed, |sooner| sooner.min(1.0 / speed)));
         }
     };
@@ -413,6 +408,21 @@ fn marks(
     mark(view.heard, Some(heard_rate), &mut last.heard, accent);
     ctx.data_mut(|d| d.insert_temp(seen, last));
     pixel
+}
+
+/// A playhead at `at` is still advancing: its value changed within
+/// [`PLAYHEAD_STALL_SECONDS`] of `clock`. `last` keeps its value and when that
+/// last changed, and a value seen for the first time counts as just changed
+/// only where `first_moves`.
+fn advancing(last: &mut Option<(f64, f64)>, at: f64, clock: f64, first_moves: bool) -> bool {
+    let changed = match *last {
+        Some((value, since)) if value == at => since,
+        Some(_) => clock,
+        None if first_moves => clock,
+        None => f64::NEG_INFINITY,
+    };
+    *last = Some((at, changed));
+    clock - changed <= PLAYHEAD_STALL_SECONDS
 }
 
 /// How fast a mark at song seconds `at`, running at `rate`, crosses the
@@ -882,26 +892,13 @@ pub(super) fn harmony(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, s
     // (`marks`): its value changed within the stall allowance.
     let under = view.heard.map(|at| (at, heard_rate)).or(view.position.zip(position_rate));
     let clock = ui.input(|i| i.time);
-    let seen = ui.data(|d| d.get_temp::<(f64, f64)>(id));
-    let changed = match (seen, under) {
-        (Some((value, since)), Some((at, _))) if value == at => since,
-        // First seen counts as moving, unlike `marks`, which waits to see it
-        // move before asking for frames: a cue's first frame must already
-        // hide what the section has not yet struck.
-        (_, Some(_)) => clock,
-        (_, None) => f64::NEG_INFINITY,
-    };
     // Forgotten with the playhead, so one that comes back on the value it
-    // left on is seen afresh.
-    match under {
-        Some((at, _)) => ui.data_mut(|d| {
-            d.insert_temp(id, (at, changed));
-        }),
-        None => ui.data_mut(|d| {
-            d.remove_temp::<(f64, f64)>(id);
-        }),
-    }
-    let advancing = clock - changed <= PLAYHEAD_STALL_SECONDS;
+    // left on is seen afresh. First seen counts as moving, unlike in `marks`,
+    // which waits to see it move before asking for frames: a cue's first
+    // frame must already hide what the section has not yet struck.
+    let mut seen = ui.data(|d| d.get_temp::<Option<(f64, f64)>>(id)).flatten();
+    let advancing = under.is_some_and(|(at, _)| advancing(&mut seen, at, clock, true));
+    ui.data_mut(|d| d.insert_temp(id, seen.filter(|_| under.is_some())));
     let mut next_change = None::<f64>;
 
     let white = egui::Color32::WHITE;
