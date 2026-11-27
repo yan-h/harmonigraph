@@ -12,8 +12,6 @@
         cabinet_scale: 0.6,
     ),
     view: (
-        extent_threes: 12,
-        extent_fives: 20,
         min_sevens: 0,
         max_sevens: 0,
         center_threes: 0,

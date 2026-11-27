@@ -153,52 +153,6 @@ fn a_cabinet_pane_never_draws_a_node_the_reach_cannot_name() {
     }
 }
 
-/// ...and a LOADED view holds it too, which is the half the fresh one cannot
-/// check.
-///
-/// The reach is sized on the drawn window, and the sizing is a default — so the
-/// test above asserts the property for the one view that cannot violate it. A
-/// saved blob carries whatever reach the build that wrote it shipped, and the
-/// reach is a persisted field with no bar: nothing on screen sets it, so
-/// nothing on screen can repair it either. Sanitize is the only place a loaded
-/// view is made to make sense, and a reach that no longer covers the window is
-/// exactly the case it exists for.
-///
-/// The fixture is the reach the previous build shipped, which is the input
-/// every project on disk actually carries.
-#[test]
-fn a_loaded_view_never_draws_a_node_its_reach_cannot_name() {
-    let mut view = ViewConfig { extent_threes: 10, extent_fives: 6, ..ViewConfig::default() };
-    view.sanitize();
-    let reach: std::collections::HashSet<_> = view.reach().positions().collect();
-    for aspect in [0.6, 1.0, 1.5, 16.0 / 9.0] {
-        for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
-            for cabinet_scale in [0.1, 0.6, 1.0] {
-                let camera = Camera {
-                    projection: Projection::Cabinet,
-                    distance,
-                    cabinet_scale,
-                    ..Camera::default()
-                };
-                let drawn = view.scrolled(&camera, aspect);
-                let outside = drawn
-                    .positions()
-                    .filter(|&pos| {
-                        ndc(&camera, &view, aspect, pos)
-                            .is_some_and(|p| p.x.abs() <= 1.0 && p.y.abs() <= 1.0)
-                    })
-                    .filter(|pos| !reach.contains(pos))
-                    .count();
-                assert_eq!(
-                    outside, 0,
-                    "aspect {aspect}, distance {distance}, shear {cabinet_scale}: {outside} \
-                     nodes are drawn on the pane and cannot be named",
-                );
-            }
-        }
-    }
-}
-
 /// What a cabinet camera asks of the node budget on a pane of ordinary shape,
 /// at any zoom, depth or shear — because under the projection this feature is
 /// FOR, the cap is meant to be a thing that exists rather than a thing that
@@ -649,48 +603,11 @@ fn no_camera_asks_for_more_than_the_budget() {
     }
 }
 
-/// A target no gesture can reach still leaves both windows usable, and walks
-/// back to somewhere the picture is.
-///
-/// `Camera::sanitize` deliberately leaves the target unbounded ("No bound the
-/// geometry cares about"), so this is a value that really does arrive from a
-/// blob — and `follow_camera` is the function on the far side of that door
-/// that WRITES persisted state from it. Carrying the step into the center
-/// without bounding it pinned the center at `i32::MAX` while the target went
-/// on stepping, and `center + extent` in `reach` then wrapped:
-/// the reach came out EMPTY, so every note read as off the lattice, with no
-/// analyzer names and an empty Notes column, and it never recovered.
-#[test]
-fn a_target_no_gesture_can_reach_still_names_and_draws() {
-    for x in [1e9f32, 3e9, 1e30, -1e30, f32::MAX] {
-        let mut view = ViewConfig::default();
-        let mut camera = Camera { target: Vec3::new(x, -x, x), ..Camera::default() };
-        // A few frames, because an absurd target is walked back rather than
-        // teleported — one bound's worth of steps per frame.
-        for _ in 0..8 {
-            view.follow_camera(&mut camera);
-        }
-        assert!(
-            view.reach().positions().count() > 0,
-            "target {x:e} left the naming reach empty at center {:?}",
-            view.center(),
-        );
-        // The sum `reach` builds its ranges from, which is what wrapped. In
-        // debug this test would panic on the overflow instead.
-        assert!(
-            view.center_fives.checked_add(view.extent_fives).is_some()
-                && view.center_threes.checked_add(view.extent_threes).is_some(),
-            "target {x:e} left a center that overflows its own extent: {:?}",
-            view.center(),
-        );
-        assert!(view.scrolled(&camera, 1.5).count() > 0);
-    }
-}
-
-/// A camera a hand-edited blob can carry still yields a drawable window. The
-/// same door `Camera::sanitize` and `ViewConfig::sanitize` guard, one step
-/// further along: these two run on load, and a scene is derived every frame
-/// from whatever they left.
+/// A camera no producer hands it still yields a drawable window: a target far
+/// off or not finite, and a pane with no shape. `Camera::sanitize` refuses a
+/// non-finite target on load, and in the plugin `sync_camera` replaces a saved
+/// one every frame, so this holds the window's own arithmetic — its
+/// saturating offsets and its fallback — rather than a case the use reaches.
 #[test]
 fn a_nonsense_camera_still_yields_a_drawable_window() {
     let view = ViewConfig::default();

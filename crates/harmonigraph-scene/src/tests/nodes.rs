@@ -719,21 +719,24 @@ fn window_center_pans_which_nodes_display() {
     let view = ViewConfig {
         center_threes: 5,
         center_fives: 0,
-        extent_threes: 1,
-        extent_fives: 0,
         min_sevens: 0,
         max_sevens: 0,
         ..ViewConfig::default()
     };
-    let positions: Vec<_> = view.reach().positions().collect();
+    let window = view.reach();
     assert_eq!(
-        positions,
-        vec![LatticePos::new(4, 0, 0), LatticePos::new(5, 0, 0), LatticePos::new(6, 0, 0)]
+        (window.min, window.max),
+        (
+            LatticePos::new(5 - crate::view::REACH_THREES, -crate::view::REACH_FIVES, 0),
+            LatticePos::new(5 + crate::view::REACH_THREES, crate::view::REACH_FIVES, 0),
+        ),
+        "the reach did not follow the center",
     );
 
     // The center node renders at the world origin.
     let tracker = NoteTracker::new();
-    let scene = scene_of(&tracker, &Tuning::default(), &view, 0.0);
+    let column = block(&view, 1, 0);
+    let scene = scene_in(&tracker, &Tuning::default(), &view, &column, 0.0);
     let center_node =
         scene.nodes.iter().find(|n| n.lattice_pos == LatticePos::new(5, 0, 0)).unwrap();
     assert_eq!(center_node.world_pos, Vec3::ZERO);
