@@ -285,9 +285,9 @@ pub(super) fn draw(
     let axis = SongAxis::new(axes, split, window);
     heatmap(painter, axes, scale, state, &axis, surface, TapeStrip::Region);
     if state.appearance.spectrum.show_roll {
-        // Through the live roll's own rule, which holds nothing for a song
-        // axis: it stands still. Both sources are built without a now line,
-        // which alone scrolls a roll or grows a lead.
+        // Through the live roll's own rule (`roll::RollMotion`), under which a
+        // song axis, built without a now line, stands still; what grows on it
+        // is `growing`'s.
         let now = frame.now;
         let motion = notes(painter, axes, scale, state, &axis, surface, frame);
         motion.hold(&mut state.surfaces.moving_this_frame, 0.0);

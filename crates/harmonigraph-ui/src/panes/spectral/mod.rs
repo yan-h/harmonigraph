@@ -676,16 +676,13 @@ pub(crate) fn spectral_pane(
         );
         state.surfaces.note_names.insert(surface, thinning);
         names::draw(&painter, &note_names, text.names.label, &mut labels);
-        // A name only scrolls with its note.
-        roll_motion.scrolling |= note_names.iter().any(|label| label.scrolls);
+        // A name drawn on the live roll scrolls with its note.
+        roll_motion.scrolling |= song.is_none() && !note_names.is_empty();
     } else {
         state.surfaces.note_names.remove(&surface);
     }
-    // The roll moves while a note it draws, as a ribbon, a Lead or a name, is
-    // still inside its own Span: one off the zoom, or too thin to draw, or an
-    // overhang past the far edge, leaves a still picture to the idle poll
-    // (#1835). A ribbon or a name moves on screen only when the Span's scroll
-    // crosses a device pixel (#1911).
+    // How what the roll drew moves is its own to say (`RollMotion::hold`,
+    // `Reason::RollOnScreen`), paced by the Span's device pixel.
     let pixel = axes::TimeAxis::new(state, split, now)
         .seconds_per_pixel(&axes, crate::spectrogram::pane_ppp(painter.ctx()));
     roll_motion.hold(&mut state.surfaces.moving_this_frame, pixel);

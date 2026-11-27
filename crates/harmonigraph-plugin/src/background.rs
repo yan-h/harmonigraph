@@ -146,8 +146,8 @@ impl Seen {
     /// Whether the window should draw for the tracker's `edits`, at a step
     /// that read the display clock at `display`: for any edit it took since
     /// the last step, a release, a bend or a pressure change as much as a
-    /// note, and for as long as the latest is dated at or past the display
-    /// time the last step read: so an edit dated ahead of the clock, as a
+    /// note, and for as long as the latest is dated past the display time
+    /// the last step read: so an edit dated ahead of the clock, as a
     /// Hub's are by the Tuning delay, keeps asking until the step whose clock
     /// has passed it, whose pass draws it.
     fn edited(&mut self, edits: harmonigraph_core::Edits, display: f64) -> bool {
@@ -211,7 +211,7 @@ impl InputWorker {
         tape: crate::tape::Worker,
         input: LiveInput,
         lights: Option<crate::board::Lights>,
-        learn: Option<Arc<crate::HarmonigraphParams>>,
+        params: Option<Arc<crate::HarmonigraphParams>>,
     ) -> InputWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -225,9 +225,9 @@ impl InputWorker {
             .spawn(move || {
                 raise_to_gui_priority();
                 let (mut tape, mut input, mut lights) = (tape, input, lights);
-                let learn = learn.as_deref();
+                let params = params.as_deref();
                 #[cfg(not(test))]
-                run(&worker, &editor_state, &mut tape, &mut input, &mut lights, learn, &flag);
+                run(&worker, &editor_state, &mut tape, &mut input, &mut lights, params, &flag);
                 #[cfg(test)]
                 run(
                     &worker,
@@ -235,7 +235,7 @@ impl InputWorker {
                     &mut tape,
                     &mut input,
                     &mut lights,
-                    learn,
+                    params,
                     &flag,
                     &worker_rounds,
                 );
@@ -384,7 +384,7 @@ fn step(
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
     seen: &mut Seen,
-    learn: Option<&crate::HarmonigraphParams>,
+    params: Option<&crate::HarmonigraphParams>,
 ) {
     // What the exchange displaced from the view, freed at the end of the step:
     // declared before either hold's guard, so it outlives both, an early
@@ -407,7 +407,7 @@ fn step(
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
         let learned =
-            learn.is_some_and(|params| self::learn(params, &mut shared.ui.picture.runtime));
+            params.is_some_and(|params| self::learn(params, &mut shared.ui.picture.runtime));
         // A frame's duties that must not wait for one: none runs while the
         // editor cannot be seen, open or not. Every trigger but OnDisarm is
         // decided in `poll_take_end`, so without it here an armed take would
@@ -415,13 +415,13 @@ fn step(
         // which leaves the window shut, would render nothing.
         let display = shared.clock.display_now(now);
         let edited = seen.edited(shared.ui.picture.runtime.tracker.edits(), display)
-            | learn.is_some_and(|params| seen.moved(params));
+            | params.is_some_and(|params| seen.moved(params));
         shared.ui.picture.runtime.advance_time(display, &shared.ui.picture.appearance);
         shared.poll_take_end();
         (taken, edited, learned)
     };
     // Out of the editor lock: the host's wake must not run under it (#1924 C).
-    if let Some(params) = learn.filter(|_| learned) {
+    if let Some(params) = params.filter(|_| learned) {
         params.settings.changed();
     }
     // Asked once the lock is let go, so the pass it runs does not wait on it.
@@ -478,11 +478,11 @@ fn guarded_step(
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
     seen: &mut Seen,
-    learn: Option<&crate::HarmonigraphParams>,
+    params: Option<&crate::HarmonigraphParams>,
     panicked: &mut bool,
 ) -> bool {
     let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        step(shared, editor_state, tape, input, seen, learn)
+        step(shared, editor_state, tape, input, seen, params)
     }));
     if stepped.is_err() {
         input.restart_analysis();
@@ -531,15 +531,15 @@ fn run(
     tape: &mut crate::tape::Worker,
     input: &mut LiveInput,
     lights: &mut Option<crate::board::Lights>,
-    learn: Option<&crate::HarmonigraphParams>,
+    params: Option<&crate::HarmonigraphParams>,
     stop: &AtomicBool,
     #[cfg(test)] rounds: &AtomicU64,
 ) {
     let mut panicked = false;
     let mut in_a_row = 0;
-    let mut seen = Seen::starting(learn);
+    let mut seen = Seen::starting(params);
     while !stop.load(Ordering::Relaxed) {
-        if guarded_step(shared, editor_state, tape, input, &mut seen, learn, &mut panicked) {
+        if guarded_step(shared, editor_state, tape, input, &mut seen, params, &mut panicked) {
             in_a_row = 0;
         } else {
             in_a_row += 1;
@@ -596,8 +596,9 @@ mod tests {
         /// The input the thread would own, and what its steps saw.
         input: LiveInput,
         seen: super::Seen,
-        /// The plugin whose tuning Learn writes, when a test has it learn.
-        learn: Option<Arc<crate::HarmonigraphParams>>,
+        /// The plugin whose parameters a step watches and whose tuning Learn
+        /// writes, when a test has one.
+        params: Option<Arc<crate::HarmonigraphParams>>,
     }
 
     fn tape() -> crate::tape::Worker {
@@ -619,7 +620,7 @@ mod tests {
             tape: tape(),
             input: LiveInput::new(note_consumer, audio_consumer),
             seen: Default::default(),
-            learn: None,
+            params: None,
         }
     }
 
@@ -641,7 +642,7 @@ mod tests {
                 &mut self.tape,
                 &mut self.input,
                 &mut self.seen,
-                self.learn.as_deref(),
+                self.params.as_deref(),
             );
         }
 
@@ -915,7 +916,7 @@ mod tests {
     fn a_step_asks_the_window_to_draw_a_host_parameter_that_moved() {
         let mut h = harness();
         let params = Arc::new(crate::HarmonigraphParams::default());
-        h.learn = Some(params.clone());
+        h.params = Some(params.clone());
         h.editor_state.set_open(true);
         let asked = |h: &Harness| h.editor_state.pass_request.take();
         h.step();
@@ -1218,7 +1219,7 @@ mod tests {
         let params = Arc::new(crate::HarmonigraphParams::default());
         params.settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000));
         let mut h = harness();
-        h.learn = Some(params.clone());
+        h.params = Some(params.clone());
         // A Tune's fifth, held at the stop.
         let tune = SourceId(1);
         h.notes.observe_clock(0.0);

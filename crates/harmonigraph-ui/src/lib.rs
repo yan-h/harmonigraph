@@ -339,16 +339,12 @@ pub fn root_ui(
     camera_movement::finish_edits(&mut state.picture.appearance, before_camera, params, ui.ctx());
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
 
-    // Each picture drawn says when it next changes on screen (#1911): at once
-    // while a value still fades (a voice arriving or leaving, a glow, the
-    // smoothed spectrum), or when a scroll next crosses a device pixel (the
-    // roll and the heatmap after the sound, a Tape playhead). The earliest
-    // wins, and with nothing sooner than one poll the idle poll draws, which
-    // bounds how stale a change that animates nothing gets: an automated
-    // parameter, the console, a take's status. egui repaints on input events
-    // by itself, so interaction never waits on this, and the input worker
-    // asks for a pass on every edit of the tracker, so a note, a bend or a
-    // release over a still picture does not either.
+    // Each picture drawn says when it next changes on screen, and the
+    // earliest wins ([`Animating`], each [`Reason`] naming what reports it);
+    // with nothing sooner, the idle poll draws ([`IDLE_REPAINT_INTERVAL`]
+    // says what waits for it). egui repaints on input events by itself, and
+    // the plugin's input worker asks for a pass on what it sees change
+    // (`background::step`).
     //
     // Audio that merely arrives does not count: a host streams silence with
     // its transport stopped (#1670 Q2).
@@ -527,12 +523,12 @@ pub fn draw_panes(
 }
 
 /// Repaint cadence while nothing in view moves: how long what changes with no
-/// picture asking for a frame can wait to be drawn — host automation over a
-/// still picture, a restore, a Console line, Tape's silent strip, the tuning
-/// rows (Yan, #1994 HW1). Nothing that moves rides it: each picture asks for
-/// its own frames as it moves ([`Animating::hold_for`]), a slow scroll as its
-/// pixels move included, and the input worker asks for a pass on each edit
-/// of the tracker and on sound after a still stretch.
+/// picture or worker asking for a frame can wait to be drawn — a restore, a
+/// Console line, Tape's silent strip, the tuning rows (Yan, #1994 HW1). The
+/// one owner of that list. Nothing that moves rides it: each picture asks for
+/// its own frames as it moves ([`Animating::hold_for`]; a pace at or past
+/// this moves under a device pixel between the poll's frames), and the
+/// plugin's input worker asks for what it sees change (`background::step`).
 const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Repaint cadence of the chrome's own cues, about 30 Hz: the armed Record

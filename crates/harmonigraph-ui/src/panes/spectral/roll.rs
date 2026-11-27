@@ -398,12 +398,10 @@ pub(super) fn draw_live_roll(
 
 /// Draw `sources` as one roll, in order, through one paint callback.
 ///
-/// Answers how what it drew still moves
-/// ([`Reason::RollOnScreen`](crate::Reason::RollOnScreen)): a ribbon whose note
-/// has not yet scrolled past the far edge scrolls, and a Lead, which stands
-/// only while its note sounds or its release fades it, fades. Each asks of its
-/// own note, so an older note's overhang sliding off the far edge is not held
-/// by a newer note the roll does not draw (#1835).
+/// Answers how what it drew still moves ([`RollMotion`], the rule's owner
+/// beside [`Reason::RollOnScreen`](crate::Reason::RollOnScreen)). Each asks
+/// of what it drew of its own note, so a newer note the roll does not draw
+/// holds nothing (#1835).
 #[must_use = "whether the roll still moves is the frame loop's to hear"]
 pub(super) fn draw_rolls(
     painter: &egui::Painter,
