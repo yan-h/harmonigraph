@@ -69,11 +69,12 @@ fn names_row(ui: &mut egui::Ui, view: &mut ViewConfig) {
 
 /// Forget the visited nodes, drawn only under [`NoteNames::Past`].
 ///
-/// Absent rather than grayed under the other two: what it clears is the
-/// history behind the kept names, and neither of those modes reads one, so
-/// pressed there it would take an effect nothing on screen could show. Past
-/// is also the only mode where a piece's territory accumulates, and so the
-/// only one where ending it is a thing to want.
+/// Absent rather than grayed under the other two, whose labels read no
+/// history. The history still accumulates under them, and the Video pane's
+/// Frame notes reads it in every mode (`crate::framing::drawn_positions`), so
+/// there Clear display history is what empties it. Past is the only mode
+/// where a piece's territory shows on the lattice, and so the only one this
+/// button is offered in.
 fn clear_button(ui: &mut egui::Ui, view: &ViewConfig, tracker: &mut NoteTracker) {
     if view.note_names != NoteNames::Past {
         return;
@@ -82,7 +83,7 @@ fn clear_button(ui: &mut egui::Ui, view: &ViewConfig, tracker: &mut NoteTracker)
         if ui
             .button("Clear label history")
             .on_hover_text(
-                "Forget previously visited lattice nodes; sounding notes and Analyzer history stay",
+                "Forget previously visited lattice nodes, which Frame notes also frames; sounding notes and Analyzer history stay",
             )
             .clicked()
         {

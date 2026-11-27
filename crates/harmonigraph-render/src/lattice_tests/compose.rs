@@ -195,19 +195,18 @@ fn a_thin_lines_light_reaches_the_half_whatever_the_scene_to_half_ratio() {
 fn sheets_draw_back_to_front_along_the_sevens_axis() {
     use harmonigraph_scene::{Camera, Projection, ViewConfig};
 
-    let view = ViewConfig {
-        extent_threes: 1,
-        extent_fives: 1,
-        min_sevens: -2,
-        max_sevens: 2,
-        ..ViewConfig::default()
+    let view = ViewConfig { min_sevens: -2, max_sevens: 2, ..ViewConfig::default() };
+    let c = view.center();
+    let window = harmonigraph_scene::DrawnWindow {
+        min: harmonigraph_core::LatticePos::new(c.threes - 1, c.fives - 1, -2),
+        max: harmonigraph_core::LatticePos::new(c.threes + 1, c.fives + 1, 2),
     };
     for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic] {
         let mut scene = animated_snapshot(
             &harmonigraph_core::NoteTracker::new(),
             &harmonigraph_core::Tuning::default(),
             &view,
-            &view.reach(),
+            &window,
             // Orbited, deliberately: this is the case a plain depth sort
             // gets wrong, because two nodes on one sheet then sit at
             // different depths and the sheets interleave.
