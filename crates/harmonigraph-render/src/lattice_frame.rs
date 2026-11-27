@@ -582,7 +582,7 @@ impl LatticeCallback {
                             scene.view.mark_thickness,
                             scene.view.glow_reach,
                         ),
-                        curve: scene.view.glow_curve.shape(),
+                        curve: scene.view.glow_curve.shape,
                         wash: scene.view.glow_wash,
                         accumulation: scene.view.glow_accumulation,
                         padding_end: Float2::default(),
