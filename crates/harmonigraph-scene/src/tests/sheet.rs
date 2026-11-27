@@ -353,6 +353,12 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
     assert!(band_gone.is_some(), "the sweep never ran the band out of room, so it proved nothing");
 }
 
+/// A padding dialled past the bar's ceiling reads back as the padding the
+/// picture draws. [`GAP_MAX`] is the ceiling the gap bar is BUILT from, so
+/// a blob written when it stood higher carries a value the bar cannot reach —
+/// and `rings` holds it to the ceiling for the picture while the field keeps
+/// the number the bar reads out. The bar reads 35% and both picture uses draw
+/// 20%, with nothing on screen saying which is the node.
 #[test]
 fn a_gap_dialled_past_its_ceiling_reads_back_as_the_padding_it_draws() {
     for wild in [GAP_MAX + 0.15, GAP_MAX * 4.0, -0.1, f32::NAN, f32::INFINITY] {
