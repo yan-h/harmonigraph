@@ -126,15 +126,19 @@ const SEAM_SEGMENT_PT: f32 = 6.0;
 /// The floor keeps a dot legible on the thinnest tracks the pane can draw. It
 /// is a length in POINTS and so carries no term for the track at all, which
 /// makes it the one term here that can spend the share's own argument: at the
-/// Analyzer's full range it takes the dot over from the share below a pane of
-/// about 277 points, and by 200 the dot is 98% of its track.
+/// Analyzer's full range it takes the dot's extent over from the share below a
+/// pane of about 271 points, and by 200 the extent is 96% of its track.
 ///
-/// [`Spiral::dot`] clamps it to half the track for that reason. What the clamp
-/// gives up is the "under 1.0" above — a dot on a small enough pane fills the
-/// turn it sits on — and what it keeps is the half of the argument that cannot
-/// be given up, that the dot does not cross into the turns either side to say
-/// which turn it is on. `a_notes_dot_sits_inside_its_own_turn` is what holds
-/// this.
+/// So the curve's last term holds the extent to half the track
+/// ([`Spiral::dot`]), which binds below a pane of about 192 points at that
+/// range. What the clamp gives up is the "under 1.0" above — on a small enough
+/// pane the extent fills the turn it sits on — and what it keeps is the half of
+/// the argument that cannot be given up: the drawn body, which sits inside the
+/// extent ([`DOT_CLEARANCE_PT`]), does not cross into the turns either side to
+/// say which turn it is on. Without it the floor's body, 1.75 points across
+/// whatever the track, would cross them below a pane of about 115 points, and
+/// the smallest pane is 104. `a_notes_dot_sits_inside_its_own_turn` is what
+/// holds this.
 const DOT: (f32, f32) = (0.7, 3.0);
 
 /// Clearance inside the nominal dot extent, keeping the coloured body distinct
@@ -353,13 +357,15 @@ impl Spiral {
     /// disc, centred, which is what the pane opens at and what
     /// [`framed`](Self::framed) is a transform on.
     fn new(rect: egui::Rect, cfg: &crate::SpectrumConfig) -> Spiral {
-        let min_midi = cfg.low_midi;
-        // Never trust the pair to be ordered, exactly as the Spectral pane does
-        // not: a zero or negative span divides by zero below and paints NaN
-        // geometry, which egui panics on — and a panic here takes the editor,
-        // and with it the host, down. The range bar cannot produce one; a
-        // hand-edited state blob can.
-        let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
+        let (min_midi, max_midi) = (cfg.low_midi, cfg.high_midi);
+        // A span under two octaves is one no producer writes: the load holds
+        // it open (`SpectrumConfig::sanitize`, with a Console line), and so do
+        // the range bar and the gestures. A zero or negative one would divide
+        // by zero below and paint NaN geometry, which egui panics on (#1631).
+        debug_assert!(
+            max_midi - min_midi >= crate::PITCH_RANGE_MIN_SPAN - 1e-3,
+            "a pitch range {min_midi}..{max_midi} under the floor reached the Spiral",
+        );
         let r_out = (rect.width().min(rect.height()) * 0.5 - MARGIN_PT).max(1.0);
         // The names' band comes off the radius first, so everything below fits
         // the DISC and the rim it is fitted to is the rim they are placed off.
@@ -446,14 +452,14 @@ impl Spiral {
     /// extent [`DOT`] sets, less the body clearance
     /// ([`DOT_CLEARANCE_PT`]).
     ///
-    /// Capped at HALF the track, which is the bound that is not a matter of
-    /// taste: a dot past it crosses into the octaves either side, and which
-    /// turn the note is on is what the dot is drawn to say. It answers the fit
-    /// as well: the fit reserves [`half`](Self::half) at each end of the range,
-    /// so a dot held inside its own turn is inside the disc without asking.
-    /// What the cap binds on is the
-    /// floor in [`DOT`], which is a length in points and would otherwise draw a
-    /// dot a quarter wider than the track on a small enough pane.
+    /// The extent's sizing curve is the share, raised to the floor, and capped
+    /// at HALF the track, which is the bound that is not a matter of taste: a
+    /// body past it crosses into the octaves either side, and which turn the
+    /// note is on is what the dot is drawn to say. The body is never wider than
+    /// its extent, so the cap holds it. It answers the fit as well: the fit
+    /// reserves [`half`](Self::half) at each end of the range, so a dot held
+    /// inside its own turn is inside the disc without asking. What the cap
+    /// binds on is the floor in [`DOT`], which is a length in points.
     fn dot(&self) -> f32 {
         let extent = (self.half() * DOT.0).max(DOT.1).min(self.half());
         // Never under half the extent, so a track thin enough to shrink the
@@ -733,15 +739,9 @@ fn arc_len(r_a: f32, r_b: f32, turns: f32) -> f32 {
 /// Over the spectrum, with the rays and for the rays' reason: the strip covers
 /// the whole disc at every level, so a seam beneath it is a seam nobody sees.
 fn seam(painter: &egui::Painter, spiral: &Spiral) {
+    // At least an octave: the analyzer's floor is two (`PITCH_RANGE_MIN_SPAN`,
+    // which `Spiral::new` asserts).
     let span = spiral.max_midi - 12.0 - spiral.min_midi;
-    // A range under one octave has no boundary between turns to draw. The
-    // analyzer's own floor is two (`PITCH_RANGE_MIN_SPAN`, which `Spiral::new`
-    // holds the range open to), so this never fires today — it is here so that
-    // a narrower floor would cost the seam rather than wind one backwards
-    // through the middle of the disc.
-    if span <= 0.0 {
-        return;
-    }
     let (r_a, r_b) = (spiral.radius(spiral.min_midi), spiral.radius(spiral.max_midi - 12.0));
     // Capped at the strip's own grain — one step per analyzer bucket — for the
     // case the magnifier makes: arc length is linear in radius, so a disc drawn
@@ -1193,11 +1193,8 @@ mod tests {
         // `PITCH_RANGE_MIN_SPAN` floors the range at as well as at the ten the
         // analyzer covers.
         //
-        // Two octaves is written as `(60, 72)` and not as some narrower pair
-        // that `Spiral::new` widens to it — a fixture the constructor rewrites
-        // tests the row it is rewritten INTO, so a pair of them silently
-        // becomes one case tested twice.
-        for (low, high) in [(36.0, 96.0), (15.5, 135.1), (60.0, 72.0)] {
+        // Two octaves is written as `(60, 84)`, the floor itself.
+        for (low, high) in [(36.0, 96.0), (15.5, 135.1), (60.0, 84.0)] {
             let s = spiral(low, high);
             let (r_in, r_out) = s.bounds();
             let half_pane = PANE.width().min(PANE.height()) * 0.5;
@@ -1382,8 +1379,11 @@ mod tests {
     ///
     /// Small SQUARE panes rather than `FRAMES`: the fit is driven by the short
     /// side, so a square is the cheapest way to name a short side, and the
-    /// ones here run from where the floor first takes over down to the width
-    /// of a docked column split three ways.
+    /// ones here run from where the floor first takes over down past the
+    /// smallest pane (`theme::min_pane`, 104 points at the design scale).
+    /// The clamp in [`Spiral::dot`] binds below about 192, but without it the
+    /// floor's body crosses its turn only under about 115, so the last two
+    /// sides are the ones that fail when it goes.
     #[test]
     fn a_notes_dot_sits_inside_its_own_turn() {
         // The analyzer's full range, the ~10 octaves that make a track thin
@@ -1393,7 +1393,7 @@ mod tests {
             high_midi: harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
             ..Default::default()
         };
-        for side in [400.0f32, 300.0, 277.0, 250.0, 200.0, 160.0, 134.0, 120.0] {
+        for side in [400.0f32, 300.0, 271.0, 250.0, 200.0, 160.0, 134.0, 120.0, 100.0, 80.0] {
             let rect = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(side, side));
             let s = Spiral::new(rect, &cfg);
             let fill = s.dot();
@@ -1404,28 +1404,6 @@ mod tests {
                 s.dr,
             );
             assert!(fill > 0.0, "a {side}pt pane lost its sounding-note dot");
-        }
-    }
-
-    /// A pitch range that a bar cannot produce but a hand-edited blob can —
-    /// collapsed, or the wrong way round — draws finite geometry.
-    ///
-    /// The Spectral pane guards the same pair for the same reason: NaN
-    /// geometry is not a wrong picture, it is a panic inside egui's
-    /// tessellator, and a panic in the editor takes the host down with it.
-    #[test]
-    fn a_collapsed_pitch_range_paints_no_nan() {
-        for (low, high) in [(60.0f32, 60.0f32), (96.0, 36.0), (60.0, 59.0)] {
-            let mut state = fresh();
-            state.appearance.spectrum.low_midi = low;
-            state.appearance.spectrum.high_midi = high;
-            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
-            let shapes = painted(&mut state, SpiralView::default(), 0.1);
-            assert!(!shapes.is_empty(), "{low}..{high} drew nothing at all");
-            for shape in &shapes {
-                let bounds = shape.visual_bounding_rect();
-                assert!(!bounds.any_nan(), "{low}..{high} painted NaN geometry: {shape:?}",);
-            }
         }
     }
 
